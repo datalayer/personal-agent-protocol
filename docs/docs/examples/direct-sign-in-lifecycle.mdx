@@ -1,0 +1,59 @@
+---
+title: Direct Sign-In lifecycle
+description: Consume a browser callback once and upgrade the original Session with proof-bound consent.
+---
+
+# Direct Sign-In lifecycle
+
+The complete flow resumes after the user authorizes on the company's page. The
+host consumes the pending state exactly once, verifies the callback, exchanges
+the code with PKCE and proof-of-possession, and requires the response to upgrade
+the same Session. Partial consent is an ordinary result, not an excuse to
+silently widen access.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant B as Trusted browser
+  participant C as Company authorization server
+  participant H as PAP host
+  participant R as Reactor state store
+  participant P as Signer + DPoP provider
+  U->>B: Approve orders:read; decline orders:return
+  C-->>B: Redirect with code, state, issuer
+  B->>H: Registered HTTPS callback
+  H->>R: Atomically take pending request by hashed state
+  R-->>H: Request + verifier + existing session_id
+  H->>H: Verify exact redirect, state, issuer, expiry
+  H->>P: Fresh client assertion and DPoP proof
+  H->>C: Exchange code + verifier + existing session_id
+  C-->>H: use_dpop_nonce + company nonce
+  H->>P: Fresh assertion and fresh proof with nonce
+  H->>C: Retry exchange once
+  C-->>H: Signed-in DPoP token for same Session; orders:read
+  H->>H: Reject scope escalation; compute missing scopes
+  H-->>U: Signed in; return scope unavailable
+  Note over H,R: A replayed callback finds no state and is rejected
+```
+
+## What the example proves
+
+- Callback state is consumed before exchange, so denial, failure, and success
+  cannot leave replayable state behind.
+- Redirect location, issuer, state, expiry, content type, response size, token
+  type, sign-in status, Session ID, and scopes are all validated.
+- A nonce retry reuses the one authorization code and PKCE verifier but creates
+  a fresh client assertion and fresh DPoP proof.
+- The company cannot return scopes the user did not request. Missing scopes are
+  reported so the application can degrade safely or explain the limitation.
+- Session and Account Tokens move directly into protected host storage; they do
+  not enter URLs, logs, analytics, React state, or model transcripts.
+
+The example intentionally grants only `orders:read` from a request for both
+read and return access. It also submits the callback twice and reports that the
+second attempt was rejected.
+
+Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/direct-sign-in-lifecycle)
+or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/direct-sign-in-lifecycle).
+See the detailed [Direct Sign-In guide](/guides/direct-sign-in/).

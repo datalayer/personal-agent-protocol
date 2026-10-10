@@ -1,0 +1,46 @@
+---
+title: Personal-agent identity
+description: Verify agent metadata and same-domain signing keys before a company trusts assertions.
+---
+
+# Personal-agent identity
+
+A company needs a stable way to identify the software acting for a user. The
+agent's HTTPS `client_id` points to public metadata describing its name,
+redirect URIs, and JWKS location. The company verifies that metadata before it
+accepts signed assertions; the private signing key never leaves its custodian.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Company
+  participant H as PAP host
+  participant R as Reactor discovery policy
+  participant I as Agent metadata origin
+  participant K as Same-domain JWKS
+  C->>H: Resolve client_id URL
+  H->>R: Approve HTTPS metadata destination
+  R-->>H: Public destination approved
+  H->>I: GET agent.json (no credentials)
+  I-->>H: Name, redirect URIs, jwks_uri
+  H->>H: Validate schema and exact client_id
+  H->>H: Require JWKS on the allowed domain
+  H->>K: GET public signing keys
+  K-->>H: Public JWK set
+  H-->>C: Verified identity and signing policy
+```
+
+## What the example proves
+
+- Agent metadata and JWKS are public, credential-free resources.
+- The declared identity must match the URL that was requested.
+- Redirect URIs are explicit rather than inferred from an incoming callback.
+- JWKS domain policy prevents an identity document from silently delegating
+  trust to an unrelated key host.
+- Tool output describes policy; key coordinates and raw metadata remain outside
+  model context.
+
+Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/agent-identity)
+or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/agent-identity).
+Continue with [Session assertions](./session-assertion) and the
+[personal-agent guide](/guides/personal-agent/).

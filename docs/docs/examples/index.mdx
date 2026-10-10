@@ -1,0 +1,33 @@
+---
+title: Example flows
+description: Follow each implemented PAP feature from user intent to a safe agent result.
+---
+
+# Example flows
+
+These pages explain the protocol behavior demonstrated by the runnable Python
+and Agent Runtimes examples. Each flow shows where data travels, which Reactor
+capability owns sensitive work, and what may safely cross into model context.
+
+| Flow | What it teaches | Start with |
+| --- | --- | --- |
+| [Company discovery](./company-discovery) | Resolve and validate public PAP capabilities | A company domain |
+| [Agent identity](./agent-identity) | Verify personal-agent metadata and signing policy | An `agent.json` URL |
+| [Session assertion](./session-assertion) | Bind a short-lived request to a pairwise user | Verified metadata |
+| [Direct Sign-In boundary](./direct-sign-in-boundary) | Keep OAuth state and PKCE outside the model | A signed-out Session |
+| [DPoP proof](./dpop-proof) | Bind one proof to one HTTP request | A protected key |
+| [Session lifecycle](./session-lifecycle) | Start, retry, and renew a signed-out Session | An authorization server |
+| [Direct Sign-In lifecycle](./direct-sign-in-lifecycle) | Upgrade the same Session after user consent | A browser callback |
+
+The examples use deterministic or local transports where needed, so they can
+teach the boundary without real credentials. Production hosts replace those
+fixtures through Reactor contributions for egress, state, browsers, signing,
+DPoP, key custody, and token storage.
+
+:::tip Two implementations, one boundary
+
+The PAP repository contains plain Pydantic AI examples. Agent Runtimes contains
+matching Loop applications and interactive Reactor views. The protocol and
+secret-handling rules are the same in both.
+
+:::

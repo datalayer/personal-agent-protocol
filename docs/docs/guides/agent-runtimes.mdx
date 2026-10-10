@@ -11,13 +11,13 @@ Each example covers exactly one feature and makes its trust boundary visible.
 
 | Example                   | PAP feature                                                       | Safe result                              |
 | ------------------------- | ----------------------------------------------------------------- | ---------------------------------------- |
-| `company-discovery`       | Real HTTPS discovery, protocol version, domain and issuer binding | Company capability summary               |
-| `agent-identity`          | Client metadata, redirect policy, same-domain JWKS                | Client name and signing policy           |
-| `session-assertion`       | Pairwise subject, audience, lifetime, and unique request ID       | Assertion policy; identifiers withheld   |
-| `direct-sign-in-boundary` | Random state, S256 PKCE, exact scopes, browser handoff            | Requested scopes and security properties |
-| `direct-sign-in-lifecycle` | Callback, exchange, nonce retry, partial consent, continuity     | Lifecycle evidence; all secrets withheld  |
-| `dpop-proof`              | Method, URL, access-token, nonce, and replay binding              | Verified policy; proof material withheld |
-| `session-lifecycle`       | Signed-out start, DPoP nonce retry, and renewal over HTTP         | Lifecycle evidence; credentials withheld |
+| [Company discovery](/examples/company-discovery/) | Real HTTPS discovery, protocol version, domain and issuer binding | Company capability summary |
+| [Agent identity](/examples/agent-identity/) | Client metadata, redirect policy, same-domain JWKS | Client name and signing policy |
+| [Session assertion](/examples/session-assertion/) | Pairwise subject, audience, lifetime, and unique request ID | Assertion policy; identifiers withheld |
+| [Direct Sign-In boundary](/examples/direct-sign-in-boundary/) | Random state, S256 PKCE, exact scopes, browser handoff | Requested scopes and security properties |
+| [Direct Sign-In lifecycle](/examples/direct-sign-in-lifecycle/) | Callback, exchange, nonce retry, partial consent, continuity | Lifecycle evidence; all secrets withheld |
+| [DPoP proof](/examples/dpop-proof/) | Method, URL, access-token, nonce, and replay binding | Verified policy; proof material withheld |
+| [Session lifecycle](/examples/session-lifecycle/) | Signed-out start, DPoP nonce retry, and renewal over HTTP | Lifecycle evidence; credentials withheld |
 
 Agent Runtimes now depends on PAP in both Python and TypeScript. Its
 `PapPersonalAgentCapability` uses `DiscoveryClient` and `AgentIdentityClient`

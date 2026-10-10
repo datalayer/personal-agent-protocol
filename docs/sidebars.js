@@ -61,6 +61,21 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Example flows',
+      collapsed: false,
+      items: [
+        'examples/index',
+        'examples/company-discovery',
+        'examples/agent-identity',
+        'examples/session-assertion',
+        'examples/direct-sign-in-boundary',
+        'examples/dpop-proof',
+        'examples/session-lifecycle',
+        'examples/direct-sign-in-lifecycle',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Contributing',
       items: ['contributing/sdk-design'],
     },

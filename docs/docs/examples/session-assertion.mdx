@@ -1,0 +1,48 @@
+---
+title: Session assertion
+description: Create a short-lived, audience-bound assertion for a pairwise user identity.
+---
+
+# Session assertion
+
+A Session assertion lets a personal agent ask a company for a signed-out
+Session without impersonating the human. It identifies the agent, uses a
+pairwise subject for this company, names the exact authorization-server
+audience, and expires quickly.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant M as Agent / model
+  participant H as PAP host
+  participant P as Pairwise ID store
+  participant S as Reactor signer
+  participant C as Company authorization server
+  M->>H: Start a company Session
+  H->>P: Resolve (tenant, local user, issuer)
+  P-->>H: Stable opaque pairwise subject
+  H->>H: Build iss, sub, aud, iat, exp, jti
+  H->>S: Sign claims for session_assertion
+  S-->>H: Protected compact assertion
+  H->>C: Token request with assertion
+  C->>C: Verify signature, audience, time, and jti replay
+  C-->>H: Signed-out Session Token
+  H-->>M: Session ready (opaque reference only)
+```
+
+## What the example proves
+
+- The subject is pairwise: two companies cannot correlate a user by comparing
+  PAP identifiers.
+- `aud` binds the assertion to one authorization server.
+- `iat` and `exp` bound its useful lifetime, while a unique `jti` supports
+  replay rejection.
+- Signing happens through a Reactor capability; private keys and compact
+  assertions never become tool arguments or model output.
+
+The small example stops at safe assertion policy. The
+[Session lifecycle example](./session-lifecycle) sends the assertion through a
+token exchange.
+
+Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/session-assertion)
+or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/session-assertion).

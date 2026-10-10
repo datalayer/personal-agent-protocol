@@ -53,9 +53,7 @@ async def explain_dpop_proof(method: str, url: str) -> dict[str, Any]:
     """Create and verify a real proof, then return only its safety properties."""
 
     private_key = ec.generate_private_key(ec.SECP256R1())
-    public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(
-        private_key.public_key(), as_dict=True
-    )
+    public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
 
     async def resolve_key(_: DpopProofRequest) -> DpopKeyMaterial:
         return DpopKeyMaterial(private_key=private_key, public_jwk=public_jwk)

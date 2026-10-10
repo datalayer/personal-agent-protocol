@@ -7,7 +7,7 @@ on:
       - develop
     paths:
       - 'personal_agent_protocol/**/*.py'
-      - 'personal_agent_protocol/tests/**/*.py'
+      - 'personal_agent_protocol/__tests__/**/*.py'
       - 'pyproject.toml'
       - 'setup.py'
       - '.pre-commit-config.yaml'
@@ -21,7 +21,7 @@ on:
       - develop
     paths:
       - 'personal_agent_protocol/**/*.py'
-      - 'personal_agent_protocol/tests/**/*.py'
+      - 'personal_agent_protocol/__tests__/**/*.py'
       - 'pyproject.toml'
       - 'setup.py'
       - '.pre-commit-config.yaml'

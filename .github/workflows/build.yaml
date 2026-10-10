@@ -18,6 +18,6 @@ jobs:
       python-version: ${{ matrix.python-version }}
       install-extras: test,typing
       run-tests: true
-      test-command: pytest personal_agent_protocol/tests/ --cov=personal_agent_protocol --cov-report term-missing
+      test-command: pytest personal_agent_protocol/__tests__/ --cov=personal_agent_protocol --cov-report term-missing
       run-mypy: true
       mypy-target: personal_agent_protocol

@@ -26,7 +26,7 @@
     "build": "tsc -p tsconfig.json && esbuild src/index.ts --bundle --platform=neutral --format=esm --sourcemap --outfile=lib/index.js",
     "build:lib": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test src/test/*.test.mjs",
+    "test": "npm run build && node --test src/__tests__/*.test.mjs",
     "watch:lib": "tsc -w -p tsconfig.json"
   },
   "publishConfig": {

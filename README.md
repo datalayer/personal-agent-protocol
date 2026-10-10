@@ -59,7 +59,7 @@ DPoP providers backed by suitable key custody.
 
 ```bash
 python -m pip install -e '.[test,lint,typing]'
-python -m pytest personal_agent_protocol/tests
+python -m pytest personal_agent_protocol/__tests__
 ```
 
 ```python
@@ -109,7 +109,7 @@ security boundaries, machine output, and third-party extension examples.
 ## TypeScript
 
 The TypeScript package lives at the repository root: sources are in
-[`src/`](./src), tests in [`src/test/`](./src/test), and emitted package files in
+[`src/`](./src), tests in [`src/__tests__/`](./src/__tests__), and emitted package files in
 `lib/`.
 
 ```bash

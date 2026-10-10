@@ -15,6 +15,7 @@ Each example covers exactly one feature and makes its trust boundary visible.
 | `agent-identity`          | Client metadata, redirect policy, same-domain JWKS                | Client name and signing policy           |
 | `session-assertion`       | Pairwise subject, audience, lifetime, and unique request ID       | Assertion policy; identifiers withheld   |
 | `direct-sign-in-boundary` | Random state, S256 PKCE, exact scopes, browser handoff            | Requested scopes and security properties |
+| `direct-sign-in-lifecycle` | Callback, exchange, nonce retry, partial consent, continuity     | Lifecycle evidence; all secrets withheld  |
 | `dpop-proof`              | Method, URL, access-token, nonce, and replay binding              | Verified policy; proof material withheld |
 | `session-lifecycle`       | Signed-out start, DPoP nonce retry, and renewal over HTTP         | Lifecycle evidence; credentials withheld |
 
@@ -45,6 +46,13 @@ real `SessionClient` against a deterministic local company transport. They
 prove that nonce retry creates fresh assertions and proof material, and that
 renewal is bound to the existing Session ID. Only status, scopes, and boolean
 safety evidence cross into the agent or React state.
+
+The `direct-sign-in-lifecycle` Loop application drives the real
+`DirectSignInClient` through both sides of the browser pause. It demonstrates
+atomic state consumption, exact callback validation, a proof-bound nonce
+retry, partial consent, and continuation of the original Session. The tool
+returns only scopes, status, and boolean invariants; browser and credential
+material remains owned by Reactor contributions and the host transport.
 
 Agent Runtimes also provides a separate `PAP Guided Journey` gallery example
 for product and protocol walkthroughs. It advances the user, company, and wire

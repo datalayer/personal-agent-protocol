@@ -106,5 +106,36 @@ proof, Session Token, and Account Token are redacted by default. Reveal them
 only at the browser handoff or final HTTPS serialization boundary. They must
 not enter model context, logs, analytics, A2UI state, or callback error text.
 
+## Follow the lifecycle
+
+The lifecycle has two asynchronous halves separated by user action:
+
+| Stage | Host responsibility | Safe application-visible state |
+| --- | --- | --- |
+| 1. Begin | Create random state and S256 PKCE; persist the pending request with an expiry | `waiting_for_user`, requested scopes, expiry |
+| 2. Handoff | Open the authorization URL in a user-owned browser | Browser opened |
+| 3. Callback | Atomically consume state; verify the exact redirect and issuer | `callback_accepted` or a safe error code |
+| 4. Exchange | Bind the code to the existing Session with fresh client assertion and DPoP proof | Granted and missing scopes |
+| 5. Continue | Store credentials behind opaque references and resume the same conversation | `signed_in`, unchanged Session reference |
+
+A `use_dpop_nonce` response repeats only stage 4. The SDK keeps the original
+authorization code and PKCE verifier for that retry, but creates a fresh
+client assertion and fresh proof carrying the company's nonce. It retries at
+most once. The state was already consumed, so a second callback cannot start
+another exchange.
+
+Two paired runnable examples exercise these invariants against a deterministic
+local company endpoint without contacting an identity provider:
+
+- [`examples/pydantic-ai/direct-sign-in-lifecycle`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/direct-sign-in-lifecycle)
+  shows the raw Python SDK inside a Pydantic AI tool;
+- [`examples/personal-agent-protocol/direct-sign-in-lifecycle`](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/direct-sign-in-lifecycle)
+  shows the same boundary in a Loop `Application`.
+
+Both examples intentionally return booleans and scope outcomes rather than
+request payloads. Their mock transport is pedagogical; production deployments
+must use protected key and token stores, durable expiring authorization state,
+and an HTTPS callback owned by the host.
+
 See upstream [Direct Sign-In](https://personalagentprotocol.org/docs/spec#45-direct-sign-in)
 for the complete normative flow.

@@ -6,11 +6,10 @@
 
 [![Datalayer](https://images.datalayer.io/legacy/datalayer-25.svg)](https://datalayer.ai)
 
-# 🤖 🌸 Personal Agent Protocol SDKs
+# 🤖 🌸 Personal Agent Protocol
 
-Python and TypeScript SDKs for
-[Personal Agent Protocol](https://personalagentprotocol.org), currently targeting
-[draft 0.1](https://personalagentprotocol.org/docs/spec).
+Python and TypeScript SDKs for [Personal Agent Protocol](https://personalagentprotocol.org),
+currently targeting [draft 0.1](https://personalagentprotocol.org/docs/spec).
 
 The first implemented slice provides:
 
@@ -41,9 +40,10 @@ The first implemented slice provides:
 
 Managed key custody and durable replay storage, browser handoff and Direct
 Sign-In token exchange, device/mediated sign-in, conversations, and the
-Operations client/server are not implemented yet. Session requests fail closed
-unless the host contributes signer and DPoP providers backed by suitable key
-custody.
+Operations client/server are not implemented yet.
+
+Session requests fail closed unless the host contributes signer and 
+DPoP providers backed by suitable key custody.
 
 ## Python
 
@@ -95,6 +95,8 @@ Only non-secret settings belong in CLI profiles. See the
 security boundaries, machine output, and third-party extension examples.
 
 ## TypeScript
+
+Source code in [packages/typescript](./tree/main/packages/typescript)
 
 ```bash
 npm install

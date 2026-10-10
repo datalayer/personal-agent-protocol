@@ -1,0 +1,12 @@
+{
+  "client_id": "https://agent.example/agent.json",
+  "client_name": "Example Agent",
+  "logo_uri": "https://agent.example/logo.png",
+  "jwks_uri": "https://agent.example/jwks.json",
+  "redirect_uris": ["https://agent.example/oauth/callback"],
+  "token_endpoint_auth_method": "private_key_jwt",
+  "extensions": {
+    "operations": {"version": "1"},
+    "example.org/preferences": {"version": "2", "mode": "compact"}
+  }
+}

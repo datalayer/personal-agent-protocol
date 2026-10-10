@@ -1,0 +1,260 @@
+import {
+  SignJWT,
+  calculateJwkThumbprint,
+  decodeProtectedHeader,
+  importJWK,
+  jwtVerify,
+  type JWK,
+  type JWTPayload,
+  type KeyInput,
+} from "jose";
+
+import { ProofError } from "./errors.js";
+import type { DpopProofProvider, DpopProofRequest, Signer } from "./reactor.js";
+import { SecretValue } from "./sessions.js";
+
+export type JoseAlgorithm = "ES256" | "RS256";
+
+const privateJwkMembers = new Set(["d", "p", "q", "dp", "dq", "qi", "oth", "k"]);
+
+function algorithm(value: string): JoseAlgorithm {
+  if (value !== "ES256" && value !== "RS256") {
+    throw new TypeError("PAP JOSE algorithms must be ES256 or RS256");
+  }
+  return value;
+}
+
+function publicJwk(value: JWK, alg: JoseAlgorithm): JWK {
+  for (const member of privateJwkMembers) {
+    if (member in value) {
+      throw new TypeError("DPoP public JWK must not contain private key material");
+    }
+  }
+  const expected = alg === "ES256" ? "EC" : "RSA";
+  if (value.kty !== expected) throw new TypeError(`${alg} requires a ${expected} public JWK`);
+  if (alg === "ES256") {
+    if (value.crv !== "P-256" || !value.x || !value.y) {
+      throw new TypeError("ES256 requires a complete P-256 public JWK");
+    }
+  } else if (!value.n || !value.e) {
+    throw new TypeError("RS256 requires a complete RSA public JWK");
+  }
+  return { ...value };
+}
+
+function normalizedHtu(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch (cause) {
+    throw new ProofError("invalid_htu", "DPoP target must be an HTTPS URL", { cause });
+  }
+  if (url.protocol !== "https:" || url.username || url.password) {
+    throw new ProofError("invalid_htu", "DPoP target must be an HTTPS URL");
+  }
+  url.search = "";
+  url.hash = "";
+  return url.href;
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const value of bytes) binary += String.fromCharCode(value);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+function randomBytes(length: number): Uint8Array {
+  if (!globalThis.crypto) throw new ProofError("crypto_unavailable", "Web Crypto is required");
+  return globalThis.crypto.getRandomValues(new Uint8Array(length));
+}
+
+async function accessTokenHash(token: SecretValue): Promise<string> {
+  if (!globalThis.crypto) throw new ProofError("crypto_unavailable", "Web Crypto is required");
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(token.reveal()),
+  );
+  return base64Url(new Uint8Array(digest));
+}
+
+export interface JoseSignerOptions {
+  readonly privateKey: KeyInput;
+  readonly algorithm?: JoseAlgorithm;
+  readonly keyId?: string;
+}
+
+/** Sign PAP assertions with an injected asymmetric private key or handle. */
+export class JoseSigner implements Signer {
+  readonly #privateKey: KeyInput;
+  readonly #algorithm: JoseAlgorithm;
+  readonly #keyId: string | undefined;
+
+  constructor(options: JoseSignerOptions) {
+    this.#privateKey = options.privateKey;
+    this.#algorithm = algorithm(options.algorithm ?? "ES256");
+    this.#keyId = options.keyId;
+  }
+
+  async sign(
+    claims: Readonly<Record<string, unknown>>,
+    _options: { readonly purpose: string },
+  ): Promise<SecretValue> {
+    try {
+      const token = await new SignJWT(claims as JWTPayload)
+        .setProtectedHeader({
+          alg: this.#algorithm,
+          typ: "JWT",
+          ...(this.#keyId === undefined ? {} : { kid: this.#keyId }),
+        })
+        .sign(this.#privateKey);
+      return new SecretValue(token);
+    } catch (cause) {
+      throw new ProofError("signing_failed", "Could not sign PAP assertion", { cause });
+    }
+  }
+}
+
+export interface DpopKeyMaterial {
+  readonly privateKey: KeyInput;
+  readonly publicJwk: JWK;
+  readonly algorithm?: JoseAlgorithm;
+}
+
+export type DpopKeyResolver = (
+  request: DpopProofRequest,
+) => DpopKeyMaterial | Promise<DpopKeyMaterial>;
+
+export interface JoseDpopProofProviderOptions {
+  readonly resolveKey: DpopKeyResolver;
+  readonly now?: () => Date;
+  readonly randomBytes?: (length: number) => Uint8Array;
+}
+
+/** Create fresh RFC 9449 proofs using per-user/company key material. */
+export class JoseDpopProofProvider implements DpopProofProvider {
+  readonly #resolveKey: DpopKeyResolver;
+  readonly #now: () => Date;
+  readonly #randomBytes: (length: number) => Uint8Array;
+
+  constructor(options: JoseDpopProofProviderOptions) {
+    this.#resolveKey = options.resolveKey;
+    this.#now = options.now ?? (() => new Date());
+    this.#randomBytes = options.randomBytes ?? randomBytes;
+  }
+
+  async create(request: DpopProofRequest): Promise<SecretValue> {
+    const material = await this.#resolveKey(request);
+    const alg = algorithm(material.algorithm ?? "ES256");
+    const jwk = publicJwk(material.publicJwk, alg);
+    const entropy = this.#randomBytes(16);
+    if (entropy.byteLength < 16) {
+      throw new ProofError("weak_randomness", "DPoP proof IDs require 128 random bits");
+    }
+    const claims: JWTPayload = {
+      jti: base64Url(entropy),
+      htm: request.method.toUpperCase(),
+      htu: normalizedHtu(request.url),
+      iat: Math.floor(this.#now().getTime() / 1000),
+      ...(request.nonce === undefined ? {} : { nonce: request.nonce }),
+      ...(request.accessToken === undefined
+        ? {}
+        : { ath: await accessTokenHash(request.accessToken) }),
+    };
+    try {
+      const token = await new SignJWT(claims)
+        .setProtectedHeader({ typ: "dpop+jwt", alg, jwk })
+        .sign(material.privateKey);
+      return new SecretValue(token);
+    } catch (cause) {
+      throw new ProofError("signing_failed", "Could not sign DPoP proof", { cause });
+    }
+  }
+}
+
+export interface DpopReplayCache {
+  markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean>;
+}
+
+export interface VerifyDpopProofOptions {
+  readonly method: string;
+  readonly url: string;
+  readonly replayCache: DpopReplayCache;
+  readonly accessToken?: SecretValue;
+  readonly nonce?: string;
+  readonly now?: Date;
+  readonly acceptanceWindowSeconds?: number;
+}
+
+export interface VerifiedDpopProof {
+  readonly jti: string;
+  readonly issuedAt: Date;
+  readonly publicJwk: JWK;
+  readonly keyThumbprint: string;
+}
+
+/** Verify signature, binding, freshness, nonce, token hash, and replay state. */
+export async function verifyDpopProof(
+  proof: SecretValue | string,
+  options: VerifyDpopProofOptions,
+): Promise<VerifiedDpopProof> {
+  const compact = proof instanceof SecretValue ? proof.reveal() : proof;
+  const now = options.now ?? new Date();
+  const windowSeconds = options.acceptanceWindowSeconds ?? 60;
+  if (!Number.isInteger(windowSeconds) || windowSeconds <= 0) {
+    throw new RangeError("acceptanceWindowSeconds must be a positive integer");
+  }
+  let jwk: JWK;
+  let payload: JWTPayload;
+  try {
+    const header = decodeProtectedHeader(compact);
+    const alg = algorithm(header.alg ?? "");
+    if (header.typ !== "dpop+jwt" || typeof header.jwk !== "object") {
+      throw new ProofError("invalid_dpop_proof", "DPoP protected header is invalid");
+    }
+    jwk = publicJwk(header.jwk, alg);
+    const key = await importJWK(jwk, alg);
+    ({ payload } = await jwtVerify(compact, key, {
+      algorithms: [alg],
+      typ: "dpop+jwt",
+      requiredClaims: ["jti", "htm", "htu", "iat"],
+    }));
+  } catch (cause) {
+    if (cause instanceof ProofError) throw cause;
+    throw new ProofError("invalid_dpop_proof", "DPoP signature or claims are invalid", {
+      cause,
+    });
+  }
+  if (typeof payload.jti !== "string" || !payload.jti || typeof payload.iat !== "number") {
+    throw new ProofError("invalid_dpop_proof", "DPoP proof identity is invalid");
+  }
+  const issuedAt = new Date(payload.iat * 1000);
+  const difference = Math.abs(now.getTime() - issuedAt.getTime());
+  if (difference > windowSeconds * 1000) {
+    throw new ProofError("invalid_dpop_proof", "DPoP proof is outside the acceptance window");
+  }
+  if (payload.htm !== options.method.toUpperCase() || payload.htu !== normalizedHtu(options.url)) {
+    throw new ProofError("invalid_dpop_proof", "DPoP proof does not match the request");
+  }
+  if (options.nonce !== undefined && payload.nonce !== options.nonce) {
+    throw new ProofError("use_dpop_nonce", "DPoP proof nonce is missing or invalid");
+  }
+  if (options.accessToken !== undefined) {
+    if (payload.ath !== (await accessTokenHash(options.accessToken))) {
+      throw new ProofError("invalid_dpop_proof", "DPoP access-token hash is invalid");
+    }
+  } else if (payload.ath !== undefined) {
+    throw new ProofError(
+      "invalid_dpop_proof",
+      "Token-endpoint DPoP proof must not contain ath",
+    );
+  }
+  const keyThumbprint = await calculateJwkThumbprint(jwk);
+  if (
+    !(await options.replayCache.markOnce(`${keyThumbprint}:${payload.jti}`, {
+      expiresAt: new Date(now.getTime() + windowSeconds * 1000),
+    }))
+  ) {
+    throw new ProofError("invalid_dpop_proof", "DPoP proof has already been used");
+  }
+  return { jti: payload.jti, issuedAt, publicJwk: jwk, keyThumbprint };
+}

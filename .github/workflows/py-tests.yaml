@@ -1,0 +1,42 @@
+name: Py Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'personal_agent_protocol/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'requirements*.txt'
+      - '**/*.py'
+      - '.github/workflows/py-tests.yaml'
+      - '.github/workflows/reusable-python.yaml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'personal_agent_protocol/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'requirements*.txt'
+      - '**/*.py'
+      - '.github/workflows/py-tests.yaml'
+      - '.github/workflows/reusable-python.yaml'
+
+  workflow_dispatch:
+
+jobs:
+  tests:
+    strategy:
+      max-parallel: 1
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    uses: ./.github/workflows/reusable-python.yaml
+    with:
+      python-version: ${{ matrix.python-version }}
+      install-extras: test
+      run-tests: true
+      test-command: pytest tests/ --cov=personal_agent_protocol --cov-report term-missing

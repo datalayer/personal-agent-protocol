@@ -1,0 +1,144 @@
+---
+sidebar_position: 4
+title: Python SDK
+---
+
+# Python SDK
+
+The `personal_agent_protocol` package provides async discovery, strict
+Pydantic wire models, Reactor contribution points, and PAP session primitives.
+
+## Install for development
+
+```bash
+python -m pip install -e '.[test,lint,typing]'
+python -m pytest -p no:cacheprovider
+```
+
+## Public surface
+
+| API | Status | Purpose |
+| --- | --- | --- |
+| `DiscoveryClient` | Implemented | Discover and validate a company and OAuth metadata. |
+| `DiscoveryDocument`, `OAuthServerMetadata` | Implemented | Strict, forward-compatible wire models. |
+| `ClientMetadata` | Implemented | Validate HTTPS client identity plus same-domain JWKS and redirect URIs. |
+| `Message`, `ConversationEvent`, `ConversationEventPage` | Implemented models | Validate known conversation shapes while preserving unknown event types and fields. |
+| `Operation`, `OperationConfirmation`, `OperationResult` | Implemented models | Validate Operations v1 states, exact confirmation revisions, timestamps, and final results. |
+| `build_pap_reactor` | Implemented | Build the default Reactor host. |
+| `generate_pairwise_user_id` | Implemented primitive | Generate a random identifier; the caller persists the mapping. |
+| `build_session_assertion_claims` | Implemented primitive | Build unsigned, short-lived session claims. |
+| `SessionGrant`, `SessionToken` | Implemented primitive | Redacted request and response value objects. |
+| `SessionClient` | Implemented | Start and renew signed-out sessions with host-provided signing and DPoP. |
+| `JoseSigner`, `JoseDpopProofProvider` | Implemented | Sign ES256/RS256 assertions and create fresh DPoP proofs. |
+| `verify_dpop_proof` | Implemented | Verify proof signature, request/token binding, nonce, freshness, and replay state. |
+| `build_direct_sign_in_request` | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL. |
+| `validate_direct_sign_in_callback` | Implemented primitive | Verify callback redirect, state, issuer, denial, and code. |
+| `AuthorizationCodeGrant` | Implemented primitive | Build a redacted PAP code-exchange form. |
+| Reactor infrastructure points | Implemented contract | Supply clock, randomness, signing, DPoP proofs, protected keys, token storage, cache, and browser handoff. |
+
+## Discovery
+
+```python
+import asyncio
+
+from personal_agent_protocol import DiscoveryClient
+
+
+async def main() -> None:
+    async with DiscoveryClient() as client:
+        company = await client.discover("example.com")
+        print(company.document.organization.name)
+        print(company.oauth_metadata.token_endpoint)
+
+
+asyncio.run(main())
+```
+
+Use the async context manager when the client owns its HTTPX transport. If an
+application supplies a Reactor host or HTTP client, it retains lifecycle
+ownership of that dependency.
+
+## Custom Reactor host
+
+`DiscoveryClient(reactor=platform)` accepts an existing Reactor
+`PluginPlatform`. A plugin can contribute `pap.discoveryTransport` and
+`pap.urlSafetyPolicy` implementations for a platform transport or test fixture.
+
+The default client creates a core host using HTTPX and a public-network safety
+policy. Keep the client in an async context so its owned HTTP resources close.
+
+The core plugin also supplies `pap.clock` and `pap.randomSource`. A host must
+contribute `pap.signer`, `pap.dpopProofProvider`, `pap.keyStore`,
+`pap.tokenStore`, `pap.cache`, and `pap.browserHandoff` before a flow requiring
+those services begins. Resolution fails when a required provider is missing or
+tied at the winning priority; there is no insecure in-memory fallback.
+
+## Session primitives
+
+Generate a random pairwise user ID once per local user and company issuer, then
+store that mapping durably. Never derive the identifier from an email address,
+phone number, name, or other personal information.
+
+Assertion claim and form builders do not sign tokens. Signing remains behind a
+key-custody contribution so private keys never enter application or model
+context.
+
+```python
+from pydantic import SecretStr
+
+from personal_agent_protocol import (
+    SessionGrant,
+    build_session_assertion_claims,
+    generate_pairwise_user_id,
+)
+
+claims = build_session_assertion_claims(
+    client_id="https://agent.example/agent.json",
+    pairwise_user_id=generate_pairwise_user_id(),
+    token_endpoint="https://auth.example.com/oauth/token",
+)
+
+# Signing is intentionally not performed by this module.
+grant = SessionGrant(
+    assertion=SecretStr("signed-session-assertion"),
+    client_id=claims.iss,
+    client_assertion=SecretStr("signed-client-assertion"),
+)
+```
+
+`SessionGrant.as_form()` reveals secrets at the final HTTP serialization
+boundary. Do not log or place its result in model context.
+
+For the implemented network flow, construct `SessionClient` with an existing
+Reactor platform and HTTPX client. `start()` and `renew()` resolve the signer
+and DPoP provider, create fresh assertions and proofs, send the form, and parse
+the opaque token response. See [Signed-out sessions](/guides/sessions/) for
+usage and the exact security boundary.
+
+The maintained `PyJWT[crypto]` dependency backs local JOSE operations. Only
+ES256 and RS256 are accepted; ES256 is the default. Symmetric algorithms and
+`none` are rejected. See [JOSE and DPoP](/guides/cryptography/) before choosing
+key custody or implementing a company verifier.
+
+Continue with [Direct Sign-In primitives](/guides/direct-sign-in/) for the
+implemented PKCE and callback surface.
+
+## Conversation and Operations models
+
+Conversation pages preserve unknown future event types so callers can skip
+them as draft 0.1 requires. Known event types are validated for their required
+payload: messages, state changes, authorization requests, user requests, and
+Direct Conversation links. Operations validate the exact confirmed revision,
+timezone-bearing timestamps, proposed expiry, and final result presence.
+
+These are wire models, not transport clients. Message idempotency, cursor
+persistence, streaming, approval capture, confirmation, and recovery remain
+the caller's responsibility until their SDK services are implemented.
+
+## Errors
+
+Catch `DiscoveryError` for discovery transport, redirect, trust-binding, and
+URL-safety failures. Catch `SessionError` for session transport and token
+endpoint failures. Catch `ProtocolValidationError` when remote JSON does not
+satisfy a wire model. Error messages are designed not to include response
+bodies or credentials.

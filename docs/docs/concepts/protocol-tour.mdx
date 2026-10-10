@@ -1,0 +1,62 @@
+---
+title: Protocol tour
+---
+
+# Protocol tour
+
+PAP connects three actors: a **User**, the **Personal Agent** acting for that
+user, and a **Company**. It does not prescribe company policy. It supplies the
+controls each party needs to make and enforce its own policy.
+
+## 1. Discover the company
+
+The personal agent fetches `https://{domain}/.well-known/poppy.json`. The
+document identifies the company and advertises any supported website, OpenAPI
+or MCP APIs, company-agent protocols, sign-in methods, and extensions.
+
+Discovery is a trust bootstrap, not ordinary JSON fetching. The agent verifies
+that `organization.domain` is the domain requested. If the document names an
+OAuth issuer, the agent fetches that issuer's metadata and checks both the
+exact issuer and its `poppy_domains` membership.
+
+## 2. Start a session
+
+A session ties together one user's activity at one company through one
+personal agent. It starts signed out. The company can recognize a returning
+user through a stable, opaque, pairwise user ID without learning the user's
+identity.
+
+The personal agent authenticates itself and requests a short-lived session
+token. Non-MCP tokens are sender-constrained with DPoP. The token is opaque to
+the personal agent.
+
+## 3. Sign in only when needed
+
+If a task needs account access, PAP supports direct, device, and mediated
+sign-in. Direct and device flows keep the user's credentials at the company
+and should normally be preferred. Successful sign-in produces a long-lived
+account token; that token is used only at the token endpoint to obtain scoped,
+short-lived session tokens.
+
+## 4. Choose an interface
+
+The discovery document may offer several ways to work:
+
+- **OpenAPI** for structured operations;
+- **MCP** for tool-oriented access;
+- **web browsing** joined to the same session; and
+- **conversations** with a company agent or company representative.
+
+An implementation skips interface types it does not understand. A company can
+adopt PAP progressively without exposing every channel on day one.
+
+## 5. Confirm consequential actions
+
+The optional Operations extension separates proposing an action from carrying
+it out. The personal agent presents the company's exact current revision to
+the user and confirms that revision. Retries refer to the same operation so the
+company does not perform the action twice.
+
+Continue with the [personal-agent guide](/guides/personal-agent/), the
+[company guide](/guides/company/), or the upstream
+[draft specification](https://personalagentprotocol.org/docs/spec).

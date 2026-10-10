@@ -1,0 +1,24 @@
+---
+title: Glossary
+---
+
+# Glossary
+
+| Term | Meaning |
+| --- | --- |
+| User | The person for whom a personal agent acts. |
+| Personal Agent | Software acting for one user when interacting with a company. |
+| Company | An organization publishing PAP discovery and one or more interaction paths. |
+| `poppy.json` | The discovery document at `/.well-known/poppy.json`. |
+| User ID | A stable, opaque identifier for one user and one company issuer. It is not PII. |
+| Session | One user's activity at one company through one personal agent. |
+| Session Token | A short-lived, opaque credential for a session. |
+| Account Token | A long-lived refresh credential representing approved account access. |
+| DPoP proof | A per-request proof that the caller holds the key bound to a token. |
+| Company Agent | The company's conversational agent advertised by discovery. |
+| Operation | A durable, revisioned proposal for an action requiring confirmation. |
+| PAP extension | An optional, wire-negotiated capability such as `operations`. |
+| Reactor extension | A package of runtime plugins that can contribute SDK behavior. |
+
+The upstream specification is authoritative when terminology here and the
+[draft specification](https://personalagentprotocol.org/docs/spec) differ.

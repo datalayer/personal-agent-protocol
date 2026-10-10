@@ -1,0 +1,49 @@
+{
+  "conversation_id": "cnv_8f3Kd2",
+  "events": [
+    {
+      "id": "evt_c2",
+      "type": "message",
+      "created_at": "2026-10-10T17:03:00Z",
+      "message": {
+        "id": "msg_r2Kq",
+        "role": "company",
+        "sender": "agent",
+        "text": "I can propose that exchange.",
+        "data": {"replacement_sku": "stormline-insulated-m"},
+        "operation": {
+          "operation_id": "exc_5Rt2",
+          "revision": 1,
+          "state": "proposed",
+          "summary": "Exchange the jacket for the insulated version for USD 70.00 more.",
+          "terms": {
+            "order_id": "ord_7Hk2",
+            "price_difference": {"amount": "70.00", "currency": "USD"}
+          },
+          "expires_at": "2026-10-10T18:00:00Z",
+          "user_approval_required": true,
+          "url": "https://example.com/orders/ord_7Hk2/exchanges/exc_5Rt2",
+          "confirmation": null,
+          "result": null
+        }
+      }
+    },
+    {
+      "id": "evt_c3",
+      "type": "state",
+      "created_at": "2026-10-10T17:03:01Z",
+      "status": "idle",
+      "responder": "agent"
+    },
+    {
+      "id": "evt_future",
+      "type": "example.org/future-event",
+      "created_at": "2026-10-10T17:03:02Z",
+      "future": true
+    }
+  ],
+  "cursor": "evt_future",
+  "has_more": false,
+  "status": "idle",
+  "responder": "agent"
+}

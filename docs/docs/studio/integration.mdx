@@ -1,0 +1,102 @@
+---
+title: Datalayer Studio integration
+---
+
+# Datalayer Studio integration
+
+:::info Planned product integration
+
+This page defines the intended Studio experience. It is not implemented yet.
+
+:::
+
+Studio will support PAP in two explicit roles: consume an external company as
+a personal agent, and publish a deployed application as a PAP company.
+
+## Consume a company
+
+1. Add a Personal Agent Protocol connection and enter a company domain.
+2. Studio verifies discovery and shows sign-in modes, scopes, APIs, company
+   agent, web support, and extensions.
+3. The maker selects the least authority needed and maps capabilities to
+   Studio rules.
+4. Preview starts signed out and asks the person to sign in only when needed.
+5. A task can continue through an API, conversation, or isolated browser while
+   Activity records transitions without exposing credentials.
+6. Consequential work is shown as one revisioned proposal that is explicitly
+   approved or declined before confirmation.
+
+## Publish a company
+
+The Ship experience selects company-agent conversations, OpenAPI, MCP, browser
+session joining, and optional Operations v1. It also configures guest access,
+scopes, accepted personal agents, rate limits, and actions requiring exact
+confirmation.
+
+Each deployment receives a dedicated Datalayer subdomain first, with verified
+custom domains later. The domain publishes `/.well-known/poppy.json`; a shared
+path is insufficient because PAP binds discovery to the requested domain.
+
+The company-agent adapter invokes the deployed LOOP application through its
+normal runtime boundary. It does not reinterpret an A2A endpoint as PAP.
+
+## Backend ownership
+
+- IAM owns consent, direct/device authorization, encrypted account tokens,
+  revocation, app principals, and scope grants.
+- KMS-backed signing owns client assertion keys and published metadata/JWKS.
+- Durable services own pairwise IDs, sessions, replay IDs, conversations,
+  events, operation revisions/results, and idempotency records.
+- The MCP gateway accepts only resource-bound PAP Bearer tokens.
+- Deployment gateways serve discovery, authorization, conversation, browser,
+  API, and operation routes and enforce limits.
+
+Models and tools receive safe handles, never credentials. Signing, storage,
+approval, rotation, and token attachment remain deterministic capabilities
+outside the model loop.
+
+## Appspec shape
+
+The Spec, Canvas, and Python editors will round-trip one credential-free model:
+
+```yaml
+protocols:
+  personal_agent:
+    connections:
+      - company: example.com
+        scopes: [poppy:read]
+        interfaces: [agent, openapi, mcp]
+        extensions: [operations]
+  company:
+    domain: my-app.apps.datalayer.ai
+    interfaces: [agent, mcp]
+    signed_out: true
+    scopes: [poppy:read, poppy:write]
+    extensions: [operations]
+```
+
+Endpoints, client IDs, resources, discovery documents, keys, and deployment
+metadata are generated or resolved at ship time rather than stored in the spec.
+
+## Rules and Operations
+
+Studio evaluates its rule before confirming a PAP operation. **Do it** still
+requires company scope and fixed safety constraints. **Do it if I asked**
+requires a live structured grant covering the exact action and revision.
+**Ask me first** presents the company's summary, structured terms, cost,
+expiry, company, operation ID, and revision. **Leave it to me** never confirms.
+
+When the company requires fresh user approval, only explicit approval of the
+current revision is valid. A new revision invalidates earlier approval. The
+operation ID and revision become part of the Studio audit record.
+
+## Studio surfaces
+
+- **Build:** PAP Appspec fields, verified Connections, scope/rule mapping, and
+  company policy controls.
+- **Preview:** signed-out state, human-completed sign-in, granted scopes,
+  responder identity, conversations, and disconnect.
+- **Validate:** discovery, identity, sign-in, interface, conversation,
+  operations, secret, replay, rate-limit, tenant, and Appspec tests.
+- **Ship and Activity:** domain health gates, public metadata, verification,
+  Pause/Revoke/rollback, and safe protocol event filters.

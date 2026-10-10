@@ -1,0 +1,102 @@
+# Copyright (c) 2025-2026 Datalayer, Inc.
+#
+# BSD 3-Clause License
+
+[build-system]
+requires = ["hatchling~=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "personal-agent-protocol"
+authors = [{ name = "Datalayer", email = "info@datalayer.io" }]
+dynamic = ["version"]
+description = "Python SDK for Personal Agent Protocol"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["AI", "Agents", "OAuth", "MCP", "Personal Agent Protocol"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: BSD License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+]
+dependencies = [
+  "datalayer_reactor>=1.0.5,<2",
+  "httpx>=0.27,<1",
+  "PyJWT[crypto]>=2.13,<3",
+  "pydantic>=2.10,<3",
+  "typer>=0.12,<1",
+]
+
+[project.scripts]
+pap = "personal_agent_protocol.cli:main"
+
+[project.entry-points."datalayer.reactor.cli"]
+pap = "personal_agent_protocol.cli_plugin:plugin"
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7.0",
+  "pytest-asyncio>=0.21",
+  "pytest-cov>=4.1",
+]
+lint = ["mdformat>0.7", "mdformat-gfm>=0.3.5", "ruff"]
+typing = ["mypy>=0.990"]
+
+[project.license]
+file = "LICENSE"
+
+[project.urls]
+Home = "https://github.com/datalayer/personal-agent-protocol"
+Documentation = "https://personalagentprotocol.org/docs"
+Specification = "https://personalagentprotocol.org/docs/spec"
+
+[tool.hatch.version]
+path = "personal_agent_protocol/__version__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["personal_agent_protocol"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+filterwarnings = ["error"]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+check_untyped_defs = true
+disallow_incomplete_defs = true
+no_implicit_optional = true
+pretty = true
+show_error_context = true
+show_error_codes = true
+strict_equality = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+  "A",
+  "B",
+  "C",
+  "E",
+  "F",
+  "FBT",
+  "I",
+  "N",
+  "Q",
+  "RUF",
+  "S",
+  "T",
+  "UP",
+  "W",
+  "YTT",
+]
+ignore = ["FBT001", "FBT002", "FBT003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105"]

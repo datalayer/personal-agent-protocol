@@ -1,0 +1,35 @@
+---
+title: Conformance and compatibility
+---
+
+# Conformance and compatibility
+
+The SDKs target PAP draft `0.1`. Draft changes may be incompatible, so support
+is expressed as a protocol profile rather than inferred from package version.
+
+## Compatibility rules
+
+- Reject an unsupported protocol major version.
+- Accept a later minor version while ignoring unknown fields.
+- Ignore extensions that are not supported.
+- Preserve required security checks outside replaceable plugins.
+- Keep Python and TypeScript behavior aligned through shared JSON fixtures.
+
+## Evidence in this repository
+
+| Artifact | Purpose |
+| --- | --- |
+| `protocol/requirements.yaml` | Maps normative requirements to implementation status. |
+| `protocol/fixtures/` | Shared positive and negative wire examples. |
+| `tests/` | Python behavior and security tests. |
+| `packages/typescript/test/` | TypeScript validation and discovery tests. |
+
+## Current release gate
+
+An area is documented as **implemented** only when its public API exists and
+its relevant fixtures pass in both applicable SDKs. **Partial** means safe
+foundational pieces exist but the end-to-end protocol flow does not. **Planned**
+means the documentation may explain the intended integration, but applications
+cannot depend on an SDK implementation yet.
+
+See [Protocol status](/protocol/status/) for the current matrix.

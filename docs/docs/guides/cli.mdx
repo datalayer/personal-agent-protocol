@@ -1,0 +1,124 @@
+---
+title: Extensible pap CLI
+---
+
+# Extensible `pap` CLI
+
+The Python distribution installs an initial `pap` command line for non-secret
+configuration, company discovery, and extension negotiation diagnostics.
+The executable is a small Typer host: its PAP command groups come from a
+[Datalayer Reactor](https://reactor.datalayer.tech/python-plugins/cli/)
+extension rather than being hard-coded into the host.
+
+```bash
+python -m pip install personal-agent-protocol
+pap --help
+```
+
+The current command groups are:
+
+| Command | Purpose |
+| --- | --- |
+| `pap config show|get|set|unset|profiles` | Manage non-secret named profiles and inspect value provenance. |
+| `pap company discover|verify` | Fetch and validate a company's PAP discovery document. |
+| `pap extensions list|check` | Inspect the PAP extensions a company advertises. |
+
+Session, sign-in, conversation, Operations, and conformance commands remain
+planned. Their SDK services and protected-store boundaries must exist before
+the CLI exposes them.
+
+## Configure a profile
+
+```bash
+pap config set domain example.com --profile work
+pap config set timeout 5 --profile work
+pap config show --profile work
+pap config show --profile work --json
+pap company verify --profile work --json
+```
+
+The accepted keys are `domain`, `client_id`, `issuer`, `output`,
+`store_provider`, and `timeout`. Configuration is stored at
+`$XDG_CONFIG_HOME/pap/config.json`, or `~/.config/pap/config.json` when
+`XDG_CONFIG_HOME` is unset. Writes are atomic and the file is created with
+mode `0600`.
+
+Set `PAP_PROFILE` to select a default profile. Each supported key also has an
+environment override, such as `PAP_DOMAIN`, `PAP_CLIENT_ID`, and `PAP_TIMEOUT`.
+Environment values take precedence over profile values. `pap config show`
+prints each effective value's source; its JSON representation is versioned
+with `schema_version: 1`.
+
+The configuration store deliberately rejects unknown keys. Do not put Account
+Tokens, passwords, authorization codes, private keys, assertions, DPoP proofs,
+or mediated secrets in this file or in command arguments. Future commands that
+need secrets will resolve Reactor `TokenStore` and `KeyStore` contributions and
+will expose only opaque references.
+
+## Inspect a company
+
+```bash
+pap company discover example.com
+pap company verify example.com --json
+pap extensions list example.com --json
+pap extensions check operations --version 1 example.com
+```
+
+Both company commands use the SDK's safe discovery client. `verify` therefore
+checks the requested organization domain, OAuth issuer relationship, redirect
+policy, response bound, and public-address preflight; it is not only a JSON
+syntax check. JSON output contains no terminal decoration and currently uses
+schema version 1.
+
+## Why this is a Reactor extension
+
+`personal_agent_protocol.cli` only creates the host and calls
+`reactor.cli.extend(app)`. The distribution advertises its plugin using the
+standard entry-point group:
+
+```toml
+[project.entry-points."datalayer.reactor.cli"]
+pap = "personal_agent_protocol.cli_plugin:plugin"
+```
+
+`PapCliPlugin.provide_cli` contributes the `config`, `company`, and
+`extensions` Typer applications. A broken third-party CLI extension is warned
+about and skipped by Reactor. Installed companion distributions can add their
+own groups without importing PAP CLI internals or changing the `pap` host:
+
+```toml
+[project.entry-points."datalayer.reactor.cli"]
+acme_pap = "acme_pap.cli:plugin"
+```
+
+```python
+import typer
+from reactor import PluginManifest
+
+
+class AcmePapCli:
+    def provide_cli(self, cli: typer.Typer) -> None:
+        acme = typer.Typer(name="acme", help="Acme PAP tools.")
+
+        @acme.command("inspect")
+        def inspect() -> None:
+            typer.echo("Acme inspection")
+
+        cli.add_typer(acme)
+
+
+def plugin() -> tuple[PluginManifest, AcmePapCli]:
+    manifest = PluginManifest(name="acme.pap.cli", version="1.0.0")
+    return manifest, AcmePapCli()
+```
+
+Use `provide_cli` for command groups resolved when a command-line process
+starts. Use `provide_slash_commands` for safe actions that run inside a live
+Studio or REPL session. The PAP plugin currently registers
+`pap.company.discover` in that live registry. Reactor owns its enable, disable,
+collision, and unregister lifecycle, so a command disappears when its plugin
+does.
+
+Keep extension command IDs globally namespaced, and call public SDK services
+from command handlers. Do not couple an extension to
+`personal_agent_protocol.cli_plugin` implementation details.

@@ -1,0 +1,64 @@
+---
+title: Extensions
+---
+
+# Extensions
+
+PAP extensions add optional wire capabilities. Reactor extensions add or
+replace SDK implementation components. They complement one another but are not
+the same abstraction.
+
+## Negotiate a PAP extension
+
+A company advertises support in its discovery document:
+
+```json
+{
+  "extensions": {
+    "operations": {
+      "version": "1",
+      "endpoint": "https://api.example.com/poppy/operations"
+    }
+  }
+}
+```
+
+A personal agent advertises compatible extensions in its client metadata.
+Protocol-defined extensions use plain names. Third-party names begin with a
+domain controlled by their author, such as `example.com/gift-wrap`. Both sides
+ignore unknown extensions and unknown fields.
+
+## Contribute an SDK handler
+
+The SDK exposes the shared Reactor point ID `pap.extensionHandler`. A handler
+declares the wire extension name and supported major version. It should be
+advertised only while its Reactor plugin is active.
+
+```typescript
+import { contribution, definePlugin } from '@datalayer/reactor';
+import { ExtensionHandlers } from '@datalayer/personal-agent-protocol';
+
+const operationsHandler = {
+  name: 'operations',
+  majorVersion: 1,
+};
+
+const plugin = definePlugin({
+  name: 'example.operations',
+  version: '0.1.0',
+  contributes: [
+    contribution(
+      ExtensionHandlers,
+      operationsHandler,
+      {id: 'operations-v1', order: 100},
+    ),
+  ],
+});
+```
+
+This registers capability metadata only; it is not an Operations implementation.
+An executable handler contract and example remain planned.
+
+Extensions cannot weaken mandatory protocol checks such as issuer binding,
+secret redaction, proof verification, replay protection, or exact operation
+revision approval.

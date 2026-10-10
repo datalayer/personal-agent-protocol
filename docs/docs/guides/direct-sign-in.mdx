@@ -1,0 +1,89 @@
+---
+title: Direct Sign-In primitives
+---
+
+# Direct Sign-In primitives
+
+The SDKs implement the safe local primitives for PAP Direct Sign-In: random
+OAuth state, RFC 7636 S256 PKCE, authorization URL construction, callback state
+and issuer validation, and a redacted authorization-code exchange grant.
+
+:::caution Boundary of the current implementation
+
+The SDKs do not yet open a browser, persist one-use state, sign the client
+assertion, create the DPoP proof, or send the token request. Keep the request
+object in trusted application storage and open its URL only in the user's own
+browser.
+
+:::
+
+## Python
+
+```python
+from personal_agent_protocol import (
+    AuthorizationCodeGrant,
+    build_direct_sign_in_request,
+    validate_direct_sign_in_callback,
+)
+
+sign_in = build_direct_sign_in_request(
+    authorization_endpoint="https://auth.example.com/oauth/authorize",
+    issuer="https://auth.example.com",
+    client_id="https://agent.example/agent.json",
+    redirect_uri="https://agent.example/oauth/callback",
+    scopes=("poppy:read",),
+)
+
+# Open only this deliberately revealed URL in the user's browser.
+authorization_url = sign_in.authorization_url.get_secret_value()
+
+# Later, at the registered callback route:
+callback = validate_direct_sign_in_callback(sign_in, incoming_url)
+grant = AuthorizationCodeGrant(
+    code=callback.code,
+    redirect_uri=sign_in.redirect_uri,
+    code_verifier=sign_in.code_verifier,
+    session_id="ses_2Lm0",
+    client_id=sign_in.client_id,
+    client_assertion=signed_client_assertion,
+)
+```
+
+## TypeScript
+
+```typescript
+import {
+  AuthorizationCodeGrant,
+  buildDirectSignInRequest,
+  validateDirectSignInCallback,
+} from '@datalayer/personal-agent-protocol';
+
+const signIn = await buildDirectSignInRequest({
+  authorizationEndpoint: 'https://auth.example.com/oauth/authorize',
+  issuer: 'https://auth.example.com',
+  clientId: 'https://agent.example/agent.json',
+  redirectUri: 'https://agent.example/oauth/callback',
+  scopes: ['poppy:read'],
+});
+
+openInUsersBrowser(signIn.authorizationUrl.reveal());
+
+const callback = validateDirectSignInCallback(signIn, incomingUrl);
+const grant = new AuthorizationCodeGrant({
+  code: callback.code.reveal(),
+  redirectUri: signIn.redirectUri,
+  codeVerifier: signIn.codeVerifier.reveal(),
+  sessionId: 'ses_2Lm0',
+  clientId: signIn.clientId,
+  clientAssertion: signedClientAssertion,
+});
+```
+
+The request URL, state, verifier, authorization code, and client assertion are
+redacted by default. Reveal them only at the browser handoff or final HTTPS
+serialization boundary. A callback is rejected when its redirect location,
+state, or issuer differs from the request, when the user denied access, or when
+the one-time code is absent.
+
+See upstream [Direct Sign-In](https://personalagentprotocol.org/docs/spec#45-direct-sign-in)
+for the complete normative flow.

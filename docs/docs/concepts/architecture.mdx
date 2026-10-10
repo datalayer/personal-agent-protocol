@@ -1,0 +1,57 @@
+---
+sidebar_position: 3
+title: Architecture
+---
+
+# Reactor-first architecture
+
+Both SDKs use [Datalayer Reactor](https://reactor.datalayer.tech) as their
+extension runtime. The protocol boundary owns mandatory validation and
+security rules; plugins provide replaceable infrastructure and optional PAP
+extensions.
+
+The first shared contribution points are:
+
+| ID | Responsibility |
+| --- | --- |
+| `pap.protocolProfile` | Version-specific wire behavior |
+| `pap.discoveryTransport` | Credential-free metadata transport |
+| `pap.urlSafetyPolicy` | HTTPS, DNS, IP, and redirect policy |
+| `pap.extensionHandler` | Named, major-versioned PAP extensions |
+
+Lower `order` values have higher priority. Equal winning priorities fail
+closed instead of selecting a provider by load order.
+
+```mermaid
+flowchart LR
+  App[Application] --> SDK[PAP protocol core]
+  SDK --> Profile[Protocol profile]
+  SDK --> Transport[Discovery transport]
+  SDK --> Safety[URL safety policy]
+  SDK --> Handler[Extension handlers]
+  Profile & Transport & Safety & Handler --> Reactor[Datalayer Reactor]
+```
+
+## What remains in the protocol core
+
+Reactor makes infrastructure replaceable; it does not make protocol invariants
+optional. Parsing, version compatibility, domain and issuer binding, secret
+redaction, token/resource binding, replay protection, and exact revision
+approval remain owned by the PAP core.
+
+Applications may supply an existing Reactor host so PAP participates in the
+same plugin lifecycle as the rest of their platform. Otherwise each SDK can
+assemble a host with safe defaults.
+
+## Two meanings of extension
+
+A **PAP extension** is negotiated on the wire by name and major version. A
+**Reactor extension** packages plugins and manages their lifecycle. A Reactor
+extension may contribute a PAP extension handler, but the SDK advertises that
+wire capability only while a compatible handler is active.
+
+Plugins cannot turn off domain/issuer binding, secret redaction, token/resource
+binding, replay protection, or exact operation-revision approval.
+
+See [Extensions](/guides/extensions/) for the relationship between negotiated
+wire capabilities and runtime plugins.

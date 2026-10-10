@@ -1,0 +1,58 @@
+---
+sidebar_position: 7
+title: Security
+---
+
+# Security boundaries
+
+PAP handles credentials and actions on a user's behalf. Treat these as release
+requirements:
+
+- Never put tokens, credentials, authorization codes, private keys, assertions,
+  DPoP proofs, or cookies in model context, logs, URLs, analytics, or errors.
+- Validate the exact discovery domain and OAuth issuer relationship.
+- Defend metadata requests against SSRF and DNS rebinding; bound redirects,
+  response bytes, duration, and caching.
+- Generate pairwise user IDs randomly and persist the mapping. Do not derive
+  them from personal data, even with a keyed hash.
+- Keep account tokens encrypted at rest and session tokens in memory where
+  practical.
+- Create a fresh DPoP proof for every request and every retry.
+- Use resource-bound Bearer tokens only for MCP; require DPoP elsewhere.
+- Require exact current-revision approval before confirming an operation.
+
+## Trust boundaries
+
+| Boundary | Minimum control |
+| --- | --- |
+| Remote metadata | HTTPS, bounded redirects/bytes/time, strict JSON, SSRF and DNS-rebinding defenses. |
+| Agent identity | Fetch verified client metadata and JWKS; allow only asymmetric approved algorithms. |
+| Session request | Verify issuer, subject, audience, time window, signature, and single-use `jti`. |
+| Authorized request | Verify token, DPoP proof, method, URL, nonce, replay ID, resource, and scopes. |
+| Model/tool boundary | Pass opaque references, never credentials or private signing material. |
+| Consequential action | Approve and confirm the exact current operation revision. |
+
+## Secret inventory
+
+Treat session and account tokens, private keys, client and session assertions,
+DPoP proofs, authorization codes, device codes, one-time codes, mediated
+credentials, and cookies as secrets. Redact them before requests reach logging,
+tracing, error reporting, analytics, or model instrumentation.
+
+## Metadata fetching
+
+Metadata URLs are controlled by the other party. Resolve and inspect every
+address, reject loopback/private/link-local targets unless explicitly allowed,
+validate the address actually connected to, and repeat the check for every
+redirect. Never forward credentials, cookies, or authorization headers.
+
+## Current limitations
+
+The SDK implements asymmetric assertion signing and DPoP proof creation and
+verification. Applications still provide key custody and an atomic replay
+cache; the SDK does not provide durable replay storage, token persistence,
+browser handoff, or complete server middleware. Do not interpret the current
+primitives as a complete authorization service.
+
+See the official [implementation guides](https://personalagentprotocol.org/docs/guides)
+for the complete upstream guidance.

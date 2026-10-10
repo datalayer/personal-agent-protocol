@@ -1,0 +1,78 @@
+---
+title: SDK design
+---
+
+# SDK design
+
+The Python and TypeScript packages share one protocol ledger, fixtures, public
+concepts, and Reactor contribution IDs while retaining idiomatic language APIs.
+
+## Repository structure
+
+```text
+personal-agent-protocol/
+├── protocol/                  # upstream revision, requirements, shared fixtures
+├── personal_agent_protocol/  # Python package
+├── packages/typescript/      # TypeScript package
+├── tests/                     # Python tests
+├── examples/                  # language and interoperability examples
+├── conformance/               # planned black-box suites
+└── docs/                      # this Docusaurus site
+```
+
+The protocol directory is an implementation aid, not a fork of the standard.
+Wire models retain unknown fields for compatible minor versions. Handwritten
+validation owns cross-field, URL-trust, token, and state-transition rules.
+
+## Shared public concepts
+
+Both SDKs converge on discovery and OAuth metadata, personal-agent metadata,
+sessions and token references, sign-in state machines, conversations and event
+streams, operations and revisions, and safe typed errors. Secrets redact
+themselves in representations and serialized diagnostic output. Applications
+receive handles or references; only the credential store and final HTTP layer
+receive raw secrets.
+
+## Reactor contribution contract
+
+| Point ID | Responsibility |
+| --- | --- |
+| `pap.protocolProfile` | Version-specific parsing and behavior. |
+| `pap.discoveryTransport` | Credential-free bounded metadata transport. |
+| `pap.urlSafetyPolicy` | HTTPS, DNS, IP, and redirect policy. |
+| `pap.extensionHandler` | Named, major-versioned PAP extensions. |
+| `pap.clock` / `pap.randomSource` | Testable time and cryptographically secure entropy. |
+| `pap.signer` / `pap.keyStore` | Assertions and protected-key references. |
+| `pap.dpopProofProvider` | Fresh DPoP proofs without exposing private keys. |
+| `pap.tokenStore` / `pap.cache` | Secret references, rotation, revocation, and bounded caches. |
+| `pap.browserHandoff` | Human-only authorization URLs opened by a trusted host surface. |
+| `pap.conversationProtocol` | Conversation transports. |
+| `pap.apiAdapter` | OpenAPI, MCP, and future interface adapters. |
+| `pap.companyStore` | Durable company-side protocol state. |
+| `pap.operationHandler` | Proposal, policy, confirmation, execution, and recovery. |
+
+Lower contribution order wins. Equal winning priorities fail closed. Plugins
+cannot disable issuer/domain binding, redaction, proof freshness,
+token/resource binding, replay protection, or exact-revision approval.
+
+Python and TypeScript export the same point IDs and equivalent contracts. The
+core plugin provides only the UTC clock and operating-system random source.
+Signing, DPoP proofs, protected keys, tokens, cache, and browser handoff
+intentionally have no in-memory or browser fallback: a caller that needs one
+and has no active provider fails closed. Tests cover missing providers,
+equal-priority ambiguity, plugin disable, and re-enable for every required
+security contribution.
+
+## Compatibility policy
+
+- SDKs remain `0.x` while PAP is a draft and state the supported profile.
+- Unsupported major versions are rejected; later minor versions and unknown
+  fields are tolerated as the protocol requires.
+- Deprecated draft behavior requires an explicit compatibility profile.
+- Python and TypeScript run over the same fixtures before either releases.
+- Upstream changes are reviewed; scraped documentation never changes wire
+  behavior automatically.
+
+See [Architecture](/concepts/architecture/),
+[Conformance](/guides/conformance/), and
+[Protocol status](/protocol/status/) for current evidence.

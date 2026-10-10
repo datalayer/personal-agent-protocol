@@ -1,0 +1,113 @@
+---
+sidebar_position: 5
+title: TypeScript SDK
+---
+
+# TypeScript SDK
+
+`@datalayer/personal-agent-protocol` provides portable discovery, validation,
+Reactor integration, and PAP session primitives.
+
+## Install and build
+
+```bash
+npm install @datalayer/personal-agent-protocol
+```
+
+The package is ESM and publishes TypeScript declarations.
+
+Incoming protocol JSON is decoded with `parseJsonStrict`, which rejects
+duplicate member names at every depth, including names that become equal only
+after JSON escape decoding. Discovery uses this parser automatically before
+wire-model validation.
+
+## Discovery
+
+```typescript
+import {
+  buildPapReactor,
+  discoverCompany,
+} from '@datalayer/personal-agent-protocol';
+
+const reactor = buildPapReactor({
+  assertSafeUrl: async url => serverDnsPolicy.assertSafe(url),
+});
+const company = await discoverCompany('example.com', { reactor });
+```
+
+The published ESM entry bundles Reactor's framework-neutral core so it can run
+directly in Node and in browser bundlers. Platform signing keys must remain on
+a server or KMS; they must never be shipped in a browser or desktop bundle.
+
+The SDK exports aligned `Clocks`, `RandomSources`, `Signers`,
+`DpopProofProviders`, `KeyStores`, `TokenStores`, `Caches`, and
+`BrowserHandoffs` contribution points. The core plugin provides only system
+time and secure randomness. Security-dependent services have no fallback and
+resolution fails closed when missing or ambiguous.
+
+## Session primitives
+
+```typescript
+import {
+  SessionGrant,
+  buildSessionAssertionClaims,
+  generatePairwiseUserId,
+  parseSessionToken,
+} from '@datalayer/personal-agent-protocol';
+
+const claims = buildSessionAssertionClaims({
+  clientId: 'https://agent.example/agent.json',
+  pairwiseUserId: generatePairwiseUserId(),
+  tokenEndpoint: 'https://auth.example.com/oauth/token',
+});
+
+// Signing is intentionally provided by a server or key-custody integration.
+const grant = new SessionGrant({
+  assertion: 'signed-session-assertion',
+  clientId: claims.iss,
+  clientAssertion: 'signed-client-assertion',
+});
+
+const token = parseSessionToken(await response.json());
+console.log(token.sessionId, token.scopes);
+```
+
+`SecretValue` renders as `[REDACTED]` in strings and JSON. Calling `reveal()`
+is an explicit boundary for authorization and token requests; keep that value
+out of logs, UI state, analytics, and model-visible tools.
+
+`SessionClient` implements signed-out session start and renewal over `fetch`.
+It requires host-provided signer and DPoP contributions, supports
+`AbortSignal`, retries a DPoP nonce challenge once with fresh proofs, and
+rejects redirects and malformed token responses. See
+[Signed-out sessions](/guides/sessions/) for usage and the exact security
+boundary.
+
+`JoseSigner`, `JoseDpopProofProvider`, and `verifyDpopProof` use the maintained
+`jose` package and Web Crypto. Only ES256 and RS256 are accepted; ES256 is the
+default. See [JOSE and DPoP](/guides/cryptography/) for key and replay-cache
+requirements.
+
+The package also exports `buildDirectSignInRequest`,
+`validateDirectSignInCallback`, and `AuthorizationCodeGrant`. See
+[Direct Sign-In primitives](/guides/direct-sign-in/) for the complete local
+flow and its current network boundary.
+
+## Client, conversation, and Operations models
+
+Use `parseClientMetadata`, `parseMessage`, `parseConversationEvent`,
+`parseConversationEventPage`, and `parseOperation` at trust boundaries. These
+parsers preserve unknown compatible fields and future event types while
+enforcing the required shapes of known draft 0.1 and Operations v1 objects.
+
+The models are aligned with Python through shared fixtures. Conversation and
+Operations HTTP clients are still planned; parsing an object does not perform
+message-id deduplication, cursor persistence, approval, confirmation, or
+recovery.
+
+## Server-side URL safety
+
+The portable default rejects obvious local and private literal addresses. It
+cannot prove which address DNS selected. Server applications should provide
+`assertSafeUrl` that resolves the host, rejects every non-public address, and
+ensures the transport connects to an approved address.

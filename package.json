@@ -1,0 +1,14 @@
+{
+  "name": "personal-agent-protocol-workspace",
+  "private": true,
+  "workspaces": ["packages/typescript"],
+  "scripts": {
+    "build": "npm run build --prefix packages/typescript",
+    "test": "npm run test --prefix packages/typescript",
+    "typecheck": "npm run typecheck --prefix packages/typescript"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3"
+  }
+}

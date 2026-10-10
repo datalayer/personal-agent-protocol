@@ -1,0 +1,87 @@
+---
+sidebar_position: 2
+title: Getting started
+---
+
+# Getting started
+
+This quick start discovers a company, validates its declaration and OAuth
+metadata, and prints the interfaces it offers. The SDKs target PAP draft 0.1
+and are preview software.
+
+## Prerequisites
+
+- Python 3.10 or newer, or a current Node.js release;
+- outbound HTTPS and DNS access; and
+- a company domain that publishes `/.well-known/poppy.json`.
+
+## Python
+
+```bash
+python -m pip install personal-agent-protocol
+```
+
+```python
+import asyncio
+
+from personal_agent_protocol import DiscoveryClient
+
+
+async def main() -> None:
+    async with DiscoveryClient() as client:
+        company = await client.discover("example.com")
+        print(company.document.organization.name)
+        for api in company.document.apis:
+            print(api.type, api.description, api.url)
+
+
+asyncio.run(main())
+```
+
+Python discovery resolves every hostname and rejects non-public addresses by
+default. It follows at most three redirects, requires HTTPS and JSON, and caps
+metadata responses at 100 KiB. Applications with an intentional private test
+network must opt in explicitly.
+
+## TypeScript
+
+```bash
+npm install @datalayer/personal-agent-protocol
+```
+
+```typescript
+import { discoverCompany } from '@datalayer/personal-agent-protocol';
+
+const company = await discoverCompany('example.com');
+console.log(company.document.organization.name);
+for (const api of company.document.apis) {
+  console.log(api.type, api.description, api.url);
+}
+```
+
+Browser-compatible TypeScript cannot verify the IP selected by DNS. A server
+must contribute a DNS-aware URL safety policy before using discovery against
+untrusted domains.
+
+## What was verified
+
+When discovery succeeds, the SDK has checked:
+
+- the requested input is a domain rather than an arbitrary URL;
+- discovery and redirect URLs use HTTPS;
+- the document supports protocol major version `0`;
+- `organization.domain` matches the domain requested; and
+- when authorization is advertised, OAuth metadata exactly matches the issuer
+  and authorizes the company domain through `poppy_domains`.
+
+Success does not mean every advertised endpoint is trusted forever. Retain the
+verified company context, apply URL safety checks to later metadata, and use
+only features supported by your protocol profile.
+
+## Next
+
+- [Architecture](/concepts/architecture/)
+- [Protocol tour](/concepts/protocol-tour/)
+- [Python SDK](/sdk/python/)
+- [TypeScript SDK](/sdk/typescript/)
+- [Security](/security/)

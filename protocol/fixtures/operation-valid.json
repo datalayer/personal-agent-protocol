@@ -1,0 +1,15 @@
+{
+  "operation_id": "exc_5Rt2",
+  "revision": 1,
+  "state": "proposed",
+  "summary": "Exchange the jacket for the insulated version for USD 70.00 more.",
+  "terms": {
+    "order_id": "ord_7Hk2",
+    "price_difference": {"amount": "70.00", "currency": "USD"}
+  },
+  "expires_at": "2026-10-10T18:00:00Z",
+  "user_approval_required": true,
+  "url": "https://example.com/orders/ord_7Hk2/exchanges/exc_5Rt2",
+  "confirmation": null,
+  "result": null
+}

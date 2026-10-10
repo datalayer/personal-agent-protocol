@@ -1,0 +1,67 @@
+---
+title: Integrate a company
+---
+
+# Integrate a company
+
+:::info SDK status
+
+The company/server SDK is planned. This page is initial integration guidance,
+not documentation for released server handlers.
+
+:::
+
+## Start with discovery
+
+Publish `https://your-domain.example/.well-known/poppy.json`. Advertise only
+interfaces that are deployed and authorized consistently.
+
+```json
+{
+  "protocol_version": "0.1",
+  "organization": {
+    "name": "Example Company",
+    "domain": "example.com"
+  },
+  "auth": {
+    "issuer": "https://auth.example.com",
+    "direct": {"scopes": ["poppy:read", "poppy:write"]}
+  },
+  "apis": [
+    {
+      "type": "openapi",
+      "url": "https://api.example.com/openapi.json",
+      "description": "Orders and returns"
+    }
+  ]
+}
+```
+
+The issuer's OAuth metadata must list the discovery domain in `poppy_domains`.
+Keep endpoint authorization in application code or a gateway; never ask a
+model to enforce scopes.
+
+## Implement in this order
+
+1. Publish discovery and OAuth metadata with ordinary signed-out access.
+2. Verify personal-agent client metadata, public keys, assertions, and replay
+   IDs.
+3. Issue short-lived DPoP-bound session tokens.
+4. Add direct sign-in and central scope enforcement.
+5. Expose structured APIs or a company-agent conversation endpoint.
+6. Add Operations when actions require exact, durable approval.
+
+## Required operational controls
+
+- One distributed replay cache for assertion and DPoP identifiers.
+- Rate limits by personal-agent client, user, session, and account as relevant.
+- `Cache-Control: no-store` on responses carrying credentials or codes.
+- Immediate sign-out propagation, or very short token lifetimes when that is
+  not possible.
+- Identical authorization semantics across APIs, conversations, browser
+  sessions, company-agent tools, and human-support tools.
+- Generic external errors that do not disclose whether another user's resource
+  exists.
+
+Use the upstream [company implementation guidance](https://personalagentprotocol.org/docs/guides)
+alongside the normative specification.

@@ -1,0 +1,121 @@
+protocol: personal-agent-protocol
+profile: "0.1"
+upstream_revision: "2026-10-09"
+requirements:
+  - id: PAP-1-SHOULD-EXTENSIBLE
+    section: "1.2"
+    role: sdk
+    statement: Preserve PAP extensibility and ignore unknown fields and extensions.
+    status: partial
+    python: personal_agent_protocol.reactor.EXTENSION_HANDLERS
+    typescript: ExtensionHandlers
+  - id: PAP-3-MUST-01
+    section: "3"
+    role: company
+    statement: Publish poppy.json at the HTTPS well-known URL.
+    status: planned
+  - id: PAP-3-MUST-02
+    section: "3"
+    role: personal-agent
+    statement: Follow discovery redirects only to HTTPS URLs.
+    status: implemented
+    python: personal_agent_protocol.discovery.DiscoveryClient
+    typescript: discoverCompany
+  - id: PAP-3-MUST-03
+    section: "3.1"
+    role: personal-agent
+    statement: Reject an unsupported protocol major version.
+    status: implemented
+    python: personal_agent_protocol.models.DiscoveryDocument
+    typescript: parseDiscoveryDocument
+  - id: PAP-3-MUST-04
+    section: "3.1"
+    role: personal-agent
+    statement: Match organization.domain to the requested discovery domain.
+    status: implemented
+    python: personal_agent_protocol.discovery.DiscoveryClient
+    typescript: discoverCompany
+  - id: PAP-3.2-MUST-01
+    section: "3.2"
+    role: personal-agent
+    statement: Verify exact issuer and company membership in poppy_domains.
+    status: implemented
+    python: personal_agent_protocol.discovery.DiscoveryClient
+    typescript: discoverCompany
+  - id: PAP-4.1-MUST-01
+    section: "4.1"
+    role: company
+    statement: Validate personal-agent client metadata and same-domain URLs.
+    status: partial
+    python: personal_agent_protocol.models.ClientMetadata
+    typescript: parseClientMetadata
+  - id: PAP-4.2-MUST-01
+    section: "4.2"
+    role: personal-agent
+    statement: Start a session with a signed JWT bearer assertion.
+    status: partial
+    python: personal_agent_protocol.sessions.SessionClient
+    typescript: SessionClient
+  - id: PAP-4.2-MUST-02
+    section: "4.2"
+    role: personal-agent
+    statement: Use a stable opaque non-PII User ID per user and company issuer.
+    status: partial
+    python: personal_agent_protocol.sessions.generate_pairwise_user_id
+    typescript: generatePairwiseUserId
+  - id: PAP-4.2-MUST-03
+    section: "4.2"
+    role: personal-agent
+    statement: Treat Session Tokens as opaque and do not depend on their contents.
+    status: implemented
+    python: personal_agent_protocol.sessions.SessionToken
+    typescript: parseSessionToken
+  - id: PAP-4.3-MUST-01
+    section: "4.3"
+    role: both
+    statement: Bind and verify non-MCP session tokens with DPoP.
+    status: partial
+    python: personal_agent_protocol.crypto.JoseDpopProofProvider; personal_agent_protocol.crypto.verify_dpop_proof
+    typescript: JoseDpopProofProvider; verifyDpopProof
+  - id: PAP-4.5-MUST-01
+    section: "4.5"
+    role: personal-agent
+    statement: Use random one-use state and S256 PKCE for Direct Sign-In.
+    status: partial
+    python: personal_agent_protocol.auth.build_direct_sign_in_request
+    typescript: buildDirectSignInRequest
+  - id: PAP-4.5-MUST-02
+    section: "4.5"
+    role: personal-agent
+    statement: Validate callback state and exact company issuer before exchanging a code.
+    status: implemented
+    python: personal_agent_protocol.auth.validate_direct_sign_in_callback
+    typescript: validateDirectSignInCallback
+  - id: PAP-4.5-MUST-03
+    section: "4.5"
+    role: personal-agent
+    statement: Include the existing session ID in the authorization-code exchange.
+    status: partial
+    python: personal_agent_protocol.auth.AuthorizationCodeGrant
+    typescript: AuthorizationCodeGrant
+  - id: PAP-7.3-MUST-01
+    section: "7.3"
+    role: both
+    statement: Retry a message idempotently with the same message ID.
+    status: model-only
+    python: personal_agent_protocol.models.Message
+    typescript: parseMessage
+  - id: PAP-7.5-MUST-01
+    section: "7.5"
+    role: both
+    statement: Preserve ordered events, opaque cursors, status, responder, and unknown event types.
+    status: model-only
+    python: personal_agent_protocol.models.ConversationEventPage
+    typescript: parseConversationEventPage
+  - id: PAP-OPS-5-MUST-01
+    section: "operations 5"
+    role: both
+    statement: Confirm only the exact current operation revision.
+    status: model-only
+    python: personal_agent_protocol.models.Operation
+    typescript: parseOperation

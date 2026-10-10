@@ -1,0 +1,169 @@
+# Copyright (c) 2023-2026 Datalayer, Inc.
+# Distributed under the terms of the Modified BSD License.
+
+# Publishes the release a tag names to PyPI and npm without stored tokens.
+# Each registry trusts this workflow through its own GitHub environment. The
+# tag must name both package versions; versions already published are skipped.
+# See RELEASE.md.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.plan.outputs.python }}
+      typescript: ${{ steps.plan.outputs.typescript }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Use an npm CLI with trusted-publishing support
+        run: npm install --global npm@latest
+
+      - name: Check the tag names both package versions
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          python_version="$(python -c "import re;print(re.search(r'__version__\s*=\s*[\"\']([^\"\']+)', open('personal_agent_protocol/__version__.py').read())[1])")"
+          typescript_version="$(node -p "require('./packages/typescript/package.json').version")"
+          echo "tag=$tag python=$python_version typescript=$typescript_version"
+          test "$tag" = "$python_version"
+          test "$tag" = "$typescript_version"
+
+      - name: Find which packages need publishing
+        id: plan
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          status="$(curl -sL -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/personal-agent-protocol/$version/json")"
+          if [ "$status" = "200" ]; then
+            echo "PyPI: personal-agent-protocol $version is already published, skipping"
+            echo "python=" >> "$GITHUB_OUTPUT"
+          else
+            echo "PyPI: personal-agent-protocol $version will be published"
+            echo "python=yes" >> "$GITHUB_OUTPUT"
+          fi
+          if npm view "@datalayer/personal-agent-protocol@$version" version --json >/dev/null 2>&1; then
+            echo "npm: @datalayer/personal-agent-protocol $version is already published, skipping"
+            echo "typescript=" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm: @datalayer/personal-agent-protocol $version will be published"
+            echo "typescript=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Python distributions
+        if: steps.plan.outputs.python != ''
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip build
+          python -m build --sdist --wheel --outdir dist .
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.python != ''
+        with:
+          name: python
+          path: dist/*
+
+      - name: Build and test the TypeScript package
+        if: steps.plan.outputs.typescript != ''
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          mkdir -p npm-dist
+          npm pack ./packages/typescript --pack-destination npm-dist
+          ls -la npm-dist
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.typescript != ''
+        with:
+          name: npm
+          path: npm-dist/*
+
+  pypi:
+    needs: build
+    if: needs.build.outputs.python != ''
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  npm:
+    needs: build
+    if: needs.build.outputs.typescript != ''
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+      - name: Use an npm CLI with trusted-publishing support
+        run: npm install --global npm@latest
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm
+          path: npm-dist
+      - name: Publish with npm trusted publishing
+        run: npm publish npm-dist/*.tgz --access public
+
+  release:
+    name: GitHub release
+    needs: [build, pypi, npm]
+    if: >-
+      always() &&
+      needs.build.result == 'success' &&
+      needs.pypi.result != 'failure' &&
+      needs.npm.result != 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Create the release with generated notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && exit 0
+          gh release create "$GITHUB_REF_NAME" --title "Release $version" --generate-notes \
+            --notes "- [PyPI personal-agent-protocol](https://pypi.org/project/personal-agent-protocol/$version/)
+          - [npm @datalayer/personal-agent-protocol](https://www.npmjs.com/package/@datalayer/personal-agent-protocol/v/$version)"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,102 @@
+---
+title: Signed-out sessions
+---
+
+# Start and renew signed-out sessions
+
+The Python and TypeScript `SessionClient` implementations cover the PAP 4.2
+personal-agent side of signed-out session creation and renewal. They send the
+JWT bearer grant to the company's token endpoint and return an opaque,
+proof-bound session token.
+
+The client is intentionally not a key-management system. Before calling it,
+the host must register exactly one active `pap.signer` and
+`pap.dpopProofProvider` contribution in its Reactor platform. Those providers
+must keep private keys in protected custody and return only compact signed
+values. Missing or equal-priority providers fail closed.
+
+## Python
+
+```python
+import httpx
+
+from personal_agent_protocol import SessionClient
+
+async with httpx.AsyncClient() as http:
+    sessions = SessionClient(reactor=reactor, http_client=http)
+    token = await sessions.start(
+        client_id="https://agent.example/agent.json",
+        pairwise_user_id=pairwise_user_id,
+        issuer="https://auth.company.example",
+        token_endpoint="https://auth.company.example/oauth/token",
+        tenant_id="local-user-42",
+    )
+
+    renewed = await sessions.renew(
+        client_id="https://agent.example/agent.json",
+        pairwise_user_id=pairwise_user_id,
+        issuer="https://auth.company.example",
+        token_endpoint="https://auth.company.example/oauth/token",
+        tenant_id="local-user-42",
+        session_id=token.session_id,
+    )
+```
+
+The application owns an injected HTTPX client's lifecycle. Keep
+`token.access_token` as a secret and persist it only through protected token
+storage.
+
+## TypeScript
+
+```typescript
+import { SessionClient } from '@datalayer/personal-agent-protocol';
+
+const sessions = new SessionClient({ reactor });
+const token = await sessions.start({
+  clientId: 'https://agent.example/agent.json',
+  pairwiseUserId,
+  issuer: 'https://auth.company.example',
+  tokenEndpoint: 'https://auth.company.example/oauth/token',
+  tenantId: 'local-user-42',
+  signal: abortController.signal,
+});
+
+const renewed = await sessions.renew({
+  clientId: 'https://agent.example/agent.json',
+  pairwiseUserId,
+  issuer: 'https://auth.company.example',
+  tokenEndpoint: 'https://auth.company.example/oauth/token',
+  tenantId: 'local-user-42',
+  sessionId: token.sessionId,
+});
+```
+
+## Enforced request boundary
+
+For each attempt, the client:
+
+- creates fresh session and private-key JWT claims using Reactor time and
+  cryptographic randomness;
+- signs both assertions through `pap.signer`;
+- creates a fresh proof through `pap.dpopProofProvider`;
+- sends a form-encoded POST without browser credentials or redirects;
+- accepts only bounded `application/json` responses parsed with duplicate
+  member rejection;
+- requires a `DPoP` token from a proof-bound request; and
+- retries `use_dpop_nonce` once with fresh assertions and a fresh proof.
+
+Remote error descriptions and response bodies are not copied into public
+errors. The stable OAuth error code, HTTP status, and optional `Retry-After`
+value remain available for policy and retry decisions.
+
+## Deliberate limits
+
+The SDK ships JOSE signing plus DPoP creation and verification, but it does not
+ship managed key custody, a durable replay cache, or a company-side token
+service. An application must supply those host capabilities before using real
+credentials. Direct, device, and mediated sign-in happen after this signed-out
+session and remain separate implementation work.
+
+See the upstream [session specification](https://personalagentprotocol.org/docs/spec)
+and the local [protocol status](/protocol/status/) for the current coverage
+boundary.

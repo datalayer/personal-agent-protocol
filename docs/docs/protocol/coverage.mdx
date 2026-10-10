@@ -1,0 +1,71 @@
+---
+title: Protocol coverage
+---
+
+# Protocol coverage
+
+The SDKs target **Personal Agent Protocol draft 0.1, updated October 9, 2026**.
+The upstream draft remains authoritative. This page records the surface that
+the implementation and conformance suite must eventually cover.
+
+## Sources
+
+- [Overview and principles](https://personalagentprotocol.org/docs/overview)
+- [Draft specification](https://personalagentprotocol.org/docs/spec)
+- [Implementation guides](https://personalagentprotocol.org/docs/guides)
+- [Extensions](https://personalagentprotocol.org/docs/extensions)
+- [Operations version 1](https://personalagentprotocol.org/docs/extensions/operations)
+- [Open topics](https://personalagentprotocol.org/docs/open-topics)
+
+The repository records the reviewed upstream revision in
+`protocol/UPSTREAM.md` and maps individual normative requirements in
+`protocol/requirements.yaml`.
+
+The shared fixture corpus now covers discovery, OAuth metadata, client
+metadata, session-token responses, conversation event pages, and Operations
+objects. Both SDKs preserve unknown compatible fields and event types while
+validating the required shape of known types.
+
+## Required surface
+
+| Area | Required behavior |
+| --- | --- |
+| Discovery | Fetch `/.well-known/poppy.json`; validate domain, supported major version, HTTPS redirects, interfaces, issuer, and extensions; cache within safe bounds. |
+| Company identity | Fetch RFC 8414 metadata and bind the exact issuer to an authorized `poppy_domains` entry. |
+| Personal-agent identity | Publish and verify HTTPS client metadata, same-domain JWKS and redirects, and `private_key_jwt` authentication. |
+| User identity | Maintain one stable, opaque, non-personal ID per user and company issuer. |
+| Sessions | Start signed out, renew by session ID, preserve parallel sessions, and treat session tokens as opaque. |
+| Proof of possession | Bind non-MCP tokens to per-user/per-company DPoP keys; use a new proof per request and support nonces and replay protection. |
+| Sign-in | Support direct authorization code with PKCE, device authorization, and mediated sign-in with protected one-time-code continuation. |
+| Account access | Store rotating account tokens as secrets; exchange them only at the token endpoint; narrow scopes/resources and revoke on sign-out. |
+| APIs | Use DPoP for OpenAPI. Use resource-bound Bearer tokens only for the advertised MCP server. |
+| Web | Join an isolated browser context to the session with a short-lived assertion and a validated return location. |
+| Conversations | Create, retry idempotently, read cursor events, poll or stream, identify speakers, hand off, sign in, and close. |
+| Extensions | Negotiate named major versions while ignoring unsupported extensions and unknown fields. |
+| Operations v1 | Propose immutable revisions, obtain exact approval, confirm at most once, track, recover, and cancel across channels. |
+
+## Coverage expectations
+
+The overview's principles—existing standards, user control, privacy,
+progressive adoption, and extensibility—must appear in defaults, APIs,
+examples, and Studio copy. Security guidance becomes automated tests wherever
+possible: secret redaction, safe metadata fetches, key and token custody,
+fresh proofs, retries, rate limits, sign-in preferences, consent presentation,
+and safe errors.
+
+Operations will be implemented as an optional Reactor-backed PAP extension.
+Its conformance suite must cover exact revisions, ownership, expiry,
+idempotent confirmation, recovery, and cancellation regardless of the channel
+where an operation was proposed.
+
+## Deliberate boundaries
+
+Draft 0.1 does not define payments, push notifications, or message
+attachments. The SDKs preserve unknown extension data but do not invent wire
+formats for those areas. Company registration policy is also outside the
+protocol; implementations may expose allow/block policy without presenting it
+as a standard registration flow.
+
+PAP complements rather than replaces MCP, OpenAPI, or peer-oriented agent
+protocols. PAP scopes express what the company permits. Host application rules
+express what the user permits. An action proceeds only when both allow it.

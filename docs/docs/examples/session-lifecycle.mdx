@@ -1,0 +1,52 @@
+---
+title: Signed-out Session lifecycle
+description: Start and renew a Session with fresh assertions and DPoP proofs.
+---
+
+# Signed-out Session lifecycle
+
+A signed-out Session gives the company a stable, pairwise context before the
+user shares account identity. The Session can support public questions and a
+conversation that later continues through sign-in.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant H as PAP host
+  participant S as Reactor signer
+  participant D as Reactor DPoP provider
+  participant C as Company authorization server
+  H->>S: Sign fresh Session assertion and client assertion
+  S-->>H: Protected assertions
+  H->>D: Create fresh proof (no nonce)
+  D-->>H: DPoP proof 1
+  H->>C: Start signed-out Session
+  C-->>H: use_dpop_nonce + company nonce
+  H->>S: Sign fresh assertions for retry
+  H->>D: Create fresh proof with nonce
+  H->>C: Retry token request
+  C-->>H: DPoP Session Token, signed_in=false
+  Note over H,C: Later, before expiry
+  H->>S: Sign fresh renewal assertions
+  H->>D: Create fresh renewal proof
+  H->>C: Renew the same session_id
+  C-->>H: Renewed Session Token
+```
+
+## What the example proves
+
+- The initial Session is explicitly signed out.
+- A DPoP nonce retry produces fresh assertions and a fresh proof.
+- Renewal names the existing opaque Session ID instead of creating unrelated
+  conversational state.
+- Tokens, pairwise subjects, Session IDs, assertions, proofs, and nonces stay
+  inside host-owned code and protected storage.
+- The model sees only lifecycle status, scopes, and safe invariants.
+
+The deterministic company transport returns one nonce challenge so the retry
+path is always exercised. Production code uses the same `SessionClient` with
+real HTTPS and managed Reactor contributions.
+
+Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/session-lifecycle)
+or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/session-lifecycle).
+Continue with the [complete Direct Sign-In lifecycle](./direct-sign-in-lifecycle).

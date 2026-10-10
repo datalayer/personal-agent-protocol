@@ -1,12 +1,38 @@
 export {
   AuthorizationError,
+  BrowserSessionError,
+  ConversationError,
   DiscoveryError,
   IdentityError,
   PersonalAgentProtocolError,
   ProofError,
   ProtocolValidationError,
   SessionError,
+  TransportError,
 } from "./errors.js";
+export {
+  ConversationClient,
+  generateMessageId,
+  type ConversationClientOptions,
+  type ConversationEventOptions,
+  type ConversationReceipt,
+  type ConversationRequestOptions,
+  type ConversationResponse,
+  type StartConversationOptions,
+} from "./conversations.js";
+export {
+  DpopFetchClient,
+  type DpopFetchClientOptions,
+  type DpopFetchRequestOptions,
+} from "./transport.js";
+export {
+  BROWSER_ASSERTION_TYPE,
+  BrowserSessionClient,
+  buildBrowserAssertionClaims,
+  type BrowserAssertionClaims,
+  type BrowserAssertionOptions,
+  type BrowserSessionStart,
+} from "./browser.js";
 export {
   JoseDpopProofProvider,
   type DpopKeyMaterial,
@@ -39,6 +65,7 @@ export { parseJsonStrict } from "./json.js";
 export {
   AuthorizationStateStores,
   BrowserHandoffs,
+  BrowserFormPosts,
   Caches,
   Clocks,
   DpopProofProviders,
@@ -55,6 +82,7 @@ export {
   createPapCorePlugin,
   firstContribution,
   type BrowserHandoff,
+  type BrowserFormPost,
   type AuthorizationStateStore,
   type Clock,
   type DiscoveryTransport,

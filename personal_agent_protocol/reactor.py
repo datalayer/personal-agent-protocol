@@ -10,7 +10,7 @@ import asyncio
 import ipaddress
 import secrets
 import socket
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
@@ -140,6 +140,13 @@ class BrowserHandoff(Protocol):
     async def open(self, authorization_url: SecretStr) -> None: ...
 
 
+@runtime_checkable
+class BrowserFormPost(Protocol):
+    """Submit protected fields as a controlled top-level browser navigation."""
+
+    async def post(self, endpoint: str, fields: dict[str, SecretStr]) -> None: ...
+
+
 @dataclass(frozen=True)
 class DpopProofRequest:
     """Inputs for one fresh proof-of-possession JWT."""
@@ -203,6 +210,7 @@ PAIRWISE_USER_ID_STORES = define_contribution_point("pap.pairwiseUserIdStore")
 AUTHORIZATION_STATE_STORES = define_contribution_point("pap.authorizationStateStore")
 CACHES = define_contribution_point("pap.cache")
 BROWSER_HANDOFFS = define_contribution_point("pap.browserHandoff")
+BROWSER_FORM_POSTS = define_contribution_point("pap.browserFormPost")
 DPOP_PROOF_PROVIDERS = define_contribution_point("pap.dpopProofProvider")
 
 
@@ -301,8 +309,15 @@ def build_pap_reactor(
     http_client: httpx.AsyncClient | None = None,
     address_resolver: AddressResolver = resolve_addresses,
     allow_private_networks: bool = False,
+    plugins: Iterable[tuple[PluginManifest, object]] = (),
 ) -> tuple[PluginPlatform, httpx.AsyncClient | None]:
-    """Build a PAP Reactor host and return any HTTP client it owns."""
+    """Build a PAP Reactor host with plugins and return any HTTP client it owns.
+
+    Plugins use Reactor's native ``(PluginManifest, implementation)`` input so
+    applications can assemble all required PAP contributions before handing
+    the platform to a client. The PAP core is registered first; lower-order
+    plugin contributions can deliberately replace its portable defaults.
+    """
 
     owned_http = http_client is None
     client = http_client or httpx.AsyncClient(timeout=5.0, follow_redirects=False)
@@ -310,7 +325,7 @@ def build_pap_reactor(
     platform.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.core",
-            version="0.3.1",
+            version="0.3.2",
             contribution_points=[
                 DISCOVERY_TRANSPORTS.id,
                 URL_SAFETY_POLICIES.id,
@@ -325,6 +340,7 @@ def build_pap_reactor(
                 AUTHORIZATION_STATE_STORES.id,
                 CACHES.id,
                 BROWSER_HANDOFFS.id,
+                BROWSER_FORM_POSTS.id,
                 DPOP_PROOF_PROVIDERS.id,
             ],
         ),
@@ -336,6 +352,8 @@ def build_pap_reactor(
             ),
         ),
     )
+    for manifest, implementation in plugins:
+        platform.register_plugin(manifest, implementation)
     return platform, client if owned_http else None
 
 

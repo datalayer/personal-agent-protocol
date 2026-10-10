@@ -7,7 +7,7 @@ on:
       - develop
     paths:
       - 'personal_agent_protocol/**/*.py'
-      - 'tests/**/*.py'
+      - 'personal_agent_protocol/__tests__/**/*.py'
       - 'pyproject.toml'
       - 'setup.py'
       - 'mypy.ini'
@@ -20,7 +20,7 @@ on:
       - develop
     paths:
       - 'personal_agent_protocol/**/*.py'
-      - 'tests/**/*.py'
+      - 'personal_agent_protocol/__tests__/**/*.py'
       - 'pyproject.toml'
       - 'setup.py'
       - 'mypy.ini'

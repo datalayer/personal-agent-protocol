@@ -1,0 +1,49 @@
+---
+title: Company discovery
+description: Discover a company's PAP interfaces without sending credentials.
+---
+
+# Company discovery
+
+Discovery turns a company domain into verified, public PAP metadata. The
+personal agent fetches `/.well-known/poppy.json`, validates the document and
+supported protocol version, then follows the advertised OAuth metadata. No
+Session Token, cookie, assertion, or user identifier belongs on these requests.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant M as Agent / model
+  participant H as PAP host
+  participant R as Reactor discovery policy
+  participant C as Company domain
+  participant A as Authorization server
+  M->>H: Discover company.example
+  H->>R: Validate HTTPS URL and resolve public addresses
+  R-->>H: Approved destination
+  H->>C: GET /.well-known/poppy.json (no credentials)
+  C-->>H: Organization, issuer, interfaces, extensions
+  H->>H: Strict JSON + version + domain validation
+  H->>A: GET OAuth metadata (no credentials)
+  A-->>H: Authorization and token endpoints
+  H->>H: Bind issuer to company domain
+  H-->>M: Verified public capability summary
+```
+
+## What the example proves
+
+- Only HTTPS, public-network destinations are eligible.
+- Redirects, response sizes, content types, duplicate JSON members, domains,
+  versions, and issuer relationships are checked before data is trusted.
+- The tool result contains a capability inventory, not raw response bodies.
+- Discovery is credential-free, which prevents accidental token forwarding to
+  an unverified host.
+
+Production networking must pin the approved DNS result to the connection or
+use an egress proxy that enforces the same decision. Validation before a later,
+independent DNS lookup is not sufficient protection against rebinding.
+
+Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-discovery)
+or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/company-discovery).
+Continue with [Personal-agent identity](./agent-identity) and the
+[company implementation guide](/guides/company/).

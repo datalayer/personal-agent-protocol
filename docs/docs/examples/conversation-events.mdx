@@ -1,0 +1,58 @@
+---
+title: Conversation events
+description: Consume ordered PAP events with safe cursor recovery and duplicate suppression.
+---
+
+# Conversation events
+
+After sending a message, a personal agent reads the company's ordered event
+log. The cursor is opaque: save it exactly, send it back without interpreting
+it, and advance it only after handling the page. A company can repeat events
+after a reconnect, so delivery to the application must be de-duplicated by
+event ID.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Agent or product UI
+  participant H as Trusted PAP host
+  participant C as Company agent
+  A->>H: Follow conversation cnv_demo
+  H->>C: GET /events?cursor=evt_saved&wait=30 + DPoP
+  C-->>H: 410 cursor_expired
+  H-->>A: Notify that retained history has a gap
+  H->>C: GET /events?wait=30 + DPoP
+  C-->>H: evt_1, evt_2; cursor=evt_2; has_more=true
+  H-->>A: Deliver unseen events in order
+  H->>C: GET /events?cursor=evt_2&wait=0 + DPoP
+  C-->>H: repeated evt_2, evt_3; has_more=false
+  H->>H: Drop repeated evt_2
+  H-->>A: Deliver evt_3
+```
+
+Python exposes `ConversationClient.read_events()` for one page and
+`ConversationClient.events()` as an async iterator. TypeScript exposes the
+aligned `readEvents()` and `events()` APIs. The iterator:
+
+- uses a caller-selected long-poll duration, normally 30 seconds;
+- immediately drains another page when `has_more` is true;
+- preserves company event order and treats cursors as opaque strings;
+- suppresses repeated event IDs after reconnects;
+- bounds its retained de-duplication set and fails closed at the limit;
+- invokes the host's cursor-expiry callback before one recovery read from the
+  beginning; and
+- stops after a closed page has no backlog.
+
+The cursor-expiry callback is important. Restarting from the beginning can
+recover retained events, but it cannot reconstruct events the company already
+deleted. The host should tell the person that part of the conversation may be
+missing.
+
+Session Tokens, DPoP proofs, pairwise identity, and the saved cursor remain in
+the trusted host. A model or UI receives only the event fields it needs. A
+future SSE slice will add reconnect and `text-delta` handling; applications
+must not treat a `text-delta` as an actionable final message.
+
+Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/conversation-events)
+or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/conversation-events).
+See upstream [conversation event reads](https://personalagentprotocol.org/docs/spec#75-reading-events).

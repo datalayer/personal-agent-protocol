@@ -29,12 +29,12 @@ wire-model validation.
 import {
   buildPapReactor,
   discoverCompany,
-} from '@datalayer/personal-agent-protocol';
+} from "@datalayer/personal-agent-protocol";
 
 const reactor = buildPapReactor({
-  assertSafeUrl: async url => serverDnsPolicy.assertSafe(url),
+  assertSafeUrl: async (url) => serverDnsPolicy.assertSafe(url),
 });
-const company = await discoverCompany('example.com', { reactor });
+const company = await discoverCompany("example.com", { reactor });
 ```
 
 All network operations accept an `AbortSignal`. Pass it to discovery when the
@@ -42,7 +42,7 @@ calling task, request, or UI owns cancellation:
 
 ```typescript
 const controller = new AbortController();
-const company = await discoverCompany('example.com', {
+const company = await discoverCompany("example.com", {
   reactor,
   signal: controller.signal,
 });
@@ -56,12 +56,33 @@ remain on a server or KMS; they must never be shipped in a browser or desktop
 bundle.
 
 The SDK exports aligned `Clocks`, `RandomSources`, `Signers`,
-`DpopProofProviders`, `KeyStores`, `TokenStores`, `Caches`, and
-`BrowserHandoffs` contribution points, plus `PairwiseUserIdStores` for stable
+`DpopProofProviders`, `KeyStores`, `TokenStores`, `Caches`, `BrowserHandoffs`,
+and `BrowserFormPosts` contribution points, plus `PairwiseUserIdStores` for stable
 identity and `AuthorizationStateStores` for atomic one-use authorization state.
 The core plugin provides only system time and secure randomness.
 Security-dependent services have no fallback and resolution fails closed when
 missing or ambiguous.
+
+`BrowserSessionClient` builds a maximum-60-second assertion and delegates its
+top-level, body-only POST to `BrowserFormPosts`. Company code imports
+`verifyBrowserAssertion` from `@datalayer/personal-agent-protocol/server`, so
+public-key verification and replay storage stay outside portable browser
+bundles. See the [Browser Session flow](/examples/browser-session/).
+
+`DpopFetchClient` owns `Authorization` and `DPoP` headers for API and
+conversation requests. It generates a fresh proof for every nonce retry and
+same-origin redirect target, and rejects cross-origin redirects before fetch
+can forward a credential. See the [DPoP transport flow](/examples/dpop-transport/).
+
+`ConversationClient` composes that transport to start and continue PAP
+conversations. `generateMessageId()` uses Reactor's cryptographic random source
+to create a user-global idempotency key. Retain the complete message and reuse
+it unchanged when retrying an ambiguous request. The client parses immediate
+receipts or waited event pages and propagates `AbortSignal` without exposing
+credentials. `readEvents()` and `events()` add ordered JSON long polling,
+backlog draining, cursor-expiry recovery, and duplicate suppression. See
+[Conversation messages](/examples/conversation-messages/) and
+[Conversation events](/examples/conversation-events/).
 
 ## Agent identity
 
@@ -72,11 +93,11 @@ boundary as the Python SDK:
 import {
   AgentIdentityClient,
   buildPapReactor,
-} from '@datalayer/personal-agent-protocol';
+} from "@datalayer/personal-agent-protocol";
 
 const identity = new AgentIdentityClient({ reactor });
 const metadata = await identity.fetchMetadata(
-  'https://agent.example/agent.json',
+  "https://agent.example/agent.json",
   { signal: controller.signal },
 );
 const jwks = await identity.fetchJwks(metadata.client_id, {
@@ -99,24 +120,24 @@ import {
   buildSessionAssertionClaims,
   parseSessionToken,
   resolvePairwiseUserId,
-} from '@datalayer/personal-agent-protocol';
+} from "@datalayer/personal-agent-protocol";
 
 const pairwiseUserId = await resolvePairwiseUserId(reactor, {
-  tenantId: 'application-42',
-  localUserId: 'local-user-42',
-  companyIssuer: 'https://auth.example.com',
+  tenantId: "application-42",
+  localUserId: "local-user-42",
+  companyIssuer: "https://auth.example.com",
 });
 const claims = buildSessionAssertionClaims({
-  clientId: 'https://agent.example/agent.json',
+  clientId: "https://agent.example/agent.json",
   pairwiseUserId,
-  tokenEndpoint: 'https://auth.example.com/oauth/token',
+  tokenEndpoint: "https://auth.example.com/oauth/token",
 });
 
 // Signing is intentionally provided by a server or key-custody integration.
 const grant = new SessionGrant({
-  assertion: 'signed-session-assertion',
+  assertion: "signed-session-assertion",
   clientId: claims.iss,
-  clientAssertion: 'signed-client-assertion',
+  clientAssertion: "signed-client-assertion",
 });
 
 const token = parseSessionToken(await response.json());
@@ -156,10 +177,10 @@ at trust boundaries. These parsers preserve unknown compatible fields and
 future event types while enforcing the required shapes of known draft 0.1 and
 Operations v1 objects.
 
-The models are aligned with Python through shared fixtures. Conversation and
-Operations HTTP clients are still planned; parsing an object does not perform
-message-id deduplication, cursor persistence, approval, confirmation, or
-recovery.
+The models are aligned with Python through shared fixtures. Conversation
+creation, continuation, and JSON event polling are implemented; SSE and the
+Operations HTTP client remain planned. Parsing an object alone does not
+perform durable cursor persistence, approval, or confirmation.
 
 ## Server-side URL safety
 
@@ -168,16 +189,16 @@ cannot resolve DNS without importing platform-specific APIs into browser
 bundles. Node services can use the separate server entry:
 
 ```typescript
-import { buildPapReactor } from '@datalayer/personal-agent-protocol';
+import { buildPapReactor } from "@datalayer/personal-agent-protocol";
 import {
   JoseSigner,
   NodeUrlSafetyPolicy,
   verifyDpopProof,
-} from '@datalayer/personal-agent-protocol/server';
+} from "@datalayer/personal-agent-protocol/server";
 
 const urlPolicy = new NodeUrlSafetyPolicy();
 const reactor = buildPapReactor({
-  assertSafeUrl: url => urlPolicy.assertSafe(url),
+  assertSafeUrl: (url) => urlPolicy.assertSafe(url),
 });
 ```
 

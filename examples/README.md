@@ -8,9 +8,11 @@
 
 # Personal Agent Protocol examples
 
-- [`agent-runtimes/`](./agent-runtimes/) is a small Agent Runtimes application
-  whose agent can inspect a PAP company over real HTTPS. It exposes only a
-  verified, credential-free discovery summary as a read-only tool result.
+- [`pydantic-ai/`](./pydantic-ai/) contains raw PAP examples built with plain
+  Pydantic AI. Each example teaches one protocol feature without depending on
+  Agent Runtimes.
+- The paired Agent Runtimes applications live in the
+  [`agent-runtimes` repository](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol).
 
 Examples are intentionally explicit about trust boundaries. Authorization
 callbacks, PKCE verifiers, assertions, proofs, and tokens must stay in trusted

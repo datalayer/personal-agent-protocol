@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'personal_agent_protocol/**'
-      - 'tests/**'
+      - 'personal_agent_protocol/__tests__/**'
       - 'pyproject.toml'
       - 'setup.py'
       - 'requirements*.txt'
@@ -18,7 +18,7 @@ on:
       - main
     paths:
       - 'personal_agent_protocol/**'
-      - 'tests/**'
+      - 'personal_agent_protocol/__tests__/**'
       - 'pyproject.toml'
       - 'setup.py'
       - 'requirements*.txt'
@@ -39,4 +39,4 @@ jobs:
       python-version: ${{ matrix.python-version }}
       install-extras: test
       run-tests: true
-      test-command: pytest tests/ --cov=personal_agent_protocol --cov-report term-missing
+      test-command: pytest personal_agent_protocol/__tests__/ --cov=personal_agent_protocol --cov-report term-missing

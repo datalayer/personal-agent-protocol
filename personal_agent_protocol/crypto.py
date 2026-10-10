@@ -101,7 +101,9 @@ class JoseSigner:
     async def sign(self, claims: dict[str, object], *, purpose: str) -> SecretStr:
         """Return a compact JWT without exposing the supplied private key."""
 
-        headers: dict[str, str] = {"typ": "JWT"}
+        headers: dict[str, str] = {
+            "typ": "poppy-browser+jwt" if purpose == "browser_assertion" else "JWT"
+        }
         if self.key_id:
             headers["kid"] = self.key_id
         try:

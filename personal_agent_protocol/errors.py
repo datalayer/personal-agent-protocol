@@ -52,3 +52,15 @@ class SessionError(PersonalAgentProtocolError):
 
 class ProofError(PersonalAgentProtocolError):
     """A signed assertion or proof-of-possession value is invalid."""
+
+
+class BrowserSessionError(PersonalAgentProtocolError):
+    """A browser-session handoff or assertion failed safely."""
+
+
+class TransportError(PersonalAgentProtocolError):
+    """An authenticated PAP resource request failed safely."""
+
+
+class ConversationError(PersonalAgentProtocolError):
+    """A PAP conversation request failed without exposing its body."""

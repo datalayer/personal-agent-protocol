@@ -1,0 +1,45 @@
+---
+title: Conversation messages
+description: Start and continue a PAP conversation with safe idempotent message IDs.
+---
+
+# Conversation messages
+
+PAP message IDs are user-global idempotency keys. Generate one with at least
+128 random bits, retain the complete `Message`, and retry that same object after
+an ambiguous network failure. Reusing its ID with different content is a
+`message_id_conflict`.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Agent tool
+  participant H as Trusted host
+  participant C as Company agent
+  A->>H: Ask to start a conversation
+  H->>H: Generate msg_ ID (128 random bits)
+  H->>C: POST first message + DPoP
+  C-->>H: 201 conversation_id, status, responder
+  H-->>A: Conversation status only
+  A->>H: Continue with context update
+  H->>C: POST new message ID + DPoP
+  C-->>H: 202 status or waited event page
+  Note over H,C: Retry keeps the exact ID and content
+  H-->>A: Safe conversation result
+```
+
+Python and TypeScript both expose `ConversationClient`. It validates opaque
+IDs, supports `text`, `data`, and
+`context`, bounds response bodies, rejects duplicate JSON members, surfaces
+company error codes without including response bodies, and can request replies
+with `cursor` and `wait`. Authentication remains in `DpopHttpClient` and never
+enters model-visible tool inputs or results.
+
+TypeScript additionally propagates caller-owned `AbortSignal` cancellation.
+Ordered JSON event reads are implemented separately in the
+[conversation events flow](./conversation-events). SSE, handoff, Direct
+Conversations, authorization changes, and active close requests remain
+separate milestones.
+
+Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/conversation-messages).
+See upstream [Conversations](https://personalagentprotocol.org/docs/spec#7-conversations).

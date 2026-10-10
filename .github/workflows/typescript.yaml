@@ -5,7 +5,7 @@ on:
     branches: [main, develop]
     paths:
       - 'src/**'
-      - 'test/**'
+      - 'src/__tests__/**'
       - 'tsconfig.json'
       - 'protocol/fixtures/**'
       - 'package.json'
@@ -14,7 +14,7 @@ on:
     branches: [main, develop]
     paths:
       - 'src/**'
-      - 'test/**'
+      - 'src/__tests__/**'
       - 'tsconfig.json'
       - 'protocol/fixtures/**'
       - 'package.json'

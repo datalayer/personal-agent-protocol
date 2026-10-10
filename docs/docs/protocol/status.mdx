@@ -22,10 +22,13 @@ Target: [PAP draft 0.1, updated October 9,
 | Reactor clock, randomness, signer, DPoP proof, key, token, cache, and browser contracts | Implemented and lifecycle-tested in Python and TypeScript                                                                                                  |
 | ES256/RS256 assertion signing                                                           | Implemented in Python and TypeScript                                                                                                                       |
 | DPoP proof creation and verification                                                    | Implemented in Python and TypeScript; host key resolver and replay cache required                                                                          |
+| DPoP-aware API/conversation HTTP transport                                              | Implemented in Python and TypeScript with nonce retry and same-origin redirect proof rebinding                                                             |
+| Conversation creation, continuation, and ordered JSON event reads                       | Implemented in Python and TypeScript with long polling, backlog draining, cursor recovery, and duplicate suppression                                       |
 | Direct Sign-In browser handoff and token exchange                                       | Implemented in Python and TypeScript; host state, browser, signer, and DPoP providers required                                                             |
+| Browser Session assertion, controlled form POST, and verification                       | Implemented in Python and TypeScript; host signer/form-post and company replay cache required                                                              |
 | Device and mediated sign-in                                                             | Planned                                                                                                                                                    |
-| OpenAPI, MCP, and browser helpers                                                       | Planned                                                                                                                                                    |
-| Conversations and streaming                                                             | Planned                                                                                                                                                    |
+| OpenAPI and MCP helpers                                                                 | Planned                                                                                                                                                    |
+| Conversation SSE streaming, handoff, Direct Conversations, and active close             | Planned                                                                                                                                                    |
 | Operations v1                                                                           | Aligned wire models implemented; client/server behavior planned                                                                                            |
 | Extensible `pap` CLI                                                                    | Reactor host/plugin, non-secret profiles, company discovery, agent identity/JWKS inspection, extension diagnostics, and live discovery command implemented |
 | Generated API references                                                                | Python and TypeScript public exports inventoried; documentation CI rejects stale pages                                                                     |
@@ -61,9 +64,20 @@ can support more than one protocol profile.
   own key selection and custody.
 - Security contribution contracts exist, but the SDK deliberately ships no
   default protected key store, durable replay cache, token store, general
-  cache, or browser handoff.
-- Models for conversations and Operations are aligned and fixture-tested, but
-  do not yet imply working clients or server handlers.
+  cache, browser handoff, or browser form-post surface.
+- Browser Session clients sign the distinct `poppy-browser+jwt` assertion and
+  submit it through `pap.browserFormPost`; company verification enforces the
+  endpoint, Session owner, 60-second lifetime, company-domain return target,
+  and one-use `jti`. Company adapters still own cookie creation and must bind
+  cookie state and lifetime to the underlying PAP Session.
+- DPoP resource clients own authorization headers, create a fresh proof for
+  every attempt, retry one nonce challenge, and refuse cross-origin credential
+  forwarding. Resource-bound MCP Bearer acquisition remains pending on the
+  Account Token lifecycle.
+- Conversation message and JSON event clients are aligned and tested. SSE,
+  handoff, Direct Conversations, active close requests, and company handlers
+  remain planned. Operations models do not yet imply a working client or
+  server handler.
 - The CLI does not expose auth, session, conversation, Operations, or
   conformance workflows until their service and protected-store boundaries are
   implemented.

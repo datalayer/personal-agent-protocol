@@ -3,17 +3,25 @@ title: Agent Runtimes example
 description: Expose verified PAP capabilities to an agent without exposing authorization secrets.
 ---
 
-# Use PAP from Agent Runtimes
+# Learn PAP with Agent Runtimes
 
-The repository includes a small Agent Runtimes application at
+The repository includes small Agent Runtimes applications at
 [`examples/agent-runtimes`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/agent-runtimes).
-It demonstrates the safe first integration point between an agent and PAP:
-company discovery.
+Each example covers exactly one feature and makes its trust boundary visible.
 
-The application gives its model one read-only `inspect_pap_company` tool. The
-tool performs real HTTPS discovery through `DiscoveryClient`, validates the
-document and supported protocol version, follows verified OAuth metadata, and
-binds the issuer to the requested company domain. Its result contains only:
+| Example                   | PAP feature                                                       | Safe result                              |
+| ------------------------- | ----------------------------------------------------------------- | ---------------------------------------- |
+| `company-discovery`       | Real HTTPS discovery, protocol version, domain and issuer binding | Company capability summary               |
+| `agent-identity`          | Client metadata, redirect policy, same-domain JWKS                | Client name and signing policy           |
+| `session-assertion`       | Pairwise subject, audience, lifetime, and unique request ID       | Assertion policy; identifiers withheld   |
+| `direct-sign-in-boundary` | Random state, S256 PKCE, exact scopes, browser handoff            | Requested scopes and security properties |
+
+Agent Runtimes now depends on PAP in both Python and TypeScript. Its
+`PapPersonalAgentCapability` uses `DiscoveryClient` and `AgentIdentityClient`
+on Python, and their matching TypeScript APIs, to return aligned public
+summaries. For company discovery the tool validates the document and supported
+protocol version, follows verified OAuth metadata, and binds the issuer to the
+requested company domain. Its result contains only:
 
 - the verified organization and domain;
 - the PAP version and issuer;
@@ -28,14 +36,15 @@ DPoP proofs, Session Tokens, and Account Tokens never enter model context.
 From the repository root:
 
 ```bash
-python -m pip install -e '.[examples]'
-loop apps run examples/agent-runtimes/app.py
+python -m pip install -e .
+python -m pip install -e ../agent-runtimes
+loop apps run examples/agent-runtimes/company-discovery/app.py
 ```
 
 To validate the application definition without starting an agent runtime:
 
 ```bash
-python -c "from agent_runtimes.loop.apps.build import build; print(build('examples/agent-runtimes/app.py').text)"
+python scripts/validate_agent_runtime_examples.py
 ```
 
 Ask the application to inspect a domain that publishes
@@ -46,11 +55,12 @@ an enforcing egress proxy.
 
 ## Datalayer Studio boundary
 
-The example performs discovery in process to keep the integration readable.
-In Datalayer Studio, the agent tool should call a typed metadata-gateway
-capability with opaque tenant and application context. That gateway owns DNS
-pinning, egress policy, caching, rate limits, observability, and audit, and
-returns the same credential-free summary.
+The metadata examples perform discovery in process to keep the integration
+readable. In Datalayer Studio, the agent tool calls the same typed Agent
+Runtimes capability backed by a metadata gateway with opaque tenant and
+application context. That gateway owns DNS pinning, egress policy, caching,
+rate limits, observability, and audit, and returns the same credential-free
+summary.
 
 Direct Sign-In is a separate authorization-gateway workflow. Studio starts it
 through a trusted Preview browser handoff, keeps PKCE and one-use state in host

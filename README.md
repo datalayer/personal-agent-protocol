@@ -136,10 +136,12 @@ beta.
 
 ## Examples
 
-The [`examples/`](./examples/) directory includes an Agent Runtimes Python
-application that discovers a PAP company over HTTPS while exposing only
-verified, non-secret capability metadata to the model. Authorization and token
-handling remain outside the agent tool boundary.
+The [`examples/agent-runtimes`](./examples/agent-runtimes/) directory contains
+one Agent Runtimes Python application per feature: company discovery,
+personal-agent identity/JWKS verification, Session assertion safety, and the
+Direct Sign-In model boundary. Agent Runtimes depends on PAP in Python and
+TypeScript and exposes aligned, verified public summaries. Authorization and
+token handling remain outside the agent tool boundary.
 
 ## Protocol sources
 

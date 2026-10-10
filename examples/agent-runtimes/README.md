@@ -6,27 +6,30 @@
 
 [![Datalayer](https://images.datalayer.io/legacy/datalayer-25.svg)](https://datalayer.ai)
 
-# PAP company inspector with Agent Runtimes
+# PAP feature examples with Agent Runtimes
 
-This example is an Agent Runtimes Python `Application`. Its agent receives one
-read-only tool, `inspect_pap_company`, which uses the PAP SDK to:
+Each directory is one small Agent Runtimes Python `Application` and teaches one
+PAP feature:
 
-1. fetch `https://<domain>/.well-known/poppy.json` over real HTTPS;
-1. validate the discovery document and its supported PAP version;
-1. fetch OAuth metadata when authentication is advertised;
-1. bind the exact issuer to the requested company domain; and
-1. return only a small, verified, non-secret capability summary.
+| Example                                                 | Feature                                                                      | What may reach the model                           |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------- |
+| [`company-discovery`](./company-discovery/)             | Company discovery, version/domain/issuer validation, and interface inventory | Verified company capability summary                |
+| [`agent-identity`](./agent-identity/)                   | Client metadata, same-domain JWKS, and public signing policy                 | Verified identity summary                          |
+| [`session-assertion`](./session-assertion/)             | Pairwise subject and short-lived, unique Session assertion claims            | Claim policy only; no subject, `jti`, or assertion |
+| [`direct-sign-in-boundary`](./direct-sign-in-boundary/) | OAuth state, S256 PKCE, and user-owned browser handoff boundary              | Requested scopes and security properties only      |
 
-The model never receives raw discovery bodies, authorization URLs, callback
-URLs, assertions, DPoP proofs, Session Tokens, or Account Tokens.
+The first two use Agent Runtimes' `PapPersonalAgentCapability`, available in
+both its Python and TypeScript packages. It owns the model-safe summary
+boundary while the PAP SDK owns wire validation.
 
 ## Install and run
 
 From the `personal-agent-protocol` repository:
 
 ```bash
-python -m pip install -e '.[examples]'
-loop apps run examples/agent-runtimes/app.py
+python -m pip install -e .
+python -m pip install -e ../agent-runtimes
+loop apps run examples/agent-runtimes/company-discovery/app.py
 ```
 
 Ask the application to inspect a domain that publishes PAP discovery metadata.
@@ -37,15 +40,15 @@ proxy, as described in the security documentation.
 To validate the application definition without starting an agent runtime:
 
 ```bash
-python -c "from agent_runtimes.loop.apps.build import build; print(build('examples/agent-runtimes/app.py').text)"
+python scripts/validate_agent_runtime_examples.py
 ```
 
 ## Datalayer deployment boundary
 
-This compact example performs discovery inside the application process so the
-SDK integration is visible. In Datalayer Studio, the application tool should
-call a typed metadata-gateway capability with an opaque tenant/application
-context. The gateway owns DNS pinning, egress, caching, rate limits, and audit;
-it returns this same safe summary. Direct Sign-In is then initiated through the
-authorization gateway and trusted Preview browser handoff—not through an agent
-tool—so secrets never cross runtime or model context.
+These compact examples perform public-metadata work in process so the SDK
+integration is visible. In Datalayer Studio, the application tools call typed
+metadata-gateway capabilities with opaque tenant/application context. The
+gateway owns DNS pinning, egress, caching, rate limits, and audit; it returns
+the same safe summaries. Direct Sign-In is initiated through the authorization
+gateway and trusted Preview browser handoff—not through an agent tool—so
+secrets never cross runtime or model context.

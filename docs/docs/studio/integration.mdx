@@ -101,6 +101,14 @@ the model receive only lifecycle status, granted scope names, and an opaque
 Session reference—not the pairwise subject, Session ID, assertions, proofs,
 nonces, or token response.
 
+The Agent Runtimes `PAP Guided Journey` is the reference UX for explaining
+this boundary in Studio. A single step index drives the user conversation,
+company-visible state, and redacted protocol inspector, making transitions in
+authority visible instead of reducing them to JSON. Studio onboarding and
+connection diagnostics should reuse that three-perspective pattern: show what
+the user experiences, what the company can know, and which host-owned exchange
+advanced the workflow, without rendering live credentials.
+
 The SDK now supplies safe discovery, client/JWKS retrieval, and Direct Sign-In
 orchestration in Python and TypeScript, plus a DNS-aware Node policy. Datalayer
 integration still owns the durable cache, connected-address

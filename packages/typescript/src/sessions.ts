@@ -2,6 +2,7 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { ProtocolValidationError, SessionError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
+import { SecretValue } from "./secret.js";
 import {
   Clocks,
   DpopProofProviders,
@@ -13,29 +14,6 @@ import {
 export const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 export const JWT_CLIENT_ASSERTION =
   "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
-
-export class SecretValue {
-  readonly #value: string;
-
-  constructor(value: string) {
-    if (!value) {
-      throw new ProtocolValidationError("invalid_secret", "Secret value must not be empty");
-    }
-    this.#value = value;
-  }
-
-  reveal(): string {
-    return this.#value;
-  }
-
-  toString(): string {
-    return "[REDACTED]";
-  }
-
-  toJSON(): string {
-    return "[REDACTED]";
-  }
-}
 
 export interface SessionAssertionClaims {
   readonly iss: string;

@@ -48,9 +48,12 @@ const company = await discoverCompany('example.com', {
 });
 ```
 
-The published ESM entry bundles Reactor's framework-neutral core so it can run
-directly in Node and in browser bundlers. Platform signing keys must remain on
-a server or KMS; they must never be shipped in a browser or desktop bundle.
+The published portable ESM entry bundles Reactor's framework-neutral core so it
+can run directly in Node and in browser bundlers. Company assertion signing,
+proof verification, replay-cache contracts, and Node network policy are
+exported only by the explicit `./server` entry. Platform signing keys must
+remain on a server or KMS; they must never be shipped in a browser or desktop
+bundle.
 
 The SDK exports aligned `Clocks`, `RandomSources`, `Signers`,
 `DpopProofProviders`, `KeyStores`, `TokenStores`, `Caches`, and
@@ -124,10 +127,12 @@ rejects redirects and malformed token responses. See
 [Signed-out sessions](/guides/sessions/) for usage and the exact security
 boundary.
 
-`JoseSigner`, `JoseDpopProofProvider`, and `verifyDpopProof` use the maintained
-`jose` package and Web Crypto. Only ES256 and RS256 are accepted; ES256 is the
-default. See [JOSE and DPoP](/guides/cryptography/) for key and replay-cache
-requirements.
+`JoseDpopProofProvider` is available from the portable entry for trusted
+device-side proof creation. `JoseSigner`, `verifyDpopProof`, and their
+server-side contracts are imported from
+`@datalayer/personal-agent-protocol/server`. They use the maintained `jose`
+package and Web Crypto. Only ES256 and RS256 are accepted; ES256 is the default.
+See [JOSE and DPoP](/guides/cryptography/) for key and replay-cache requirements.
 
 The package also exports `buildDirectSignInRequest`,
 `validateDirectSignInCallback`, and `AuthorizationCodeGrant`. See
@@ -155,7 +160,11 @@ bundles. Node services can use the separate server entry:
 
 ```typescript
 import { buildPapReactor } from '@datalayer/personal-agent-protocol';
-import { NodeUrlSafetyPolicy } from '@datalayer/personal-agent-protocol/server';
+import {
+  JoseSigner,
+  NodeUrlSafetyPolicy,
+  verifyDpopProof,
+} from '@datalayer/personal-agent-protocol/server';
 
 const urlPolicy = new NodeUrlSafetyPolicy();
 const reactor = buildPapReactor({

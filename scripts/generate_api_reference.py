@@ -77,20 +77,27 @@ EXPORT_BLOCK = re.compile(r'export\s*\{(?P<body>.*?)\}\s*from\s*"(?P<module>.+?)
 
 def typescript_symbols() -> list[Symbol]:
     source_root = ROOT / "packages" / "typescript" / "src"
-    index = (source_root / "index.ts").read_text()
     exported: list[tuple[str, str, Path, str]] = []
-    for match in EXPORT_BLOCK.finditer(index):
-        source = source_root / match.group("module").removeprefix("./").replace(".js", ".ts")
-        for raw in match.group("body").split(","):
-            value = raw.strip()
-            if not value:
-                continue
-            is_type = value.startswith("type ")
-            name = value.removeprefix("type ").split(" as ")[-1].strip()
-            exported.append((name, "Type" if is_type else "Value", source, "."))
+
+    def add_reexports(entry_file: Path, entry: str) -> str:
+        text = entry_file.read_text()
+        for match in EXPORT_BLOCK.finditer(text):
+            source = source_root / match.group("module").removeprefix("./").replace(
+                ".js", ".ts"
+            )
+            for raw in match.group("body").split(","):
+                value = raw.strip()
+                if not value:
+                    continue
+                is_type = value.startswith("type ")
+                name = value.removeprefix("type ").split(" as ")[-1].strip()
+                exported.append((name, "Type" if is_type else "Value", source, entry))
+        return text
+
+    add_reexports(source_root / "index.ts", ".")
 
     server = source_root / "server.ts"
-    server_text = server.read_text()
+    server_text = add_reexports(server, "./server")
     for match in re.finditer(
         r"^export\s+(?:declare\s+)?(class|function|interface|type|const)\s+([A-Za-z0-9_]+)",
         server_text,

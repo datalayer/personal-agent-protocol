@@ -5,11 +5,10 @@ import { decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair, jwtVerify
 
 import {
   JoseDpopProofProvider,
-  JoseSigner,
   ProofError,
   SecretValue,
-  verifyDpopProof,
 } from "../lib/index.js";
+import { JoseSigner, verifyDpopProof } from "../lib/server.js";
 
 const now = new Date("2026-10-10T12:00:00Z");
 

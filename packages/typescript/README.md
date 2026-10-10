@@ -29,8 +29,12 @@ duplicate-member rejection; local Direct Sign-In primitives; signed-out
 session start and renewal; safe company discovery; and bound client
 metadata/JWKS retrieval built on Datalayer Reactor.
 
-It also provides ES256/RS256 JOSE signing and DPoP proof creation and
-verification through the maintained `jose` package.
+It also provides ES256/RS256 JOSE signing and DPoP through the maintained
+`jose` package. Import device-side `JoseDpopProofProvider` from the portable
+entry. Import `JoseSigner`, `verifyDpopProof`, replay-cache contracts, and
+`NodeUrlSafetyPolicy` from
+`@datalayer/personal-agent-protocol/server`; those company/backend APIs are
+deliberately excluded from browser bundles.
 
 Use `buildPapReactor(options, plugins)` to install typed transport, URL-policy,
 protocol-profile, clock, randomness, signer, DPoP proof, protected-key,

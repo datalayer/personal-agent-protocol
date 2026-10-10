@@ -1,7 +1,17 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-import { DiscoveryError, type UrlSafetyPolicy } from "./index.js";
+import { DiscoveryError } from "./index.js";
+import type { UrlSafetyPolicy } from "./reactor.js";
+
+export {
+  JoseSigner,
+  verifyDpopProof,
+  type DpopReplayCache,
+  type JoseSignerOptions,
+  type VerifiedDpopProof,
+  type VerifyDpopProofOptions,
+} from "./crypto.js";
 
 export type NodeAddressResolver = (hostname: string) => Promise<readonly string[]>;
 

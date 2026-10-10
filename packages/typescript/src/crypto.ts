@@ -9,9 +9,8 @@ import {
   type KeyInput,
 } from "jose";
 
-import { ProofError } from "./errors.js";
+import { ProofError, SecretValue } from "./index.js";
 import type { DpopProofProvider, DpopProofRequest, Signer } from "./reactor.js";
-import { SecretValue } from "./sessions.js";
 
 export type JoseAlgorithm = "ES256" | "RS256";
 

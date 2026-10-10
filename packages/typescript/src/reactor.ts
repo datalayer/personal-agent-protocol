@@ -10,7 +10,7 @@ import {
 } from "@datalayer/reactor";
 
 import { DiscoveryError } from "./errors.js";
-import type { SecretValue } from "./sessions.js";
+import type { SecretValue } from "./secret.js";
 
 export interface DiscoveryTransport {
   fetch(input: URL, init: RequestInit): Promise<Response>;

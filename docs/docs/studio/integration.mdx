@@ -80,10 +80,25 @@ the backend.
 Generated Python and TypeScript API inventories now define the supported SDK
 boundary and are checked for drift in documentation CI. Datalayer backend and
 Studio packages should import only those public symbols. Node services import
-network-only policy from the explicit `./server` subpath; browser and Canvas
-bundles stay on the portable entry. This prevents product integration from
-quietly depending on SDK internals that can change without a compatibility
-commitment.
+network policy, `JoseSigner`, DPoP verification, and replay-cache contracts
+from the explicit `./server` subpath; browser and Canvas bundles stay on the
+portable entry and can create device-held DPoP proofs without receiving company
+signing or verification APIs. Package regression tests inspect the emitted
+portable entry for these forbidden server symbols. This prevents product
+integration from quietly depending on SDK internals or bundling company key
+custody into Studio UI code.
+
+For Datalayer, the entry split maps to a deployable ownership boundary:
+
+- Canvas, Preview UI, and browser connection flows import only the portable
+  entry and exchange opaque `company_ref` and `session_ref` handles;
+- the backend metadata and authorization gateways import `./server`, attach
+  the DNS policy, and perform proof verification against durable replay state;
+- the KMS plugin implements the Reactor `Signer` contract so client/session
+  assertion private keys remain non-extractable and outside Node process
+  memory; and
+- CI must fail any browser artifact that contains the server entry, signing
+  key material, raw tokens, assertions, or proof-verification endpoints.
 
 ## Appspec shape
 

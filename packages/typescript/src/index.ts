@@ -9,16 +9,10 @@ export {
 } from "./errors.js";
 export {
   JoseDpopProofProvider,
-  JoseSigner,
-  verifyDpopProof,
   type DpopKeyMaterial,
   type DpopKeyResolver,
-  type DpopReplayCache,
   type JoseAlgorithm,
   type JoseDpopProofProviderOptions,
-  type JoseSignerOptions,
-  type VerifiedDpopProof,
-  type VerifyDpopProofOptions,
 } from "./crypto.js";
 export {
   AuthorizationCodeGrant,
@@ -71,7 +65,6 @@ export {
 export {
   JWT_BEARER_GRANT,
   JWT_CLIENT_ASSERTION,
-  SecretValue,
   SessionClient,
   SessionGrant,
   buildSessionAssertionClaims,
@@ -86,6 +79,7 @@ export {
   type SessionRequestOptions,
   type SessionToken,
 } from "./sessions.js";
+export { SecretValue } from "./secret.js";
 export {
   parseClientMetadata,
   parseConversationEvent,

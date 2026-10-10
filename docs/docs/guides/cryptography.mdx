@@ -16,6 +16,13 @@ ES256 is the default. RS256 is accepted for interoperability. Symmetric
 algorithms and `none` are rejected even if the underlying JOSE library supports
 them.
 
+In TypeScript, import device-side `JoseDpopProofProvider` from the portable
+package entry. Import `JoseSigner`, `verifyDpopProof`, and the replay-cache
+contracts from `@datalayer/personal-agent-protocol/server`. This enforced entry
+split keeps company assertion signing and proof verification out of browser
+bundles; it does not make an in-process Node private key equivalent to KMS/HSM
+custody.
+
 ## Key custody
 
 The local signers receive an asymmetric private key object. DPoP providers
@@ -24,11 +31,11 @@ tenant, subject, and company issuer. The protected header contains only the
 public JWK; a JWK with any private member is rejected.
 
 For local development, an in-process private key is sufficient. TypeScript can
-also use a non-exportable Web Crypto key. Production hosts using an HSM, KMS,
-or another remote custody service should contribute their own Reactor signer
-and DPoP provider. Never place private JWKs, PEM values, proofs, assertions, or
-access tokens in configuration returned to a browser, logs, analytics, tool
-arguments, or model context.
+also use a non-exportable Web Crypto key in trusted device code. Production
+hosts using an HSM, KMS, or another remote custody service should contribute
+their own Reactor signer and DPoP provider. Never place private JWKs, PEM
+values, proofs, assertions, or access tokens in configuration returned to a
+browser, logs, analytics, tool arguments, or model context.
 
 ## Replay cache contract
 

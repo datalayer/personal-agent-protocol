@@ -47,7 +47,6 @@ Unknown or internal symbols are deliberately excluded.
 - [`DpopProofProvider`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `DpopProofProvider`.
 - [`DpopProofProviders`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/reactor.ts) — Const; entry `.`. Public TypeScript const `DpopProofProviders`.
 - [`DpopProofRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `DpopProofRequest`.
-- [`DpopReplayCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Interface; entry `.`. Public TypeScript interface `DpopReplayCache`.
 - [`ExtensionDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/models.ts) — Interface; entry `.`. Public TypeScript interface `ExtensionDescriptor`.
 - [`ExtensionHandler`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `ExtensionHandler`.
 - [`ExtensionHandlers`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/reactor.ts) — Const; entry `.`. Public TypeScript const `ExtensionHandlers`.
@@ -58,8 +57,6 @@ Unknown or internal symbols are deliberately excluded.
 - [`JoseAlgorithm`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Type; entry `.`. Public TypeScript type `JoseAlgorithm`.
 - [`JoseDpopProofProvider`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Class; entry `.`. Create fresh RFC 9449 proofs using per-user/company key material.
 - [`JoseDpopProofProviderOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Interface; entry `.`. Public TypeScript interface `JoseDpopProofProviderOptions`.
-- [`JoseSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Class; entry `.`. Sign PAP assertions with an injected asymmetric private key or handle.
-- [`JoseSignerOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Interface; entry `.`. Public TypeScript interface `JoseSignerOptions`.
 - [`JsonWebKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/models.ts) — Interface; entry `.`. Public TypeScript interface `JsonWebKey`.
 - [`JsonWebKeySet`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/models.ts) — Interface; entry `.`. Public TypeScript interface `JsonWebKeySet`.
 - [`JWT_BEARER_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/sessions.ts) — Const; entry `.`. Public TypeScript const `JWT_BEARER_GRANT`.
@@ -94,7 +91,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`RandomBytes`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/sessions.ts) — Type; entry `.`. Public TypeScript type `RandomBytes`.
 - [`RandomSource`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `RandomSource`.
 - [`RandomSources`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/reactor.ts) — Const; entry `.`. Public TypeScript const `RandomSources`.
-- [`SecretValue`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/sessions.ts) — Class; entry `.`. Public TypeScript class `SecretValue`.
+- [`SecretValue`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/secret.ts) — Class; entry `.`. Redacted wrapper for credentials and other protocol secrets.
 - [`SessionAssertionClaims`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/sessions.ts) — Interface; entry `.`. Public TypeScript interface `SessionAssertionClaims`.
 - [`SessionAssertionOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/sessions.ts) — Interface; entry `.`. Public TypeScript interface `SessionAssertionOptions`.
 - [`SessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/sessions.ts) — Class; entry `.`. Start and renew signed-out PAP sessions over an OAuth token endpoint.
@@ -112,11 +109,14 @@ Unknown or internal symbols are deliberately excluded.
 - [`UrlSafetyPolicies`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/reactor.ts) — Const; entry `.`. Public TypeScript const `UrlSafetyPolicies`.
 - [`UrlSafetyPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `UrlSafetyPolicy`.
 - [`validateDirectSignInCallback`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/auth.ts) — Function; entry `.`. Public TypeScript function `validateDirectSignInCallback`.
-- [`VerifiedDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Interface; entry `.`. Public TypeScript interface `VerifiedDpopProof`.
-- [`verifyDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Value; entry `.`. Public TypeScript value `verifyDpopProof`.
-- [`VerifyDpopProofOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Interface; entry `.`. Public TypeScript interface `VerifyDpopProofOptions`.
 - [`WebDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/models.ts) — Interface; entry `.`. Public TypeScript interface `WebDescriptor`.
+- [`DpopReplayCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `DpopReplayCache`.
 - [`isPublicIpAddress`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/server.ts) — Function; entry `./server`. Public TypeScript function `isPublicIpAddress`.
+- [`JoseSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Class; entry `./server`. Sign PAP assertions with an injected asymmetric private key or handle.
+- [`JoseSignerOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `JoseSignerOptions`.
 - [`NodeAddressResolver`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/server.ts) — Type; entry `./server`. Public TypeScript type `NodeAddressResolver`.
 - [`NodeUrlSafetyPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/server.ts) — Class; entry `./server`. DNS-aware server policy for untrusted PAP discovery and metadata URLs.
 - [`NodeUrlSafetyPolicyOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/server.ts) — Interface; entry `./server`. Public TypeScript interface `NodeUrlSafetyPolicyOptions`.
+- [`VerifiedDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `VerifiedDpopProof`.
+- [`verifyDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Value; entry `./server`. Public TypeScript value `verifyDpopProof`.
+- [`VerifyDpopProofOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/packages/typescript/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `VerifyDpopProofOptions`.

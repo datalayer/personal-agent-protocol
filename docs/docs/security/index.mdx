@@ -60,6 +60,13 @@ and is deliberately absent from the portable bundle. DNS preflight does not
 pin the later socket: pair it with a transport or egress proxy that connects
 only to the approved address set.
 
+The same server entry owns TypeScript company-side assertion signing, DPoP
+verification, and replay-cache contracts. Package tests inspect the emitted
+portable entry to ensure those symbols and Node DNS APIs are absent. This
+prevents accidental imports into browser and Canvas bundles; production key
+custody must still use a KMS/HSM-backed Reactor signer or an equivalent remote
+signing service.
+
 ## Current limitations
 
 The SDK implements asymmetric assertion signing and DPoP proof creation and

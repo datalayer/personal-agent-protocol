@@ -42,7 +42,7 @@ Managed key custody and durable replay storage, browser handoff and Direct
 Sign-In token exchange, device/mediated sign-in, conversations, and the
 Operations client/server are not implemented yet.
 
-Session requests fail closed unless the host contributes signer and 
+Session requests fail closed unless the host contributes signer and
 DPoP providers backed by suitable key custody.
 
 ## Python
@@ -115,14 +115,16 @@ pass an existing `ReactorPlatformView` as `discoverCompany(..., { reactor })`.
 The package bundles Reactor's framework-neutral core in its ESM entry so it can
 run directly in Node as well as through a browser bundler.
 
-Server-side TypeScript callers should provide `assertSafeUrl` with DNS-aware
-SSRF protection. The portable default rejects obvious local/private literal
-addresses, but a browser-compatible package cannot verify the address selected
-by DNS.
+Server-side TypeScript callers can import `NodeUrlSafetyPolicy`, `JoseSigner`,
+and DPoP verification from the explicit
+`@datalayer/personal-agent-protocol/server` entry. The portable entry excludes
+those server APIs and rejects obvious local/private literal addresses; the Node
+policy additionally checks every resolved A and AAAA address.
 
-The Python preflight rejects a host if any resolved address is non-public.
-Transport-level address pinning, required to close the DNS-rebinding interval,
-is still part of the security work before the first beta.
+The Python and Node preflights reject a host if any resolved address is
+non-public. Transport-level address pinning, required to close the
+DNS-rebinding interval, is still part of the security work before the first
+beta.
 
 ## Protocol sources
 

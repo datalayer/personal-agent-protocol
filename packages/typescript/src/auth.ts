@@ -1,5 +1,6 @@
 import { AuthorizationError } from "./errors.js";
-import { JWT_CLIENT_ASSERTION, SecretValue, type RandomBytes } from "./sessions.js";
+import { SecretValue } from "./secret.js";
+import { JWT_CLIENT_ASSERTION, type RandomBytes } from "./sessions.js";
 
 function defaultRandomBytes(length: number): Uint8Array {
   if (!globalThis.crypto) {

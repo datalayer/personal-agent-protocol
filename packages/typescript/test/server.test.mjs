@@ -56,8 +56,10 @@ test("rejects private literals before DNS and permits explicit private deploymen
   await privatePolicy.assertSafe(new URL("https://127.0.0.1/agent.json"));
 });
 
-test("keeps Node DNS APIs out of the portable entry bundle", async () => {
+test("keeps server security APIs out of the portable entry bundle", async () => {
   const bundle = await readFile(new URL("../lib/index.js", import.meta.url), "utf8");
   assert.equal(bundle.includes("node:dns"), false);
   assert.equal(bundle.includes("NodeUrlSafetyPolicy"), false);
+  assert.equal(bundle.includes("JoseSigner"), false);
+  assert.equal(bundle.includes("verifyDpopProof"), false);
 });

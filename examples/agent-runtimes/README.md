@@ -12,10 +12,10 @@ This example is an Agent Runtimes Python `Application`. Its agent receives one
 read-only tool, `inspect_pap_company`, which uses the PAP SDK to:
 
 1. fetch `https://<domain>/.well-known/poppy.json` over real HTTPS;
-2. validate the discovery document and its supported PAP version;
-3. fetch OAuth metadata when authentication is advertised;
-4. bind the exact issuer to the requested company domain; and
-5. return only a small, verified, non-secret capability summary.
+1. validate the discovery document and its supported PAP version;
+1. fetch OAuth metadata when authentication is advertised;
+1. bind the exact issuer to the requested company domain; and
+1. return only a small, verified, non-secret capability summary.
 
 The model never receives raw discovery bodies, authorization URLs, callback
 URLs, assertions, DPoP proofs, Session Tokens, or Account Tokens.

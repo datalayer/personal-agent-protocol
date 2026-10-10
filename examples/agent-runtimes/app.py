@@ -47,9 +47,7 @@ async def inspect_pap_company(domain: str) -> dict[str, Any]:
     sign_in = []
     if auth is not None:
         sign_in = [
-            name
-            for name in ("direct", "device", "mediated")
-            if getattr(auth, name) is not None
+            name for name in ("direct", "device", "mediated") if getattr(auth, name) is not None
         ]
     return {
         "organization": {
@@ -65,8 +63,6 @@ async def inspect_pap_company(domain: str) -> dict[str, Any]:
             else []
         ),
         "apis": [api.type for api in document.apis],
-        "browser_session": bool(
-            document.web is not None and document.web.browser_session_endpoint
-        ),
+        "browser_session": bool(document.web is not None and document.web.browser_session_endpoint),
         "extensions": sorted(document.extensions),
     }

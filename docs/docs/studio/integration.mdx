@@ -71,9 +71,9 @@ Models and tools receive safe handles, never credentials. Signing, storage,
 approval, rotation, and token attachment remain deterministic capabilities
 outside the model loop.
 
-The SDK now supplies safe discovery and client/JWKS retrieval in Python and
-TypeScript, a DNS-aware Node policy, and Python Direct Sign-In orchestration.
-Datalayer integration still owns the durable cache, connected-address
+The SDK now supplies safe discovery, client/JWKS retrieval, and Direct Sign-In
+orchestration in Python and TypeScript, plus a DNS-aware Node policy. Datalayer
+integration still owns the durable cache, connected-address
 enforcement, tenant policy, rate limiting, audit summaries, availability
 controls, browser surface, and authorization-state persistence. This split
 keeps reusable PAP validation in the SDK while deployment-specific network and
@@ -94,6 +94,9 @@ For Datalayer, the entry split maps to a deployable ownership boundary:
 
 - Canvas, Preview UI, and browser connection flows import only the portable
   entry and exchange opaque `company_ref` and `session_ref` handles;
+- authorization gateways may use either SDK's `DirectSignInClient`; the
+  TypeScript client stays in a trusted Node/desktop host even though its types
+  are portable, because its Reactor resolves signing and protected state;
 - the backend metadata and authorization gateways import `./server`, attach
   the DNS policy, and perform proof verification against durable replay state;
 - the KMS plugin implements the Reactor `Signer` contract so client/session

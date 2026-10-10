@@ -16,12 +16,18 @@ export {
 } from "./crypto.js";
 export {
   AuthorizationCodeGrant,
+  DirectSignInClient,
   buildDirectSignInRequest,
   validateDirectSignInCallback,
   type AuthorizationCodeGrantOptions,
+  type DirectSignInBeginOptions,
   type DirectSignInCallback,
+  type DirectSignInClientOptions,
+  type DirectSignInCompleteOptions,
   type DirectSignInOptions,
   type DirectSignInRequest,
+  type DirectSignInResult,
+  type DirectSignInStart,
 } from "./auth.js";
 export { discoverCompany, type DiscoveryOptions } from "./discovery.js";
 export {

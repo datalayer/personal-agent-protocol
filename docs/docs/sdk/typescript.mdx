@@ -61,9 +61,7 @@ The SDK exports aligned `Clocks`, `RandomSources`, `Signers`,
 identity and `AuthorizationStateStores` for atomic one-use authorization state.
 The core plugin provides only system time and secure randomness.
 Security-dependent services have no fallback and resolution fails closed when
-missing or ambiguous. The TypeScript Direct Sign-In orchestrator remains
-planned; the state-store contract is aligned now so hosts do not invent an
-incompatible persistence boundary.
+missing or ambiguous.
 
 ## Agent identity
 
@@ -143,10 +141,12 @@ server-side contracts are imported from
 package and Web Crypto. Only ES256 and RS256 are accepted; ES256 is the default.
 See [JOSE and DPoP](/guides/cryptography/) for key and replay-cache requirements.
 
-The package also exports `buildDirectSignInRequest`,
-`validateDirectSignInCallback`, and `AuthorizationCodeGrant`. See
-[Direct Sign-In](/guides/direct-sign-in/) for the complete local flow and its
-current network boundary.
+`DirectSignInClient` implements browser handoff, atomic one-use state,
+proof-bound exchange, one DPoP nonce retry, cancellation, existing-Session
+binding, and partial-scope reporting. The package also retains the lower-level
+`buildDirectSignInRequest`, `validateDirectSignInCallback`, and
+`AuthorizationCodeGrant` primitives. See [Direct Sign-In](/guides/direct-sign-in/)
+for usage and the trusted-host boundary.
 
 ## Client, conversation, and Operations models
 

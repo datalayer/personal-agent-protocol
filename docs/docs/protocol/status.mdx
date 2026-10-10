@@ -18,11 +18,11 @@ Target: [PAP draft 0.1, updated October 9,
 | Client metadata and public JWKS retrieval                                               | Implemented in Python and TypeScript with Reactor safety policies                                                                                          |
 | Pairwise user IDs and session wire primitives                                           | Implemented in Python and TypeScript                                                                                                                       |
 | Signed-out session start and renewal over HTTP                                          | Implemented in Python and TypeScript; host signer and DPoP provider required                                                                               |
-| Direct Sign-In state, S256 PKCE, callback validation, and exchange grant                | Implemented primitives in Python and TypeScript                                                                                                            |
+| Direct Sign-In state, S256 PKCE, callback validation, and exchange grant                | Implemented in Python and TypeScript                                                                                                                       |
 | Reactor clock, randomness, signer, DPoP proof, key, token, cache, and browser contracts | Implemented and lifecycle-tested in Python and TypeScript                                                                                                  |
 | ES256/RS256 assertion signing                                                           | Implemented in Python and TypeScript                                                                                                                       |
 | DPoP proof creation and verification                                                    | Implemented in Python and TypeScript; host key resolver and replay cache required                                                                          |
-| Direct Sign-In browser handoff and token exchange                                       | Planned                                                                                                                                                    |
+| Direct Sign-In browser handoff and token exchange                                       | Implemented in Python and TypeScript; host state, browser, signer, and DPoP providers required                                                             |
 | Device and mediated sign-in                                                             | Planned                                                                                                                                                    |
 | OpenAPI, MCP, and browser helpers                                                       | Planned                                                                                                                                                    |
 | Conversations and streaming                                                             | Planned                                                                                                                                                    |
@@ -52,12 +52,10 @@ can support more than one protocol profile.
 - Pairwise ID generation and a file-backed atomic Python reference store are
   implemented. Distributed deployments must contribute their own transactional
   `pap.pairwiseUserIdStore` and own retention and erasure policy.
-- Python Direct Sign-In now performs trusted browser handoff, atomic one-use
+- Python and TypeScript Direct Sign-In perform trusted browser handoff, atomic one-use
   state consumption, exact callback validation, fresh assertion/DPoP exchange,
   one nonce retry, and partial-scope reporting. Hosts still provide the
-  authorization-state store, browser surface, signer, and DPoP key custody;
-  TypeScript currently exposes the lower-level primitives and aligned
-  state-store contract.
+  authorization-state store, browser surface, signer, and DPoP key custody.
 - Session clients sign fresh claims, create a DPoP proof, and send the token
   request. Local JOSE implementations are available, but applications still
   own key selection and custody.

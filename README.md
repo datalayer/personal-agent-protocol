@@ -33,8 +33,7 @@ The first implemented slice provides:
   verification, including nonce, request, token-hash, freshness, and replay
   checks, in both SDKs;
 - Direct Sign-In state, S256 PKCE, callback validation, and redacted exchange
-  forms in both SDKs, plus one-use browser and token-exchange orchestration in
-  Python;
+  forms plus one-use browser and token-exchange orchestration in both SDKs;
 - duplicate JSON member rejection at Python and TypeScript trust boundaries;
 - a Reactor-extensible `pap` CLI with non-secret profiles, verified company
   discovery, extension diagnostics, versioned JSON, and a safe live-session

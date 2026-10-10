@@ -2,8 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AuthorizationStateStores,
   AuthorizationCodeGrant,
   AuthorizationError,
+  BrowserHandoffs,
+  DirectSignInClient,
+  DpopProofProviders,
+  Signers,
+  buildPapReactor,
   buildDirectSignInRequest,
   validateDirectSignInCallback,
 } from "../lib/index.js";
@@ -116,4 +122,192 @@ test("rejects callbacks at another redirect location", async () => {
     () => validateDirectSignInCallback(signIn, callback.toString()),
     (error) => error instanceof AuthorizationError && error.code === "redirect_mismatch",
   );
+});
+
+function orchestrationPlugin() {
+  const values = new Map();
+  const browserUrls = [];
+  const proofRequests = [];
+  const purposes = [];
+  let signature = 0;
+  return {
+    plugin: {
+      name: "@tests/pap-direct-sign-in",
+      contributes: [
+        {
+          point: AuthorizationStateStores,
+          value: {
+            async put(reference, value) {
+              values.set(reference, value);
+            },
+            async take(reference) {
+              const value = values.get(reference);
+              values.delete(reference);
+              return value;
+            },
+          },
+          options: { id: "memory" },
+        },
+        {
+          point: BrowserHandoffs,
+          value: {
+            async open(url) {
+              browserUrls.push(url.reveal());
+            },
+          },
+          options: { id: "browser" },
+        },
+        {
+          point: Signers,
+          value: {
+            async sign(_claims, options) {
+              purposes.push(options.purpose);
+              signature += 1;
+              const value = `client-assertion-${signature}`;
+              return {
+                reveal: () => value,
+                toString: () => "[REDACTED]",
+                toJSON: () => "[REDACTED]",
+              };
+            },
+          },
+          options: { id: "signer" },
+        },
+        {
+          point: DpopProofProviders,
+          value: {
+            async create(proofRequest) {
+              proofRequests.push(proofRequest);
+              const value = `dpop-${proofRequests.length}`;
+              return {
+                reveal: () => value,
+                toString: () => "[REDACTED]",
+                toJSON: () => "[REDACTED]",
+              };
+            },
+          },
+          options: { id: "dpop" },
+        },
+      ],
+    },
+    browserUrls,
+    proofRequests,
+    purposes,
+  };
+}
+
+const orchestrationOptions = {
+  authorizationEndpoint: "https://auth.example.com/oauth/authorize",
+  tokenEndpoint: "https://auth.example.com/oauth/token",
+  issuer: "https://auth.example.com",
+  clientId: "https://agent.example/agent.json",
+  redirectUri: "https://agent.example/oauth/callback",
+  scopes: ["poppy:read", "poppy:write"],
+  tenantId: "application-one",
+  pairwiseUserId: "usr_AAECAwQFBgcICQoLDA0ODw",
+  sessionId: "ses_existing",
+};
+
+function browserCallback(browserUrl, overrides = {}) {
+  const authorization = new URL(browserUrl);
+  const callback = new URL(orchestrationOptions.redirectUri);
+  const parameters = {
+    code: "one-time-code",
+    state: authorization.searchParams.get("state"),
+    iss: orchestrationOptions.issuer,
+    ...overrides,
+  };
+  for (const [key, value] of Object.entries(parameters)) callback.searchParams.set(key, value);
+  return callback.toString();
+}
+
+test("orchestrates one-use Direct Sign-In with nonce and partial scopes", async () => {
+  const orchestration = orchestrationPlugin();
+  const forms = [];
+  const signals = [];
+  let calls = 0;
+  const fetch = async (_input, init) => {
+    calls += 1;
+    forms.push(new URLSearchParams(init.body));
+    signals.push(init.signal);
+    assert.equal(init.headers.DPoP, `dpop-${calls}`);
+    assert.equal(init.redirect, "error");
+    if (calls === 1) {
+      return new Response(JSON.stringify({ error: "use_dpop_nonce" }), {
+        status: 400,
+        headers: {
+          "content-type": "application/json",
+          "DPoP-Nonce": "company-nonce",
+        },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        access_token: "signed-in-session-token",
+        token_type: "DPoP",
+        expires_in: 300,
+        scope: "poppy:read",
+        session_id: "ses_existing",
+        signed_in: true,
+        refresh_token: "account-token",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const reactor = buildPapReactor({ fetch }, [orchestration.plugin]);
+  const client = new DirectSignInClient({ reactor, fetch });
+  const controller = new AbortController();
+  const started = await client.begin(orchestrationOptions);
+  const callbackUrl = browserCallback(orchestration.browserUrls[0]);
+  const result = await client.complete({ callbackUrl, signal: controller.signal });
+  await assert.rejects(
+    client.complete({ callbackUrl }),
+    (error) =>
+      error instanceof AuthorizationError && error.code === "invalid_or_expired_state",
+  );
+  reactor.stop();
+
+  assert.ok(started.expiresAt > new Date());
+  assert.deepEqual(started.requestedScopes, ["poppy:read", "poppy:write"]);
+  assert.deepEqual(result.grantedScopes, ["poppy:read"]);
+  assert.deepEqual(result.missingScopes, ["poppy:write"]);
+  assert.equal(result.token.accessToken.reveal(), "signed-in-session-token");
+  assert.deepEqual(
+    orchestration.proofRequests.map((proof) => proof.nonce),
+    [undefined, "company-nonce"],
+  );
+  assert.deepEqual(orchestration.purposes, ["client_assertion", "client_assertion"]);
+  assert.equal(forms[0].get("session_id"), "ses_existing");
+  assert.equal(forms[0].get("code_verifier"), forms[1].get("code_verifier"));
+  assert.notEqual(forms[0].get("client_assertion"), forms[1].get("client_assertion"));
+  assert.deepEqual(signals, [controller.signal, controller.signal]);
+});
+
+test("Direct Sign-In denial consumes state without exposing remote text", async () => {
+  const orchestration = orchestrationPlugin();
+  const fetch = async () => {
+    throw new Error("token endpoint must not be called for a denial");
+  };
+  const reactor = buildPapReactor({ fetch }, [orchestration.plugin]);
+  const client = new DirectSignInClient({ reactor, fetch });
+  await client.begin(orchestrationOptions);
+  const callbackUrl = browserCallback(orchestration.browserUrls[0], {
+    error: "access_denied",
+    error_description: "private company detail",
+    code: "",
+  });
+
+  await assert.rejects(
+    client.complete({ callbackUrl }),
+    (error) =>
+      error instanceof AuthorizationError &&
+      error.code === "authorization_denied" &&
+      !String(error).includes("private company detail"),
+  );
+  await assert.rejects(
+    client.complete({ callbackUrl }),
+    (error) =>
+      error instanceof AuthorizationError && error.code === "invalid_or_expired_state",
+  );
+  reactor.stop();
 });

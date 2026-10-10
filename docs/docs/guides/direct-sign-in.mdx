@@ -6,8 +6,8 @@ title: Direct Sign-In
 
 Both SDKs implement safe Direct Sign-In primitives: random OAuth state, RFC
 7636 S256 PKCE, authorization URL construction, callback state and issuer
-validation, and a redacted authorization-code exchange grant. Python also
-implements the complete personal-agent orchestration through
+validation, and a redacted authorization-code exchange grant. Both also
+implement the complete personal-agent orchestration through
 `DirectSignInClient`.
 
 :::caution Host services remain mandatory
@@ -70,36 +70,36 @@ flow.
 
 ```typescript
 import {
-  AuthorizationCodeGrant,
-  buildDirectSignInRequest,
-  validateDirectSignInCallback,
+  DirectSignInClient,
 } from '@datalayer/personal-agent-protocol';
 
-const signIn = await buildDirectSignInRequest({
+const signIn = new DirectSignInClient({ reactor, fetch });
+const started = await signIn.begin({
   authorizationEndpoint: 'https://auth.example.com/oauth/authorize',
+  tokenEndpoint: 'https://auth.example.com/oauth/token',
   issuer: 'https://auth.example.com',
   clientId: 'https://agent.example/agent.json',
   redirectUri: 'https://agent.example/oauth/callback',
   scopes: ['poppy:read'],
+  tenantId: 'application-42',
+  pairwiseUserId,
+  sessionId: signedOutSession.sessionId,
 });
 
-openInUsersBrowser(signIn.authorizationUrl.reveal());
-
-const callback = validateDirectSignInCallback(signIn, incomingUrl);
-const grant = new AuthorizationCodeGrant({
-  code: callback.code.reveal(),
-  redirectUri: signIn.redirectUri,
-  codeVerifier: signIn.codeVerifier.reveal(),
-  sessionId: 'ses_2Lm0',
-  clientId: signIn.clientId,
-  clientAssertion: signedClientAssertion,
+// Later, at the registered callback route. Never put this URL in UI/model state.
+const result = await signIn.complete({
+  callbackUrl: incomingCallbackUrl,
+  signal: request.signal,
 });
+console.log(started.expiresAt, result.grantedScopes, result.missingScopes);
 ```
 
-TypeScript currently exposes these lower-level primitives plus the aligned
-`AuthorizationStateStores` Reactor contract. Browser opening, atomic state
-consumption, and proof-bound HTTP exchange remain planned for the TypeScript
-orchestrator.
+The TypeScript flow has the same one-use, redirect, issuer, nonce, Session, and
+scope guarantees as Python and propagates an optional `AbortSignal` to both
+exchange attempts. Use it in a trusted backend or desktop host whose Reactor
+contributions keep assertion signing and authorization state out of browser
+code. A web Preview should request the flow through that host and receive only
+safe status.
 
 The request URL, state, verifier, authorization code, client assertion, DPoP
 proof, Session Token, and Account Token are redacted by default. Reveal them

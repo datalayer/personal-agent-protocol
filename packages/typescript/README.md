@@ -44,5 +44,12 @@ Reactor host to `discoverCompany`.
 
 Security-dependent services have no fallback and fail closed when missing or ambiguous.
 
+`DirectSignInClient` orchestrates one-use browser authorization and the
+proof-bound code exchange. It requires host authorization-state, browser,
+signer, and DPoP contributions; supports cancellation; retries one DPoP nonce;
+and reports partial scopes without placing callback secrets in UI or model
+state. Run it in a trusted desktop or backend host, never in a bundle carrying
+server signing authority.
+
 See the repository [README](https://github.com/datalayer/personal-agent-protocol) for
 current limits and security guidance.

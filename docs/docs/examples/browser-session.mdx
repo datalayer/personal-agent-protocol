@@ -1,0 +1,77 @@
+---
+title: Browser Session
+description: Join a controlled browser to an existing PAP Session with a one-use signed assertion.
+---
+
+# Browser Session
+
+PAP can carry one Session across APIs, conversations, and the company's
+website. When discovery advertises `web.browser_session_endpoint`, the personal
+agent signs a short-lived browser assertion and has a browser it controls POST
+that assertion to the company. The company verifies it, sets its own Session
+cookie, and redirects to the requested page.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Personal agent
+  participant S as Reactor signer
+  participant B as Agent-controlled browser
+  participant C as Company browser-session endpoint
+  participant R as Company replay cache
+  A->>A: Validate HTTPS endpoint and company-domain return_to
+  A->>A: Build iss, pairwise sub, session_id, iat, exp, jti
+  A->>S: Sign with typ=poppy-browser+jwt
+  S-->>A: Protected assertion
+  A->>B: Controlled top-level form POST instruction
+  B->>C: POST assertion in form body
+  C->>C: Verify type, signature, audience, owner, lifetime, return_to
+  C->>R: Atomically accept jti until exp
+  R-->>C: First use accepted
+  C-->>B: 303 + Secure HttpOnly SameSite cookie
+  B->>C: GET return_to with company cookie
+  Note over A,B: The assertion is never placed in a URL or model context
+```
+
+## Personal-agent responsibilities
+
+- Use the advertised HTTPS endpoint as the exact assertion audience.
+- Set `return_to` only to the company's domain or one of its subdomains.
+- Use the pairwise User ID and active Session ID that belong together.
+- Limit `exp - iat` to at most 60 seconds and generate a unique, unpredictable
+  `jti` with at least 128 bits of entropy.
+- Sign with the distinct protected-header type `poppy-browser+jwt`.
+- Submit `assertion` in a top-level form POST from a browser the agent controls.
+  It must never appear in a query string or the user's ordinary browser.
+
+`BrowserSessionClient` resolves clock, randomness, signing, and the controlled
+form POST through Reactor. It returns only the endpoint, safe return location,
+and expiry; the compact assertion never leaves the host boundary.
+
+## Company responsibilities
+
+`verify_browser_assertion` in Python and `verifyBrowserAssertion` from the
+TypeScript `./server` entry check:
+
+- ES256 or RS256 signature against the agent's verified JWKS;
+- exact `poppy-browser+jwt` type and endpoint audience;
+- a lifetime no longer than 60 seconds and an assertion active now;
+- the expected client, pairwise User ID, active Session, and company-domain
+  return target; and
+- atomic one-use replay acceptance of `(client_id, jti)` until expiry.
+
+After verification, the company creates its own cookie. That cookie must be
+`Secure` and `HttpOnly`, use `SameSite=Lax` or `None`, follow later sign-in,
+sign-out, and scope changes, and never outlive the PAP Session. Cookie creation
+is intentionally a company web-framework responsibility rather than an SDK
+side effect.
+
+## What the examples prove
+
+Both examples create a real ES256 assertion, pass it through a Reactor form
+POST contribution, verify it, and submit it a second time to demonstrate replay
+rejection. Their tool results contain boolean policy evidence only.
+
+Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/browser-session)
+or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/browser-session).
+See upstream [Web browsing](https://personalagentprotocol.org/docs/spec#web-browsing).

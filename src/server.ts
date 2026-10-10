@@ -12,6 +12,12 @@ export {
   type VerifiedDpopProof,
   type VerifyDpopProofOptions,
 } from "./crypto.js";
+export {
+  verifyBrowserAssertion,
+  type BrowserAssertionReplayCache,
+  type VerifiedBrowserAssertion,
+  type VerifyBrowserAssertionOptions,
+} from "./browser-server.js";
 
 export type NodeAddressResolver = (hostname: string) => Promise<readonly string[]>;
 

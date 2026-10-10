@@ -62,4 +62,5 @@ test("keeps server security APIs out of the portable entry bundle", async () => 
   assert.equal(bundle.includes("NodeUrlSafetyPolicy"), false);
   assert.equal(bundle.includes("JoseSigner"), false);
   assert.equal(bundle.includes("verifyDpopProof"), false);
+  assert.equal(bundle.includes("verifyBrowserAssertion"), false);
 });

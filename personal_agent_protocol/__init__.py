@@ -15,6 +15,16 @@ from .auth import (
     build_direct_sign_in_request,
     validate_direct_sign_in_callback,
 )
+from .browser import (
+    BROWSER_ASSERTION_TYPE,
+    BrowserAssertionClaims,
+    BrowserAssertionReplayCache,
+    BrowserSessionClient,
+    BrowserSessionStart,
+    VerifiedBrowserAssertion,
+    build_browser_assertion_claims,
+    verify_browser_assertion,
+)
 from .crypto import (
     DpopKeyMaterial,
     DpopReplayCache,
@@ -27,6 +37,7 @@ from .crypto import (
 from .discovery import DiscoveryClient
 from .errors import (
     AuthorizationError,
+    BrowserSessionError,
     DiscoveryError,
     IdentityError,
     PersonalAgentProtocolError,
@@ -52,6 +63,7 @@ from .models import (
 from .pairwise import SqlitePairwiseUserIdStore, resolve_pairwise_user_id
 from .reactor import (
     AUTHORIZATION_STATE_STORES,
+    BROWSER_FORM_POSTS,
     BROWSER_HANDOFFS,
     CACHES,
     CLOCKS,
@@ -66,6 +78,7 @@ from .reactor import (
     TOKEN_STORES,
     URL_SAFETY_POLICIES,
     AuthorizationStateStore,
+    BrowserFormPost,
     BrowserHandoff,
     Clock,
     DpopProofProvider,
@@ -96,6 +109,8 @@ from .sessions import (
 
 __all__ = [
     "AUTHORIZATION_STATE_STORES",
+    "BROWSER_ASSERTION_TYPE",
+    "BROWSER_FORM_POSTS",
     "BROWSER_HANDOFFS",
     "CACHES",
     "CLOCKS",
@@ -115,7 +130,13 @@ __all__ = [
     "AuthorizationCodeGrant",
     "AuthorizationError",
     "AuthorizationStateStore",
+    "BrowserAssertionClaims",
+    "BrowserAssertionReplayCache",
+    "BrowserFormPost",
     "BrowserHandoff",
+    "BrowserSessionClient",
+    "BrowserSessionError",
+    "BrowserSessionStart",
     "ClientMetadata",
     "Clock",
     "ConversationEvent",
@@ -164,13 +185,16 @@ __all__ = [
     "SystemClock",
     "SystemRandomSource",
     "TokenStore",
+    "VerifiedBrowserAssertion",
     "VerifiedDpopProof",
     "__version__",
+    "build_browser_assertion_claims",
     "build_direct_sign_in_request",
     "build_pap_reactor",
     "build_session_assertion_claims",
     "generate_pairwise_user_id",
     "resolve_pairwise_user_id",
     "validate_direct_sign_in_callback",
+    "verify_browser_assertion",
     "verify_dpop_proof",
 ]

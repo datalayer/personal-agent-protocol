@@ -18,6 +18,7 @@ capability owns sensitive work, and what may safely cross into model context.
 | [DPoP proof](./dpop-proof) | Bind one proof to one HTTP request | A protected key |
 | [Session lifecycle](./session-lifecycle) | Start, retry, and renew a signed-out Session | An authorization server |
 | [Direct Sign-In lifecycle](./direct-sign-in-lifecycle) | Upgrade the same Session after user consent | A browser callback |
+| [Browser Session](./browser-session) | Join a controlled browser to the same Session | A signed browser assertion |
 
 The examples use deterministic or local transports where needed, so they can
 teach the boundary without real credentials. Production hosts replace those

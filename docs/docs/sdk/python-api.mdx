@@ -15,8 +15,17 @@ Unknown or internal symbols are deliberately excluded.
 - [`AuthorizationCodeGrant`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Redacted PAP authorization-code exchange values.
 - [`AuthorizationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. An authorization flow failed without exposing callback secrets.
 - [`AuthorizationStateStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist and atomically consume short-lived authorization state.
+- [`BROWSER_ASSERTION_TYPE`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Constant. Public `BROWSER_ASSERTION_TYPE` constant.
+- [`BROWSER_FORM_POSTS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `BROWSER_FORM_POSTS` constant.
 - [`BROWSER_HANDOFFS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `BROWSER_HANDOFFS` constant.
+- [`BrowserAssertionClaims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Claims that bind a controlled browser to one PAP Session.
+- [`BrowserAssertionReplayCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Public `BrowserAssertionReplayCache` class.
+- [`BrowserFormPost`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Submit protected fields as a controlled top-level browser navigation.
 - [`BrowserHandoff`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Hand a human-only authorization URL to a trusted browser surface.
+- [`BrowserSessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Sign and POST a browser assertion without putting it in a URL.
+- [`BrowserSessionError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A browser-session handoff or assertion failed safely.
+- [`BrowserSessionStart`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Safe status after a controlled form POST has started.
+- [`build_browser_assertion_claims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Function. Build unsigned PAP section 5 claims for protected signing.
 - [`build_direct_sign_in_request`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Build a user-browser authorization URL with random state and S256 PKCE.
 - [`build_pap_reactor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. Build a PAP Reactor host and return any HTTP client it owns.
 - [`build_session_assertion_claims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. Build unsigned PAP 4.2 claims; a key-custody provider signs them.
@@ -85,5 +94,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`TokenStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Keep credentials behind opaque references and explicit deletion.
 - [`URL_SAFETY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `URL_SAFETY_POLICIES` constant.
 - [`validate_direct_sign_in_callback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Validate redirect location, state, and issuer before exposing the code.
+- [`VerifiedBrowserAssertion`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Public `VerifiedBrowserAssertion` class.
 - [`VerifiedDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Safe identity of a verified, newly accepted DPoP proof.
+- [`verify_browser_assertion`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Function. Verify type, signature, bindings, lifetime, return target, and replay.
 - [`verify_dpop_proof`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Function. Verify signature, binding, freshness, nonce, token hash, and replay state.

@@ -102,7 +102,7 @@ export class JoseSigner implements Signer {
       const token = await new SignJWT(claims as JWTPayload)
         .setProtectedHeader({
           alg: this.#algorithm,
-          typ: "JWT",
+          typ: _options.purpose === "browser_assertion" ? "poppy-browser+jwt" : "JWT",
           ...(this.#keyId === undefined ? {} : { kid: this.#keyId }),
         })
         .sign(this.#privateKey);

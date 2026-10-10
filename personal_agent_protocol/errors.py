@@ -52,3 +52,7 @@ class SessionError(PersonalAgentProtocolError):
 
 class ProofError(PersonalAgentProtocolError):
     """A signed assertion or proof-of-possession value is invalid."""
+
+
+class BrowserSessionError(PersonalAgentProtocolError):
+    """A browser-session handoff or assertion failed safely."""

@@ -56,12 +56,18 @@ remain on a server or KMS; they must never be shipped in a browser or desktop
 bundle.
 
 The SDK exports aligned `Clocks`, `RandomSources`, `Signers`,
-`DpopProofProviders`, `KeyStores`, `TokenStores`, `Caches`, and
-`BrowserHandoffs` contribution points, plus `PairwiseUserIdStores` for stable
+`DpopProofProviders`, `KeyStores`, `TokenStores`, `Caches`, `BrowserHandoffs`,
+and `BrowserFormPosts` contribution points, plus `PairwiseUserIdStores` for stable
 identity and `AuthorizationStateStores` for atomic one-use authorization state.
 The core plugin provides only system time and secure randomness.
 Security-dependent services have no fallback and resolution fails closed when
 missing or ambiguous.
+
+`BrowserSessionClient` builds a maximum-60-second assertion and delegates its
+top-level, body-only POST to `BrowserFormPosts`. Company code imports
+`verifyBrowserAssertion` from `@datalayer/personal-agent-protocol/server`, so
+public-key verification and replay storage stay outside portable browser
+bundles. See the [Browser Session flow](/examples/browser-session/).
 
 ## Agent identity
 

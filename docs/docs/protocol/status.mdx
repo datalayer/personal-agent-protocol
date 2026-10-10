@@ -23,8 +23,9 @@ Target: [PAP draft 0.1, updated October 9,
 | ES256/RS256 assertion signing                                                           | Implemented in Python and TypeScript                                                                                                                       |
 | DPoP proof creation and verification                                                    | Implemented in Python and TypeScript; host key resolver and replay cache required                                                                          |
 | Direct Sign-In browser handoff and token exchange                                       | Implemented in Python and TypeScript; host state, browser, signer, and DPoP providers required                                                             |
+| Browser Session assertion, controlled form POST, and verification                       | Implemented in Python and TypeScript; host signer/form-post and company replay cache required                                                              |
 | Device and mediated sign-in                                                             | Planned                                                                                                                                                    |
-| OpenAPI, MCP, and browser helpers                                                       | Planned                                                                                                                                                    |
+| OpenAPI and MCP helpers                                                                 | Planned                                                                                                                                                    |
 | Conversations and streaming                                                             | Planned                                                                                                                                                    |
 | Operations v1                                                                           | Aligned wire models implemented; client/server behavior planned                                                                                            |
 | Extensible `pap` CLI                                                                    | Reactor host/plugin, non-secret profiles, company discovery, agent identity/JWKS inspection, extension diagnostics, and live discovery command implemented |
@@ -61,7 +62,12 @@ can support more than one protocol profile.
   own key selection and custody.
 - Security contribution contracts exist, but the SDK deliberately ships no
   default protected key store, durable replay cache, token store, general
-  cache, or browser handoff.
+  cache, browser handoff, or browser form-post surface.
+- Browser Session clients sign the distinct `poppy-browser+jwt` assertion and
+  submit it through `pap.browserFormPost`; company verification enforces the
+  endpoint, Session owner, 60-second lifetime, company-domain return target,
+  and one-use `jti`. Company adapters still own cookie creation and must bind
+  cookie state and lifetime to the underlying PAP Session.
 - Models for conversations and Operations are aligned and fixture-tested, but
   do not yet imply working clients or server handlers.
 - The CLI does not expose auth, session, conversation, Operations, or

@@ -18,6 +18,7 @@ Each example covers exactly one feature and makes its trust boundary visible.
 | [Direct Sign-In lifecycle](/examples/direct-sign-in-lifecycle/) | Callback, exchange, nonce retry, partial consent, continuity | Lifecycle evidence; all secrets withheld |
 | [DPoP proof](/examples/dpop-proof/) | Method, URL, access-token, nonce, and replay binding | Verified policy; proof material withheld |
 | [Session lifecycle](/examples/session-lifecycle/) | Signed-out start, DPoP nonce retry, and renewal over HTTP | Lifecycle evidence; credentials withheld |
+| [Browser Session](/examples/browser-session/) | Signed assertion, controlled form POST, verification, replay rejection | Browser policy; credentials withheld |
 
 Agent Runtimes now depends on PAP in both Python and TypeScript. Its
 `PapPersonalAgentCapability` uses `DiscoveryClient` and `AgentIdentityClient`

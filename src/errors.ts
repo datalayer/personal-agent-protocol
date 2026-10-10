@@ -82,3 +82,10 @@ export class ProofError extends PersonalAgentProtocolError {
     this.name = "ProofError";
   }
 }
+
+export class BrowserSessionError extends PersonalAgentProtocolError {
+  constructor(code: string, message: string, options: { cause?: unknown } = {}) {
+    super(code, message, options);
+    this.name = "BrowserSessionError";
+  }
+}

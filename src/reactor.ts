@@ -86,6 +86,10 @@ export interface BrowserHandoff {
   open(authorizationUrl: SecretValue): Promise<void>;
 }
 
+export interface BrowserFormPost {
+  post(endpoint: URL, fields: Readonly<Record<string, SecretValue>>): Promise<void>;
+}
+
 export interface DpopProofRequest {
   readonly method: string;
   readonly url: string;
@@ -126,6 +130,9 @@ export const AuthorizationStateStores = defineContributionPoint<AuthorizationSta
 export const Caches = defineContributionPoint<ProtocolCache>("pap.cache");
 export const BrowserHandoffs = defineContributionPoint<BrowserHandoff>(
   "pap.browserHandoff",
+);
+export const BrowserFormPosts = defineContributionPoint<BrowserFormPost>(
+  "pap.browserFormPost",
 );
 export const DpopProofProviders = defineContributionPoint<DpopProofProvider>(
   "pap.dpopProofProvider",
@@ -190,6 +197,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       AuthorizationStateStores,
       Caches,
       BrowserHandoffs,
+      BrowserFormPosts,
       DpopProofProviders,
     ],
     contributes: [

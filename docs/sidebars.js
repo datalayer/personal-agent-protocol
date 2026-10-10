@@ -72,6 +72,7 @@ const sidebars = {
         'examples/dpop-proof',
         'examples/session-lifecycle',
         'examples/direct-sign-in-lifecycle',
+        'examples/browser-session',
       ],
     },
     {

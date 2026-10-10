@@ -13,6 +13,7 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | [`direct-sign-in-lifecycle`](./direct-sign-in-lifecycle/) | Complete Session upgrade and consent  | Lifecycle evidence only           |
 | [`dpop-proof`](./dpop-proof/)                           | Request binding and replay rejection    | Verified policy; secrets withheld |
 | [`session-lifecycle`](./session-lifecycle/)             | Start, nonce retry, and renewal over HTTP | Lifecycle evidence only          |
+| [`browser-session`](./browser-session/)                 | Controlled form POST and one-use assertion | Browser policy only             |
 
 Install and run from the PAP repository:
 

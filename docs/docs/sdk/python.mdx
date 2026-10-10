@@ -39,7 +39,8 @@ python -m pytest -p no:cacheprovider
 | `validate_direct_sign_in_callback`                      | Implemented primitive | Verify callback redirect, state, issuer, denial, and code.                                                 |
 | `AuthorizationCodeGrant`                                | Implemented primitive | Build a redacted PAP code-exchange form.                                                                   |
 | `DirectSignInClient`                                    | Implemented           | Perform one-use browser handoff and proof-bound exchange with partial-scope reporting.                     |
-| Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, DPoP proofs, protected keys, token storage, cache, and browser handoff. |
+| `BrowserSessionClient`, `verify_browser_assertion`      | Implemented           | Join a controlled browser through a body-only form POST and verify the assertion once.                    |
+| Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, DPoP proofs, stores, browser handoff, and browser form POST.            |
 
 ## Discovery
 
@@ -76,7 +77,8 @@ The core plugin also supplies `pap.clock` and `pap.randomSource`. A host must
 contribute `pap.signer`, `pap.dpopProofProvider`, `pap.keyStore`,
 `pap.tokenStore`, `pap.pairwiseUserIdStore`, `pap.authorizationStateStore`,
 `pap.cache`, and `pap.browserHandoff` before a flow requiring those services
-begins. Resolution fails when a required provider is missing or tied at the
+begins. Browser Session also requires `pap.browserFormPost`. Resolution fails
+when a required provider is missing or tied at the
 winning priority; there is no insecure in-memory fallback.
 
 ## Agent identity

@@ -23,7 +23,8 @@ early implementation: discovery, foundational session value objects, and
 Direct Sign-In primitives and one-use browser/proof-bound exchange
 orchestration work in both SDKs. Signed-out session
 start and renewal work when the host supplies secure signing and DPoP
-providers. Local JOSE providers are available; managed key custody, Account
+providers. Browser Session form-post handoff and company-side assertion
+verification are also implemented. Local JOSE providers are available; managed key custody, Account
 Token lifecycle, company services, conversations, and Operations are not ready.
 
 :::
@@ -56,7 +57,9 @@ The current `0.3.x` preview line includes:
 - ES256/RS256 assertion signing and DPoP creation and verification with nonce,
   request, token-hash, freshness, and replay checks;
 - Direct Sign-In state, S256 PKCE, callback, exchange-grant, and
-  browser/exchange orchestration in both SDKs; and
+  browser/exchange orchestration in both SDKs;
+- Browser Session assertion, controlled form POST, and replay-safe company
+  verification in both SDKs; and
 - a Reactor-extensible `pap` CLI for non-secret profiles, verified discovery,
   and extension diagnostics; and
 - shared fixtures and cross-language validation tests.

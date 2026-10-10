@@ -8,33 +8,34 @@ title: Protocol status
 Target: [PAP draft 0.1, updated October 9,
 2026](https://personalagentprotocol.org/docs/spec).
 
-| Area | Status |
-| --- | --- |
-| Discovery document and OAuth metadata | Implemented in Python and TypeScript |
-| Client metadata, conversation-event, and Operations wire models | Implemented in Python and TypeScript with shared fixtures |
-| Domain and issuer binding | Implemented in Python and TypeScript |
-| Duplicate JSON member rejection | Implemented at Python and TypeScript trust boundaries |
-| Client metadata validation | Implemented in Python and TypeScript |
-| Pairwise user IDs and session wire primitives | Implemented in Python and TypeScript |
-| Signed-out session start and renewal over HTTP | Implemented in Python and TypeScript; host signer and DPoP provider required |
-| Direct Sign-In state, S256 PKCE, callback validation, and exchange grant | Implemented primitives in Python and TypeScript |
-| Reactor clock, randomness, signer, DPoP proof, key, token, cache, and browser contracts | Implemented and lifecycle-tested in Python and TypeScript |
-| ES256/RS256 assertion signing | Implemented in Python and TypeScript |
-| DPoP proof creation and verification | Implemented in Python and TypeScript; host key resolver and replay cache required |
-| Direct Sign-In browser handoff and token exchange | Planned |
-| Device and mediated sign-in | Planned |
-| OpenAPI, MCP, and browser helpers | Planned |
-| Conversations and streaming | Planned |
-| Operations v1 | Aligned wire models implemented; client/server behavior planned |
-| Extensible `pap` CLI | Reactor host/plugin, non-secret profiles, company discovery, extension diagnostics, and live discovery command implemented |
-| Company/server SDK | Planned |
+| Area                                                                                    | Status                                                                                                                                                     |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discovery document and OAuth metadata                                                   | Implemented in Python and TypeScript                                                                                                                       |
+| Client metadata, conversation-event, and Operations wire models                         | Implemented in Python and TypeScript with shared fixtures                                                                                                  |
+| Domain and issuer binding                                                               | Implemented in Python and TypeScript                                                                                                                       |
+| Duplicate JSON member rejection                                                         | Implemented at Python and TypeScript trust boundaries                                                                                                      |
+| Client metadata validation                                                              | Implemented in Python and TypeScript                                                                                                                       |
+| Client metadata and public JWKS retrieval                                               | Implemented in Python and TypeScript with Reactor safety policies                                                                                          |
+| Pairwise user IDs and session wire primitives                                           | Implemented in Python and TypeScript                                                                                                                       |
+| Signed-out session start and renewal over HTTP                                          | Implemented in Python and TypeScript; host signer and DPoP provider required                                                                               |
+| Direct Sign-In state, S256 PKCE, callback validation, and exchange grant                | Implemented primitives in Python and TypeScript                                                                                                            |
+| Reactor clock, randomness, signer, DPoP proof, key, token, cache, and browser contracts | Implemented and lifecycle-tested in Python and TypeScript                                                                                                  |
+| ES256/RS256 assertion signing                                                           | Implemented in Python and TypeScript                                                                                                                       |
+| DPoP proof creation and verification                                                    | Implemented in Python and TypeScript; host key resolver and replay cache required                                                                          |
+| Direct Sign-In browser handoff and token exchange                                       | Planned                                                                                                                                                    |
+| Device and mediated sign-in                                                             | Planned                                                                                                                                                    |
+| OpenAPI, MCP, and browser helpers                                                       | Planned                                                                                                                                                    |
+| Conversations and streaming                                                             | Planned                                                                                                                                                    |
+| Operations v1                                                                           | Aligned wire models implemented; client/server behavior planned                                                                                            |
+| Extensible `pap` CLI                                                                    | Reactor host/plugin, non-secret profiles, company discovery, agent identity/JWKS inspection, extension diagnostics, and live discovery command implemented |
+| Company/server SDK                                                                      | Planned                                                                                                                                                    |
 
 ## Supported package line
 
-| Package | Version | PAP profile | Maturity |
-| --- | --- | --- | --- |
-| `personal-agent-protocol` | `0.3.x` | `0.1` | Preview |
-| `@datalayer/personal-agent-protocol` | `0.3.x` | `0.1` | Preview |
+| Package                              | Version | PAP profile | Maturity |
+| ------------------------------------ | ------- | ----------- | -------- |
+| `personal-agent-protocol`            | `0.3.x` | `0.1`       | Preview  |
+| `@datalayer/personal-agent-protocol` | `0.3.x` | `0.1`       | Preview  |
 
 The package version and protocol version are independent. A future SDK release
 can support more than one protocol profile.
@@ -62,5 +63,6 @@ The machine-readable requirement ledger lives in
 [`protocol/requirements.yaml`](https://github.com/datalayer/personal-agent-protocol/blob/main/protocol/requirements.yaml).
 
 PAP itself still leaves payments, push notifications, and message attachments
-as open topics. Follow the upstream [open topics](https://personalagentprotocol.org/docs/open-topics)
-before designing private extensions for those areas.
+as open topics. See [Open topics and SDK gaps](./open-topics) before designing
+private extensions or interpreting an unimplemented SDK service as an omission
+from the protocol.

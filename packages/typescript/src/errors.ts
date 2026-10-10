@@ -43,6 +43,17 @@ export class DiscoveryError extends PersonalAgentProtocolError {
   }
 }
 
+export class IdentityError extends PersonalAgentProtocolError {
+  constructor(
+    code: string,
+    message: string,
+    options: { statusCode?: number; cause?: unknown } = {},
+  ) {
+    super(code, message, options);
+    this.name = "IdentityError";
+  }
+}
+
 export class AuthorizationError extends PersonalAgentProtocolError {
   constructor(code: string, message: string, options: { cause?: unknown } = {}) {
     super(code, message, options);

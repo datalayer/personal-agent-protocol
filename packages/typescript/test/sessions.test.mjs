@@ -65,11 +65,14 @@ const requestOptions = {
 
 test("starts and renews a signed-out session over HTTP", async () => {
   const security = securityPlugin();
+  const controller = new AbortController();
   const forms = [];
+  const signals = [];
   const fetch = async (_input, init) => {
     assert.equal(init.method, "POST");
     assert.match(init.headers.DPoP, /^proof-/);
     forms.push(new URLSearchParams(init.body));
+    signals.push(init.signal);
     return new Response(JSON.stringify(tokenResponse), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -78,8 +81,12 @@ test("starts and renews a signed-out session over HTTP", async () => {
   const reactor = buildPapReactor({ fetch }, [security.plugin]);
   const client = new SessionClient({ reactor, fetch });
 
-  const started = await client.start(requestOptions);
-  const renewed = await client.renew({ ...requestOptions, sessionId: started.sessionId });
+  const started = await client.start({ ...requestOptions, signal: controller.signal });
+  const renewed = await client.renew({
+    ...requestOptions,
+    sessionId: started.sessionId,
+    signal: controller.signal,
+  });
   reactor.stop();
 
   assert.equal(started.sessionId, "ses_2Lm0");
@@ -87,6 +94,7 @@ test("starts and renews a signed-out session over HTTP", async () => {
   assert.equal(forms[0].has("session_id"), false);
   assert.equal(forms[1].get("session_id"), "ses_2Lm0");
   assert.equal(forms[0].get("grant_type"), JWT_BEARER_GRANT);
+  assert.deepEqual(signals, [controller.signal, controller.signal]);
   assert.deepEqual(security.purposes, [
     "session_assertion",
     "client_assertion",

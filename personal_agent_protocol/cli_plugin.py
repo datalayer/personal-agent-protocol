@@ -18,6 +18,7 @@ from .__version__ import __version__
 from .config import CONFIG_KEYS, ConfigStore
 from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError
+from .identity import AgentIdentityClient
 
 MANIFEST = PluginManifest(
     name="personal-agent-protocol.cli",
@@ -37,6 +38,13 @@ def _extension_versions(payload: dict[str, object]) -> dict[str, object]:
     if not isinstance(extensions, dict):
         raise ValueError("discovery summary has invalid extensions")
     return extensions
+
+
+def _list_value(payload: dict[str, object], key: str) -> list[Any]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        raise ValueError(f"identity summary has invalid {key}")
+    return value
 
 
 async def discover_company(domain: str) -> dict[str, object]:
@@ -69,11 +77,42 @@ async def discover_company(domain: str) -> dict[str, object]:
     }
 
 
+async def inspect_agent_metadata(client_id: str) -> dict[str, object]:
+    """Return verified public client metadata with stable JSON framing."""
+
+    async with AgentIdentityClient() as client:
+        metadata = await client.fetch_metadata(client_id)
+    return {"schema_version": 1, **metadata.model_dump(mode="json")}
+
+
+async def inspect_agent_jwks(client_id: str) -> dict[str, object]:
+    """Return a verified agent's public-only signing keys."""
+
+    async with AgentIdentityClient() as client:
+        jwks = await client.fetch_jwks(client_id)
+    return {
+        "schema_version": 1,
+        "client_id": client_id,
+        "keys": [key.model_dump(mode="json", exclude_none=True) for key in jwks.keys],
+    }
+
+
 def _run_discovery(domain: str) -> dict[str, object]:
     """Run discovery behind the CLI's redacted error boundary."""
 
     try:
         return asyncio.run(discover_company(domain))
+    except PersonalAgentProtocolError as error:
+        typer.secho(str(error), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+
+def _run_identity(client_id: str, *, jwks: bool = False) -> dict[str, object]:
+    """Run identity inspection behind the CLI's redacted error boundary."""
+
+    try:
+        operation = inspect_agent_jwks if jwks else inspect_agent_metadata
+        return asyncio.run(operation(client_id))
     except PersonalAgentProtocolError as error:
         typer.secho(str(error), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from error
@@ -88,6 +127,7 @@ class PapCliPlugin:
     def provide_cli(self, cli: typer.Typer) -> None:
         cli.add_typer(self._config_app())
         cli.add_typer(self._company_app())
+        cli.add_typer(self._agent_app())
         cli.add_typer(self._extensions_app())
 
     def provide_slash_commands(self, commands: Any) -> None:
@@ -223,6 +263,58 @@ class PapCliPlugin:
             """Verify discovery, organization domain, and OAuth issuer binding."""
 
             run(domain, profile, json_output)
+
+        return app
+
+    def _agent_app(self) -> typer.Typer:
+        app = typer.Typer(name="agent", help="Inspect PAP personal-agent identity.")
+
+        def selected_client_id(client_id: str | None, profile: str | None) -> str:
+            configured = self.config.resolve(profile)
+            selected = client_id or (
+                str(configured["client_id"].value) if "client_id" in configured else None
+            )
+            if not selected:
+                raise typer.BadParameter("provide CLIENT_ID or configure client_id")
+            return selected
+
+        @app.command("metadata")
+        def metadata(
+            client_id: str | None = typer.Argument(None),
+            profile: str | None = typer.Option(None, "--profile"),
+            json_output: bool = typer.Option(False, "--json"),
+        ) -> None:
+            """Fetch and verify a personal agent's client metadata."""
+
+            selected = selected_client_id(client_id, profile)
+            payload = _run_identity(selected)
+            if json_output:
+                _json(payload)
+                return
+            typer.echo(f"{payload['client_name']} ({payload['client_id']})")
+            typer.echo(f"JWKS: {payload['jwks_uri']}")
+            typer.echo(f"Redirect URIs: {len(_list_value(payload, 'redirect_uris'))}")
+
+        @app.command("jwks")
+        def jwks(
+            client_id: str | None = typer.Argument(None),
+            profile: str | None = typer.Option(None, "--profile"),
+            json_output: bool = typer.Option(False, "--json"),
+        ) -> None:
+            """Fetch and verify a personal agent's public signing keys."""
+
+            selected = selected_client_id(client_id, profile)
+            payload = _run_identity(selected, jwks=True)
+            if json_output:
+                _json(payload)
+                return
+            keys = _list_value(payload, "keys")
+            typer.echo(f"{payload['client_id']}: {len(keys)} public signing key(s)")
+            for key in keys:
+                if not isinstance(key, dict):
+                    raise ValueError("identity summary has invalid key")
+                identity = f"{key.get('kid', '(no kid)')} · {key['kty']}"
+                typer.echo(f"{identity} · {key.get('alg', 'unspecified')}")
 
         return app
 

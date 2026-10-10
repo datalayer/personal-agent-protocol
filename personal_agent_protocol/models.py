@@ -213,6 +213,49 @@ class ClientMetadata(ProtocolModel):
         return self
 
 
+_PRIVATE_JWK_MEMBERS = frozenset({"d", "p", "q", "dp", "dq", "qi", "oth", "k"})
+
+
+class JsonWebKey(ProtocolModel):
+    """One asymmetric public signing key published by a personal agent."""
+
+    kty: Literal["EC", "RSA"]
+    kid: str | None = None
+    use: Literal["sig"] | None = None
+    alg: Literal["ES256", "RS256"] | None = None
+    crv: str | None = None
+    x: str | None = None
+    y: str | None = None
+    n: str | None = None
+    e: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_private_material(cls, value: Any) -> Any:
+        if isinstance(value, dict) and _PRIVATE_JWK_MEMBERS.intersection(value):
+            raise ValueError("JWKS keys must not contain private or symmetric key material")
+        return value
+
+    @model_validator(mode="after")
+    def validate_public_key(self) -> JsonWebKey:
+        if self.kty == "EC":
+            if self.crv != "P-256" or not self.x or not self.y:
+                raise ValueError("EC signing keys must be complete P-256 public keys")
+            if self.alg not in {None, "ES256"}:
+                raise ValueError("P-256 signing keys may advertise only ES256")
+        elif not self.n or not self.e:
+            raise ValueError("RSA signing keys must include public modulus and exponent")
+        elif self.alg not in {None, "RS256"}:
+            raise ValueError("RSA signing keys may advertise only RS256")
+        return self
+
+
+class JsonWebKeySet(ProtocolModel):
+    """A non-empty set of public keys suitable for PAP assertion verification."""
+
+    keys: list[JsonWebKey] = Field(min_length=1)
+
+
 class OperationResult(ProtocolModel):
     summary: str = Field(min_length=1)
     data: dict[str, Any] | None = None

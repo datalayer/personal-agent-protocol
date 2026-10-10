@@ -21,6 +21,7 @@ export interface DiscoveryOptions {
   readonly assertSafeUrl?: (url: URL) => void | Promise<void>;
   readonly maxRedirects?: number;
   readonly maxResponseBytes?: number;
+  readonly signal?: AbortSignal;
 }
 
 function normalizeDomain(domain: string): string {
@@ -46,6 +47,7 @@ async function readJson(
   urlPolicy: UrlSafetyPolicy,
   maxRedirects: number,
   maxResponseBytes: number,
+  signal?: AbortSignal,
 ): Promise<{ value: unknown; finalUrl: URL }> {
   let current = initialUrl;
   for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
@@ -56,6 +58,7 @@ async function readJson(
         headers: { Accept: "application/json" },
         redirect: "manual",
         credentials: "omit",
+        ...(signal === undefined ? {} : { signal }),
       });
     } catch (cause) {
       throw new DiscoveryError("request_failed", "Discovery request failed", { cause });
@@ -123,6 +126,7 @@ export async function discoverCompany(
     urlPolicy,
     maxRedirects,
     maxBytes,
+    options.signal,
   );
   const document = parseDiscoveryDocument(discovery.value);
   if (
@@ -144,6 +148,7 @@ export async function discoverCompany(
     urlPolicy,
     maxRedirects,
     maxBytes,
+    options.signal,
   );
   const oauthMetadata = parseOAuthServerMetadata(metadataResponse.value);
   if (oauthMetadata.issuer !== document.auth.issuer) {

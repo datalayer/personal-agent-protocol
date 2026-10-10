@@ -5,7 +5,8 @@ title: Extensible pap CLI
 # Extensible `pap` CLI
 
 The Python distribution installs an initial `pap` command line for non-secret
-configuration, company discovery, and extension negotiation diagnostics.
+configuration, company discovery, agent-identity inspection, and extension
+negotiation diagnostics.
 The executable is a small Typer host: its PAP command groups come from a
 [Datalayer Reactor](https://reactor.datalayer.tech/python-plugins/cli/)
 extension rather than being hard-coded into the host.
@@ -17,11 +18,12 @@ pap --help
 
 The current command groups are:
 
-| Command | Purpose |
-| --- | --- |
-| `pap config show|get|set|unset|profiles` | Manage non-secret named profiles and inspect value provenance. |
-| `pap company discover|verify` | Fetch and validate a company's PAP discovery document. |
-| `pap extensions list|check` | Inspect the PAP extensions a company advertises. |
+| Command          | Purpose                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `pap config`     | Show, get, set, unset, and list non-secret profiles and value provenance. |
+| `pap company`    | Discover and verify a company's PAP document.                             |
+| `pap agent`      | Verify personal-agent metadata and public JWKS.                           |
+| `pap extensions` | List advertised PAP extensions and check one required major version.      |
 
 Session, sign-in, conversation, Operations, and conformance commands remain
 planned. Their SDK services and protected-store boundaries must exist before
@@ -70,6 +72,26 @@ policy, response bound, and public-address preflight; it is not only a JSON
 syntax check. JSON output contains no terminal decoration and currently uses
 schema version 1.
 
+## Inspect a personal agent
+
+```bash
+pap agent metadata https://agent.example/agent.json
+pap agent jwks https://agent.example/agent.json --json
+
+# Or use a non-secret profile default.
+pap config set client_id https://agent.example/agent.json --profile work
+pap agent metadata --profile work --json
+```
+
+`metadata` does not follow redirects and requires the document's `client_id`
+to equal the exact URL fetched. It validates HTTPS and same-domain JWKS and
+redirect URIs. `jwks` first repeats that metadata verification, then retrieves
+the key set through the same Reactor transport and URL-safety policy. JWKS
+redirects are bounded and cannot leave the client ID host. Only public P-256
+ES256 and RSA RS256 signing keys are accepted; private members and symmetric
+keys are rejected. Both responses are public, schema-versioned inspection
+output and never include assertions or private key material.
+
 ## Why this is a Reactor extension
 
 `personal_agent_protocol.cli` only creates the host and calls
@@ -81,7 +103,7 @@ standard entry-point group:
 pap = "personal_agent_protocol.cli_plugin:plugin"
 ```
 
-`PapCliPlugin.provide_cli` contributes the `config`, `company`, and
+`PapCliPlugin.provide_cli` contributes the `config`, `company`, `agent`, and
 `extensions` Typer applications. A broken third-party CLI extension is warned
 about and skipped by Reactor. Installed companion distributions can add their
 own groups without importing PAP CLI internals or changing the `pap` host:

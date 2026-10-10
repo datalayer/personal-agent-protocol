@@ -17,24 +17,25 @@ python -m pytest -p no:cacheprovider
 
 ## Public surface
 
-| API | Status | Purpose |
-| --- | --- | --- |
-| `DiscoveryClient` | Implemented | Discover and validate a company and OAuth metadata. |
-| `DiscoveryDocument`, `OAuthServerMetadata` | Implemented | Strict, forward-compatible wire models. |
-| `ClientMetadata` | Implemented | Validate HTTPS client identity plus same-domain JWKS and redirect URIs. |
-| `Message`, `ConversationEvent`, `ConversationEventPage` | Implemented models | Validate known conversation shapes while preserving unknown event types and fields. |
-| `Operation`, `OperationConfirmation`, `OperationResult` | Implemented models | Validate Operations v1 states, exact confirmation revisions, timestamps, and final results. |
-| `build_pap_reactor` | Implemented | Build the default Reactor host. |
-| `generate_pairwise_user_id` | Implemented primitive | Generate a random identifier; the caller persists the mapping. |
-| `build_session_assertion_claims` | Implemented primitive | Build unsigned, short-lived session claims. |
-| `SessionGrant`, `SessionToken` | Implemented primitive | Redacted request and response value objects. |
-| `SessionClient` | Implemented | Start and renew signed-out sessions with host-provided signing and DPoP. |
-| `JoseSigner`, `JoseDpopProofProvider` | Implemented | Sign ES256/RS256 assertions and create fresh DPoP proofs. |
-| `verify_dpop_proof` | Implemented | Verify proof signature, request/token binding, nonce, freshness, and replay state. |
-| `build_direct_sign_in_request` | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL. |
-| `validate_direct_sign_in_callback` | Implemented primitive | Verify callback redirect, state, issuer, denial, and code. |
-| `AuthorizationCodeGrant` | Implemented primitive | Build a redacted PAP code-exchange form. |
-| Reactor infrastructure points | Implemented contract | Supply clock, randomness, signing, DPoP proofs, protected keys, token storage, cache, and browser handoff. |
+| API                                                     | Status                | Purpose                                                                                                    |
+| ------------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `DiscoveryClient`                                       | Implemented           | Discover and validate a company and OAuth metadata.                                                        |
+| `AgentIdentityClient`                                   | Implemented           | Safely fetch and bind client metadata and public JWKS.                                                     |
+| `DiscoveryDocument`, `OAuthServerMetadata`              | Implemented           | Strict, forward-compatible wire models.                                                                    |
+| `ClientMetadata`, `JsonWebKeySet`                       | Implemented           | Validate HTTPS client identity plus approved public assertion keys.                                        |
+| `Message`, `ConversationEvent`, `ConversationEventPage` | Implemented models    | Validate known conversation shapes while preserving unknown event types and fields.                        |
+| `Operation`, `OperationConfirmation`, `OperationResult` | Implemented models    | Validate Operations v1 states, exact confirmation revisions, timestamps, and final results.                |
+| `build_pap_reactor`                                     | Implemented           | Build the default Reactor host.                                                                            |
+| `generate_pairwise_user_id`                             | Implemented primitive | Generate a random identifier; the caller persists the mapping.                                             |
+| `build_session_assertion_claims`                        | Implemented primitive | Build unsigned, short-lived session claims.                                                                |
+| `SessionGrant`, `SessionToken`                          | Implemented primitive | Redacted request and response value objects.                                                               |
+| `SessionClient`                                         | Implemented           | Start and renew signed-out sessions with host-provided signing and DPoP.                                   |
+| `JoseSigner`, `JoseDpopProofProvider`                   | Implemented           | Sign ES256/RS256 assertions and create fresh DPoP proofs.                                                  |
+| `verify_dpop_proof`                                     | Implemented           | Verify proof signature, request/token binding, nonce, freshness, and replay state.                         |
+| `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL.                                               |
+| `validate_direct_sign_in_callback`                      | Implemented primitive | Verify callback redirect, state, issuer, denial, and code.                                                 |
+| `AuthorizationCodeGrant`                                | Implemented primitive | Build a redacted PAP code-exchange form.                                                                   |
+| Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, DPoP proofs, protected keys, token storage, cache, and browser handoff. |
 
 ## Discovery
 
@@ -72,6 +73,38 @@ contribute `pap.signer`, `pap.dpopProofProvider`, `pap.keyStore`,
 `pap.tokenStore`, `pap.cache`, and `pap.browserHandoff` before a flow requiring
 those services begins. Resolution fails when a required provider is missing or
 tied at the winning priority; there is no insecure in-memory fallback.
+
+## Agent identity
+
+Companies can resolve a personal agent's public identity through the same
+Reactor transport and URL-safety contributions used for discovery:
+
+```python
+import asyncio
+
+from personal_agent_protocol import AgentIdentityClient
+
+
+async def inspect() -> None:
+    async with AgentIdentityClient() as client:
+        metadata = await client.fetch_metadata(
+            "https://agent.example/agent.json"
+        )
+        jwks = await client.fetch_jwks(metadata.client_id)
+        print(metadata.client_name, [key.kid for key in jwks.keys])
+
+
+asyncio.run(inspect())
+```
+
+Metadata retrieval rejects redirects and a `client_id` that differs from the
+fetched URL. Key retrieval repeats metadata verification, bounds response size
+and redirects, prevents a redirect to another host, and accepts only public
+P-256 ES256 or RSA RS256 keys. The client rejects duplicate JSON members,
+private JWK members, symmetric keys, unsafe resolved addresses, and non-JSON
+responses. Applications verifying assertions must select only a key from this
+verified set and must still enforce `kid`, signature, claims, lifetime, and
+replay rules.
 
 ## Session primitives
 
@@ -137,8 +170,8 @@ the caller's responsibility until their SDK services are implemented.
 
 ## Errors
 
-Catch `DiscoveryError` for discovery transport, redirect, trust-binding, and
-URL-safety failures. Catch `SessionError` for session transport and token
-endpoint failures. Catch `ProtocolValidationError` when remote JSON does not
-satisfy a wire model. Error messages are designed not to include response
-bodies or credentials.
+Catch `DiscoveryError` for company discovery and URL-safety failures. Catch
+`IdentityError` for client identity retrieval and binding failures. Catch
+`SessionError` for session transport and token endpoint failures. Catch
+`ProtocolValidationError` when remote JSON does not satisfy a wire model.
+Error messages are designed not to include response bodies or credentials.

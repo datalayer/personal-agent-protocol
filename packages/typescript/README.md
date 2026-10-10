@@ -12,16 +12,22 @@ TypeScript SDK for [Personal Agent Protocol](https://personalagentprotocol.org)
 [draft 0.1](https://personalagentprotocol.org/docs/spec).
 
 ```typescript
-import { discoverCompany } from "@datalayer/personal-agent-protocol";
+import {
+  AgentIdentityClient,
+  discoverCompany,
+} from "@datalayer/personal-agent-protocol";
 
 const company = await discoverCompany("example.com");
+const agent = new AgentIdentityClient();
+const metadata = await agent.fetchMetadata("https://agent.example/agent.json");
+const jwks = await agent.fetchJwks(metadata.client_id);
 ```
 
 The current release provides forward-compatible discovery, OAuth, client
 metadata, conversation-event, and Operations v1 models; strict
 duplicate-member rejection; local Direct Sign-In primitives; signed-out
-session start and renewal; and safe company discovery built on Datalayer
-Reactor.
+session start and renewal; safe company discovery; and bound client
+metadata/JWKS retrieval built on Datalayer Reactor.
 
 It also provides ES256/RS256 JOSE signing and DPoP proof creation and
 verification through the maintained `jose` package.
@@ -33,5 +39,5 @@ pass an existing Reactor host to `discoverCompany`.
 
 Security-dependent services have no fallback and fail closed when missing or ambiguous.
 
-See the repository [README](https://github.com/datalayer/personal-agent-protocol) for 
+See the repository [README](https://github.com/datalayer/personal-agent-protocol) for
 current limits and security guidance.

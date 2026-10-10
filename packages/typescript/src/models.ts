@@ -84,6 +84,22 @@ export interface ClientMetadata extends UnknownFields {
   readonly extensions: Readonly<Record<string, ExtensionDescriptor>>;
 }
 
+export interface JsonWebKey extends UnknownFields {
+  readonly kty: "EC" | "RSA";
+  readonly kid?: string;
+  readonly use?: "sig";
+  readonly alg?: "ES256" | "RS256";
+  readonly crv?: "P-256";
+  readonly x?: string;
+  readonly y?: string;
+  readonly n?: string;
+  readonly e?: string;
+}
+
+export interface JsonWebKeySet extends UnknownFields {
+  readonly keys: readonly JsonWebKey[];
+}
+
 export type OperationState =
   | "proposed"
   | "in_progress"
@@ -526,6 +542,75 @@ export function parseClientMetadata(value: unknown): ClientMetadata {
     token_endpoint_auth_method: authMethod,
     extensions: extensions(source.extensions, "extensions"),
   } as ClientMetadata;
+}
+
+const privateJwkMembers = new Set(["d", "p", "q", "dp", "dq", "qi", "oth", "k"]);
+
+function parseJsonWebKey(value: unknown): JsonWebKey {
+  const source = record(value, "JWKS key");
+  if (Object.keys(source).some((key) => privateJwkMembers.has(key))) {
+    throw new ProtocolValidationError(
+      "private_jwk",
+      "JWKS keys must not contain private or symmetric key material",
+    );
+  }
+  const kty = oneOf(source.kty, ["EC", "RSA"] as const, "JWKS key kty");
+  const kid = source.kid === undefined ? undefined : string(source.kid, "JWKS key kid");
+  const use =
+    source.use === undefined ? undefined : oneOf(source.use, ["sig"] as const, "use");
+  const alg =
+    source.alg === undefined
+      ? undefined
+      : oneOf(source.alg, ["ES256", "RS256"] as const, "alg");
+
+  if (kty === "EC") {
+    const crv = oneOf(source.crv, ["P-256"] as const, "EC key crv");
+    const x = string(source.x, "EC key x");
+    const y = string(source.y, "EC key y");
+    if (alg !== undefined && alg !== "ES256") {
+      throw new ProtocolValidationError(
+        "invalid_jwk_algorithm",
+        "P-256 signing keys may advertise only ES256",
+      );
+    }
+    return {
+      ...source,
+      kty,
+      ...(kid === undefined ? {} : { kid }),
+      ...(use === undefined ? {} : { use }),
+      ...(alg === undefined ? {} : { alg }),
+      crv,
+      x,
+      y,
+    } as JsonWebKey;
+  }
+
+  const n = string(source.n, "RSA key n");
+  const e = string(source.e, "RSA key e");
+  if (alg !== undefined && alg !== "RS256") {
+    throw new ProtocolValidationError(
+      "invalid_jwk_algorithm",
+      "RSA signing keys may advertise only RS256",
+    );
+  }
+  return {
+    ...source,
+    kty,
+    ...(kid === undefined ? {} : { kid }),
+    ...(use === undefined ? {} : { use }),
+    ...(alg === undefined ? {} : { alg }),
+    n,
+    e,
+  } as JsonWebKey;
+}
+
+export function parseJsonWebKeySet(value: unknown): JsonWebKeySet {
+  const source = record(value, "JWKS");
+  const keys = array(source.keys, "JWKS keys").map(parseJsonWebKey);
+  if (keys.length === 0) {
+    throw new ProtocolValidationError("invalid_jwks", "JWKS keys must not be empty");
+  }
+  return { ...source, keys } as JsonWebKeySet;
 }
 
 export function parseOperation(value: unknown): Operation {

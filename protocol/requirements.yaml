@@ -47,8 +47,8 @@ requirements:
     role: company
     statement: Validate personal-agent client metadata and same-domain URLs.
     status: partial
-    python: personal_agent_protocol.models.ClientMetadata
-    typescript: parseClientMetadata
+    python: personal_agent_protocol.identity.AgentIdentityClient
+    typescript: AgentIdentityClient
   - id: PAP-4.2-MUST-01
     section: "4.2"
     role: personal-agent

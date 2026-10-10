@@ -33,6 +33,7 @@ def test_reactor_extension_adds_groups_to_thin_host(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "company" in result.stdout
+    assert "agent" in result.stdout
     assert "config" in result.stdout
     assert "extensions" in result.stdout
 
@@ -120,6 +121,45 @@ def test_company_commands_emit_stable_json(
     assert result.exit_code == 0
     assert json.loads(result.stdout)["schema_version"] == 1
     assert json.loads(result.stdout)["issuer"] == "https://auth.example.com"
+
+
+def test_agent_commands_use_profile_and_emit_stable_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_metadata(client_id: str) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "client_id": client_id,
+            "client_name": "Example Agent",
+            "jwks_uri": "https://agent.example/jwks.json",
+            "redirect_uris": [],
+        }
+
+    async def fake_jwks(client_id: str) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "client_id": client_id,
+            "keys": [{"kid": "key-1", "kty": "EC", "alg": "ES256"}],
+        }
+
+    monkeypatch.setattr(
+        "personal_agent_protocol.cli_plugin.inspect_agent_metadata", fake_metadata
+    )
+    monkeypatch.setattr("personal_agent_protocol.cli_plugin.inspect_agent_jwks", fake_jwks)
+    runner, app, _, _ = cli(tmp_path)
+    assert runner.invoke(
+        app,
+        ["config", "set", "client_id", "https://agent.example/agent.json"],
+    ).exit_code == 0
+
+    metadata = runner.invoke(app, ["agent", "metadata", "--json"])
+    jwks = runner.invoke(app, ["agent", "jwks", "--json"])
+
+    assert metadata.exit_code == 0
+    assert json.loads(metadata.stdout)["client_name"] == "Example Agent"
+    assert jwks.exit_code == 0
+    assert json.loads(jwks.stdout)["keys"][0]["kid"] == "key-1"
 
 
 @pytest.mark.parametrize(

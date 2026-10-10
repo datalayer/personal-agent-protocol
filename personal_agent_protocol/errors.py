@@ -38,6 +38,10 @@ class DiscoveryError(PersonalAgentProtocolError):
     """Discovery could not be completed safely."""
 
 
+class IdentityError(PersonalAgentProtocolError):
+    """Personal-agent metadata or public keys could not be verified safely."""
+
+
 class AuthorizationError(PersonalAgentProtocolError):
     """An authorization flow failed without exposing callback secrets."""
 

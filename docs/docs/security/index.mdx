@@ -23,14 +23,14 @@ requirements:
 
 ## Trust boundaries
 
-| Boundary | Minimum control |
-| --- | --- |
-| Remote metadata | HTTPS, bounded redirects/bytes/time, strict JSON, SSRF and DNS-rebinding defenses. |
-| Agent identity | Fetch verified client metadata and JWKS; allow only asymmetric approved algorithms. |
-| Session request | Verify issuer, subject, audience, time window, signature, and single-use `jti`. |
-| Authorized request | Verify token, DPoP proof, method, URL, nonce, replay ID, resource, and scopes. |
-| Model/tool boundary | Pass opaque references, never credentials or private signing material. |
-| Consequential action | Approve and confirm the exact current operation revision. |
+| Boundary             | Minimum control                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------- |
+| Remote metadata      | HTTPS, bounded redirects/bytes/time, strict JSON, SSRF and DNS-rebinding defenses.  |
+| Agent identity       | Fetch verified client metadata and JWKS; allow only asymmetric approved algorithms. |
+| Session request      | Verify issuer, subject, audience, time window, signature, and single-use `jti`.     |
+| Authorized request   | Verify token, DPoP proof, method, URL, nonce, replay ID, resource, and scopes.      |
+| Model/tool boundary  | Pass opaque references, never credentials or private signing material.              |
+| Consequential action | Approve and confirm the exact current operation revision.                           |
 
 ## Secret inventory
 
@@ -45,6 +45,13 @@ Metadata URLs are controlled by the other party. Resolve and inspect every
 address, reject loopback/private/link-local targets unless explicitly allowed,
 validate the address actually connected to, and repeat the check for every
 redirect. Never forward credentials, cookies, or authorization headers.
+
+`AgentIdentityClient` applies this boundary to personal-agent identity. It
+fetches a `client_id` without redirects, requires the returned identifier to
+equal the fetched URL, and validates same-domain redirect and JWKS URLs. JWKS
+retrieval permits only bounded same-host redirects and accepts complete public
+P-256/ES256 or RSA/RS256 signing keys. Symmetric keys and every standard
+private JWK member are rejected before a key can reach assertion verification.
 
 ## Current limitations
 

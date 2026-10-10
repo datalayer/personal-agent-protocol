@@ -54,6 +54,25 @@ test("discovers and authenticates a company", async () => {
   assert.equal(company.oauthMetadata.token_endpoint, "https://auth.example.com/oauth/token");
 });
 
+test("passes AbortSignal to discovery requests", async () => {
+  const discovery = await fixture("discovery-valid.json");
+  const metadata = await fixture("oauth-metadata-valid.json");
+  const controller = new AbortController();
+  const receivedSignals = [];
+  const fetch = async (input, init) => {
+    receivedSignals.push(init.signal);
+    const body = new URL(input).hostname === "example.com" ? discovery : metadata;
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await discoverCompany("example.com", { fetch, signal: controller.signal });
+
+  assert.deepEqual(receivedSignals, [controller.signal, controller.signal]);
+});
+
 test("rejects an OAuth issuer that does not authorize the company domain", async () => {
   const discovery = await fixture("discovery-valid.json");
   const metadata = {

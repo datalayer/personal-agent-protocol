@@ -35,6 +35,17 @@ const reactor = buildPapReactor({
 const company = await discoverCompany('example.com', { reactor });
 ```
 
+All network operations accept an `AbortSignal`. Pass it to discovery when the
+calling task, request, or UI owns cancellation:
+
+```typescript
+const controller = new AbortController();
+const company = await discoverCompany('example.com', {
+  reactor,
+  signal: controller.signal,
+});
+```
+
 The published ESM entry bundles Reactor's framework-neutral core so it can run
 directly in Node and in browser bundlers. Platform signing keys must remain on
 a server or KMS; they must never be shipped in a browser or desktop bundle.
@@ -44,6 +55,34 @@ The SDK exports aligned `Clocks`, `RandomSources`, `Signers`,
 `BrowserHandoffs` contribution points. The core plugin provides only system
 time and secure randomness. Security-dependent services have no fallback and
 resolution fails closed when missing or ambiguous.
+
+## Agent identity
+
+`AgentIdentityClient` gives companies the same hardened metadata and JWKS
+boundary as the Python SDK:
+
+```typescript
+import {
+  AgentIdentityClient,
+  buildPapReactor,
+} from '@datalayer/personal-agent-protocol';
+
+const identity = new AgentIdentityClient({ reactor });
+const metadata = await identity.fetchMetadata(
+  'https://agent.example/agent.json',
+  { signal: controller.signal },
+);
+const jwks = await identity.fetchJwks(metadata.client_id, {
+  signal: controller.signal,
+});
+```
+
+Client metadata is fetched without redirects and its `client_id` must equal
+the exact fetched URL. The client validates same-domain redirect and JWKS URLs,
+bounds responses, rejects duplicate JSON members, and retrieves keys through
+the configured Reactor transport and URL-safety policy. JWKS redirects cannot
+leave the client host. Only complete public P-256/ES256 and RSA/RS256 signing
+keys are accepted; symmetric and private JWK members are rejected.
 
 ## Session primitives
 
@@ -95,10 +134,11 @@ flow and its current network boundary.
 
 ## Client, conversation, and Operations models
 
-Use `parseClientMetadata`, `parseMessage`, `parseConversationEvent`,
-`parseConversationEventPage`, and `parseOperation` at trust boundaries. These
-parsers preserve unknown compatible fields and future event types while
-enforcing the required shapes of known draft 0.1 and Operations v1 objects.
+Use `parseClientMetadata`, `parseJsonWebKeySet`, `parseMessage`,
+`parseConversationEvent`, `parseConversationEventPage`, and `parseOperation`
+at trust boundaries. These parsers preserve unknown compatible fields and
+future event types while enforcing the required shapes of known draft 0.1 and
+Operations v1 objects.
 
 The models are aligned with Python through shared fixtures. Conversation and
 Operations HTTP clients are still planned; parsing an object does not perform

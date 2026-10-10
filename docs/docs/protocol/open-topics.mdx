@@ -1,0 +1,61 @@
+---
+sidebar_position: 7
+title: Open topics and SDK gaps
+---
+
+# Open topics and SDK gaps
+
+PAP draft 0.1 is intentionally incomplete. Its
+[upstream open-topics page](https://personalagentprotocol.org/docs/open-topics)
+currently leaves three areas unspecified:
+
+- **Payments:** how a personal agent pays through PAP or composes PAP with an
+  existing payment protocol.
+- **Push notifications:** how a company reaches a personal agent when no
+  request or event stream is open.
+- **Attachments:** how messages carry receipts, labels, images, or interactive
+  forms beyond the existing text and structured-data fields.
+
+These are protocol omissions, not SDK backlog items. The Python and TypeScript
+packages do not invent core wire fields, security semantics, or conformance
+claims for them. An experiment must use an explicitly negotiated extension,
+prefer a domain-qualified extension name, and document that it is outside PAP
+draft 0.1. Applications must continue to work when the other party ignores an
+unknown extension.
+
+## SDK implementation gaps
+
+An SDK gap is different: draft 0.1 or Operations v1 already defines the
+behavior, but this repository has not implemented its complete service yet.
+Current examples include:
+
+- device and mediated sign-in orchestration;
+- Account Token storage, rotation, narrowing, exchange, and revocation;
+- DPoP-aware OpenAPI and resource-bound MCP transports;
+- browser-session assertion and handoff services;
+- conversation transport, streaming, handoff, and closure;
+- Operations approval, confirmation, recovery, and at-most-once services; and
+- framework-neutral company handlers and adapters.
+
+The [implementation status](./status) and
+[requirements ledger](https://github.com/datalayer/personal-agent-protocol/blob/main/protocol/requirements.yaml)
+track these gaps. A model or parser marked implemented does not imply that its
+network flow, durable state, authorization checks, or conformance suite also
+exists.
+
+## Datalayer integrations
+
+Datalayer Studio and backend work is downstream product integration. Appspec
+roles, Canvas controls, IAM services, KMS-backed publication, deployment
+gateways, Rules, and observability can implement or operate PAP, but they are
+not part of the PAP standard and must not be presented as conformance
+requirements.
+
+## Change policy
+
+The upstream page says the list is not exhaustive and the entire protocol is
+still a draft. Before adding a new public SDK abstraction, check the current
+specification, extensions, guides, and open topics. Record the exact upstream
+revision in the requirement ledger. If upstream later standardizes an
+experimental extension, migrate deliberately rather than silently treating
+the old shape as compliant.

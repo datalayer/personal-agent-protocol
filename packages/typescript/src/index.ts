@@ -1,6 +1,7 @@
 export {
   AuthorizationError,
   DiscoveryError,
+  IdentityError,
   PersonalAgentProtocolError,
   ProofError,
   ProtocolValidationError,
@@ -29,6 +30,11 @@ export {
   type DirectSignInRequest,
 } from "./auth.js";
 export { discoverCompany, type DiscoveryOptions } from "./discovery.js";
+export {
+  AgentIdentityClient,
+  type AgentIdentityClientOptions,
+  type IdentityRequestOptions,
+} from "./identity.js";
 export { parseJsonStrict } from "./json.js";
 export {
   BrowserHandoffs,
@@ -85,6 +91,7 @@ export {
   parseConversationEvent,
   parseConversationEventPage,
   parseDiscoveryDocument,
+  parseJsonWebKeySet,
   parseOAuthServerMetadata,
   parseMessage,
   parseOperation,
@@ -100,6 +107,8 @@ export {
   type DiscoveredCompany,
   type DiscoveryDocument,
   type ExtensionDescriptor,
+  type JsonWebKey,
+  type JsonWebKeySet,
   type Message,
   type OAuthServerMetadata,
   type Operation,

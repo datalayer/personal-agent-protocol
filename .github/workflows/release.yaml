@@ -141,7 +141,7 @@ jobs:
           name: npm
           path: npm-dist
       - name: Publish with npm trusted publishing
-        run: npm publish npm-dist/*.tgz --access public
+        run: npm publish ./npm-dist/*.tgz --access public
 
   release:
     name: GitHub release

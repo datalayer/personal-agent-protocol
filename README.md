@@ -96,7 +96,7 @@ security boundaries, machine output, and third-party extension examples.
 
 ## TypeScript
 
-Source code in [packages/typescript](./tree/main/packages/typescript)
+Source code in [packages/typescript](./packages/typescript).
 
 ```bash
 npm install

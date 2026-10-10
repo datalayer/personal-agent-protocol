@@ -136,12 +136,12 @@ beta.
 
 ## Examples
 
-The [`examples/agent-runtimes`](./examples/agent-runtimes/) directory contains
-one Agent Runtimes Python application per feature: company discovery,
-personal-agent identity/JWKS verification, Session assertion safety, and the
-Direct Sign-In model boundary. Agent Runtimes depends on PAP in Python and
-TypeScript and exposes aligned, verified public summaries. Authorization and
-token handling remain outside the agent tool boundary.
+The [`examples/pydantic-ai`](./examples/pydantic-ai/) directory contains one
+plain Pydantic AI agent per feature: company discovery, personal-agent
+identity/JWKS verification, Session assertion safety, and the Direct Sign-In
+model boundary. The Agent Runtimes repository owns the corresponding
+Reactor/Loop applications and browser gallery. Authorization and token
+handling remain outside every agent tool boundary.
 
 ## Protocol sources
 

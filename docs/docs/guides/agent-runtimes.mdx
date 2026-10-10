@@ -5,8 +5,8 @@ description: Expose verified PAP capabilities to an agent without exposing autho
 
 # Learn PAP with Agent Runtimes
 
-The repository includes small Agent Runtimes applications at
-[`examples/agent-runtimes`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/agent-runtimes).
+The Agent Runtimes repository includes small applications at
+[`examples/personal-agent-protocol`](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol).
 Each example covers exactly one feature and makes its trust boundary visible.
 
 | Example                   | PAP feature                                                       | Safe result                              |
@@ -33,18 +33,17 @@ DPoP proofs, Session Tokens, and Account Tokens never enter model context.
 
 ## Run the example
 
-From the repository root:
+From the Agent Runtimes repository root:
 
 ```bash
 python -m pip install -e .
-python -m pip install -e ../agent-runtimes
-loop apps run examples/agent-runtimes/company-discovery/app.py
+loop apps run examples/personal-agent-protocol/company-discovery/app.py
 ```
 
 To validate the application definition without starting an agent runtime:
 
 ```bash
-python scripts/validate_agent_runtime_examples.py
+python scripts/validate_pap_examples.py
 ```
 
 Ask the application to inspect a domain that publishes

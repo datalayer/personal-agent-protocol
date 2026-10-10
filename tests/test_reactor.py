@@ -11,6 +11,7 @@ from personal_agent_protocol import (
     CLOCKS,
     DPOP_PROOF_PROVIDERS,
     KEY_STORES,
+    PAIRWISE_USER_ID_STORES,
     RANDOM_SOURCES,
     SIGNERS,
     TOKEN_STORES,
@@ -21,6 +22,7 @@ SECURITY_POINTS = [
     SIGNERS,
     KEY_STORES,
     TOKEN_STORES,
+    PAIRWISE_USER_ID_STORES,
     CACHES,
     BROWSER_HANDOFFS,
     DPOP_PROOF_PROVIDERS,
@@ -59,6 +61,7 @@ def test_cross_language_infrastructure_point_ids_are_stable() -> None:
     assert SIGNERS.id == "pap.signer"
     assert KEY_STORES.id == "pap.keyStore"
     assert TOKEN_STORES.id == "pap.tokenStore"
+    assert PAIRWISE_USER_ID_STORES.id == "pap.pairwiseUserIdStore"
     assert CACHES.id == "pap.cache"
     assert BROWSER_HANDOFFS.id == "pap.browserHandoff"
     assert DPOP_PROOF_PROVIDERS.id == "pap.dpopProofProvider"

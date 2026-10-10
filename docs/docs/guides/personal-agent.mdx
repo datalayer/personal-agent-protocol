@@ -9,9 +9,9 @@ This guide separates the working SDK surface from the remaining roadmap.
 ## Available now: discover and validate a company
 
 1. Accept a company domain—not an arbitrary metadata URL—from the task.
-2. Call the discovery client.
-3. Choose only an interface and extension your runtime supports.
-4. Keep the returned issuer and endpoints attached to that verified company.
+1. Call the discovery client.
+1. Choose only an interface and extension your runtime supports.
+1. Keep the returned issuer and endpoints attached to that verified company.
 
 ```python
 from personal_agent_protocol import DiscoveryClient
@@ -28,23 +28,32 @@ TypeScript callers should contribute a DNS-aware URL safety policy.
 
 ## Available now: start or renew a signed-out session
 
-Generate a pairwise identifier once for each internal user and company issuer,
-then store the mapping. The helper creates a suitable random value; persistence
-is the application's responsibility.
+Resolve one pairwise identifier for each tenant, internal user, and exact
+verified company issuer. The store creates a random value atomically and
+returns the same mapping across restarts.
 
 ```python
 from personal_agent_protocol import (
     build_session_assertion_claims,
-    generate_pairwise_user_id,
+    resolve_pairwise_user_id,
 )
 
-user_id = generate_pairwise_user_id()
+user_id = await resolve_pairwise_user_id(
+    reactor,
+    tenant_id="application-42",
+    local_user_id="local-user-42",
+    company_issuer=company.oauth_metadata.issuer,
+)
 claims = build_session_assertion_claims(
     client_id="https://agent.example/agent.json",
     pairwise_user_id=user_id,
     token_endpoint="https://auth.example.com/oauth/token",
 )
 ```
+
+Python provides `SqlitePairwiseUserIdStore` for local file-backed deployments.
+Distributed hosts contribute a transactional implementation through
+`pap.pairwiseUserIdStore`; TypeScript exposes the same Reactor contract.
 
 The lower-level result is unsigned. `SessionClient` uses Reactor signer and
 DPoP-proof contributions to create fresh proofs and send the real token
@@ -58,11 +67,11 @@ The high-level client now implements the first step. The remaining lifecycle
 is planned:
 
 1. **Implemented:** start or renew a signed-out session;
-2. **Planned:** choose direct, device, or mediated sign-in;
-3. **Planned:** obtain the smallest scopes and resource needed for the task;
-4. **Planned:** call an API, browse, or open a conversation;
-5. **Planned:** confirm exact operation revisions for consequential actions;
-6. **Planned:** discard session credentials and revoke account access when
+1. **Planned:** choose direct, device, or mediated sign-in;
+1. **Planned:** obtain the smallest scopes and resource needed for the task;
+1. **Planned:** call an API, browse, or open a conversation;
+1. **Planned:** confirm exact operation revisions for consequential actions;
+1. **Planned:** discard session credentials and revoke account access when
    requested.
 
 Do not treat the remaining value objects as production PAP support. Track

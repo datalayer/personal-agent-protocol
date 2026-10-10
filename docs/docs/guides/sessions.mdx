@@ -15,14 +15,25 @@ the host must register exactly one active `pap.signer` and
 must keep private keys in protected custody and return only compact signed
 values. Missing or equal-priority providers fail closed.
 
+The pairwise user ID is not a profile identifier and must not be regenerated
+per process. Resolve it through the `pap.pairwiseUserIdStore` contribution
+using the local tenant/application, local user ID, and the exact verified OAuth
+issuer. Different issuers must receive unlinkable values.
+
 ## Python
 
 ```python
 import httpx
 
-from personal_agent_protocol import SessionClient
+from personal_agent_protocol import SessionClient, resolve_pairwise_user_id
 
 async with httpx.AsyncClient() as http:
+    pairwise_user_id = await resolve_pairwise_user_id(
+        reactor,
+        tenant_id="application-42",
+        local_user_id="local-user-42",
+        company_issuer="https://auth.company.example",
+    )
     sessions = SessionClient(reactor=reactor, http_client=http)
     token = await sessions.start(
         client_id="https://agent.example/agent.json",
@@ -49,7 +60,16 @@ storage.
 ## TypeScript
 
 ```typescript
-import { SessionClient } from '@datalayer/personal-agent-protocol';
+import {
+  SessionClient,
+  resolvePairwiseUserId,
+} from '@datalayer/personal-agent-protocol';
+
+const pairwiseUserId = await resolvePairwiseUserId(reactor, {
+  tenantId: 'application-42',
+  localUserId: 'local-user-42',
+  companyIssuer: 'https://auth.company.example',
+});
 
 const sessions = new SessionClient({ reactor });
 const token = await sessions.start({
@@ -96,6 +116,12 @@ ship managed key custody, a durable replay cache, or a company-side token
 service. An application must supply those host capabilities before using real
 credentials. Direct, device, and mediated sign-in happen after this signed-out
 session and remain separate implementation work.
+
+Python includes `SqlitePairwiseUserIdStore` as a file-backed, atomic reference
+implementation for local deployments and tests. It rejects in-memory SQLite so
+the mapping cannot disappear on restart. Distributed production hosts should
+contribute a transactional database implementation; Datalayer maps `tenant_id`
+to the stable application identity and owns retention and erasure in IAM.
 
 See the upstream [session specification](https://personalagentprotocol.org/docs/spec)
 and the local [protocol status](/protocol/status/) for the current coverage

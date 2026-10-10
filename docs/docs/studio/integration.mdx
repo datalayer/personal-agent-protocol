@@ -97,6 +97,9 @@ For Datalayer, the entry split maps to a deployable ownership boundary:
 - the KMS plugin implements the Reactor `Signer` contract so client/session
   assertion private keys remain non-extractable and outside Node process
   memory; and
+- IAM contributes `pap.pairwiseUserIdStore`, atomically keyed by application,
+  Datalayer user, and exact verified issuer; runtimes receive only the random
+  `usr_…` value and never derive it from profile data; and
 - CI must fail any browser artifact that contains the server entry, signing
   key material, raw tokens, assertions, or proof-verification endpoints.
 

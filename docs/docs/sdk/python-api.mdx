@@ -54,6 +54,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `Operation` class.
 - [`OperationConfirmation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `OperationConfirmation` class.
 - [`OperationResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `OperationResult` class.
+- [`PAIRWISE_USER_ID_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `PAIRWISE_USER_ID_STORES` constant.
+- [`PairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist stable random identities by tenant, local user, and issuer.
 - [`PapCorePlugin`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Contribute PAP's secure defaults through Reactor.
 - [`PersonalAgentProtocolError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Base error whose string representation never includes response bodies.
 - [`ProofError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A signed assertion or proof-of-possession value is invalid.
@@ -63,6 +65,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`ProtocolValidationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A protocol document is malformed or internally inconsistent.
 - [`RANDOM_SOURCES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `RANDOM_SOURCES` constant.
 - [`RandomSource`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Supply cryptographically secure random bytes.
+- [`resolve_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pairwise.py) — Function. Resolve the active Reactor store and return its stable pairwise ID.
 - [`SessionAssertionClaims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Claims signed by the personal agent when starting or renewing a session.
 - [`SessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Start and renew signed-out PAP sessions over the OAuth token endpoint.
 - [`SessionError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A session request failed without exposing response secrets.
@@ -70,6 +73,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`SessionToken`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Opaque token response returned by a PAP company.
 - [`Signer`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign a compact assertion without exposing private key material.
 - [`SIGNERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `SIGNERS` constant.
+- [`SqlitePairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pairwise.py) — Class. Atomically persist random pairwise IDs in a local SQLite database.
 - [`SystemClock`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default UTC wall clock.
 - [`SystemRandomSource`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default operating-system cryptographic randomness.
 - [`TOKEN_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `TOKEN_STORES` constant.

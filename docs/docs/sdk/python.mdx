@@ -28,7 +28,8 @@ python -m pytest -p no:cacheprovider
 | `Message`, `ConversationEvent`, `ConversationEventPage` | Implemented models    | Validate known conversation shapes while preserving unknown event types and fields.                        |
 | `Operation`, `OperationConfirmation`, `OperationResult` | Implemented models    | Validate Operations v1 states, exact confirmation revisions, timestamps, and final results.                |
 | `build_pap_reactor`                                     | Implemented           | Build the default Reactor host.                                                                            |
-| `generate_pairwise_user_id`                             | Implemented primitive | Generate a random identifier; the caller persists the mapping.                                             |
+| `generate_pairwise_user_id`                             | Implemented primitive | Generate an unlinkable random identifier.                                                                  |
+| `SqlitePairwiseUserIdStore`, `resolve_pairwise_user_id` | Implemented           | Atomically persist/resolve stable IDs by tenant, local user, and verified issuer.                          |
 | `build_session_assertion_claims`                        | Implemented primitive | Build unsigned, short-lived session claims.                                                                |
 | `SessionGrant`, `SessionToken`                          | Implemented primitive | Redacted request and response value objects.                                                               |
 | `SessionClient`                                         | Implemented           | Start and renew signed-out sessions with host-provided signing and DPoP.                                   |
@@ -72,9 +73,10 @@ policy. Keep the client in an async context so its owned HTTP resources close.
 
 The core plugin also supplies `pap.clock` and `pap.randomSource`. A host must
 contribute `pap.signer`, `pap.dpopProofProvider`, `pap.keyStore`,
-`pap.tokenStore`, `pap.cache`, and `pap.browserHandoff` before a flow requiring
-those services begins. Resolution fails when a required provider is missing or
-tied at the winning priority; there is no insecure in-memory fallback.
+`pap.tokenStore`, `pap.pairwiseUserIdStore`, `pap.cache`, and
+`pap.browserHandoff` before a flow requiring those services begins. Resolution
+fails when a required provider is missing or tied at the winning priority;
+there is no insecure in-memory fallback.
 
 ## Agent identity
 
@@ -114,6 +116,11 @@ Generate a random pairwise user ID once per local user and company issuer, then
 store that mapping durably. Never derive the identifier from an email address,
 phone number, name, or other personal information.
 
+`SqlitePairwiseUserIdStore` is an atomic, file-backed reference implementation.
+Register it as `pap.pairwiseUserIdStore`, or contribute a transactional
+platform store with the aligned contract. `resolve_pairwise_user_id` fails
+closed when no unambiguous store is active.
+
 Assertion claim and form builders do not sign tokens. Signing remains behind a
 key-custody contribution so private keys never enter application or model
 context.
@@ -124,12 +131,18 @@ from pydantic import SecretStr
 from personal_agent_protocol import (
     SessionGrant,
     build_session_assertion_claims,
-    generate_pairwise_user_id,
+    resolve_pairwise_user_id,
 )
 
+pairwise_user_id = await resolve_pairwise_user_id(
+    reactor,
+    tenant_id="application-42",
+    local_user_id="local-user-42",
+    company_issuer="https://auth.example.com",
+)
 claims = build_session_assertion_claims(
     client_id="https://agent.example/agent.json",
-    pairwise_user_id=generate_pairwise_user_id(),
+    pairwise_user_id=pairwise_user_id,
     token_endpoint="https://auth.example.com/oauth/token",
 )
 

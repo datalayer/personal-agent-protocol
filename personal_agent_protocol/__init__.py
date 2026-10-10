@@ -46,6 +46,7 @@ from .models import (
     OperationConfirmation,
     OperationResult,
 )
+from .pairwise import SqlitePairwiseUserIdStore, resolve_pairwise_user_id
 from .reactor import (
     BROWSER_HANDOFFS,
     CACHES,
@@ -54,6 +55,7 @@ from .reactor import (
     DPOP_PROOF_PROVIDERS,
     EXTENSION_HANDLERS,
     KEY_STORES,
+    PAIRWISE_USER_ID_STORES,
     PROTOCOL_PROFILES,
     RANDOM_SOURCES,
     SIGNERS,
@@ -65,6 +67,7 @@ from .reactor import (
     DpopProofRequest,
     KeyReference,
     KeyStore,
+    PairwiseUserIdStore,
     PapCorePlugin,
     ProtocolCache,
     ProtocolProfile,
@@ -96,6 +99,7 @@ __all__ = [
     "JWT_BEARER_GRANT",
     "JWT_CLIENT_ASSERTION",
     "KEY_STORES",
+    "PAIRWISE_USER_ID_STORES",
     "PROTOCOL_PROFILES",
     "RANDOM_SOURCES",
     "SIGNERS",
@@ -132,6 +136,7 @@ __all__ = [
     "Operation",
     "OperationConfirmation",
     "OperationResult",
+    "PairwiseUserIdStore",
     "PapCorePlugin",
     "PersonalAgentProtocolError",
     "ProofError",
@@ -145,6 +150,7 @@ __all__ = [
     "SessionGrant",
     "SessionToken",
     "Signer",
+    "SqlitePairwiseUserIdStore",
     "SystemClock",
     "SystemRandomSource",
     "TokenStore",
@@ -154,6 +160,7 @@ __all__ = [
     "build_pap_reactor",
     "build_session_assertion_claims",
     "generate_pairwise_user_id",
+    "resolve_pairwise_user_id",
     "validate_direct_sign_in_callback",
     "verify_dpop_proof",
 ]

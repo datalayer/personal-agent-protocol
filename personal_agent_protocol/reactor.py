@@ -101,6 +101,19 @@ class TokenStore(Protocol):
 
 
 @runtime_checkable
+class PairwiseUserIdStore(Protocol):
+    """Persist stable random identities by tenant, local user, and issuer."""
+
+    async def get_or_create(
+        self,
+        *,
+        tenant_id: str,
+        local_user_id: str,
+        company_issuer: str,
+    ) -> str: ...
+
+
+@runtime_checkable
 class ProtocolCache(Protocol):
     """Bound cached public protocol data by an absolute expiry."""
 
@@ -177,6 +190,7 @@ RANDOM_SOURCES = define_contribution_point("pap.randomSource")
 SIGNERS = define_contribution_point("pap.signer")
 KEY_STORES = define_contribution_point("pap.keyStore")
 TOKEN_STORES = define_contribution_point("pap.tokenStore")
+PAIRWISE_USER_ID_STORES = define_contribution_point("pap.pairwiseUserIdStore")
 CACHES = define_contribution_point("pap.cache")
 BROWSER_HANDOFFS = define_contribution_point("pap.browserHandoff")
 DPOP_PROOF_PROVIDERS = define_contribution_point("pap.dpopProofProvider")
@@ -297,6 +311,7 @@ def build_pap_reactor(
                 SIGNERS.id,
                 KEY_STORES.id,
                 TOKEN_STORES.id,
+                PAIRWISE_USER_ID_STORES.id,
                 CACHES.id,
                 BROWSER_HANDOFFS.id,
                 DPOP_PROOF_PROVIDERS.id,

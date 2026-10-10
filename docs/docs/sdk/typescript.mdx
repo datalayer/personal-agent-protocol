@@ -57,9 +57,10 @@ bundle.
 
 The SDK exports aligned `Clocks`, `RandomSources`, `Signers`,
 `DpopProofProviders`, `KeyStores`, `TokenStores`, `Caches`, and
-`BrowserHandoffs` contribution points. The core plugin provides only system
-time and secure randomness. Security-dependent services have no fallback and
-resolution fails closed when missing or ambiguous.
+`BrowserHandoffs` contribution points, plus `PairwiseUserIdStores` for stable
+identity. The core plugin provides only system time and secure randomness.
+Security-dependent services have no fallback and resolution fails closed when
+missing or ambiguous.
 
 ## Agent identity
 
@@ -95,13 +96,18 @@ keys are accepted; symmetric and private JWK members are rejected.
 import {
   SessionGrant,
   buildSessionAssertionClaims,
-  generatePairwiseUserId,
   parseSessionToken,
+  resolvePairwiseUserId,
 } from '@datalayer/personal-agent-protocol';
 
+const pairwiseUserId = await resolvePairwiseUserId(reactor, {
+  tenantId: 'application-42',
+  localUserId: 'local-user-42',
+  companyIssuer: 'https://auth.example.com',
+});
 const claims = buildSessionAssertionClaims({
   clientId: 'https://agent.example/agent.json',
-  pairwiseUserId: generatePairwiseUserId(),
+  pairwiseUserId,
   tokenEndpoint: 'https://auth.example.com/oauth/token',
 });
 

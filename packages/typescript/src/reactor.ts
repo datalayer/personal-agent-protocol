@@ -63,6 +63,14 @@ export interface TokenStore {
   delete(reference: string): Promise<void>;
 }
 
+export interface PairwiseUserIdStore {
+  getOrCreate(options: {
+    readonly tenantId: string;
+    readonly localUserId: string;
+    readonly companyIssuer: string;
+  }): Promise<string>;
+}
+
 export interface ProtocolCache {
   put(key: string, value: unknown, options: { readonly expiresAt: Date }): Promise<void>;
   get(key: string): Promise<unknown | undefined>;
@@ -104,6 +112,9 @@ export const RandomSources = defineContributionPoint<RandomSource>("pap.randomSo
 export const Signers = defineContributionPoint<Signer>("pap.signer");
 export const KeyStores = defineContributionPoint<KeyStore>("pap.keyStore");
 export const TokenStores = defineContributionPoint<TokenStore>("pap.tokenStore");
+export const PairwiseUserIdStores = defineContributionPoint<PairwiseUserIdStore>(
+  "pap.pairwiseUserIdStore",
+);
 export const Caches = defineContributionPoint<ProtocolCache>("pap.cache");
 export const BrowserHandoffs = defineContributionPoint<BrowserHandoff>(
   "pap.browserHandoff",
@@ -167,6 +178,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       Signers,
       KeyStores,
       TokenStores,
+      PairwiseUserIdStores,
       Caches,
       BrowserHandoffs,
       DpopProofProviders,

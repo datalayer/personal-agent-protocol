@@ -6,9 +6,11 @@ import { SecretValue } from "./secret.js";
 import {
   Clocks,
   DpopProofProviders,
+  PairwiseUserIdStores,
   RandomSources,
   Signers,
   firstContribution,
+  type PairwiseUserIdStore,
 } from "./reactor.js";
 
 export const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
@@ -75,6 +77,22 @@ export function generatePairwiseUserId(
   randomBytes: RandomBytes = defaultRandomBytes,
 ): string {
   return opaqueId("usr", randomBytes);
+}
+
+export async function resolvePairwiseUserId(
+  reactor: ReactorPlatformView,
+  options: {
+    readonly tenantId: string;
+    readonly localUserId: string;
+    readonly companyIssuer: string;
+  },
+): Promise<string> {
+  const store = firstContribution(
+    reactor,
+    PairwiseUserIdStores,
+    "pairwise user ID store",
+  ) as PairwiseUserIdStore;
+  return store.getOrCreate(options);
 }
 
 export interface SessionAssertionOptions {

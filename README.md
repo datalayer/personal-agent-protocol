@@ -22,9 +22,11 @@ The first implemented slice provides:
   guard in the Python discovery client;
 - Reactor-backed protocol profiles, discovery transports, URL-safety policies,
   extension handlers, clocks, randomness, signing, protected keys, token
-  storage, caches, and browser-handoff contribution points in both SDKs;
-- redacted session-token values, random pairwise user-ID generation, PAP 4.2
-  assertion claims, and JWT-bearer request forms in both SDKs;
+  storage, pairwise identity, caches, and browser-handoff contribution points
+  in both SDKs;
+- redacted session-token values, random pairwise user-ID generation and atomic
+  file-backed reference persistence, PAP 4.2 assertion claims, and JWT-bearer
+  request forms;
 - signed-out session start and renewal over HTTP, with Reactor-provided signing
   and DPoP proof generation, in both SDKs;
 - asymmetric ES256/RS256 JOSE signers and RFC 9449 DPoP creation and
@@ -76,7 +78,9 @@ fail closed as ambiguous.
 The core also contributes UTC time and operating-system randomness. It does
 not provide insecure fallbacks for signing, DPoP proof generation, protected
 keys, token storage, cache, or browser handoff. A flow requiring one fails
-closed until its host contributes it.
+closed until its host contributes it. This also applies to pairwise identity;
+Python includes an explicit SQLite reference provider, but the core does not
+silently install it.
 
 ### Command line
 

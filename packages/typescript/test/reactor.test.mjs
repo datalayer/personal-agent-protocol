@@ -7,9 +7,11 @@ import {
   Clocks,
   DpopProofProviders,
   KeyStores,
+  PairwiseUserIdStores,
   RandomSources,
   Signers,
   TokenStores,
+  resolvePairwiseUserId,
   buildPapReactor,
   firstContribution,
 } from "../lib/index.js";
@@ -18,6 +20,7 @@ const securityPoints = [
   Signers,
   KeyStores,
   TokenStores,
+  PairwiseUserIdStores,
   Caches,
   BrowserHandoffs,
   DpopProofProviders,
@@ -34,6 +37,7 @@ test("exports aligned infrastructure point IDs and secure defaults", () => {
   assert.equal(Signers.id, "pap.signer");
   assert.equal(KeyStores.id, "pap.keyStore");
   assert.equal(TokenStores.id, "pap.tokenStore");
+  assert.equal(PairwiseUserIdStores.id, "pap.pairwiseUserIdStore");
   assert.equal(Caches.id, "pap.cache");
   assert.equal(BrowserHandoffs.id, "pap.browserHandoff");
   assert.equal(DpopProofProviders.id, "pap.dpopProofProvider");
@@ -44,6 +48,29 @@ test("exports aligned infrastructure point IDs and secure defaults", () => {
   assert.ok(clock.now() instanceof Date);
   assert.equal(random.bytes(16).byteLength, 16);
   assert.throws(() => random.bytes(0), RangeError);
+  reactor.stop();
+});
+
+test("resolves stable pairwise identity through the host store", async () => {
+  const store = {
+    async getOrCreate(options) {
+      assert.deepEqual(options, {
+        tenantId: "app-one",
+        localUserId: "user-one",
+        companyIssuer: "https://auth.example.com",
+      });
+      return "usr_stable-pairwise-id";
+    },
+  };
+  const reactor = buildPapReactor({}, [plugin("@tests/pairwise", PairwiseUserIdStores, store)]);
+  assert.equal(
+    await resolvePairwiseUserId(reactor, {
+      tenantId: "app-one",
+      localUserId: "user-one",
+      companyIssuer: "https://auth.example.com",
+    }),
+    "usr_stable-pairwise-id",
+  );
   reactor.stop();
 });
 

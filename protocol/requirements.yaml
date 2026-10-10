@@ -60,9 +60,9 @@ requirements:
     section: "4.2"
     role: personal-agent
     statement: Use a stable opaque non-PII User ID per user and company issuer.
-    status: partial
-    python: personal_agent_protocol.sessions.generate_pairwise_user_id
-    typescript: generatePairwiseUserId
+    status: implemented
+    python: personal_agent_protocol.pairwise.resolve_pairwise_user_id
+    typescript: resolvePairwiseUserId
   - id: PAP-4.2-MUST-03
     section: "4.2"
     role: personal-agent

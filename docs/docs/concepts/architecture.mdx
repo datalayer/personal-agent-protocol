@@ -12,12 +12,16 @@ extensions.
 
 The first shared contribution points are:
 
-| ID | Responsibility |
-| --- | --- |
-| `pap.protocolProfile` | Version-specific wire behavior |
-| `pap.discoveryTransport` | Credential-free metadata transport |
-| `pap.urlSafetyPolicy` | HTTPS, DNS, IP, and redirect policy |
-| `pap.extensionHandler` | Named, major-versioned PAP extensions |
+| ID                                     | Responsibility                                                    |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| `pap.protocolProfile`                  | Version-specific wire behavior                                    |
+| `pap.discoveryTransport`               | Credential-free metadata transport                                |
+| `pap.urlSafetyPolicy`                  | HTTPS, DNS, IP, and redirect policy                               |
+| `pap.extensionHandler`                 | Named, major-versioned PAP extensions                             |
+| `pap.pairwiseUserIdStore`              | Atomic stable identity by tenant, local user, and verified issuer |
+| `pap.signer` / `pap.dpopProofProvider` | Protected assertion and proof creation                            |
+| `pap.keyStore` / `pap.tokenStore`      | Protected key references and opaque credentials                   |
+| `pap.cache` / `pap.browserHandoff`     | Bounded public state and trusted human handoff                    |
 
 Lower `order` values have higher priority. Equal winning priorities fail
 closed instead of selecting a provider by load order.

@@ -16,14 +16,14 @@ a personal agent, and publish a deployed application as a PAP company.
 ## Consume a company
 
 1. Add a Personal Agent Protocol connection and enter a company domain.
-2. Studio verifies discovery and shows sign-in modes, scopes, APIs, company
+1. Studio verifies discovery and shows sign-in modes, scopes, APIs, company
    agent, web support, and extensions.
-3. The maker selects the least authority needed and maps capabilities to
+1. The maker selects the least authority needed and maps capabilities to
    Studio rules.
-4. Preview starts signed out and asks the person to sign in only when needed.
-5. A task can continue through an API, conversation, or isolated browser while
+1. Preview starts signed out and asks the person to sign in only when needed.
+1. A task can continue through an API, conversation, or isolated browser while
    Activity records transitions without exposing credentials.
-6. Consequential work is shown as one revisioned proposal that is explicitly
+1. Consequential work is shown as one revisioned proposal that is explicitly
    approved or declined before confirmation.
 
 ## Publish a company
@@ -50,10 +50,32 @@ normal runtime boundary. It does not reinterpret an A2A endpoint as PAP.
 - The MCP gateway accepts only resource-bound PAP Bearer tokens.
 - Deployment gateways serve discovery, authorization, conversation, browser,
   API, and operation routes and enforce limits.
+- A backend metadata gateway owns all outbound PAP document fetches. Its Node
+  Reactor host installs `NodeUrlSafetyPolicy` from the SDK's server entry,
+  rejects a hostname when any A or AAAA result is non-public, sends no ambient
+  credentials, and applies the SDK's redirect and byte bounds. Production
+  egress must additionally pin the connection to an approved address or
+  enforce the resolved set at a proxy; DNS preflight alone does not close the
+  rebinding interval.
+- That gateway returns typed, verified summaries to Studio and runtime code:
+  discovered company, exact issuer binding, or client metadata plus public
+  JWKS. Raw response bodies and unverified URLs do not enter Appspec, model
+  context, Canvas state, logs, or tool arguments.
+- Cache keys include the tenant trust policy, document kind, and canonical
+  URL. Client metadata never follows redirects. JWKS caches retain overlapping
+  rotation keys only within bounded HTTP expiry; an unknown `kid` can trigger
+  a rate-limited refresh, not an unbounded fetch loop.
 
 Models and tools receive safe handles, never credentials. Signing, storage,
 approval, rotation, and token attachment remain deterministic capabilities
 outside the model loop.
+
+The SDK now supplies safe discovery and client/JWKS retrieval in Python and
+TypeScript plus a DNS-aware Node policy. Datalayer integration still owns the
+durable cache, connected-address enforcement, tenant policy, rate limiting,
+audit summaries, and availability controls. This split keeps reusable PAP
+validation in the SDK while deployment-specific network authority remains in
+the backend.
 
 ## Appspec shape
 

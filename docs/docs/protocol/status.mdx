@@ -44,7 +44,10 @@ can support more than one protocol profile.
 
 - Python preflight validates resolved addresses, but transport-level address
   pinning is still needed to fully close the DNS-rebinding interval.
-- Portable TypeScript needs a server-contributed DNS-aware URL safety policy.
+- Python and Node now reject non-public DNS results before metadata requests,
+  but their default transports do not yet pin the connection to an approved
+  resolved address. Production deployments need a pinning transport or an
+  enforcing egress proxy to fully close the DNS-rebinding interval.
 - Pairwise ID generation exists, but durable per-user/per-issuer storage is an
   application concern until a storage contribution is implemented.
 - Session clients sign fresh claims, create a DPoP proof, and send the token

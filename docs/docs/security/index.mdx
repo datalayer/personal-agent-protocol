@@ -53,6 +53,13 @@ retrieval permits only bounded same-host redirects and accepts complete public
 P-256/ES256 or RSA/RS256 signing keys. Symmetric keys and every standard
 private JWK member are rejected before a key can reach assertion verification.
 
+For Node backends, import `NodeUrlSafetyPolicy` from
+`@datalayer/personal-agent-protocol/server` and contribute it through
+`assertSafeUrl`. The server-only entry checks every resolved A and AAAA address
+and is deliberately absent from the portable bundle. DNS preflight does not
+pin the later socket: pair it with a transport or egress proxy that connects
+only to the approved address set.
+
 ## Current limitations
 
 The SDK implements asymmetric assertion signing and DPoP proof creation and

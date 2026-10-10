@@ -16,6 +16,10 @@
     ".": {
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
+    },
+    "./server": {
+      "types": "./lib/server.d.ts",
+      "import": "./lib/server.js"
     }
   },
   "files": ["lib", "README.md"],
@@ -32,5 +36,8 @@
   "dependencies": {
     "@datalayer/reactor": "^1.0.5",
     "jose": "^6.2.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0"
   }
 }

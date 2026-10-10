@@ -148,6 +148,27 @@ recovery.
 ## Server-side URL safety
 
 The portable default rejects obvious local and private literal addresses. It
-cannot prove which address DNS selected. Server applications should provide
-`assertSafeUrl` that resolves the host, rejects every non-public address, and
-ensures the transport connects to an approved address.
+cannot resolve DNS without importing platform-specific APIs into browser
+bundles. Node services can use the separate server entry:
+
+```typescript
+import { buildPapReactor } from '@datalayer/personal-agent-protocol';
+import { NodeUrlSafetyPolicy } from '@datalayer/personal-agent-protocol/server';
+
+const urlPolicy = new NodeUrlSafetyPolicy();
+const reactor = buildPapReactor({
+  assertSafeUrl: url => urlPolicy.assertSafe(url),
+});
+```
+
+`NodeUrlSafetyPolicy` resolves every A and AAAA result and rejects the URL if
+any address is loopback, private, link-local, shared, documentation-only,
+multicast, or reserved. Literal IP addresses use the same classification
+without DNS. Private-network access is disabled by default and must be enabled
+explicitly for a controlled deployment.
+
+This is a DNS preflight, not connection pinning. A production server must also
+ensure its HTTP transport connects to an approved resolved address, or send
+metadata traffic through an egress proxy that enforces the same policy. That
+closes the interval in which DNS could return a different address after the
+check.

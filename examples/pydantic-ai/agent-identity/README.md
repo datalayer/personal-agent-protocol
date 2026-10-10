@@ -7,3 +7,6 @@ coordinates.
 ```bash
 python examples/pydantic-ai/agent-identity/app.py
 ```
+
+See the canonical
+[personal-agent guide](../../../docs/docs/guides/personal-agent.mdx).

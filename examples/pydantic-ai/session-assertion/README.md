@@ -7,3 +7,5 @@ signing keys remain outside model context.
 ```bash
 python examples/pydantic-ai/session-assertion/app.py
 ```
+
+See the canonical [Sessions guide](../../../docs/docs/guides/sessions.mdx).

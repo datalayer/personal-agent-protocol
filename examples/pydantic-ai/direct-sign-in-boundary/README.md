@@ -7,3 +7,6 @@ state, verifier, callback and tokens.
 ```bash
 python examples/pydantic-ai/direct-sign-in-boundary/app.py
 ```
+
+See the canonical
+[Direct Sign-In guide](../../../docs/docs/guides/direct-sign-in.mdx).

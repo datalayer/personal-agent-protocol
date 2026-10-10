@@ -10,6 +10,7 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | [`agent-identity`](./agent-identity/)                   | Client metadata and same-domain JWKS    | Identity and signing policy       |
 | [`session-assertion`](./session-assertion/)             | Pairwise subject and short-lived claims | Policy only; identifiers withheld |
 | [`direct-sign-in-boundary`](./direct-sign-in-boundary/) | OAuth state and S256 PKCE               | Security properties only          |
+| [`dpop-proof`](./dpop-proof/)                           | Request binding and replay rejection    | Verified policy; secrets withheld |
 
 Install and run from the PAP repository:
 

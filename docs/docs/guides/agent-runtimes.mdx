@@ -15,6 +15,7 @@ Each example covers exactly one feature and makes its trust boundary visible.
 | `agent-identity`          | Client metadata, redirect policy, same-domain JWKS                | Client name and signing policy           |
 | `session-assertion`       | Pairwise subject, audience, lifetime, and unique request ID       | Assertion policy; identifiers withheld   |
 | `direct-sign-in-boundary` | Random state, S256 PKCE, exact scopes, browser handoff            | Requested scopes and security properties |
+| `dpop-proof`              | Method, URL, access-token, nonce, and replay binding              | Verified policy; proof material withheld |
 
 Agent Runtimes now depends on PAP in both Python and TypeScript. Its
 `PapPersonalAgentCapability` uses `DiscoveryClient` and `AgentIdentityClient`
@@ -30,6 +31,13 @@ requested company domain. Its result contains only:
 
 Raw response bodies, authorization URLs, callback parameters, assertions,
 DPoP proofs, Session Tokens, and Account Tokens never enter model context.
+
+The `dpop-proof` Loop application creates and verifies a real ES256 proof in
+host code and demonstrates one-use replay rejection. Its paired Reactor
+gallery view uses non-exportable Web Crypto key material to create fresh
+device-side proofs but stores only boolean policy evidence in React state.
+Server-side signature and replay verification remains behind PAP's `./server`
+entry and is never bundled into that browser view.
 
 ## Run the example
 

@@ -84,6 +84,14 @@ pinning, caches, egress, rate limits, and audit remain server-owned. Direct
 Sign-In stays a separate authorization gateway plus trusted Preview handoff
 and is never exposed as an agent tool.
 
+The Agent Runtimes DPoP examples make the same split executable. A read-only
+Loop tool creates and verifies a real ES256 proof, rejects replay, and returns
+only policy evidence. Its Reactor-contributed browser view creates fresh
+proofs with non-exportable Web Crypto keys and never places a proof, token,
+nonce, identifier, or JWK in React state. Studio can reuse that portable
+creation pattern, while the authorization gateway alone imports `./server`
+for signature and durable replay verification.
+
 The SDK now supplies safe discovery, client/JWKS retrieval, and Direct Sign-In
 orchestration in Python and TypeScript, plus a DNS-aware Node policy. Datalayer
 integration still owns the durable cache, connected-address

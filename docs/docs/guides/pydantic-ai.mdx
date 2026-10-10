@@ -7,7 +7,7 @@ description: Use PAP directly from Pydantic AI while keeping protocol secrets ou
 
 The PAP repository's
 [`examples/pydantic-ai`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai)
-directory contains four deliberately small agents. Each exposes one PAP
+directory contains deliberately small agents. Each exposes one PAP
 feature as a Pydantic AI tool:
 
 | Example                   | PAP feature                                                | Tool result                            |
@@ -16,6 +16,7 @@ feature as a Pydantic AI tool:
 | `agent-identity`          | Client metadata and same-domain JWKS                       | Client identity and signing policy     |
 | `session-assertion`       | Pairwise subject, audience, lifetime and unique request ID | Assertion policy; identifiers withheld |
 | `direct-sign-in-boundary` | Random state, S256 PKCE and browser handoff                | Scopes and security properties only    |
+| `dpop-proof`              | Method, URL, token, nonce and replay binding               | Verification policy; secrets withheld  |
 
 Install the example dependency and run one agent:
 
@@ -28,14 +29,14 @@ python examples/pydantic-ai/company-discovery/app.py
 The default model is `openai:gpt-4o-mini`. Set `PAP_EXAMPLE_MODEL` to any
 Pydantic AI model string supported by your installed provider.
 
-Validate all four agent definitions without making a model request:
+Validate all agent definitions without making a model request:
 
 ```bash
 python scripts/validate_pydantic_ai_examples.py
 ```
 
 The company and identity tools may return only verified public summaries. The
-Session and Direct Sign-In tools create real random material internally but
-return policy status only. Pairwise subjects, `jti`, assertions,
-authorization URLs, OAuth state, PKCE verifiers, proofs and tokens never enter
-the prompt, tool result or transcript.
+Session, Direct Sign-In, and DPoP tools create real cryptographic material
+internally but return policy status only. Pairwise subjects, `jti`, assertions,
+authorization URLs, OAuth state, PKCE verifiers, proofs, nonces, key material,
+and tokens never enter the prompt, tool result, or transcript.

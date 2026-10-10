@@ -6,3 +6,5 @@ Only verified public capability metadata enters the tool result.
 ```bash
 python examples/pydantic-ai/company-discovery/app.py
 ```
+
+See the canonical [company guide](../../../docs/docs/guides/company.mdx).

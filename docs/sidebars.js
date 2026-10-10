@@ -71,6 +71,7 @@ const sidebars = {
         "examples/direct-sign-in-boundary",
         "examples/dpop-proof",
         "examples/dpop-transport",
+        "examples/conversation-messages",
         "examples/session-lifecycle",
         "examples/direct-sign-in-lifecycle",
         "examples/browser-session",

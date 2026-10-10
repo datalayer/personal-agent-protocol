@@ -60,3 +60,7 @@ class BrowserSessionError(PersonalAgentProtocolError):
 
 class TransportError(PersonalAgentProtocolError):
     """An authenticated PAP resource request failed safely."""
+
+
+class ConversationError(PersonalAgentProtocolError):
+    """A PAP conversation request failed without exposing its body."""

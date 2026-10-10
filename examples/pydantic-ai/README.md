@@ -15,6 +15,7 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | [`session-lifecycle`](./session-lifecycle/)               | Start, nonce retry, and renewal over HTTP  | Lifecycle evidence only           |
 | [`browser-session`](./browser-session/)                   | Controlled form POST and one-use assertion | Browser policy only               |
 | [`dpop-transport`](./dpop-transport/)                     | Nonce retry and safe redirect proofs       | Transport policy only             |
+| [`conversation-messages`](./conversation-messages/)       | Start and continue with idempotent IDs     | Conversation state only           |
 
 Install and run from the PAP repository:
 

@@ -25,6 +25,12 @@ from .browser import (
     build_browser_assertion_claims,
     verify_browser_assertion,
 )
+from .conversations import (
+    ConversationClient,
+    ConversationReceipt,
+    ConversationResponse,
+    generate_message_id,
+)
 from .crypto import (
     DpopKeyMaterial,
     DpopReplayCache,
@@ -38,6 +44,7 @@ from .discovery import DiscoveryClient
 from .errors import (
     AuthorizationError,
     BrowserSessionError,
+    ConversationError,
     DiscoveryError,
     IdentityError,
     PersonalAgentProtocolError,
@@ -141,8 +148,12 @@ __all__ = [
     "BrowserSessionStart",
     "ClientMetadata",
     "Clock",
+    "ConversationClient",
+    "ConversationError",
     "ConversationEvent",
     "ConversationEventPage",
+    "ConversationReceipt",
+    "ConversationResponse",
     "DirectSignInCallback",
     "DirectSignInClient",
     "DirectSignInRequest",
@@ -196,6 +207,7 @@ __all__ = [
     "build_direct_sign_in_request",
     "build_pap_reactor",
     "build_session_assertion_claims",
+    "generate_message_id",
     "generate_pairwise_user_id",
     "resolve_pairwise_user_id",
     "validate_direct_sign_in_callback",

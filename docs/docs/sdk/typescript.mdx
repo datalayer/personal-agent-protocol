@@ -29,12 +29,12 @@ wire-model validation.
 import {
   buildPapReactor,
   discoverCompany,
-} from '@datalayer/personal-agent-protocol';
+} from "@datalayer/personal-agent-protocol";
 
 const reactor = buildPapReactor({
-  assertSafeUrl: async url => serverDnsPolicy.assertSafe(url),
+  assertSafeUrl: async (url) => serverDnsPolicy.assertSafe(url),
 });
-const company = await discoverCompany('example.com', { reactor });
+const company = await discoverCompany("example.com", { reactor });
 ```
 
 All network operations accept an `AbortSignal`. Pass it to discovery when the
@@ -42,7 +42,7 @@ calling task, request, or UI owns cancellation:
 
 ```typescript
 const controller = new AbortController();
-const company = await discoverCompany('example.com', {
+const company = await discoverCompany("example.com", {
   reactor,
   signal: controller.signal,
 });
@@ -69,6 +69,11 @@ top-level, body-only POST to `BrowserFormPosts`. Company code imports
 public-key verification and replay storage stay outside portable browser
 bundles. See the [Browser Session flow](/examples/browser-session/).
 
+`DpopFetchClient` owns `Authorization` and `DPoP` headers for API and
+conversation requests. It generates a fresh proof for every nonce retry and
+same-origin redirect target, and rejects cross-origin redirects before fetch
+can forward a credential. See the [DPoP transport flow](/examples/dpop-transport/).
+
 ## Agent identity
 
 `AgentIdentityClient` gives companies the same hardened metadata and JWKS
@@ -78,11 +83,11 @@ boundary as the Python SDK:
 import {
   AgentIdentityClient,
   buildPapReactor,
-} from '@datalayer/personal-agent-protocol';
+} from "@datalayer/personal-agent-protocol";
 
 const identity = new AgentIdentityClient({ reactor });
 const metadata = await identity.fetchMetadata(
-  'https://agent.example/agent.json',
+  "https://agent.example/agent.json",
   { signal: controller.signal },
 );
 const jwks = await identity.fetchJwks(metadata.client_id, {
@@ -105,24 +110,24 @@ import {
   buildSessionAssertionClaims,
   parseSessionToken,
   resolvePairwiseUserId,
-} from '@datalayer/personal-agent-protocol';
+} from "@datalayer/personal-agent-protocol";
 
 const pairwiseUserId = await resolvePairwiseUserId(reactor, {
-  tenantId: 'application-42',
-  localUserId: 'local-user-42',
-  companyIssuer: 'https://auth.example.com',
+  tenantId: "application-42",
+  localUserId: "local-user-42",
+  companyIssuer: "https://auth.example.com",
 });
 const claims = buildSessionAssertionClaims({
-  clientId: 'https://agent.example/agent.json',
+  clientId: "https://agent.example/agent.json",
   pairwiseUserId,
-  tokenEndpoint: 'https://auth.example.com/oauth/token',
+  tokenEndpoint: "https://auth.example.com/oauth/token",
 });
 
 // Signing is intentionally provided by a server or key-custody integration.
 const grant = new SessionGrant({
-  assertion: 'signed-session-assertion',
+  assertion: "signed-session-assertion",
   clientId: claims.iss,
-  clientAssertion: 'signed-client-assertion',
+  clientAssertion: "signed-client-assertion",
 });
 
 const token = parseSessionToken(await response.json());
@@ -174,16 +179,16 @@ cannot resolve DNS without importing platform-specific APIs into browser
 bundles. Node services can use the separate server entry:
 
 ```typescript
-import { buildPapReactor } from '@datalayer/personal-agent-protocol';
+import { buildPapReactor } from "@datalayer/personal-agent-protocol";
 import {
   JoseSigner,
   NodeUrlSafetyPolicy,
   verifyDpopProof,
-} from '@datalayer/personal-agent-protocol/server';
+} from "@datalayer/personal-agent-protocol/server";
 
 const urlPolicy = new NodeUrlSafetyPolicy();
 const reactor = buildPapReactor({
-  assertSafeUrl: url => urlPolicy.assertSafe(url),
+  assertSafeUrl: (url) => urlPolicy.assertSafe(url),
 });
 ```
 

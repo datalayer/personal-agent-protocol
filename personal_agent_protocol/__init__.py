@@ -44,6 +44,7 @@ from .errors import (
     ProofError,
     ProtocolValidationError,
     SessionError,
+    TransportError,
 )
 from .identity import AgentIdentityClient
 from .models import (
@@ -106,6 +107,7 @@ from .sessions import (
     build_session_assertion_claims,
     generate_pairwise_user_id,
 )
+from .transport import DpopHttpClient
 
 __all__ = [
     "AUTHORIZATION_STATE_STORES",
@@ -150,6 +152,7 @@ __all__ = [
     "DiscoveryClient",
     "DiscoveryDocument",
     "DiscoveryError",
+    "DpopHttpClient",
     "DpopKeyMaterial",
     "DpopProofProvider",
     "DpopProofRequest",
@@ -185,6 +188,7 @@ __all__ = [
     "SystemClock",
     "SystemRandomSource",
     "TokenStore",
+    "TransportError",
     "VerifiedBrowserAssertion",
     "VerifiedDpopProof",
     "__version__",

@@ -10,16 +10,17 @@ The PAP repository's
 directory contains deliberately small agents. Each exposes one PAP
 feature as a Pydantic AI tool:
 
-| Example                   | PAP feature                                                | Tool result                            |
-| ------------------------- | ---------------------------------------------------------- | -------------------------------------- |
-| [Company discovery](/examples/company-discovery/) | HTTPS discovery, version/domain/issuer validation | Public company capability summary |
-| [Agent identity](/examples/agent-identity/) | Client metadata and same-domain JWKS | Client identity and signing policy |
-| [Session assertion](/examples/session-assertion/) | Pairwise subject, audience, lifetime and unique request ID | Assertion policy; identifiers withheld |
-| [Direct Sign-In boundary](/examples/direct-sign-in-boundary/) | Random state, S256 PKCE and browser handoff | Scopes and security properties only |
+| Example                                                         | PAP feature                                                  | Tool result                              |
+| --------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------- |
+| [Company discovery](/examples/company-discovery/)               | HTTPS discovery, version/domain/issuer validation            | Public company capability summary        |
+| [Agent identity](/examples/agent-identity/)                     | Client metadata and same-domain JWKS                         | Client identity and signing policy       |
+| [Session assertion](/examples/session-assertion/)               | Pairwise subject, audience, lifetime and unique request ID   | Assertion policy; identifiers withheld   |
+| [Direct Sign-In boundary](/examples/direct-sign-in-boundary/)   | Random state, S256 PKCE and browser handoff                  | Scopes and security properties only      |
 | [Direct Sign-In lifecycle](/examples/direct-sign-in-lifecycle/) | Callback, exchange, nonce retry, partial consent, continuity | Lifecycle evidence; all secrets withheld |
-| [DPoP proof](/examples/dpop-proof/) | Method, URL, token, nonce and replay binding | Verification policy; secrets withheld |
-| [Session lifecycle](/examples/session-lifecycle/) | Start, DPoP nonce retry, and renewal over HTTP | Lifecycle evidence; secrets withheld |
-| [Browser Session](/examples/browser-session/) | Signed assertion, form POST, verification, replay rejection | Browser policy; secrets withheld |
+| [DPoP proof](/examples/dpop-proof/)                             | Method, URL, token, nonce and replay binding                 | Verification policy; secrets withheld    |
+| [DPoP transport](/examples/dpop-transport/)                     | Nonce retry, redirect rebinding, origin isolation            | Transport policy; secrets withheld       |
+| [Session lifecycle](/examples/session-lifecycle/)               | Start, DPoP nonce retry, and renewal over HTTP               | Lifecycle evidence; secrets withheld     |
+| [Browser Session](/examples/browser-session/)                   | Signed assertion, form POST, verification, replay rejection  | Browser policy; secrets withheld         |
 
 Install the example dependency and run one agent:
 

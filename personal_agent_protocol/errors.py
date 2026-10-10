@@ -56,3 +56,7 @@ class ProofError(PersonalAgentProtocolError):
 
 class BrowserSessionError(PersonalAgentProtocolError):
     """A browser-session handoff or assertion failed safely."""
+
+
+class TransportError(PersonalAgentProtocolError):
+    """An authenticated PAP resource request failed safely."""

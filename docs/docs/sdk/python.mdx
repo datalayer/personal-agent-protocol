@@ -19,28 +19,29 @@ python -m pytest -p no:cacheprovider
 
 ## Public surface
 
-| API                                                     | Status                | Purpose                                                                                                    |
-| ------------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `DiscoveryClient`                                       | Implemented           | Discover and validate a company and OAuth metadata.                                                        |
-| `AgentIdentityClient`                                   | Implemented           | Safely fetch and bind client metadata and public JWKS.                                                     |
-| `DiscoveryDocument`, `OAuthServerMetadata`              | Implemented           | Strict, forward-compatible wire models.                                                                    |
-| `ClientMetadata`, `JsonWebKeySet`                       | Implemented           | Validate HTTPS client identity plus approved public assertion keys.                                        |
-| `Message`, `ConversationEvent`, `ConversationEventPage` | Implemented models    | Validate known conversation shapes while preserving unknown event types and fields.                        |
-| `Operation`, `OperationConfirmation`, `OperationResult` | Implemented models    | Validate Operations v1 states, exact confirmation revisions, timestamps, and final results.                |
-| `build_pap_reactor`                                     | Implemented           | Build the default Reactor host.                                                                            |
-| `generate_pairwise_user_id`                             | Implemented primitive | Generate an unlinkable random identifier.                                                                  |
-| `SqlitePairwiseUserIdStore`, `resolve_pairwise_user_id` | Implemented           | Atomically persist/resolve stable IDs by tenant, local user, and verified issuer.                          |
-| `build_session_assertion_claims`                        | Implemented primitive | Build unsigned, short-lived session claims.                                                                |
-| `SessionGrant`, `SessionToken`                          | Implemented primitive | Redacted request and response value objects.                                                               |
-| `SessionClient`                                         | Implemented           | Start and renew signed-out sessions with host-provided signing and DPoP.                                   |
-| `JoseSigner`, `JoseDpopProofProvider`                   | Implemented           | Sign ES256/RS256 assertions and create fresh DPoP proofs.                                                  |
-| `verify_dpop_proof`                                     | Implemented           | Verify proof signature, request/token binding, nonce, freshness, and replay state.                         |
-| `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL.                                               |
-| `validate_direct_sign_in_callback`                      | Implemented primitive | Verify callback redirect, state, issuer, denial, and code.                                                 |
-| `AuthorizationCodeGrant`                                | Implemented primitive | Build a redacted PAP code-exchange form.                                                                   |
-| `DirectSignInClient`                                    | Implemented           | Perform one-use browser handoff and proof-bound exchange with partial-scope reporting.                     |
-| `BrowserSessionClient`, `verify_browser_assertion`      | Implemented           | Join a controlled browser through a body-only form POST and verify the assertion once.                    |
-| Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, DPoP proofs, stores, browser handoff, and browser form POST.            |
+| API                                                     | Status                | Purpose                                                                                         |
+| ------------------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------- |
+| `DiscoveryClient`                                       | Implemented           | Discover and validate a company and OAuth metadata.                                             |
+| `AgentIdentityClient`                                   | Implemented           | Safely fetch and bind client metadata and public JWKS.                                          |
+| `DiscoveryDocument`, `OAuthServerMetadata`              | Implemented           | Strict, forward-compatible wire models.                                                         |
+| `ClientMetadata`, `JsonWebKeySet`                       | Implemented           | Validate HTTPS client identity plus approved public assertion keys.                             |
+| `Message`, `ConversationEvent`, `ConversationEventPage` | Implemented models    | Validate known conversation shapes while preserving unknown event types and fields.             |
+| `Operation`, `OperationConfirmation`, `OperationResult` | Implemented models    | Validate Operations v1 states, exact confirmation revisions, timestamps, and final results.     |
+| `build_pap_reactor`                                     | Implemented           | Build the default Reactor host.                                                                 |
+| `generate_pairwise_user_id`                             | Implemented primitive | Generate an unlinkable random identifier.                                                       |
+| `SqlitePairwiseUserIdStore`, `resolve_pairwise_user_id` | Implemented           | Atomically persist/resolve stable IDs by tenant, local user, and verified issuer.               |
+| `build_session_assertion_claims`                        | Implemented primitive | Build unsigned, short-lived session claims.                                                     |
+| `SessionGrant`, `SessionToken`                          | Implemented primitive | Redacted request and response value objects.                                                    |
+| `SessionClient`                                         | Implemented           | Start and renew signed-out sessions with host-provided signing and DPoP.                        |
+| `JoseSigner`, `JoseDpopProofProvider`                   | Implemented           | Sign ES256/RS256 assertions and create fresh DPoP proofs.                                       |
+| `verify_dpop_proof`                                     | Implemented           | Verify proof signature, request/token binding, nonce, freshness, and replay state.              |
+| `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL.                                    |
+| `validate_direct_sign_in_callback`                      | Implemented primitive | Verify callback redirect, state, issuer, denial, and code.                                      |
+| `AuthorizationCodeGrant`                                | Implemented primitive | Build a redacted PAP code-exchange form.                                                        |
+| `DirectSignInClient`                                    | Implemented           | Perform one-use browser handoff and proof-bound exchange with partial-scope reporting.          |
+| `BrowserSessionClient`, `verify_browser_assertion`      | Implemented           | Join a controlled browser through a body-only form POST and verify the assertion once.          |
+| `DpopHttpClient`                                        | Implemented           | Send DPoP resource requests with nonce retry and safe same-origin redirects.                    |
+| Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, DPoP proofs, stores, browser handoff, and browser form POST. |
 
 ## Discovery
 

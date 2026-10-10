@@ -46,6 +46,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`DiscoveryDocument`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `DiscoveryDocument` class.
 - [`DiscoveryError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Discovery could not be completed safely.
 - [`DPOP_PROOF_PROVIDERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `DPOP_PROOF_PROVIDERS` constant.
+- [`DpopHttpClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/transport.py) — Class. Send replay-safe DPoP requests without forwarding credentials across origins.
 - [`DpopKeyMaterial`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Private signing handle and separately exportable public JWK.
 - [`DpopProofProvider`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Create a fresh DPoP proof while keeping its private key protected.
 - [`DpopProofRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Inputs for one fresh proof-of-possession JWT.
@@ -92,6 +93,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`SystemRandomSource`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default operating-system cryptographic randomness.
 - [`TOKEN_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `TOKEN_STORES` constant.
 - [`TokenStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Keep credentials behind opaque references and explicit deletion.
+- [`TransportError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. An authenticated PAP resource request failed safely.
 - [`URL_SAFETY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `URL_SAFETY_POLICIES` constant.
 - [`validate_direct_sign_in_callback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Validate redirect location, state, and issuer before exposing the code.
 - [`VerifiedBrowserAssertion`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Public `VerifiedBrowserAssertion` class.

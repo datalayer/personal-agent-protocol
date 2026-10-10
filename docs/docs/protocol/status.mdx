@@ -22,6 +22,7 @@ Target: [PAP draft 0.1, updated October 9,
 | Reactor clock, randomness, signer, DPoP proof, key, token, cache, and browser contracts | Implemented and lifecycle-tested in Python and TypeScript                                                                                                  |
 | ES256/RS256 assertion signing                                                           | Implemented in Python and TypeScript                                                                                                                       |
 | DPoP proof creation and verification                                                    | Implemented in Python and TypeScript; host key resolver and replay cache required                                                                          |
+| DPoP-aware API/conversation HTTP transport                                              | Implemented in Python and TypeScript with nonce retry and same-origin redirect proof rebinding                                                             |
 | Direct Sign-In browser handoff and token exchange                                       | Implemented in Python and TypeScript; host state, browser, signer, and DPoP providers required                                                             |
 | Browser Session assertion, controlled form POST, and verification                       | Implemented in Python and TypeScript; host signer/form-post and company replay cache required                                                              |
 | Device and mediated sign-in                                                             | Planned                                                                                                                                                    |
@@ -68,6 +69,10 @@ can support more than one protocol profile.
   endpoint, Session owner, 60-second lifetime, company-domain return target,
   and one-use `jti`. Company adapters still own cookie creation and must bind
   cookie state and lifetime to the underlying PAP Session.
+- DPoP resource clients own authorization headers, create a fresh proof for
+  every attempt, retry one nonce challenge, and refuse cross-origin credential
+  forwarding. Resource-bound MCP Bearer acquisition remains pending on the
+  Account Token lifecycle.
 - Models for conversations and Operations are aligned and fixture-tested, but
   do not yet imply working clients or server handlers.
 - The CLI does not expose auth, session, conversation, Operations, or

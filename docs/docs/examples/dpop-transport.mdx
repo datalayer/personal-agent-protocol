@@ -1,0 +1,64 @@
+---
+title: DPoP-aware transport
+description: Send PAP API and conversation requests with fresh proofs and safe retry boundaries.
+---
+
+# DPoP-aware transport
+
+Creating a valid proof is only half of DPoP safety. The HTTP transport must
+create a new proof for the exact method and URL of every attempt—including a
+nonce retry or redirect—and must never let caller-controlled headers override
+the Session Token or proof.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Agent tool
+  participant H as DPoP HTTP client
+  participant P as Reactor proof provider
+  participant C as Company API
+  A->>H: GET orders with opaque Session Token reference
+  H->>P: Proof 1 for GET /orders + token hash
+  H->>C: Authorization: DPoP + DPoP proof 1
+  C-->>H: 401 use_dpop_nonce + nonce
+  H->>P: Proof 2 for same request + nonce
+  H->>C: Retry with proof 2
+  C-->>H: 307 Location: /orders/current
+  H->>H: Require HTTPS and same origin
+  H->>P: Proof 3 for GET /orders/current
+  H->>C: Redirected request with proof 3
+  C-->>H: 200 API result
+  H-->>A: Response without token or proof material
+```
+
+## Enforced boundaries
+
+- Only HTTPS resource URLs without embedded credentials are accepted.
+- `Authorization` and `DPoP` are host-owned; callers cannot supply or replace
+  them.
+- Every attempt receives a fresh proof bound to its method, normalized target,
+  and Session Token hash.
+- A `use_dpop_nonce` challenge is retried once with the company's nonce.
+- Same-origin redirects receive a new target-bound proof. Cross-origin
+  redirects fail before a credential reaches the new origin.
+- Redirects are bounded and handled manually; the underlying HTTP client never
+  forwards authorization automatically.
+- Request bodies are replayable values rather than unbounded streams. A `303`
+  changes the redirected request to `GET` and discards the body.
+
+Python exposes `DpopHttpClient`; TypeScript exposes `DpopFetchClient`. Both
+resolve proof generation through Reactor and keep Session Tokens, proofs,
+nonces, and pairwise identity outside model-visible inputs and results.
+
+:::note MCP remains a separate milestone
+
+MCP uses a resource-bound Bearer Session Token rather than DPoP. Issuing that
+token safely depends on the Account Token exchange lifecycle, so the generic
+DPoP transport does not accept Bearer tokens or silently downgrade. The plan
+keeps MCP acquisition and enforcement open until that lifecycle exists.
+
+:::
+
+Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/dpop-transport)
+or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/dpop-transport).
+See upstream [Using Session Tokens](https://personalagentprotocol.org/docs/spec#sending-tokens).

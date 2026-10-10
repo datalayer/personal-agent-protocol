@@ -7,7 +7,13 @@ export {
   ProofError,
   ProtocolValidationError,
   SessionError,
+  TransportError,
 } from "./errors.js";
+export {
+  DpopFetchClient,
+  type DpopFetchClientOptions,
+  type DpopFetchRequestOptions,
+} from "./transport.js";
 export {
   BROWSER_ASSERTION_TYPE,
   BrowserSessionClient,

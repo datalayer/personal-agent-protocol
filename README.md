@@ -34,14 +34,20 @@ The first implemented slice provides:
   checks, in both SDKs;
 - Direct Sign-In state, S256 PKCE, callback validation, and redacted exchange
   forms plus one-use browser and token-exchange orchestration in both SDKs;
+- Browser Session assertion creation, controlled form POST, replay-safe
+  verification, and company-domain return validation in both SDKs;
+- DPoP-aware API and conversation transport with host-owned authorization
+  headers, one nonce retry, fresh redirect-bound proofs, and cross-origin
+  credential isolation in both SDKs;
 - duplicate JSON member rejection at Python and TypeScript trust boundaries;
 - a Reactor-extensible `pap` CLI with non-secret profiles, verified company
   discovery, extension diagnostics, versioned JSON, and a safe live-session
   discovery command;
 - one shared set of fixtures exercised by both SDKs.
 
-Managed key custody and durable replay storage, device/mediated sign-in,
-conversations, and the Operations client/server are not implemented yet.
+Managed key custody and durable replay storage, Account Token exchange,
+resource-bound MCP Bearer transport, device/mediated sign-in, conversations,
+and the Operations client/server are not implemented yet.
 Direct Sign-In requires host-provided authorization-state, browser, signer, and
 DPoP contributions; the SDK does not open a browser or persist state through an
 implicit global service.
@@ -137,11 +143,12 @@ beta.
 ## Examples
 
 The [`examples/pydantic-ai`](./examples/pydantic-ai/) directory contains one
-plain Pydantic AI agent per feature: company discovery, personal-agent
-identity/JWKS verification, Session assertion safety, and the Direct Sign-In
-model boundary. The Agent Runtimes repository owns the corresponding
-Reactor/Loop applications and browser gallery. Authorization and token
-handling remain outside every agent tool boundary.
+plain Pydantic AI agent per feature, including discovery, identity, sessions,
+sign-in, Browser Session, cryptography, and proof-bound transport. The Agent
+Runtimes repository owns the corresponding Reactor/Loop applications and
+interactive gallery. Every feature links to a Docusaurus guide with a Mermaid
+sequence diagram. Authorization, tokens, proofs, nonces, and pairwise identity
+remain outside every agent tool boundary.
 
 ## Protocol sources
 

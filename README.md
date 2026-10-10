@@ -122,16 +122,25 @@ ambiguous security contributions fail closed.
 Python accepts a host-assembled Reactor `PluginPlatform`:
 
 ```python
-from reactor import PluginPlatform
+from reactor import PluginManifest
 
-from personal_agent_protocol import DiscoveryClient
+from personal_agent_protocol import DiscoveryClient, build_pap_reactor
 
 
-async def discover_with_host(platform: PluginPlatform) -> None:
-    # The application registers and starts its platform plugins before this call.
-    async with DiscoveryClient(reactor=platform) as client:
-        company = await client.discover("example.com")
-        print(company.document.organization.name)
+async def discover_with_host() -> None:
+    platform, owned_http = build_pap_reactor(
+        plugins=[
+            (PluginManifest(name="my-security", version="1"), my_security_plugin)
+        ]
+    )
+    try:
+        async with DiscoveryClient(reactor=platform) as client:
+            company = await client.discover("example.com")
+            print(company.document.organization.name)
+    finally:
+        platform.stop()
+        if owned_http is not None:
+            await owned_http.aclose()
 ```
 
 TypeScript can build a host or receive an existing `ReactorPlatformView`:
@@ -154,18 +163,18 @@ plugin model and contribution lifecycle.
 Python and TypeScript share fixtures and cover the same principal protocol
 surface:
 
-| Area            | Current support                                                                                                       |
-| --------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Models          | Forward-compatible discovery, OAuth metadata, client metadata, messages, events, and Operations v1 models             |
-| Discovery       | `poppy.json`, company-domain and issuer validation, `poppy_domains`, bounded responses, and redirect controls         |
-| Sessions        | Pairwise user IDs, PAP 4.2 assertions, signed-out start and renewal, redacted tokens, and DPoP nonce retry            |
-| Cryptography    | ES256/RS256 JOSE, RFC 9449 DPoP creation and verification, freshness, token hash, nonce, and replay checks            |
-| Direct Sign-In  | State, S256 PKCE, callback validation, browser handoff, and one-use token exchange orchestration                      |
-| Browser Session | Assertion creation, controlled form POST, replay-safe verification, and company-domain return validation              |
-| Transport       | Host-owned authorization headers, fresh redirect-bound proofs, one nonce retry, and cross-origin credential isolation |
-| Conversations   | Start and continue, random user-global message IDs, event-page parsing, and safe retry/error behavior                 |
-| Extensibility   | Reactor contribution points for platform, security, protocol, storage, and CLI behavior                               |
-| CLI             | Non-secret profiles, company verification, extension diagnostics, and versioned JSON output                           |
+| Area            | Current support                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Models          | Forward-compatible discovery, OAuth metadata, client metadata, messages, events, and Operations v1 models                         |
+| Discovery       | `poppy.json`, company-domain and issuer validation, `poppy_domains`, bounded responses, and redirect controls                     |
+| Sessions        | Pairwise user IDs, PAP 4.2 assertions, signed-out start and renewal, redacted tokens, and DPoP nonce retry                        |
+| Cryptography    | ES256/RS256 JOSE, RFC 9449 DPoP creation and verification, freshness, token hash, nonce, and replay checks                        |
+| Direct Sign-In  | State, S256 PKCE, callback validation, browser handoff, and one-use token exchange orchestration                                  |
+| Browser Session | Assertion creation, controlled form POST, replay-safe verification, and company-domain return validation                          |
+| Transport       | Host-owned authorization headers, fresh redirect-bound proofs, one nonce retry, and cross-origin credential isolation             |
+| Conversations   | Start and continue, random user-global message IDs, ordered long polling, cursor recovery, duplicate suppression, and safe errors |
+| Extensibility   | Reactor contribution points for platform, security, protocol, storage, and CLI behavior                                           |
+| CLI             | Non-secret profiles, company verification, extension diagnostics, and versioned JSON output                                       |
 
 Python additionally provides a SQLite pairwise-identity reference provider.
 The portable TypeScript entry rejects obvious local and private literal
@@ -190,7 +199,7 @@ surface:
 - Account Token exchange;
 - resource-bound MCP Bearer transport;
 - device and mediated sign-in;
-- conversation event streaming, handoff, and explicit closure;
+- conversation SSE streaming, handoff, and explicit close requests;
 - the Operations client and server;
 - transport-level address pinning to close the DNS-rebinding interval.
 

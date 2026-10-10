@@ -2,6 +2,7 @@
 #
 # BSD 3-Clause License
 
+import httpx
 import pytest
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 
@@ -16,6 +17,7 @@ from personal_agent_protocol import (
     RANDOM_SOURCES,
     SIGNERS,
     TOKEN_STORES,
+    build_pap_reactor,
 )
 from personal_agent_protocol.reactor import first_contribution
 
@@ -97,3 +99,49 @@ def test_required_security_contribution_tracks_plugin_lifecycle(point: object) -
         first_contribution(platform, point, point.id)  # type: ignore[attr-defined]
     platform.enable_plugin("pap-test-0")
     assert first_contribution(platform, point, point.id) is value  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_build_pap_reactor_registers_plugin_inputs_before_use() -> None:
+    signer = object()
+    manifest = PluginManifest(name="pap-test-host-security", version="1")
+
+    async with httpx.AsyncClient() as http:
+        platform, owned_http = build_pap_reactor(
+            http_client=http,
+            plugins=[
+                (
+                    manifest,
+                    ContributionPlugin(SIGNERS, signer, "host-signer"),
+                )
+            ],
+        )
+        try:
+            assert owned_http is None
+            assert first_contribution(platform, SIGNERS, "signer") is signer
+        finally:
+            platform.stop()
+
+
+@pytest.mark.asyncio
+async def test_build_pap_reactor_consumes_plugin_iterables_once() -> None:
+    values = [object(), object()]
+
+    def plugins():
+        for index, value in enumerate(values):
+            yield (
+                PluginManifest(name=f"pap-test-plugin-{index}", version="1"),
+                ContributionPlugin(
+                    KEY_STORES,
+                    value,
+                    f"host-key-store-{index}",
+                ),
+            )
+
+    async with httpx.AsyncClient() as http:
+        platform, _ = build_pap_reactor(http_client=http, plugins=plugins())
+        try:
+            with pytest.raises(RuntimeError, match="ambiguous"):
+                first_contribution(platform, KEY_STORES, "key store")
+        finally:
+            platform.stop()

@@ -27,7 +27,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`BrowserSessionStart`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Safe status after a controlled form POST has started.
 - [`build_browser_assertion_claims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Function. Build unsigned PAP section 5 claims for protected signing.
 - [`build_direct_sign_in_request`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Build a user-browser authorization URL with random state and S256 PKCE.
-- [`build_pap_reactor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. Build a PAP Reactor host and return any HTTP client it owns.
+- [`build_pap_reactor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. Build a PAP Reactor host with plugins and return any HTTP client it owns.
 - [`build_session_assertion_claims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. Build unsigned PAP 4.2 claims; a key-custody provider signs them.
 - [`CACHES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `CACHES` constant.
 - [`ClientMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `ClientMetadata` class.
@@ -39,6 +39,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`ConversationEventPage`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A cursor page returned by a PAP conversation read or waited write.
 - [`ConversationReceipt`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Class. State returned after a message when the caller does not wait for events.
 - [`ConversationResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `ConversationResponse` constant.
+- [`CursorExpiredHandler`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `CursorExpiredHandler` constant.
 - [`DirectSignInCallback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Validated one-time authorization code.
 - [`DirectSignInClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Orchestrate one-use browser authorization and proof-bound code exchange.
 - [`DirectSignInRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Authorization request state that redacts its URL and PKCE values.

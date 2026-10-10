@@ -29,6 +29,7 @@ from .conversations import (
     ConversationClient,
     ConversationReceipt,
     ConversationResponse,
+    CursorExpiredHandler,
     generate_message_id,
 )
 from .crypto import (
@@ -154,6 +155,7 @@ __all__ = [
     "ConversationEventPage",
     "ConversationReceipt",
     "ConversationResponse",
+    "CursorExpiredHandler",
     "DirectSignInCallback",
     "DirectSignInClient",
     "DirectSignInRequest",

@@ -109,3 +109,100 @@ test("surfaces message ID conflicts without response body details", async () => 
   );
   reactor.stop();
 });
+
+test("recovers an expired cursor, drains pages, and suppresses duplicates", async () => {
+  const urls = [];
+  let recovered = 0;
+  const event = (id, text) => ({
+    id,
+    type: "message",
+    created_at: "2026-10-10T12:00:00Z",
+    message: {
+      id: `msg_${id}`,
+      sender: "agent",
+      role: "company",
+      text,
+    },
+  });
+  const fetch = async (input) => {
+    urls.push(input.toString());
+    if (urls.length === 1) {
+      return new Response(JSON.stringify({ error: "cursor_expired" }), {
+        status: 410,
+      });
+    }
+    if (urls.length === 2) {
+      return new Response(
+        JSON.stringify({
+          conversation_id: "cnv_one",
+          events: [event("evt_one", "one"), event("evt_two", "two")],
+          cursor: "evt_two",
+          has_more: true,
+          status: "working",
+          responder: "agent",
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        conversation_id: "cnv_one",
+        events: [event("evt_two", "two"), event("evt_three", "three")],
+        cursor: "evt_three",
+        has_more: false,
+        status: "closed",
+        responder: "agent",
+      }),
+      { status: 200 },
+    );
+  };
+  const { reactor, client } = setup(fetch);
+  const events = [];
+  for await (const item of client.events(
+    "https://api.example/conversations",
+    "cnv_one",
+    {
+      ...request,
+      cursor: "evt_saved",
+      wait: 30,
+      onCursorExpired: () => {
+        recovered += 1;
+      },
+    },
+  )) {
+    events.push(item);
+  }
+  reactor.stop();
+
+  assert.deepEqual(
+    events.map((item) => item.id),
+    ["evt_one", "evt_two", "evt_three"],
+  );
+  assert.equal(recovered, 1);
+  assert.match(urls[0], /cursor=evt_saved&wait=30$/);
+  assert.match(urls[1], /\/events\?wait=30$/);
+  assert.match(urls[2], /cursor=evt_two&wait=0$/);
+});
+
+test("rejects event pages for a different conversation", async () => {
+  const fetch = async () =>
+    new Response(
+      JSON.stringify({
+        conversation_id: "cnv_other",
+        events: [],
+        cursor: "evt_zero",
+        has_more: false,
+        status: "idle",
+        responder: "agent",
+      }),
+      { status: 200 },
+    );
+  const { reactor, client } = setup(fetch);
+  await assert.rejects(
+    client.readEvents("https://api.example/conversations", "cnv_one", request),
+    (error) =>
+      error instanceof ConversationError &&
+      error.code === "conversation_mismatch",
+  );
+  reactor.stop();
+});

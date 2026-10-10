@@ -125,3 +125,125 @@ async def test_surfaces_message_id_conflict_without_response_body() -> None:
 
     assert caught.value.code == "message_id_conflict"
     assert "secret" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_events_recover_cursor_drain_backlog_and_suppress_duplicates() -> None:
+    urls: list[str] = []
+    recovered = 0
+
+    def event(event_id: str, text: str) -> dict[str, object]:
+        return {
+            "id": event_id,
+            "type": "message",
+            "created_at": "2026-10-10T12:00:00Z",
+            "message": {
+                "id": f"msg_{event_id}",
+                "sender": "agent",
+                "role": "company",
+                "text": text,
+            },
+        }
+
+    def company(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        if len(urls) == 1:
+            return httpx.Response(410, json={"error": "cursor_expired"})
+        if len(urls) == 2:
+            return httpx.Response(
+                200,
+                json={
+                    "conversation_id": "cnv_one",
+                    "events": [event("evt_one", "one"), event("evt_two", "two")],
+                    "cursor": "evt_two",
+                    "has_more": True,
+                    "status": "working",
+                    "responder": "agent",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "conversation_id": "cnv_one",
+                "events": [event("evt_two", "two"), event("evt_three", "three")],
+                "cursor": "evt_three",
+                "has_more": False,
+                "status": "closed",
+                "responder": "agent",
+            },
+        )
+
+    async def on_cursor_expired() -> None:
+        nonlocal recovered
+        recovered += 1
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
+        reactor, _ = build_pap_reactor(
+            http_client=http,
+            plugins=[
+                (
+                    PluginManifest(name="conversation-events-test", version="1"),
+                    Plugin(),
+                )
+            ],
+        )
+        client = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+        events = [
+            item
+            async for item in client.events(
+                "https://api.example/conversations",
+                "cnv_one",
+                token=token(),
+                tenant_id="tenant",
+                pairwise_user_id="usr_example",
+                issuer="https://auth.example",
+                cursor="evt_saved",
+                wait=30,
+                on_cursor_expired=on_cursor_expired,
+            )
+        ]
+        reactor.stop()
+
+    assert [item.id for item in events] == ["evt_one", "evt_two", "evt_three"]
+    assert recovered == 1
+    assert urls[0].endswith("?cursor=evt_saved&wait=30")
+    assert urls[1].endswith("/events?wait=30")
+    assert urls[2].endswith("?cursor=evt_two&wait=0")
+
+
+@pytest.mark.asyncio
+async def test_read_events_rejects_conversation_mismatch() -> None:
+    def company(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "conversation_id": "cnv_other",
+                "events": [],
+                "cursor": "evt_zero",
+                "has_more": False,
+                "status": "idle",
+                "responder": "agent",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
+        reactor, _ = build_pap_reactor(
+            http_client=http,
+            plugins=[
+                (
+                    PluginManifest(name="conversation-mismatch-test", version="1"),
+                    Plugin(),
+                )
+            ],
+        )
+        client = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+        with pytest.raises(ConversationError, match="different conversation"):
+            await client.read_events(
+                "https://api.example/conversations",
+                "cnv_one",
+                token=token(),
+                tenant_id="tenant",
+                pairwise_user_id="usr_example",
+                issuer="https://auth.example",
+            )
+        reactor.stop()

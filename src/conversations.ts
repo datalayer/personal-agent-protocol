@@ -5,6 +5,7 @@ import { parseJsonStrict } from "./json.js";
 import {
   parseConversationEventPage,
   parseMessage,
+  type ConversationEvent,
   type ConversationEventPage,
   type ConversationResponder,
   type ConversationStatus,
@@ -36,6 +37,13 @@ export interface ConversationRequestOptions {
 
 export interface StartConversationOptions extends ConversationRequestOptions {
   readonly parentConversationId?: string;
+}
+
+export interface ConversationEventOptions extends ConversationRequestOptions {
+  /** Called before one recovery read from the beginning after cursor expiry. */
+  readonly onCursorExpired?: () => void | Promise<void>;
+  /** Bound retained event IDs used to suppress reconnect duplicates. */
+  readonly maxSeenEventIds?: number;
 }
 
 export interface ConversationClientOptions {
@@ -134,6 +142,111 @@ export class ConversationClient {
     );
   }
 
+  /** Read one ordered page of events after an opaque cursor. */
+  async readEvents(
+    endpoint: string,
+    conversationId: string,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationEventPage> {
+    assertIdentifier(conversationId, "conversation ID");
+    const target = this.#eventTarget(
+      endpoint,
+      conversationId,
+      options.cursor,
+      options.wait,
+    );
+    const response = await this.#transport.request("GET", target, {
+      token: options.token,
+      tenantId: options.tenantId,
+      pairwiseUserId: options.pairwiseUserId,
+      issuer: options.issuer,
+      headers: { Accept: "application/json" },
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    const payload = await this.#responsePayload(response, 200);
+    let page: ConversationEventPage;
+    try {
+      page = parseConversationEventPage(payload);
+    } catch (cause) {
+      throw new ConversationError(
+        "invalid_response",
+        "conversation response was malformed",
+        { cause },
+      );
+    }
+    if (page.conversation_id !== conversationId) {
+      throw new ConversationError(
+        "conversation_mismatch",
+        "conversation event page belongs to a different conversation",
+      );
+    }
+    return page;
+  }
+
+  /** Yield ordered, de-duplicated events until the conversation closes. */
+  async *events(
+    endpoint: string,
+    conversationId: string,
+    options: ConversationEventOptions,
+  ): AsyncGenerator<ConversationEvent> {
+    const {
+      cursor: initialCursor,
+      wait: pollWait,
+      onCursorExpired,
+      maxSeenEventIds,
+      ...requestOptions
+    } = options;
+    const maximum = maxSeenEventIds ?? 10_000;
+    if (!Number.isInteger(maximum) || maximum <= 0) {
+      throw new RangeError("maxSeenEventIds must be positive");
+    }
+    let cursor = initialCursor;
+    let recoveredCursor = false;
+    let drainBacklog = false;
+    const seen = new Set<string>();
+    while (true) {
+      let page: ConversationEventPage;
+      try {
+        page = await this.readEvents(endpoint, conversationId, {
+          ...requestOptions,
+          ...(cursor === undefined ? {} : { cursor }),
+          ...(drainBacklog
+            ? { wait: 0 }
+            : pollWait === undefined
+              ? {}
+              : { wait: pollWait }),
+        });
+      } catch (cause) {
+        if (
+          !(cause instanceof ConversationError) ||
+          cause.code !== "cursor_expired" ||
+          cursor === undefined ||
+          recoveredCursor
+        ) {
+          throw cause;
+        }
+        recoveredCursor = true;
+        cursor = undefined;
+        await onCursorExpired?.();
+        continue;
+      }
+      for (const event of page.events) {
+        if (seen.has(event.id)) continue;
+        if (seen.size >= maximum) {
+          throw new ConversationError(
+            "event_history_too_large",
+            "conversation event de-duplication limit was exceeded",
+          );
+        }
+        seen.add(event.id);
+        yield event;
+      }
+      cursor = page.cursor;
+      if (page.status === "closed" && !page.has_more) return;
+      drainBacklog = page.has_more;
+    }
+  }
+
   #outgoing(message: Message): Message {
     const parsed = parseMessage(message);
     if (parsed.role !== undefined) {
@@ -180,6 +293,45 @@ export class ConversationClient {
       body: JSON.stringify(body),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
+    const payload = await this.#responsePayload(response, expectedStatus);
+    return parseConversationResponse(payload);
+  }
+
+  #eventTarget(
+    endpoint: string,
+    conversationId: string,
+    cursor?: string,
+    wait?: number,
+  ): string {
+    const target = new URL(
+      `${endpoint.replace(/\/$/, "")}/${conversationId}/events`,
+    );
+    if (target.search || target.hash) {
+      throw new ProtocolValidationError(
+        "invalid_endpoint",
+        "conversation endpoint cannot have query or fragment",
+      );
+    }
+    if (cursor !== undefined) {
+      assertIdentifier(cursor, "cursor");
+      target.searchParams.set("cursor", cursor);
+    }
+    if (wait !== undefined) {
+      if (!Number.isInteger(wait) || wait < 0) {
+        throw new ProtocolValidationError(
+          "invalid_wait",
+          "wait must be a non-negative integer",
+        );
+      }
+      target.searchParams.set("wait", String(wait));
+    }
+    return target.toString();
+  }
+
+  async #responsePayload(
+    response: Response,
+    expectedStatus: number,
+  ): Promise<unknown> {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength > this.#maxResponseBytes) {
       throw new ConversationError(
@@ -214,7 +366,7 @@ export class ConversationClient {
         { statusCode: response.status },
       );
     }
-    return parseConversationResponse(payload);
+    return payload;
   }
 }
 

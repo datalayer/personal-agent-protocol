@@ -36,8 +36,10 @@ with `cursor` and `wait`. Authentication remains in `DpopHttpClient` and never
 enters model-visible tool inputs or results.
 
 TypeScript additionally propagates caller-owned `AbortSignal` cancellation.
-Event reading, SSE, handoff, Direct Conversations, authorization changes, and
-closure remain separate milestones.
+Ordered JSON event reads are implemented separately in the
+[conversation events flow](./conversation-events). SSE, handoff, Direct
+Conversations, authorization changes, and active close requests remain
+separate milestones.
 
 Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/conversation-messages).
 See upstream [Conversations](https://personalagentprotocol.org/docs/spec#7-conversations).

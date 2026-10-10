@@ -10,7 +10,7 @@ import asyncio
 import ipaddress
 import secrets
 import socket
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
@@ -309,8 +309,15 @@ def build_pap_reactor(
     http_client: httpx.AsyncClient | None = None,
     address_resolver: AddressResolver = resolve_addresses,
     allow_private_networks: bool = False,
+    plugins: Iterable[tuple[PluginManifest, object]] = (),
 ) -> tuple[PluginPlatform, httpx.AsyncClient | None]:
-    """Build a PAP Reactor host and return any HTTP client it owns."""
+    """Build a PAP Reactor host with plugins and return any HTTP client it owns.
+
+    Plugins use Reactor's native ``(PluginManifest, implementation)`` input so
+    applications can assemble all required PAP contributions before handing
+    the platform to a client. The PAP core is registered first; lower-order
+    plugin contributions can deliberately replace its portable defaults.
+    """
 
     owned_http = http_client is None
     client = http_client or httpx.AsyncClient(timeout=5.0, follow_redirects=False)
@@ -345,6 +352,8 @@ def build_pap_reactor(
             ),
         ),
     )
+    for manifest, implementation in plugins:
+        platform.register_plugin(manifest, implementation)
     return platform, client if owned_http else None
 
 

@@ -14,6 +14,7 @@ export {
   ConversationClient,
   generateMessageId,
   type ConversationClientOptions,
+  type ConversationEventOptions,
   type ConversationReceipt,
   type ConversationRequestOptions,
   type ConversationResponse,

@@ -6,17 +6,20 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import re
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Literal, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
+import httpx
 from pydantic import Field
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import ConversationError, ProtocolValidationError
 from .json import loads_strict
-from .models import ConversationEventPage, Message, ProtocolModel
+from .models import ConversationEvent, ConversationEventPage, Message, ProtocolModel
 from .reactor import RANDOM_SOURCES, RandomSource, first_contribution
 from .sessions import SessionToken
 from .transport import DpopHttpClient
@@ -31,6 +34,7 @@ class ConversationReceipt(ProtocolModel):
 
 
 ConversationResponse = ConversationReceipt | ConversationEventPage
+CursorExpiredHandler = Callable[[], Awaitable[None] | None]
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
 
@@ -113,6 +117,111 @@ class ConversationClient:
             wait=wait,
         )
 
+    async def read_events(
+        self,
+        endpoint: str,
+        conversation_id: str,
+        *,
+        token: SessionToken,
+        tenant_id: str,
+        pairwise_user_id: str,
+        issuer: str,
+        cursor: str | None = None,
+        wait: int | None = None,
+    ) -> ConversationEventPage:
+        """Read one ordered page of events after an opaque cursor."""
+
+        self._identifier(conversation_id, "conversation ID")
+        target = self._query(
+            f"{endpoint.rstrip('/')}/{conversation_id}/events",
+            cursor=cursor,
+            wait=wait,
+        )
+        response = await self.transport.request(
+            "GET",
+            target,
+            token=token,
+            tenant_id=tenant_id,
+            pairwise_user_id=pairwise_user_id,
+            issuer=issuer,
+            headers={"Accept": "application/json"},
+        )
+        page = self._parse_page(response, expected_status=200)
+        if page.conversation_id != conversation_id:
+            raise ConversationError(
+                "conversation_mismatch",
+                "conversation event page belongs to a different conversation",
+            )
+        return page
+
+    async def events(  # noqa: C901 - protocol recovery is one ordered state machine
+        self,
+        endpoint: str,
+        conversation_id: str,
+        *,
+        token: SessionToken,
+        tenant_id: str,
+        pairwise_user_id: str,
+        issuer: str,
+        cursor: str | None = None,
+        wait: int = 30,
+        on_cursor_expired: CursorExpiredHandler | None = None,
+        max_seen_event_ids: int = 10_000,
+    ) -> AsyncIterator[ConversationEvent]:
+        """Yield ordered, de-duplicated events until the conversation closes.
+
+        ``has_more`` pages are drained immediately. Long polls use ``wait``.
+        If a saved cursor expired, the iterator notifies the host, restarts
+        from the beginning once, and retains seen IDs so replayed events are
+        not delivered twice.
+        """
+
+        if max_seen_event_ids <= 0:
+            raise ValueError("max_seen_event_ids must be positive")
+        current_cursor = cursor
+        seen: set[str] = set()
+        recovered_cursor = False
+        drain_backlog = False
+        while True:
+            try:
+                page = await self.read_events(
+                    endpoint,
+                    conversation_id,
+                    token=token,
+                    tenant_id=tenant_id,
+                    pairwise_user_id=pairwise_user_id,
+                    issuer=issuer,
+                    cursor=current_cursor,
+                    wait=0 if drain_backlog else wait,
+                )
+            except ConversationError as exc:
+                if exc.code != "cursor_expired" or current_cursor is None or recovered_cursor:
+                    raise
+                recovered_cursor = True
+                current_cursor = None
+                if on_cursor_expired is not None:
+                    result = on_cursor_expired()
+                    if inspect.isawaitable(result):
+                        await result
+                continue
+
+            for event in page.events:
+                if event.id in seen:
+                    continue
+                if len(seen) >= max_seen_event_ids:
+                    raise ConversationError(
+                        "event_history_too_large",
+                        "conversation event de-duplication limit was exceeded",
+                    )
+                seen.add(event.id)
+                yield event
+            current_cursor = page.cursor
+            if page.status == "closed" and not page.has_more:
+                return
+            # A backlog must be drained immediately rather than held by a new
+            # long poll. Once drained, return to the caller's requested wait.
+            drain_backlog = page.has_more
+
     async def _send(
         self,
         url: str,
@@ -137,14 +246,7 @@ class ConversationClient:
             headers={"Content-Type": "application/json"},
             content=json.dumps(body, separators=(",", ":")).encode(),
         )
-        if len(response.content) > self.max_response_bytes:
-            raise ConversationError("response_too_large", "conversation response exceeded limit")
-        try:
-            payload = loads_strict(response.content)
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise ConversationError(
-                "invalid_response", "conversation returned invalid JSON"
-            ) from exc
+        payload = self._parse_payload(response)
         if response.status_code != expected_status:
             code = payload.get("error") if isinstance(payload, dict) else None
             raise ConversationError(
@@ -156,6 +258,35 @@ class ConversationClient:
             if isinstance(payload, dict) and "events" in payload:
                 return ConversationEventPage.model_validate(payload)
             return ConversationReceipt.model_validate(payload)
+        except ValueError as exc:
+            raise ConversationError(
+                "invalid_response", "conversation response was malformed"
+            ) from exc
+
+    def _parse_payload(self, response: httpx.Response) -> object:
+        content = response.content
+        if len(content) > self.max_response_bytes:
+            raise ConversationError("response_too_large", "conversation response exceeded limit")
+        try:
+            return loads_strict(content)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ConversationError(
+                "invalid_response", "conversation returned invalid JSON"
+            ) from exc
+
+    def _parse_page(
+        self, response: httpx.Response, *, expected_status: int
+    ) -> ConversationEventPage:
+        payload = self._parse_payload(response)
+        if response.status_code != expected_status:
+            code = payload.get("error") if isinstance(payload, dict) else None
+            raise ConversationError(
+                code if isinstance(code, str) else "conversation_request_failed",
+                "conversation request was rejected",
+                status_code=response.status_code,
+            )
+        try:
+            return ConversationEventPage.model_validate(payload)
         except ValueError as exc:
             raise ConversationError(
                 "invalid_response", "conversation response was malformed"

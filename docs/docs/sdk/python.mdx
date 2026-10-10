@@ -184,10 +184,10 @@ payload: messages, state changes, authorization requests, user requests, and
 Direct Conversation links. Operations validate the exact confirmed revision,
 timezone-bearing timestamps, proposed expiry, and final result presence.
 
-`ConversationClient` implements message creation and continuation. Cursor
-persistence, event reading/streaming, approval capture, confirmation, and
-recovery remain the caller's responsibility until their SDK services are
-implemented.
+`ConversationClient` implements message creation, continuation, one-page event
+reads, and a de-duplicating long-poll iterator with cursor-expiry recovery.
+Durable cursor persistence, SSE streaming, approval capture, confirmation, and
+advanced lifecycle actions remain the caller's responsibility.
 
 ## Errors
 

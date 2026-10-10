@@ -24,9 +24,10 @@ Direct Sign-In primitives and one-use browser/proof-bound exchange
 orchestration work in both SDKs. Signed-out session
 start and renewal work when the host supplies secure signing and DPoP
 providers. Browser Session form-post handoff and company-side assertion
-verification are also implemented. Conversation creation and continuation work
-in both SDKs. Local JOSE providers are available; managed key custody, Account
-Token lifecycle, company services, conversation events, and Operations are not ready.
+verification are also implemented. Conversation creation, continuation, and
+ordered JSON event reads work in both SDKs. Local JOSE providers are available;
+managed key custody, Account Token lifecycle, company services, conversation
+SSE, and Operations are not ready.
 
 :::
 
@@ -68,7 +69,8 @@ The current `0.3.x` preview line includes:
 - shared fixtures and cross-language validation tests.
 
 Managed key custody, durable replay storage, device and mediated sign-in,
-conversation events/streaming, Operations v1, and company/server adapters
+conversation SSE and advanced lifecycle actions, Operations v1, and
+company/server adapters
 remain under active development.
 Pages label planned surfaces rather than presenting them as released behavior.
 
@@ -100,7 +102,7 @@ sequenceDiagram
 The SDKs will support both sides of PAP:
 
 1. A **personal agent client** discovers and works with companies for one user.
-2. A **company implementation** publishes discovery, issues sessions, and
+1. A **company implementation** publishes discovery, issues sessions, and
    exposes APIs or a company agent.
 
 The current executable vertical slice covers personal-agent discovery and

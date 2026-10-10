@@ -4,6 +4,12 @@ title: Signed-out sessions
 
 # Start and renew signed-out sessions
 
+The runnable
+[`session-lifecycle` Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/session-lifecycle)
+drives the real `SessionClient` through start, one DPoP nonce retry, and
+renewal over a deterministic local HTTP transport. It returns only lifecycle
+evidence to the model; identifiers and credentials remain inside the host.
+
 The Python and TypeScript `SessionClient` implementations cover the PAP 4.2
 personal-agent side of signed-out session creation and renewal. They send the
 JWT bearer grant to the company's token endpoint and return an opaque,

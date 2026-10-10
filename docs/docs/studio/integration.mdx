@@ -92,6 +92,15 @@ nonce, identifier, or JWK in React state. Studio can reuse that portable
 creation pattern, while the authorization gateway alone imports `./server`
 for signature and durable replay verification.
 
+The paired Session lifecycle examples extend this into the authorization
+gateway contract. Studio supplies only opaque tenant, user, and company
+references; the gateway resolves the stable pairwise subject, signer, DPoP
+provider, and token endpoint, then calls `SessionClient.start` or `renew`.
+Nonce retry and credential replacement stay inside that request. Canvas and
+the model receive only lifecycle status, granted scope names, and an opaque
+Session reference—not the pairwise subject, Session ID, assertions, proofs,
+nonces, or token response.
+
 The SDK now supplies safe discovery, client/JWKS retrieval, and Direct Sign-In
 orchestration in Python and TypeScript, plus a DNS-aware Node policy. Datalayer
 integration still owns the durable cache, connected-address

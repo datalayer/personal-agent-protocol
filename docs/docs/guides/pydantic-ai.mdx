@@ -17,6 +17,7 @@ feature as a Pydantic AI tool:
 | `session-assertion`       | Pairwise subject, audience, lifetime and unique request ID | Assertion policy; identifiers withheld |
 | `direct-sign-in-boundary` | Random state, S256 PKCE and browser handoff                | Scopes and security properties only    |
 | `dpop-proof`              | Method, URL, token, nonce and replay binding               | Verification policy; secrets withheld  |
+| `session-lifecycle`       | Start, DPoP nonce retry, and renewal over HTTP             | Lifecycle evidence; secrets withheld   |
 
 Install the example dependency and run one agent:
 

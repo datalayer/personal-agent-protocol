@@ -16,6 +16,7 @@ Each example covers exactly one feature and makes its trust boundary visible.
 | `session-assertion`       | Pairwise subject, audience, lifetime, and unique request ID       | Assertion policy; identifiers withheld   |
 | `direct-sign-in-boundary` | Random state, S256 PKCE, exact scopes, browser handoff            | Requested scopes and security properties |
 | `dpop-proof`              | Method, URL, access-token, nonce, and replay binding              | Verified policy; proof material withheld |
+| `session-lifecycle`       | Signed-out start, DPoP nonce retry, and renewal over HTTP         | Lifecycle evidence; credentials withheld |
 
 Agent Runtimes now depends on PAP in both Python and TypeScript. Its
 `PapPersonalAgentCapability` uses `DiscoveryClient` and `AgentIdentityClient`
@@ -38,6 +39,12 @@ gallery view uses non-exportable Web Crypto key material to create fresh
 device-side proofs but stores only boolean policy evidence in React state.
 Server-side signature and replay verification remains behind PAP's `./server`
 entry and is never bundled into that browser view.
+
+The `session-lifecycle` Loop application and Reactor gallery view drive the
+real `SessionClient` against a deterministic local company transport. They
+prove that nonce retry creates fresh assertions and proof material, and that
+renewal is bound to the existing Session ID. Only status, scopes, and boolean
+safety evidence cross into the agent or React state.
 
 ## Run the example
 

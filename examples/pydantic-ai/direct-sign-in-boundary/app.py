@@ -8,11 +8,34 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic_ai import Agent
 
 from personal_agent_protocol import build_direct_sign_in_request
+
+
+@dataclass(frozen=True)
+class DirectSignInHostConfig:
+    """Trusted registration and discovery values that never enter tool input."""
+
+    authorization_endpoint: str
+    issuer: str
+    client_id: str
+    redirect_uri: str
+    scopes: tuple[str, ...]
+
+
+HOST_CONFIG = DirectSignInHostConfig(
+    authorization_endpoint=os.getenv(
+        "PAP_AUTHORIZATION_ENDPOINT", "https://shop.example/oauth/authorize"
+    ),
+    issuer=os.getenv("PAP_COMPANY_ISSUER", "https://shop.example"),
+    client_id=os.getenv("PAP_CLIENT_ID", "https://assistant.example/agent.json"),
+    redirect_uri=os.getenv("PAP_REDIRECT_URI", "https://assistant.example/oauth/callback"),
+    scopes=tuple(os.getenv("PAP_SCOPES", "poppy:read").split()),
+)
 
 agent = Agent(
     instructions=(
@@ -23,21 +46,15 @@ agent = Agent(
 
 
 @agent.tool_plain
-def explain_direct_sign_in(
-    authorization_endpoint: str,
-    issuer: str,
-    client_id: str,
-    redirect_uri: str,
-    scopes: list[str],
-) -> dict[str, Any]:
+def explain_direct_sign_in() -> dict[str, Any]:
     """Create protected authorization material and return safe policy only."""
 
     request = build_direct_sign_in_request(
-        authorization_endpoint=authorization_endpoint,
-        issuer=issuer,
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        scopes=scopes,
+        authorization_endpoint=HOST_CONFIG.authorization_endpoint,
+        issuer=HOST_CONFIG.issuer,
+        client_id=HOST_CONFIG.client_id,
+        redirect_uri=HOST_CONFIG.redirect_uri,
+        scopes=HOST_CONFIG.scopes,
     )
     return {
         "requested_scopes": request.scopes,
@@ -54,9 +71,7 @@ async def main() -> None:
     """Run one didactic Direct Sign-In boundary conversation."""
 
     result = await agent.run(
-        "Explain Direct Sign-In for https://assistant.example/agent.json against "
-        "https://shop.example/oauth/authorize, redirecting to "
-        "https://assistant.example/callback with poppy:read scope.",
+        "Explain how this host performs PAP Direct Sign-In safely.",
         model=os.getenv("PAP_EXAMPLE_MODEL", "openai:gpt-4o-mini"),
     )
     sys.stdout.write(f"{result.output}\n")

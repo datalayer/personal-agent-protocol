@@ -7,7 +7,6 @@ on:
       - 'packages/typescript/**'
       - 'protocol/fixtures/**'
       - 'package.json'
-      - 'package-lock.json'
       - '.github/workflows/typescript.yaml'
   pull_request:
     branches: [main, develop]
@@ -15,7 +14,6 @@ on:
       - 'packages/typescript/**'
       - 'protocol/fixtures/**'
       - 'package.json'
-      - 'package-lock.json'
       - '.github/workflows/typescript.yaml'
   workflow_dispatch:
 
@@ -27,7 +25,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
+      - run: npm install --no-package-lock
       - run: npm run typecheck
       - run: npm test

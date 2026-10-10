@@ -77,6 +77,14 @@ audit summaries, and availability controls. This split keeps reusable PAP
 validation in the SDK while deployment-specific network authority remains in
 the backend.
 
+Generated Python and TypeScript API inventories now define the supported SDK
+boundary and are checked for drift in documentation CI. Datalayer backend and
+Studio packages should import only those public symbols. Node services import
+network-only policy from the explicit `./server` subpath; browser and Canvas
+bundles stay on the portable entry. This prevents product integration from
+quietly depending on SDK internals that can change without a compatibility
+commitment.
+
 ## Appspec shape
 
 The Spec, Canvas, and Python editors will round-trip one credential-free model:

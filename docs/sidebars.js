@@ -36,7 +36,12 @@ const sidebars = {
       type: 'category',
       label: 'SDKs',
       collapsed: false,
-      items: ['sdk/python', 'sdk/typescript'],
+      items: [
+        'sdk/python',
+        'sdk/python-api',
+        'sdk/typescript',
+        'sdk/typescript-api',
+      ],
     },
     {
       type: 'category',

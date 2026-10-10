@@ -39,6 +39,8 @@ The first implemented slice provides:
 - DPoP-aware API and conversation transport with host-owned authorization
   headers, one nonce retry, fresh redirect-bound proofs, and cross-origin
   credential isolation in both SDKs;
+- conversation creation and continuation with cryptographically random,
+  user-global message IDs and safe retry/error semantics in both SDKs;
 - duplicate JSON member rejection at Python and TypeScript trust boundaries;
 - a Reactor-extensible `pap` CLI with non-secret profiles, verified company
   discovery, extension diagnostics, versioned JSON, and a safe live-session
@@ -46,8 +48,9 @@ The first implemented slice provides:
 - one shared set of fixtures exercised by both SDKs.
 
 Managed key custody and durable replay storage, Account Token exchange,
-resource-bound MCP Bearer transport, device/mediated sign-in, conversations,
-and the Operations client/server are not implemented yet.
+resource-bound MCP Bearer transport, device/mediated sign-in, conversation
+event streaming/handoff/closure, and the Operations client/server are not
+implemented yet.
 Direct Sign-In requires host-provided authorization-state, browser, signer, and
 DPoP contributions; the SDK does not open a browser or persist state through an
 implicit global service.

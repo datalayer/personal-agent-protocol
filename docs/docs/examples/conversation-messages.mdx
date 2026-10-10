@@ -28,12 +28,14 @@ sequenceDiagram
   H-->>A: Safe conversation result
 ```
 
-`ConversationClient` validates opaque IDs, supports `text`, `data`, and
+Python and TypeScript both expose `ConversationClient`. It validates opaque
+IDs, supports `text`, `data`, and
 `context`, bounds response bodies, rejects duplicate JSON members, surfaces
 company error codes without including response bodies, and can request replies
 with `cursor` and `wait`. Authentication remains in `DpopHttpClient` and never
 enters model-visible tool inputs or results.
 
+TypeScript additionally propagates caller-owned `AbortSignal` cancellation.
 Event reading, SSE, handoff, Direct Conversations, authorization changes, and
 closure remain separate milestones.
 

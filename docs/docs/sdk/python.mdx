@@ -184,9 +184,10 @@ payload: messages, state changes, authorization requests, user requests, and
 Direct Conversation links. Operations validate the exact confirmed revision,
 timezone-bearing timestamps, proposed expiry, and final result presence.
 
-These are wire models, not transport clients. Message idempotency, cursor
-persistence, streaming, approval capture, confirmation, and recovery remain
-the caller's responsibility until their SDK services are implemented.
+`ConversationClient` implements message creation and continuation. Cursor
+persistence, event reading/streaming, approval capture, confirmation, and
+recovery remain the caller's responsibility until their SDK services are
+implemented.
 
 ## Errors
 

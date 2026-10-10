@@ -116,3 +116,14 @@ export class TransportError extends PersonalAgentProtocolError {
     this.name = "TransportError";
   }
 }
+
+export class ConversationError extends PersonalAgentProtocolError {
+  constructor(
+    code: string,
+    message: string,
+    options: { statusCode?: number; cause?: unknown } = {},
+  ) {
+    super(code, message, options);
+    this.name = "ConversationError";
+  }
+}

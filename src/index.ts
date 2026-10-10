@@ -1,6 +1,7 @@
 export {
   AuthorizationError,
   BrowserSessionError,
+  ConversationError,
   DiscoveryError,
   IdentityError,
   PersonalAgentProtocolError,
@@ -9,6 +10,15 @@ export {
   SessionError,
   TransportError,
 } from "./errors.js";
+export {
+  ConversationClient,
+  generateMessageId,
+  type ConversationClientOptions,
+  type ConversationReceipt,
+  type ConversationRequestOptions,
+  type ConversationResponse,
+  type StartConversationOptions,
+} from "./conversations.js";
 export {
   DpopFetchClient,
   type DpopFetchClientOptions,

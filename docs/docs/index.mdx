@@ -24,22 +24,23 @@ Direct Sign-In primitives and one-use browser/proof-bound exchange
 orchestration work in both SDKs. Signed-out session
 start and renewal work when the host supplies secure signing and DPoP
 providers. Browser Session form-post handoff and company-side assertion
-verification are also implemented. Local JOSE providers are available; managed key custody, Account
-Token lifecycle, company services, conversations, and Operations are not ready.
+verification are also implemented. Conversation creation and continuation work
+in both SDKs. Local JOSE providers are available; managed key custody, Account
+Token lifecycle, company services, conversation events, and Operations are not ready.
 
 :::
 
 ## Pick your role
 
-| I am building… | Start here |
-| --- | --- |
-| A personal agent that connects to companies | [Personal-agent guide](/guides/personal-agent/) |
-| A company endpoint for personal agents | [Company guide](/guides/company/) |
-| A platform integration or PAP capability | [Extensions guide](/guides/extensions/) |
-| A terminal or third-party command extension | [`pap` CLI guide](/guides/cli/) |
-| By following end-to-end feature flows | [Example flows](/examples/) |
-| Against one of the SDKs | [Python](/sdk/python/) · [TypeScript](/sdk/typescript/) |
-| Datalayer Studio integration | [Studio integration](/studio/integration/) |
+| I am building…                              | Start here                                              |
+| ------------------------------------------- | ------------------------------------------------------- |
+| A personal agent that connects to companies | [Personal-agent guide](/guides/personal-agent/)         |
+| A company endpoint for personal agents      | [Company guide](/guides/company/)                       |
+| A platform integration or PAP capability    | [Extensions guide](/guides/extensions/)                 |
+| A terminal or third-party command extension | [`pap` CLI guide](/guides/cli/)                         |
+| By following end-to-end feature flows       | [Example flows](/examples/)                             |
+| Against one of the SDKs                     | [Python](/sdk/python/) · [TypeScript](/sdk/typescript/) |
+| Datalayer Studio integration                | [Studio integration](/studio/integration/)              |
 
 ## What is available
 
@@ -59,13 +60,16 @@ The current `0.3.x` preview line includes:
 - Direct Sign-In state, S256 PKCE, callback, exchange-grant, and
   browser/exchange orchestration in both SDKs;
 - Browser Session assertion, controlled form POST, and replay-safe company
-  verification in both SDKs; and
+  verification in both SDKs;
+- DPoP-aware conversation creation and continuation with user-global
+  idempotent message IDs in both SDKs;
 - a Reactor-extensible `pap` CLI for non-secret profiles, verified discovery,
   and extension diagnostics; and
 - shared fixtures and cross-language validation tests.
 
-Managed key custody, durable replay storage, sign-in flows, conversations,
-Operations v1, and company/server adapters remain under active development.
+Managed key custody, durable replay storage, device and mediated sign-in,
+conversation events/streaming, Operations v1, and company/server adapters
+remain under active development.
 Pages label planned surfaces rather than presenting them as released behavior.
 
 ## The interaction at a glance

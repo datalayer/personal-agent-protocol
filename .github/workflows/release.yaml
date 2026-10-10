@@ -91,7 +91,7 @@ jobs:
         if: steps.plan.outputs.typescript != ''
         run: |
           set -euo pipefail
-          npm ci
+          npm install --no-package-lock
           npm test
           mkdir -p npm-dist
           npm pack ./packages/typescript --pack-destination npm-dist

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from agent_runtimes.loop.apps.build import build
@@ -30,7 +31,9 @@ def main() -> int:
             if key in tool_names:
                 raise RuntimeError(f"Duplicate example tool: {app_id}/{tool.name}")
             tool_names.add(key)
-        print(f"{path.relative_to(ROOT)}: {app_id} ({len(built.application.spec.tools)} tool)")
+        sys.stdout.write(
+            f"{path.relative_to(ROOT)}: {app_id} " f"({len(built.application.spec.tools)} tool)\n"
+        )
     return 0
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_runtimes.loop.apps import Application
+
 from personal_agent_protocol import build_direct_sign_in_request
 
 app = Application(

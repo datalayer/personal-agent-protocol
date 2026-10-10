@@ -7,8 +7,8 @@ import {
   JoseDpopProofProvider,
   ProofError,
   SecretValue,
-} from "../lib/index.js";
-import { JoseSigner, verifyDpopProof } from "../lib/server.js";
+} from "../../lib/index.js";
+import { JoseSigner, verifyDpopProof } from "../../lib/server.js";
 
 const now = new Date("2026-10-10T12:00:00Z");
 

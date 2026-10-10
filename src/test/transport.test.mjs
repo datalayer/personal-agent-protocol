@@ -7,7 +7,7 @@ import {
   SecretValue,
   TransportError,
   buildPapReactor,
-} from "../lib/index.js";
+} from "../../lib/index.js";
 
 const token = {
   accessToken: new SecretValue("session-secret"),

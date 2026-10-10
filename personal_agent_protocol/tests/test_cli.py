@@ -210,7 +210,7 @@ def test_namespaced_session_command_follows_plugin_lifecycle(tmp_path: Path) -> 
 
 
 def test_distribution_declares_console_script_and_reactor_entry_point() -> None:
-    project = (Path(__file__).parents[1] / "pyproject.toml").read_text()
+    project = (Path(__file__).parents[2] / "pyproject.toml").read_text()
 
     assert '[project.scripts]\npap = "personal_agent_protocol.cli:main"' in project
     assert '[project.entry-points."datalayer.reactor.cli"]' in project

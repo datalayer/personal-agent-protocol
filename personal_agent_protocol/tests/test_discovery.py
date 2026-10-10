@@ -17,7 +17,7 @@ from personal_agent_protocol import (
 )
 from personal_agent_protocol.reactor import DiscoveryResponse
 
-FIXTURES = Path(__file__).parents[1] / "protocol" / "fixtures"
+FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
 
 
 async def public_resolver(_: str) -> list[str]:

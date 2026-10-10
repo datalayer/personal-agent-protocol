@@ -8,7 +8,7 @@ import {
   SessionError,
   Signers,
   buildPapReactor,
-} from "../lib/index.js";
+} from "../../lib/index.js";
 
 const tokenResponse = {
   access_token: "opaque-session-token",

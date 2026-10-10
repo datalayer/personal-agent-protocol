@@ -12,7 +12,7 @@ import {
   buildPapReactor,
   buildDirectSignInRequest,
   validateDirectSignInCallback,
-} from "../lib/index.js";
+} from "../../lib/index.js";
 
 const fixedRandom = (length) => Uint8Array.from({ length }, (_, index) => index);
 

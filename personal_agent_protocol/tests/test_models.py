@@ -18,7 +18,7 @@ from personal_agent_protocol.models import (
     Operation,
 )
 
-FIXTURES = Path(__file__).parents[1] / "protocol" / "fixtures"
+FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
 
 
 def test_discovery_fixture_round_trips_and_preserves_extensions() -> None:

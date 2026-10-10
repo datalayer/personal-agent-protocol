@@ -15,7 +15,7 @@ import {
   resolvePairwiseUserId,
   buildPapReactor,
   firstContribution,
-} from "../lib/index.js";
+} from "../../lib/index.js";
 
 const securityPoints = [
   AuthorizationStateStores,

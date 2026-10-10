@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { DiscoveryError } from "../lib/index.js";
-import { NodeUrlSafetyPolicy, isPublicIpAddress } from "../lib/server.js";
+import { DiscoveryError } from "../../lib/index.js";
+import { NodeUrlSafetyPolicy, isPublicIpAddress } from "../../lib/server.js";
 
 test("classifies public and non-public IP address ranges", () => {
   assert.equal(isPublicIpAddress("93.184.216.34"), true);
@@ -57,7 +57,7 @@ test("rejects private literals before DNS and permits explicit private deploymen
 });
 
 test("keeps server security APIs out of the portable entry bundle", async () => {
-  const bundle = await readFile(new URL("../lib/index.js", import.meta.url), "utf8");
+  const bundle = await readFile(new URL("../../lib/index.js", import.meta.url), "utf8");
   assert.equal(bundle.includes("node:dns"), false);
   assert.equal(bundle.includes("NodeUrlSafetyPolicy"), false);
   assert.equal(bundle.includes("JoseSigner"), false);

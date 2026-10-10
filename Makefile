@@ -28,7 +28,7 @@ build:
 	python -m build .
 
 test: ## Run tests
-	python -m pytest tests/ -v
+	python -m pytest personal_agent_protocol/tests/ -v
 
 clean: ## clean
 	git clean -fdx

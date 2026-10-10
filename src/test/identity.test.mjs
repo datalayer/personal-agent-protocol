@@ -6,12 +6,12 @@ import {
   AgentIdentityClient,
   IdentityError,
   ProtocolValidationError,
-} from "../lib/index.js";
+} from "../../lib/index.js";
 
 const clientId = "https://agent.example/agent.json";
 const fixture = async (name) =>
   JSON.parse(
-    await readFile(new URL(`../protocol/fixtures/${name}`, import.meta.url), "utf8"),
+    await readFile(new URL(`../../protocol/fixtures/${name}`, import.meta.url), "utf8"),
   );
 
 test("fetches and binds client metadata and public JWKS", async () => {

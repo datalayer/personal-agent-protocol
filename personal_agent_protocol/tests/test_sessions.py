@@ -27,7 +27,7 @@ from personal_agent_protocol import (
 )
 from personal_agent_protocol.reactor import build_pap_reactor
 
-FIXTURES = Path(__file__).parents[1] / "protocol" / "fixtures"
+FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
 
 
 def fixed_random(length: int) -> bytes:

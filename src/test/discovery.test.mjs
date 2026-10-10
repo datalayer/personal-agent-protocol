@@ -21,11 +21,11 @@ import {
   parseMessage,
   parseOperation,
   parseSessionToken,
-} from "../lib/index.js";
+} from "../../lib/index.js";
 
 const fixture = async (name) =>
   JSON.parse(
-    await readFile(new URL(`../protocol/fixtures/${name}`, import.meta.url), "utf8"),
+    await readFile(new URL(`../../protocol/fixtures/${name}`, import.meta.url), "utf8"),
   );
 
 test("parses the shared discovery fixture and preserves extension fields", async () => {

@@ -12,8 +12,8 @@ import {
   Signers,
   buildBrowserAssertionClaims,
   buildPapReactor,
-} from "../lib/index.js";
-import { JoseSigner, verifyBrowserAssertion } from "../lib/server.js";
+} from "../../lib/index.js";
+import { JoseSigner, verifyBrowserAssertion } from "../../lib/server.js";
 
 const now = new Date("2026-10-10T12:00:00Z");
 const fixedRandom = length => Uint8Array.from({ length }, (_, index) => index);

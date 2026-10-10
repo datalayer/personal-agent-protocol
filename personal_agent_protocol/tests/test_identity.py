@@ -14,7 +14,7 @@ from personal_agent_protocol import (
     ProtocolValidationError,
 )
 
-FIXTURES = Path(__file__).parents[1] / "protocol" / "fixtures"
+FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
 CLIENT_ID = "https://agent.example/agent.json"
 
 

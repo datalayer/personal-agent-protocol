@@ -71,6 +71,11 @@ export interface PairwiseUserIdStore {
   }): Promise<string>;
 }
 
+export interface AuthorizationStateStore {
+  put(reference: string, value: unknown, options: { readonly expiresAt: Date }): Promise<void>;
+  take(reference: string): Promise<unknown | undefined>;
+}
+
 export interface ProtocolCache {
   put(key: string, value: unknown, options: { readonly expiresAt: Date }): Promise<void>;
   get(key: string): Promise<unknown | undefined>;
@@ -114,6 +119,9 @@ export const KeyStores = defineContributionPoint<KeyStore>("pap.keyStore");
 export const TokenStores = defineContributionPoint<TokenStore>("pap.tokenStore");
 export const PairwiseUserIdStores = defineContributionPoint<PairwiseUserIdStore>(
   "pap.pairwiseUserIdStore",
+);
+export const AuthorizationStateStores = defineContributionPoint<AuthorizationStateStore>(
+  "pap.authorizationStateStore",
 );
 export const Caches = defineContributionPoint<ProtocolCache>("pap.cache");
 export const BrowserHandoffs = defineContributionPoint<BrowserHandoff>(
@@ -179,6 +187,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       KeyStores,
       TokenStores,
       PairwiseUserIdStores,
+      AuthorizationStateStores,
       Caches,
       BrowserHandoffs,
       DpopProofProviders,

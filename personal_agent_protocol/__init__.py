@@ -8,7 +8,10 @@ from .__version__ import __version__
 from .auth import (
     AuthorizationCodeGrant,
     DirectSignInCallback,
+    DirectSignInClient,
     DirectSignInRequest,
+    DirectSignInResult,
+    DirectSignInStart,
     build_direct_sign_in_request,
     validate_direct_sign_in_callback,
 )
@@ -48,6 +51,7 @@ from .models import (
 )
 from .pairwise import SqlitePairwiseUserIdStore, resolve_pairwise_user_id
 from .reactor import (
+    AUTHORIZATION_STATE_STORES,
     BROWSER_HANDOFFS,
     CACHES,
     CLOCKS,
@@ -61,6 +65,7 @@ from .reactor import (
     SIGNERS,
     TOKEN_STORES,
     URL_SAFETY_POLICIES,
+    AuthorizationStateStore,
     BrowserHandoff,
     Clock,
     DpopProofProvider,
@@ -90,6 +95,7 @@ from .sessions import (
 )
 
 __all__ = [
+    "AUTHORIZATION_STATE_STORES",
     "BROWSER_HANDOFFS",
     "CACHES",
     "CLOCKS",
@@ -108,13 +114,17 @@ __all__ = [
     "AgentIdentityClient",
     "AuthorizationCodeGrant",
     "AuthorizationError",
+    "AuthorizationStateStore",
     "BrowserHandoff",
     "ClientMetadata",
     "Clock",
     "ConversationEvent",
     "ConversationEventPage",
     "DirectSignInCallback",
+    "DirectSignInClient",
     "DirectSignInRequest",
+    "DirectSignInResult",
+    "DirectSignInStart",
     "DiscoveredCompany",
     "DiscoveryClient",
     "DiscoveryDocument",

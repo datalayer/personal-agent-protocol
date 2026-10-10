@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AuthorizationStateStores,
   BrowserHandoffs,
   Caches,
   Clocks,
@@ -17,6 +18,7 @@ import {
 } from "../lib/index.js";
 
 const securityPoints = [
+  AuthorizationStateStores,
   Signers,
   KeyStores,
   TokenStores,
@@ -32,6 +34,7 @@ const plugin = (name, point, value, id = name) => ({
 });
 
 test("exports aligned infrastructure point IDs and secure defaults", () => {
+  assert.equal(AuthorizationStateStores.id, "pap.authorizationStateStore");
   assert.equal(Clocks.id, "pap.clock");
   assert.equal(RandomSources.id, "pap.randomSource");
   assert.equal(Signers.id, "pap.signer");

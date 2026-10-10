@@ -11,8 +11,10 @@ Unknown or internal symbols are deliberately excluded.
 
 - [`__version__`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/__version__.py) — Constant. Public `__version__` constant.
 - [`AgentIdentityClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/identity.py) — Class. Fetch and verify a personal agent's public identity documents.
+- [`AUTHORIZATION_STATE_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `AUTHORIZATION_STATE_STORES` constant.
 - [`AuthorizationCodeGrant`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Redacted PAP authorization-code exchange values.
 - [`AuthorizationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. An authorization flow failed without exposing callback secrets.
+- [`AuthorizationStateStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist and atomically consume short-lived authorization state.
 - [`BROWSER_HANDOFFS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `BROWSER_HANDOFFS` constant.
 - [`BrowserHandoff`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Hand a human-only authorization URL to a trusted browser surface.
 - [`build_direct_sign_in_request`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Build a user-browser authorization URL with random state and S256 PKCE.
@@ -25,7 +27,10 @@ Unknown or internal symbols are deliberately excluded.
 - [`ConversationEvent`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. One ordered PAP conversation event, including unknown future types.
 - [`ConversationEventPage`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A cursor page returned by a PAP conversation read or waited write.
 - [`DirectSignInCallback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Validated one-time authorization code.
+- [`DirectSignInClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Orchestrate one-use browser authorization and proof-bound code exchange.
 - [`DirectSignInRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Authorization request state that redacts its URL and PKCE values.
+- [`DirectSignInResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Signed-in Session plus any scopes the company did not grant.
+- [`DirectSignInStart`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Non-secret status returned after handing authorization to the user.
 - [`DiscoveredCompany`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `DiscoveredCompany` class.
 - [`DISCOVERY_TRANSPORTS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `DISCOVERY_TRANSPORTS` constant.
 - [`DiscoveryClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/discovery.py) — Class. Discover and authenticate a company's PAP declaration.

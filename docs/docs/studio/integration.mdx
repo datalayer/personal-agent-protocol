@@ -43,7 +43,8 @@ normal runtime boundary. It does not reinterpret an A2A endpoint as PAP.
 ## Backend ownership
 
 - IAM owns consent, direct/device authorization, encrypted account tokens,
-  revocation, app principals, and scope grants.
+  revocation, app principals, scope grants, and expiring authorization state
+  with atomic consume semantics.
 - KMS-backed signing owns client assertion keys and published metadata/JWKS.
 - Durable services own pairwise IDs, sessions, replay IDs, conversations,
   events, operation revisions/results, and idempotency records.
@@ -71,11 +72,12 @@ approval, rotation, and token attachment remain deterministic capabilities
 outside the model loop.
 
 The SDK now supplies safe discovery and client/JWKS retrieval in Python and
-TypeScript plus a DNS-aware Node policy. Datalayer integration still owns the
-durable cache, connected-address enforcement, tenant policy, rate limiting,
-audit summaries, and availability controls. This split keeps reusable PAP
-validation in the SDK while deployment-specific network authority remains in
-the backend.
+TypeScript, a DNS-aware Node policy, and Python Direct Sign-In orchestration.
+Datalayer integration still owns the durable cache, connected-address
+enforcement, tenant policy, rate limiting, audit summaries, availability
+controls, browser surface, and authorization-state persistence. This split
+keeps reusable PAP validation in the SDK while deployment-specific network and
+user-interaction authority remains in the backend.
 
 Generated Python and TypeScript API inventories now define the supported SDK
 boundary and are checked for drift in documentation CI. Datalayer backend and
@@ -100,6 +102,18 @@ For Datalayer, the entry split maps to a deployable ownership boundary:
 - IAM contributes `pap.pairwiseUserIdStore`, atomically keyed by application,
   Datalayer user, and exact verified issuer; runtimes receive only the random
   `usr_…` value and never derive it from profile data; and
+- IAM contributes `pap.authorizationStateStore` with encrypted, bounded-TTL
+  pending state and atomic `take`; keys are hashes of OAuth state, and the
+  consumed verifier and authorization code flow directly to the token exchange
+  without entering Canvas, A2UI, Activity payloads, or model-visible tools;
+- after a successful exchange, the callback controller immediately moves any
+  returned Account Token into IAM's `pap.tokenStore`, clears it from the
+  response passed onward, and exposes only an opaque token reference to backend
+  capabilities; Account Token lifecycle remains a follow-on SDK milestone;
+- Preview contributes `pap.browserHandoff` to open the user's trusted browser,
+  while the registered Datalayer callback route reconstructs no authority from
+  URL parameters beyond passing the full URL to `DirectSignInClient.complete`;
+  denial or callback failure requires a new flow rather than reused state; and
 - CI must fail any browser artifact that contains the server entry, signing
   key material, raw tokens, assertions, or proof-verification endpoints.
 
@@ -142,8 +156,10 @@ operation ID and revision become part of the Studio audit record.
 
 - **Build:** PAP Appspec fields, verified Connections, scope/rule mapping, and
   company policy controls.
-- **Preview:** signed-out state, human-completed sign-in, granted scopes,
-  responder identity, conversations, and disconnect.
+- **Preview:** signed-out state, human-completed sign-in, requested/granted/
+  missing scopes, responder identity, conversations, and disconnect. The UI
+  receives only safe status and opaque handles; callback URLs, codes, PKCE
+  verifiers, assertions, proofs, and tokens remain backend-only.
 - **Validate:** discovery, identity, sign-in, interface, conversation,
   operations, secret, replay, rate-limit, tenant, and Appspec tests.
 - **Ship and Activity:** domain health gates, public metadata, verification,

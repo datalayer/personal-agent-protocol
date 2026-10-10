@@ -38,6 +38,7 @@ python -m pytest -p no:cacheprovider
 | `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL.                                               |
 | `validate_direct_sign_in_callback`                      | Implemented primitive | Verify callback redirect, state, issuer, denial, and code.                                                 |
 | `AuthorizationCodeGrant`                                | Implemented primitive | Build a redacted PAP code-exchange form.                                                                   |
+| `DirectSignInClient`                                    | Implemented           | Perform one-use browser handoff and proof-bound exchange with partial-scope reporting.                     |
 | Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, DPoP proofs, protected keys, token storage, cache, and browser handoff. |
 
 ## Discovery
@@ -73,10 +74,10 @@ policy. Keep the client in an async context so its owned HTTP resources close.
 
 The core plugin also supplies `pap.clock` and `pap.randomSource`. A host must
 contribute `pap.signer`, `pap.dpopProofProvider`, `pap.keyStore`,
-`pap.tokenStore`, `pap.pairwiseUserIdStore`, `pap.cache`, and
-`pap.browserHandoff` before a flow requiring those services begins. Resolution
-fails when a required provider is missing or tied at the winning priority;
-there is no insecure in-memory fallback.
+`pap.tokenStore`, `pap.pairwiseUserIdStore`, `pap.authorizationStateStore`,
+`pap.cache`, and `pap.browserHandoff` before a flow requiring those services
+begins. Resolution fails when a required provider is missing or tied at the
+winning priority; there is no insecure in-memory fallback.
 
 ## Agent identity
 
@@ -168,8 +169,8 @@ ES256 and RS256 are accepted; ES256 is the default. Symmetric algorithms and
 `none` are rejected. See [JOSE and DPoP](/guides/cryptography/) before choosing
 key custody or implementing a company verifier.
 
-Continue with [Direct Sign-In primitives](/guides/direct-sign-in/) for the
-implemented PKCE and callback surface.
+Continue with [Direct Sign-In](/guides/direct-sign-in/) for the complete Python
+orchestrator and the portable primitives shared with TypeScript.
 
 ## Conversation and Operations models
 

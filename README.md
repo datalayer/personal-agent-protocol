@@ -32,17 +32,20 @@ The first implemented slice provides:
 - asymmetric ES256/RS256 JOSE signers and RFC 9449 DPoP creation and
   verification, including nonce, request, token-hash, freshness, and replay
   checks, in both SDKs;
-- Direct Sign-In state, S256 PKCE, callback validation, and redacted
-  authorization-code exchange forms in both SDKs;
+- Direct Sign-In state, S256 PKCE, callback validation, and redacted exchange
+  forms in both SDKs, plus one-use browser and token-exchange orchestration in
+  Python;
 - duplicate JSON member rejection at Python and TypeScript trust boundaries;
 - a Reactor-extensible `pap` CLI with non-secret profiles, verified company
   discovery, extension diagnostics, versioned JSON, and a safe live-session
   discovery command;
 - one shared set of fixtures exercised by both SDKs.
 
-Managed key custody and durable replay storage, browser handoff and Direct
-Sign-In token exchange, device/mediated sign-in, conversations, and the
-Operations client/server are not implemented yet.
+Managed key custody and durable replay storage, device/mediated sign-in,
+conversations, and the Operations client/server are not implemented yet.
+Direct Sign-In requires host-provided authorization-state, browser, signer, and
+DPoP contributions; the SDK does not open a browser or persist state through an
+implicit global service.
 
 Session requests fail closed unless the host contributes signer and
 DPoP providers backed by suitable key custody.

@@ -31,6 +31,7 @@ export {
 } from "./identity.js";
 export { parseJsonStrict } from "./json.js";
 export {
+  AuthorizationStateStores,
   BrowserHandoffs,
   Caches,
   Clocks,
@@ -48,6 +49,7 @@ export {
   createPapCorePlugin,
   firstContribution,
   type BrowserHandoff,
+  type AuthorizationStateStore,
   type Clock,
   type DiscoveryTransport,
   type DpopProofProvider,

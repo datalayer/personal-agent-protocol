@@ -36,6 +36,7 @@ class ReplayCache:
 @pytest.mark.parametrize("algorithm", ["ES256", "RS256"])
 @pytest.mark.asyncio
 async def test_signs_and_verifies_only_asymmetric_pap_assertions(algorithm: str) -> None:
+    private_key: ec.EllipticCurvePrivateKey | rsa.RSAPrivateKey
     if algorithm == "ES256":
         private_key = ec.generate_private_key(ec.SECP256R1())
     else:

@@ -1,53 +1,70 @@
 ---
-title: Direct Sign-In primitives
+title: Direct Sign-In
 ---
 
-# Direct Sign-In primitives
+# Direct Sign-In
 
-The SDKs implement the safe local primitives for PAP Direct Sign-In: random
-OAuth state, RFC 7636 S256 PKCE, authorization URL construction, callback state
-and issuer validation, and a redacted authorization-code exchange grant.
+Both SDKs implement safe Direct Sign-In primitives: random OAuth state, RFC
+7636 S256 PKCE, authorization URL construction, callback state and issuer
+validation, and a redacted authorization-code exchange grant. Python also
+implements the complete personal-agent orchestration through
+`DirectSignInClient`.
 
-:::caution Boundary of the current implementation
+:::caution Host services remain mandatory
 
-The SDKs do not yet open a browser, persist one-use state, sign the client
-assertion, create the DPoP proof, or send the token request. Keep the request
-object in trusted application storage and open its URL only in the user's own
-browser.
+The orchestrator resolves `pap.authorizationStateStore`, `pap.browserHandoff`,
+`pap.signer`, and `pap.dpopProofProvider` from Reactor. The core installs no
+in-memory fallback. The state store must provide atomic `take`; the browser
+handoff must open the URL only for the user; signing and DPoP providers must
+keep private keys in protected custody.
 
 :::
 
 ## Python
 
 ```python
+import httpx
+
 from personal_agent_protocol import (
-    AuthorizationCodeGrant,
-    build_direct_sign_in_request,
-    validate_direct_sign_in_callback,
+    DirectSignInClient,
 )
 
-sign_in = build_direct_sign_in_request(
-    authorization_endpoint="https://auth.example.com/oauth/authorize",
-    issuer="https://auth.example.com",
-    client_id="https://agent.example/agent.json",
-    redirect_uri="https://agent.example/oauth/callback",
-    scopes=("poppy:read",),
-)
+async with httpx.AsyncClient() as http:
+    sign_in = DirectSignInClient(reactor=reactor, http_client=http)
+    started = await sign_in.begin(
+        authorization_endpoint="https://auth.example.com/oauth/authorize",
+        token_endpoint="https://auth.example.com/oauth/token",
+        issuer="https://auth.example.com",
+        client_id="https://agent.example/agent.json",
+        redirect_uri="https://agent.example/oauth/callback",
+        scopes=("poppy:read",),
+        tenant_id="application-42",
+        pairwise_user_id=pairwise_user_id,
+        session_id=signed_out_session.session_id,
+    )
 
-# Open only this deliberately revealed URL in the user's browser.
-authorization_url = sign_in.authorization_url.get_secret_value()
-
-# Later, at the registered callback route:
-callback = validate_direct_sign_in_callback(sign_in, incoming_url)
-grant = AuthorizationCodeGrant(
-    code=callback.code,
-    redirect_uri=sign_in.redirect_uri,
-    code_verifier=sign_in.code_verifier,
-    session_id="ses_2Lm0",
-    client_id=sign_in.client_id,
-    client_assertion=signed_client_assertion,
-)
+    # Later, at the registered callback route. Never pass this URL to a model.
+    result = await sign_in.complete(incoming_callback_url)
+    print(result.granted_scopes, result.missing_scopes)
 ```
+
+`begin()` stores the redacted pending request under a SHA-256 reference to its
+state and then invokes the trusted browser handoff. `complete()` atomically
+consumes that state before validating the exact redirect and issuer, so a
+callback cannot be replayed. Expired, unknown, and already-used states produce
+the same safe error class.
+
+The exchange signs a fresh client assertion and creates a fresh DPoP proof for
+every attempt. It follows no redirects and retries one `use_dpop_nonce`
+challenge. A successful response must be a signed-in DPoP token for the
+existing Session. Extra scopes are rejected; omitted scopes are returned in
+`missing_scopes` so the application can continue with reduced authority or ask
+the user what to do. If the response includes an Account Token, the callback
+controller must immediately move it into protected token storage and expose
+only an opaque reference beyond that boundary. Account Token rotation,
+narrowing, exchange, and revocation remain a separate implementation milestone.
+Denial consumes state and exposes no remote description; recovery starts a new
+flow.
 
 ## TypeScript
 
@@ -79,11 +96,15 @@ const grant = new AuthorizationCodeGrant({
 });
 ```
 
-The request URL, state, verifier, authorization code, and client assertion are
-redacted by default. Reveal them only at the browser handoff or final HTTPS
-serialization boundary. A callback is rejected when its redirect location,
-state, or issuer differs from the request, when the user denied access, or when
-the one-time code is absent.
+TypeScript currently exposes these lower-level primitives plus the aligned
+`AuthorizationStateStores` Reactor contract. Browser opening, atomic state
+consumption, and proof-bound HTTP exchange remain planned for the TypeScript
+orchestrator.
+
+The request URL, state, verifier, authorization code, client assertion, DPoP
+proof, Session Token, and Account Token are redacted by default. Reveal them
+only at the browser handoff or final HTTPS serialization boundary. They must
+not enter model context, logs, analytics, A2UI state, or callback error text.
 
 See upstream [Direct Sign-In](https://personalagentprotocol.org/docs/spec#45-direct-sign-in)
 for the complete normative flow.

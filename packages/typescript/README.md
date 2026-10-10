@@ -38,9 +38,9 @@ deliberately excluded from browser bundles.
 
 Use `buildPapReactor(options, plugins)` to install typed transport, URL-policy,
 protocol-profile, clock, randomness, signer, DPoP proof, protected-key,
-token-store, pairwise-user-ID store, cache, browser-handoff, and
-extension-handler contributions, or pass an existing Reactor host to
-`discoverCompany`.
+token-store, pairwise-user-ID store, authorization-state store, cache,
+browser-handoff, and extension-handler contributions, or pass an existing
+Reactor host to `discoverCompany`.
 
 Security-dependent services have no fallback and fail closed when missing or ambiguous.
 

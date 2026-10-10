@@ -52,6 +52,12 @@ can support more than one protocol profile.
 - Pairwise ID generation and a file-backed atomic Python reference store are
   implemented. Distributed deployments must contribute their own transactional
   `pap.pairwiseUserIdStore` and own retention and erasure policy.
+- Python Direct Sign-In now performs trusted browser handoff, atomic one-use
+  state consumption, exact callback validation, fresh assertion/DPoP exchange,
+  one nonce retry, and partial-scope reporting. Hosts still provide the
+  authorization-state store, browser surface, signer, and DPoP key custody;
+  TypeScript currently exposes the lower-level primitives and aligned
+  state-store contract.
 - Session clients sign fresh claims, create a DPoP proof, and send the token
   request. Local JOSE implementations are available, but applications still
   own key selection and custody.

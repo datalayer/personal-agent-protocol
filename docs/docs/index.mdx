@@ -19,11 +19,12 @@ services and optional protocol extensions.
 :::caution Draft and preview software
 
 PAP can change incompatibly before its first stable version. The SDKs are an
-early implementation: discovery, foundational session value objects, and local
-Direct Sign-In primitives work. Signed-out session start and renewal also work
-when the host supplies secure signing and DPoP providers. Local JOSE providers
-are available; managed key custody, company services, conversations, and
-Operations are not ready.
+early implementation: discovery, foundational session value objects, and
+Direct Sign-In primitives work in both SDKs. Python also orchestrates one-use
+browser handoff and proof-bound Direct Sign-In exchange. Signed-out session
+start and renewal work when the host supplies secure signing and DPoP
+providers. Local JOSE providers are available; managed key custody, Account
+Token lifecycle, company services, conversations, and Operations are not ready.
 
 :::
 
@@ -53,7 +54,8 @@ The current `0.3.x` preview line includes:
   renewal over HTTP for the PAP 4.2 implementation slice;
 - ES256/RS256 assertion signing and DPoP creation and verification with nonce,
   request, token-hash, freshness, and replay checks;
-- Direct Sign-In state, S256 PKCE, callback, and exchange-grant primitives; and
+- Direct Sign-In state, S256 PKCE, callback, and exchange-grant primitives in
+  both SDKs, plus Python browser/exchange orchestration; and
 - a Reactor-extensible `pap` CLI for non-secret profiles, verified discovery,
   and extension diagnostics; and
 - shared fixtures and cross-language validation tests.

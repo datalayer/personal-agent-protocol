@@ -114,6 +114,15 @@ class PairwiseUserIdStore(Protocol):
 
 
 @runtime_checkable
+class AuthorizationStateStore(Protocol):
+    """Persist and atomically consume short-lived authorization state."""
+
+    async def put(self, reference: str, value: object, *, expires_at: datetime) -> None: ...
+
+    async def take(self, reference: str) -> object | None: ...
+
+
+@runtime_checkable
 class ProtocolCache(Protocol):
     """Bound cached public protocol data by an absolute expiry."""
 
@@ -191,6 +200,7 @@ SIGNERS = define_contribution_point("pap.signer")
 KEY_STORES = define_contribution_point("pap.keyStore")
 TOKEN_STORES = define_contribution_point("pap.tokenStore")
 PAIRWISE_USER_ID_STORES = define_contribution_point("pap.pairwiseUserIdStore")
+AUTHORIZATION_STATE_STORES = define_contribution_point("pap.authorizationStateStore")
 CACHES = define_contribution_point("pap.cache")
 BROWSER_HANDOFFS = define_contribution_point("pap.browserHandoff")
 DPOP_PROOF_PROVIDERS = define_contribution_point("pap.dpopProofProvider")
@@ -312,6 +322,7 @@ def build_pap_reactor(
                 KEY_STORES.id,
                 TOKEN_STORES.id,
                 PAIRWISE_USER_ID_STORES.id,
+                AUTHORIZATION_STATE_STORES.id,
                 CACHES.id,
                 BROWSER_HANDOFFS.id,
                 DPOP_PROOF_PROVIDERS.id,

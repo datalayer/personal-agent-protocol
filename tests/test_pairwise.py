@@ -3,6 +3,7 @@
 # BSD 3-Clause License
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from reactor import PluginManifest  # type: ignore[import-untyped]
@@ -25,7 +26,9 @@ class DistinctRandom:
 
 
 @pytest.mark.asyncio
-async def test_persists_stable_pairwise_ids_by_exact_tenant_user_and_issuer(tmp_path) -> None:
+async def test_persists_stable_pairwise_ids_by_exact_tenant_user_and_issuer(
+    tmp_path: Path,
+) -> None:
     random = DistinctRandom()
     database = tmp_path / "pairwise.sqlite3"
     store = SqlitePairwiseUserIdStore(database, random_bytes=random)
@@ -49,7 +52,9 @@ async def test_persists_stable_pairwise_ids_by_exact_tenant_user_and_issuer(tmp_
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_is_atomic_across_concurrent_store_instances(tmp_path) -> None:
+async def test_get_or_create_is_atomic_across_concurrent_store_instances(
+    tmp_path: Path,
+) -> None:
     database = tmp_path / "pairwise.sqlite3"
     stores = [SqlitePairwiseUserIdStore(database) for _ in range(8)]
 
@@ -80,7 +85,7 @@ class PairwisePlugin:
 
 
 @pytest.mark.asyncio
-async def test_resolves_pairwise_store_through_reactor(tmp_path) -> None:
+async def test_resolves_pairwise_store_through_reactor(tmp_path: Path) -> None:
     reactor, http = build_pap_reactor()
     assert http is not None
     reactor.register_plugin(
@@ -102,7 +107,7 @@ async def test_resolves_pairwise_store_through_reactor(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_rejects_non_durable_or_unverified_store_keys(tmp_path) -> None:
+async def test_rejects_non_durable_or_unverified_store_keys(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="file-backed"):
         SqlitePairwiseUserIdStore(":memory:")
 

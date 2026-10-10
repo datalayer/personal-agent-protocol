@@ -19,6 +19,7 @@ The first shared contribution points are:
 | `pap.urlSafetyPolicy`                  | HTTPS, DNS, IP, and redirect policy                               |
 | `pap.extensionHandler`                 | Named, major-versioned PAP extensions                             |
 | `pap.pairwiseUserIdStore`              | Atomic stable identity by tenant, local user, and verified issuer |
+| `pap.authorizationStateStore`          | Expiring atomic put/take for one-use authorization state          |
 | `pap.signer` / `pap.dpopProofProvider` | Protected assertion and proof creation                            |
 | `pap.keyStore` / `pap.tokenStore`      | Protected key references and opaque credentials                   |
 | `pap.cache` / `pap.browserHandoff`     | Bounded public state and trusted human handoff                    |

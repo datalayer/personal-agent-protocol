@@ -6,6 +6,7 @@ import pytest
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 
 from personal_agent_protocol import (
+    AUTHORIZATION_STATE_STORES,
     BROWSER_HANDOFFS,
     CACHES,
     CLOCKS,
@@ -19,6 +20,7 @@ from personal_agent_protocol import (
 from personal_agent_protocol.reactor import first_contribution
 
 SECURITY_POINTS = [
+    AUTHORIZATION_STATE_STORES,
     SIGNERS,
     KEY_STORES,
     TOKEN_STORES,
@@ -56,6 +58,7 @@ def platform_with(point: object, *values: object) -> PluginPlatform:
 
 
 def test_cross_language_infrastructure_point_ids_are_stable() -> None:
+    assert AUTHORIZATION_STATE_STORES.id == "pap.authorizationStateStore"
     assert CLOCKS.id == "pap.clock"
     assert RANDOM_SOURCES.id == "pap.randomSource"
     assert SIGNERS.id == "pap.signer"

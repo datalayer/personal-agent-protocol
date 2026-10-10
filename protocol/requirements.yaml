@@ -81,8 +81,8 @@ requirements:
     section: "4.5"
     role: personal-agent
     statement: Use random one-use state and S256 PKCE for Direct Sign-In.
-    status: partial
-    python: personal_agent_protocol.auth.build_direct_sign_in_request
+    status: implemented
+    python: personal_agent_protocol.auth.DirectSignInClient
     typescript: buildDirectSignInRequest
   - id: PAP-4.5-MUST-02
     section: "4.5"
@@ -95,8 +95,8 @@ requirements:
     section: "4.5"
     role: personal-agent
     statement: Include the existing session ID in the authorization-code exchange.
-    status: partial
-    python: personal_agent_protocol.auth.AuthorizationCodeGrant
+    status: implemented
+    python: personal_agent_protocol.auth.DirectSignInClient
     typescript: AuthorizationCodeGrant
   - id: PAP-7.3-MUST-01
     section: "7.3"

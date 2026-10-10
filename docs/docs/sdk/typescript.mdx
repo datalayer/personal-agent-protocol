@@ -58,9 +58,12 @@ bundle.
 The SDK exports aligned `Clocks`, `RandomSources`, `Signers`,
 `DpopProofProviders`, `KeyStores`, `TokenStores`, `Caches`, and
 `BrowserHandoffs` contribution points, plus `PairwiseUserIdStores` for stable
-identity. The core plugin provides only system time and secure randomness.
+identity and `AuthorizationStateStores` for atomic one-use authorization state.
+The core plugin provides only system time and secure randomness.
 Security-dependent services have no fallback and resolution fails closed when
-missing or ambiguous.
+missing or ambiguous. The TypeScript Direct Sign-In orchestrator remains
+planned; the state-store contract is aligned now so hosts do not invent an
+incompatible persistence boundary.
 
 ## Agent identity
 
@@ -142,8 +145,8 @@ See [JOSE and DPoP](/guides/cryptography/) for key and replay-cache requirements
 
 The package also exports `buildDirectSignInRequest`,
 `validateDirectSignInCallback`, and `AuthorizationCodeGrant`. See
-[Direct Sign-In primitives](/guides/direct-sign-in/) for the complete local
-flow and its current network boundary.
+[Direct Sign-In](/guides/direct-sign-in/) for the complete local flow and its
+current network boundary.
 
 ## Client, conversation, and Operations models
 

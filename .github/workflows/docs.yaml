@@ -6,7 +6,7 @@ on:
     paths:
       - 'docs/**'
       - 'personal_agent_protocol/**'
-      - 'packages/typescript/src/**'
+      - 'src/**'
       - 'scripts/generate_api_reference.py'
       - '.github/workflows/docs.yaml'
   pull_request:
@@ -14,7 +14,7 @@ on:
     paths:
       - 'docs/**'
       - 'personal_agent_protocol/**'
-      - 'packages/typescript/src/**'
+      - 'src/**'
       - 'scripts/generate_api_reference.py'
       - '.github/workflows/docs.yaml'
   workflow_dispatch:

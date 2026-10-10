@@ -47,7 +47,7 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
           python_version="$(python -c "import re;print(re.search(r'__version__\s*=\s*[\"\']([^\"\']+)', open('personal_agent_protocol/__version__.py').read())[1])")"
-          typescript_version="$(node -p "require('./packages/typescript/package.json').version")"
+          typescript_version="$(node -p "require('./package.json').version")"
           echo "tag=$tag python=$python_version typescript=$typescript_version"
           test "$tag" = "$python_version"
           test "$tag" = "$typescript_version"
@@ -94,7 +94,7 @@ jobs:
           npm install --no-package-lock
           npm test
           mkdir -p npm-dist
-          npm pack ./packages/typescript --pack-destination npm-dist
+          npm pack . --pack-destination npm-dist
           ls -la npm-dist
 
       - uses: actions/upload-artifact@v4

@@ -71,6 +71,15 @@ Models and tools receive safe handles, never credentials. Signing, storage,
 approval, rotation, and token attachment remain deterministic capabilities
 outside the model loop.
 
+The Agent Runtimes company-inspector example makes the model boundary concrete:
+its read-only tool returns organization, protocol version, verified issuer,
+interface kinds, sign-in methods, and extension names only. The compact example
+performs discovery in process for readability. A Datalayer deployment replaces
+that direct call with a typed metadata-gateway capability carrying opaque
+tenant/application context; the gateway applies DNS pinning, cache, egress,
+rate-limit, and audit policy. Direct Sign-In remains a separate authorization
+gateway plus trusted Preview handoff and is never exposed as an agent tool.
+
 The SDK now supplies safe discovery, client/JWKS retrieval, and Direct Sign-In
 orchestration in Python and TypeScript, plus a DNS-aware Node policy. Datalayer
 integration still owns the durable cache, connected-address

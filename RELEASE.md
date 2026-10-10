@@ -10,13 +10,13 @@ A tag releases `personal-agent-protocol` to PyPI and
 `@datalayer/personal-agent-protocol` to npm with no stored publishing tokens.
 Each registry trusts `.github/workflows/release.yaml` through OIDC. The Python
 version lives in `personal_agent_protocol/__version__.py`, which Hatch reads;
-the TypeScript version lives in `packages/typescript/package.json`. They must
-match the tag.
+the TypeScript version lives in the root `package.json`. They must match the
+tag.
 
 ## Steps
 
 1. Bump both package versions on a branch and open a pull request. Update the
-   matching workspace lockfile entry and runtime plugin manifests.
+   matching runtime plugin manifests.
 
 1. Merge, then tag the merge commit and push the tag:
 

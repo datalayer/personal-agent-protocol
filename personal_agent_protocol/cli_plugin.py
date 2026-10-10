@@ -71,9 +71,7 @@ async def discover_company(domain: str) -> dict[str, object]:
             [item.type for item in document.agent.protocols] if document.agent else []
         ),
         "web": document.web is not None,
-        "extensions": {
-            name: item.version for name, item in sorted(document.extensions.items())
-        },
+        "extensions": {name: item.version for name, item in sorted(document.extensions.items())},
     }
 
 

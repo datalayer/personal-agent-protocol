@@ -4,14 +4,18 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - 'packages/typescript/**'
+      - 'src/**'
+      - 'test/**'
+      - 'tsconfig.json'
       - 'protocol/fixtures/**'
       - 'package.json'
       - '.github/workflows/typescript.yaml'
   pull_request:
     branches: [main, develop]
     paths:
-      - 'packages/typescript/**'
+      - 'src/**'
+      - 'test/**'
+      - 'tsconfig.json'
       - 'protocol/fixtures/**'
       - 'package.json'
       - '.github/workflows/typescript.yaml'

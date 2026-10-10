@@ -50,9 +50,7 @@ async def test_signs_and_verifies_only_asymmetric_pap_assertions(algorithm: str)
         "kid": "agent-key",
         "typ": "JWT",
     }
-    assert jwt.decode(compact, private_key.public_key(), algorithms=[algorithm]) == {
-        "sub": "user"
-    }
+    assert jwt.decode(compact, private_key.public_key(), algorithms=[algorithm]) == {"sub": "user"}
 
 
 def test_rejects_symmetric_and_none_algorithms() -> None:
@@ -65,9 +63,7 @@ def test_rejects_symmetric_and_none_algorithms() -> None:
 @pytest.mark.asyncio
 async def test_creates_and_verifies_bound_dpop_proof_once() -> None:
     private_key = ec.generate_private_key(ec.SECP256R1())
-    public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(
-        private_key.public_key(), as_dict=True
-    )
+    public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
 
     async def resolve(_: DpopProofRequest) -> DpopKeyMaterial:
         return DpopKeyMaterial(private_key, public_jwk)
@@ -119,9 +115,7 @@ async def test_creates_and_verifies_bound_dpop_proof_once() -> None:
 @pytest.mark.asyncio
 async def test_rejects_dpop_request_or_token_mismatch() -> None:
     private_key = ec.generate_private_key(ec.SECP256R1())
-    public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(
-        private_key.public_key(), as_dict=True
-    )
+    public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
 
     async def resolve(_: DpopProofRequest) -> DpopKeyMaterial:
         return DpopKeyMaterial(private_key, public_jwk)

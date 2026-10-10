@@ -191,7 +191,7 @@ class ClientMetadata(ProtocolModel):
     logo_uri: str | None = None
     jwks_uri: str
     redirect_uris: list[str] = Field(default_factory=list)
-    token_endpoint_auth_method: Literal["private_key_jwt"] = "private_key_jwt"  # noqa: S105
+    token_endpoint_auth_method: Literal["private_key_jwt"] = "private_key_jwt"
     extensions: dict[str, ExtensionDescriptor] = Field(default_factory=dict)
 
     @field_validator("client_id", "logo_uri", "jwks_uri")
@@ -339,10 +339,7 @@ class Message(ProtocolModel):
 
     @model_validator(mode="after")
     def validate_content(self) -> Message:
-        if all(
-            value is None
-            for value in (self.text, self.data, self.context, self.operation)
-        ):
+        if all(value is None for value in (self.text, self.data, self.context, self.operation)):
             raise ValueError("a message requires text, data, context, or operation")
         return self
 

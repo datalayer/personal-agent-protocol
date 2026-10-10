@@ -54,7 +54,7 @@ def python_symbols() -> list[Symbol]:
             (
                 node
                 for node in module.body
-                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
                 and node.name == name
             ),
             None,
@@ -62,7 +62,7 @@ def python_symbols() -> list[Symbol]:
         if isinstance(definition, ast.ClassDef):
             kind = "Class"
             summary = first_line(ast.get_docstring(definition), f"Public `{name}` class.")
-        elif isinstance(definition, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        elif isinstance(definition, ast.FunctionDef | ast.AsyncFunctionDef):
             kind = "Function"
             summary = first_line(ast.get_docstring(definition), f"Public `{name}` function.")
         else:
@@ -76,15 +76,13 @@ EXPORT_BLOCK = re.compile(r'export\s*\{(?P<body>.*?)\}\s*from\s*"(?P<module>.+?)
 
 
 def typescript_symbols() -> list[Symbol]:
-    source_root = ROOT / "packages" / "typescript" / "src"
+    source_root = ROOT / "src"
     exported: list[tuple[str, str, Path, str]] = []
 
     def add_reexports(entry_file: Path, entry: str) -> str:
         text = entry_file.read_text()
         for match in EXPORT_BLOCK.finditer(text):
-            source = source_root / match.group("module").removeprefix("./").replace(
-                ".js", ".ts"
-            )
+            source = source_root / match.group("module").removeprefix("./").replace(".js", ".ts")
             for raw in match.group("body").split(","):
                 value = raw.strip()
                 if not value:
@@ -135,9 +133,7 @@ def render(title: str, symbols: list[Symbol], *, include_entry: bool = False) ->
         details = symbol.kind
         if include_entry:
             details += f"; entry `{symbol.entry}`"
-        rows.append(
-            f"- [`{symbol.name}`]({GITHUB}/{source}) — {details}. {symbol.summary}"
-        )
+        rows.append(f"- [`{symbol.name}`]({GITHUB}/{source}) — {details}. {symbol.summary}")
     return "\n".join(
         [
             "---",

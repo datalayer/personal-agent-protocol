@@ -53,6 +53,7 @@ const sidebars = {
         'guides/cryptography',
         'guides/direct-sign-in',
         'guides/company',
+        'guides/agent-runtimes',
         'guides/extensions',
         'guides/cli',
         'guides/conformance',

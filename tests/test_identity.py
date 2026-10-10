@@ -30,9 +30,7 @@ def fixture(name: str) -> dict[str, object]:
 async def test_fetches_metadata_and_public_jwks() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         name = (
-            "client-metadata-valid.json"
-            if request.url.path == "/agent.json"
-            else "jwks-valid.json"
+            "client-metadata-valid.json" if request.url.path == "/agent.json" else "jwks-valid.json"
         )
         return httpx.Response(200, json=fixture(name), request=request)
 

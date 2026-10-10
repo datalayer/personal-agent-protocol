@@ -287,9 +287,7 @@ class SessionClient:
                 exp=issued_at + 60,
                 jti=_opaque_id("jti", random_source.bytes),
             )
-            assertion = await signer.sign(
-                session_claims.model_dump(), purpose="session_assertion"
-            )
+            assertion = await signer.sign(session_claims.model_dump(), purpose="session_assertion")
             client_assertion = await signer.sign(
                 client_claims.model_dump(), purpose="client_assertion"
             )

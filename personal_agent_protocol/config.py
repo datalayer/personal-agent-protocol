@@ -18,9 +18,7 @@ from .json import loads_strict
 CONFIG_KEYS: Final = frozenset(
     {"domain", "client_id", "issuer", "output", "store_provider", "timeout"}
 )
-ENVIRONMENT_KEYS: Final = {
-    key: f"PAP_{key.upper()}" for key in CONFIG_KEYS
-}
+ENVIRONMENT_KEYS: Final = {key: f"PAP_{key.upper()}" for key in CONFIG_KEYS}
 
 
 def default_config_path() -> Path:

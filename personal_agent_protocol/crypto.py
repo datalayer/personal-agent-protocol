@@ -239,9 +239,7 @@ async def verify_dpop_proof(  # noqa: C901 - every bound claim is checked in seq
     if nonce is not None and claims.get("nonce") != nonce:
         raise ProofError("use_dpop_nonce", "DPoP proof nonce is missing or invalid")
     if access_token is not None:
-        expected = _base64url(
-            hashlib.sha256(access_token.get_secret_value().encode()).digest()
-        )
+        expected = _base64url(hashlib.sha256(access_token.get_secret_value().encode()).digest())
         actual = claims.get("ath")
         if not isinstance(actual, str) or not hmac.compare_digest(actual, expected):
             raise ProofError("invalid_dpop_proof", "DPoP access-token hash is invalid")

@@ -143,15 +143,16 @@ def test_agent_commands_use_profile_and_emit_stable_json(
             "keys": [{"kid": "key-1", "kty": "EC", "alg": "ES256"}],
         }
 
-    monkeypatch.setattr(
-        "personal_agent_protocol.cli_plugin.inspect_agent_metadata", fake_metadata
-    )
+    monkeypatch.setattr("personal_agent_protocol.cli_plugin.inspect_agent_metadata", fake_metadata)
     monkeypatch.setattr("personal_agent_protocol.cli_plugin.inspect_agent_jwks", fake_jwks)
     runner, app, _, _ = cli(tmp_path)
-    assert runner.invoke(
-        app,
-        ["config", "set", "client_id", "https://agent.example/agent.json"],
-    ).exit_code == 0
+    assert (
+        runner.invoke(
+            app,
+            ["config", "set", "client_id", "https://agent.example/agent.json"],
+        ).exit_code
+        == 0
+    )
 
     metadata = runner.invoke(app, ["agent", "metadata", "--json"])
     jwks = runner.invoke(app, ["agent", "jwks", "--json"])

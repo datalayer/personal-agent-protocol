@@ -1,0 +1,59 @@
+---
+title: Agent Runtimes example
+description: Expose verified PAP capabilities to an agent without exposing authorization secrets.
+---
+
+# Use PAP from Agent Runtimes
+
+The repository includes a small Agent Runtimes application at
+[`examples/agent-runtimes`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/agent-runtimes).
+It demonstrates the safe first integration point between an agent and PAP:
+company discovery.
+
+The application gives its model one read-only `inspect_pap_company` tool. The
+tool performs real HTTPS discovery through `DiscoveryClient`, validates the
+document and supported protocol version, follows verified OAuth metadata, and
+binds the issuer to the requested company domain. Its result contains only:
+
+- the verified organization and domain;
+- the PAP version and issuer;
+- advertised sign-in methods and interfaces; and
+- extension names.
+
+Raw response bodies, authorization URLs, callback parameters, assertions,
+DPoP proofs, Session Tokens, and Account Tokens never enter model context.
+
+## Run the example
+
+From the repository root:
+
+```bash
+python -m pip install -e '.[examples]'
+loop apps run examples/agent-runtimes/app.py
+```
+
+To validate the application definition without starting an agent runtime:
+
+```bash
+python -c "from agent_runtimes.loop.apps.build import build; print(build('examples/agent-runtimes/app.py').text)"
+```
+
+Ask the application to inspect a domain that publishes
+`/.well-known/poppy.json`. The SDK applies HTTPS, public-network, response-size,
+redirect, schema, version, domain, and issuer checks. Production services must
+also pin the approved DNS result to the connection or route requests through
+an enforcing egress proxy.
+
+## Datalayer Studio boundary
+
+The example performs discovery in process to keep the integration readable.
+In Datalayer Studio, the agent tool should call a typed metadata-gateway
+capability with opaque tenant and application context. That gateway owns DNS
+pinning, egress policy, caching, rate limits, observability, and audit, and
+returns the same credential-free summary.
+
+Direct Sign-In is a separate authorization-gateway workflow. Studio starts it
+through a trusted Preview browser handoff, keeps PKCE and one-use state in host
+storage, and returns only status or an opaque connection reference to the
+application. It must not expose browser callbacks, proofs, credentials, or
+tokens as agent tool arguments or results.

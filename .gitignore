@@ -129,7 +129,4 @@ generated
 
 # TypeScript
 node_modules/
-packages/typescript/lib/
-
 **/package-lock.json
-

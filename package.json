@@ -1,13 +1,43 @@
 {
-  "name": "personal-agent-protocol-workspace",
-  "private": true,
-  "workspaces": ["packages/typescript"],
+  "name": "@datalayer/personal-agent-protocol",
+  "version": "0.3.1",
+  "description": "TypeScript SDK for Personal Agent Protocol",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/datalayer/personal-agent-protocol.git"
+  },
+  "type": "module",
+  "license": "BSD-3-Clause",
+  "sideEffects": false,
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    },
+    "./server": {
+      "types": "./lib/server.d.ts",
+      "import": "./lib/server.js"
+    }
+  },
+  "files": ["lib", "README.md"],
   "scripts": {
-    "build": "npm run build --prefix packages/typescript",
-    "test": "npm run test --prefix packages/typescript",
-    "typecheck": "npm run typecheck --prefix packages/typescript"
+    "build": "tsc -p tsconfig.json && esbuild src/index.ts --bundle --platform=neutral --format=esm --sourcemap --outfile=lib/index.js",
+    "build:lib": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "@datalayer/reactor": "^1.0.5",
+    "jose": "^6.2.12"
   },
   "devDependencies": {
+    "@types/node": "^22.10.0",
     "esbuild": "^0.25.12",
     "typescript": "^5.9.3"
   }

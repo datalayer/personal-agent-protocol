@@ -378,9 +378,7 @@ class DirectSignInClient:
             )
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
         if clock.now() > pending.expires_at:
-            raise AuthorizationError(
-                "invalid_or_expired_state", "authorization state has expired"
-            )
+            raise AuthorizationError("invalid_or_expired_state", "authorization state has expired")
         callback = validate_direct_sign_in_callback(pending.request, callback_url)
         return await self._exchange(pending, callback)
 

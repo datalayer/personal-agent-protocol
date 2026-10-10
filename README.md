@@ -102,7 +102,9 @@ security boundaries, machine output, and third-party extension examples.
 
 ## TypeScript
 
-Source code in [packages/typescript](./packages/typescript).
+The TypeScript package lives at the repository root: sources are in
+[`src/`](./src), tests in [`test/`](./test), and emitted package files in
+`lib/`.
 
 ```bash
 npm install
@@ -131,6 +133,13 @@ The Python and Node preflights reject a host if any resolved address is
 non-public. Transport-level address pinning, required to close the
 DNS-rebinding interval, is still part of the security work before the first
 beta.
+
+## Examples
+
+The [`examples/`](./examples/) directory includes an Agent Runtimes Python
+application that discovers a PAP company over HTTPS while exposing only
+verified, non-secret capability metadata to the model. Authorization and token
+handling remain outside the agent tool boundary.
 
 ## Protocol sources
 

@@ -55,6 +55,14 @@ export {
   type DirectSignInResult,
   type DirectSignInStart,
 } from "./auth.js";
+export {
+  DEVICE_CODE_GRANT,
+  DeviceSignInClient,
+  type DeviceSignInBeginOptions,
+  type DeviceSignInClientOptions,
+  type DeviceSignInPoll,
+  type DeviceSignInStart,
+} from "./device.js";
 export { discoverCompany, type DiscoveryOptions } from "./discovery.js";
 export {
   AgentIdentityClient,

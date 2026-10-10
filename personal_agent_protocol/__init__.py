@@ -41,6 +41,13 @@ from .crypto import (
     VerifiedDpopProof,
     verify_dpop_proof,
 )
+from .device import (
+    DEVICE_CODE_GRANT,
+    DeviceAuthorizationResponse,
+    DeviceSignInClient,
+    DeviceSignInPoll,
+    DeviceSignInStart,
+)
 from .discovery import DiscoveryClient
 from .errors import (
     AuthorizationError,
@@ -124,6 +131,7 @@ __all__ = [
     "BROWSER_HANDOFFS",
     "CACHES",
     "CLOCKS",
+    "DEVICE_CODE_GRANT",
     "DISCOVERY_TRANSPORTS",
     "DPOP_PROOF_PROVIDERS",
     "EXTENSION_HANDLERS",
@@ -156,6 +164,10 @@ __all__ = [
     "ConversationReceipt",
     "ConversationResponse",
     "CursorExpiredHandler",
+    "DeviceAuthorizationResponse",
+    "DeviceSignInClient",
+    "DeviceSignInPoll",
+    "DeviceSignInStart",
     "DirectSignInCallback",
     "DirectSignInClient",
     "DirectSignInRequest",

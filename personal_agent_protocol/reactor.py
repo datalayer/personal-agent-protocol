@@ -717,6 +717,14 @@ class PapCorePlugin:
             RATE_LIMIT_BUDGETS, SharedRateLimitBudget(), contribution_id="in-process", order=100
         )
 
+    @hookimpl
+    def provide_display_types(self, registry: object) -> None:
+        # Asked only by a reactor with `reactor.ui` (1.1), so the import waits
+        # until then: the SDK itself runs on an older one.
+        from .ui import PapSignIn
+
+        registry.register(PapSignIn)  # type: ignore[attr-defined]
+
 
 def build_pap_reactor(
     *,

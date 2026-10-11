@@ -6,6 +6,16 @@
 
 # Changelog
 
+## Unreleased
+
+- **reactor.ui displays:** `personal_agent_protocol.ui.PapSignIn`
+  (`application/vnd.datalayer.pap.sign-in+json`, version 1) is a sign-in
+  waiting for the person (`direct`, `device` or `mediated`; an `https` page
+  only; the device code for the page, never the model's view). `from_answer`
+  reads a `pap_sign_in` answer and `tool_meta()` is the MCP `_meta` that carries
+  the display. The core plugin declares the type through `provide_display_types`.
+  Needs `datalayer_reactor` 1.1 (the new `ui` extra); nothing else imports it.
+
 ## 0.6.0 (2026-10-11)
 
 - **Breaking — company store:** `pap.company.store` is an async keyed store of

@@ -714,6 +714,36 @@ export function parseOperation(value: unknown): Operation {
   } as Operation;
 }
 
+const LOCALE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/;
+
+function ianaZone(value: unknown): boolean {
+  if (typeof value !== "string" || !value || value.length > 64 || value.includes("..")) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The facts §7.4 defines use its field names and formats; others pass through. */
+function messageContext(
+  context: Readonly<Record<string, unknown>> | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+  if (context === undefined) return context;
+  const { locale, time_zone: zone, user_available: available } = context;
+  if (locale !== undefined && (typeof locale !== "string" || !LOCALE.test(locale))) {
+    throw new ProtocolValidationError("invalid_message", "context.locale must be a language tag such as en-US");
+  }
+  if (zone !== undefined && !ianaZone(zone)) {
+    throw new ProtocolValidationError("invalid_message", "context.time_zone must be an IANA time zone name");
+  }
+  if (available !== undefined && typeof available !== "boolean") {
+    throw new ProtocolValidationError("invalid_message", "context.user_available must be true or false");
+  }
+  return context;
+}
+
 export function parseMessage(value: unknown): Message {
   const source = nullsAbsent(value, "message", [
     "role",
@@ -724,7 +754,7 @@ export function parseMessage(value: unknown): Message {
   ]);
   const text = source.text === undefined ? undefined : string(source.text, "message.text");
   const data = optionalRecord(source.data, "message.data");
-  const context = optionalRecord(source.context, "message.context");
+  const context = messageContext(optionalRecord(source.context, "message.context"));
   const operation =
     source.operation === undefined ? undefined : parseOperation(source.operation);
   if (text === undefined && data === undefined && context === undefined && operation === undefined) {

@@ -426,7 +426,7 @@ export class SessionClient {
       const retryAfter = response.headers.get("retry-after");
       throw new SessionError(code, "Company refused the session token request", {
         statusCode: response.status,
-        ...(retryAfter === null ? {} : { details: { retryAfter } }),
+        ...(retryAfter === null ? {} : { details: { retry_after: retryAfter } }),
       });
     }
     throw new SessionError("use_dpop_nonce", "Company rejected the refreshed DPoP proof");

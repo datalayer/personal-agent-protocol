@@ -155,6 +155,14 @@ export {
 } from "./limits.js";
 export { MetadataCache } from "./caching.js";
 export {
+  SUPPORTED_EXTENSIONS,
+  extensionDomain,
+  extensionNameKind,
+  extensionRequired,
+  negotiateExtensions,
+} from "./extensions.js";
+export { KNOWN_API_TYPES, conversationEndpoint, knownApis, openapiUrl } from "./apis.js";
+export {
   parseClientMetadata,
   parseConversationEvent,
   parseConversationEventPage,

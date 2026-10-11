@@ -392,9 +392,14 @@ function operationError(response: Response, payload: unknown): OperationError {
   const code = errorCode(payload);
   const extension =
     code === "extension_required" ? (payload as Record<string, unknown>).extension : undefined;
+  const retryAfter = response.status === 429 ? response.headers.get("retry-after") : null;
+  const details = {
+    ...(typeof extension === "string" ? { extension } : {}),
+    ...(retryAfter ? { retry_after: retryAfter } : {}),
+  };
   return new OperationError(code ?? "operation_request_failed", "the operation request was refused", {
     statusCode: response.status,
-    ...(typeof extension === "string" ? { details: { extension } } : {}),
+    ...(Object.keys(details).length ? { details } : {}),
   });
 }
 

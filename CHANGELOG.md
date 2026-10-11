@@ -20,6 +20,13 @@
   unverified `redirect_uri`. `authorization_request(request_id)`
   (`authorizationRequest`) reads a pending request back for that page without
   consuming it.
+- **TypeScript parity:** `negotiateExtensions`, `extensionNameKind`,
+  `extensionDomain`, `extensionRequired`, `knownApis`, `conversationEndpoint`,
+  `openapiUrl`; message `context` facts validated as in Python; a 429's
+  `Retry-After` is `details.retry_after` on Session, conversation and
+  operation errors (Sessions used `retryAfter`); `confirm` answers
+  `not_confirmed` for a cancelled or expired operation. The TypeScript specs
+  pass every conformance fixture case the SDK decides alone.
 
 ## 0.4.0 (2026-10-11)
 

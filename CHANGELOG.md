@@ -20,8 +20,7 @@
   form replayed from another browser are refused. A hosted consent page gets no
   binding. The website's operation page carries a token derived from its
   `poppy_session` cookie and refuses a cross-site POST or another browser's
-  form with `403`. Pages keep `frame-ancestors 'none'` and `X-Frame-Options:
-  DENY`.
+  form with `403`. Pages keep `frame-ancestors 'none'` and `X-Frame-Options: DENY`.
 - **Overlapping JWKS verified at the company:** during a rotation assertions
   signed with either key verify; the retired key is refused once the cached set
   expires; unknown `kid`s refetch at most once a minute (tests in both SDKs;

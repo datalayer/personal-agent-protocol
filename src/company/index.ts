@@ -87,7 +87,7 @@ export class ReactorClock implements Clock {
 export function createCompanyDefaultsPlugin(resolver: ClientResolver, clock?: Clock) {
   return definePlugin({
     name: "personal-agent-protocol.company",
-    version: "0.6.0",
+    version: "0.8.0",
     contributionPoints: [
       CompanyStores,
       CompanyAccounts,

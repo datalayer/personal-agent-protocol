@@ -6,6 +6,58 @@
 
 # Changelog
 
+## 0.8.0 (2026-10-11)
+
+- **Consent pages bind the browser (Guides, consent pages):** the built-in
+  consent page sets a `__Host-poppy_consent` cookie (`Secure`, `HttpOnly`,
+  `SameSite=Strict`), stores its digest with the sign-in request
+  (`PendingAuthorization.browser_binding`, `browserBinding`), and puts a CSRF
+  token derived from the cookie in its form, which posts to
+  `/oauth/authorize`. `CompanyService.consent_decision(request)`
+  (`consentDecision`) returns the user's decision only for a same-origin POST
+  (`Sec-Fetch-Site`, `Origin`) carrying the bound cookie and its token; a
+  cross-site POST, a foreign or opaque origin, a missing cookie or token, and a
+  form replayed from another browser are refused. A hosted consent page gets no
+  binding. The website's operation page carries a token derived from its
+  `poppy_session` cookie and refuses a cross-site POST or another browser's
+  form with `403`. Pages keep `frame-ancestors 'none'` and `X-Frame-Options:
+  DENY`.
+- **Overlapping JWKS verified at the company:** during a rotation assertions
+  signed with either key verify; the retired key is refused once the cached set
+  expires; unknown `kid`s refetch at most once a minute (tests in both SDKs;
+  the guide says how long to keep a retired key published).
+- **Credentials stay out of logs, errors, URLs, and model context:** a canary
+  suite in both SDKs runs the demo worlds, every conformance case, and the
+  Pydantic AI examples' tools with `CANARY`-minted values and canary
+  passwords, and fails if any credential exchanged appears in a log record, a
+  raised error, a requested URL, a model-readable body, a message's text, or a
+  `PapSignIn` model view; the TypeScript suite also checks the built `lib/` and
+  that the browser entry reaches no demo credential. Fixed the leak it found:
+  Ledgerly's connect reply put Northwind's device user code in the message
+  text (it is now in the message's `data` only).
+- **Load tests** (`load` mark, `PAP_LOAD_SIZE`; 512 in CI) for replay caches,
+  shared budgets, device polling, and SSE fan-out, with
+  [a docs page](docs/docs/protocol/load-tests.mdx). They found and this release
+  fixes:
+  - `MemoryReplayCache` never forgot an identifier. It now takes a clock
+    (the company's), sweeps expired identifiers whenever it doubles, and
+    reports its `len()` / `size`. The verifiers now remember an identifier
+    exactly as long as they would accept it: a DPoP proof until its `iat`
+    leaves the acceptance window (it was `now` plus the window), a client or
+    Session assertion until `exp` plus the 30-second skew (it was `exp`) — a
+    replay cache that honoured the old expiries could accept a replay inside
+    those gaps.
+  - `SharedRateLimitBudget` slept while holding its per-company lock, so
+    `max_wait` bounded each caller's own sleep but not its time queued. It now
+    reserves each caller's turn when it asks (the generic cell rate algorithm):
+    concurrent callers never exceed the rate and burst, a turn beyond
+    `max_wait` is refused at once with `rate_limited`, and a timer that fires
+    early (Node's can) is slept out. TypeScript's default sleep rounds up to
+    whole milliseconds.
+- **Kits:** `check_replay_cache` / `checkReplayCache` check a
+  `pap.company.replayCache` (of many callers marking one identifier at once,
+  exactly one wins); `check_store` / `checkStore` take a `concurrency`.
+
 ## 0.7.0 (2026-10-11)
 
 - **reactor.ui displays:** `personal_agent_protocol.ui.PapSignIn`

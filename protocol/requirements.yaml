@@ -903,6 +903,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService.disconnect
   - personal_agent_protocol.company.service:CompanyService._caller
   tests:
+  - personal_agent_protocol/__tests__/test_company_store.py::test_a_company_restarted_over_its_store_continues_every_flow
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - lifecycle.sign-out-takes-effect
@@ -1301,6 +1302,7 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._page_response
   tests:
+  - personal_agent_protocol/__tests__/test_company_store.py::test_a_company_restarted_over_its_store_continues_every_flow
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - conversations.start-and-reply
@@ -1495,8 +1497,10 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._operation_route
-  - personal_agent_protocol.company.points:MemoryCompanyStore
+  - personal_agent_protocol.company.store:MemoryCompanyStore
   tests:
+  - personal_agent_protocol/__tests__/test_company_store.py::test_a_company_restarted_over_its_store_continues_every_flow
+  - personal_agent_protocol/__tests__/test_company_store.py::test_the_memory_store_keeps_the_contract
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - operations.readable-until-final
@@ -1636,9 +1640,12 @@ requirements:
     channels it is confirmed.
   status: implemented
   implementation:
+  - personal_agent_protocol.company.store:CompanyStore
   - personal_agent_protocol.company.service:CompanyService._confirm_operation
   - personal_agent_protocol.company.service:CompanyService._operation_page
   tests:
+  - personal_agent_protocol/__tests__/test_company_store.py::test_a_company_restarted_over_its_store_continues_every_flow
+  - personal_agent_protocol/__tests__/test_company_store.py::test_the_memory_store_keeps_the_contract
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_operation_confirmed_on_the_website_is_the_same_operation_once
   - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_revised_operation_is_terms_changed_and_never_performed_twice
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls

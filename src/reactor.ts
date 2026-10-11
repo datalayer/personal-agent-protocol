@@ -10,6 +10,12 @@ import {
 } from "@datalayer/reactor";
 
 import { DiscoveryError } from "./errors.js";
+import {
+  InMemoryProtocolCache,
+  RetryPolicy,
+  SharedRateLimitBudget,
+  type RateLimitBudget,
+} from "./limits.js";
 import type { SecretValue } from "./secret.js";
 
 export interface DiscoveryTransport {
@@ -186,6 +192,11 @@ export const ProtectedInputs = defineContributionPoint<ProtectedInput>(
   "pap.protectedInput",
 );
 
+export const RetryPolicies = defineContributionPoint<RetryPolicy>("pap.retryPolicy");
+export const RateLimitBudgets = defineContributionPoint<RateLimitBudget>(
+  "pap.rateLimitBudget",
+);
+
 export interface PapCoreOptions {
   readonly fetch?: typeof globalThis.fetch;
   readonly assertSafeUrl?: (url: URL) => void | Promise<void>;
@@ -230,7 +241,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
   }
   return definePlugin({
     name: "@datalayer/personal-agent-protocol-core",
-    version: "0.4.0",
+    version: "0.5.0",
     contributionPoints: [
       DiscoveryTransports,
       UrlSafetyPolicies,
@@ -249,6 +260,8 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       DpopProofProviders,
       AccountTokenLocks,
       ProtectedInputs,
+      RetryPolicies,
+      RateLimitBudgets,
     ],
     contributes: [
       contribution(
@@ -270,6 +283,12 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       contribution(Clocks, systemClock, { id: "system", order: 100 }),
       contribution(RandomSources, systemRandom, { id: "system", order: 100 }),
       contribution(AccountTokenLocks, new InProcessAccountTokenLock(), {
+        id: "in-process",
+        order: 100,
+      }),
+      contribution(Caches, new InMemoryProtocolCache(), { id: "memory", order: 100 }),
+      contribution(RetryPolicies, new RetryPolicy(), { id: "default", order: 100 }),
+      contribution(RateLimitBudgets, new SharedRateLimitBudget(), {
         id: "in-process",
         order: 100,
       }),

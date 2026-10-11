@@ -192,7 +192,13 @@ export class InMemoryStandingPermissionStore implements StandingPermissionStore 
 }
 
 export interface ConfirmOutcome {
-  readonly status: "confirmed" | "terms_changed" | "approval_required";
+  /**
+   * `confirmed`: accepted (final, or `in_progress` with `retryAfter`).
+   * `terms_changed`: a newer revision to show the user. `approval_required`: the
+   * company wants the user's own approval. `not_confirmed`: already cancelled or
+   * expired, returned as it is; nothing was confirmed or performed.
+   */
+  readonly status: "confirmed" | "terms_changed" | "approval_required" | "not_confirmed";
   readonly operation?: Operation;
   readonly changed: readonly string[];
   readonly retryAfter?: number;
@@ -264,6 +270,13 @@ export class OperationsClient {
     await settle(held, response.status === 200);
     if (response.status === 200) {
       const confirmed = expectOperation(payload, operation.operation_id);
+      if (
+        confirmed.confirmation === null &&
+        (confirmed.state === "cancelled" || confirmed.state === "expired")
+      ) {
+        // A late confirm is safe: the record comes back unchanged (Operations §5.3).
+        return { status: "not_confirmed", operation: confirmed, changed: [] };
+      }
       if (confirmed.revision !== operation.revision || confirmed.confirmation === null) {
         throw new OperationError("invalid_operation", "The company confirmed a revision other than the one sent");
       }
@@ -379,9 +392,14 @@ function operationError(response: Response, payload: unknown): OperationError {
   const code = errorCode(payload);
   const extension =
     code === "extension_required" ? (payload as Record<string, unknown>).extension : undefined;
+  const retryAfter = response.status === 429 ? response.headers.get("retry-after") : null;
+  const details = {
+    ...(typeof extension === "string" ? { extension } : {}),
+    ...(retryAfter ? { retry_after: retryAfter } : {}),
+  };
   return new OperationError(code ?? "operation_request_failed", "the operation request was refused", {
     statusCode: response.status,
-    ...(typeof extension === "string" ? { details: { extension } } : {}),
+    ...(Object.keys(details).length ? { details } : {}),
   });
 }
 

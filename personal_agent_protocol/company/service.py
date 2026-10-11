@@ -53,7 +53,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from http.cookies import CookieError, SimpleCookie
 from typing import Any, Literal, cast
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import jwt
 from pydantic import SecretStr
@@ -108,6 +108,16 @@ REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - OAuth grant type
 _PAGE = 50
 
 
+def _key_id(compact: str) -> str | None:
+    """The `kid` a compact JWT's header names, if any (never trusted beyond key lookup)."""
+
+    try:
+        kid = jwt.get_unverified_header(compact).get("kid")
+    except jwt.PyJWTError:
+        return None
+    return kid if isinstance(kid, str) else None
+
+
 @dataclass(frozen=True)
 class CompanyConfig:
     """What the company publishes and allows."""
@@ -128,6 +138,20 @@ class CompanyConfig:
     max_code_attempts: int = 3
     custom_scopes: Mapping[str, str] = field(default_factory=dict)
     web: bool = False
+    #: A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it.
+    device_page: str | None = None
+    #: A hosted consent page with `{request_id}`: `GET /oauth/authorize` answers 303 to it.
+    consent_page: str | None = None
+
+    def __post_init__(self) -> None:
+        for name, value in (("device_page", self.device_page), ("consent_page", self.consent_page)):
+            if value is None:
+                continue
+            parsed = urlsplit(value.replace("{request_id}", "x"))
+            if parsed.scheme != "https" or not parsed.hostname or parsed.fragment:
+                raise ValueError(f"{name} must be an HTTPS URL without a fragment")
+        if self.consent_page is not None and "{request_id}" not in self.consent_page:
+            raise ValueError("consent_page must contain {request_id}")
 
     @property
     def base(self) -> str:
@@ -382,7 +406,9 @@ class CompanyService:
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client resolver")
         )
         try:
-            metadata, keys = await resolver.resolve(client_id)
+            metadata, keys = await resolver.resolve(
+                client_id, kid=_key_id(form.get("client_assertion", ""))
+            )
         except PersonalAgentProtocolError as exc:
             raise _RefusedError(401, "invalid_client") from exc
         await verify_assertion(
@@ -445,7 +471,7 @@ class CompanyService:
         resolver = cast(
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
         )
-        _, keys = await resolver.resolve(client_id)
+        _, keys = await resolver.resolve(client_id, kid=_key_id(form.get("assertion", "")))
         claims = await verify_assertion(
             form.get("assertion", ""),
             keys=keys,
@@ -548,13 +574,20 @@ class CompanyService:
             expires_at=self._now() + timedelta(seconds=lifetime),
             interval=self.config.device_interval,
         )
+        if self.config.device_page is not None:
+            verification_uri = self.config.device_page
+            joiner = "&" if urlsplit(verification_uri).query else "?"
+            complete = f"{verification_uri}{joiner}{urlencode({'code': user_code})}"
+        else:
+            verification_uri = f"{self.config.base}/device"
+            complete = f"{self.config.base}/device?user_code={user_code}"
         return CompanyResponse(
             200,
             {
                 "device_code": device_code,
                 "user_code": user_code,
-                "verification_uri": f"{self.config.base}/device",
-                "verification_uri_complete": f"{self.config.base}/device?user_code={user_code}",
+                "verification_uri": verification_uri,
+                "verification_uri_complete": complete,
                 "expires_in": lifetime,
                 "interval": self.config.device_interval,
             },
@@ -743,7 +776,20 @@ class CompanyService:
             state=state,
             code_challenge=query["code_challenge"],
             expires_at=self._now() + timedelta(minutes=10),
+            client_name=metadata.client_name,
         )
+        if self.config.consent_page is not None:
+            # A hosted consent page reads the request back (`authorization_request`).
+            return CompanyResponse(
+                303,
+                None,
+                {
+                    "Location": self.config.consent_page.replace(
+                        "{request_id}", quote(request_id, safe="")
+                    ),
+                    "Cache-Control": "no-store",
+                },
+            )
         agent = html.escape(metadata.client_name)
         agent_domain = html.escape(urlsplit(client_id).hostname or "")
         described = "".join(
@@ -759,6 +805,29 @@ class CompanyService:
             '<button name="decision" value="allow">Allow</button>'
             '<button name="decision" value="deny">Deny</button></form>',
         )
+
+    def authorization_request(self, request_id: str) -> dict[str, Any]:
+        """A pending Direct Sign-In request, for a consent page to show; not consumed.
+
+        Who asks (the agent's `client_name` and its `client_id` domain), for what
+        (each requested scope with its `custom_scopes` words), until when. No
+        `state`, PKCE challenge, or redirect: nothing that helps answer it.
+        Raises `KeyError` for an unknown, used, or expired request.
+        """
+
+        pending = self.store.authorizations.get(request_id)
+        if pending is None or self._now() >= pending.expires_at:
+            raise KeyError("unknown, used, or expired sign-in request")
+        return {
+            "request_id": request_id,
+            "client_name": pending.client_name,
+            "client_domain": urlsplit(pending.client_id).hostname or "",
+            "scopes": [
+                {"scope": scope, "description": self.config.custom_scopes.get(scope, scope)}
+                for scope in pending.scopes
+            ],
+            "expires_at": pending.expires_at.isoformat().replace("+00:00", "Z"),
+        }
 
     def approve_authorization(
         self, request_id: str, *, account_id: str, scopes: Sequence[str] | None = None
@@ -1572,7 +1641,7 @@ class CompanyService:
             resolver = cast(
                 ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
             )
-            _, keys = await resolver.resolve(client_id)
+            _, keys = await resolver.resolve(client_id, kid=_key_id(assertion))
         except (KeyError, TypeError, ValueError, jwt.PyJWTError, PersonalAgentProtocolError):
             return refused
         algorithm = str(header.get("alg", ""))

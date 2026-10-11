@@ -9,6 +9,7 @@ import {
   DirectSignInClient,
   DpopProofProviders,
   Signers,
+  TokenStores,
   buildPapReactor,
   buildDirectSignInRequest,
   validateDirectSignInCallback,
@@ -126,6 +127,7 @@ test("rejects callbacks at another redirect location", async () => {
 
 function orchestrationPlugin() {
   const values = new Map();
+  const tokens = new Map();
   const browserUrls = [];
   const proofRequests = [];
   const purposes = [];
@@ -188,8 +190,24 @@ function orchestrationPlugin() {
           },
           options: { id: "dpop" },
         },
+        {
+          point: TokenStores,
+          value: {
+            async put(reference, token) {
+              tokens.set(reference, token);
+            },
+            async get(reference) {
+              return tokens.get(reference);
+            },
+            async delete(reference) {
+              tokens.delete(reference);
+            },
+          },
+          options: { id: "memory" },
+        },
       ],
     },
+    tokens,
     browserUrls,
     proofRequests,
     purposes,
@@ -272,6 +290,11 @@ test("orchestrates one-use Direct Sign-In with nonce and partial scopes", async 
   assert.deepEqual(result.grantedScopes, ["poppy:read"]);
   assert.deepEqual(result.missingScopes, ["poppy:write"]);
   assert.equal(result.token.accessToken.reveal(), "signed-in-session-token");
+  // The Account Token never stays in the result (§4.8): only its opaque reference.
+  assert.equal(result.token.accountToken, undefined);
+  assert.match(result.accountTokenReference, /^account_/);
+  assert.equal(orchestration.tokens.get(result.accountTokenReference).reveal(), "account-token");
+  assert.ok(!JSON.stringify(result).includes("account-token"));
   assert.deepEqual(
     orchestration.proofRequests.map((proof) => proof.nonce),
     [undefined, "company-nonce"],

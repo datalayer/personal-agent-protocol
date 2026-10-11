@@ -45,6 +45,8 @@ export interface IssuedSession {
 
 /** What an Account Token is: one account, one agent, one user, some scopes. */
 export interface AccountGrant {
+  /** The sign-in it comes from: every token rotated from it shares it (§4.9). */
+  readonly family: string;
   readonly accountId: string;
   readonly clientId: string;
   readonly pairwiseUserId: string;
@@ -73,6 +75,8 @@ export interface PendingAuthorization {
   readonly state: string;
   readonly codeChallenge: string;
   readonly expiresAt: Date;
+  /** The agent's `client_name`, for a hosted consent page (`authorizationRequest`). */
+  readonly clientName?: string;
 }
 
 /** A one-use authorization code, at most a minute old. */
@@ -251,9 +255,16 @@ export class AllowEveryAgent implements ClientPolicy {
   }
 }
 
-/** Resolve a `client_id` to its verified metadata and keys. */
+/**
+ * Resolve a `client_id` to its verified metadata and keys. `kid` is the key an
+ * assertion names: a resolver that caches keys fetches them again when the
+ * cached set lacks it (rate-limited; Guides, rotating keys).
+ */
 export interface ClientResolver {
-  resolve(clientId: string): Promise<readonly [ClientMetadata, JsonWebKeySet]>;
+  resolve(
+    clientId: string,
+    options?: { readonly kid?: string },
+  ): Promise<readonly [ClientMetadata, JsonWebKeySet]>;
 }
 
 /** Remember an assertion or proof ID once (the `DpopReplayCache` shape). */

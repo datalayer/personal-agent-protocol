@@ -16,7 +16,7 @@ from typing import Final
 from .json import loads_strict
 
 CONFIG_KEYS: Final = frozenset(
-    {"domain", "client_id", "issuer", "output", "store_provider", "timeout"}
+    {"domain", "client_id", "issuer", "output", "store_provider", "tenant", "timeout"}
 )
 ENVIRONMENT_KEYS: Final = {key: f"PAP_{key.upper()}" for key in CONFIG_KEYS}
 

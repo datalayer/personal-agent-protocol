@@ -16,6 +16,7 @@ import {
   DpopProofProviders,
   RandomSources,
   Signers,
+  TokenStores,
   firstContribution,
 } from "./reactor.js";
 
@@ -263,10 +264,17 @@ export interface DirectSignInStart {
   readonly requestedScopes: readonly string[];
 }
 
+/**
+ * The signed-in Session, its scopes, and a reference to its stored Account Token.
+ *
+ * The Account Token never stays in `token`: it is moved into `pap.tokenStore`
+ * behind `accountTokenReference` (§4.8).
+ */
 export interface DirectSignInResult {
   readonly token: SessionToken;
   readonly grantedScopes: readonly string[];
   readonly missingScopes: readonly string[];
+  readonly accountTokenReference?: string;
 }
 
 export interface DirectSignInBeginOptions extends DirectSignInOptions {
@@ -492,7 +500,7 @@ export class DirectSignInClient {
         );
       }
       const payload = await this.#decode(response);
-      if (response.ok) return this.#result(response, payload, pending);
+      if (response.ok) return await this.#result(response, payload, pending);
 
       const source = typeof payload === "object" && payload !== null ? payload : {};
       const remoteCode = "error" in source ? (source as { error?: unknown }).error : undefined;
@@ -543,11 +551,11 @@ export class DirectSignInClient {
     }
   }
 
-  #result(
+  async #result(
     response: Response,
     payload: unknown,
     pending: PendingDirectSignIn,
-  ): DirectSignInResult {
+  ): Promise<DirectSignInResult> {
     let token: SessionToken;
     try {
       token = parseSessionToken(payload);
@@ -579,10 +587,22 @@ export class DirectSignInClient {
         { statusCode: response.status },
       );
     }
+    let accountTokenReference: string | undefined;
+    if (token.accountToken !== undefined) {
+      // The Account Token is a secret (§4.8): behind an opaque reference, never returned.
+      const random = firstContribution(this.#reactor, RandomSources, "random source");
+      accountTokenReference = `account_${base64Url(random.bytes(16))}`;
+      await firstContribution(this.#reactor, TokenStores, "token store").put(
+        accountTokenReference,
+        token.accountToken,
+      );
+    }
+    const { accountToken: _account, ...publicToken } = token;
     return {
-      token,
-      grantedScopes: token.scopes,
-      missingScopes: pending.request.scopes.filter((scope) => !token.scopes.includes(scope)),
+      token: publicToken,
+      grantedScopes: publicToken.scopes,
+      missingScopes: pending.request.scopes.filter((scope) => !publicToken.scopes.includes(scope)),
+      ...(accountTokenReference === undefined ? {} : { accountTokenReference }),
     };
   }
 }

@@ -15,7 +15,12 @@ from personal_agent_protocol import (
     DiscoveryClient,
     DiscoveryError,
 )
-from personal_agent_protocol.reactor import DiscoveryResponse
+from personal_agent_protocol.reactor import (
+    ApprovedUrl,
+    DiscoveryResponse,
+    MetadataFetch,
+    build_pap_reactor,
+)
 
 FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
 
@@ -77,11 +82,15 @@ async def test_rejects_private_discovery_address() -> None:
 @pytest.mark.asyncio
 async def test_discovers_through_reactor_contributions() -> None:
     class SafePolicy:
-        async def assert_safe(self, _: str) -> None:
-            return None
+        async def assert_safe(self, url: str) -> ApprovedUrl:
+            return ApprovedUrl(url=url, host=url.split("/")[2], addresses=("93.184.216.34",))
 
     class FixtureTransport:
-        async def get(self, url: str) -> DiscoveryResponse:
+        def __init__(self) -> None:
+            self.fetches: list[MetadataFetch] = []
+
+        async def get(self, url: str, *, fetch: MetadataFetch) -> DiscoveryResponse:
+            self.fetches.append(fetch)
             name = (
                 "discovery-valid.json"
                 if url.startswith("https://example.com/")
@@ -97,13 +106,66 @@ async def test_discovers_through_reactor_contributions() -> None:
     class TestPlugin:
         def provide_contributions(self, contributions: object) -> None:
             contribute = contributions.contribute  # type: ignore[attr-defined]
-            contribute(DISCOVERY_TRANSPORTS, FixtureTransport())
+            contribute(DISCOVERY_TRANSPORTS, transport)
             contribute(URL_SAFETY_POLICIES, SafePolicy())
 
+    transport = FixtureTransport()
     reactor = PluginPlatform(extension_group="pap.tests")
     reactor.register_plugin(PluginManifest(name="pap-test", version="1"), TestPlugin())
 
-    company = await DiscoveryClient(reactor=reactor).discover("example.com")
+    company = await DiscoveryClient(reactor=reactor, timeout=2.0).discover("example.com")
 
     assert company.oauth_metadata is not None
     assert company.oauth_metadata.issuer == "https://auth.example.com"
+    # Each fetch carries the policy's approval and the client's bounds to the transport.
+    assert [fetch.approved.host for fetch in transport.fetches] == [
+        "example.com",
+        "auth.example.com",
+    ]
+    assert {(fetch.max_bytes, fetch.timeout) for fetch in transport.fetches} == {(100 * 1024, 2.0)}
+
+
+@pytest.mark.asyncio
+async def test_refuses_a_policy_that_approves_nothing() -> None:
+    class OldPolicy:
+        async def assert_safe(self, _: str) -> None:
+            return None
+
+    class TestPlugin:
+        def provide_contributions(self, contributions: object) -> None:
+            contribute = contributions.contribute  # type: ignore[attr-defined]
+            contribute(URL_SAFETY_POLICIES, OldPolicy(), order=1)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(500))
+    ) as http:
+        reactor, _ = build_pap_reactor(
+            http_client=http, plugins=[(PluginManifest(name="old", version="1"), TestPlugin())]
+        )
+        with pytest.raises(TypeError, match="ApprovedUrl"):
+            await DiscoveryClient(reactor=reactor).discover("example.com")
+
+
+@pytest.mark.asyncio
+async def test_metadata_fetches_carry_no_cookie_or_credential() -> None:
+    seen: list[httpx.Headers] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers)
+        if request.url.host == "example.com":
+            return httpx.Response(200, json=fixture("discovery-valid.json"))
+        return httpx.Response(200, json=fixture("oauth-metadata-valid.json"))
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        cookies={"session": "host-cookie"},
+        headers={"Authorization": "Bearer host-token"},
+    ) as http:
+        await DiscoveryClient(http_client=http, address_resolver=public_resolver).discover(
+            "example.com"
+        )
+
+    assert len(seen) == 2
+    for headers in seen:
+        assert "cookie" not in headers
+        assert "authorization" not in headers

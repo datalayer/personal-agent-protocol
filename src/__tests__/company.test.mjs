@@ -27,13 +27,13 @@ import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./suppor
 const TENANT = "atlas-demo";
 const PAIRWISE = "usr_ada_at_manzanita_000000";
 
-async function world({ answers = [], extensions } = {}) {
+async function world({ answers = [], extensions, config } = {}) {
   const clock = new MutableClock();
   const sites = {};
   const fetch = inProcessFetch(sites);
   const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas", ...(extensions ? { extensions } : {}) });
   sites["atlas.example"] = identity.documents;
-  const { service: shop, plugin } = manzanita({ fetch, clock });
+  const { service: shop, plugin } = manzanita({ fetch, clock, ...(config ? { config } : {}) });
   sites["manzanita.example"] = shop;
   const host = await agentHost({ identity, fetch, clock, answers });
   const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
@@ -447,4 +447,94 @@ test("a conversation that used the account stays with it; disconnecting signs Se
   assert.equal(out.headers.get("www-authenticate"), 'DPoP error="sign_in_required"');
   const orders = await w.transport.request("GET", "https://manzanita.example/api/orders", { ...w.who, token: result.token });
   assert.deepEqual(await orders.json(), { error: "sign_in_required", scope: "orders:read" });
+});
+
+const DEVICE_PAGE = "https://datalayer.ai/pap/device?slug=orders-helper";
+const CONSENT_PAGE = "https://datalayer.ai/pap/consent?slug=orders-helper&request={request_id}";
+
+test("hosted page templates are checked", async () => {
+  const { CompanyConfig } = await import("../../lib/server.js");
+  const base = { name: "Shop", domain: "shop.example", scopes: ["orders:read"] };
+  assert.throws(() => new CompanyConfig({ ...base, consentPage: "https://datalayer.ai/pap/consent" }), /consentPage/);
+  assert.throws(() => new CompanyConfig({ ...base, devicePage: "http://datalayer.ai/pap/device" }), /HTTPS/);
+});
+
+test("Device Sign-In points at the hosted device page", async () => {
+  const w = await world({ config: { devicePage: DEVICE_PAGE } });
+  const session = await w.start();
+  const started = await new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch }).begin({
+    deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
+    tokenEndpoint: w.metadata.token_endpoint,
+    issuer: w.metadata.issuer,
+    clientId: w.identity.clientId,
+    scopes: ["orders:read"],
+    tenantId: TENANT,
+    pairwiseUserId: PAIRWISE,
+    sessionId: session.sessionId,
+  });
+  assert.equal(started.verificationUri, DEVICE_PAGE);
+  assert.equal(started.verificationUriComplete, `${DEVICE_PAGE}&${new URLSearchParams({ code: started.userCode })}`);
+});
+
+test("authorize redirects to the hosted consent page, which reads the request back", async () => {
+  const w = await world({ config: { consentPage: CONSENT_PAGE } });
+  const session = await w.start();
+  const client = new DirectSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const handed = [];
+  w.host.browser.open = async (url) => {
+    handed.push(await w.fetch(url.reveal(), { method: "GET", redirect: "manual" }));
+  };
+  await client.begin({
+    authorizationEndpoint: w.metadata.authorization_endpoint,
+    tokenEndpoint: w.metadata.token_endpoint,
+    issuer: w.metadata.issuer,
+    clientId: w.identity.clientId,
+    redirectUri: "https://atlas.example/oauth/callback",
+    scopes: ["orders:read", "orders:write"],
+    tenantId: TENANT,
+    pairwiseUserId: PAIRWISE,
+    sessionId: session.sessionId,
+  });
+  assert.equal(handed[0].status, 303);
+  assert.equal(handed[0].headers.get("cache-control"), "no-store");
+  const location = new URL(handed[0].headers.get("location"));
+  assert.equal(`${location.origin}${location.pathname}`, "https://datalayer.ai/pap/consent");
+  assert.equal(location.searchParams.get("slug"), "orders-helper");
+  const requestId = location.searchParams.get("request");
+  const summary = w.shop.authorizationRequest(requestId);
+  assert.deepEqual(w.shop.authorizationRequest(requestId), summary);
+  assert.equal(summary.client_name, "Atlas");
+  assert.equal(summary.client_domain, "atlas.example");
+  assert.deepEqual(summary.scopes, [
+    { scope: "orders:read", description: "See your orders" },
+    { scope: "orders:write", description: "Exchange and return items" },
+  ]);
+  assert.match(summary.expires_at, /Z$/);
+  assert.deepEqual(Object.keys(summary).sort(), ["client_domain", "client_name", "expires_at", "request_id", "scopes"]);
+  const callbackUrl = w.shop.approveAuthorization(requestId, { accountId: "acct_ada" });
+  const result = await client.complete({ callbackUrl });
+  assert.equal(result.token.signedIn, true);
+  assert.throws(() => w.shop.authorizationRequest(requestId));
+});
+
+test("an unverified redirect is never sent to the hosted consent page", async () => {
+  const w = await world({ config: { consentPage: CONSENT_PAGE } });
+  const authorize = (redirectUri, responseType = "code") =>
+    `https://manzanita.example/oauth/authorize?${new URLSearchParams({
+      response_type: responseType,
+      client_id: w.identity.clientId,
+      redirect_uri: redirectUri,
+      scope: "orders:read",
+      state: "s",
+      code_challenge: "c".repeat(43),
+      code_challenge_method: "S256",
+    })}`;
+  const refusedPage = await w.fetch(authorize("https://attacker.example/callback"), { method: "GET" });
+  assert.equal(refusedPage.status, 400);
+  assert.equal(refusedPage.headers.get("location"), null);
+  assert.equal(w.shop.store.authorizations.size, 0);
+  const back = await w.fetch(authorize("https://atlas.example/oauth/callback", "token"), { method: "GET" });
+  assert.equal(back.status, 303);
+  assert.ok(back.headers.get("location").startsWith("https://atlas.example/oauth/callback?"));
+  assert.equal(w.shop.store.authorizations.size, 0);
 });

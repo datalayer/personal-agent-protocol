@@ -35,6 +35,7 @@ import {
   OperationOutcomeUnknown,
   buildCompany,
   type AccountDirectory,
+  type CompanyConfigOptions,
   type ApiCall,
   type ApiResult,
   type Authenticated,
@@ -59,7 +60,7 @@ export const ORDER = {
   status: "delivered",
 } as const;
 
-export const CONFIG = new CompanyConfig({
+export const CONFIG_OPTIONS: CompanyConfigOptions = {
   name: "Manzanita Outfitters",
   domain: DOMAIN,
   scopes: ["orders:read", "orders:write"],
@@ -69,7 +70,8 @@ export const CONFIG = new CompanyConfig({
     ["password", "Password", true],
   ],
   customScopes: { "orders:read": "See your orders", "orders:write": "Exchange and return items" },
-});
+};
+export const CONFIG = new CompanyConfig(CONFIG_OPTIONS);
 
 function same(value: string, expected: string): boolean {
   const a = Buffer.from(value);
@@ -293,13 +295,15 @@ export class ManzanitaPlugin {
 export interface ManzanitaOptions extends PapCoreOptions {
   /** One clock for every party, so a test can skip a polling interval. */
   readonly clock?: Clock;
+  /** Changes to Manzanita's configuration, e.g. hosted sign-in pages. */
+  readonly config?: Partial<CompanyConfigOptions>;
 }
 
 /** Build Manzanita; serve it with `companyRequestListener` at `manzanita.example`. */
 export function manzanita(
   options: ManzanitaOptions = {},
 ): { readonly service: CompanyService; readonly plugin: ManzanitaPlugin } {
-  const { clock, ...core } = options;
+  const { clock, config, ...core } = options;
   const plugin = new ManzanitaPlugin();
   const plugins: PlatformInput[] = [plugin.plugin()];
   if (clock !== undefined) {
@@ -309,6 +313,9 @@ export function manzanita(
       contributes: [{ point: Clocks, value: clock, options: { id: "demo-clock" } }],
     } as PlatformInput);
   }
-  const service = buildCompany(CONFIG, { ...core, plugins });
+  const service = buildCompany(
+    config === undefined ? CONFIG : new CompanyConfig({ ...CONFIG_OPTIONS, ...config }),
+    { ...core, plugins },
+  );
   return { service, plugin };
 }

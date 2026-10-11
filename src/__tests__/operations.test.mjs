@@ -149,3 +149,12 @@ test("cancel, and extension_required names the extension", async () => {
   assert.equal((await client.cancel(endpoint, "exc_5Rt2", who)).result.summary, "Nothing was changed.");
   await assert.rejects(client.read(endpoint, "exc_5Rt2", who), (e) => e.code === "extension_required" && e.details.extension === "operations");
 });
+
+test("a late confirm of a cancelled operation is not_confirmed, as in Python", async () => {
+  const operation = proposed();
+  const cancelled = { ...operation, state: "cancelled", result: { summary: "Cancelled; nothing was changed." } };
+  const { client } = arrange(() => json(200, cancelled));
+  const outcome = await client.confirm(endpoint, operation, { approval: await approve(operation), ...who });
+  assert.equal(outcome.status, "not_confirmed");
+  assert.equal(outcome.operation.state, "cancelled");
+});

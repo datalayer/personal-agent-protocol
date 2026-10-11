@@ -534,12 +534,18 @@ export class ConversationClient {
         identifier.test((payload as Record<string, unknown>).conversation_id as string)
           ? ((payload as Record<string, unknown>).conversation_id as string)
           : undefined;
+      // A 429's Retry-After goes to the caller, who waits at least this long (§4.3).
+      const retryAfter = response.status === 429 ? response.headers.get("retry-after") : null;
+      const details = {
+        ...(openId === undefined ? {} : { conversation_id: openId }),
+        ...(retryAfter ? { retry_after: retryAfter } : {}),
+      };
       throw new ConversationError(
         typeof error === "string" ? error : "conversation_request_failed",
         "conversation request was rejected",
         {
           statusCode: response.status,
-          ...(openId === undefined ? {} : { details: { conversation_id: openId } }),
+          ...(Object.keys(details).length ? { details } : {}),
         },
       );
     }

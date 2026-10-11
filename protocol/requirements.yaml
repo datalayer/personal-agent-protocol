@@ -64,11 +64,14 @@ requirements:
   level: SHOULD
   role: personal-agent
   text: Personal Agents SHOULD cache the document according to its HTTP caching headers.
-  status: open
+  status: implemented
   implementation:
-  - personal_agent_protocol.discovery:DiscoveryClient
-  reason: DiscoveryClient fetches on every call; the pap.cache contribution point exists but discovery
-    does not use it yet.
+  - personal_agent_protocol.discovery:DiscoveryClient._get_json
+  - personal_agent_protocol.caching:MetadataCache
+  - personal_agent_protocol.caching:cache_lifetime
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_discovery_and_oauth_metadata_are_cached_until_they_expire
+  - personal_agent_protocol/__tests__/test_guidance.py::test_cache_lifetime_follows_cache_control_within_bounds
 - id: PAP-3.1-01
   section: '3.1'
   level: MUST NOT
@@ -154,10 +157,12 @@ requirements:
   level: SHOULD
   role: personal-agent
   text: Personal Agents SHOULD cache it according to its HTTP caching headers.
-  status: open
+  status: implemented
   implementation:
-  - personal_agent_protocol.discovery:DiscoveryClient
-  reason: OAuth metadata is fetched with every discovery; no bounded cache yet.
+  - personal_agent_protocol.discovery:DiscoveryClient._get_json
+  - personal_agent_protocol.caching:MetadataCache
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_discovery_and_oauth_metadata_are_cached_until_they_expire
 - id: PAP-3.3-01
   section: '3.3'
   level: MUST
@@ -864,8 +869,10 @@ requirements:
   - personal_agent_protocol.reactor:TokenStore
   - personal_agent_protocol.device:DeviceSignInClient._complete
   - personal_agent_protocol.auth:DirectSignInClient._result
+  - personal_agent_protocol.mediated:MediatedSignInClient._complete
   tests:
   - personal_agent_protocol/__tests__/test_device.py::test_device_sign_in_paces_polling_and_protects_tokens
+  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes
 - id: PAP-4.8-07
   section: '4.8'
   level: MUST NOT
@@ -876,8 +883,12 @@ requirements:
   implementation:
   - personal_agent_protocol.accounts:AccountTokenClient
   - personal_agent_protocol.accounts:AccountRefreshResult
+  - personal_agent_protocol.auth:DirectSignInClient._result
+  - personal_agent_protocol.device:DeviceSignInClient._complete
+  - personal_agent_protocol.mediated:MediatedSignInClient._complete
   tests:
   - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_account_token
+  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes
   reason: Results and errors never carry the token, but no test yet proves logs and traces stay free of
     credentials (plan §2).
 - id: PAP-4.9-01
@@ -1824,9 +1835,12 @@ guide:
   role: company
   text: Companies refetch jwks_uri when they see an unknown kid, with a rate limit so a stream of bad
     assertions can't trigger a fetch each time.
-  status: open
-  reason: The company resolver fetches metadata and keys on every assertion; no cache, refetch rule, or
-    rate limit.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.identity:AgentIdentityClient.fetch_jwks
+  - personal_agent_protocol.company:IdentityClientResolver.resolve
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_unknown_kid_refetches_the_overlapping_jwks_rate_limited
 - id: GUIDE-fetch-01
   source: guide
   section: Fetching metadata safely
@@ -1837,11 +1851,13 @@ guide:
   implementation:
   - personal_agent_protocol.discovery:DiscoveryClient._get_json
   - personal_agent_protocol.identity:AgentIdentityClient._get_json
+  - personal_agent_protocol.reactor:HttpxDiscoveryTransport.get
   tests:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   conformance:
   - security.discovery-redirect-limit
   - security.oversized-metadata
+  - security.slow-metadata
   - security.metadata-not-json
 - id: GUIDE-fetch-02
   source: guide
@@ -1849,11 +1865,11 @@ guide:
   level: SHOULD
   role: both
   text: Never send cookies, tokens, or other credentials on these fetches.
-  status: partial
+  status: implemented
   implementation:
   - personal_agent_protocol.reactor:HttpxDiscoveryTransport.get
-  reason: Discovery sends no credential of its own, but uses the host's httpx client, whose cookie jar
-    is not cleared.
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_metadata_fetches_carry_no_cookie_or_credential
 - id: GUIDE-fetch-03
   source: guide
   section: Fetching metadata safely
@@ -1861,11 +1877,15 @@ guide:
   role: both
   text: Reject loopback, private, and link-local addresses unless you've configured them on purpose. Check
     the address you actually connect to, not only the one DNS returned first.
-  status: partial
+  status: implemented
   implementation:
   - personal_agent_protocol.reactor:PublicUrlSafetyPolicy.assert_safe
+  - personal_agent_protocol.reactor:PinnedNetworkBackend
+  - personal_agent_protocol.reactor:HttpxDiscoveryTransport.get
   tests:
   - personal_agent_protocol/__tests__/test_discovery.py::test_rejects_private_discovery_address
+  - personal_agent_protocol/__tests__/test_real_sockets.py::test_metadata_connects_to_the_approved_address
+  - personal_agent_protocol/__tests__/test_fuzz.py::test_url_safety_approves_only_https_public_addresses
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   conformance:
   - security.ssrf-loopback
@@ -1874,9 +1894,8 @@ guide:
   - security.ssrf-ipv6-loopback-and-unique-local
   - security.ssrf-ipv4-mapped
   - security.dns-rebinding-mixed-answers
+  - security.dns-rebinding-after-check
   - security.public-address-allowed
-  reason: Every resolved address must be public, but the connection is not pinned to a checked address
-    (DNS rebinding between check and connect).
 - id: GUIDE-fetch-04
   source: guide
   section: Fetching metadata safely
@@ -1884,8 +1903,17 @@ guide:
   role: both
   text: Cache according to HTTP caching headers, within bounds you set, such as at least a minute and
     at most a day.
-  status: open
-  reason: No bounded metadata cache yet (see PAP-3-04, PAP-3.2-05).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.caching:CacheBounds
+  - personal_agent_protocol.caching:cache_lifetime
+  - personal_agent_protocol.caching:MetadataCache
+  - personal_agent_protocol.discovery:DiscoveryClient._get_json
+  - personal_agent_protocol.identity:AgentIdentityClient._cached_json
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_cache_lifetime_follows_cache_control_within_bounds
+  - personal_agent_protocol/__tests__/test_guidance.py::test_discovery_and_oauth_metadata_are_cached_until_they_expire
+  - personal_agent_protocol/__tests__/test_guidance.py::test_no_store_metadata_is_fetched_every_time
 - id: GUIDE-retry-01
   source: guide
   section: Retries
@@ -1913,8 +1941,13 @@ guide:
   level: SHOULD
   role: personal-agent
   text: Otherwise, back off exponentially with jitter, cap the delay, and limit the number of attempts.
-  status: open
-  reason: The SDK does not retry on its own; no backoff helper.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:RetryPolicy
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_retry_policy_honours_retry_after_backs_off_with_jitter_and_caps
+  - personal_agent_protocol/__tests__/test_guidance.py::test_safe_requests_retry_after_retry_after_with_fresh_proofs
 - id: GUIDE-rate-01
   source: guide
   section: Rate limits
@@ -1929,8 +1962,14 @@ guide:
   level: SHOULD
   role: personal-agent
   text: Keep track of limits for each company and share them across your tasks and users.
-  status: open
-  reason: No shared rate-limit budget contribution yet.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:RateLimitBudget
+  - personal_agent_protocol.reactor:SharedRateLimitBudget
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_shared_budget_paces_tasks_and_refuses_long_waits
+  - personal_agent_protocol/__tests__/test_guidance.py::test_writes_and_long_pauses_go_back_to_the_caller_and_are_shared
 - id: GUIDE-json-01
   source: guide
   section: Transport and JSON
@@ -1943,6 +1982,7 @@ guide:
   tests:
   - personal_agent_protocol/__tests__/test_models.py::test_strict_json_rejects_duplicate_members
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  - personal_agent_protocol/__tests__/test_fuzz.py::test_strict_json_accepts_every_unique_document_and_refuses_every_duplicate
   conformance:
   - security.duplicate-json-members
 - id: GUIDE-pa-dpop-01

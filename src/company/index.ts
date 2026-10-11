@@ -43,10 +43,17 @@ export class IdentityClientResolver implements ClientResolver {
     this.#identity = identity;
   }
 
-  async resolve(clientId: string): Promise<readonly [ClientMetadata, JsonWebKeySet]> {
+  /** Cached metadata and keys, the keys fetched again for an unknown `kid`. */
+  async resolve(
+    clientId: string,
+    options: { readonly kid?: string } = {},
+  ): Promise<readonly [ClientMetadata, JsonWebKeySet]> {
     const identity = this.#identity;
     if (identity === undefined) throw new Error("IdentityClientResolver is not bound");
-    return [await identity.fetchMetadata(clientId), await identity.fetchJwks(clientId)];
+    return [
+      await identity.fetchMetadata(clientId),
+      await identity.fetchJwks(clientId, options.kid === undefined ? {} : { kid: options.kid }),
+    ];
   }
 }
 
@@ -54,7 +61,7 @@ export class IdentityClientResolver implements ClientResolver {
 export function createCompanyDefaultsPlugin(resolver: ClientResolver) {
   return definePlugin({
     name: "personal-agent-protocol.company",
-    version: "0.4.0",
+    version: "0.5.0",
     contributionPoints: [
       CompanyStores,
       CompanyAccounts,

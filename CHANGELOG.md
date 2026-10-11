@@ -6,6 +6,33 @@
 
 # Changelog
 
+## 0.5.0 (2026-10-11)
+
+- **Security:** Direct Sign-In moves the Account Token into `pap.tokenStore`
+  behind an opaque `account_…` reference, as Device and Mediated Sign-In do: the
+  result's token no longer carries `refresh_token`, and the new
+  `account_token_reference` (`accountTokenReference` in TypeScript) names it
+  (§4.8). Hosts that read `result.token.refresh_token` read the token store.
+- **Company:** hosted sign-in pages. `CompanyConfig.device_page` (`devicePage`)
+  becomes the Device Sign-In `verification_uri` (`&code=<user_code>` completes
+  it); `consent_page` (`consentPage`, with `{request_id}`) makes
+  `GET /oauth/authorize` answer `303` to it after every check, never for an
+  unverified `redirect_uri`. `authorization_request(request_id)`
+  (`authorizationRequest`) reads a pending request back for that page without
+  consuming it.
+- **TypeScript parity:** `negotiateExtensions`, `extensionNameKind`,
+  `extensionDomain`, `extensionRequired`, `knownApis`, `conversationEndpoint`,
+  `openapiUrl`; message `context` facts validated as in Python; a 429's
+  `Retry-After` is `details.retry_after` on Session, conversation and
+  operation errors (Sessions used `retryAfter`); `confirm` answers
+  `not_confirmed` for a cancelled or expired operation. The TypeScript specs
+  pass every conformance fixture case the SDK decides alone.
+- **Fuzzing** (seeded, no new dependency): strict JSON, URL safety and the
+  operation state machine in Python; strict JSON and URL safety in TypeScript.
+  It found, and this release fixes: Python's strict JSON accepted `NaN`,
+  `Infinity` and `-Infinity` (not JSON, and refused by TypeScript), and the URL
+  safety policy accepted an empty user-information part (`https://:@host/`).
+
 ## 0.4.0 (2026-10-11)
 
 Both sides of PAP draft 0.1 and Operations v1, in Python and TypeScript.

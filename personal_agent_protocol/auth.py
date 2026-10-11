@@ -31,6 +31,7 @@ from .reactor import (
     DPOP_PROOF_PROVIDERS,
     RANDOM_SOURCES,
     SIGNERS,
+    TOKEN_STORES,
     AuthorizationStateStore,
     BrowserHandoff,
     Clock,
@@ -38,6 +39,7 @@ from .reactor import (
     DpopProofRequest,
     RandomSource,
     Signer,
+    TokenStore,
     first_contribution,
 )
 from .sessions import (
@@ -234,11 +236,16 @@ class DirectSignInStart(ProtocolModel):
 
 
 class DirectSignInResult(ProtocolModel):
-    """Signed-in Session plus any scopes the company did not grant."""
+    """Signed-in Session plus any scopes the company did not grant.
+
+    The Account Token (the response's `refresh_token`) never stays in `token`:
+    it is moved into `pap.tokenStore` behind `account_token_reference` (§4.8).
+    """
 
     token: SessionToken
     granted_scopes: tuple[str, ...]
     missing_scopes: tuple[str, ...]
+    account_token_reference: str | None = None
 
 
 @dataclass(frozen=True)
@@ -448,7 +455,7 @@ class DirectSignInClient:
                 ) from exc
             payload = self._decode(response)
             if response.is_success:
-                return self._result(response, payload, pending)
+                return await self._result(response, payload, pending)
             error_code = payload.get("error") if isinstance(payload, dict) else None
             safe_code = error_code if isinstance(error_code, str) else "http_error"
             if safe_code == "use_dpop_nonce" and attempt == 0:
@@ -490,8 +497,8 @@ class DirectSignInClient:
                 status_code=response.status_code,
             ) from exc
 
-    @staticmethod
-    def _result(
+    async def _result(
+        self,
         response: httpx.Response,
         payload: object,
         pending: _PendingDirectSignIn,
@@ -524,8 +531,18 @@ class DirectSignInClient:
                 "Company returned a scope that was not requested",
                 status_code=response.status_code,
             )
+        account_reference: str | None = None
+        if token.refresh_token is not None:
+            # The Account Token is a secret (§4.8): behind an opaque reference, never returned.
+            random_source = cast(
+                RandomSource, first_contribution(self.reactor, RANDOM_SOURCES, "random source")
+            )
+            account_reference = _opaque_id("account", random_source.bytes)
+            store = cast(TokenStore, first_contribution(self.reactor, TOKEN_STORES, "token store"))
+            await store.put(account_reference, token.refresh_token)
         return DirectSignInResult(
-            token=token,
+            token=token.model_copy(update={"refresh_token": None}),
             granted_scopes=granted,
             missing_scopes=tuple(scope for scope in requested if scope not in granted),
+            account_token_reference=account_reference,
         )

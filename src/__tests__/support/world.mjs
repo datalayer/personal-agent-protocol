@@ -246,9 +246,15 @@ export async function agentHost({ identity, fetch, clock, answers = [] }) {
             now,
             async resolveKey(request) {
               const key = `${request.tenantId}\u0000${request.subject}\u0000${request.issuer}`;
+              // One key per (tenant, user, company), even for requests made at the same time.
               if (!keys.has(key)) {
-                const pair = await generateKeyPair("ES256", { extractable: true });
-                keys.set(key, { privateKey: pair.privateKey, publicJwk: await exportJWK(pair.publicKey) });
+                keys.set(
+                  key,
+                  generateKeyPair("ES256", { extractable: true }).then(async (pair) => ({
+                    privateKey: pair.privateKey,
+                    publicJwk: await exportJWK(pair.publicKey),
+                  })),
+                );
               }
               return keys.get(key);
             },

@@ -24,7 +24,7 @@ from personal_agent_protocol import (
     build_direct_sign_in_request,
     validate_direct_sign_in_callback,
 )
-from personal_agent_protocol.reactor import build_pap_reactor
+from personal_agent_protocol.reactor import TOKEN_STORES, build_pap_reactor
 
 
 def fixed_random(length: int) -> bytes:
@@ -167,8 +167,23 @@ class Dpop:
         return SecretStr(f"dpop-{len(self.requests)}")
 
 
+class MemoryTokenStore:
+    def __init__(self) -> None:
+        self.values: dict[str, SecretStr] = {}
+
+    async def put(self, reference: str, token: SecretStr) -> None:
+        self.values[reference] = token
+
+    async def get(self, reference: str) -> SecretStr | None:
+        return self.values.get(reference)
+
+    async def delete(self, reference: str) -> None:
+        self.values.pop(reference, None)
+
+
 class DirectSignInPlugin:
     def __init__(self) -> None:
+        self.tokens = MemoryTokenStore()
         self.state = MemoryAuthorizationStateStore()
         self.browser = Browser()
         self.signer = Signer()
@@ -180,6 +195,7 @@ class DirectSignInPlugin:
         contribute(BROWSER_HANDOFFS, self.browser, contribution_id="browser")
         contribute(SIGNERS, self.signer, contribution_id="signer")
         contribute(DPOP_PROOF_PROVIDERS, self.dpop, contribution_id="dpop")
+        contribute(TOKEN_STORES, self.tokens, contribution_id="memory")
 
 
 def callback_from_browser(browser: Browser, **overrides: str) -> str:
@@ -263,6 +279,13 @@ def test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes() -> 
         assert result.token.access_token.get_secret_value() == "signed-in-session-token"
         assert result.granted_scopes == ("poppy:read",)
         assert result.missing_scopes == ("poppy:write",)
+        # The Account Token never stays in the result (§4.8): only its opaque reference.
+        assert result.token.refresh_token is None
+        assert result.account_token_reference is not None
+        assert result.account_token_reference.startswith("account_")
+        assert "account-token" not in result.model_dump_json()
+        stored = plugin.tokens.values[result.account_token_reference]
+        assert stored.get_secret_value() == "account-token"
         assert [item.nonce for item in plugin.dpop.requests] == [None, "company-nonce"]
         assert forms[0]["session_id"] == forms[1]["session_id"] == "ses_existing"
         assert forms[0]["code_verifier"] == forms[1]["code_verifier"]

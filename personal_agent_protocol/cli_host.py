@@ -376,6 +376,19 @@ class CliRuntime:
     def expires_at(self, expires_in: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
+    def session(self, session_id: str) -> SessionRecord:
+        """A Session of this runtime's tenant; another tenant's looks unknown."""
+
+        record = self.state.sessions.get(session_id)
+        if record is None or record.tenant_id != self.tenant_id:
+            raise NotConfiguredError("unknown_session", "No such Session: run `pap sessions start`")
+        return record
+
+    def sessions(self) -> list[SessionRecord]:
+        """The Sessions of this runtime's tenant only."""
+
+        return [r for r in self.state.sessions.values() if r.tenant_id == self.tenant_id]
+
 
 class CliHostPlugin:
     """The CLI's default contributions, each replaceable by an installed plugin."""

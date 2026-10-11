@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import cast
 from urllib.parse import urljoin, urlsplit
 
@@ -14,10 +16,29 @@ import httpx
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import TransportError
-from .reactor import DPOP_PROOF_PROVIDERS, DpopProofProvider, DpopProofRequest, first_contribution
+from .reactor import (
+    CLOCKS,
+    DPOP_PROOF_PROVIDERS,
+    RANDOM_SOURCES,
+    RATE_LIMIT_BUDGETS,
+    RETRY_POLICIES,
+    Clock,
+    DpopProofProvider,
+    DpopProofRequest,
+    RandomSource,
+    RateLimitBudget,
+    RetryPolicy,
+    SystemClock,
+    first_contribution,
+    parse_retry_after,
+)
 from .sessions import SessionToken
 
 _REDIRECTS = frozenset({301, 302, 303, 307, 308})
+#: Refusals that ask the caller to come back later (Guides, retries and rate limits).
+_LATER = frozenset({429, 503})
+#: Methods retried on their own: they change nothing at the company.
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def _https_url(value: str) -> str:
@@ -30,6 +51,18 @@ def _https_url(value: str) -> str:
 def _origin(value: str) -> tuple[str, str, int]:
     parsed = urlsplit(value)
     return parsed.scheme, (parsed.hostname or "").lower(), parsed.port or 443
+
+
+def budget_key(url: str) -> str:
+    """The shared rate-limit budget a request draws on: its company's origin."""
+
+    scheme, host, port = _origin(url)
+    return f"{scheme}://{host}:{port}"
+
+
+def _optional(platform: PluginPlatform, point: object) -> object | None:
+    contributions = platform.get_contributions(point)
+    return contributions[0].value if contributions else None
 
 
 class DpopHttpClient:
@@ -48,7 +81,7 @@ class DpopHttpClient:
         self.http = http_client
         self.max_redirects = max_redirects
 
-    async def request(  # noqa: C901 - security state machine is clearer in one loop
+    async def request(
         self,
         method: str,
         url: str,
@@ -60,7 +93,75 @@ class DpopHttpClient:
         headers: Mapping[str, str] | None = None,
         content: bytes | None = None,
     ) -> httpx.Response:
-        """Send a DPoP request, retry one nonce, and follow same-origin redirects."""
+        """Send a DPoP request within the company's shared budget, retrying when told to.
+
+        Every attempt draws on `pap.rateLimitBudget` for the company's origin.
+        A 429 or 503 shares its `Retry-After` with every task through the
+        budget; a safe method (GET, HEAD, OPTIONS) is then retried by
+        `pap.retryPolicy` — never sooner than `Retry-After`, with exponential
+        backoff and jitter otherwise — each time with a fresh DPoP proof. A
+        write, or a pause longer than the policy allows, returns the refusal
+        to the caller.
+        """
+
+        policy = _optional(self.reactor, RETRY_POLICIES)
+        budget = _optional(self.reactor, RATE_LIMIT_BUDGETS)
+        retry = policy if isinstance(policy, RetryPolicy) else RetryPolicy(max_attempts=1)
+        key = budget_key(url)
+        attempts = 0
+        while True:
+            if isinstance(budget, RateLimitBudget):
+                await budget.acquire(key)
+            response = await self._request_once(
+                method,
+                url,
+                token=token,
+                tenant_id=tenant_id,
+                pairwise_user_id=pairwise_user_id,
+                issuer=issuer,
+                headers=headers,
+                content=content,
+            )
+            attempts += 1
+            if response.status_code not in _LATER:
+                return response
+            retry_after = parse_retry_after(response.headers.get("retry-after"), self._now())
+            delay = (
+                retry.delay(attempts, retry_after, self._jitter())
+                if method.upper() in _SAFE_METHODS
+                else None
+            )
+            pause = delay if delay is not None else retry_after
+            if isinstance(budget, RateLimitBudget) and pause is not None:
+                await budget.defer(key, pause)
+            if delay is None:
+                return response
+            if not isinstance(budget, RateLimitBudget):
+                await asyncio.sleep(delay)
+
+    def _now(self) -> datetime:
+        clock = _optional(self.reactor, CLOCKS)
+        return (clock if isinstance(clock, Clock) else SystemClock()).now()
+
+    def _jitter(self) -> float:
+        source = _optional(self.reactor, RANDOM_SOURCES)
+        if not isinstance(source, RandomSource):
+            return 0.5
+        return int.from_bytes(source.bytes(4), "big") / 2**32
+
+    async def _request_once(  # noqa: C901 - security state machine is clearer in one loop
+        self,
+        method: str,
+        url: str,
+        *,
+        token: SessionToken,
+        tenant_id: str,
+        pairwise_user_id: str,
+        issuer: str,
+        headers: Mapping[str, str] | None = None,
+        content: bytes | None = None,
+    ) -> httpx.Response:
+        """One DPoP request: retry one nonce and follow same-origin redirects."""
 
         if token.token_type != "DPoP":  # noqa: S105 - OAuth token type
             raise TransportError(

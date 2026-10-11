@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 from typing import Any
 
 import typer
@@ -118,6 +119,9 @@ def _run_identity(client_id: str, *, jwks: bool = False) -> dict[str, object]:
         raise typer.Exit(code=1) from error
 
 
+_TENANT = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
 class PapCliPlugin:
     """Add PAP-owned groups to a CLI and safe actions to live sessions."""
 
@@ -125,6 +129,23 @@ class PapCliPlugin:
         self.config = config or ConfigStore()
         self._host = host
         self.agent_group = typer.Typer(name="agent", help="Inspect PAP personal-agent identity.")
+
+    def tenant(self) -> str:
+        """The tenant every command acts for: `PAP_TENANT`, else the profile's, else `pap-cli`.
+
+        Sessions, pairwise User IDs and DPoP keys are kept apart by tenant: a
+        command sees only its tenant's Sessions.
+        """
+
+        configured = self.config.resolve().get("tenant")
+        tenant = str(configured.value) if configured else "pap-cli"
+        if not _TENANT.fullmatch(tenant):
+            from .cli_host import NotConfiguredError
+
+            raise NotConfiguredError(
+                "invalid_tenant", "A tenant is 1 to 64 letters, digits, '.', '_' or '-'"
+            )
+        return tenant
 
     @property
     def host(self) -> HostFactory:

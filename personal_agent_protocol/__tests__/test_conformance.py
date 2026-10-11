@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from xml.etree import ElementTree
 
 import pytest
@@ -35,6 +37,11 @@ async def test_python_agent_python_company_over_tls() -> None:
     async with served_over_tls(world.network) as network:
         assert network.socket_transport is not None
         report = await run_conformance(world.context())
+    reports = os.environ.get("PAP_CONFORMANCE_REPORTS")
+    if reports:  # kept for the compatibility report (scripts/conformance_report.py)
+        Path(reports).mkdir(parents=True, exist_ok=True)
+        target = Path(reports) / "python-agent-python-company.json"
+        target.write_text(json.dumps(report.to_json(), indent=2) + "\n")
     assert _failures(report) == []
     assert {r.id for r in report.results} == set(CASES)
     kinds = {r.kind for r in report.results}

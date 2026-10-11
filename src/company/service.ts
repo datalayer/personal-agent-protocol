@@ -76,6 +76,19 @@ import {
 } from "./points.js";
 import { verifyAssertion } from "./verify.js";
 
+/** The `kid` a compact JWT's header names, if any (used only to look a key up). */
+function keyId(compact: string): { readonly kid?: string } {
+  try {
+    const header: unknown = JSON.parse(
+      Buffer.from(compact.split(".", 1)[0] ?? "", "base64url").toString("utf8"),
+    );
+    const kid = (header as { kid?: unknown } | null)?.kid;
+    return typeof kid === "string" ? { kid } : {};
+  } catch {
+    return {};
+  }
+}
+
 const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 const REFRESH_TOKEN_GRANT = "refresh_token";
 const PAGE = 50;
@@ -98,6 +111,24 @@ export interface CompanyConfigOptions {
   readonly deviceInterval?: number;
   readonly maxCodeAttempts?: number;
   readonly customScopes?: Readonly<Record<string, string>>;
+  /** A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it. */
+  readonly devicePage?: string;
+  /** A hosted consent page with `{request_id}`: `GET /oauth/authorize` answers 303 to it. */
+  readonly consentPage?: string;
+}
+
+function hostedPage(name: string, value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(value.replaceAll("{request_id}", "x"));
+  } catch {
+    throw new RangeError(`${name} must be an HTTPS URL without a fragment`);
+  }
+  if (parsed.protocol !== "https:" || !parsed.hostname || parsed.hash) {
+    throw new RangeError(`${name} must be an HTTPS URL without a fragment`);
+  }
+  return value;
 }
 
 /** What the company publishes and allows. */
@@ -117,6 +148,8 @@ export class CompanyConfig {
   readonly deviceInterval: number;
   readonly maxCodeAttempts: number;
   readonly customScopes: Readonly<Record<string, string>>;
+  readonly devicePage: string | undefined;
+  readonly consentPage: string | undefined;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -134,6 +167,11 @@ export class CompanyConfig {
     this.deviceInterval = options.deviceInterval ?? 5;
     this.maxCodeAttempts = options.maxCodeAttempts ?? 3;
     this.customScopes = { ...(options.customScopes ?? {}) };
+    this.devicePage = hostedPage("devicePage", options.devicePage);
+    this.consentPage = hostedPage("consentPage", options.consentPage);
+    if (this.consentPage !== undefined && !this.consentPage.includes("{request_id}")) {
+      throw new RangeError("consentPage must contain {request_id}");
+    }
   }
 
   get base(): string {
@@ -429,7 +467,7 @@ export class CompanyService {
     const resolver = firstContribution(this.reactor, ClientResolvers, "client resolver");
     let resolved: readonly [ClientMetadata, JsonWebKeySet];
     try {
-      resolved = await resolver.resolve(clientId);
+      resolved = await resolver.resolve(clientId, keyId(form.client_assertion ?? ""));
     } catch {
       throw new Refused(401, "invalid_client");
     }
@@ -487,7 +525,7 @@ export class CompanyService {
     thumbprint: string,
   ): Promise<CompanyResponse> {
     const resolver = firstContribution(this.reactor, ClientResolvers, "client");
-    const [, keys] = await resolver.resolve(clientId);
+    const [, keys] = await resolver.resolve(clientId, keyId(form.assertion ?? ""));
     const claims = await verifyAssertion(form.assertion ?? "", {
       keys,
       issuer: clientId,
@@ -599,8 +637,17 @@ export class CompanyService {
       body: {
         device_code: deviceCode,
         user_code: userCode,
-        verification_uri: `${this.config.base}/device`,
-        verification_uri_complete: `${this.config.base}/device?user_code=${userCode}`,
+        ...(this.config.devicePage === undefined
+          ? {
+              verification_uri: `${this.config.base}/device`,
+              verification_uri_complete: `${this.config.base}/device?user_code=${userCode}`,
+            }
+          : {
+              verification_uri: this.config.devicePage,
+              verification_uri_complete: `${this.config.devicePage}${
+                new URL(this.config.devicePage).search ? "&" : "?"
+              }${new URLSearchParams({ code: userCode })}`,
+            }),
         expires_in: lifetime,
         interval: this.config.deviceInterval,
       },
@@ -683,9 +730,14 @@ export class CompanyService {
     const key = digest(form.token ?? "");
     const grant = this.store.accountTokens.get(key);
     if (grant !== undefined && grant.clientId === clientId) {
-      grant.revoked = true;
-      // Every Session signed in with it continues signed out (§4.9).
-      this.#signOutSessionsOf(key);
+      // The token and every one rotated from the same sign-in: each Session signed
+      // in with any of them continues signed out (§4.9).
+      for (const [other, sibling] of this.store.accountTokens) {
+        if (sibling.family === grant.family) {
+          sibling.revoked = true;
+          this.#signOutSessionsOf(other);
+        }
+      }
     }
     return { status: 200, body: {}, headers: { ...NO_STORE } };
   }
@@ -727,6 +779,7 @@ export class CompanyService {
     }
     const accountToken = this.#id("acct");
     this.store.accountTokens.set(digest(accountToken), {
+      family: digest(accountToken),
       accountId,
       clientId: session.clientId,
       pairwiseUserId: session.pairwiseUserId,
@@ -813,7 +866,18 @@ export class CompanyService {
       state,
       codeChallenge: query.code_challenge,
       expiresAt: this.#later(10 * 60),
+      clientName: metadata.client_name,
     });
+    if (this.config.consentPage !== undefined) {
+      // A hosted consent page reads the request back (`authorizationRequest`).
+      return {
+        status: 303,
+        headers: {
+          Location: this.config.consentPage.replaceAll("{request_id}", encodeURIComponent(requestId)),
+          ...NO_STORE,
+        },
+      };
+    }
     const agent = escapeHtml(metadata.client_name);
     const agentDomain = escapeHtml(new URL(clientId).hostname);
     const described = scopes
@@ -828,6 +892,33 @@ export class CompanyService {
         '<button name="decision" value="allow">Allow</button>' +
         '<button name="decision" value="deny">Deny</button></form>',
     );
+  }
+
+  /**
+   * A pending Direct Sign-In request, for a consent page to show; not consumed.
+   *
+   * Who asks (`client_name`, the `client_id` domain), for what (each scope with its
+   * `customScopes` words), until when; never `state`, PKCE, or the redirect. Throws
+   * for an unknown, used, or expired request.
+   */
+  authorizationRequest(requestId: string): {
+    readonly request_id: string;
+    readonly client_name: string;
+    readonly client_domain: string;
+    readonly scopes: readonly { readonly scope: string; readonly description: string }[];
+    readonly expires_at: string;
+  } {
+    const pending = this.store.authorizations.get(requestId);
+    if (pending === undefined || this.#now().getTime() >= pending.expiresAt.getTime()) {
+      throw new Error("unknown, used, or expired sign-in request");
+    }
+    return {
+      request_id: requestId,
+      client_name: pending.clientName ?? "",
+      client_domain: new URL(pending.clientId).hostname,
+      scopes: pending.scopes.map((scope) => ({ scope, description: this.config.customScopes[scope] ?? scope })),
+      expires_at: isoZ(pending.expiresAt),
+    };
   }
 
   /**

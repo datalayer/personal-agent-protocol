@@ -7,7 +7,8 @@ on:
       - 'docs/**'
       - 'personal_agent_protocol/**'
       - 'src/**'
-      - 'scripts/generate_api_reference.py'
+      - 'scripts/**'
+      - 'protocol/**'
       - '.github/workflows/docs.yaml'
   pull_request:
     branches: [main, develop]
@@ -15,7 +16,8 @@ on:
       - 'docs/**'
       - 'personal_agent_protocol/**'
       - 'src/**'
-      - 'scripts/generate_api_reference.py'
+      - 'scripts/**'
+      - 'protocol/**'
       - '.github/workflows/docs.yaml'
   workflow_dispatch:
 
@@ -45,5 +47,6 @@ jobs:
         with:
           python-version: '3.12'
       - run: python ../scripts/generate_api_reference.py --check
+      - run: python -m pip install pyyaml && python ../scripts/generate_coverage.py --check
       - run: npm install --no-package-lock
       - run: npm run build

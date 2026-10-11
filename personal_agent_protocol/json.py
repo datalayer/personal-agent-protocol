@@ -24,11 +24,16 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _no_constant(name: str) -> Any:
+    # NaN, Infinity and -Infinity are not JSON (RFC 8259), though Python's decoder takes them.
+    raise ProtocolValidationError("invalid_json", f"JSON does not allow {name}")
+
+
 def loads_strict(value: str | bytes) -> Any:
-    """Decode JSON while rejecting duplicate object member names."""
+    """Decode JSON (RFC 8259) while rejecting duplicate object member names."""
 
     try:
-        return json.loads(value, object_pairs_hook=_unique_object)
+        return json.loads(value, object_pairs_hook=_unique_object, parse_constant=_no_constant)
     except ProtocolValidationError:
         raise
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:

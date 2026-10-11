@@ -13,13 +13,14 @@ conversation, so one approval flow serves both channels.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import httpx
 
 from .errors import PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
-from .models import DiscoveryDocument, Operation, ProtocolModel
+from .models import ApiDescriptor, DiscoveryDocument, Operation, ProtocolModel
 from .sessions import SessionToken
 from .transport import DpopHttpClient
 
@@ -36,6 +37,27 @@ class ApiResponse(ProtocolModel):
     operation: Operation | None = None
 
 
+#: API types draft 0.1 defines (§6); any other type is skipped.
+KNOWN_API_TYPES = frozenset({"openapi", "mcp"})
+
+
+def known_apis(document: DiscoveryDocument) -> list[ApiDescriptor]:
+    """The APIs whose type this SDK knows, skipping the rest so later versions can add types."""
+
+    return [api for api in document.apis if api.type in KNOWN_API_TYPES]
+
+
+def conversation_endpoint(document: DiscoveryDocument) -> str | None:
+    """The `poppy` conversation endpoint, skipping protocol types this SDK does not speak."""
+
+    if document.agent is None:
+        return None
+    for protocol in document.agent.protocols:
+        if protocol.type == "poppy":
+            return protocol.endpoint
+    return None
+
+
 def openapi_url(document: DiscoveryDocument) -> str | None:
     """The company's OpenAPI description, when it advertises one."""
 
@@ -43,6 +65,16 @@ def openapi_url(document: DiscoveryDocument) -> str | None:
         if api.type == "openapi":
             return api.url
     return None
+
+
+_CHALLENGE = re.compile(r'(\w+)="([^"]*)"')
+
+
+def _challenge(header: str) -> tuple[str | None, str | None]:
+    """`error` and `scope` from a `DPoP`/`Bearer` WWW-Authenticate challenge."""
+
+    values = dict(_CHALLENGE.findall(header))
+    return values.get("error"), values.get("scope")
 
 
 class ApiClient:
@@ -95,6 +127,9 @@ class ApiClient:
             return ApiResponse(status=response.status_code, body=payload)
         error = payload.get("error") if isinstance(payload, dict) else None
         scope = payload.get("scope") if isinstance(payload, dict) else None
+        if not isinstance(error, str):
+            # Token errors may come only in WWW-Authenticate (§6).
+            error, scope = _challenge(response.headers.get("www-authenticate", ""))
         raise ApiError(
             error if isinstance(error, str) else "api_request_failed",
             "the company refused the API call",

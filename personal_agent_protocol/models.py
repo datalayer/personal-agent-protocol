@@ -344,6 +344,12 @@ class Message(ProtocolModel):
         return self
 
 
+#: Event types draft 0.1 defines (§7.5); a personal agent skips any other type.
+KNOWN_EVENT_TYPES = frozenset(
+    {"message", "state", "authorization", "user_requested", "direct_opened", "direct_closed"}
+)
+
+
 class ConversationEvent(ProtocolModel):
     """One ordered PAP conversation event, including unknown future types."""
 
@@ -364,6 +370,12 @@ class ConversationEvent(ProtocolModel):
         if value is not None and not _IDENTIFIER.fullmatch(value):
             raise ValueError("conversation event IDs must use the URL-safe base64 alphabet")
         return value
+
+    @property
+    def known(self) -> bool:
+        """Whether this SDK knows the type; an unknown one is skipped, never an error."""
+
+        return self.type in KNOWN_EVENT_TYPES
 
     @field_validator("created_at")
     @classmethod

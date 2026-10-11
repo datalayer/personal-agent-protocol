@@ -241,9 +241,11 @@ class ConfirmOutcome(ProtocolModel):
     or `in_progress` with `retry_after`). `terms_changed`: a newer revision
     (`operation`) to show the user, with the `changed` term paths.
     `approval_required`: the company wants the user's own approval.
+    `not_confirmed`: the operation was already cancelled or expired, returned
+    as it is; nothing was confirmed or performed.
     """
 
-    status: Literal["confirmed", "terms_changed", "approval_required"]
+    status: Literal["confirmed", "terms_changed", "approval_required", "not_confirmed"]
     operation: Operation | None = None
     changed: tuple[str, ...] = ()
     retry_after: int | None = None
@@ -324,6 +326,9 @@ class OperationsClient:
         await _settle(held, spent=response.status_code == 200)
         if response.status_code == 200:
             confirmed = self._operation(payload, operation.operation_id)
+            if confirmed.confirmation is None and confirmed.state in {"cancelled", "expired"}:
+                # A repeated or late confirm is safe: the record comes back unchanged.
+                return ConfirmOutcome(status="not_confirmed", operation=confirmed)
             if confirmed.revision != operation.revision or confirmed.confirmation is None:
                 raise OperationError(
                     "invalid_operation", "The company confirmed a revision other than the one sent"

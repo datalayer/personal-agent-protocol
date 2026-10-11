@@ -77,6 +77,16 @@ so a stream of assertions naming made-up keys cannot make the company fetch
 on every request. The `kid` is used only to look a key up; the signature is
 still verified against the published key.
 
+During the overlap, assertions signed with either key verify. Once the agent
+retires the old key (publishes the set without it), the company keeps
+accepting it only until its cached set expires — the set's `Cache-Control`,
+within the bounds above — and refuses it after that with `invalid_client`.
+An agent therefore keeps the old key published, and stops signing with it,
+for at least its JWKS `max-age` before removing it. A real rotation that
+arrives within a minute of a refetch caused by a made-up `kid` waits for the
+next refetch. `test_guide_security.py` and `guide-security.test.mjs` play
+the rotation against each reference company.
+
 ## Retries: `Retry-After`, backoff, and jitter
 
 `DpopHttpClient.request` / `DpopFetchClient.request` handle a `429` or `503`:

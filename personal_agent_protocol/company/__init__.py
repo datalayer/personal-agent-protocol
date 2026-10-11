@@ -61,7 +61,13 @@ from .points import (
     ToolResult,
     Turn,
 )
-from .service import CompanyConfig, CompanyRequest, CompanyResponse, CompanyService
+from .service import (
+    CompanyConfig,
+    CompanyRequest,
+    CompanyResponse,
+    CompanyService,
+    ConsentDecision,
+)
 from .store import RECORD_KINDS, StoredRecord
 from .verify import verify_assertion
 
@@ -175,6 +181,7 @@ __all__ = [
     "CompanyResponse",
     "CompanyService",
     "CompanyStore",
+    "ConsentDecision",
     "IdentityClientResolver",
     "MemoryCompanyStore",
     "MemoryReplayCache",

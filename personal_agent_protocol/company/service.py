@@ -157,6 +157,50 @@ def _key_id(compact: str) -> str | None:
     return kid if isinstance(kid, str) else None
 
 
+#: The consent page's cookie: `__Host-`, so no other host or path can set it.
+CONSENT_COOKIE = "__Host-poppy_consent"
+#: The website's cookie, standing for the agent's Session in its own browser (§5).
+WEB_COOKIE = "poppy_session"
+
+
+def _bound(secret: str, purpose: str) -> str:
+    """A form's CSRF token: only a page whose browser holds `secret` (a cookie) can know it."""
+
+    mac = hmac.new(secret.encode(), purpose.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(mac).rstrip(b"=").decode()
+
+
+def _cookie(request: CompanyRequest, name: str) -> str | None:
+    cookies = SimpleCookie()
+    try:
+        cookies.load(request.headers.get("cookie", ""))
+    except CookieError:
+        return None
+    morsel = cookies.get(name)
+    return morsel.value if morsel is not None and morsel.value else None
+
+
+def _from_this_site(request: CompanyRequest, base: str) -> bool:
+    """A POST a page of this site sent: never one another site's page made the browser send.
+
+    `Sec-Fetch-Site`, when the browser sends it, must be `same-origin`, and
+    `Origin`, when sent, the company's own; the form's CSRF token is checked
+    besides (Guides, consent pages).
+    """
+
+    site = request.headers.get("sec-fetch-site")
+    origin = request.headers.get("origin")
+    return (site is None or site == "same-origin") and (origin is None or origin == base)
+
+
+@dataclass(frozen=True)
+class ConsentDecision:
+    """What the user decided on the company's own consent page, checked by `consent_decision`."""
+
+    request_id: str
+    allow: bool
+
+
 @dataclass(frozen=True)
 class CompanyConfig:
     """What the company publishes and allows."""
@@ -1073,6 +1117,11 @@ class CompanyService:
             return self._redirect(redirect_uri, error="invalid_scope", state=state)
         request_id = self._id("authz")
         expires_at = self._now() + timedelta(minutes=10)
+        # The company's own page binds the request to this browser: its consent cookie
+        # (kept if it has one) and a form token only that cookie yields.
+        browser = None
+        if self.config.consent_page is None:
+            browser = _cookie(request, CONSENT_COOKIE) or self._id("consent")
         await self.store.put(
             AUTHORIZATION,
             request_id,
@@ -1084,10 +1133,11 @@ class CompanyService:
                 code_challenge=query["code_challenge"],
                 expires_at=expires_at,
                 client_name=metadata.client_name,
+                browser_binding=None if browser is None else _digest(browser),
             ).to_json(),
             expires_at=expires_at,
         )
-        if self.config.consent_page is not None:
+        if browser is None:
             # A hosted consent page reads the request back (`authorization_request`).
             return CompanyResponse(
                 303,
@@ -1109,11 +1159,46 @@ class CompanyService:
             200,
             f"<h1>{html.escape(self.config.name)}</h1>"
             f"<p><strong>{agent}</strong> ({agent_domain}) asks to:</p><ul>{described}</ul>"
-            f'<form method="post" data-request-id="{request_id}">'
+            f'<form method="post" action="{self.config.authorization_endpoint}" '
+            f'data-request-id="{request_id}">'
             f'<input type="hidden" name="request_id" value="{request_id}">'
+            f'<input type="hidden" name="csrf" value="{_bound(browser, f"consent:{request_id}")}">'
             '<button name="decision" value="allow">Allow</button>'
             '<button name="decision" value="deny">Deny</button></form>',
+            cookie=f"{CONSENT_COOKIE}={browser}; Path=/; Secure; HttpOnly; SameSite=Strict",
         )
+
+    async def consent_decision(self, request: CompanyRequest) -> ConsentDecision:
+        """The decision the company's own consent form posted, once it is shown to be the user's.
+
+        The company's web layer, which knows who is signed in, calls this on the
+        form's POST and then `approve_authorization` or `deny_authorization`.
+        Refused (`PermissionError`) unless the POST comes from this site
+        (`Sec-Fetch-Site`, `Origin`), carries the consent cookie the request was
+        bound to when its page was shown, and the form token only that cookie
+        yields: another site's page cannot make the browser decide, and a form
+        replayed from another browser does not match (Guides, consent pages).
+        """
+
+        refused = PermissionError("this decision did not come from the page that asked")
+        if request.method.upper() != "POST" or not _from_this_site(request, self.config.base):
+            raise refused
+        form = dict(parse_qsl(request.body.decode()))
+        request_id = form.get("request_id", "")
+        browser = _cookie(request, CONSENT_COOKIE)
+        pending = await self._read(AUTHORIZATION, request_id, PendingAuthorization.from_json)
+        if (
+            browser is None
+            or pending is None
+            or pending.browser_binding is None
+            or not hmac.compare_digest(_digest(browser), pending.browser_binding)
+            or not hmac.compare_digest(
+                form.get("csrf", ""), _bound(browser, f"consent:{request_id}")
+            )
+            or form.get("decision") not in {"allow", "deny"}
+        ):
+            raise refused
+        return ConsentDecision(request_id=request_id, allow=form["decision"] == "allow")
 
     async def authorization_request(self, request_id: str) -> dict[str, Any]:
         """A pending Direct Sign-In request, for a consent page to show; not consumed.
@@ -1218,18 +1303,19 @@ class CompanyService:
         )
 
     @staticmethod
-    def _page(status: int, body: str) -> CompanyResponse:
+    def _page(status: int, body: str, *, cookie: str | None = None) -> CompanyResponse:
         """A consent page: never framed, never cached (upstream guides, consent pages)."""
 
+        headers = {
+            "Content-Type": "text/html; charset=utf-8",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'",
+            "Cache-Control": "no-store",
+        }
+        if cookie is not None:
+            headers["Set-Cookie"] = cookie
         return CompanyResponse(
-            status,
-            f"<!doctype html><meta charset=utf-8><title>Sign in</title>{body}",
-            {
-                "Content-Type": "text/html; charset=utf-8",
-                "X-Frame-Options": "DENY",
-                "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'",
-                "Cache-Control": "no-store",
-            },
+            status, f"<!doctype html><meta charset=utf-8><title>Sign in</title>{body}", headers
         )
 
     # OpenAPI API (§6, Operations §4.1) -----------------------------------------------------
@@ -2255,47 +2341,46 @@ class CompanyService:
             {
                 "Location": verified.return_to,
                 # The company's own cookie: no Max-Age, and only as alive as its Session.
-                "Set-Cookie": f"poppy_session={cookie}; Path=/; Secure; HttpOnly; SameSite=Lax",
+                "Set-Cookie": f"{WEB_COOKIE}={cookie}; Path=/; Secure; HttpOnly; SameSite=Lax",
                 "Cache-Control": "no-store",
             },
         )
 
-    async def _web_session(self, request: CompanyRequest) -> IssuedSession | None:
+    async def _web_session(self, cookie: str | None) -> IssuedSession | None:
         """The Session a browser's cookie stands for, as it is now (§5)."""
 
-        cookies = SimpleCookie()
-        try:
-            cookies.load(request.headers.get("cookie", ""))
-        except CookieError:
+        if cookie is None:
             return None
-        morsel = cookies.get("poppy_session")
-        if morsel is None:
-            return None
-        pointer = await self._read(BROWSER_COOKIE, _digest(morsel.value), SessionPointer.from_json)
+        pointer = await self._read(BROWSER_COOKIE, _digest(cookie), SessionPointer.from_json)
         if pointer is None:
             return None
         session = await self._live_session(pointer.session_id)
         if session is None:
             # The cookie does not outlive the Session.
-            await self.store.delete(BROWSER_COOKIE, _digest(morsel.value))
+            await self.store.delete(BROWSER_COOKIE, _digest(cookie))
         return session
 
     async def _operation_page(
         self, request: CompanyRequest, method: str, operation_id: str
     ) -> CompanyResponse:
-        session = await self._web_session(request)
-        if session is None:
+        cookie = _cookie(request, WEB_COOKIE)
+        session = await self._web_session(cookie)
+        if cookie is None or session is None:
             return self._page(401, "Your agent's session has ended. Ask it to open this again.")
         try:
             stored = await self._usable(operation_id, session)
         except _RefusedError:
             return self._page(404, "There is nothing to show here.")
         page_url = f"{self.config.base}/operations/{operation_id}"
+        csrf = _bound(cookie, f"operation:{operation_id}")
         if method == "POST":
-            origin = request.headers.get("origin")
-            if origin is not None and origin != self.config.base:
-                return self._page(403, "This request did not come from this site.")
             form = dict(parse_qsl(request.body.decode()))
+            # This site's page, in the browser this cookie is in: never another site's
+            # page, nor a form copied from another Session's page (Guides, consent pages).
+            if not _from_this_site(request, self.config.base) or not hmac.compare_digest(
+                form.get("csrf", ""), csrf
+            ):
+                return self._page(403, "This request did not come from this site.")
             try:
                 if form.get("action") == "cancel":
                     await self._cancel_operation(operation_id)
@@ -2323,6 +2408,7 @@ class CompanyService:
                 f'<form method="post" action="{page_url}">'
                 f'<input type="hidden" name="revision" value="{operation.revision}">'
                 '<input type="hidden" name="approved_by" value="user">'
+                f'<input type="hidden" name="csrf" value="{csrf}">'
                 '<button name="action" value="confirm">Confirm</button>'
                 '<button name="action" value="cancel">Cancel</button></form>'
             )

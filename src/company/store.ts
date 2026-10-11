@@ -269,6 +269,11 @@ export interface PendingAuthorization {
   readonly expiresAt: string;
   /** The agent's `client_name`, for a hosted consent page (`authorizationRequest`). */
   readonly clientName?: string;
+  /**
+   * The digest of the consent cookie of the browser the company's own page was shown
+   * to; absent when a hosted consent page answers (it protects its own form).
+   */
+  readonly browserBinding?: string;
 }
 
 /** A one-use authorization code, at most a minute old. */

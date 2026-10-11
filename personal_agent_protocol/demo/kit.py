@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Iterable, MutableMapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -46,6 +47,9 @@ from ..reactor import (
     ProtectedInputRequest,
     build_pap_reactor,
 )
+
+#: A page's hidden form fields, as a browser submits them.
+_HIDDEN = re.compile(r'<input type="hidden" name="([^"]+)" value="([^"]*)">')
 
 #: A public address the SSRF policy accepts; nothing is ever sent to it.
 PUBLIC_ADDRESS = "93.184.216.34"
@@ -236,11 +240,19 @@ class ControlledBrowser:
         return self.page
 
     async def submit(self, url: str, form: dict[str, str]) -> httpx.Response:
-        """Press a button on the company's page: a same-origin form POST."""
+        """Press a button on the company's page: a same-origin form POST.
+
+        As a browser does, it sends the page's hidden fields (its CSRF token
+        among them) with the button's.
+        """
 
         origin = f"https://{httpx.URL(url).host}"
+        hidden = dict(_HIDDEN.findall(self.page.text)) if self.page is not None else {}
         self.page = await self.http.post(
-            url, data=form, headers={"Origin": origin}, follow_redirects=True
+            url,
+            data={**hidden, **form},
+            headers={"Origin": origin, "Sec-Fetch-Site": "same-origin"},
+            follow_redirects=True,
         )
         return self.page
 

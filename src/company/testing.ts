@@ -138,6 +138,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       codeChallenge: "chal",
       expiresAt: later,
       clientName: "Atlas",
+      browserBinding: "bind",
     } satisfies PendingAuthorization,
     [RecordKinds.code]: {
       clientId: "c",

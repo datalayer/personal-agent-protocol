@@ -457,6 +457,9 @@ class PendingAuthorization:
     code_challenge: str
     expires_at: datetime
     client_name: str = ""
+    #: The digest of the consent cookie of the browser the company's own page was
+    #: shown to; `None` when a hosted consent page answers (it protects its own form).
+    browser_binding: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -467,6 +470,7 @@ class PendingAuthorization:
             "code_challenge": self.code_challenge,
             "expires_at": _time(self.expires_at),
             "client_name": self.client_name,
+            "browser_binding": self.browser_binding,
         }
 
     @classmethod
@@ -479,6 +483,7 @@ class PendingAuthorization:
             code_challenge=value["code_challenge"],
             expires_at=_parse(value["expires_at"]),
             client_name=value["client_name"],
+            browser_binding=value["browser_binding"],
         )
 
 

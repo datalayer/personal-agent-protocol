@@ -123,7 +123,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
         DEVICE: PendingDevice("c", ("a",), "ABCD-EFGH", later, 10, now, "acct_1", ("a",), True),
         USER_CODE: UserCode("dev_digest"),
         AUTHORIZATION: PendingAuthorization(
-            "c", "https://atlas.example/cb", ("a",), "st", "chal", later, "Atlas"
+            "c", "https://atlas.example/cb", ("a",), "st", "chal", later, "Atlas", "bind"
         ),
         CODE: IssuedCode("c", "https://atlas.example/cb", "chal", "acct_1", ("a",), later),
         MEDIATED: PendingMediated("ses_1", "acct_1", ("a",), "ref", later, 2),

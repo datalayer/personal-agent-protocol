@@ -35,7 +35,7 @@
  *   once, and cancel.
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
@@ -280,6 +280,48 @@ function digest(token: string): string {
 
 function base64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
+}
+
+/** The consent page's cookie: `__Host-`, so no other host or path can set it. */
+export const CONSENT_COOKIE = "__Host-poppy_consent";
+
+/** What the user decided on the company's own consent page, checked by `consentDecision`. */
+export interface ConsentDecision {
+  readonly requestId: string;
+  readonly allow: boolean;
+}
+
+/** A form's CSRF token: only a page whose browser holds `secret` (a cookie) can know it. */
+function bound(secret: string, purpose: string): string {
+  return createHmac("sha256", secret).update(purpose).digest("base64url");
+}
+
+function cookie(request: CompanyRequest, name: string): string | undefined {
+  for (const part of (request.headers.cookie ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at).trim() === name) {
+      const value = part.slice(at + 1).trim();
+      return value || undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A POST a page of this site sent, never one another site's page made the browser send:
+ * `Sec-Fetch-Site`, when sent, is `same-origin`, and `Origin`, when sent, the company's
+ * own; the form's CSRF token is checked besides (Guides, consent pages).
+ */
+function fromThisSite(request: CompanyRequest, base: string): boolean {
+  const site = request.headers["sec-fetch-site"];
+  const origin = request.headers.origin;
+  return (site === undefined || site === "same-origin") && (origin === undefined || origin === base);
+}
+
+function sameText(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 /** Python's `parse_qsl` into a dict: blank values dropped, the last value wins. */
@@ -1138,6 +1180,10 @@ export class CompanyService {
     }
     const requestId = this.#id("authz");
     const expiresAt = this.#later(10 * 60);
+    // The company's own page binds the request to this browser: its consent cookie
+    // (kept if it has one) and a form token only that cookie yields.
+    const browser =
+      this.config.consentPage === undefined ? (cookie(request, CONSENT_COOKIE) ?? this.#id("consent")) : undefined;
     const pending: PendingAuthorization = {
       clientId,
       redirectUri,
@@ -1146,14 +1192,15 @@ export class CompanyService {
       codeChallenge: query.code_challenge,
       expiresAt: expiresAt.toISOString(),
       clientName: metadata.client_name,
+      ...(browser === undefined ? {} : { browserBinding: digest(browser) }),
     };
     await this.store.put(RecordKinds.authorization, requestId, json(pending), expiry(expiresAt));
-    if (this.config.consentPage !== undefined) {
+    if (browser === undefined) {
       // A hosted consent page reads the request back (`authorizationRequest`).
       return {
         status: 303,
         headers: {
-          Location: this.config.consentPage.replaceAll("{request_id}", encodeURIComponent(requestId)),
+          Location: (this.config.consentPage ?? "").replaceAll("{request_id}", encodeURIComponent(requestId)),
           ...NO_STORE,
         },
       };
@@ -1167,11 +1214,44 @@ export class CompanyService {
       200,
       `<h1>${escapeHtml(this.config.name)}</h1>` +
         `<p><strong>${agent}</strong> (${agentDomain}) asks to:</p><ul>${described}</ul>` +
-        `<form method="post" data-request-id="${requestId}">` +
+        `<form method="post" action="${this.config.authorizationEndpoint}" data-request-id="${requestId}">` +
         `<input type="hidden" name="request_id" value="${requestId}">` +
+        `<input type="hidden" name="csrf" value="${bound(browser, `consent:${requestId}`)}">` +
         '<button name="decision" value="allow">Allow</button>' +
         '<button name="decision" value="deny">Deny</button></form>',
+      `${CONSENT_COOKIE}=${browser}; Path=/; Secure; HttpOnly; SameSite=Strict`,
     );
+  }
+
+  /**
+   * The decision the company's own consent form posted, once it is shown to be the user's.
+   *
+   * The company's web layer, which knows who is signed in, calls this on the form's POST
+   * and then `approveAuthorization` or `denyAuthorization`. Rejects unless the POST comes
+   * from this site (`Sec-Fetch-Site`, `Origin`), carries the consent cookie the request
+   * was bound to when its page was shown, and the form token only that cookie yields:
+   * another site's page cannot make the browser decide, and a form replayed from another
+   * browser does not match (Guides, consent pages).
+   */
+  async consentDecision(request: CompanyRequest): Promise<ConsentDecision> {
+    const refused = new Error("this decision did not come from the page that asked");
+    if (request.method.toUpperCase() !== "POST" || !fromThisSite(request, this.config.base)) throw refused;
+    const form = pairs(text(request.body));
+    const requestId = form.request_id ?? "";
+    const browser = cookie(request, CONSENT_COOKIE);
+    const pending = requestId
+      ? await this.#read<PendingAuthorization>(RecordKinds.authorization, requestId)
+      : undefined;
+    if (
+      browser === undefined ||
+      pending?.browserBinding === undefined ||
+      !sameText(digest(browser), pending.browserBinding) ||
+      !sameText(form.csrf ?? "", bound(browser, `consent:${requestId}`)) ||
+      (form.decision !== "allow" && form.decision !== "deny")
+    ) {
+      throw refused;
+    }
+    return { requestId, allow: form.decision === "allow" };
   }
 
   /**
@@ -2227,7 +2307,7 @@ function startCursor(conversation: StoredConversation): string {
 }
 
 /** A consent page: never framed, never cached (upstream guides, consent pages). */
-function page(status: number, body: string): CompanyResponse {
+function page(status: number, body: string, setCookie?: string): CompanyResponse {
   return {
     status,
     body: `<!doctype html><meta charset=utf-8><title>Sign in</title>${body}`,
@@ -2236,6 +2316,7 @@ function page(status: number, body: string): CompanyResponse {
       "X-Frame-Options": "DENY",
       "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'",
       ...NO_STORE,
+      ...(setCookie === undefined ? {} : { "Set-Cookie": setCookie }),
     },
   };
 }

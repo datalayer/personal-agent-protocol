@@ -201,6 +201,39 @@ to the kit as `now`.
 - Errors are generic codes that do not disclose whether another user's
   conversation or operation exists.
 
+### Consent pages and the website
+
+Every page the company serves (the consent page, the operation page) is sent
+with `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors
+'none'`, and `Cache-Control: no-store`.
+
+The built-in consent page binds the sign-in request to the browser it is shown
+to: it sets a `__Host-poppy_consent` cookie (`Secure`, `HttpOnly`,
+`SameSite=Strict`; a browser that has one keeps it), stores its digest with the
+request, and puts a CSRF token derived from the cookie and the request in the
+form, which posts to `/oauth/authorize`. The company's web layer, which knows
+who is signed in, hands that POST to `service.consent_decision(request)`
+(`consentDecision`) and then calls `approve_authorization` or
+`deny_authorization`. It is refused (`PermissionError`; a rejected promise in
+TypeScript) when:
+
+- `Sec-Fetch-Site` is anything but `same-origin`, or `Origin` is another
+  origin (or `null`);
+- the consent cookie is missing, or is not the one the request was bound to:
+  a form replayed from another browser does not match;
+- the CSRF token is missing or was made for another cookie or request;
+- the request is unknown, expired, or already decided.
+
+A hosted consent page (`consent_page`) gets no binding: it protects its own
+form, and `consent_decision` refuses every POST for its requests.
+
+The operation page (`/operations/{operation_id}`, Python) does the same with
+the browser's `poppy_session` cookie: its form carries a token derived from
+that cookie and the operation, and a POST that is cross-site, from another
+origin, without the token, or with a token from another browser's page is
+refused with `403`. `test_guide_security.py` and `guide-security.test.mjs`
+test each case.
+
 ### Hosted sign-in pages
 
 By default the reference company serves its own Device Sign-In and consent

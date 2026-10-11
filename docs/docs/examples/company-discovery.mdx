@@ -39,9 +39,13 @@ sequenceDiagram
 - Discovery is credential-free, which prevents accidental token forwarding to
   an unverified host.
 
-Production networking must pin the approved DNS result to the connection or
-use an egress proxy that enforces the same decision. Validation before a later,
-independent DNS lookup is not sufficient protection against rebinding.
+Validation before a later, independent DNS lookup is not sufficient
+protection against rebinding, so the Python SDK pins the connection: the URL
+safety policy returns the addresses it approved (`ApprovedUrl`), and the
+default transport dials only those, never resolving the host again, while TLS
+still verifies the host name. The TypeScript SDK checks addresses but does not
+yet pin the socket: pair it with an egress proxy that enforces the same
+decision.
 
 Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-discovery)
 or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/company-discovery).

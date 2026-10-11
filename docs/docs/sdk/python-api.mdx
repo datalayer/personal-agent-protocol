@@ -21,6 +21,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`ApiError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. The company refused an API call; `code` is its error, never its body.
 - [`ApiResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. A successful API answer: the body, or the operation it proposes.
 - [`approve`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Record the user's approval of the revision the host just showed them.
+- [`ApprovedUrl`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. A URL the safety policy approved, and the addresses it approved for its host.
 - [`AUTHORIZATION_STATE_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `AUTHORIZATION_STATE_STORES` constant.
 - [`AuthorizationCodeGrant`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Redacted PAP authorization-code exchange values.
 - [`AuthorizationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. An authorization flow failed without exposing callback secrets.
@@ -93,6 +94,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`MediatedSignInClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Class. Relay a user's credentials to the company's mediated endpoint, once.
 - [`MediatedSignInResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Class. Where a Mediated Sign-In stands, without any credential.
 - [`Message`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Message sent by either side or returned in a conversation event.
+- [`MetadataFetch`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The bounds of one public metadata fetch: size, total time, approved addresses.
 - [`OAuthServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `OAuthServerMetadata` class.
 - [`openapi_url`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. The company's OpenAPI description, when it advertises one.
 - [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `Operation` class.
@@ -107,6 +109,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`PairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist stable random identities by tenant, local user, and issuer.
 - [`PapCorePlugin`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Contribute PAP's secure defaults through Reactor.
 - [`PersonalAgentProtocolError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Base error whose string representation never includes response bodies.
+- [`pin_connections`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. Make `client`'s socket transports dial approved addresses during metadata fetches.
+- [`PinnedNetworkBackend`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Dial the address the URL safety policy approved, never the host name again.
 - [`ProofError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A signed assertion or proof-of-possession value is invalid.
 - [`PROTECTED_INPUTS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `PROTECTED_INPUTS` constant.
 - [`ProtectedInput`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Collect protected values from the user outside model context (PAP §4.7).

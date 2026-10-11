@@ -72,6 +72,17 @@
       "expect": {"error": "unsafe_address"}
     },
     {
+      "id": "security.dns-rebinding-after-check",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-03"],
+      "description": "The host resolves to a public address when checked, then to loopback: the connection goes to the checked address, and the host is never resolved again.",
+      "sdk": ["python"],
+      "check": "pinned_connect",
+      "input": {"url": "https://company.example/.well-known/poppy.json", "answers": [["93.184.216.34"], ["127.0.0.1"]]},
+      "expect": {"connects_to": ["93.184.216.34"], "resolutions": 1}
+    },
+    {
       "id": "security.public-address-allowed",
       "kind": "positive",
       "role": "personal-agent",
@@ -148,6 +159,26 @@
         }
       },
       "expect": {"error": "response_too_large"}
+    },
+    {
+      "id": "security.slow-metadata",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-01"],
+      "description": "The server sends the document a few bytes at a time, each read well within any read timeout: the fetch is abandoned when its total time limit passes.",
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "timeout_seconds": 0.3,
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {"status": 200, "trickle": {"chunk_bytes": 8, "interval_seconds": 0.05}, "json": {
+            "protocol_version": "0.1",
+            "organization": {"name": "Example", "domain": "example.com"},
+            "web": {}
+          }}
+        }
+      },
+      "expect": {"error": "metadata_timeout"}
     },
     {
       "id": "security.metadata-not-json",

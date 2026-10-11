@@ -7,16 +7,18 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import ipaddress
 import secrets
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
+import httpcore
 import httpx
 from pydantic import SecretStr
 from reactor import (  # type: ignore[import-untyped]
@@ -43,6 +45,28 @@ class DiscoveryResponse:
     @property
     def is_redirect(self) -> bool:
         return 300 <= self.status_code < 400
+
+
+@dataclass(frozen=True)
+class ApprovedUrl:
+    """A URL the safety policy approved, and the addresses it approved for its host.
+
+    The transport connects only to these addresses: it never resolves the host
+    again, so DNS cannot rebind it between the check and the connection.
+    """
+
+    url: str
+    host: str
+    addresses: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MetadataFetch:
+    """The bounds of one public metadata fetch: size, total time, approved addresses."""
+
+    approved: ApprovedUrl
+    max_bytes: int
+    timeout: float
 
 
 @dataclass(frozen=True)
@@ -243,16 +267,22 @@ class SystemRandomSource:
 
 @runtime_checkable
 class DiscoveryTransport(Protocol):
-    """Fetch public discovery metadata without carrying credentials."""
+    """Fetch public metadata without credentials, within `fetch`'s bounds.
 
-    async def get(self, url: str) -> DiscoveryResponse: ...
+    The transport connects only to `fetch.approved.addresses`, stops reading
+    past `fetch.max_bytes` (`response_too_large`), and gives up after
+    `fetch.timeout` seconds in all (`metadata_timeout`), however slowly the
+    server sends.
+    """
+
+    async def get(self, url: str, *, fetch: MetadataFetch) -> DiscoveryResponse: ...
 
 
 @runtime_checkable
 class UrlSafetyPolicy(Protocol):
-    """Approve a resolved discovery URL before the transport connects."""
+    """Resolve and approve a metadata URL before the transport connects to it."""
 
-    async def assert_safe(self, url: str) -> None: ...
+    async def assert_safe(self, url: str) -> ApprovedUrl: ...
 
 
 DISCOVERY_TRANSPORTS = define_contribution_point("pap.discoveryTransport")
@@ -287,26 +317,156 @@ async def resolve_addresses(host: str) -> list[str]:
         raise DiscoveryError("dns_failed", "Could not resolve discovery host") from exc
 
 
+# Connection pinning ------------------------------------------------------------------
+
+#: The addresses approved for each host, while a metadata fetch is in flight.
+_PINNED: contextvars.ContextVar[Mapping[str, tuple[str, ...]] | None] = contextvars.ContextVar(
+    "pap_pinned_addresses", default=None
+)
+
+
+class PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Dial the address the URL safety policy approved, never the host name again.
+
+    While `HttpxDiscoveryTransport` fetches metadata, a connection to the
+    fetched host goes to one of the approved addresses, in order; TLS still
+    names the host (SNI and certificate verification are unchanged). Any other
+    connection passes through to the wrapped backend.
+    """
+
+    def __init__(self, inner: httpcore.AsyncNetworkBackend) -> None:
+        self.inner = inner
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        pins = _PINNED.get()
+        if pins is None or host.lower() not in pins:
+            return await self.inner.connect_tcp(
+                host,
+                port,
+                timeout=timeout,
+                local_address=local_address,
+                socket_options=socket_options,
+            )
+        failure: Exception | None = None
+        for address in pins[host.lower()]:
+            try:
+                return await self.inner.connect_tcp(
+                    address,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout, OSError) as exc:
+                failure = exc
+        raise httpcore.ConnectError("no approved address accepted the connection") from failure
+
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        if _PINNED.get() is not None:
+            raise httpcore.ConnectError("metadata is never fetched over a unix socket")
+        return await self.inner.connect_unix_socket(
+            path, timeout=timeout, socket_options=socket_options
+        )
+
+    async def sleep(self, seconds: float) -> None:
+        await self.inner.sleep(seconds)
+
+
+def pin_connections(client: httpx.AsyncClient) -> httpx.AsyncClient:
+    """Make `client`'s socket transports dial approved addresses during metadata fetches.
+
+    Every `httpx.AsyncHTTPTransport` of the client (its default and its mounts)
+    gets a `PinnedNetworkBackend`; transports without sockets (mock, ASGI) are
+    left as they are. Idempotent.
+    """
+
+    transports = [client._transport, *client._mounts.values()]
+    for transport in transports:
+        pool = getattr(transport, "_pool", None)
+        backend = getattr(pool, "_network_backend", None)
+        if pool is None or backend is None or isinstance(backend, PinnedNetworkBackend):
+            continue
+        pool._network_backend = PinnedNetworkBackend(backend)
+    return client
+
+
+@asynccontextmanager
+async def pinned(approved: ApprovedUrl) -> AsyncIterator[None]:
+    """Pin connections to `approved.host` to its approved addresses within the block."""
+
+    if not approved.addresses:
+        raise DiscoveryError("dns_failed", "Discovery host has no approved address")
+    token = _PINNED.set({approved.host.lower(): approved.addresses})
+    try:
+        yield
+    finally:
+        _PINNED.reset(token)
+
+
 class HttpxDiscoveryTransport:
-    """Default credential-free transport contributed by the PAP core plugin."""
+    """Default credential-free transport contributed by the PAP core plugin.
+
+    It sends no cookie or credential, connects only to the approved addresses,
+    reads at most `max_bytes`, and abandons a fetch after `timeout` seconds in
+    all, so a slow server cannot hold it open by trickling bytes.
+    """
 
     def __init__(self, client: httpx.AsyncClient) -> None:
-        self.client = client
+        self.client = pin_connections(client)
 
-    async def get(self, url: str) -> DiscoveryResponse:
+    async def get(self, url: str, *, fetch: MetadataFetch) -> DiscoveryResponse:
+        if urlsplit(url).hostname != fetch.approved.host:
+            raise DiscoveryError("unsafe_url", "The fetched URL is not the approved one")
         try:
-            response = await self.client.get(
-                url,
-                headers={"Accept": "application/json"},
-                follow_redirects=False,
-            )
+            return await asyncio.wait_for(self._get(url, fetch), fetch.timeout)
+        except asyncio.TimeoutError as exc:
+            raise DiscoveryError(
+                "metadata_timeout", "Metadata fetch exceeded its time limit"
+            ) from exc
+
+    async def _get(self, url: str, fetch: MetadataFetch) -> DiscoveryResponse:
+        request = self.client.build_request("GET", url, headers={"Accept": "application/json"})
+        # Never the host client's cookies, nor any credential header (Guides, fetching).
+        for name in ("cookie", "authorization", "dpop"):
+            if name in request.headers:
+                del request.headers[name]
+        try:
+            async with pinned(fetch.approved):
+                response = await self.client.send(request, stream=True, follow_redirects=False)
+                try:
+                    declared = response.headers.get("content-length", "")
+                    if declared.isdigit() and int(declared) > fetch.max_bytes:
+                        raise DiscoveryError(
+                            "response_too_large", "Discovery response exceeds size limit"
+                        )
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk)
+                        if len(body) > fetch.max_bytes:
+                            raise DiscoveryError(
+                                "response_too_large", "Discovery response exceeds size limit"
+                            )
+                finally:
+                    await response.aclose()
         except httpx.HTTPError as exc:
             raise DiscoveryError("request_failed", "Discovery request failed") from exc
         return DiscoveryResponse(
             url=str(response.url),
             status_code=response.status_code,
             headers={key.lower(): value for key, value in response.headers.items()},
-            content=response.content,
+            content=bytes(body),
         )
 
 
@@ -322,19 +482,27 @@ class PublicUrlSafetyPolicy:
         self._resolver = resolver
         self._allow_private = allow_private_networks
 
-    async def assert_safe(self, url: str) -> None:
+    async def assert_safe(self, url: str) -> ApprovedUrl:
         parsed = urlsplit(url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise DiscoveryError("unsafe_url", "Discovery and metadata URLs must use HTTPS")
         addresses = await self._resolver(parsed.hostname)
         if not addresses:
             raise DiscoveryError("dns_failed", "Discovery host has no addresses")
-        if self._allow_private:
-            return
-        if any(not ipaddress.ip_address(address).is_global for address in addresses):
+        try:
+            parsed_addresses = [ipaddress.ip_address(address) for address in addresses]
+        except ValueError as exc:
+            raise DiscoveryError("dns_failed", "Discovery host resolved to no address") from exc
+        if not self._allow_private and any(not address.is_global for address in parsed_addresses):
             raise DiscoveryError(
                 "unsafe_address", "Discovery host resolves to a non-public address"
             )
+        # The transport dials exactly these: the host is never resolved again.
+        return ApprovedUrl(
+            url=url,
+            host=parsed.hostname,
+            addresses=tuple(str(address) for address in parsed_addresses),
+        )
 
 
 class PapCorePlugin:
@@ -386,7 +554,9 @@ def build_pap_reactor(
     """
 
     owned_http = http_client is None
-    client = http_client or httpx.AsyncClient(timeout=5.0, follow_redirects=False)
+    client = pin_connections(
+        http_client or httpx.AsyncClient(timeout=5.0, follow_redirects=False)
+    )
     platform = PluginPlatform(extension_group="personal_agent_protocol.plugins")
     platform.register_plugin(
         PluginManifest(

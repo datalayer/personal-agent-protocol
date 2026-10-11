@@ -49,12 +49,11 @@ can support more than one protocol profile.
 
 ## Known gaps
 
-- Python preflight validates resolved addresses, but transport-level address
-  pinning is still needed to fully close the DNS-rebinding interval.
-- Python and Node now reject non-public DNS results before metadata requests,
-  but their default transports do not yet pin the connection to an approved
-  resolved address. Production deployments need a pinning transport or an
-  enforcing egress proxy to fully close the DNS-rebinding interval.
+- Python pins metadata connections to the addresses its URL safety policy
+  approved (`PinnedNetworkBackend`), closing the DNS-rebinding interval. Node
+  rejects non-public DNS results before metadata requests, but its default
+  transport does not yet pin the socket: production Node deployments need an
+  enforcing egress proxy to fully close the interval.
 - Pairwise ID generation and a file-backed atomic Python reference store are
   implemented. Distributed deployments must contribute their own transactional
   `pap.pairwiseUserIdStore` and own retention and erasure policy.

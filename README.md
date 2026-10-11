@@ -203,7 +203,6 @@ surface:
 - device and mediated sign-in;
 - conversation SSE streaming, handoff, and explicit close requests;
 - the Operations client and server;
-- transport-level address pinning to close the DNS-rebinding interval.
 
 Models for Operations v1 exist, but a complete Operations workflow does not.
 Applications should not infer client support from model availability alone.

@@ -11,9 +11,12 @@ run by the conformance runner against a company (`test_conformance.py`).
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import AsyncIterator, Iterable
 from typing import Any
 
+import httpcore
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -57,12 +60,46 @@ def _mock_network(responses: dict[str, dict[str, Any]]) -> httpx.AsyncClient:
             body = json.dumps(answer["json"]).encode()
             body += b" " * int(answer.get("padding_bytes", 0))
             headers.setdefault("content-type", answer.get("content_type", "application/json"))
+            if "trickle" in answer:
+                return httpx.Response(
+                    answer["status"], headers=headers, stream=_Trickle(body, **answer["trickle"])
+                )
         else:
             body = str(answer.get("text", "")).encode()
             headers.setdefault("content-type", answer.get("content_type", "text/plain"))
         return httpx.Response(answer["status"], headers=headers, content=body)
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+class _Trickle(httpx.AsyncByteStream):
+    """A body sent a few bytes at a time: a slow (or slowloris) server."""
+
+    def __init__(self, body: bytes, *, chunk_bytes: int, interval_seconds: float) -> None:
+        self.body, self.size, self.interval = body, chunk_bytes, interval_seconds
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for start in range(0, len(self.body), self.size):
+            await asyncio.sleep(self.interval)
+            yield self.body[start : start + self.size]
+
+
+class _RecordingBackend(httpcore.AsyncNetworkBackend):
+    """Record where each connection would go; connect nowhere."""
+
+    def __init__(self) -> None:
+        self.hosts: list[str] = []
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        self.hosts.append(host)
+        raise httpcore.ConnectError("the test network connects nowhere")
 
 
 async def _public(_: str) -> list[str]:
@@ -122,7 +159,11 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             assert (operation.model_extra or {})[key] == value
     elif case.check == "discovery":
         http = _mock_network(given["responses"])
-        client = DiscoveryClient(http_client=http, address_resolver=_public)
+        client = DiscoveryClient(
+            http_client=http,
+            address_resolver=_public,
+            timeout=float(given.get("timeout_seconds", 5.0)),
+        )
         try:
             if "error" in expect:
                 with pytest.raises(PersonalAgentProtocolError) as raised:
@@ -151,6 +192,25 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         with pytest.raises(PersonalAgentProtocolError) as raised:
             await policy.assert_safe(given["url"])
         assert raised.value.code == expect["error"]
+    elif case.check == "pinned_connect":
+        answers = [list(answer) for answer in given["answers"]]
+        resolutions = 0
+
+        async def rebinding(_: str) -> list[str]:
+            nonlocal resolutions
+            resolutions += 1
+            return answers.pop(0)
+
+        backend = _RecordingBackend()
+        socket_transport = httpx.AsyncHTTPTransport()
+        socket_transport._pool._network_backend = backend
+        async with httpx.AsyncClient(transport=socket_transport) as http:
+            client = DiscoveryClient(http_client=http, address_resolver=rebinding)
+            with pytest.raises(PersonalAgentProtocolError) as raised:
+                await client.discover(httpx.URL(given["url"]).host)
+        assert raised.value.code == "request_failed"
+        assert backend.hosts == expect["connects_to"]
+        assert resolutions == expect["resolutions"]
     elif case.check == "strict_json":
         for document in given:
             with pytest.raises(ProtocolValidationError) as raised:

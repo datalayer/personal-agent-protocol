@@ -19,7 +19,9 @@ from .reactor import (
     DISCOVERY_TRANSPORTS,
     URL_SAFETY_POLICIES,
     AddressResolver,
+    ApprovedUrl,
     DiscoveryTransport,
+    MetadataFetch,
     UrlSafetyPolicy,
     build_pap_reactor,
     first_contribution,
@@ -46,7 +48,10 @@ class DiscoveryClient:
         allow_private_networks: bool = False,
         max_redirects: int = 3,
         max_response_bytes: int = 100 * 1024,
+        timeout: float = 5.0,
     ) -> None:
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
         if reactor is None:
             reactor, owned_http = build_pap_reactor(
                 http_client=http_client,
@@ -59,6 +64,7 @@ class DiscoveryClient:
         self._owned_http = owned_http
         self._max_redirects = max_redirects
         self._max_bytes = max_response_bytes
+        self._timeout = timeout
 
     async def __aenter__(self) -> DiscoveryClient:
         return self
@@ -130,8 +136,15 @@ class DiscoveryClient:
             raise TypeError("PAP URL safety policy contribution has an invalid contract")
         current = url
         for redirect_count in range(self._max_redirects + 1):
-            await policy.assert_safe(current)
-            response = await transport.get(current)
+            approved = await policy.assert_safe(current)
+            if not isinstance(approved, ApprovedUrl) or approved.url != current:
+                raise TypeError("PAP URL safety policy must return the ApprovedUrl it checked")
+            response = await transport.get(
+                current,
+                fetch=MetadataFetch(
+                    approved=approved, max_bytes=self._max_bytes, timeout=self._timeout
+                ),
+            )
 
             if response.is_redirect:
                 if redirect_count == self._max_redirects:

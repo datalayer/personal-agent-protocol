@@ -19,7 +19,9 @@ from .reactor import (
     DISCOVERY_TRANSPORTS,
     URL_SAFETY_POLICIES,
     AddressResolver,
+    ApprovedUrl,
     DiscoveryTransport,
+    MetadataFetch,
     UrlSafetyPolicy,
     build_pap_reactor,
     first_contribution,
@@ -39,7 +41,10 @@ class AgentIdentityClient:
         allow_private_networks: bool = False,
         max_jwks_redirects: int = 3,
         max_response_bytes: int = 100 * 1024,
+        timeout: float = 5.0,
     ) -> None:
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
         if reactor is None:
             reactor, owned_http = build_pap_reactor(
                 http_client=http_client,
@@ -52,6 +57,7 @@ class AgentIdentityClient:
         self._owned_http = owned_http
         self._max_jwks_redirects = max_jwks_redirects
         self._max_bytes = max_response_bytes
+        self._timeout = timeout
 
     async def __aenter__(self) -> AgentIdentityClient:
         return self
@@ -126,8 +132,15 @@ class AgentIdentityClient:
         for redirect_count in range(max_redirects + 1):
             if required_host is not None and urlsplit(current).hostname != required_host:
                 raise IdentityError("jwks_domain_mismatch", "JWKS redirect changed agent domain")
-            await policy.assert_safe(current)
-            response = await transport.get(current)
+            approved = await policy.assert_safe(current)
+            if not isinstance(approved, ApprovedUrl) or approved.url != current:
+                raise TypeError("PAP URL safety policy must return the ApprovedUrl it checked")
+            response = await transport.get(
+                current,
+                fetch=MetadataFetch(
+                    approved=approved, max_bytes=self._max_bytes, timeout=self._timeout
+                ),
+            )
             if response.is_redirect:
                 if redirect_count == max_redirects:
                     code = "metadata_redirect" if max_redirects == 0 else "too_many_redirects"

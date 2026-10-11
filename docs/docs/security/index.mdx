@@ -56,9 +56,13 @@ private JWK member are rejected before a key can reach assertion verification.
 For Node backends, import `NodeUrlSafetyPolicy` from
 `@datalayer/personal-agent-protocol/server` and contribute it through
 `assertSafeUrl`. The server-only entry checks every resolved A and AAAA address
-and is deliberately absent from the portable bundle. DNS preflight does not
-pin the later socket: pair it with a transport or egress proxy that connects
-only to the approved address set.
+and is deliberately absent from the portable bundle. In TypeScript, DNS
+preflight does not pin the later socket: pair it with a transport or egress
+proxy that connects only to the approved address set. In Python, the policy
+returns the approved addresses (`ApprovedUrl`) and the default transport dials
+only those (`PinnedNetworkBackend`), with SNI and certificate checks still on
+the host name; metadata fetches also stop at a byte limit and a total time
+limit, however slowly the server sends, and carry no cookie or credential.
 
 The same server entry owns TypeScript company-side assertion signing, DPoP
 verification, and replay-cache contracts. Package tests inspect the emitted

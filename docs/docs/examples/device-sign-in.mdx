@@ -1,0 +1,44 @@
+---
+title: Device Sign-In
+description: Hand authentication to the user, pace polling, and protect every credential.
+---
+
+# Device Sign-In
+
+The paired examples use the real SDK state machine against a deterministic
+company transport. They demonstrate a terminal-style personal agent that
+cannot receive a browser callback.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor User
+  participant Tool as Read-only agent tool
+  participant SDK as DeviceSignInClient
+  participant Company
+  participant Vault as Reactor stores
+  Tool->>SDK: Begin for existing signed-out Session
+  SDK->>Company: Request device authorization
+  Company-->>SDK: Link, user code, interval, private device code
+  SDK->>Vault: Save private device code
+  SDK-->>Tool: Link, user code, opaque reference
+  Tool-->>User: Authenticate on company page
+  SDK->>Company: Poll at interval with DPoP
+  Company-->>SDK: authorization_pending
+  SDK->>Company: Poll at interval
+  Company-->>SDK: slow_down
+  Note over SDK: Increase interval by five seconds
+  SDK->>Company: Poll at new interval
+  Company-->>SDK: Signed-in Session + Account Token + partial scopes
+  SDK->>Vault: Store Account Token
+  SDK-->>Tool: Safe lifecycle evidence + opaque token reference
+```
+
+The model sees that the link and code were presented, early polling was
+suppressed, pending and slow-down responses were respected, the original
+Session was upgraded, and one requested scope was omitted. It never sees the
+device code, assertions, proofs, or tokens.
+
+- Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/device-sign-in).
+- Run the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/device-sign-in).
+- Read the production [Device Sign-In guide](/guides/device-sign-in/).

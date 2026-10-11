@@ -98,6 +98,34 @@ requirements:
     status: implemented
     python: personal_agent_protocol.auth.DirectSignInClient
     typescript: DirectSignInClient
+  - id: PAP-4.6-MUST-01
+    section: "4.6"
+    role: personal-agent
+    statement: Keep the device code private and present only the company verification URI and user code.
+    status: implemented
+    python: personal_agent_protocol.device.DeviceSignInClient
+    typescript: DeviceSignInClient
+  - id: PAP-4.6-MUST-02
+    section: "4.6"
+    role: personal-agent
+    statement: Poll no faster than the interval and add five seconds after slow_down.
+    status: implemented
+    python: personal_agent_protocol.device.DeviceSignInClient.poll
+    typescript: DeviceSignInClient.poll
+  - id: PAP-4.6-MUST-03
+    section: "4.6"
+    role: personal-agent
+    statement: Treat access_denied and expired_token as terminal device authorization outcomes.
+    status: implemented
+    python: personal_agent_protocol.device.DeviceSignInClient.poll
+    typescript: DeviceSignInClient.poll
+  - id: PAP-4.6-MUST-04
+    section: "4.6"
+    role: personal-agent
+    statement: Bind successful Device Sign-In to the initiating Session and protect the Account Token.
+    status: implemented
+    python: personal_agent_protocol.device.DeviceSignInClient
+    typescript: DeviceSignInClient
   - id: PAP-7.3-MUST-01
     section: "7.3"
     role: both

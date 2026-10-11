@@ -1,0 +1,108 @@
+---
+title: Device Sign-In
+---
+
+# Device Sign-In
+
+Device Sign-In is the fallback when the personal agent cannot receive a Direct
+Sign-In browser callback. The user authenticates on the company's own page;
+the personal agent never handles a password, one-time password, or approval
+click.
+
+Prefer Direct Sign-In when it is available. Device Sign-In adds polling and a
+code-entry step, but it works for terminals, remote runtimes, and devices that
+cannot host a callback.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as User
+  participant A as Personal agent host
+  participant R as Reactor stores
+  participant C as Company authorization server
+  A->>C: POST device endpoint (scopes + client assertion)
+  C-->>A: user_code + verification URI + private device_code
+  A->>R: Store device_code under opaque reference
+  A-->>U: Show company link/QR and user_code
+  U->>C: Open company page, sign in, confirm code and scopes
+  loop No faster than current interval
+    A->>R: Atomically take pending state
+    A->>C: Poll with private device_code + session_id + DPoP
+    alt authorization_pending
+      C-->>A: Wait
+      A->>R: Restore state with next poll time
+    else slow_down
+      C-->>A: Add five seconds
+      A->>R: Restore state with longer interval
+    else success
+      C-->>A: Account Token + signed-in Session Token
+      A->>R: Store Account Token; expose opaque reference
+      A-->>U: Continue the same conversation with granted scopes
+    end
+  end
+```
+
+## Python
+
+```python
+client = DeviceSignInClient(reactor=reactor, http_client=http)
+started = await client.begin(
+    device_authorization_endpoint=metadata.device_authorization_endpoint,
+    token_endpoint=metadata.token_endpoint,
+    issuer=metadata.issuer,
+    client_id="https://agent.example/agent.json",
+    scopes=("orders:read", "orders:return"),
+    tenant_id="application-42",
+    pairwise_user_id=pairwise_user_id,
+    session_id=signed_out_session.session_id,
+)
+
+# Render only these human-facing values. A UI may turn the complete URI into a QR.
+show_to_user(started.verification_uri_complete or started.verification_uri)
+show_to_user(started.user_code)
+
+result = await client.poll(started.reference)
+if result.status == "pending":
+    schedule_at(result.retry_at)
+```
+
+## TypeScript
+
+```typescript
+const client = new DeviceSignInClient({ reactor, fetch });
+const started = await client.begin({
+  deviceAuthorizationEndpoint: metadata.device_authorization_endpoint,
+  tokenEndpoint: metadata.token_endpoint,
+  issuer: metadata.issuer,
+  clientId: 'https://agent.example/agent.json',
+  scopes: ['orders:read', 'orders:return'],
+  tenantId: 'application-42',
+  pairwiseUserId,
+  sessionId: signedOutSession.sessionId,
+});
+
+renderHumanHandoff(started.verificationUriComplete ?? started.verificationUri,
+                   started.userCode);
+const result = await client.poll(started.reference, abortSignal);
+```
+
+`begin()` returns an opaque reference, not the `device_code`. `poll()` performs
+at most one network poll. It suppresses premature calls locally, adds five
+seconds after `slow_down`, and consumes state after success, denial, or expiry.
+This makes scheduling explicit for workers and prevents an LLM loop from
+accidentally hammering the company endpoint.
+
+On success, both SDKs require a signed-in proof-bound token for the initiating
+Session. Extra scopes are rejected and missing scopes are reported. The Account
+Token is written directly to the Reactor `TokenStore`; only its opaque reference
+crosses into application code. Hosts must provide durable, encrypted,
+tenant-isolated state and token stores in production.
+
+Opening `verification_uri_complete` is a navigation, never approval. The user
+must see the company domain and confirm the displayed code on the company's
+page. Do not automate sign-in, type credentials, follow approval buttons, or
+put device codes and tokens in logs, analytics, model context, QR telemetry, or
+browser state.
+
+See the runnable [Device Sign-In example](/examples/device-sign-in/) and the
+upstream [Device Sign-In specification](https://personalagentprotocol.org/docs/spec#46-device-sign-in).

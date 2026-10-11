@@ -18,7 +18,11 @@ export {
   type ConversationReceipt,
   type ConversationRequestOptions,
   type ConversationResponse,
+  type ConversationStreamOptions,
   type StartConversationOptions,
+  type StreamItem,
+  type StreamReconnected,
+  type TextDelta,
 } from "./conversations.js";
 export {
   DpopFetchClient,

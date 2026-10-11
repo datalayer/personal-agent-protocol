@@ -5,6 +5,13 @@
 """Python SDK for Personal Agent Protocol draft 0.1."""
 
 from .__version__ import __version__
+from .accounts import (
+    REFRESH_TOKEN_GRANT,
+    AccountRefreshResult,
+    AccountRevocationResult,
+    AccountTokenClient,
+    AccountTokenContext,
+)
 from .auth import (
     AuthorizationCodeGrant,
     DirectSignInCallback,
@@ -78,6 +85,7 @@ from .models import (
 )
 from .pairwise import SqlitePairwiseUserIdStore, resolve_pairwise_user_id
 from .reactor import (
+    ACCOUNT_TOKEN_LOCKS,
     AUTHORIZATION_STATE_STORES,
     BROWSER_FORM_POSTS,
     BROWSER_HANDOFFS,
@@ -93,12 +101,14 @@ from .reactor import (
     SIGNERS,
     TOKEN_STORES,
     URL_SAFETY_POLICIES,
+    AccountTokenLock,
     AuthorizationStateStore,
     BrowserFormPost,
     BrowserHandoff,
     Clock,
     DpopProofProvider,
     DpopProofRequest,
+    InProcessAccountTokenLock,
     KeyReference,
     KeyStore,
     PairwiseUserIdStore,
@@ -125,6 +135,7 @@ from .sessions import (
 from .transport import DpopHttpClient
 
 __all__ = [
+    "ACCOUNT_TOKEN_LOCKS",
     "AUTHORIZATION_STATE_STORES",
     "BROWSER_ASSERTION_TYPE",
     "BROWSER_FORM_POSTS",
@@ -141,9 +152,15 @@ __all__ = [
     "PAIRWISE_USER_ID_STORES",
     "PROTOCOL_PROFILES",
     "RANDOM_SOURCES",
+    "REFRESH_TOKEN_GRANT",
     "SIGNERS",
     "TOKEN_STORES",
     "URL_SAFETY_POLICIES",
+    "AccountRefreshResult",
+    "AccountRevocationResult",
+    "AccountTokenClient",
+    "AccountTokenContext",
+    "AccountTokenLock",
     "AgentIdentityClient",
     "AuthorizationCodeGrant",
     "AuthorizationError",
@@ -183,6 +200,7 @@ __all__ = [
     "DpopProofRequest",
     "DpopReplayCache",
     "IdentityError",
+    "InProcessAccountTokenLock",
     "JoseAlgorithm",
     "JoseDpopProofProvider",
     "JoseSigner",

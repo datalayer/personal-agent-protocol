@@ -10,7 +10,8 @@ import asyncio
 import ipaddress
 import secrets
 import socket
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
@@ -167,6 +168,31 @@ class DpopProofProvider(Protocol):
     async def create(self, request: DpopProofRequest) -> SecretStr: ...
 
 
+@runtime_checkable
+class AccountTokenLock(Protocol):
+    """Serialize every use of one Account Token (PAP §4.8 rotation).
+
+    A rotated Account Token invalidates the one it replaces, so two refreshes
+    racing on the same reference would leave one of them holding a revoked
+    credential. A multi-process host contributes a distributed lock here.
+    """
+
+    def hold(self, reference: str) -> AbstractAsyncContextManager[None]: ...
+
+
+class InProcessAccountTokenLock:
+    """Default Account Token lock for a single process."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    @asynccontextmanager
+    async def hold(self, reference: str) -> AsyncIterator[None]:
+        lock = self._locks.setdefault(reference, asyncio.Lock())
+        async with lock:
+            yield
+
+
 class SystemClock:
     """Default UTC wall clock."""
 
@@ -212,6 +238,7 @@ CACHES = define_contribution_point("pap.cache")
 BROWSER_HANDOFFS = define_contribution_point("pap.browserHandoff")
 BROWSER_FORM_POSTS = define_contribution_point("pap.browserFormPost")
 DPOP_PROOF_PROVIDERS = define_contribution_point("pap.dpopProofProvider")
+ACCOUNT_TOKEN_LOCKS = define_contribution_point("pap.accountTokenLock")
 
 
 async def resolve_addresses(host: str) -> list[str]:
@@ -302,6 +329,12 @@ class PapCorePlugin:
             contribution_id="system",
             order=100,
         )
+        contribute(
+            ACCOUNT_TOKEN_LOCKS,
+            InProcessAccountTokenLock(),
+            contribution_id="in-process",
+            order=100,
+        )
 
 
 def build_pap_reactor(
@@ -342,6 +375,7 @@ def build_pap_reactor(
                 BROWSER_HANDOFFS.id,
                 BROWSER_FORM_POSTS.id,
                 DPOP_PROOF_PROVIDERS.id,
+                ACCOUNT_TOKEN_LOCKS.id,
             ],
         ),
         PapCorePlugin(

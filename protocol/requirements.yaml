@@ -1885,6 +1885,7 @@ guide:
   tests:
   - personal_agent_protocol/__tests__/test_discovery.py::test_rejects_private_discovery_address
   - personal_agent_protocol/__tests__/test_real_sockets.py::test_metadata_connects_to_the_approved_address
+  - personal_agent_protocol/__tests__/test_fuzz.py::test_url_safety_approves_only_https_public_addresses
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   conformance:
   - security.ssrf-loopback
@@ -1981,6 +1982,7 @@ guide:
   tests:
   - personal_agent_protocol/__tests__/test_models.py::test_strict_json_rejects_duplicate_members
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  - personal_agent_protocol/__tests__/test_fuzz.py::test_strict_json_accepts_every_unique_document_and_refuses_every_duplicate
   conformance:
   - security.duplicate-json-members
 - id: GUIDE-pa-dpop-01

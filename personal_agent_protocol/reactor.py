@@ -658,7 +658,8 @@ class PublicUrlSafetyPolicy:
 
     async def assert_safe(self, url: str) -> ApprovedUrl:
         parsed = urlsplit(url)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        # Any user information, even empty (`https://:@host/`), is refused.
+        if parsed.scheme != "https" or not parsed.hostname or "@" in parsed.netloc:
             raise DiscoveryError("unsafe_url", "Discovery and metadata URLs must use HTTPS")
         addresses = await self._resolver(parsed.hostname)
         if not addresses:

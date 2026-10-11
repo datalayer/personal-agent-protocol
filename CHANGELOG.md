@@ -27,6 +27,11 @@
   operation errors (Sessions used `retryAfter`); `confirm` answers
   `not_confirmed` for a cancelled or expired operation. The TypeScript specs
   pass every conformance fixture case the SDK decides alone.
+- **Fuzzing** (seeded, no new dependency): strict JSON, URL safety and the
+  operation state machine in Python; strict JSON and URL safety in TypeScript.
+  It found, and this release fixes: Python's strict JSON accepted `NaN`,
+  `Infinity` and `-Infinity` (not JSON, and refused by TypeScript), and the URL
+  safety policy accepted an empty user-information part (`https://:@host/`).
 
 ## 0.4.0 (2026-10-11)
 

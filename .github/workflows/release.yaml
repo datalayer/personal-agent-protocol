@@ -103,6 +103,38 @@ jobs:
           name: npm
           path: npm-dist/*
 
+  # The compatibility and conformance report for this release: every language pairing
+  # over TLS, published with the release's workflow run (artifact conformance-report).
+  conformance:
+    runs-on: ubuntu-latest
+    env:
+      PAP_CONFORMANCE_REPORTS: conformance-report
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+          python-version: '3.12'
+          activate-environment: true
+      - run: npm install --no-package-lock
+      - run: npm run build
+      - run: uv pip install ".[test]"
+      - name: Run every pairing and generate the report
+        run: |
+          set -euo pipefail
+          pytest -q personal_agent_protocol/__tests__/test_conformance.py \
+            personal_agent_protocol/__tests__/test_cross_language.py
+          node --test src/__tests__/conformance-pairing.test.mjs
+          python scripts/conformance_report.py conformance-report \
+            --output conformance-report/conformance-report.mdx
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report
+          path: conformance-report
+
   pypi:
     needs: build
     if: needs.build.outputs.python != ''

@@ -30,6 +30,7 @@ const sidebars = {
         "concepts/architecture",
         "concepts/glossary",
         "protocol/coverage",
+        "protocol/conformance-report",
       ],
     },
     {

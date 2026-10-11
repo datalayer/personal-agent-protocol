@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-11)
 
 - **Security:** Direct Sign-In moves the Account Token into `pap.tokenStore`
   behind an opaque `account_…` reference, as Device and Mediated Sign-In do: the

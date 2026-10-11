@@ -61,7 +61,7 @@ export class IdentityClientResolver implements ClientResolver {
 export function createCompanyDefaultsPlugin(resolver: ClientResolver) {
   return definePlugin({
     name: "personal-agent-protocol.company",
-    version: "0.4.0",
+    version: "0.5.0",
     contributionPoints: [
       CompanyStores,
       CompanyAccounts,

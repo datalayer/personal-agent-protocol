@@ -175,3 +175,12 @@ export {
   type AccountTokenClientOptions,
   type AccountTokenContext,
 } from "./accounts.js";
+export {
+  MediatedSignInClient,
+  type MediatedCodeOptions,
+  type MediatedField,
+  type MediatedSignInClientOptions,
+  type MediatedSignInDescriptor,
+  type MediatedSignInOptions,
+  type MediatedSignInResult,
+} from "./mediated.js";

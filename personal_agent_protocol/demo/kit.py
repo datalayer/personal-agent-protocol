@@ -128,6 +128,9 @@ class InProcessNetwork:
 
     def __init__(self) -> None:
         self.apps: dict[str, Asgi] = {}
+        #: Set while the network is served over sockets (`sockets.served_over_tls`):
+        #: every client of the network, old or new, then dials it over TCP and TLS.
+        self.socket_transport: httpx.AsyncBaseTransport | None = None
 
     def add(self, domain: str, app: Asgi) -> None:
         self.apps[domain] = app
@@ -148,6 +151,8 @@ class _Routing(httpx.AsyncBaseTransport):
         self.network = network
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if self.network.socket_transport is not None:
+            return await self.network.socket_transport.handle_async_request(request)
         app = self.network.apps.get(request.url.host)
         if request.url.scheme != "https" or app is None:
             raise httpx.ConnectError(f"{request.url.host} is not on the network", request=request)

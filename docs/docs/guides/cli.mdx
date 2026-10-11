@@ -114,7 +114,7 @@ pap company verify --profile work --json
 ```
 
 The accepted keys are `domain`, `client_id`, `issuer`, `output`,
-`store_provider`, and `timeout`. Configuration is stored at
+`store_provider`, `tenant`, and `timeout`. Configuration is stored at
 `$XDG_CONFIG_HOME/pap/config.json`, or `~/.config/pap/config.json` when
 `XDG_CONFIG_HOME` is unset. Writes are atomic and the file is created with
 mode `0600`.
@@ -124,6 +124,12 @@ environment override, such as `PAP_DOMAIN`, `PAP_CLIENT_ID`, and `PAP_TIMEOUT`.
 Environment values take precedence over profile values. `pap config show`
 prints each effective value's source; its JSON representation is versioned
 with `schema_version: 1`.
+
+`tenant` (or `PAP_TENANT`; `pap-cli` by default) keeps applications apart in
+one state directory: pairwise User IDs and DPoP keys are per tenant, and every
+command sees only its tenant's Sessions. `pap sessions show` lists them, and
+another tenant's Session ID is answered like an unknown one (exit code 3), for
+every command. A tenant is 1 to 64 letters, digits, `.`, `_` or `-`.
 
 The configuration store deliberately rejects unknown keys. Do not put Account
 Tokens, passwords, authorization codes, private keys, assertions, DPoP proofs,

@@ -365,3 +365,41 @@ def test_requirements_and_conformance_commands(tmp_path: Path) -> None:
     text = pap("conformance", "run", "--demo", "--case", "lifecycle.rotated-token")
     assert "passed   lifecycle.rotated-token" in text.output
     pap("conformance", "run", code=3)  # a real company needs its own driver and scenario
+
+
+def test_every_command_sees_only_its_tenants_sessions(tmp_path: Path, monkeypatch: Any) -> None:
+    pap = Pap(tmp_path)
+    pap.set_up()
+    first = pap("sessions", "start", "--json")["session"]
+    assert first["tenant_id"] == "pap-cli"
+
+    # Another tenant, from the profile: its own Sessions and pairwise User IDs.
+    pap("config", "set", "tenant", "shop-b")
+    second = pap("sessions", "start", "--json")["session"]
+    assert second["tenant_id"] == "shop-b"
+    listed = pap("sessions", "show", "--json")["sessions"]
+    assert [item["session_id"] for item in listed] == [second["session_id"]]
+    # Another tenant's Session looks unknown to every command, not forbidden.
+    for arguments in (
+        ("sessions", "show", first["session_id"]),
+        ("sessions", "renew", first["session_id"]),
+        ("sessions", "end", first["session_id"]),
+        ("auth", "disconnect", first["session_id"]),
+        ("api", "openapi", first["session_id"], "GET", "/api/orders"),
+    ):
+        pap(*arguments, code=ExitCode.NOT_CONFIGURED)  # unknown_session, as for no Session
+    state = json.loads((pap.state / "state.json").read_text())["sessions"]
+    assert (
+        state[first["session_id"]]["pairwise_user_id"]
+        != state[second["session_id"]]["pairwise_user_id"]
+    )
+
+    # PAP_TENANT overrides the profile; the first tenant sees its Session again.
+    monkeypatch.setenv("PAP_TENANT", "pap-cli")
+    listed = pap("sessions", "show", "--json")["sessions"]
+    assert [item["session_id"] for item in listed] == [first["session_id"]]
+    pap("sessions", "show", second["session_id"], code=ExitCode.NOT_CONFIGURED)
+
+    # A tenant is a plain name.
+    monkeypatch.setenv("PAP_TENANT", "../other")
+    pap("sessions", "show", code=ExitCode.NOT_CONFIGURED)  # invalid_tenant

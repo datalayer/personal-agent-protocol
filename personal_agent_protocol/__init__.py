@@ -96,7 +96,6 @@ from .models import (
     OperationConfirmation,
     OperationResult,
 )
-from .profile import PROTOCOL_PROFILE, PROTOCOL_REVISION
 from .operations import (
     FINAL_STATES,
     OPERATIONS_EXTENSION,
@@ -117,6 +116,7 @@ from .operations import (
     terms_digest,
 )
 from .pairwise import SqlitePairwiseUserIdStore, resolve_pairwise_user_id
+from .profile import PROTOCOL_PROFILE, PROTOCOL_REVISION
 from .reactor import (
     ACCOUNT_TOKEN_LOCKS,
     AUTHORIZATION_STATE_STORES,

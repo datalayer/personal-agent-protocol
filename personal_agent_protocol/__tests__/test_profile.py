@@ -19,7 +19,10 @@ import yaml
 from personal_agent_protocol import OPERATIONS_VERSION, PROTOCOL_PROFILE, PROTOCOL_REVISION
 
 ROOT = Path(__file__).parents[2]
-STATEMENT = f"draft {PROTOCOL_PROFILE} ({PROTOCOL_REVISION}) and its Operations extension v{OPERATIONS_VERSION}"
+STATEMENT = (
+    f"draft {PROTOCOL_PROFILE} ({PROTOCOL_REVISION}) "
+    f"and its Operations extension v{OPERATIONS_VERSION}"
+)
 
 
 def _typescript(path: str, name: str) -> str:
@@ -49,14 +52,24 @@ def test_the_packages_and_the_docs_state_it() -> None:
     assert f'description = "Python SDK for Personal Agent Protocol {STATEMENT}"\n' in pyproject
     assert package["description"] == f"TypeScript SDK for Personal Agent Protocol {STATEMENT}"
     readme = " ".join((ROOT / "README.md").read_text().split())
-    assert f"draft {PROTOCOL_PROFILE}](https://personalagentprotocol.org/docs/spec) ({PROTOCOL_REVISION})" in readme
+    spec = "https://personalagentprotocol.org/docs/spec"
+    assert f"draft {PROTOCOL_PROFILE}]({spec}) ({PROTOCOL_REVISION})" in readme
     assert f"Operations extension v{OPERATIONS_VERSION}" in readme
     docs = ROOT / "docs" / "docs"
     compatibility = (docs / "releases" / "compatibility.mdx").read_text()
     for python, typescript in (
-        (f"`PROTOCOL_PROFILE` = `{PROTOCOL_PROFILE}`", f'`PROTOCOL_PROFILE` = `"{PROTOCOL_PROFILE}"`'),
-        (f"`PROTOCOL_REVISION` = `{PROTOCOL_REVISION}`", f'`PROTOCOL_REVISION` = `"{PROTOCOL_REVISION}"`'),
-        (f"`OPERATIONS_VERSION` = `{OPERATIONS_VERSION}`", f'`OPERATIONS_VERSION` = `"{OPERATIONS_VERSION}"`'),
+        (
+            f"`PROTOCOL_PROFILE` = `{PROTOCOL_PROFILE}`",
+            f'`PROTOCOL_PROFILE` = `"{PROTOCOL_PROFILE}"`',
+        ),
+        (
+            f"`PROTOCOL_REVISION` = `{PROTOCOL_REVISION}`",
+            f'`PROTOCOL_REVISION` = `"{PROTOCOL_REVISION}"`',
+        ),
+        (
+            f"`OPERATIONS_VERSION` = `{OPERATIONS_VERSION}`",
+            f'`OPERATIONS_VERSION` = `"{OPERATIONS_VERSION}"`',
+        ),
     ):
         assert python in compatibility and typescript in compatibility
     report = (docs / "protocol" / "conformance-report.mdx").read_text()
@@ -77,4 +90,7 @@ def test_the_docs_are_versioned_with_the_release() -> None:
     assert f"| `{minor}.x` | Yes" in (docs / "releases" / "support.mdx").read_text()
     changelog = (ROOT / "CHANGELOG.md").read_text()
     assert f"## {__version__} (" in changelog
-    assert f"SDK version **{__version__}**" in (docs / "protocol" / "conformance-report.mdx").read_text()
+    assert (
+        f"SDK version **{__version__}**"
+        in (docs / "protocol" / "conformance-report.mdx").read_text()
+    )

@@ -41,7 +41,7 @@ from typing import Any, Literal, Protocol, cast, runtime_checkable
 from urllib.parse import urlsplit
 
 import httpx
-from reactor import PluginPlatform, define_contribution_point  # type: ignore[import-untyped]
+from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import PersonalAgentProtocolError, ProtocolValidationError, TransportError
 from .json import loads_strict

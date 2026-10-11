@@ -58,7 +58,6 @@ from .device import DeviceSignInClient
 from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError, TransportError
 from .mcp import McpClient, McpError, mcp_api
-from .profile import PROTOCOL_PROFILE
 from .models import ConversationEvent, DiscoveredCompany, Message, Operation
 from .operations import (
     STANDING_PERMISSION_STORES,
@@ -71,6 +70,7 @@ from .operations import (
     operation_page,
     operations_endpoint,
 )
+from .profile import PROTOCOL_PROFILE
 from .reactor import (
     CLOCKS,
     DPOP_PROOF_PROVIDERS,

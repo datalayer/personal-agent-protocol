@@ -40,7 +40,6 @@ import personal_agent_protocol
 from personal_agent_protocol import (
     PAIRWISE_USER_ID_STORES,
     RATE_LIMIT_BUDGETS,
-    AccountTokenClient,
     DeviceSignInClient,
     DiscoveryClient,
     DpopHttpClient,
@@ -401,7 +400,10 @@ async def _device_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
     scheduled: list[Any] = []
 
     async def check(namespace: dict[str, Any], out: str) -> None:
-        assert shown[0].startswith("https://shop.example/") and shown[1] == namespace["started"].user_code
+        assert (
+            shown[0].startswith("https://shop.example/")
+            and shown[1] == namespace["started"].user_code
+        )
         assert namespace["result"].status == "pending" and scheduled
 
     return {
@@ -609,10 +611,14 @@ async def _standing(docs: Docs) -> tuple[dict[str, Any], Check]:
 async def _company(docs: Docs) -> tuple[dict[str, Any], Check]:
     async def check(namespace: dict[str, Any], out: str) -> None:
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=namespace["app"]), base_url="https://manzanita.example"
+            transport=httpx.ASGITransport(app=namespace["app"]),
+            base_url="https://manzanita.example",
         ) as client:
             document = (await client.get("/.well-known/poppy.json")).json()
-        assert document["organization"] == {"name": "Manzanita Outfitters", "domain": "manzanita.example"}
+        assert document["organization"] == {
+            "name": "Manzanita Outfitters",
+            "domain": "manzanita.example",
+        }
 
     return {
         "http": docs.http,

@@ -128,9 +128,10 @@ def render(reports: dict[str, dict[str, Any]]) -> str:
         "",
         f"SDK version **{_version()}**, PAP profile **{_PROFILE}** (draft updated "
         f"{_REVISION}), Operations extension **v{_OPERATIONS}**. Each pairing runs every "
-        "positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language "
-        "and the reference company (Manzanita) in the other. A case is skipped, never "
-        "passed, when a side lacks what it needs; the reason is listed below.",
+        "positive, negative and recovery fixture case over real TCP and TLS, the personal "
+        "agent in one language and the reference company (Manzanita) in the other. A case "
+        "is skipped, never passed, when a side lacks what it needs; the reason is listed "
+        "below.",
         "",
         "## Pairings",
         "",

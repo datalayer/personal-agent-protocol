@@ -493,7 +493,10 @@ class CompanyService:
             document["web"] = {"browser_session_endpoint": config.browser_session_endpoint}
         if config.operations:
             document["extensions"] = {
-                "operations": {"version": OPERATIONS_VERSION, "endpoint": config.operations_endpoint}
+                "operations": {
+                    "version": OPERATIONS_VERSION,
+                    "endpoint": config.operations_endpoint,
+                }
             }
         return document
 
@@ -2156,7 +2159,9 @@ class CompanyService:
     # MCP (§4.3, §6, Operations §4.2) -------------------------------------------------------
 
     def _mcp(self) -> CompanyMcp | None:
-        return cast(CompanyMcp | None, optional_contribution(self.reactor, COMPANY_MCP, "MCP server"))
+        return cast(
+            CompanyMcp | None, optional_contribution(self.reactor, COMPANY_MCP, "MCP server")
+        )
 
     def _bearer_refusal(self, status: int, error: str, scope: str | None = None) -> CompanyResponse:
         challenge = (

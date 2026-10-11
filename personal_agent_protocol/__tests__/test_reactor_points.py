@@ -109,7 +109,9 @@ def test_the_inventory_names_each_point_once() -> None:
     ids = [entry["id"] for entry in POINTS]
     assert len(ids) == len(set(ids))
     assert all(entry["role"] in {"personal-agent", "company"} for entry in POINTS)
-    assert all(entry["id"].startswith("pap.company.") == (entry["role"] == "company") for entry in POINTS)
+    assert all(
+        entry["id"].startswith("pap.company.") == (entry["role"] == "company") for entry in POINTS
+    )
     assert all(entry["resolution"] in {"single", "optional", "by-action"} for entry in POINTS)
 
 
@@ -194,7 +196,9 @@ async def test_pairwise_ids_are_resolved_per_tenant_and_never_cross(tmp_path: Pa
     asked: list[str] = []
 
     class Spy:
-        async def get_or_create(self, *, tenant_id: str, local_user_id: str, company_issuer: str) -> str:
+        async def get_or_create(
+            self, *, tenant_id: str, local_user_id: str, company_issuer: str
+        ) -> str:
             asked.append(tenant_id)
             return await store.get_or_create(
                 tenant_id=tenant_id, local_user_id=local_user_id, company_issuer=company_issuer
@@ -202,7 +206,10 @@ async def test_pairwise_ids_are_resolved_per_tenant_and_never_cross(tmp_path: Pa
 
     platform, owned = build_pap_reactor(
         plugins=[
-            (PluginManifest(name="pairwise", version="1"), _Contributor(PAIRWISE_USER_ID_STORES, Spy(), 10))
+            (
+                PluginManifest(name="pairwise", version="1"),
+                _Contributor(PAIRWISE_USER_ID_STORES, Spy(), 10),
+            )
         ]
     )
     try:
@@ -237,19 +244,29 @@ async def test_each_dpop_proof_is_asked_for_the_requests_own_tenant() -> None:
         platform, _ = build_pap_reactor(
             http_client=http,
             plugins=[
-                (PluginManifest(name="proofs", version="1"), _Contributor(DPOP_PROOF_PROVIDERS, Proofs(), 10))
+                (
+                    PluginManifest(name="proofs", version="1"),
+                    _Contributor(DPOP_PROOF_PROVIDERS, Proofs(), 10),
+                )
             ],
         )
         try:
             client = DpopHttpClient(reactor=platform, http_client=http)
             token = SessionToken(
-                access_token=SecretStr("sat"), token_type="DPoP", expires_in=60,
-                session_id="ses_1", signed_in=False,
+                access_token=SecretStr("sat"),
+                token_type="DPoP",  # noqa: S106 - OAuth token type
+                expires_in=60,
+                session_id="ses_1",
+                signed_in=False,
             )
             for tenant, user in (("tenant-one", "usr_one"), ("tenant-two", "usr_two")):
                 await client.request(
-                    "GET", "https://shop.example/api/orders", token=token,
-                    tenant_id=tenant, pairwise_user_id=user, issuer="https://shop.example",
+                    "GET",
+                    "https://shop.example/api/orders",
+                    token=token,
+                    tenant_id=tenant,
+                    pairwise_user_id=user,
+                    issuer="https://shop.example",
                 )
         finally:
             platform.stop()
@@ -259,5 +276,9 @@ async def test_each_dpop_proof_is_asked_for_the_requests_own_tenant() -> None:
 
 def test_the_docs_list_every_point() -> None:
     page = (ROOT / "docs" / "docs" / "concepts" / "contribution-points.mdx").read_text()
-    rows = {line.split("|")[1].strip().strip("`") for line in page.splitlines() if line.startswith("| `pap.")}
+    rows = {
+        line.split("|")[1].strip().strip("`")
+        for line in page.splitlines()
+        if line.startswith("| `pap.")
+    }
     assert rows == {entry["id"] for entry in POINTS}

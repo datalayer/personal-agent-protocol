@@ -69,6 +69,10 @@ from .errors import (
     TransportError,
 )
 from .identity import AgentIdentityClient
+from .mediated import (
+    MediatedSignInClient,
+    MediatedSignInResult,
+)
 from .models import (
     ClientMetadata,
     ConversationEvent,
@@ -96,6 +100,7 @@ from .reactor import (
     EXTENSION_HANDLERS,
     KEY_STORES,
     PAIRWISE_USER_ID_STORES,
+    PROTECTED_INPUTS,
     PROTOCOL_PROFILES,
     RANDOM_SOURCES,
     SIGNERS,
@@ -113,6 +118,9 @@ from .reactor import (
     KeyStore,
     PairwiseUserIdStore,
     PapCorePlugin,
+    ProtectedInput,
+    ProtectedInputField,
+    ProtectedInputRequest,
     ProtocolCache,
     ProtocolProfile,
     RandomSource,
@@ -150,6 +158,7 @@ __all__ = [
     "JWT_CLIENT_ASSERTION",
     "KEY_STORES",
     "PAIRWISE_USER_ID_STORES",
+    "PROTECTED_INPUTS",
     "PROTOCOL_PROFILES",
     "RANDOM_SOURCES",
     "REFRESH_TOKEN_GRANT",
@@ -208,6 +217,8 @@ __all__ = [
     "JsonWebKeySet",
     "KeyReference",
     "KeyStore",
+    "MediatedSignInClient",
+    "MediatedSignInResult",
     "Message",
     "OAuthServerMetadata",
     "Operation",
@@ -217,6 +228,9 @@ __all__ = [
     "PapCorePlugin",
     "PersonalAgentProtocolError",
     "ProofError",
+    "ProtectedInput",
+    "ProtectedInputField",
+    "ProtectedInputRequest",
     "ProtocolCache",
     "ProtocolProfile",
     "ProtocolValidationError",

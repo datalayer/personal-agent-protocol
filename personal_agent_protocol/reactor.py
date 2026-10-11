@@ -353,17 +353,21 @@ class RateLimitBudget(Protocol):
 
 @dataclass
 class _Bucket:
-    tokens: float
-    updated: float
+    #: When the next request may go if the burst is spent (GCRA's theoretical arrival time).
+    due: float
     blocked_until: float = 0.0
 
 
 class SharedRateLimitBudget:
-    """Default `pap.rateLimitBudget`: per-company token buckets in one process.
+    """Default `pap.rateLimitBudget`: per-company budgets in one process.
 
     `rate` requests per second with bursts of `burst` (no rate limit when
-    `rate` is `None`: only the companies' own pauses are shared). A wait longer
-    than `max_wait` seconds is refused with `rate_limited` and `retry_after`.
+    `rate` is `None`: only the companies' own pauses are shared). Each caller
+    reserves its turn when it asks — the turn counts every caller ahead of it
+    and the company's pause (`defer`) — and sleeps until then, so concurrent
+    callers never exceed the rate, and a turn further than `max_wait` seconds
+    away is refused at once with `rate_limited` and `retry_after`, however
+    many callers are queued (the generic cell rate algorithm).
     """
 
     def __init__(
@@ -385,35 +389,32 @@ class SharedRateLimitBudget:
         self._sleep = sleep
         self._monotonic = monotonic
         self._buckets: dict[str, _Bucket] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
 
     def _bucket(self, key: str, now: float) -> _Bucket:
-        bucket = self._buckets.setdefault(key, _Bucket(tokens=float(self.burst), updated=now))
-        if self.rate is not None:
-            bucket.tokens = min(
-                float(self.burst), bucket.tokens + (now - bucket.updated) * self.rate
-            )
-        bucket.updated = now
-        return bucket
+        return self._buckets.setdefault(key, _Bucket(due=now))
 
     async def acquire(self, key: str) -> None:
-        async with self._locks.setdefault(key, asyncio.Lock()):
-            now = self._monotonic()
-            bucket = self._bucket(key, now)
-            wait = max(0.0, bucket.blocked_until - now)
-            if self.rate is not None and bucket.tokens < 1:
-                wait = max(wait, (1 - bucket.tokens) / self.rate)
-            if wait > self.max_wait:
-                raise TransportError(
-                    "rate_limited",
-                    "The company's shared request budget is exhausted",
-                    details={"retry_after": str(math.ceil(wait))},
-                )
-            if wait > 0:
-                await self._sleep(wait)
-                bucket = self._bucket(key, self._monotonic())
-            if self.rate is not None:
-                bucket.tokens -= 1
+        # Reserved without awaiting anything: callers take their turns in arrival order.
+        now = self._monotonic()
+        bucket = self._bucket(key, now)
+        turn = max(now, bucket.blocked_until)
+        due = max(bucket.due, turn)
+        interval = 0.0 if self.rate is None else 1.0 / self.rate
+        if self.rate is not None:
+            turn = max(turn, due - (self.burst - 1) * interval)
+        wait = turn - now
+        if wait > self.max_wait:
+            raise TransportError(
+                "rate_limited",
+                "The company's shared request budget is exhausted",
+                details={"retry_after": str(math.ceil(wait))},
+            )
+        if self.rate is not None:
+            bucket.due = due + interval
+        left = wait
+        while left > 0:  # a timer may fire a little early: sleep the rest
+            await self._sleep(left)
+            left = turn - self._monotonic()
 
     async def defer(self, key: str, seconds: float) -> None:
         now = self._monotonic()

@@ -250,6 +250,7 @@ async def verify_dpop_proof(  # noqa: C901 - every bound claim is checked in seq
 
     thumbprint = _thumbprint(public_jwk)
     replay_key = f"{thumbprint}:{jti}"
-    if not await replay_cache.mark_once(replay_key, expires_at=current + window):
+    # Remembered for as long as the proof would be accepted: until `iat` leaves the window.
+    if not await replay_cache.mark_once(replay_key, expires_at=issued_at + window):
         raise ProofError("invalid_dpop_proof", "DPoP proof has already been used")
     return VerifiedDpopProof(jti, issued_at, public_jwk, thumbprint)

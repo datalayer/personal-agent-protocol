@@ -73,7 +73,8 @@ export async function verifyAssertion(
   }
   const fresh = await options.replayCache.markOnce(
     `assertion:${options.issuer}:${String(claims.jti)}`,
-    { expiresAt: new Date(exp * 1000) },
+    // Remembered for as long as the assertion would be accepted: `exp` and the skew.
+    { expiresAt: new Date((exp + SKEW_SECONDS) * 1000) },
   );
   if (!fresh) throw refuse("Assertion has already been used");
   return claims;

@@ -110,7 +110,8 @@ class CompanyDefaultsPlugin:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         store = MemoryCompanyStore(self.clock)
         contribute(COMPANY_STORES, store, contribution_id="memory", order=100)
-        contribute(REPLAY_CACHES, MemoryReplayCache(), contribution_id="memory", order=100)
+        replay = MemoryReplayCache(self.clock)
+        contribute(REPLAY_CACHES, replay, contribution_id="memory", order=100)
         contribute(CLIENT_POLICIES, AllowEveryAgent(), contribution_id="allow", order=100)
         contribute(CLIENT_RESOLVERS, self.resolver, contribution_id="https", order=100)
 

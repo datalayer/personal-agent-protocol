@@ -60,7 +60,9 @@ async def verify_assertion(
     skew = timedelta(seconds=30)
     if now > expires + skew or issued > now + skew:
         raise SessionError(error, "Assertion is not active", status_code=_status(error))
-    if not await replay_cache.mark_once(f"assertion:{issuer}:{claims['jti']}", expires_at=expires):
+    # Remembered for as long as the assertion would be accepted: `exp` and the skew.
+    replay_key = f"assertion:{issuer}:{claims['jti']}"
+    if not await replay_cache.mark_once(replay_key, expires_at=expires + skew):
         raise SessionError(error, "Assertion has already been used", status_code=_status(error))
     return claims
 

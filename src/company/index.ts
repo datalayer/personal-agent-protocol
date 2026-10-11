@@ -104,7 +104,10 @@ export function createCompanyDefaultsPlugin(resolver: ClientResolver, clock?: Cl
         new MemoryCompanyStore(clock === undefined ? {} : { clock }),
         { id: "memory", order: 100 },
       ),
-      contribution(ReplayCaches, new MemoryReplayCache(), { id: "memory", order: 100 }),
+      contribution(ReplayCaches, new MemoryReplayCache(clock === undefined ? {} : { clock }), {
+        id: "memory",
+        order: 100,
+      }),
       contribution(ClientPolicies, new AllowEveryAgent(), { id: "allow", order: 100 }),
       contribution(ClientResolvers, resolver, { id: "https", order: 100 }),
     ],
@@ -139,7 +142,7 @@ export function buildCompany(
 export * from "./points.js";
 export * from "./service.js";
 export { verifyAssertion, type VerifyAssertionOptions } from "./verify.js";
-export { checkStore, recordSamples, StoreConformanceError } from "./testing.js";
+export { checkReplayCache, checkStore, recordSamples, StoreConformanceError } from "./testing.js";
 export {
   byHost,
   companyRequestListener,

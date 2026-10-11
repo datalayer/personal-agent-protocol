@@ -45,6 +45,7 @@ const sidebars = {
           ],
         },
         "protocol/conformance-report",
+        "protocol/load-tests",
       ],
     },
     {

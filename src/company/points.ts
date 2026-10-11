@@ -151,15 +151,42 @@ export interface ReplayCache {
  * It keeps each expiry but never prunes on the wall clock: a company's clock
  * is a contribution, and an ID dropped early could be replayed.
  */
+const FIRST_SWEEP = 1024;
+
+/**
+ * The default replay cache: one process, entries dropped after expiry.
+ *
+ * An identifier is refused until its `expiresAt` by `clock` (the assertion or proof it
+ * names is refused as expired after that). Expired entries are swept whenever the cache
+ * has doubled since the last sweep, so it holds about twice the identifiers still alive,
+ * never every one ever seen.
+ */
 export class MemoryReplayCache implements ReplayCache {
-  readonly #seen = new Map<string, Date>();
+  #seen = new Map<string, number>();
+  #sweepAt = FIRST_SWEEP;
+  clock: { now(): Date };
+
+  constructor(options: { readonly clock?: { now(): Date } } = {}) {
+    this.clock = options.clock ?? { now: () => new Date() };
+  }
+
+  get size(): number {
+    return this.#seen.size;
+  }
 
   async markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean> {
-    if (this.#seen.has(key)) return false;
-    this.#seen.set(key, options.expiresAt);
+    const now = this.clock.now().getTime();
+    const seen = this.#seen.get(key);
+    if (seen !== undefined && now < seen) return false;
+    this.#seen.set(key, options.expiresAt.getTime());
+    if (this.#seen.size >= this.#sweepAt) {
+      this.#seen = new Map([...this.#seen].filter(([, until]) => now < until));
+      this.#sweepAt = Math.max(FIRST_SWEEP, 2 * this.#seen.size);
+    }
     return true;
   }
 }
+
 
 /** One verified call to the company's API: who, with what authority. */
 export interface ApiCall {

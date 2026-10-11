@@ -38,6 +38,7 @@ from pydantic import SecretStr
 from reactor import define_contribution_point  # type: ignore[import-untyped]
 
 from ..models import ClientMetadata, JsonWebKeySet, Operation, OperationResult
+from ..reactor import Clock, SystemClock
 from .store import (
     DPOP,
     AccountGrant,
@@ -188,16 +189,36 @@ class ReplayCache(Protocol):
     async def mark_once(self, key: str, *, expires_at: datetime) -> bool: ...
 
 
-class MemoryReplayCache:
-    """The default replay cache: one process, entries dropped after expiry."""
+_FIRST_SWEEP = 1024
 
-    def __init__(self) -> None:
+
+class MemoryReplayCache:
+    """The default replay cache: one process, entries dropped after expiry.
+
+    An identifier is refused until its `expires_at` by `clock` (the
+    assertion or proof it names is refused as expired after that). Expired
+    entries are swept whenever the cache has doubled since the last sweep,
+    so it holds about twice the identifiers still alive, never every one
+    ever seen.
+    """
+
+    def __init__(self, clock: Clock | None = None) -> None:
+        self.clock: Clock = clock or SystemClock()
         self._seen: dict[str, datetime] = {}
+        self._sweep_at = _FIRST_SWEEP
+
+    def __len__(self) -> int:
+        return len(self._seen)
 
     async def mark_once(self, key: str, *, expires_at: datetime) -> bool:
-        if key in self._seen:
+        now = self.clock.now()
+        seen = self._seen.get(key)
+        if seen is not None and now < seen:
             return False
         self._seen[key] = expires_at
+        if len(self._seen) >= self._sweep_at:
+            self._seen = {k: until for k, until in self._seen.items() if now < until}
+            self._sweep_at = max(_FIRST_SWEEP, 2 * len(self._seen))
         return True
 
 

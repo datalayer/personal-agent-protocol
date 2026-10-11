@@ -112,9 +112,13 @@ recorded there with `defer`: every other task for that company then waits it
 out too, instead of being refused in turn. A wait longer than `max_wait` is
 refused locally with `rate_limited`.
 
-`SharedRateLimitBudget(rate=..., burst=...)` also paces requests with a token
-bucket per company. A multi-process host contributes a budget backed by shared
-storage:
+`SharedRateLimitBudget(rate=..., burst=...)` also paces requests per company
+(the generic cell rate algorithm): each caller reserves its turn when it asks,
+counting every caller ahead of it and the company's pause, so concurrent
+callers never exceed the rate, and a caller whose turn is more than `max_wait`
+away is refused at once, however long the queue. [Load tests](/protocol/load-tests/)
+check it under concurrent callers. A multi-process host contributes a budget
+backed by shared storage:
 
 ```python
 from reactor import PluginManifest

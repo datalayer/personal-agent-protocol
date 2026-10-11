@@ -74,6 +74,9 @@ packages = ["personal_agent_protocol"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 filterwarnings = ["error"]
+markers = [
+  "load: bounded load tests, sized by PAP_LOAD_SIZE (64 by default; the load CI job runs 512)",
+]
 
 [tool.mypy]
 plugins = ["pydantic.mypy"]

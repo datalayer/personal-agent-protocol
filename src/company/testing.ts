@@ -11,10 +11,16 @@
  * concurrency, `create` only if absent, compare-and-set conflicts, kinds kept
  * apart, values copied rather than shared, and a JSON round trip of every
  * record kind the company keeps. `makeStore` returns a fresh, empty store (or
- * a promise of one); `now` is the clock the store judges expiry by.
+ * a promise of one); `now` is the clock the store judges expiry by;
+ * `concurrency` is how many callers race for one record.
+ *
+ * `checkReplayCache` does the same for `pap.company.replayCache`: of
+ * `concurrency` callers marking one identifier at once, exactly one wins, and the
+ * identifier stays refused; distinct identifiers are all accepted.
  */
 
 import type { Operation } from "../models.js";
+import type { ReplayCache } from "./points.js";
 import {
   RecordKinds,
   type AccountAgent,
@@ -184,16 +190,40 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
 /** Check that the stores `makeStore` returns keep the company store contract. */
 export async function checkStore(
   makeStore: () => CompanyStore | Promise<CompanyStore>,
-  options: { readonly now?: () => Date } = {},
+  options: { readonly now?: () => Date; readonly concurrency?: number } = {},
 ): Promise<void> {
   const now = options.now ?? (() => new Date());
+  const concurrency = options.concurrency ?? CONCURRENCY;
+  check(concurrency >= 2, "concurrency must be at least 2");
   await absent(await makeStore());
   await present(await makeStore());
   await expiry(await makeStore(), now());
-  await takeOnce(await makeStore());
-  await createOnce(await makeStore());
-  await compareAndSet(await makeStore());
+  await takeOnce(await makeStore(), concurrency);
+  await createOnce(await makeStore(), concurrency);
+  await compareAndSet(await makeStore(), concurrency);
   await roundTrips(await makeStore(), now());
+}
+
+/** Check that the caches `makeCache` returns accept each identifier exactly once. */
+export async function checkReplayCache(
+  makeCache: () => ReplayCache | Promise<ReplayCache>,
+  options: { readonly now?: () => Date; readonly concurrency?: number } = {},
+): Promise<void> {
+  const now = options.now ?? (() => new Date());
+  const concurrency = options.concurrency ?? CONCURRENCY;
+  check(concurrency >= 2, "concurrency must be at least 2");
+  const cache = await makeCache();
+  const expiresAt = new Date(now().getTime() + 5 * 60 * 1000);
+  const marked = await Promise.all(
+    Array.from({ length: concurrency }, () => cache.markOnce("proof:one", { expiresAt })),
+  );
+  const wins = marked.filter(Boolean).length;
+  check(wins === 1, `one identifier was accepted ${wins} times, not once`);
+  check(!(await cache.markOnce("proof:one", { expiresAt })), "an accepted identifier stays refused until it expires");
+  const distinct = await Promise.all(
+    Array.from({ length: concurrency }, (_, n) => cache.markOnce(`proof:${n}:distinct`, { expiresAt })),
+  );
+  check(distinct.every(Boolean), "distinct identifiers are each accepted");
 }
 
 async function absent(store: CompanyStore): Promise<void> {
@@ -261,10 +291,10 @@ async function expiry(store: CompanyStore, now: Date): Promise<void> {
   }
 }
 
-async function takeOnce(store: CompanyStore): Promise<void> {
+async function takeOnce(store: CompanyStore, concurrency: number): Promise<void> {
   await store.put("authorization", "once", { a: 1 });
   const taken = await Promise.all(
-    Array.from({ length: CONCURRENCY }, () => store.take("authorization", "once")),
+    Array.from({ length: concurrency }, () => store.take("authorization", "once")),
   );
   const winners = taken.filter((value) => value !== undefined);
   check(winners.length === 1, `take returned the record ${winners.length} times, not once`);
@@ -272,9 +302,9 @@ async function takeOnce(store: CompanyStore): Promise<void> {
   check((await store.get("authorization", "once")) === undefined, "a taken record is gone");
 }
 
-async function createOnce(store: CompanyStore): Promise<void> {
+async function createOnce(store: CompanyStore, concurrency: number): Promise<void> {
   const created = await Promise.all(
-    Array.from({ length: CONCURRENCY }, (_, n) => store.create("message_id", "m", { n })),
+    Array.from({ length: concurrency }, (_, n) => store.create("message_id", "m", { n })),
   );
   const wins = created.filter(Boolean).length;
   check(wins === 1, `create succeeded ${wins} times, not once`);
@@ -283,13 +313,13 @@ async function createOnce(store: CompanyStore): Promise<void> {
   check(!(await store.create("message_id", "m", { n: -1 })), "create of a present record");
 }
 
-async function compareAndSet(store: CompanyStore): Promise<void> {
+async function compareAndSet(store: CompanyStore, concurrency: number): Promise<void> {
   await store.put("operation", "op", { state: "proposed" });
   const entry = await store.get("operation", "op");
   check(entry !== undefined, "the record is present");
   if (entry === undefined) return;
   const replaced = await Promise.all(
-    Array.from({ length: CONCURRENCY }, (_, n) =>
+    Array.from({ length: concurrency }, (_, n) =>
       store.replace("operation", "op", entry.version, { state: "in_progress", n }),
     ),
   );

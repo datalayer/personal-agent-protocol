@@ -250,7 +250,8 @@ export async function verifyDpopProof(
   const keyThumbprint = await calculateJwkThumbprint(jwk);
   if (
     !(await options.replayCache.markOnce(`${keyThumbprint}:${payload.jti}`, {
-      expiresAt: new Date(now.getTime() + windowSeconds * 1000),
+      // Remembered for as long as the proof would be accepted: until `iat` leaves the window.
+      expiresAt: new Date(issuedAt.getTime() + windowSeconds * 1000),
     }))
   ) {
     throw new ProofError("invalid_dpop_proof", "DPoP proof has already been used");

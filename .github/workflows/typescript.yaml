@@ -36,6 +36,10 @@ jobs:
       - run: npm install --no-package-lock
       - run: npm run typecheck
       - run: npm test
+      - name: Load tests at size
+        run: node --test src/__tests__/load.test.mjs
+        env:
+          PAP_LOAD_SIZE: '512'
 
   # Every language pairing runs the conformance suite over TLS (PAP plan §5), and the
   # compatibility report is generated from their JSON reports.

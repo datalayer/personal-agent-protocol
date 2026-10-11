@@ -1,0 +1,62 @@
+---
+title: Load tests
+---
+
+# Load tests
+
+Bounded, local load tests check the parts of the SDK that concurrency stresses:
+replay caches, shared rate-limit budgets, device-flow polling, and one
+conversation's events fanned out to many readers. They are
+`personal_agent_protocol/__tests__/test_load.py` (marked `load`) and
+`src/__tests__/load.test.mjs`, sized by `PAP_LOAD_SIZE`: 64 in the ordinary
+test runs, so they stay quick, and 512 in CI's `load-and-canaries` job (Python)
+and the TypeScript job's *Load tests at size* step. Each test prints its
+numbers:
+
+```bash
+PAP_LOAD_SIZE=512 pytest -q -s -m load personal_agent_protocol/__tests__/test_load.py
+PAP_LOAD_SIZE=512 node --test src/__tests__/load.test.mjs
+```
+
+## What each test checks
+
+| Test | Load | Holds when |
+| --- | --- | --- |
+| One DPoP proof, one client assertion | `SIZE` concurrent verifications of each | exactly one is accepted; the rest are `invalid_dpop_proof` / `invalid_client` |
+| One token request at the company | the same request (assertion and proof) sent `SIZE` times at once | exactly one `200` |
+| Store and replay-cache kits | `check_store` / `check_replay_cache` (`checkStore` / `checkReplayCache`) at `concurrency=SIZE` | one `take`, one `create`, one compare-and-set, one `mark_once` win |
+| Memory replay cache | 20 rounds of at least 1024 proofs, each round expiring | the cache never holds more than about twice one round's identifiers |
+| Shared budgets | `SIZE` callers on each of four companies at once, 2000 requests per second, bursts of 8 | no request goes before its company's budget allows it |
+| A company's pause | a `Retry-After` pause, then `SIZE` + 64 callers with `max_wait` 50 ms | nobody goes before the pause ends; those whose turn is beyond `max_wait` are refused at once with `rate_limited` |
+| Device polling | `SIZE` Device Sign-Ins polled together | eager polls send nothing; each interval sends one poll per sign-in; `slow_down` adds five seconds for every poller; two polls of one sign-in at once send one |
+| SSE fan-out | `SIZE` subscribers of one conversation, each from its own cursor, while it grows by eight messages and closes | each gets every event after its cursor, once, in order |
+
+## One run
+
+Python 3.13 and Node 22 on a laptop, `PAP_LOAD_SIZE=512`, everything in one
+process (the in-process network: real HTTP over ASGI, real keys):
+
+| Test | Result |
+| --- | --- |
+| One DPoP proof | 1 of 512 accepted, 60 ms (Python); 1 of 512, 106 ms (TypeScript) |
+| One client assertion | 1 of 512 accepted, 56 ms |
+| One token request at the company | 1 of 512 accepted, 511 `invalid_client`, 181 ms |
+| Memory replay cache | 20,480 identifiers, never more than 1,024 held |
+| Shared budgets | 2,048 requests on four companies, 307 ms (Python), 253 ms (TypeScript) |
+| A company's pause | 26 admitted, 550 refused at once (Python); 27 and 549 (TypeScript) |
+| Device polling | 512 pollers, 3,584 polls in seven rounds, 3.7 s |
+| SSE fan-out | 512 subscribers, 27 events, 11,279 delivered, 4,616 reconnects, 3.0 s |
+
+## What the tests found
+
+- The memory replay cache never forgot an identifier, so a long-running company
+  grew it forever. It now drops identifiers once they have expired, swept
+  whenever it doubles, and the verifiers remember each identifier as long as
+  they would accept it: a DPoP proof until its `iat` leaves the acceptance
+  window, a client or Session assertion until `exp` plus the 30-second skew.
+- The shared budget held its lock while a caller slept, so `max_wait` bounded
+  each caller's own sleep but not its time in the queue: under load callers
+  waited far longer than `max_wait`. It now reserves each caller's turn when it
+  asks (the generic cell rate algorithm), so a turn beyond `max_wait` is
+  refused at once, and it sleeps again if a timer fires early (Node's timers
+  can, by a busy loop iteration).

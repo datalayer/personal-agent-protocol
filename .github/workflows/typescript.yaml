@@ -7,7 +7,9 @@ on:
       - 'src/**'
       - 'src/__tests__/**'
       - 'tsconfig.json'
-      - 'protocol/fixtures/**'
+      - 'protocol/**'
+      - 'personal_agent_protocol/**'
+      - 'scripts/conformance_report.py'
       - 'package.json'
       - '.github/workflows/typescript.yaml'
   pull_request:
@@ -16,7 +18,9 @@ on:
       - 'src/**'
       - 'src/__tests__/**'
       - 'tsconfig.json'
-      - 'protocol/fixtures/**'
+      - 'protocol/**'
+      - 'personal_agent_protocol/**'
+      - 'scripts/conformance_report.py'
       - 'package.json'
       - '.github/workflows/typescript.yaml'
   workflow_dispatch:
@@ -32,3 +36,39 @@ jobs:
       - run: npm install --no-package-lock
       - run: npm run typecheck
       - run: npm test
+
+  # Every language pairing runs the conformance suite over TLS (PAP plan §5), and the
+  # compatibility report is generated from their JSON reports.
+  pairings:
+    runs-on: ubuntu-latest
+    env:
+      PAP_CONFORMANCE_REPORTS: conformance-reports
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+          python-version: '3.12'
+          activate-environment: true
+      - run: npm install --no-package-lock
+      - run: npm run build
+      - run: uv pip install ".[test]"
+      - name: Python and TypeScript agents against Python and TypeScript companies
+        run: |
+          pytest -q personal_agent_protocol/__tests__/test_conformance.py \
+            personal_agent_protocol/__tests__/test_pairings.py \
+            personal_agent_protocol/__tests__/test_cross_language.py
+          node --test src/__tests__/conformance-pairing.test.mjs
+          test "$(ls conformance-reports/*.json | wc -l)" = 4
+      - name: Compatibility and conformance report
+        run: |
+          python scripts/conformance_report.py conformance-reports \
+            --output conformance-reports/conformance-report.mdx
+          python scripts/conformance_report.py conformance-reports --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conformance-reports
+          path: conformance-reports

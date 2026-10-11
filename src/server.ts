@@ -18,6 +18,7 @@ export {
   type VerifiedBrowserAssertion,
   type VerifyBrowserAssertionOptions,
 } from "./browser-server.js";
+export * from "./company/index.js";
 
 export type NodeAddressResolver = (hostname: string) => Promise<readonly string[]>;
 

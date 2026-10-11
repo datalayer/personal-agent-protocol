@@ -17,6 +17,9 @@ Unknown or internal symbols are deliberately excluded.
 - [`AccountTokenContext`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Class. Where an Account Token is used, and for whom (all non-secret).
 - [`AccountTokenLock`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Serialize every use of one Account Token (PAP §4.8 rotation).
 - [`AgentIdentityClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/identity.py) — Class. Fetch and verify a personal agent's public identity documents.
+- [`ApiClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. Read and change through a company's API, the credentials host-owned.
+- [`ApiError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. The company refused an API call; `code` is its error, never its body.
+- [`ApiResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. A successful API answer: the body, or the operation it proposes.
 - [`approve`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Record the user's approval of the revision the host just showed them.
 - [`AUTHORIZATION_STATE_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `AUTHORIZATION_STATE_STORES` constant.
 - [`AuthorizationCodeGrant`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Redacted PAP authorization-code exchange values.
@@ -91,6 +94,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`MediatedSignInResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Class. Where a Mediated Sign-In stands, without any credential.
 - [`Message`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Message sent by either side or returned in a conversation event.
 - [`OAuthServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `OAuthServerMetadata` class.
+- [`openapi_url`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. The company's OpenAPI description, when it advertises one.
 - [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `Operation` class.
 - [`OperationConfirmation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `OperationConfirmation` class.
 - [`OperationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. An operation could not be read, confirmed, or cancelled.

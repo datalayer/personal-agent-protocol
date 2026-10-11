@@ -23,7 +23,7 @@
   },
   "files": ["lib", "README.md"],
   "scripts": {
-    "build": "tsc -p tsconfig.json && esbuild src/index.ts src/server.ts --bundle --splitting --platform=neutral --format=esm --sourcemap --outdir=lib --outbase=src --external:node:*",
+    "build": "tsc -p tsconfig.json && esbuild src/index.ts src/server.ts src/demo/manzanita.ts --bundle --splitting --platform=neutral --format=esm --sourcemap --outdir=lib --outbase=src --external:node:*",
     "build:lib": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test src/__tests__/*.test.mjs",

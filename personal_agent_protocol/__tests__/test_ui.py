@@ -4,6 +4,8 @@
 
 """A sign-in waiting for the person, as a reactor.ui display."""
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -30,9 +32,13 @@ def test_a_device_answer_is_a_display_whose_code_only_the_page_sees() -> None:
     assert wire.version == 1
     assert wire.data["code"] == "WDJB-MJHT"
     assert wire.data["expires_at"] == "2026-10-11T12:15:00Z"
+    assert wire.data["open"] == DEVICE["open"]
+    # Neither the code nor the verification URL carrying it reaches a model:
+    # checked against everything the model is given, not the text alone.
     view = display.model_view()
-    assert "code" not in view["data"]
-    assert "WDJB-MJHT" not in view["text"].replace(DEVICE["open"], "")
+    assert "code" not in view["data"] and "open" not in view["data"]
+    seen = json.dumps(view)
+    assert "WDJB-MJHT" not in seen and "user_code" not in seen
     assert view["text"].startswith("Sign in at manzanita.example")
 
 
@@ -56,6 +62,9 @@ def test_direct_and_mediated_answers() -> None:
     assert mediated is not None
     assert "never in this conversation" in mediated.text()
     assert "a•••@example.com" in mediated.text()
+    # The page's address, with its ticket, is the page's alone.
+    for display in (direct, mediated):
+        assert display.open not in json.dumps(display.model_view())
 
 
 def test_another_status_is_no_display() -> None:

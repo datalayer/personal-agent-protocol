@@ -14,8 +14,10 @@ PAP, not in a host. It needs ``datalayer_reactor`` 1.1 (``reactor.ui``), the
 ``ui`` extra; importing this module is the only thing that does, so the rest
 of the SDK keeps working on an older reactor.
 
-What the person types never travels in a display, and the code to enter is
-for the page only: :meth:`~reactor.ui.Display.model_view` leaves it out.
+What the person types never travels in a display, and the page to open and
+the code to enter are for the page only: a device's verification URL may
+carry the code, so :meth:`~reactor.ui.Display.model_view` leaves both out and
+the text names only the company's domain.
 """
 
 from __future__ import annotations
@@ -50,8 +52,9 @@ class PapSignIn(Display):
     """
 
     mode: Literal["direct", "device", "mediated"]
-    #: The page to open, ``https`` only.
-    open: str
+    #: The page to open, ``https`` only. For the page alone: a device's
+    #: verification URL may carry the code.
+    open: Annotated[str, audience("page")]
     #: The code to enter, for ``device``. The page shows it; a model is not told.
     code: Annotated[str | None, audience("page")] = None
     #: Until when the sign-in can be finished.
@@ -79,15 +82,22 @@ class PapSignIn(Display):
         return urlsplit(self.open).hostname or ""
 
     def text(self) -> str:
-        # No code here: the text is also what a model and a transcript read.
+        # Neither the page nor the code: the text is also what a model and a
+        # transcript read, and a verification URL may carry the code.
         if self.mode == "direct":
-            return f"Sign in at {self.host}: open {self.open}, sign in there, and come back."
+            return (
+                f"Sign in at {self.host}: open its sign-in page, shown here, "
+                "sign in there, and come back."
+            )
         if self.mode == "device":
-            return f"Sign in at {self.host}: open {self.open} and enter the code shown there."
+            return (
+                f"Sign in at {self.host}: open its sign-in page, shown here, "
+                "and enter the code shown with it."
+            )
         sent = f" A code was sent to {self.sent_to}." if self.sent_to else ""
         return (
-            f"Sign in at {self.host}: open {self.open} and type what the company asks there, "
-            f"never in this conversation.{sent}"
+            f"Sign in at {self.host}: open the page shown here and type what the company "
+            f"asks there, never in this conversation.{sent}"
         )
 
     @classmethod

@@ -6,6 +6,60 @@
 
 # Changelog
 
+## 0.9.0 (2026-10-11)
+
+- **The exact draft, in code:** `PROTOCOL_PROFILE` (`0.1`) and
+  `PROTOCOL_REVISION` (`2026-10-09`, the specification page implemented), with
+  `OPERATIONS_VERSION` (`1`), exported by both SDKs; the reference companies'
+  discovery documents and the conformance runners read them, and a test in
+  each language holds the other SDK, the package descriptions, the README,
+  `protocol/UPSTREAM.md`, the requirement ledger, and the docs to the same
+  values.
+- **Breaking — unused contribution points removed:** `pap.protocolProfile`
+  (`PROTOCOL_PROFILES`, `ProtocolProfile(s)`), `pap.extensionHandler`
+  (`EXTENSION_HANDLERS`, `ExtensionHandler(s)`), and `pap.keyStore`
+  (`KEY_STORES`, `KeyStore(s)`, `KeyReference`): no SDK code read them. See the
+  [migration guide](docs/docs/releases/migration.mdx).
+- **Aligned Reactor contributions:** `protocol/reactor-points.json` lists every
+  point (17 for the personal agent, 9 for the company) with its contract,
+  default, and tenant scope; a table-driven test in each SDK checks its
+  exports, contracts and defaults against it, and each point's lifecycle
+  (contributed, replaced by a lower `order`, removed with its plugin, equal
+  orders failing closed), plus the tenant-scoped `pap.pairwiseUserIdStore` and
+  `pap.dpopProofProvider`. The alignment fixed:
+  - **Breaking:** optional points (cache, clock, random source, retry policy,
+    rate-limit budget where optional, `pap.company.api`, `pap.company.mcp`)
+    now fail closed on two contributions at the winning order
+    (`optional_contribution` / `optionalContribution`), and the
+    lowest-order `pap.company.operationExecutor` for an action performs it.
+  - The TypeScript company serves `pap.company.mcp` (`CompanyMcps`,
+    `CompanyMcp`, `ToolResult`, `ToolResults`): `/mcp` with Bearer Session
+    Tokens for its URL, RFC 9728 metadata, and tools that propose operations,
+    as in Python; Manzanita's MCP server in both languages. The Python agent
+    now passes the four MCP conformance cases and `operations.cross-channel-mcp`
+    against the TypeScript company.
+  - **Breaking (TypeScript company):** renewing a Session with the Session
+    assertion gives a signed-out token, as in Python (§4.2).
+  - `pap.standingPermissionStore` is declared by the core plugin in both SDKs.
+- **Every public code example runs in CI:** each Python and TypeScript block
+  of the README and the docs runs as written against reference companies on
+  an in-process network (`test_docs_examples.py`, `docs-examples.test.mjs`),
+  the JSON examples are parsed by their wire models, and every tool of every
+  Pydantic AI example runs. It found and this release fixes: the caching
+  example's `CacheBounds(min_seconds=300)` raised (its default lifetime was
+  outside the bounds), the sessions guide started and renewed with the local
+  user as the tenant, and a budget example used `build_pap_reactor` without
+  importing it. A new `Examples` workflow also builds every Agent Runtimes PAP
+  example application with the latest Agent Runtimes release (1.3.111 or
+  later) and rejects duplicate application and tool IDs.
+- **Release documentation:** [Compatibility](docs/docs/releases/compatibility.mdx)
+  (the draft, the SDK versions, the four pairings),
+  [Migration](docs/docs/releases/migration.mdx) (every breaking release),
+  and [Support](docs/docs/releases/support.mdx) (supported versions, how to
+  report, the security contact), with the conformance report under Releases.
+- **Signed releases:** PyPI distributions are published with attestations
+  and the npm package with provenance, both from the `Release` workflow.
+
 ## 0.8.0 (2026-10-11)
 
 - **Consent pages bind the browser (Guides, consent pages):** the built-in

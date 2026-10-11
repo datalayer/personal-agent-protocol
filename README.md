@@ -9,8 +9,13 @@
 # 🤖 🌸 Personal Agent Protocol
 
 Python and TypeScript SDKs for the
-[Personal Agent Protocol](https://personalagentprotocol.org), currently
-targeting [draft 0.1](https://personalagentprotocol.org/docs/spec).
+[Personal Agent Protocol](https://personalagentprotocol.org): both implement
+[draft 0.1](https://personalagentprotocol.org/docs/spec) (2026-10-09) and its
+Operations extension v1. See
+[Compatibility](https://personal-agent-protocol.datalayer.tech/releases/compatibility/),
+[Migration](https://personal-agent-protocol.datalayer.tech/releases/migration/),
+the [conformance report](https://personal-agent-protocol.datalayer.tech/protocol/conformance-report/),
+and [Support](https://personal-agent-protocol.datalayer.tech/releases/support/).
 
 ![Personal Agent Protocol demo](https://images.datalayer.io/products/personal-agent-protocol/pap-demo.gif)
 

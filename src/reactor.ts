@@ -16,6 +16,7 @@ import {
   SharedRateLimitBudget,
   type RateLimitBudget,
 } from "./limits.js";
+import type { StandingPermissionStore } from "./operations.js";
 import type { SecretValue } from "./secret.js";
 
 export interface DiscoveryTransport {
@@ -24,15 +25,6 @@ export interface DiscoveryTransport {
 
 export interface UrlSafetyPolicy {
   assertSafe(url: URL): void | Promise<void>;
-}
-
-export interface ProtocolProfile {
-  readonly version: string;
-}
-
-export interface ExtensionHandler {
-  readonly name: string;
-  readonly majorVersion: number;
 }
 
 export interface Clock {
@@ -50,18 +42,6 @@ export interface Signer {
   ): Promise<SecretValue>;
 }
 
-export interface KeyReference {
-  readonly id: string;
-  readonly algorithm: string;
-}
-
-export interface KeyStore {
-  getOrCreate(options: {
-    readonly tenantId: string;
-    readonly subject: string;
-    readonly purpose: string;
-  }): Promise<KeyReference>;
-}
 
 export interface TokenStore {
   put(reference: string, token: SecretValue): Promise<void>;
@@ -158,16 +138,9 @@ export const DiscoveryTransports = defineContributionPoint<DiscoveryTransport>(
 export const UrlSafetyPolicies = defineContributionPoint<UrlSafetyPolicy>(
   "pap.urlSafetyPolicy",
 );
-export const ProtocolProfiles = defineContributionPoint<ProtocolProfile>(
-  "pap.protocolProfile",
-);
-export const ExtensionHandlers = defineContributionPoint<ExtensionHandler>(
-  "pap.extensionHandler",
-);
 export const Clocks = defineContributionPoint<Clock>("pap.clock");
 export const RandomSources = defineContributionPoint<RandomSource>("pap.randomSource");
 export const Signers = defineContributionPoint<Signer>("pap.signer");
-export const KeyStores = defineContributionPoint<KeyStore>("pap.keyStore");
 export const TokenStores = defineContributionPoint<TokenStore>("pap.tokenStore");
 export const PairwiseUserIdStores = defineContributionPoint<PairwiseUserIdStore>(
   "pap.pairwiseUserIdStore",
@@ -195,6 +168,10 @@ export const ProtectedInputs = defineContributionPoint<ProtectedInput>(
 export const RetryPolicies = defineContributionPoint<RetryPolicy>("pap.retryPolicy");
 export const RateLimitBudgets = defineContributionPoint<RateLimitBudget>(
   "pap.rateLimitBudget",
+);
+/** `StandingPermissionStore` (operations.ts): the user's standing permissions (Operations). */
+export const StandingPermissionStores = defineContributionPoint<StandingPermissionStore>(
+  "pap.standingPermissionStore",
 );
 
 export interface PapCoreOptions {
@@ -241,16 +218,13 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
   }
   return definePlugin({
     name: "@datalayer/personal-agent-protocol-core",
-    version: "0.8.0",
+    version: "0.9.0",
     contributionPoints: [
       DiscoveryTransports,
       UrlSafetyPolicies,
-      ProtocolProfiles,
-      ExtensionHandlers,
       Clocks,
       RandomSources,
       Signers,
-      KeyStores,
       TokenStores,
       PairwiseUserIdStores,
       AuthorizationStateStores,
@@ -262,6 +236,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       ProtectedInputs,
       RetryPolicies,
       RateLimitBudgets,
+      StandingPermissionStores,
     ],
     contributes: [
       contribution(
@@ -279,7 +254,6 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
         },
         { id: "public", order: 100 },
       ),
-      contribution(ProtocolProfiles, { version: "0.1" }, { id: "0.1", order: 100 }),
       contribution(Clocks, systemClock, { id: "system", order: 100 }),
       contribution(RandomSources, systemRandom, { id: "system", order: 100 }),
       contribution(AccountTokenLocks, new InProcessAccountTokenLock(), {
@@ -319,4 +293,19 @@ export function firstContribution<T>(
     throw new Error(`PAP Reactor has ambiguous ${label} contributions`);
   }
   return selected.value;
+}
+
+/**
+ * The highest-priority provider for an optional PAP point, `undefined` when there is none.
+ *
+ * An optional point may have no provider (the feature is off), but never two at the same
+ * winning priority: that fails closed exactly as `firstContribution` does.
+ */
+export function optionalContribution<T>(
+  reactor: ReactorPlatformView,
+  point: ContributionPoint<T>,
+  label: string,
+): T | undefined {
+  if (!reactor.getContributions(point).length) return undefined;
+  return firstContribution(reactor, point, label);
 }

@@ -23,6 +23,7 @@ import {
   InMemoryStandingPermissionStore,
   JoseDpopProofProvider,
   OperationsClient,
+  PROTOCOL_PROFILE,
   PersonalAgentProtocolError,
   SecretValue,
   SessionClient,
@@ -1489,7 +1490,7 @@ export async function runConformance(ctx, { cases = companyCases(), timeoutMs = 
   return {
     schema_version: 1,
     protocol: "personal-agent-protocol",
-    profile: "0.1",
+    profile: PROTOCOL_PROFILE,
     extensions: { operations: "1" },
     role: "personal-agent",
     target: ctx.baseUrl,

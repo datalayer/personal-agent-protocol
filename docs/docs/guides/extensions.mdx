@@ -28,39 +28,42 @@ Protocol-defined extensions use plain names. Third-party names begin with a
 domain controlled by their author, such as `example.com/gift-wrap`. Both sides
 ignore unknown extensions and unknown fields.
 
-## Contribute an SDK handler
+## Negotiate in code
 
-The SDK exposes the shared Reactor point ID `pap.extensionHandler`. A handler
-declares the wire extension name and supported major version. It should be
-advertised only while its Reactor plugin is active.
+Both SDKs negotiate the same way: an extension is used only when the company
+and the agent both list it, at the same major version, and this SDK
+implements that version (`SUPPORTED_EXTENSIONS`: Operations version 1).
 
-```typescript
-import { contribution, definePlugin } from '@datalayer/reactor';
-import { ExtensionHandlers } from '@datalayer/personal-agent-protocol';
+```python
+from personal_agent_protocol.extensions import negotiate_extensions
+from personal_agent_protocol.models import ExtensionDescriptor
 
-const operationsHandler = {
-  name: 'operations',
-  majorVersion: 1,
-};
-
-const plugin = definePlugin({
-  name: 'example.operations',
-  version: '0.1.0',
-  contributes: [
-    contribution(
-      ExtensionHandlers,
-      operationsHandler,
-      {id: 'operations-v1', order: 100},
-    ),
-  ],
-});
+company = {
+    "operations": ExtensionDescriptor(version="1", endpoint="https://api.example.com/poppy/operations"),
+    "example.com/gift-wrap": ExtensionDescriptor(version="2"),
+}
+agent = {"operations": ExtensionDescriptor(version="1")}
+assert negotiate_extensions(company, agent) == {"operations": "1"}
 ```
 
-This registers capability metadata only. The Operations behavior itself lives
-in `OperationsClient` (Python and TypeScript), negotiated with
-`operations_endpoint()` / `operationsEndpoint()`; see the
-[Operations guide](/guides/operations/). A general executable handler contract
-for other extensions remains planned.
+```typescript
+import { negotiateExtensions } from '@datalayer/personal-agent-protocol';
+
+const negotiated = negotiateExtensions(
+  {
+    operations: { version: '1', endpoint: 'https://api.example.com/poppy/operations' },
+    'example.com/gift-wrap': { version: '2' },
+  },
+  { operations: { version: '1' } },
+);
+console.log(negotiated); // { operations: '1' }
+```
+
+The Operations behavior itself lives in `OperationsClient` (Python and
+TypeScript), negotiated with `operations_endpoint()` / `operationsEndpoint()`;
+see the [Operations guide](/guides/operations/). The SDK has no contribution
+point for other extensions' behavior yet: a third-party extension is used by
+the host's own code once negotiation says both sides list it.
 
 Extensions cannot weaken mandatory protocol checks such as issuer binding,
 secret redaction, proof verification, replay protection, or exact operation

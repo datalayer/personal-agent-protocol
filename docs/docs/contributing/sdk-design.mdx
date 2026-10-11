@@ -36,33 +36,22 @@ receive raw secrets.
 
 ## Reactor contribution contract
 
-| Point ID | Responsibility |
-| --- | --- |
-| `pap.protocolProfile` | Version-specific parsing and behavior. |
-| `pap.discoveryTransport` | Credential-free bounded metadata transport. |
-| `pap.urlSafetyPolicy` | HTTPS, DNS, IP, and redirect policy. |
-| `pap.extensionHandler` | Named, major-versioned PAP extensions. |
-| `pap.clock` / `pap.randomSource` | Testable time and cryptographically secure entropy. |
-| `pap.signer` / `pap.keyStore` | Assertions and protected-key references. |
-| `pap.dpopProofProvider` | Fresh DPoP proofs without exposing private keys. |
-| `pap.tokenStore` / `pap.cache` | Secret references, rotation, revocation, and bounded caches. |
-| `pap.browserHandoff` | Human-only authorization URLs opened by a trusted host surface. |
-| `pap.conversationProtocol` | Conversation transports. |
-| `pap.apiAdapter` | OpenAPI, MCP, and future interface adapters. |
-| `pap.companyStore` | Durable company-side protocol state. |
-| `pap.operationHandler` | Proposal, policy, confirmation, execution, and recovery. |
+Every point, its contract, default, and tenant scope is in
+`protocol/reactor-points.json`, which both SDKs' tests check (see
+[Contribution points](/concepts/contribution-points/)).
 
 Lower contribution order wins. Equal winning priorities fail closed. Plugins
 cannot disable issuer/domain binding, redaction, proof freshness,
 token/resource binding, replay protection, or exact-revision approval.
 
-Python and TypeScript export the same point IDs and equivalent contracts. The
-core plugin provides only the UTC clock and operating-system random source.
-Signing, DPoP proofs, protected keys, tokens, cache, and browser handoff
-intentionally have no in-memory or browser fallback: a caller that needs one
-and has no active provider fails closed. Tests cover missing providers,
-equal-priority ambiguity, plugin disable, and re-enable for every required
-security contribution.
+Python and TypeScript export the same point IDs and contracts. The core plugin
+provides the clock, random source, metadata transport and URL policy, cache,
+Account Token lock, retry policy, and rate-limit budget. Signing, DPoP proofs,
+tokens, sign-in state, pairwise IDs, browser handoff, and protected input
+intentionally have no fallback: a caller that needs one and has no active
+provider fails closed. Tests cover, for every point, its default, a host
+contribution, its replacement by a lower order, its removal with its plugin,
+and equal-priority ambiguity, plus the tenant-scoped points.
 
 ## Compatibility policy
 

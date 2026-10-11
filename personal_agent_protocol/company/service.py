@@ -64,7 +64,16 @@ from ..crypto import verify_dpop_proof
 from ..errors import PersonalAgentProtocolError, ProofError, SessionError
 from ..json import loads_strict
 from ..models import Message, Operation, OperationConfirmation, OperationResult
-from ..reactor import CLOCKS, RANDOM_SOURCES, Clock, RandomSource, first_contribution
+from ..operations import OPERATIONS_VERSION
+from ..profile import PROTOCOL_PROFILE
+from ..reactor import (
+    CLOCKS,
+    RANDOM_SOURCES,
+    Clock,
+    RandomSource,
+    first_contribution,
+    optional_contribution,
+)
 from ..sessions import JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION, _opaque_id
 from .points import (
     CLIENT_POLICIES,
@@ -464,7 +473,7 @@ class CompanyService:
         if config.custom_scopes:
             auth["custom_scopes"] = dict(config.custom_scopes)
         document: dict[str, Any] = {
-            "protocol_version": "0.1",
+            "protocol_version": PROTOCOL_PROFILE,
             "organization": {"name": config.name, "domain": config.domain},
             "auth": auth,
             "agent": {"protocols": [{"type": "poppy", "endpoint": config.conversations_endpoint}]},
@@ -484,7 +493,7 @@ class CompanyService:
             document["web"] = {"browser_session_endpoint": config.browser_session_endpoint}
         if config.operations:
             document["extensions"] = {
-                "operations": {"version": "1", "endpoint": config.operations_endpoint}
+                "operations": {"version": OPERATIONS_VERSION, "endpoint": config.operations_endpoint}
             }
         return document
 
@@ -1318,8 +1327,7 @@ class CompanyService:
     # OpenAPI API (§6, Operations §4.1) -----------------------------------------------------
 
     def _api(self) -> CompanyApi | None:
-        contributions = self.reactor.get_contributions(COMPANY_APIS)
-        return cast(CompanyApi, contributions[0].value) if contributions else None
+        return cast(CompanyApi | None, optional_contribution(self.reactor, COMPANY_APIS, "API"))
 
     async def _api_call(self, request: CompanyRequest, method: str, path: str) -> CompanyResponse:
         _, session = await self._caller(request)
@@ -2096,18 +2104,22 @@ class CompanyService:
         )
 
     async def _perform(self, confirmed: StoredOperation) -> CompanyResponse:
-        """Perform a just-confirmed operation with its one executor."""
+        """Perform a just-confirmed operation with its action's executor.
+
+        The action's lowest-order executor performs it; two at that order are ambiguous.
+        """
 
         executors = [
-            cast(OperationExecutor, c.value)
-            for c in self.reactor.get_contributions(OPERATION_EXECUTORS)
-            if getattr(c.value, "action", None) == confirmed.action
+            contribution
+            for contribution in self.reactor.get_contributions(OPERATION_EXECUTORS)
+            if getattr(contribution.value, "action", None) == confirmed.action
         ]
-        if len(executors) != 1:
+        if not executors or (len(executors) > 1 and executors[0].order == executors[1].order):
             # Nobody can perform it: it stays in progress rather than claim a failure.
             return self._operation_response(confirmed)
+        executor = cast(OperationExecutor, executors[0].value)
         try:
-            result = await executors[0].perform(confirmed.operation, confirmed.account_id)
+            result = await executor.perform(confirmed.operation, confirmed.account_id)
         except OperationFailed as failed:
             # Failed partway: the result says every change that was made (Operations §6).
             return await self._finish(confirmed, "failed", failed.result)
@@ -2144,8 +2156,7 @@ class CompanyService:
     # MCP (§4.3, §6, Operations §4.2) -------------------------------------------------------
 
     def _mcp(self) -> CompanyMcp | None:
-        contributions = self.reactor.get_contributions(COMPANY_MCP)
-        return cast(CompanyMcp, contributions[0].value) if contributions else None
+        return cast(CompanyMcp | None, optional_contribution(self.reactor, COMPANY_MCP, "MCP server"))
 
     def _bearer_refusal(self, status: int, error: str, scope: str | None = None) -> CompanyResponse:
         challenge = (

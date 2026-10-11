@@ -12,7 +12,6 @@ from personal_agent_protocol import (
     CACHES,
     CLOCKS,
     DPOP_PROOF_PROVIDERS,
-    KEY_STORES,
     PAIRWISE_USER_ID_STORES,
     RANDOM_SOURCES,
     SIGNERS,
@@ -24,7 +23,6 @@ from personal_agent_protocol.reactor import first_contribution
 SECURITY_POINTS = [
     AUTHORIZATION_STATE_STORES,
     SIGNERS,
-    KEY_STORES,
     TOKEN_STORES,
     PAIRWISE_USER_ID_STORES,
     CACHES,
@@ -64,7 +62,6 @@ def test_cross_language_infrastructure_point_ids_are_stable() -> None:
     assert CLOCKS.id == "pap.clock"
     assert RANDOM_SOURCES.id == "pap.randomSource"
     assert SIGNERS.id == "pap.signer"
-    assert KEY_STORES.id == "pap.keyStore"
     assert TOKEN_STORES.id == "pap.tokenStore"
     assert PAIRWISE_USER_ID_STORES.id == "pap.pairwiseUserIdStore"
     assert CACHES.id == "pap.cache"
@@ -132,9 +129,9 @@ async def test_build_pap_reactor_consumes_plugin_iterables_once() -> None:
             yield (
                 PluginManifest(name=f"pap-test-plugin-{index}", version="1"),
                 ContributionPlugin(
-                    KEY_STORES,
+                    TOKEN_STORES,
                     value,
-                    f"host-key-store-{index}",
+                    f"host-token-store-{index}",
                 ),
             )
 
@@ -142,6 +139,6 @@ async def test_build_pap_reactor_consumes_plugin_iterables_once() -> None:
         platform, _ = build_pap_reactor(http_client=http, plugins=plugins())
         try:
             with pytest.raises(RuntimeError, match="ambiguous"):
-                first_contribution(platform, KEY_STORES, "key store")
+                first_contribution(platform, TOKEN_STORES, "token store")
         finally:
             platform.stop()

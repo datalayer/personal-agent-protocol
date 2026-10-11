@@ -55,11 +55,11 @@ exported only by the explicit `./server` entry. Platform signing keys must
 remain on a server or KMS; they must never be shipped in a browser or desktop
 bundle.
 
-The SDK exports aligned `Clocks`, `RandomSources`, `Signers`,
-`DpopProofProviders`, `KeyStores`, `TokenStores`, `Caches`, `BrowserHandoffs`,
-and `BrowserFormPosts` contribution points, plus `PairwiseUserIdStores` for stable
-identity and `AuthorizationStateStores` for atomic one-use authorization state.
-The core plugin provides only system time and secure randomness.
+The SDK exports the same contribution points as Python (`Clocks`,
+`RandomSources`, `Signers`, `DpopProofProviders`, `TokenStores`, `Caches`,
+`BrowserHandoffs`, `BrowserFormPosts`, `PairwiseUserIdStores`,
+`AuthorizationStateStores`, and the rest; see [Contribution
+points](/concepts/contribution-points/)).
 Security-dependent services have no fallback and resolution fails closed when
 missing or ambiguous.
 

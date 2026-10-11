@@ -46,7 +46,7 @@ from reactor import PluginPlatform, define_contribution_point  # type: ignore[im
 from .errors import PersonalAgentProtocolError, ProtocolValidationError, TransportError
 from .json import loads_strict
 from .models import ClientMetadata, DiscoveryDocument, Message, Operation, ProtocolModel
-from .reactor import CLOCKS, Clock, first_contribution
+from .reactor import CLOCKS, STANDING_PERMISSION_STORES, Clock, first_contribution
 from .sessions import SessionToken
 from .transport import DpopHttpClient
 
@@ -199,9 +199,6 @@ class StandingPermissionStore(Protocol):
     async def commit(self, reservation: str) -> None: ...
 
     async def release(self, reservation: str) -> None: ...
-
-
-STANDING_PERMISSION_STORES = define_contribution_point("pap.standingPermissionStore")
 
 
 def _term(terms: dict[str, Any], path: str) -> Any:

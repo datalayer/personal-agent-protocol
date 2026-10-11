@@ -13,6 +13,8 @@
  *   (`authorization` until then) and proposes the exchange as an operation.
  * - `ManzanitaApi` (`pap.company.api`): orders, and consequential calls that
  *   propose operations (`202`).
+ * - `ManzanitaMcp` (`pap.company.mcp`): the same orders and exchange, as MCP
+ *   tools (§6, Operations §4.2).
  * - `ExchangeExecutor` (`pap.company.operationExecutor`): performs the
  *   exchange, once. Gift wrap, a return that fails partway, and a repair whose
  *   carrier never answers show the other ends of an operation.
@@ -30,10 +32,12 @@ import {
   CompanyAgents,
   CompanyApis,
   CompanyConfig,
+  CompanyMcps,
   CompanyStores,
   OperationExecutors,
   OperationFailed,
   OperationOutcomeUnknown,
+  ToolResults,
   buildCompany,
   type AccountDirectory,
   type CompanyConfigOptions,
@@ -42,11 +46,13 @@ import {
   type Authenticated,
   type CompanyAgent,
   type CompanyApi,
+  type CompanyMcp,
   type CompanyService,
   type CompanyStore,
   type OperationExecutor,
   type ProposedOperation,
   type Reply,
+  type ToolResult,
   type Turn,
 } from "../company/index.js";
 import type { Operation, OperationResult } from "../models.js";
@@ -212,6 +218,43 @@ export class ManzanitaApi implements CompanyApi {
   }
 }
 
+/** Manzanita's MCP server: the same orders and exchange, as tools (§6, Operations §4.2). */
+export class ManzanitaMcp implements CompanyMcp {
+  readonly description = "Orders and exchanges, as MCP tools";
+
+  tools(): Record<string, unknown>[] {
+    return [
+      {
+        name: "list_orders",
+        description: "Your orders (orders:read).",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "exchange_jacket",
+        description: "Propose the insulated jacket in exchange (orders:write).",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ];
+  }
+
+  async call(name: string, _args: Readonly<Record<string, unknown>>, call: ApiCall): Promise<ToolResult> {
+    if (name === "list_orders") {
+      if (call.accountId === undefined) return ToolResults.signInRequired("orders:read");
+      if (!call.scopes.includes("orders:read")) return ToolResults.insufficientScope("orders:read");
+      return {
+        text: "Order ord_7Hk2: Ridge Jacket, size M, delivered.",
+        structured: { orders: [{ ...ORDER }] },
+      };
+    }
+    if (name === "exchange_jacket") {
+      if (call.accountId === undefined) return ToolResults.signInRequired("orders:write");
+      if (!call.scopes.includes("orders:write")) return ToolResults.insufficientScope("orders:write");
+      return { operation: EXCHANGE };
+    }
+    return { text: `Unknown tool ${name}.`, isError: true };
+  }
+}
+
 /** Perform an exchange once: the operation ID is the downstream idempotency key. */
 export class ExchangeExecutor implements OperationExecutor {
   readonly action = "orders.exchange";
@@ -289,6 +332,7 @@ export class ManzanitaPlugin {
         { point: OperationExecutors, value: this.returns, options: { id: "returns" } },
         { point: OperationExecutors, value: this.repairs, options: { id: "repairs" } },
         { point: CompanyApis, value: new ManzanitaApi(), options: { id: "api" } },
+        { point: CompanyMcps, value: new ManzanitaMcp(), options: { id: "mcp" } },
       ],
     } as PlatformInput;
   }

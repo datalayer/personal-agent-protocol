@@ -2,7 +2,8 @@
 # Distributed under the terms of the Modified BSD License.
 
 # Publishes the release a tag names to PyPI and npm without stored tokens.
-# Each registry trusts this workflow through its own GitHub environment. The
+# Each registry trusts this workflow through its own GitHub environment; the
+# PyPI distributions carry attestations and the npm package provenance. The
 # tag must name both package versions; versions already published are skipped.
 # See RELEASE.md.
 
@@ -147,9 +148,12 @@ jobs:
         with:
           name: python
           path: dist
+      # Trusted publishing (OIDC, no token) with PEP 740 attestations: each
+      # distribution is signed for this workflow run and tag.
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
+          attestations: true
 
   npm:
     needs: build
@@ -172,8 +176,10 @@ jobs:
         with:
           name: npm
           path: npm-dist
-      - name: Publish with npm trusted publishing
-        run: npm publish ./npm-dist/*.tgz --access public
+      # Trusted publishing (OIDC, no token) with a provenance statement naming
+      # this workflow run and tag.
+      - name: Publish with npm trusted publishing and provenance
+        run: npm publish ./npm-dist/*.tgz --access public --provenance
 
   release:
     name: GitHub release

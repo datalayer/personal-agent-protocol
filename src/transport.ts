@@ -9,6 +9,7 @@ import {
   RateLimitBudgets,
   RetryPolicies,
   firstContribution,
+  optionalContribution,
 } from "./reactor.js";
 import type { SessionToken } from "./sessions.js";
 
@@ -87,8 +88,10 @@ export class DpopFetchClient {
     url: string,
     options: DpopFetchRequestOptions,
   ): Promise<Response> {
-    const policy = this.#reactor.getContributions(RetryPolicies)[0]?.value ?? new RetryPolicy({ maxAttempts: 1 });
-    const budget = this.#reactor.getContributions(RateLimitBudgets)[0]?.value;
+    const policy =
+      optionalContribution(this.#reactor, RetryPolicies, "retry policy") ??
+      new RetryPolicy({ maxAttempts: 1 });
+    const budget = optionalContribution(this.#reactor, RateLimitBudgets, "rate-limit budget");
     const key = budgetKey(httpsUrl(url));
     let attempts = 0;
     while (true) {
@@ -110,11 +113,11 @@ export class DpopFetchClient {
   }
 
   #now(): Date {
-    return (this.#reactor.getContributions(Clocks)[0]?.value ?? { now: () => new Date() }).now();
+    return (optionalContribution(this.#reactor, Clocks, "clock") ?? { now: () => new Date() }).now();
   }
 
   #jitter(): number {
-    const source = this.#reactor.getContributions(RandomSources)[0]?.value;
+    const source = optionalContribution(this.#reactor, RandomSources, "random source");
     if (source === undefined) return 0.5;
     const bytes = source.bytes(4);
     if (bytes.byteLength < 4) return 0.5;

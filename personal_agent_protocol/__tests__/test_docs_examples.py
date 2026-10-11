@@ -1,0 +1,751 @@
+# Copyright (c) 2025-2026 Datalayer, Inc.
+#
+# BSD 3-Clause License
+
+"""Every Python code example in the README and the docs runs, as written.
+
+Each ```python block of `README.md` and `docs/docs/**/*.mdx` is executed against
+reference companies on an in-process network (`demo.kit`): `example.com`,
+`shop.example`, `auth.example.com` and `auth.company.example` are Manzanita
+under those names, `northwind.example` is the bank, and the personal agent is
+`https://agent.example/agent.json`. A block that is a fragment gets the names it
+uses (`reactor`, `metadata`, `session`, …) from its case below, made by really
+discovering, starting a Session or signing in; a block's own clients (a bare
+`DiscoveryClient()`, an `httpx.AsyncClient()`) reach the same network. A
+top-level `asyncio.run(f())` runs as `await f()` in the test's loop. Each case
+then checks what the example did. A block without a case fails: a new example
+needs one. The ```json blocks are parsed by the wire model they show.
+"""
+
+from __future__ import annotations
+
+import ast
+import contextlib
+import io
+import json
+import re
+import types
+from collections.abc import Awaitable, Callable
+from datetime import timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+from pydantic import SecretStr
+from reactor import PluginManifest  # type: ignore[import-untyped]
+
+import personal_agent_protocol
+from personal_agent_protocol import (
+    PAIRWISE_USER_ID_STORES,
+    RATE_LIMIT_BUDGETS,
+    AccountTokenClient,
+    DeviceSignInClient,
+    DiscoveryClient,
+    DpopHttpClient,
+    MediatedSignInClient,
+    OperationsClient,
+    ProtectedInputField,
+    ProtectedInputRequest,
+    SessionClient,
+    SqlitePairwiseUserIdStore,
+    StreamReconnected,
+    TextDelta,
+    resolve_pairwise_user_id,
+)
+from personal_agent_protocol import discovery as discovery_module
+from personal_agent_protocol import identity as identity_module
+from personal_agent_protocol import reactor as reactor_module
+from personal_agent_protocol.apis import ApiClient
+from personal_agent_protocol.company import (
+    CompanyConfig,
+    MemoryCompanyStore,
+    build_company,
+    company_app,
+)
+from personal_agent_protocol.conversations import ConversationClient, generate_message_id
+from personal_agent_protocol.demo import northwind as northwind_demo
+from personal_agent_protocol.demo.kit import (
+    AgentIdentity,
+    ClockPlugin,
+    InProcessNetwork,
+    MutableClock,
+    PersonalAgentHost,
+    ScriptedBrowser,
+    ScriptedInput,
+    _Routing,
+    personal_agent_reactor,
+)
+from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, ManzanitaPlugin
+from personal_agent_protocol.models import ClientMetadata, DiscoveryDocument, Message
+from personal_agent_protocol.operations import (
+    StandingPermission,
+    TermLimit,
+)
+from personal_agent_protocol.reactor import first_contribution, resolve_addresses
+
+ROOT = Path(__file__).parents[2]
+SOURCES = [ROOT / "README.md", *sorted((ROOT / "docs" / "docs").rglob("*.mdx"))]
+FENCE = re.compile(r"^```(?P<language>\w+)[^\n]*\n(?P<code>.*?)^```", re.MULTILINE | re.DOTALL)
+TENANT = "application-42"
+LOCAL_USER = "local-user-42"
+SCOPES = ("orders:read", "orders:write", "orders:return", "poppy:read")
+COMPANIES = {
+    "example.com": "Example Company",
+    "shop.example": "Example Shop",
+    "auth.example.com": "Example Auth",
+    "auth.company.example": "Example Company Auth",
+}
+
+
+def _blocks(language: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for path in SOURCES:
+        index = 0
+        for match in FENCE.finditer(path.read_text()):
+            if match["language"] == language:
+                found[f"{path.relative_to(ROOT)}#{index}"] = match["code"]
+                index += 1
+    return found
+
+
+PYTHON = _blocks("python")
+JSON = _blocks("json")
+
+
+class ApprovingBrowser(ScriptedBrowser):
+    """The user's browser: opens the consent page, and the user approves at once.
+
+    The company's redirect is what the example calls `incoming_callback_url`.
+    """
+
+    def __init__(self, docs: Docs) -> None:
+        super().__init__(docs.http)
+        self.docs = docs
+
+    async def open(self, authorization_url: SecretStr) -> None:
+        await super().open(authorization_url)
+        host = httpx.URL(authorization_url.get_secret_value()).host
+        callback = await self.docs.companies[host].approve_authorization(
+            self.request_id, account_id="acct_ada"
+        )
+        self.docs.namespace["incoming_callback_url"] = callback
+
+
+class Contributor:
+    def __init__(self, point: object, value: object) -> None:
+        self.point, self.value = point, value
+
+    def provide_contributions(self, contributions: object) -> None:
+        contributions.contribute(self.point, self.value, contribution_id="docs")  # type: ignore[attr-defined]
+
+
+class Docs:
+    """The world the examples run in."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        self.namespace: dict[str, Any] = {}
+        self.clock = MutableClock()
+        self.network = network = InProcessNetwork()
+
+        class NetworkClient(httpx.AsyncClient):
+            """`httpx.AsyncClient()` in an example reaches the in-process network."""
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                kwargs.setdefault("transport", _Routing(network))
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", NetworkClient)
+        built = reactor_module.build_pap_reactor
+
+        def build_pap_reactor(**kwargs: Any) -> Any:
+            # A Reactor an example builds resolves the network's names, not the internet's.
+            if kwargs.get("address_resolver", resolve_addresses) is resolve_addresses:
+                kwargs["address_resolver"] = network.resolve
+            return built(**kwargs)
+
+        for module in (reactor_module, personal_agent_protocol, discovery_module, identity_module):
+            monkeypatch.setattr(module, "build_pap_reactor", build_pap_reactor)
+
+        self.agent = AgentIdentity(domain="agent.example", name="Example Agent")
+        network.add(self.agent.domain, self.agent.website())
+        self.companies = {domain: self._company(domain, name) for domain, name in COMPANIES.items()}
+        self.northwind, self.bank = northwind_demo.northwind(network, self.clock)
+        self.companies[northwind_demo.DOMAIN] = self.northwind
+        self.http = network.client()
+        self.browser = ApprovingBrowser(self)
+        self.host = PersonalAgentHost(
+            self.agent,
+            self.clock,
+            protected_input=ScriptedInput(dict(ADA), {"code": ADA_CODE}),
+            browser=self.browser,
+        )
+        pairwise = SqlitePairwiseUserIdStore(tmp_path / "pairwise.sqlite3")
+        self.reactor = personal_agent_reactor(
+            self.host,
+            network=network,
+            http_client=self.http,
+            plugins=[
+                (
+                    PluginManifest(name="pairwise", version="1"),
+                    Contributor(PAIRWISE_USER_ID_STORES, pairwise),
+                )
+            ],
+        )
+        self.transport = DpopHttpClient(reactor=self.reactor, http_client=self.http)
+
+    def _company(self, domain: str, name: str) -> Any:
+        config = CompanyConfig(
+            name=name,
+            domain=domain,
+            scopes=SCOPES,
+            write_scopes=("orders:write",),
+            mediated_fields=(("email", "Email", False), ("password", "Password", True)),
+        )
+        service = build_company(
+            config,
+            http_client=self.network.client(),
+            address_resolver=self.network.resolve,
+            plugins=[
+                (PluginManifest(name="manzanita", version="1"), ManzanitaPlugin()),
+                (PluginManifest(name="clock", version="1"), ClockPlugin(self.clock)),
+            ],
+        )
+        self.network.add(domain, company_app(service))
+        return service
+
+    # The steps the fragments start after ----------------------------------------------
+
+    async def discovered(self, domain: str) -> Any:
+        return await DiscoveryClient(reactor=self.reactor, http_client=self.http).discover(domain)
+
+    async def who(self, domain: str) -> dict[str, str]:
+        company = await self.discovered(domain)
+        issuer = company.oauth_metadata.issuer
+        pairwise = await resolve_pairwise_user_id(
+            self.reactor, tenant_id=TENANT, local_user_id=LOCAL_USER, company_issuer=issuer
+        )
+        return {"tenant_id": TENANT, "pairwise_user_id": pairwise, "issuer": issuer}
+
+    async def signed_out(self, domain: str) -> Any:
+        company = await self.discovered(domain)
+        who = await self.who(domain)
+        return await SessionClient(reactor=self.reactor, http_client=self.http).start(
+            client_id=self.agent.client_id,
+            pairwise_user_id=who["pairwise_user_id"],
+            issuer=who["issuer"],
+            token_endpoint=company.oauth_metadata.token_endpoint,
+            tenant_id=TENANT,
+        )
+
+    async def signed_in(self, domain: str, scopes: tuple[str, ...]) -> tuple[Any, str]:
+        """A Session signed in with Device Sign-In: the token and its Account Token reference."""
+
+        metadata = (await self.discovered(domain)).oauth_metadata
+        who = await self.who(domain)
+        session = await self.signed_out(domain)
+        device = DeviceSignInClient(reactor=self.reactor, http_client=self.http)
+        started = await device.begin(
+            device_authorization_endpoint=metadata.device_authorization_endpoint,
+            token_endpoint=metadata.token_endpoint,
+            issuer=metadata.issuer,
+            client_id=self.agent.client_id,
+            scopes=scopes,
+            tenant_id=TENANT,
+            pairwise_user_id=who["pairwise_user_id"],
+            session_id=session.session_id,
+        )
+        account = "acct_ada_northwind" if domain == northwind_demo.DOMAIN else "acct_ada"
+        await self.companies[domain].approve_device(started.user_code, account_id=account)
+        self.clock.advance(started.poll_interval)
+        done = await device.poll(started.reference)
+        assert done.status == "complete" and done.token is not None
+        return done.token, str(done.account_token_reference)
+
+
+Check = Callable[[dict[str, Any], str], Awaitable[None]]
+Case = Callable[[Docs], Awaitable[tuple[dict[str, Any], Check]]]
+CASES: dict[str, Case] = {}
+
+
+def case(*keys: str) -> Callable[[Case], Case]:
+    def register(function: Case) -> Case:
+        for key in keys:
+            CASES[key] = function
+        return function
+
+    return register
+
+
+async def _nothing(namespace: dict[str, Any], out: str) -> None:
+    return None
+
+
+# Discovery and identity ------------------------------------------------------------------
+
+
+@case("README.md#0", "docs/docs/getting-started/index.mdx#0", "docs/docs/sdk/python.mdx#0")
+async def _discover_example_com(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert "Example Company" in out
+
+    return {}, check
+
+
+@case("docs/docs/guides/personal-agent.mdx#0")
+async def _discover_top_level(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert "Example Company" in out and "https://example.com/oauth/token" in out
+
+    return {}, check
+
+
+@case("README.md#1")
+async def _discover_with_host(docs: Docs) -> tuple[dict[str, Any], Check]:
+    contributed: list[str] = []
+
+    class MySecurityPlugin:
+        def provide_contributions(self, contributions: object) -> None:
+            contributed.append("my-security")
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        await namespace["discover_with_host"]()
+        assert contributed == ["my-security"]
+
+    return {"my_security_plugin": MySecurityPlugin()}, check
+
+
+@case("docs/docs/sdk/python.mdx#1")
+async def _agent_identity(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert "Example Agent" in out and "key-1" in out
+
+    return {}, check
+
+
+@case("docs/docs/guides/operational-limits.mdx#0")
+async def _cached_discovery(docs: Docs) -> tuple[dict[str, Any], Check]:
+    fetched: list[str] = []
+    app = docs.network.apps["shop.example"]
+
+    async def counting(scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("path") == "/.well-known/poppy.json":
+            fetched.append(scope["path"])
+        await app(scope, receive, send)
+
+    docs.network.add("shop.example", counting)
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["company"].document.organization.domain == "shop.example"
+        assert fetched == ["/.well-known/poppy.json"]  # the second came from pap.cache
+
+    return {"reactor": docs.reactor}, check
+
+
+@case("docs/docs/guides/operational-limits.mdx#1")
+async def _shared_budget(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        budget = first_contribution(namespace["reactor"], RATE_LIMIT_BUDGETS, "budget")
+        assert type(budget).__name__ == "RedisBudget"
+
+    return {}, check
+
+
+# Sessions ---------------------------------------------------------------------------------
+
+
+@case("docs/docs/guides/personal-agent.mdx#1", "docs/docs/sdk/python.mdx#2")
+async def _session_assertion(docs: Docs) -> tuple[dict[str, Any], Check]:
+    company = await docs.discovered("example.com")
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["claims"].iss == "https://agent.example/agent.json"
+        assert namespace["claims"].sub.startswith("usr_")
+
+    return {"reactor": docs.reactor, "company": company}, check
+
+
+@case("docs/docs/guides/sessions.mdx#0")
+async def _sessions(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        token, renewed = namespace["token"], namespace["renewed"]
+        assert not token.signed_in and renewed.session_id == token.session_id
+
+    return {"reactor": docs.reactor}, check
+
+
+# Sign-in ----------------------------------------------------------------------------------
+
+
+@case("docs/docs/guides/direct-sign-in.mdx#0")
+async def _direct_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
+    who = await docs.who("auth.example.com")
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert "('poppy:read',) ()" in out
+        assert namespace["account_reference"].startswith("account_")
+
+    return {
+        "reactor": docs.reactor,
+        "pairwise_user_id": who["pairwise_user_id"],
+        "signed_out_session": await docs.signed_out("auth.example.com"),
+    }, check
+
+
+@case("docs/docs/guides/device-sign-in.mdx#0")
+async def _device_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
+    company = await docs.discovered("shop.example")
+    who = await docs.who("shop.example")
+    shown: list[str] = []
+    scheduled: list[Any] = []
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert shown[0].startswith("https://shop.example/") and shown[1] == namespace["started"].user_code
+        assert namespace["result"].status == "pending" and scheduled
+
+    return {
+        "DeviceSignInClient": DeviceSignInClient,
+        "reactor": docs.reactor,
+        "http": docs.http,
+        "metadata": company.oauth_metadata,
+        "pairwise_user_id": who["pairwise_user_id"],
+        "signed_out_session": await docs.signed_out("shop.example"),
+        "show_to_user": shown.append,
+        "schedule_at": scheduled.append,
+    }, check
+
+
+@case("docs/docs/guides/mediated-sign-in.mdx#0")
+async def _protected_input(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def native_secure_form(request: ProtectedInputRequest) -> dict[str, SecretStr]:
+        return {field.name: SecretStr(f"typed {field.name}") for field in request.fields}
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        request = ProtectedInputRequest(
+            purpose="credentials",
+            company_name="Example Shop",
+            company_domain="shop.example",
+            fields=(ProtectedInputField(name="password", label="Password", secret=True),),
+        )
+        answer = await namespace["PasswordSheet"]().collect(request)
+        assert answer["password"].get_secret_value() == "typed password"
+
+    return {"SecretStr": SecretStr, "native_secure_form": native_secure_form}, check
+
+
+@case("docs/docs/guides/mediated-sign-in.mdx#1")
+async def _mediated_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
+    company = await docs.discovered("shop.example")
+    who = await docs.who("shop.example")
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["result"].status == "complete"
+        assert namespace["result"].token.signed_in
+
+    return {
+        "MediatedSignInClient": MediatedSignInClient,
+        "reactor": docs.reactor,
+        "http": docs.http,
+        "document": company.document,
+        "issuer": who["issuer"],
+        "pairwise_user_id": who["pairwise_user_id"],
+        "signed_out_session": await docs.signed_out("shop.example"),
+    }, check
+
+
+@case("docs/docs/guides/account-tokens.mdx#0")
+async def _account_tokens(docs: Docs) -> tuple[dict[str, Any], Check]:
+    company = await docs.discovered("shop.example")
+    who = await docs.who("shop.example")
+    session, reference = await docs.signed_in("shop.example", ("orders:read",))
+    asked: list[str] = []
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["result"].status == "signed_in" and asked == []
+        assert namespace["session"].signed_in
+
+    return {
+        "reactor": docs.reactor,
+        "http": docs.http,
+        "metadata": company.oauth_metadata,
+        "pairwise_user_id": who["pairwise_user_id"],
+        "account_token_reference": reference,
+        "session": session,
+        "ask_the_user_to_sign_in_again": lambda: asked.append("again"),
+        "continue_signed_out": lambda: asked.append("signed out"),
+    }, check
+
+
+# Conversations and operations ----------------------------------------------------------
+
+
+@case("docs/docs/guides/conversations.mdx#0")
+async def _stream(docs: Docs) -> tuple[dict[str, Any], Check]:
+    company = await docs.discovered("shop.example")
+    who = await docs.who("shop.example")
+    token = await docs.signed_out("shop.example")
+    endpoint = company.document.agent.protocols[0].endpoint
+    conversations = ConversationClient(transport=docs.transport)
+    message = Message(id=generate_message_id(docs.reactor), sender="human", text="Hello")
+    page = await conversations.start(endpoint, message, token=token, wait=0, **who)
+    await conversations.close(endpoint, page.conversation_id, token=token, **who)
+    handled: list[Any] = []
+
+    class Ui:
+        def show_typing(self, message_id: str, text: str) -> None: ...
+
+        def drop_partial(self, message_ids: Any) -> None: ...
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert [event.type for event in handled][:1] == ["message"]
+
+    return {
+        "conversations": conversations,
+        "endpoint": endpoint,
+        "conversation_id": page.conversation_id,
+        "token": token,
+        "who": who,
+        "ui": Ui(),
+        "handle_event": handled.append,
+        "TextDelta": TextDelta,
+        "StreamReconnected": StreamReconnected,
+    }, check
+
+
+async def _proposed(docs: Docs, domain: str) -> dict[str, Any]:
+    """A signed-in Session and an operation its company proposed (an exchange)."""
+
+    who = await docs.who(domain)
+    token, _ = await docs.signed_in(domain, ("orders:read", "orders:write"))
+    proposed = await ApiClient(transport=docs.transport).call(
+        "POST", f"https://{domain}/api/orders/ord_7Hk2/exchanges", token=token, body={}, **who
+    )
+    return {"token": token, "who": who, "operation": proposed.operation}
+
+
+@case("docs/docs/guides/operations.mdx#0")
+async def _operations_client(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["endpoint"] == "https://shop.example/poppy/operations"
+        assert isinstance(namespace["operations"], OperationsClient)
+
+    return {
+        "discovered": await docs.discovered("shop.example"),
+        "my_client_metadata": ClientMetadata.model_validate(docs.agent.metadata),
+        "DpopHttpClient": DpopHttpClient,
+        "reactor": docs.reactor,
+        "http": docs.http,
+    }, check
+
+
+@case("docs/docs/guides/operations.mdx#1")
+async def _confirm(docs: Docs) -> tuple[dict[str, Any], Check]:
+    proposed = await _proposed(docs, "shop.example")
+    shown: list[Any] = []
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["outcome"].status == "confirmed"
+        assert namespace["outcome"].operation.state == "succeeded"
+        assert shown == [(proposed["operation"].summary, proposed["operation"].terms)]
+
+    from personal_agent_protocol import approve
+
+    return {
+        **proposed,
+        "approve": approve,
+        "operations": OperationsClient(transport=docs.transport),
+        "endpoint": "https://shop.example/poppy/operations",
+        "show_to_user": lambda *shown_values: shown.append(shown_values),
+        "show_changes": lambda *changed: None,
+    }, check
+
+
+@case("docs/docs/guides/operations.mdx#2")
+async def _standing(docs: Docs) -> tuple[dict[str, Any], Check]:
+    domain = northwind_demo.DOMAIN
+    who = await docs.who(domain)
+    token, _ = await docs.signed_in(domain, ("accounts:read", "payments:write"))
+    endpoint = (await docs.discovered(domain)).document.agent.protocols[0].endpoint
+    conversations = ConversationClient(transport=docs.transport)
+    message = Message(
+        id=generate_message_id(docs.reactor),
+        sender="human",
+        text="Pay INV-1042: EUR 120.00 to Ledgerly",
+    )
+    page = await conversations.start(endpoint, message, token=token, wait=0, **who)
+    operation = next(
+        event.message.operation
+        for event in page.events
+        if event.message is not None and event.message.operation is not None
+    )
+    docs.host.standing.permissions["perm_1"] = StandingPermission(
+        reference="perm_1",
+        company="Northwind Bank",
+        account="current account",
+        action="payments.transfer",
+        limits=(TermLimit(path="amount.amount", maximum=Decimal("500.00")),),
+        expires_at=docs.clock.now() + timedelta(days=30),
+    )
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["outcome"].status == "confirmed"
+        assert docs.bank.executor.performed == [operation.operation_id]
+
+    return {
+        "operations": OperationsClient(transport=docs.transport),
+        "endpoint": f"https://{domain}/poppy/operations",
+        "operation": operation,
+        "account": "current account",
+        "token": token,
+        "who": who,
+    }, check
+
+
+# Companies --------------------------------------------------------------------------------
+
+
+@case("docs/docs/guides/company.mdx#0")
+async def _company(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=namespace["app"]), base_url="https://manzanita.example"
+        ) as client:
+            document = (await client.get("/.well-known/poppy.json")).json()
+        assert document["organization"] == {"name": "Manzanita Outfitters", "domain": "manzanita.example"}
+
+    return {
+        "http": docs.http,
+        "manifest": PluginManifest(name="manzanita", version="1"),
+        "my_company_plugin": ManzanitaPlugin(),
+    }, check
+
+
+@case("docs/docs/guides/company.mdx#1")
+async def _store_kit(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        await namespace["test_my_store_conforms"]()
+
+    return {"MyDatabaseStore": lambda url: MemoryCompanyStore(), "url": "memory://"}, check
+
+
+@case("docs/docs/guides/company.mdx#2")
+async def _hosted_pages(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert "{request_id}" in namespace["config"].consent_page
+
+    return {"CompanyConfig": CompanyConfig}, check
+
+
+# CLI and extensions -----------------------------------------------------------------------
+
+
+@case("docs/docs/guides/cli.mdx#0")
+async def _cli_plugin(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        import typer
+        from typer.testing import CliRunner
+
+        manifest, implementation = namespace["plugin"]()
+        assert manifest.name == "acme.pap.cli"
+        cli = typer.Typer()
+
+        @cli.callback()
+        def main() -> None: ...
+
+        implementation.provide_cli(cli)
+        result = CliRunner().invoke(cli, ["acme", "inspect"])
+        assert result.exit_code == 0 and "Acme inspection" in result.output
+
+    return {}, check
+
+
+@case("docs/docs/guides/extensions.mdx#0")
+async def _negotiation(docs: Docs) -> tuple[dict[str, Any], Check]:
+    return {}, _nothing
+
+
+# The runner -------------------------------------------------------------------------------
+
+
+async def run(code: str, namespace: dict[str, Any]) -> str:
+    """Run one example in `namespace`, top-level `await` allowed; what it printed."""
+
+    source = re.sub(r"^asyncio\.run\((.+)\)$", r"await \1", code, flags=re.MULTILINE)
+    compiled = compile(source, "<docs example>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        result = eval(compiled, namespace)  # noqa: S307 - the docs' own examples
+        if isinstance(result, types.CoroutineType):
+            await result
+    return out.getvalue()
+
+
+def test_every_python_example_has_a_case() -> None:
+    assert PYTHON, "no Python examples were found"
+    assert sorted(PYTHON) == sorted(CASES)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", sorted(PYTHON))
+async def test_the_python_example_runs(
+    key: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docs = Docs(monkeypatch, tmp_path)
+    given, check = await CASES[key](docs)
+    namespace: dict[str, Any] = {"__name__": "docs_example", **given}
+    docs.namespace = namespace
+    out = await run(PYTHON[key], namespace)
+    await check(namespace, out)
+
+
+@pytest.mark.parametrize("key", sorted(JSON))
+def test_the_json_example_is_valid(key: str) -> None:
+    value = json.loads(JSON[key])
+    if "protocol_version" in value:
+        DiscoveryDocument.model_validate(value)
+    else:
+        DiscoveryDocument.model_validate(
+            {
+                "protocol_version": "0.1",
+                "organization": {"name": "Example", "domain": "example.com"},
+                "auth": {"issuer": "https://example.com", "direct": {"scopes": ["a"]}},
+                "agent": {"protocols": [{"type": "poppy", "endpoint": "https://example.com/c"}]},
+                **value,
+            }
+        )
+
+
+# The Pydantic AI examples ----------------------------------------------------------------
+
+EXAMPLES = sorted((ROOT / "examples" / "pydantic-ai").glob("*/app.py"))
+#: What a model would pass the examples' tools that take arguments.
+TOOL_ARGUMENTS = {
+    "discover_pap_company": ("example.com",),
+    "inspect_pap_agent": ("https://agent.example/agent.json",),
+    "explain_dpop_proof": ("POST", "https://shop.example/oauth/token"),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", EXAMPLES, ids=lambda path: path.parent.name)
+async def test_every_tool_of_the_pydantic_ai_example_runs(
+    path: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pytest.importorskip("pydantic_ai")
+    import runpy
+
+    Docs(monkeypatch, tmp_path)  # the network the tools reach
+    namespace = runpy.run_path(str(path), run_name="pap_example")
+    tools = {
+        name: tool
+        for toolset in namespace["agent"].toolsets
+        for name, tool in getattr(toolset, "tools", {}).items()
+    }
+    assert tools, f"{path.parent.name} gives its agent no tool"
+    for name, tool in tools.items():
+        result = tool.function(*TOOL_ARGUMENTS.get(name, ()))
+        if hasattr(result, "__await__"):
+            result = await result
+        json.dumps(result, default=str)
+        assert result, f"{name} returned nothing"

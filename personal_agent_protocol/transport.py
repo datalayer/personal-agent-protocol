@@ -30,6 +30,7 @@ from .reactor import (
     RetryPolicy,
     SystemClock,
     first_contribution,
+    optional_contribution,
     parse_retry_after,
 )
 from .sessions import SessionToken
@@ -58,11 +59,6 @@ def budget_key(url: str) -> str:
 
     scheme, host, port = _origin(url)
     return f"{scheme}://{host}:{port}"
-
-
-def _optional(platform: PluginPlatform, point: object) -> object | None:
-    contributions = platform.get_contributions(point)
-    return contributions[0].value if contributions else None
 
 
 class DpopHttpClient:
@@ -104,8 +100,8 @@ class DpopHttpClient:
         to the caller.
         """
 
-        policy = _optional(self.reactor, RETRY_POLICIES)
-        budget = _optional(self.reactor, RATE_LIMIT_BUDGETS)
+        policy = optional_contribution(self.reactor, RETRY_POLICIES, "retry policy")
+        budget = optional_contribution(self.reactor, RATE_LIMIT_BUDGETS, "rate-limit budget")
         retry = policy if isinstance(policy, RetryPolicy) else RetryPolicy(max_attempts=1)
         key = budget_key(url)
         attempts = 0
@@ -140,11 +136,11 @@ class DpopHttpClient:
                 await asyncio.sleep(delay)
 
     def _now(self) -> datetime:
-        clock = _optional(self.reactor, CLOCKS)
+        clock = optional_contribution(self.reactor, CLOCKS, "clock")
         return (clock if isinstance(clock, Clock) else SystemClock()).now()
 
     def _jitter(self) -> float:
-        source = _optional(self.reactor, RANDOM_SOURCES)
+        source = optional_contribution(self.reactor, RANDOM_SOURCES, "random source")
         if not isinstance(source, RandomSource):
             return 0.5
         return int.from_bytes(source.bytes(4), "big") / 2**32

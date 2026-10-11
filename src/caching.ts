@@ -14,7 +14,7 @@ import {
   type CacheBounds,
   type CachedMetadata,
 } from "./limits.js";
-import { Caches, Clocks } from "./reactor.js";
+import { Caches, Clocks, optionalContribution } from "./reactor.js";
 
 export class MetadataCache {
   readonly #reactor: ReactorPlatformView;
@@ -26,11 +26,11 @@ export class MetadataCache {
   }
 
   now(): Date {
-    return (this.#reactor.getContributions(Clocks)[0]?.value ?? { now: () => new Date() }).now();
+    return (optionalContribution(this.#reactor, Clocks, "clock") ?? { now: () => new Date() }).now();
   }
 
   async get(key: string): Promise<CachedMetadata | undefined> {
-    const cache = this.#reactor.getContributions(Caches)[0]?.value;
+    const cache = optionalContribution(this.#reactor, Caches, "cache");
     if (cache === undefined) return undefined;
     const entry = await cache.get(key);
     if (!isCachedMetadata(entry)) return undefined;
@@ -42,7 +42,7 @@ export class MetadataCache {
   }
 
   async put(key: string, value: unknown, finalUrl: string, headers: Headers): Promise<void> {
-    const cache = this.#reactor.getContributions(Caches)[0]?.value;
+    const cache = optionalContribution(this.#reactor, Caches, "cache");
     if (cache === undefined) return;
     const lifetime = cacheLifetime(headers.get("cache-control"), this.bounds);
     if (lifetime === undefined) {
@@ -55,6 +55,6 @@ export class MetadataCache {
   }
 
   async delete(key: string): Promise<void> {
-    await this.#reactor.getContributions(Caches)[0]?.value.delete(key);
+    await optionalContribution(this.#reactor, Caches, "cache")?.delete(key);
   }
 }

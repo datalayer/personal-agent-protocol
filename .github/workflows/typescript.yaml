@@ -11,6 +11,8 @@ on:
       - 'personal_agent_protocol/**'
       - 'scripts/conformance_report.py'
       - 'package.json'
+      - 'README.md'
+      - 'docs/docs/**'
       - '.github/workflows/typescript.yaml'
   pull_request:
     branches: [main, develop]
@@ -22,6 +24,8 @@ on:
       - 'personal_agent_protocol/**'
       - 'scripts/conformance_report.py'
       - 'package.json'
+      - 'README.md'
+      - 'docs/docs/**'
       - '.github/workflows/typescript.yaml'
   workflow_dispatch:
 

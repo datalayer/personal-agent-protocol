@@ -28,6 +28,7 @@ const sidebars = {
       items: [
         "concepts/protocol-tour",
         "concepts/architecture",
+        "concepts/contribution-points",
         "concepts/glossary",
         "protocol/coverage",
         {
@@ -44,7 +45,6 @@ const sidebars = {
             "protocol/coverage/operational-guidance",
           ],
         },
-        "protocol/conformance-report",
         "protocol/load-tests",
       ],
     },
@@ -112,6 +112,16 @@ const sidebars = {
       type: "category",
       label: "Contributing",
       items: ["contributing/sdk-design"],
+    },
+    {
+      type: "category",
+      label: "Releases",
+      items: [
+        "releases/compatibility",
+        "releases/migration",
+        "protocol/conformance-report",
+        "releases/support",
+      ],
     },
     "studio/integration",
     "security/index",

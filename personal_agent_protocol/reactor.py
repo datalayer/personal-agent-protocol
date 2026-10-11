@@ -73,13 +73,6 @@ class MetadataFetch:
     timeout: float
 
 
-@dataclass(frozen=True)
-class ProtocolProfile:
-    """Version-specific PAP behavior selected through Reactor."""
-
-    version: str
-
-
 @runtime_checkable
 class Clock(Protocol):
     """Supply timezone-aware wall-clock time to expiring protocol state."""
@@ -99,23 +92,6 @@ class Signer(Protocol):
     """Sign a compact assertion without exposing private key material."""
 
     async def sign(self, claims: dict[str, object], *, purpose: str) -> SecretStr: ...
-
-
-@dataclass(frozen=True)
-class KeyReference:
-    """Opaque reference to a protected signing or proof-of-possession key."""
-
-    id: str
-    algorithm: str
-
-
-@runtime_checkable
-class KeyStore(Protocol):
-    """Resolve protected keys by tenant and protocol purpose."""
-
-    async def get_or_create(
-        self, *, tenant_id: str, subject: str, purpose: str
-    ) -> KeyReference: ...
 
 
 @runtime_checkable
@@ -460,12 +436,9 @@ class UrlSafetyPolicy(Protocol):
 
 DISCOVERY_TRANSPORTS = define_contribution_point("pap.discoveryTransport")
 URL_SAFETY_POLICIES = define_contribution_point("pap.urlSafetyPolicy")
-PROTOCOL_PROFILES = define_contribution_point("pap.protocolProfile")
-EXTENSION_HANDLERS = define_contribution_point("pap.extensionHandler")
 CLOCKS = define_contribution_point("pap.clock")
 RANDOM_SOURCES = define_contribution_point("pap.randomSource")
 SIGNERS = define_contribution_point("pap.signer")
-KEY_STORES = define_contribution_point("pap.keyStore")
 TOKEN_STORES = define_contribution_point("pap.tokenStore")
 PAIRWISE_USER_ID_STORES = define_contribution_point("pap.pairwiseUserIdStore")
 AUTHORIZATION_STATE_STORES = define_contribution_point("pap.authorizationStateStore")
@@ -477,6 +450,8 @@ ACCOUNT_TOKEN_LOCKS = define_contribution_point("pap.accountTokenLock")
 PROTECTED_INPUTS = define_contribution_point("pap.protectedInput")
 RETRY_POLICIES = define_contribution_point("pap.retryPolicy")
 RATE_LIMIT_BUDGETS = define_contribution_point("pap.rateLimitBudget")
+#: `operations.StandingPermissionStore`: the user's standing permissions (Operations).
+STANDING_PERMISSION_STORES = define_contribution_point("pap.standingPermissionStore")
 
 
 async def resolve_addresses(host: str) -> list[str]:
@@ -693,12 +668,6 @@ class PapCorePlugin:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         contribute(DISCOVERY_TRANSPORTS, self._transport, contribution_id="httpx", order=100)
         contribute(URL_SAFETY_POLICIES, self._url_policy, contribution_id="public", order=100)
-        contribute(
-            PROTOCOL_PROFILES,
-            ProtocolProfile(version="0.1"),
-            contribution_id="0.1",
-            order=100,
-        )
         contribute(CLOCKS, SystemClock(), contribution_id="system", order=100)
         contribute(
             RANDOM_SOURCES,
@@ -748,16 +717,13 @@ def build_pap_reactor(
     platform.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.core",
-            version="0.8.0",
+            version="0.9.0",
             contribution_points=[
                 DISCOVERY_TRANSPORTS.id,
                 URL_SAFETY_POLICIES.id,
-                PROTOCOL_PROFILES.id,
-                EXTENSION_HANDLERS.id,
                 CLOCKS.id,
                 RANDOM_SOURCES.id,
                 SIGNERS.id,
-                KEY_STORES.id,
                 TOKEN_STORES.id,
                 PAIRWISE_USER_ID_STORES.id,
                 AUTHORIZATION_STATE_STORES.id,
@@ -769,6 +735,7 @@ def build_pap_reactor(
                 PROTECTED_INPUTS.id,
                 RETRY_POLICIES.id,
                 RATE_LIMIT_BUDGETS.id,
+                STANDING_PERMISSION_STORES.id,
             ],
         ),
         PapCorePlugin(
@@ -793,3 +760,15 @@ def first_contribution(platform: PluginPlatform, point: object, label: str) -> o
     if len(contributions) > 1 and contributions[0].order == contributions[1].order:
         raise RuntimeError(f"PAP Reactor has ambiguous {label} contributions")
     return contributions[0].value
+
+
+def optional_contribution(platform: PluginPlatform, point: object, label: str) -> object | None:
+    """The highest-priority provider for an optional PAP point, `None` when there is none.
+
+    An optional point may have no provider (the feature is off), but never two at the
+    same winning priority: that fails closed exactly as `first_contribution` does.
+    """
+
+    if not platform.get_contributions(point):
+        return None
+    return first_contribution(platform, point, label)

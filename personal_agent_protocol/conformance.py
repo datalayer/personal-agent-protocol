@@ -58,6 +58,7 @@ from .device import DeviceSignInClient
 from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError, TransportError
 from .mcp import McpClient, McpError, mcp_api
+from .profile import PROTOCOL_PROFILE
 from .models import ConversationEvent, DiscoveredCompany, Message, Operation
 from .operations import (
     STANDING_PERMISSION_STORES,
@@ -2586,7 +2587,7 @@ async def run_conformance(
     return ConformanceReport(
         target=context.base_url,
         agent=context.agent.identity.client_id,
-        profile="0.1",
+        profile=PROTOCOL_PROFILE,
         started_at=started,
         results=tuple(results),
     )

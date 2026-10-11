@@ -7,7 +7,6 @@ import {
   Caches,
   Clocks,
   DpopProofProviders,
-  KeyStores,
   PairwiseUserIdStores,
   RandomSources,
   Signers,
@@ -20,7 +19,6 @@ import {
 const securityPoints = [
   AuthorizationStateStores,
   Signers,
-  KeyStores,
   TokenStores,
   PairwiseUserIdStores,
   BrowserHandoffs,
@@ -37,7 +35,6 @@ test("exports aligned infrastructure point IDs and secure defaults", () => {
   assert.equal(Clocks.id, "pap.clock");
   assert.equal(RandomSources.id, "pap.randomSource");
   assert.equal(Signers.id, "pap.signer");
-  assert.equal(KeyStores.id, "pap.keyStore");
   assert.equal(TokenStores.id, "pap.tokenStore");
   assert.equal(PairwiseUserIdStores.id, "pap.pairwiseUserIdStore");
   assert.equal(Caches.id, "pap.cache");

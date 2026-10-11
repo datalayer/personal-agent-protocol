@@ -53,7 +53,9 @@ clock sees them expire. A failed fetch is never cached.
 from personal_agent_protocol import DiscoveryClient
 from personal_agent_protocol.caching import CacheBounds
 
-client = DiscoveryClient(reactor=reactor, cache_bounds=CacheBounds(min_seconds=300))
+# Keep every document at least five minutes (the default lifetime must lie within).
+bounds = CacheBounds(min_seconds=300, default_seconds=300)
+client = DiscoveryClient(reactor=reactor, cache_bounds=bounds)
 company = await client.discover("shop.example")  # fetched
 company = await client.discover("shop.example")  # from pap.cache
 ```
@@ -123,7 +125,7 @@ backed by shared storage:
 ```python
 from reactor import PluginManifest
 
-from personal_agent_protocol import RATE_LIMIT_BUDGETS
+from personal_agent_protocol import RATE_LIMIT_BUDGETS, build_pap_reactor
 
 
 class RedisBudget:

@@ -32,6 +32,7 @@ import {
   CompanyAccounts,
   CompanyAgents,
   CompanyApis,
+  CompanyMcps,
   CompanyStores,
   MemoryCompanyStore,
   MemoryReplayCache,
@@ -87,12 +88,13 @@ export class ReactorClock implements Clock {
 export function createCompanyDefaultsPlugin(resolver: ClientResolver, clock?: Clock) {
   return definePlugin({
     name: "personal-agent-protocol.company",
-    version: "0.8.0",
+    version: "0.9.0",
     contributionPoints: [
       CompanyStores,
       CompanyAccounts,
       CompanyAgents,
       CompanyApis,
+      CompanyMcps,
       OperationExecutors,
       ClientPolicies,
       ClientResolvers,

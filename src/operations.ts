@@ -1,9 +1,9 @@
-import { defineContributionPoint, type ReactorPlatformView } from "@datalayer/reactor";
+import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { PersonalAgentProtocolError, ProtocolValidationError, TransportError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { parseOperation, type ClientMetadata, type DiscoveryDocument, type Operation } from "./models.js";
-import { Clocks, firstContribution } from "./reactor.js";
+import { Clocks, StandingPermissionStores, firstContribution } from "./reactor.js";
 import type { SessionToken } from "./sessions.js";
 import type { DpopFetchClient } from "./transport.js";
 
@@ -104,9 +104,7 @@ export interface StandingPermissionStore {
   release(reservation: string): Promise<void>;
 }
 
-export const StandingPermissionStores = defineContributionPoint<StandingPermissionStore>(
-  "pap.standingPermissionStore",
-);
+export { StandingPermissionStores } from "./reactor.js";
 
 function term(terms: Readonly<Record<string, unknown>>, path: string): unknown {
   let value: unknown = terms;

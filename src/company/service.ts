@@ -33,6 +33,11 @@
  * - Operations v1: proposals from the company agent or the API, read, confirm
  *   (latest revision, approval rules, scope, extension negotiation), at most
  *   once, and cancel.
+ * - MCP (§4.3, §6), when a `pap.company.mcp` contribution is present: a
+ *   Streamable HTTP endpoint at `/mcp` accepting only Bearer Session Tokens
+ *   issued for its url (requested without DPoP, `resource` = that url), its
+ *   protected resource metadata (RFC 9728), and tools that propose operations
+ *   in `structuredContent` (Operations §4.2). Bearer tokens work nowhere else.
  */
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
@@ -51,7 +56,9 @@ import {
   type Operation,
   type OperationResult,
 } from "../models.js";
-import { Clocks, RandomSources, firstContribution } from "../reactor.js";
+import { OPERATIONS_VERSION } from "../operations.js";
+import { PROTOCOL_PROFILE } from "../profile.js";
+import { Clocks, RandomSources, firstContribution, optionalContribution } from "../reactor.js";
 import { SecretValue } from "../secret.js";
 import { JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION } from "../sessions.js";
 import {
@@ -60,12 +67,14 @@ import {
   CompanyAccounts,
   CompanyAgents,
   CompanyApis,
+  CompanyMcps,
   CompanyStores,
   OperationExecutors,
   OperationFailed,
   OperationOutcomeUnknown,
   ReplayCaches,
   type CompanyApi,
+  type CompanyMcp,
   type Reply,
   type ReplayCache,
 } from "./points.js";
@@ -219,6 +228,12 @@ export class CompanyConfig {
   get operationsEndpoint(): string {
     return `${this.base}/poppy/operations`;
   }
+  get mcpUrl(): string {
+    return `${this.base}/mcp`;
+  }
+  get mcpResourceMetadata(): string {
+    return `${this.base}/.well-known/oauth-protected-resource/mcp`;
+  }
 }
 
 /** A request as any framework hands it over: full HTTPS URL, lower-case headers. */
@@ -272,6 +287,14 @@ function jsonError(
       `DPoP error="${error}"` + (typeof scope === "string" ? `, scope="${scope}"` : "");
   }
   return { status, body: { error, ...extra }, headers };
+}
+
+function rpcError(requestId: unknown, code: number, message: string): CompanyResponse {
+  return {
+    status: 200,
+    body: { jsonrpc: "2.0", id: requestId ?? null, error: { code, message } },
+    headers: {},
+  };
 }
 
 function digest(token: string): string {
@@ -373,6 +396,9 @@ function plain(message: Message): Record<string, unknown> {
 
 /** How often a compare-and-set is retried against concurrent writers before giving up. */
 const CAS_ATTEMPTS = 32;
+
+type TokenType = "DPoP" | "Bearer";
+const EVERY_TOKEN_TYPE: readonly TokenType[] = ["DPoP", "Bearer"];
 /** How long an expired device or Mediated sign-in is kept, to answer that it expired. */
 const KEPT_EXPIRED_MS = 10 * 60 * 1000;
 
@@ -488,6 +514,11 @@ export class CompanyService {
       if (method === "GET" && path === "/.well-known/oauth-authorization-server") {
         return { status: 200, body: this.oauthMetadata(), headers: {} };
       }
+      const mcp = this.#mcp();
+      if (path === "/.well-known/oauth-protected-resource/mcp" && mcp !== undefined) {
+        return { status: 200, body: this.protectedResourceMetadata(), headers: {} };
+      }
+      if (path === "/mcp" && mcp !== undefined) return await this.#mcpRoute(request, mcp);
       if (method === "POST" && path === "/oauth/token") return await this.#token(request);
       if (method === "GET" && path === "/oauth/authorize" && this.config.direct) {
         return await this.#authorize(request);
@@ -545,23 +576,37 @@ export class CompanyService {
     }
     if (Object.keys(config.customScopes).length) auth.custom_scopes = { ...config.customScopes };
     const document: Record<string, unknown> = {
-      protocol_version: "0.1",
+      protocol_version: PROTOCOL_PROFILE,
       organization: { name: config.name, domain: config.domain },
       auth,
       agent: { protocols: [{ type: "poppy", endpoint: config.conversationsEndpoint }] },
     };
+    const apis: Record<string, string>[] = [];
     const api = this.#api();
     if (api !== undefined) {
-      document.apis = [
-        { type: "openapi", url: config.apiDescription, description: api.description },
-      ];
+      apis.push({ type: "openapi", url: config.apiDescription, description: api.description });
     }
+    const mcp = this.#mcp();
+    if (mcp !== undefined) {
+      apis.push({ type: "mcp", url: config.mcpUrl, description: mcp.description });
+    }
+    if (apis.length) document.apis = apis;
     if (config.operations) {
       document.extensions = {
-        operations: { version: "1", endpoint: config.operationsEndpoint },
+        operations: { version: OPERATIONS_VERSION, endpoint: config.operationsEndpoint },
       };
     }
     return document;
+  }
+
+  /** RFC 9728 metadata for the MCP server: its issuer is the company's (§6). */
+  protectedResourceMetadata(): Record<string, unknown> {
+    return {
+      resource: this.config.mcpUrl,
+      authorization_servers: [this.config.base],
+      scopes_supported: [...this.config.scopes],
+      bearer_methods_supported: ["header"],
+    };
   }
 
   oauthMetadata(): Record<string, unknown> {
@@ -644,9 +689,20 @@ export class CompanyService {
     const form = pairs(text(request.body));
     const grant = form.grant_type;
     const clientId = await this.#client(form, this.config.tokenEndpoint);
+    if (request.headers.dpop === undefined && this.#mcp() !== undefined) {
+      // A Bearer token, only for the MCP server's url and an existing Session (§4.3).
+      if (form.resource !== this.config.mcpUrl) throw new Refused(400, "invalid_dpop_proof");
+      if ((grant !== JWT_BEARER_GRANT && grant !== REFRESH_TOKEN_GRANT) || !form.session_id) {
+        throw new Refused(400, "invalid_request");
+      }
+      if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, "", "Bearer");
+      return this.#refreshGrant(form, clientId, "", "Bearer");
+    }
     const thumbprint = await this.#dpop(request);
-    if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, thumbprint);
-    if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, thumbprint);
+    if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, thumbprint, "DPoP");
+    if (grant === REFRESH_TOKEN_GRANT) {
+      return this.#refreshGrant(form, clientId, thumbprint, "DPoP");
+    }
     if (grant === "authorization_code" && this.config.direct) {
       return this.#codeGrant(form, clientId, thumbprint);
     }
@@ -660,6 +716,7 @@ export class CompanyService {
     form: Readonly<Record<string, string>>,
     clientId: string,
     thumbprint: string,
+    tokenType: TokenType,
   ): Promise<CompanyResponse> {
     const resolver = firstContribution(this.reactor, ClientResolvers, "client");
     const [, keys] = await resolver.resolve(clientId, keyId(form.assertion ?? ""));
@@ -688,11 +745,24 @@ export class CompanyService {
       if (known === undefined || known.clientId !== clientId || known.pairwiseUserId !== pairwise) {
         throw new Refused(400, "invalid_session");
       }
+      // Renewal with the assertion gives a signed-out token; a signed-in Session is
+      // renewed with its Account Token instead (§4.2, §4.8).
+      const {
+        accountId: _account,
+        accountToken: _token,
+        resource: _resource,
+        tokenType: _type,
+        ...signedOut
+      } = known;
       session = {
-        ...known,
+        ...signedOut,
         keyThumbprint: thumbprint,
         expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
+        scopes: [],
+        ...(form.resource === undefined ? {} : { resource: form.resource }),
+        ...(tokenType === "Bearer" ? { tokenType } : {}),
       };
+      return this.#issue(session, undefined, [tokenType]);
     }
     return this.#issue(session);
   }
@@ -701,6 +771,7 @@ export class CompanyService {
     form: Readonly<Record<string, string>>,
     clientId: string,
     thumbprint: string,
+    tokenType: TokenType,
   ): Promise<CompanyResponse> {
     const presented = digest(form.refresh_token ?? "");
     const entry = await this.store.get(RecordKinds.accountToken, presented);
@@ -762,10 +833,12 @@ export class CompanyService {
       expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
     };
     // The resource is what this refresh asked for, never one an earlier refresh named.
-    const { resource: _earlier, ...unbound } = signedIn;
+    const { resource: _earlier, tokenType: _type, ...unbound } = signedIn;
+    const typed: IssuedSession = tokenType === "Bearer" ? { ...unbound, tokenType } : unbound;
     const response = await this.#issue(
-      resource === undefined ? unbound : { ...unbound, resource },
+      resource === undefined ? typed : { ...typed, resource },
       rotated,
+      [tokenType],
     );
     const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, grant.family);
     if (family === undefined || family.revoked) {
@@ -1083,15 +1156,20 @@ export class CompanyService {
   }
 
   /** Issue a token for the Session; it replaces the Session's earlier tokens. */
-  async #issue(session: IssuedSession, refreshToken?: string): Promise<CompanyResponse> {
+  /** Issue a token for the Session; it replaces the Session's tokens of `replacing` types. */
+  async #issue(
+    session: IssuedSession,
+    refreshToken?: string,
+    replacing: readonly TokenType[] = EVERY_TOKEN_TYPE,
+  ): Promise<CompanyResponse> {
     const accessToken = this.#id("sat");
     const key = digest(accessToken);
-    await this.#recordToken(session, key);
+    await this.#recordToken(session, key, replacing);
     const pointer: SessionPointer = { sessionId: session.sessionId };
     await this.store.put(RecordKinds.sessionToken, key, json(pointer), expiry(session.expiresAt));
     const body: Record<string, unknown> = {
       access_token: accessToken,
-      token_type: "DPoP",
+      token_type: session.tokenType ?? "DPoP",
       expires_in: Math.trunc((new Date(session.expiresAt).getTime() - this.#now().getTime()) / 1000),
       scope: session.scopes.join(" "),
       session_id: session.sessionId,
@@ -1101,23 +1179,32 @@ export class CompanyService {
     return { status: 200, body, headers: { ...NO_STORE } };
   }
 
-  /** One write: the new token is the Session's, the ones it replaces leave it. */
-  async #recordToken(session: IssuedSession, key: string): Promise<void> {
-    const stored: StoredSession = {
-      sessionId: session.sessionId,
-      clientId: session.clientId,
-      pairwiseUserId: session.pairwiseUserId,
-      tokens: { [key]: session },
-      latest: key,
-    };
-    // A Session is forgotten once no Account Token could renew it any more.
-    const kept = expiry(
-      new Date(
-        new Date(session.expiresAt).getTime() + this.config.accountTokenLifetimeSeconds * 1000,
-      ),
-    );
+  /** One write: the new token joins the Session, the ones it replaces leave it. */
+  async #recordToken(
+    session: IssuedSession,
+    key: string,
+    replacing: readonly TokenType[],
+  ): Promise<void> {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
       const entry = await this.store.get(RecordKinds.session, session.sessionId);
+      const tokens: Record<string, IssuedSession> = {};
+      if (entry !== undefined) {
+        const current = entry.value as unknown as StoredSession;
+        for (const [held, token] of Object.entries(current.tokens)) {
+          if (!replacing.includes(token.tokenType ?? "DPoP")) tokens[held] = token;
+        }
+      }
+      tokens[key] = session;
+      const stored: StoredSession = {
+        sessionId: session.sessionId,
+        clientId: session.clientId,
+        pairwiseUserId: session.pairwiseUserId,
+        tokens,
+        latest: key,
+      };
+      // A Session is forgotten once no Account Token could renew it any more.
+      const latest = Math.max(...Object.values(tokens).map((token) => Date.parse(token.expiresAt)));
+      const kept = expiry(new Date(latest + this.config.accountTokenLifetimeSeconds * 1000));
       if (entry === undefined) {
         if (await this.store.create(RecordKinds.session, session.sessionId, json(stored), kept)) {
           return;
@@ -1379,7 +1466,7 @@ export class CompanyService {
   // OpenAPI API (§6, Operations §4.1) -----------------------------------------------------
 
   #api(): CompanyApi | undefined {
-    return this.reactor.getContributions(CompanyApis)[0]?.value;
+    return optionalContribution(this.reactor, CompanyApis, "API");
   }
 
   async #apiCall(
@@ -1411,6 +1498,131 @@ export class CompanyService {
     return { status: 202, body: { operation }, headers: {} };
   }
 
+  // MCP (§4.3, §6, Operations §4.2) -------------------------------------------------------
+
+  #mcp(): CompanyMcp | undefined {
+    return optionalContribution(this.reactor, CompanyMcps, "MCP server");
+  }
+
+  #bearerRefusal(status: number, error: string, scope?: string): CompanyResponse {
+    let challenge = `Bearer error="${error}", resource_metadata="${this.config.mcpResourceMetadata}"`;
+    if (scope !== undefined) challenge += `, scope="${scope}"`;
+    return {
+      status,
+      body: scope === undefined ? { error } : { error, scope },
+      headers: { "WWW-Authenticate": challenge, ...NO_STORE },
+    };
+  }
+
+  /** The Session of a Bearer token issued for this MCP server, else `undefined`. */
+  async #bearerCaller(request: CompanyRequest): Promise<IssuedSession | undefined> {
+    const authorization = request.headers.authorization ?? "";
+    const space = authorization.indexOf(" ");
+    const scheme = space < 0 ? authorization : authorization.slice(0, space);
+    const token = space < 0 ? "" : authorization.slice(space + 1);
+    if (scheme !== "Bearer" || !token) return undefined;
+    const session = await this.#tokenSession(token);
+    if (
+      session === undefined ||
+      this.#passed(session.expiresAt) ||
+      session.tokenType !== "Bearer" ||
+      session.resource !== this.config.mcpUrl
+    ) {
+      return undefined;
+    }
+    return session;
+  }
+
+  async #mcpRoute(request: CompanyRequest, mcp: CompanyMcp): Promise<CompanyResponse> {
+    const session = await this.#bearerCaller(request);
+    // A missing, expired, DPoP, or other-resource token: none is accepted here.
+    if (session === undefined) return this.#bearerRefusal(401, "invalid_token");
+    if (request.method.toUpperCase() !== "POST") {
+      return { status: 405, body: { error: "method_not_allowed" }, headers: { Allow: "POST" } };
+    }
+    let message: unknown;
+    try {
+      message = parseJsonStrict(text(request.body));
+    } catch {
+      return rpcError(null, -32700, "Parse error");
+    }
+    if (!isObject(message) || message.jsonrpc !== "2.0") {
+      return rpcError(null, -32600, "Invalid Request");
+    }
+    const requestId = message.id;
+    if (requestId === undefined || requestId === null) {
+      return { status: 202, headers: {} }; // a notification, such as notifications/initialized
+    }
+    const params = isObject(message.params) ? message.params : {};
+    let result: unknown;
+    if (message.method === "initialize") {
+      result = {
+        protocolVersion: "2025-06-18",
+        capabilities: { tools: {} },
+        serverInfo: { name: this.config.name, version: "1" },
+      };
+    } else if (message.method === "ping") {
+      result = {};
+    } else if (message.method === "tools/list") {
+      result = { tools: mcp.tools() };
+    } else if (message.method === "tools/call") {
+      const outcome = await this.#mcpTool(session, mcp, params);
+      if ("refused" in outcome) return outcome.refused;
+      result = outcome.result;
+    } else {
+      return rpcError(requestId, -32601, "Method not found");
+    }
+    return { status: 200, body: { jsonrpc: "2.0", id: requestId, result }, headers: {} };
+  }
+
+  async #mcpTool(
+    session: IssuedSession,
+    mcp: CompanyMcp,
+    params: Readonly<Record<string, unknown>>,
+  ): Promise<{ readonly result: Record<string, unknown> } | { readonly refused: CompanyResponse }> {
+    const name = params.name;
+    const args = params.arguments ?? {};
+    if (typeof name !== "string" || !isObject(args)) {
+      return { refused: rpcError(null, -32602, "Invalid params") };
+    }
+    const answer = await mcp.call(name, args, {
+      method: "TOOL",
+      path: name,
+      query: {},
+      body: args,
+      ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
+      scopes: session.scopes,
+      clientId: session.clientId,
+    });
+    if (answer.refusal !== undefined) {
+      const [status, error, scope] = answer.refusal;
+      return { refused: this.#bearerRefusal(status, error, scope) };
+    }
+    if (answer.operation !== undefined) {
+      if (session.accountId === undefined) {
+        return { refused: this.#bearerRefusal(403, "sign_in_required") };
+      }
+      if (!(await this.#supportsOperations(session.clientId))) {
+        return { refused: jsonError(403, "extension_required", { extension: "operations" }) };
+      }
+      const operation = await this.#propose(session, { operation: answer.operation });
+      return {
+        result: {
+          content: [
+            { type: "text", text: `Proposed: ${operation.summary} Not done until confirmed.` },
+          ],
+          structuredContent: { operation },
+        },
+      };
+    }
+    const result: Record<string, unknown> = {
+      content: [{ type: "text", text: answer.text ?? JSON.stringify(answer.structured ?? {}) }],
+    };
+    if (answer.structured !== undefined) result.structuredContent = answer.structured;
+    if (answer.isError) result.isError = true;
+    return { result };
+  }
+
   // Resource requests ---------------------------------------------------------------
 
   async #caller(request: CompanyRequest): Promise<[string, IssuedSession]> {
@@ -1421,7 +1633,8 @@ export class CompanyService {
     if (scheme !== "DPoP" || !token) throw new Refused(401, "invalid_token");
     const key = digest(token);
     const session = await this.#tokenSession(token);
-    if (session === undefined || this.#passed(session.expiresAt)) {
+    if (session === undefined || this.#passed(session.expiresAt) || session.tokenType === "Bearer") {
+      // A Bearer token works only at the MCP server it was issued for (§4.3).
       throw new Refused(401, "invalid_token");
     }
     const thumbprint = await this.#dpop(request, token);
@@ -2225,14 +2438,16 @@ export class CompanyService {
     return this.#perform(confirmed);
   }
 
-  /** Perform a just-confirmed operation with its one executor. */
+  /**
+   * Perform a just-confirmed operation with its action's executor: the action's
+   * lowest-order executor performs it; two at that order are ambiguous.
+   */
   async #perform(confirmed: StoredOperation): Promise<CompanyResponse> {
     const executors = this.reactor
       .getContributions(OperationExecutors)
-      .map((contribution) => contribution.value)
-      .filter((executor) => executor.action === confirmed.action);
-    const executor = executors[0];
-    if (executors.length !== 1 || executor === undefined) {
+      .filter((contribution) => contribution.value.action === confirmed.action);
+    const executor = executors[0]?.value;
+    if (executor === undefined || executors[1]?.order === executors[0]?.order) {
       // Nobody can perform it: it stays in progress rather than claim a failure.
       return operationResponse(confirmed);
     }

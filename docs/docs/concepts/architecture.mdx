@@ -10,19 +10,9 @@ extension runtime. The protocol boundary owns mandatory validation and
 security rules; plugins provide replaceable infrastructure and optional PAP
 extensions.
 
-The first shared contribution points are:
-
-| ID                                     | Responsibility                                                    |
-| -------------------------------------- | ----------------------------------------------------------------- |
-| `pap.protocolProfile`                  | Version-specific wire behavior                                    |
-| `pap.discoveryTransport`               | Credential-free metadata transport                                |
-| `pap.urlSafetyPolicy`                  | HTTPS, DNS, IP, and redirect policy                               |
-| `pap.extensionHandler`                 | Named, major-versioned PAP extensions                             |
-| `pap.pairwiseUserIdStore`              | Atomic stable identity by tenant, local user, and verified issuer |
-| `pap.authorizationStateStore`          | Expiring atomic put/take for one-use authorization state          |
-| `pap.signer` / `pap.dpopProofProvider` | Protected assertion and proof creation                            |
-| `pap.keyStore` / `pap.tokenStore`      | Protected key references and opaque credentials                   |
-| `pap.cache` / `pap.browserHandoff`     | Bounded public state and trusted human handoff                    |
+Every replaceable service is a contribution point, the same in Python and
+TypeScript: [Contribution points](/concepts/contribution-points/) lists them
+with their defaults and which are tenant-scoped.
 
 Lower `order` values have higher priority. Equal winning priorities fail
 closed instead of selecting a provider by load order.
@@ -30,11 +20,11 @@ closed instead of selecting a provider by load order.
 ```mermaid
 flowchart LR
   App[Application] --> SDK[PAP protocol core]
-  SDK --> Profile[Protocol profile]
   SDK --> Transport[Discovery transport]
   SDK --> Safety[URL safety policy]
-  SDK --> Handler[Extension handlers]
-  Profile & Transport & Safety & Handler --> Reactor[Datalayer Reactor]
+  SDK --> Keys[Signer and DPoP proofs]
+  SDK --> Stores[Token, state and pairwise stores]
+  Transport & Safety & Keys & Stores --> Reactor[Datalayer Reactor]
 ```
 
 ## What remains in the protocol core
@@ -51,9 +41,9 @@ assemble a host with safe defaults.
 ## Two meanings of extension
 
 A **PAP extension** is negotiated on the wire by name and major version. A
-**Reactor extension** packages plugins and manages their lifecycle. A Reactor
-extension may contribute a PAP extension handler, but the SDK advertises that
-wire capability only while a compatible handler is active.
+**Reactor extension** packages plugins and manages their lifecycle. The SDK
+implements one PAP extension, Operations version 1; see
+[Extensions](/guides/extensions/).
 
 Plugins cannot turn off domain/issuer binding, secret redaction, token/resource
 binding, replay protection, or exact operation-revision approval.

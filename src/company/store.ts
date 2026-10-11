@@ -199,6 +199,8 @@ export interface IssuedSession {
   /** The digest of the Account Token this Session is signed in with. */
   readonly accountToken?: string;
   readonly resource?: string;
+  /** `Bearer` for a token issued to the MCP server (§4.3); a DPoP token otherwise. */
+  readonly tokenType?: "Bearer";
 }
 
 /** A Session by its ID: each live token's state by digest, and the latest issued. */

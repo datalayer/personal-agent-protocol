@@ -17,6 +17,8 @@
  * - `pap.company.replayCache` remembers assertion and proof IDs once.
  * - `pap.company.api` answers the company's OpenAPI API (`/api/…`), its
  *   consequential calls proposing operations (`202`, Operations §4.1).
+ * - `pap.company.mcp` answers the company's MCP server (`/mcp`), its tools
+ *   proposing operations in `structuredContent` (§6, Operations §4.2).
  */
 
 import { defineContributionPoint } from "@datalayer/reactor";
@@ -225,6 +227,36 @@ export interface CompanyApi {
   handle(call: ApiCall): Promise<ApiResult>;
 }
 
+/**
+ * An MCP tool's answer: text and structured content, or an operation to propose.
+ *
+ * `refusal` is `[status, error, scope]` for a token error the server returns
+ * over HTTP with a Bearer challenge (`sign_in_required`, `insufficient_scope`).
+ */
+export interface ToolResult {
+  readonly text?: string;
+  readonly structured?: Readonly<Record<string, unknown>>;
+  readonly operation?: ProposedOperation;
+  readonly isError?: boolean;
+  readonly refusal?: readonly [status: number, error: string, scope: string | undefined];
+}
+
+export const ToolResults = {
+  signInRequired(scope: string): ToolResult {
+    return { refusal: [403, "sign_in_required", scope] };
+  },
+  insufficientScope(scope: string): ToolResult {
+    return { refusal: [403, "insufficient_scope", scope] };
+  },
+} as const;
+
+/** The company's MCP server: its tools, and each call (with the caller's authority). */
+export interface CompanyMcp {
+  readonly description: string;
+  tools(): readonly Readonly<Record<string, unknown>>[];
+  call(name: string, args: Readonly<Record<string, unknown>>, call: ApiCall): Promise<ToolResult>;
+}
+
 export const CompanyStores = defineContributionPoint<CompanyStore>("pap.company.store");
 export const CompanyAccounts = defineContributionPoint<AccountDirectory>("pap.company.accounts");
 export const CompanyAgents = defineContributionPoint<CompanyAgent>("pap.company.agent");
@@ -237,3 +269,4 @@ export const ClientResolvers = defineContributionPoint<ClientResolver>(
 );
 export const ReplayCaches = defineContributionPoint<ReplayCache>("pap.company.replayCache");
 export const CompanyApis = defineContributionPoint<CompanyApi>("pap.company.api");
+export const CompanyMcps = defineContributionPoint<CompanyMcp>("pap.company.mcp");

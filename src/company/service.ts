@@ -76,6 +76,19 @@ import {
 } from "./points.js";
 import { verifyAssertion } from "./verify.js";
 
+/** The `kid` a compact JWT's header names, if any (used only to look a key up). */
+function keyId(compact: string): { readonly kid?: string } {
+  try {
+    const header: unknown = JSON.parse(
+      Buffer.from(compact.split(".", 1)[0] ?? "", "base64url").toString("utf8"),
+    );
+    const kid = (header as { kid?: unknown } | null)?.kid;
+    return typeof kid === "string" ? { kid } : {};
+  } catch {
+    return {};
+  }
+}
+
 const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 const REFRESH_TOKEN_GRANT = "refresh_token";
 const PAGE = 50;
@@ -429,7 +442,7 @@ export class CompanyService {
     const resolver = firstContribution(this.reactor, ClientResolvers, "client resolver");
     let resolved: readonly [ClientMetadata, JsonWebKeySet];
     try {
-      resolved = await resolver.resolve(clientId);
+      resolved = await resolver.resolve(clientId, keyId(form.client_assertion ?? ""));
     } catch {
       throw new Refused(401, "invalid_client");
     }
@@ -487,7 +500,7 @@ export class CompanyService {
     thumbprint: string,
   ): Promise<CompanyResponse> {
     const resolver = firstContribution(this.reactor, ClientResolvers, "client");
-    const [, keys] = await resolver.resolve(clientId);
+    const [, keys] = await resolver.resolve(clientId, keyId(form.assertion ?? ""));
     const claims = await verifyAssertion(form.assertion ?? "", {
       keys,
       issuer: clientId,

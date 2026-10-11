@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from urllib.parse import urljoin, urlsplit
 
 import httpx
 from pydantic import ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
+from .caching import CacheBounds, MetadataCache
 from .errors import IdentityError, ProtocolValidationError
 from .json import loads_strict
 from .models import ClientMetadata, JsonWebKeySet
@@ -42,6 +44,8 @@ class AgentIdentityClient:
         max_jwks_redirects: int = 3,
         max_response_bytes: int = 100 * 1024,
         timeout: float = 5.0,
+        cache_bounds: CacheBounds | None = None,
+        jwks_refetch_interval: float = 60.0,
     ) -> None:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
@@ -58,6 +62,9 @@ class AgentIdentityClient:
         self._max_jwks_redirects = max_jwks_redirects
         self._max_bytes = max_response_bytes
         self._timeout = timeout
+        self._cache = MetadataCache(reactor, cache_bounds)
+        self._refetch_interval = timedelta(seconds=jwks_refetch_interval)
+        self._refetched: dict[str, datetime] = {}
 
     async def __aenter__(self) -> AgentIdentityClient:
         return self
@@ -73,7 +80,9 @@ class AgentIdentityClient:
         """Fetch client metadata without redirects and bind it to ``client_id``."""
 
         requested = self._fetchable_url(client_id)
-        data = await self._get_json(requested, max_redirects=0, required_host=None)
+        data = await self._cached_json(
+            f"pap.client-metadata:{requested}", requested, max_redirects=0, required_host=None
+        )
         try:
             metadata = ClientMetadata.model_validate(data)
         except ValidationError as exc:
@@ -87,22 +96,57 @@ class AgentIdentityClient:
             )
         return metadata
 
-    async def fetch_jwks(self, client_id: str) -> JsonWebKeySet:
-        """Fetch a verified client's bounded, public-only signing key set."""
+    async def fetch_jwks(self, client_id: str, *, kid: str | None = None) -> JsonWebKeySet:
+        """Fetch a verified client's bounded, public-only signing key set.
+
+        The set is cached by its `Cache-Control`. When `kid` names a key the
+        cached set lacks — the agent rotated its keys, publishing the new one
+        beside the old — the set is fetched again, at most once per
+        `jwks_refetch_interval` for each `jwks_uri`, so a stream of assertions
+        with unknown `kid`s cannot trigger a fetch each time (Guides, rotating keys).
+        """
 
         metadata = await self.fetch_metadata(client_id)
-        host = urlsplit(metadata.client_id).hostname
-        data = await self._get_json(
+        key = f"pap.jwks:{metadata.jwks_uri}"
+        keys = self._key_set(await self._jwks(metadata, key))
+        if kid is None or any(item.kid == kid for item in keys.keys):
+            return keys
+        now = self._cache.now()
+        last = self._refetched.get(metadata.jwks_uri)
+        if last is not None and now - last < self._refetch_interval:
+            return keys
+        self._refetched[metadata.jwks_uri] = now
+        await self._cache.delete(key)
+        return self._key_set(await self._jwks(metadata, key))
+
+    async def _jwks(self, metadata: ClientMetadata, key: str) -> object:
+        return await self._cached_json(
+            key,
             metadata.jwks_uri,
             max_redirects=self._max_jwks_redirects,
-            required_host=host,
+            required_host=urlsplit(metadata.client_id).hostname,
         )
+
+    @staticmethod
+    def _key_set(data: object) -> JsonWebKeySet:
         try:
             return JsonWebKeySet.model_validate(data)
         except ValidationError as exc:
             raise ProtocolValidationError(
                 "invalid_jwks", "Personal-agent JWKS failed protocol validation"
             ) from exc
+
+    async def _cached_json(
+        self, key: str, url: str, *, max_redirects: int, required_host: str | None
+    ) -> object:
+        cached = await self._cache.get(key)
+        if cached is not None:
+            return cached.value
+        value, final_url, headers = await self._get_json(
+            url, max_redirects=max_redirects, required_host=required_host
+        )
+        await self._cache.put(key, value, final_url=final_url, headers=headers)
+        return value
 
     @staticmethod
     def _fetchable_url(value: str) -> str:
@@ -120,7 +164,7 @@ class AgentIdentityClient:
         *,
         max_redirects: int,
         required_host: str | None,
-    ) -> object:
+    ) -> tuple[object, str, dict[str, str]]:
         transport = first_contribution(self.reactor, DISCOVERY_TRANSPORTS, "metadata transport")
         policy = first_contribution(self.reactor, URL_SAFETY_POLICIES, "URL safety policy")
         if not isinstance(transport, DiscoveryTransport):
@@ -165,6 +209,6 @@ class AgentIdentityClient:
                 raise IdentityError(
                     "response_too_large", "Agent identity response exceeds size limit"
                 )
-            return loads_strict(response.content)
+            return loads_strict(response.content), response.url, response.headers
 
         raise AssertionError("redirect loop exited unexpectedly")

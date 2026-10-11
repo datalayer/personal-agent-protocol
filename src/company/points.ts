@@ -251,9 +251,16 @@ export class AllowEveryAgent implements ClientPolicy {
   }
 }
 
-/** Resolve a `client_id` to its verified metadata and keys. */
+/**
+ * Resolve a `client_id` to its verified metadata and keys. `kid` is the key an
+ * assertion names: a resolver that caches keys fetches them again when the
+ * cached set lacks it (rate-limited; Guides, rotating keys).
+ */
 export interface ClientResolver {
-  resolve(clientId: string): Promise<readonly [ClientMetadata, JsonWebKeySet]>;
+  resolve(
+    clientId: string,
+    options?: { readonly kid?: string },
+  ): Promise<readonly [ClientMetadata, JsonWebKeySet]>;
 }
 
 /** Remember an assertion or proof ID once (the `DpopReplayCache` shape). */

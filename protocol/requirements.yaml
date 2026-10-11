@@ -64,11 +64,14 @@ requirements:
   level: SHOULD
   role: personal-agent
   text: Personal Agents SHOULD cache the document according to its HTTP caching headers.
-  status: open
+  status: implemented
   implementation:
-  - personal_agent_protocol.discovery:DiscoveryClient
-  reason: DiscoveryClient fetches on every call; the pap.cache contribution point exists but discovery
-    does not use it yet.
+  - personal_agent_protocol.discovery:DiscoveryClient._get_json
+  - personal_agent_protocol.caching:MetadataCache
+  - personal_agent_protocol.caching:cache_lifetime
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_discovery_and_oauth_metadata_are_cached_until_they_expire
+  - personal_agent_protocol/__tests__/test_guidance.py::test_cache_lifetime_follows_cache_control_within_bounds
 - id: PAP-3.1-01
   section: '3.1'
   level: MUST NOT
@@ -154,10 +157,12 @@ requirements:
   level: SHOULD
   role: personal-agent
   text: Personal Agents SHOULD cache it according to its HTTP caching headers.
-  status: open
+  status: implemented
   implementation:
-  - personal_agent_protocol.discovery:DiscoveryClient
-  reason: OAuth metadata is fetched with every discovery; no bounded cache yet.
+  - personal_agent_protocol.discovery:DiscoveryClient._get_json
+  - personal_agent_protocol.caching:MetadataCache
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_discovery_and_oauth_metadata_are_cached_until_they_expire
 - id: PAP-3.3-01
   section: '3.3'
   level: MUST
@@ -1830,9 +1835,12 @@ guide:
   role: company
   text: Companies refetch jwks_uri when they see an unknown kid, with a rate limit so a stream of bad
     assertions can't trigger a fetch each time.
-  status: open
-  reason: The company resolver fetches metadata and keys on every assertion; no cache, refetch rule, or
-    rate limit.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.identity:AgentIdentityClient.fetch_jwks
+  - personal_agent_protocol.company:IdentityClientResolver.resolve
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_unknown_kid_refetches_the_overlapping_jwks_rate_limited
 - id: GUIDE-fetch-01
   source: guide
   section: Fetching metadata safely
@@ -1894,8 +1902,17 @@ guide:
   role: both
   text: Cache according to HTTP caching headers, within bounds you set, such as at least a minute and
     at most a day.
-  status: open
-  reason: No bounded metadata cache yet (see PAP-3-04, PAP-3.2-05).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.caching:CacheBounds
+  - personal_agent_protocol.caching:cache_lifetime
+  - personal_agent_protocol.caching:MetadataCache
+  - personal_agent_protocol.discovery:DiscoveryClient._get_json
+  - personal_agent_protocol.identity:AgentIdentityClient._cached_json
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_cache_lifetime_follows_cache_control_within_bounds
+  - personal_agent_protocol/__tests__/test_guidance.py::test_discovery_and_oauth_metadata_are_cached_until_they_expire
+  - personal_agent_protocol/__tests__/test_guidance.py::test_no_store_metadata_is_fetched_every_time
 - id: GUIDE-retry-01
   source: guide
   section: Retries
@@ -1923,8 +1940,13 @@ guide:
   level: SHOULD
   role: personal-agent
   text: Otherwise, back off exponentially with jitter, cap the delay, and limit the number of attempts.
-  status: open
-  reason: The SDK does not retry on its own; no backoff helper.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:RetryPolicy
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_retry_policy_honours_retry_after_backs_off_with_jitter_and_caps
+  - personal_agent_protocol/__tests__/test_guidance.py::test_safe_requests_retry_after_retry_after_with_fresh_proofs
 - id: GUIDE-rate-01
   source: guide
   section: Rate limits
@@ -1939,8 +1961,14 @@ guide:
   level: SHOULD
   role: personal-agent
   text: Keep track of limits for each company and share them across your tasks and users.
-  status: open
-  reason: No shared rate-limit budget contribution yet.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:RateLimitBudget
+  - personal_agent_protocol.reactor:SharedRateLimitBudget
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  tests:
+  - personal_agent_protocol/__tests__/test_guidance.py::test_shared_budget_paces_tasks_and_refuses_long_waits
+  - personal_agent_protocol/__tests__/test_guidance.py::test_writes_and_long_pauses_go_back_to_the_caller_and_are_shared
 - id: GUIDE-json-01
   source: guide
   section: Transport and JSON

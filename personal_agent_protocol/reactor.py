@@ -9,12 +9,16 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import ipaddress
+import math
 import secrets
 import socket
+import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -28,7 +32,7 @@ from reactor import (  # type: ignore[import-untyped]
     hookimpl,
 )
 
-from .errors import DiscoveryError
+from .errors import DiscoveryError, TransportError
 
 AddressResolver = Callable[[str], Awaitable[list[str]]]
 
@@ -249,6 +253,174 @@ class ProtectedInput(Protocol):
     async def collect(self, request: ProtectedInputRequest) -> dict[str, SecretStr]: ...
 
 
+class InMemoryProtocolCache:
+    """Default `pap.cache`: a bounded, least-recently-used map in one process."""
+
+    def __init__(self, max_entries: int = 1024) -> None:
+        if max_entries <= 0:
+            raise ValueError("max_entries must be positive")
+        self.max_entries = max_entries
+        self._entries: OrderedDict[str, tuple[object, datetime]] = OrderedDict()
+
+    async def put(self, key: str, value: object, *, expires_at: datetime) -> None:
+        self._entries[key] = (value, expires_at)
+        self._entries.move_to_end(key)
+        while len(self._entries) > self.max_entries:
+            self._entries.popitem(last=False)
+
+    async def get(self, key: str) -> object | None:
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        self._entries.move_to_end(key)
+        return entry[0]
+
+    async def delete(self, key: str) -> None:
+        self._entries.pop(key, None)
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """When to retry a refused request (Guides, retries).
+
+    After `attempts` tries, `delay` is how long to wait before the next one,
+    or `None` to stop and report: a `Retry-After` is always honoured (never
+    retried sooner), but one longer than `max_retry_after` is reported to the
+    caller instead of waited for; otherwise the delay backs off exponentially
+    from `base_delay`, with jitter, capped at `max_delay`. At most
+    `max_attempts` tries in all.
+    """
+
+    max_attempts: int = 3
+    base_delay: float = 0.5
+    max_delay: float = 30.0
+    max_retry_after: float = 10.0
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        if not 0 < self.base_delay <= self.max_delay:
+            raise ValueError("retry delays need 0 < base_delay <= max_delay")
+        if self.max_retry_after < 0:
+            raise ValueError("max_retry_after must not be negative")
+
+    def delay(self, attempts: int, retry_after: float | None, jitter: float) -> float | None:
+        """Seconds to wait after `attempts` tries; `jitter` is uniform in [0, 1)."""
+
+        if attempts >= self.max_attempts:
+            return None
+        backoff = min(self.max_delay, self.base_delay * 2 ** (attempts - 1))
+        if retry_after is None:
+            # "Equal jitter": at least half the backoff, so a retry is never immediate.
+            return backoff / 2 + jitter * backoff / 2
+        if retry_after > self.max_retry_after:
+            return None
+        # Never sooner than Retry-After; jitter spreads clients told the same time.
+        return retry_after + jitter * min(backoff, self.base_delay)
+
+
+def parse_retry_after(value: str | None, now: datetime) -> float | None:
+    """`Retry-After` in seconds (delta-seconds or an HTTP date), or `None`."""
+
+    if value is None:
+        return None
+    text = value.strip()
+    if text.isdigit():
+        return float(int(text))
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - now).total_seconds())
+
+
+@runtime_checkable
+class RateLimitBudget(Protocol):
+    """A company's request budget, shared by every task and user of the host.
+
+    `acquire` waits for the company's budget (or raises `rate_limited` when the
+    wait would be too long); `defer` records that the company asked for a pause
+    (`Retry-After`), so every task waits, not only the one that was refused. A
+    multi-process host contributes a distributed budget.
+    """
+
+    async def acquire(self, key: str) -> None: ...
+
+    async def defer(self, key: str, seconds: float) -> None: ...
+
+
+@dataclass
+class _Bucket:
+    tokens: float
+    updated: float
+    blocked_until: float = 0.0
+
+
+class SharedRateLimitBudget:
+    """Default `pap.rateLimitBudget`: per-company token buckets in one process.
+
+    `rate` requests per second with bursts of `burst` (no rate limit when
+    `rate` is `None`: only the companies' own pauses are shared). A wait longer
+    than `max_wait` seconds is refused with `rate_limited` and `retry_after`.
+    """
+
+    def __init__(
+        self,
+        *,
+        rate: float | None = None,
+        burst: int = 1,
+        max_wait: float = 10.0,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if rate is not None and rate <= 0:
+            raise ValueError("rate must be positive")
+        if burst < 1:
+            raise ValueError("burst must be at least 1")
+        self.rate = rate
+        self.burst = burst
+        self.max_wait = max_wait
+        self._sleep = sleep
+        self._monotonic = monotonic
+        self._buckets: dict[str, _Bucket] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _bucket(self, key: str, now: float) -> _Bucket:
+        bucket = self._buckets.setdefault(key, _Bucket(tokens=float(self.burst), updated=now))
+        if self.rate is not None:
+            bucket.tokens = min(
+                float(self.burst), bucket.tokens + (now - bucket.updated) * self.rate
+            )
+        bucket.updated = now
+        return bucket
+
+    async def acquire(self, key: str) -> None:
+        async with self._locks.setdefault(key, asyncio.Lock()):
+            now = self._monotonic()
+            bucket = self._bucket(key, now)
+            wait = max(0.0, bucket.blocked_until - now)
+            if self.rate is not None and bucket.tokens < 1:
+                wait = max(wait, (1 - bucket.tokens) / self.rate)
+            if wait > self.max_wait:
+                raise TransportError(
+                    "rate_limited",
+                    "The company's shared request budget is exhausted",
+                    details={"retry_after": str(math.ceil(wait))},
+                )
+            if wait > 0:
+                await self._sleep(wait)
+                bucket = self._bucket(key, self._monotonic())
+            if self.rate is not None:
+                bucket.tokens -= 1
+
+    async def defer(self, key: str, seconds: float) -> None:
+        now = self._monotonic()
+        bucket = self._bucket(key, now)
+        bucket.blocked_until = max(bucket.blocked_until, now + max(0.0, seconds))
+
+
 class SystemClock:
     """Default UTC wall clock."""
 
@@ -302,6 +474,8 @@ BROWSER_FORM_POSTS = define_contribution_point("pap.browserFormPost")
 DPOP_PROOF_PROVIDERS = define_contribution_point("pap.dpopProofProvider")
 ACCOUNT_TOKEN_LOCKS = define_contribution_point("pap.accountTokenLock")
 PROTECTED_INPUTS = define_contribution_point("pap.protectedInput")
+RETRY_POLICIES = define_contribution_point("pap.retryPolicy")
+RATE_LIMIT_BUDGETS = define_contribution_point("pap.rateLimitBudget")
 
 
 async def resolve_addresses(host: str) -> list[str]:
@@ -536,6 +710,11 @@ class PapCorePlugin:
             contribution_id="in-process",
             order=100,
         )
+        contribute(CACHES, InMemoryProtocolCache(), contribution_id="memory", order=100)
+        contribute(RETRY_POLICIES, RetryPolicy(), contribution_id="default", order=100)
+        contribute(
+            RATE_LIMIT_BUDGETS, SharedRateLimitBudget(), contribution_id="in-process", order=100
+        )
 
 
 def build_pap_reactor(
@@ -554,9 +733,7 @@ def build_pap_reactor(
     """
 
     owned_http = http_client is None
-    client = pin_connections(
-        http_client or httpx.AsyncClient(timeout=5.0, follow_redirects=False)
-    )
+    client = pin_connections(http_client or httpx.AsyncClient(timeout=5.0, follow_redirects=False))
     platform = PluginPlatform(extension_group="personal_agent_protocol.plugins")
     platform.register_plugin(
         PluginManifest(
@@ -580,6 +757,8 @@ def build_pap_reactor(
                 DPOP_PROOF_PROVIDERS.id,
                 ACCOUNT_TOKEN_LOCKS.id,
                 PROTECTED_INPUTS.id,
+                RETRY_POLICIES.id,
+                RATE_LIMIT_BUDGETS.id,
             ],
         ),
         PapCorePlugin(

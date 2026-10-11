@@ -72,6 +72,7 @@ export {
   AgentIdentityClient,
   type AgentIdentityClientOptions,
   type IdentityRequestOptions,
+  type JwksRequestOptions,
 } from "./identity.js";
 export { parseJsonStrict } from "./json.js";
 export {
@@ -90,6 +91,8 @@ export {
   PairwiseUserIdStores,
   ProtocolProfiles,
   RandomSources,
+  RateLimitBudgets,
+  RetryPolicies,
   Signers,
   TokenStores,
   UrlSafetyPolicies,
@@ -138,6 +141,19 @@ export {
   type SessionToken,
 } from "./sessions.js";
 export { SecretValue } from "./secret.js";
+export {
+  DEFAULT_CACHE_BOUNDS,
+  InMemoryProtocolCache,
+  RetryPolicy,
+  SharedRateLimitBudget,
+  budgetKey,
+  cacheLifetime,
+  parseRetryAfter,
+  type CacheBounds,
+  type CachedMetadata,
+  type RateLimitBudget,
+} from "./limits.js";
+export { MetadataCache } from "./caching.js";
 export {
   parseClientMetadata,
   parseConversationEvent,

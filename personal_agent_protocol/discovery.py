@@ -12,6 +12,7 @@ import httpx
 from pydantic import ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
+from .caching import CacheBounds, MetadataCache
 from .errors import DiscoveryError, ProtocolValidationError
 from .json import loads_strict
 from .models import DiscoveredCompany, DiscoveryDocument, OAuthServerMetadata
@@ -49,6 +50,7 @@ class DiscoveryClient:
         max_redirects: int = 3,
         max_response_bytes: int = 100 * 1024,
         timeout: float = 5.0,
+        cache_bounds: CacheBounds | None = None,
     ) -> None:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
@@ -65,6 +67,7 @@ class DiscoveryClient:
         self._max_redirects = max_redirects
         self._max_bytes = max_response_bytes
         self._timeout = timeout
+        self._cache = MetadataCache(reactor, cache_bounds)
 
     async def __aenter__(self) -> DiscoveryClient:
         return self
@@ -128,6 +131,19 @@ class DiscoveryClient:
         return value
 
     async def _get_json(self, url: str) -> tuple[object, httpx.URL]:
+        """The document at `url`, from `pap.cache` while its `Cache-Control` allows (§3, §3.2)."""
+
+        key = f"pap.metadata:{url}"
+        cached = await self._cache.get(key)
+        if cached is not None:
+            return cached.value, httpx.URL(cached.final_url)
+        value, final_url, headers = await self._fetch_json(url)
+        await self._cache.put(key, value, final_url=str(final_url), headers=headers)
+        return value, final_url
+
+    async def _fetch_json(  # noqa: C901 - explicit trust-boundary branches
+        self, url: str
+    ) -> tuple[object, httpx.URL, dict[str, str]]:
         transport = first_contribution(self.reactor, DISCOVERY_TRANSPORTS, "discovery transport")
         policy = first_contribution(self.reactor, URL_SAFETY_POLICIES, "URL safety policy")
         if not isinstance(transport, DiscoveryTransport):
@@ -166,6 +182,6 @@ class DiscoveryClient:
                 raise DiscoveryError("invalid_content_type", "Discovery response must be JSON")
             if len(response.content) > self._max_bytes:
                 raise DiscoveryError("response_too_large", "Discovery response exceeds size limit")
-            return loads_strict(response.content), httpx.URL(response.url)
+            return loads_strict(response.content), httpx.URL(response.url), response.headers
 
         raise AssertionError("redirect loop exited unexpectedly")

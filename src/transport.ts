@@ -1,10 +1,22 @@
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { TransportError } from "./errors.js";
-import { DpopProofProviders, firstContribution } from "./reactor.js";
+import { budgetKey, parseRetryAfter, RetryPolicy } from "./limits.js";
+import {
+  Clocks,
+  DpopProofProviders,
+  RandomSources,
+  RateLimitBudgets,
+  RetryPolicies,
+  firstContribution,
+} from "./reactor.js";
 import type { SessionToken } from "./sessions.js";
 
 const redirects = new Set([301, 302, 303, 307, 308]);
+/** Refusals that ask the caller to come back later (Guides, retries and rate limits). */
+const later = new Set([429, 503]);
+/** Methods retried on their own: they change nothing at the company. */
+const safeMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 
 function httpsUrl(value: string): URL {
   let url: URL;
@@ -60,7 +72,56 @@ export class DpopFetchClient {
     this.#maxRedirects = maxRedirects;
   }
 
+  /**
+   * Send a DPoP request within the company's shared budget, retrying when told to.
+   *
+   * Every attempt draws on `pap.rateLimitBudget` for the company's origin. A
+   * 429 or 503 shares its `Retry-After` with every task through the budget; a
+   * safe method (GET, HEAD, OPTIONS) is then retried by `pap.retryPolicy` —
+   * never sooner than `Retry-After`, with exponential backoff and jitter
+   * otherwise — each time with a fresh DPoP proof. A write, or a pause longer
+   * than the policy allows, returns the refusal to the caller.
+   */
   async request(
+    method: string,
+    url: string,
+    options: DpopFetchRequestOptions,
+  ): Promise<Response> {
+    const policy = this.#reactor.getContributions(RetryPolicies)[0]?.value ?? new RetryPolicy({ maxAttempts: 1 });
+    const budget = this.#reactor.getContributions(RateLimitBudgets)[0]?.value;
+    const key = budgetKey(httpsUrl(url));
+    let attempts = 0;
+    while (true) {
+      await budget?.acquire(key);
+      const response = await this.#requestOnce(method, url, options);
+      attempts += 1;
+      if (!later.has(response.status)) return response;
+      const retryAfter = parseRetryAfter(response.headers.get("retry-after"), this.#now());
+      const delay = safeMethods.has(method.toUpperCase())
+        ? policy.delay(attempts, retryAfter, this.#jitter())
+        : undefined;
+      const pause = delay ?? retryAfter;
+      if (budget !== undefined && pause !== undefined) await budget.defer(key, pause);
+      if (delay === undefined) return response;
+      // Drop the refused body before trying again.
+      await response.body?.cancel().catch(() => undefined);
+      if (budget === undefined) await new Promise((resolve) => setTimeout(resolve, delay * 1000));
+    }
+  }
+
+  #now(): Date {
+    return (this.#reactor.getContributions(Clocks)[0]?.value ?? { now: () => new Date() }).now();
+  }
+
+  #jitter(): number {
+    const source = this.#reactor.getContributions(RandomSources)[0]?.value;
+    if (source === undefined) return 0.5;
+    const bytes = source.bytes(4);
+    if (bytes.byteLength < 4) return 0.5;
+    return new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0) / 2 ** 32;
+  }
+
+  async #requestOnce(
     method: string,
     url: string,
     options: DpopFetchRequestOptions,

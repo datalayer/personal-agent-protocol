@@ -305,9 +305,15 @@ class AllowEveryAgent:
 
 @runtime_checkable
 class ClientResolver(Protocol):
-    """Resolve a `client_id` to its verified metadata and keys."""
+    """Resolve a `client_id` to its verified metadata and keys.
 
-    async def resolve(self, client_id: str) -> tuple[ClientMetadata, JsonWebKeySet]: ...
+    `kid` is the key an assertion names: a resolver that caches keys fetches
+    them again when the cached set lacks it (rate-limited; Guides, rotating keys).
+    """
+
+    async def resolve(
+        self, client_id: str, *, kid: str | None = None
+    ) -> tuple[ClientMetadata, JsonWebKeySet]: ...
 
 
 @runtime_checkable

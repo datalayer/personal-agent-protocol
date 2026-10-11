@@ -145,9 +145,7 @@ async def test_metadata_connects_to_the_approved_address() -> None:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(("127.0.0.1", 0))
         server = uvicorn.Server(
-            uvicorn.Config(
-                app, ssl_certfile=str(cert), ssl_keyfile=str(key), log_level="warning"
-            )
+            uvicorn.Config(app, ssl_certfile=str(cert), ssl_keyfile=str(key), log_level="warning")
         )
         task = asyncio.create_task(server.serve(sockets=[listener]))
         try:

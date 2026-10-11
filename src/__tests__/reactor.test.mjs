@@ -23,7 +23,6 @@ const securityPoints = [
   KeyStores,
   TokenStores,
   PairwiseUserIdStores,
-  Caches,
   BrowserHandoffs,
   DpopProofProviders,
 ];
@@ -75,6 +74,18 @@ test("resolves stable pairwise identity through the host store", async () => {
     "usr_stable-pairwise-id",
   );
   reactor.stop();
+});
+
+test("the core contributes a bounded public-metadata cache a host can replace", async () => {
+  const reactor = buildPapReactor();
+  const cache = firstContribution(reactor, Caches, "cache");
+  await cache.put("k", 1, { expiresAt: new Date() });
+  assert.equal(await cache.get("k"), 1);
+  reactor.stop();
+  const shared = { async put() {}, async get() {}, async delete() {} };
+  const replaced = buildPapReactor({}, [plugin("@tests/cache", Caches, shared)]);
+  assert.equal(firstContribution(replaced, Caches, "cache"), shared);
+  replaced.stop();
 });
 
 for (const point of securityPoints) {

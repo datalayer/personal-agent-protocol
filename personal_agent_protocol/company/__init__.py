@@ -62,9 +62,13 @@ class IdentityClientResolver:
     def __init__(self, identity: AgentIdentityClient) -> None:
         self.identity = identity
 
-    async def resolve(self, client_id: str) -> tuple[ClientMetadata, JsonWebKeySet]:
+    async def resolve(
+        self, client_id: str, *, kid: str | None = None
+    ) -> tuple[ClientMetadata, JsonWebKeySet]:
+        """Cached metadata and keys, the keys fetched again for an unknown `kid`."""
+
         return await self.identity.fetch_metadata(client_id), await self.identity.fetch_jwks(
-            client_id
+            client_id, kid=kid
         )
 
 

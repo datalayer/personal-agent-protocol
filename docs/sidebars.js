@@ -60,6 +60,7 @@ const sidebars = {
         "guides/company",
         "guides/agent-runtimes",
         "guides/extensions",
+        "guides/operational-limits",
         "guides/cli",
         "guides/conformance",
       ],

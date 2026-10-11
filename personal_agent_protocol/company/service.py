@@ -108,6 +108,16 @@ REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - OAuth grant type
 _PAGE = 50
 
 
+def _key_id(compact: str) -> str | None:
+    """The `kid` a compact JWT's header names, if any (never trusted beyond key lookup)."""
+
+    try:
+        kid = jwt.get_unverified_header(compact).get("kid")
+    except jwt.PyJWTError:
+        return None
+    return kid if isinstance(kid, str) else None
+
+
 @dataclass(frozen=True)
 class CompanyConfig:
     """What the company publishes and allows."""
@@ -382,7 +392,9 @@ class CompanyService:
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client resolver")
         )
         try:
-            metadata, keys = await resolver.resolve(client_id)
+            metadata, keys = await resolver.resolve(
+                client_id, kid=_key_id(form.get("client_assertion", ""))
+            )
         except PersonalAgentProtocolError as exc:
             raise _RefusedError(401, "invalid_client") from exc
         await verify_assertion(
@@ -445,7 +457,7 @@ class CompanyService:
         resolver = cast(
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
         )
-        _, keys = await resolver.resolve(client_id)
+        _, keys = await resolver.resolve(client_id, kid=_key_id(form.get("assertion", "")))
         claims = await verify_assertion(
             form.get("assertion", ""),
             keys=keys,
@@ -1572,7 +1584,7 @@ class CompanyService:
             resolver = cast(
                 ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
             )
-            _, keys = await resolver.resolve(client_id)
+            _, keys = await resolver.resolve(client_id, kid=_key_id(assertion))
         except (KeyError, TypeError, ValueError, jwt.PyJWTError, PersonalAgentProtocolError):
             return refused
         algorithm = str(header.get("alg", ""))

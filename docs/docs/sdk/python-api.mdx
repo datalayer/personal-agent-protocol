@@ -79,6 +79,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`generate_message_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Function. Generate a user-global message ID with at least 128 random bits.
 - [`generate_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. Generate a non-PII user ID to persist for one user/company issuer pair.
 - [`IdentityError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Personal-agent metadata or public keys could not be verified safely.
+- [`InMemoryProtocolCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default `pap.cache`: a bounded, least-recently-used map in one process.
 - [`InMemoryStandingPermissionStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. A single-process store of standing permissions, for examples and tests.
 - [`InProcessAccountTokenLock`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default Account Token lock for a single process.
 - [`JoseAlgorithm`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Constant. Public `JoseAlgorithm` constant.
@@ -122,13 +123,18 @@ Unknown or internal symbols are deliberately excluded.
 - [`ProtocolValidationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A protocol document is malformed or internally inconsistent.
 - [`RANDOM_SOURCES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `RANDOM_SOURCES` constant.
 - [`RandomSource`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Supply cryptographically secure random bytes.
+- [`RATE_LIMIT_BUDGETS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `RATE_LIMIT_BUDGETS` constant.
+- [`RateLimitBudget`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. A company's request budget, shared by every task and user of the host.
 - [`REFRESH_TOKEN_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Constant. Public `REFRESH_TOKEN_GRANT` constant.
 - [`resolve_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pairwise.py) — Function. Resolve the active Reactor store and return its stable pairwise ID.
+- [`RETRY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `RETRY_POLICIES` constant.
+- [`RetryPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. When to retry a refused request (Guides, retries).
 - [`SessionAssertionClaims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Claims signed by the personal agent when starting or renewing a session.
 - [`SessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Start and renew signed-out PAP sessions over the OAuth token endpoint.
 - [`SessionError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A session request failed without exposing response secrets.
 - [`SessionGrant`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Redacted form values for a PAP JWT-bearer session request.
 - [`SessionToken`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Opaque token response returned by a PAP company.
+- [`SharedRateLimitBudget`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default `pap.rateLimitBudget`: per-company token buckets in one process.
 - [`Signer`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign a compact assertion without exposing private key material.
 - [`SIGNERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `SIGNERS` constant.
 - [`SqlitePairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pairwise.py) — Class. Atomically persist random pairwise IDs in a local SQLite database.

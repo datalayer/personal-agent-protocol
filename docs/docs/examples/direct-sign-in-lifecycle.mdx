@@ -47,8 +47,10 @@ sequenceDiagram
   a fresh client assertion and fresh DPoP proof.
 - The company cannot return scopes the user did not request. Missing scopes are
   reported so the application can degrade safely or explain the limitation.
-- Session and Account Tokens move directly into protected host storage; they do
-  not enter URLs, logs, analytics, React state, or model transcripts.
+- The Account Token moves into the host's `pap.tokenStore` before `complete()`
+  returns: the result carries only `account_token_reference`, and its `token`
+  has no `refresh_token`. Session and Account Tokens do not enter URLs, logs,
+  analytics, React state, or model transcripts.
 
 The example intentionally grants only `orders:read` from a request for both
 read and return access. It also submits the callback twice and reports that the

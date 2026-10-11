@@ -509,7 +509,9 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             )
             callback = runtime.input.read("Callback URL", secret=True)
             result = await client.complete(callback.get_secret_value())
-            await _keep(runtime, record, result.token)
+            await _keep(
+                runtime, record, result.token, account_reference=result.account_token_reference
+            )
             return {**_session_view(record), "missing_scopes": list(result.missing_scopes)}
 
         run(

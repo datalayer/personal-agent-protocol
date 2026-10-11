@@ -864,8 +864,10 @@ requirements:
   - personal_agent_protocol.reactor:TokenStore
   - personal_agent_protocol.device:DeviceSignInClient._complete
   - personal_agent_protocol.auth:DirectSignInClient._result
+  - personal_agent_protocol.mediated:MediatedSignInClient._complete
   tests:
   - personal_agent_protocol/__tests__/test_device.py::test_device_sign_in_paces_polling_and_protects_tokens
+  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes
 - id: PAP-4.8-07
   section: '4.8'
   level: MUST NOT
@@ -876,8 +878,12 @@ requirements:
   implementation:
   - personal_agent_protocol.accounts:AccountTokenClient
   - personal_agent_protocol.accounts:AccountRefreshResult
+  - personal_agent_protocol.auth:DirectSignInClient._result
+  - personal_agent_protocol.device:DeviceSignInClient._complete
+  - personal_agent_protocol.mediated:MediatedSignInClient._complete
   tests:
   - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_account_token
+  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes
   reason: Results and errors never carry the token, but no test yet proves logs and traces stay free of
     credentials (plan §2).
 - id: PAP-4.9-01

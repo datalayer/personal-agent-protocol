@@ -22,6 +22,7 @@ from personal_agent_protocol import (
     BROWSER_HANDOFFS,
     DPOP_PROOF_PROVIDERS,
     SIGNERS,
+    TOKEN_STORES,
     AuthorizationError,
     DirectSignInClient,
     DpopProofRequest,
@@ -40,6 +41,22 @@ class OneUseStateStore:
 
     async def take(self, reference: str) -> object | None:
         return self.values.pop(reference, None)
+
+
+class HostVault:
+    """`pap.tokenStore`: the Account Token stays here, behind an opaque reference."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, SecretStr] = {}
+
+    async def put(self, reference: str, token: SecretStr) -> None:
+        self.values[reference] = token
+
+    async def get(self, reference: str) -> SecretStr | None:
+        return self.values.get(reference)
+
+    async def delete(self, reference: str) -> None:
+        self.values.pop(reference, None)
 
 
 class RecordingBrowser:
@@ -79,7 +96,9 @@ class DirectSignInSecurityPlugin:
         browser: RecordingBrowser,
         signer: RecordingSigner,
         dpop: RecordingDpopProvider,
+        vault: HostVault,
     ) -> None:
+        self.vault = vault
         self.store = store
         self.browser = browser
         self.signer = signer
@@ -91,6 +110,7 @@ class DirectSignInSecurityPlugin:
         contribute(BROWSER_HANDOFFS, self.browser, contribution_id="trusted-browser")
         contribute(SIGNERS, self.signer, contribution_id="protected-signer")
         contribute(DPOP_PROOF_PROVIDERS, self.dpop, contribution_id="protected-dpop")
+        contribute(TOKEN_STORES, self.vault, contribution_id="host-vault")
 
 
 agent = Agent(
@@ -136,11 +156,12 @@ async def explain_direct_sign_in_lifecycle() -> dict[str, Any]:
     browser = RecordingBrowser()
     signer = RecordingSigner()
     dpop = RecordingDpopProvider()
+    vault = HostVault()
     async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
         reactor, _ = build_pap_reactor(http_client=http)
         reactor.register_plugin(
             PluginManifest(name="pap-direct-sign-in-example-security", version="1"),
-            DirectSignInSecurityPlugin(store, browser, signer, dpop),
+            DirectSignInSecurityPlugin(store, browser, signer, dpop, vault),
         )
         client = DirectSignInClient(reactor=reactor, http_client=http)
         started = await client.begin(
@@ -190,6 +211,9 @@ async def explain_direct_sign_in_lifecycle() -> dict[str, Any]:
         "callback_and_code_withheld": True,
         "assertions_and_proofs_withheld": True,
         "session_and_account_tokens_withheld": True,
+        # The Account Token went to the host's token store; the result holds only a reference.
+        "account_token_in_result": result.token.refresh_token is not None,
+        "account_token_stored": result.account_token_reference in vault.values,
     }
 
 

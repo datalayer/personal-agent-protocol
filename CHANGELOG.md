@@ -6,6 +6,14 @@
 
 # Changelog
 
+## Unreleased
+
+- **Security:** Direct Sign-In moves the Account Token into `pap.tokenStore`
+  behind an opaque `account_…` reference, as Device and Mediated Sign-In do: the
+  result's token no longer carries `refresh_token`, and the new
+  `account_token_reference` (`accountTokenReference` in TypeScript) names it
+  (§4.8). Hosts that read `result.token.refresh_token` read the token store.
+
 ## 0.4.0 (2026-10-11)
 
 Both sides of PAP draft 0.1 and Operations v1, in Python and TypeScript.

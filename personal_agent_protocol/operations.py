@@ -38,13 +38,14 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol, cast, runtime_checkable
+from urllib.parse import urlsplit
 
 import httpx
 from reactor import PluginPlatform, define_contribution_point  # type: ignore[import-untyped]
 
 from .errors import PersonalAgentProtocolError, ProtocolValidationError, TransportError
 from .json import loads_strict
-from .models import ClientMetadata, DiscoveryDocument, Operation, ProtocolModel
+from .models import ClientMetadata, DiscoveryDocument, Message, Operation, ProtocolModel
 from .reactor import CLOCKS, Clock, first_contribution
 from .sessions import SessionToken
 from .transport import DpopHttpClient
@@ -70,6 +71,50 @@ def operations_endpoint(document: DiscoveryDocument, metadata: ClientMetadata) -
         return None
     endpoint = (company.model_extra or {}).get("endpoint")
     return endpoint if isinstance(endpoint, str) and endpoint.startswith("https://") else None
+
+
+def operation_from(payload: object) -> Operation:
+    """The one operation object, from whichever channel carried it (Operations §4).
+
+    Accepts an API's `202` body (`{"operation": …}`), an MCP tool result
+    (`{"structuredContent": {"operation": …}}`), a conversation message
+    (`{"operation": …}`, or a `Message`), or the operation itself.
+    """
+
+    candidate: object = payload
+    if isinstance(payload, Message):
+        candidate = payload.operation
+    elif isinstance(payload, dict):
+        structured = payload.get("structuredContent")
+        if isinstance(structured, dict) and "operation" in structured:
+            candidate = structured["operation"]
+        elif "operation" in payload:
+            candidate = payload["operation"]
+    if isinstance(candidate, Operation):
+        return candidate
+    if candidate is None:
+        raise ValueError("the payload carries no operation")
+    return Operation.model_validate(candidate)
+
+
+def operation_page(operation: Operation, company_domain: str) -> str:
+    """The operation's `url`, once checked to be the company's own HTTPS page (§4.4, §5).
+
+    The personal agent opens it in its own browser joined to the Session
+    (`BrowserSessionClient.join(return_to=...)`), never in the user's. What
+    is confirmed there is the same operation, read back by its ID.
+    """
+
+    if operation.url is None:
+        raise OperationError("no_operation_page", "The company gave no page for this operation")
+    parsed = urlsplit(operation.url)
+    host = (parsed.hostname or "").lower()
+    domain = company_domain.lower().removeprefix("www.")
+    if parsed.scheme != "https" or not (host == domain or host.endswith(f".{domain}")):
+        raise OperationError(
+            "foreign_operation_page", "An operation's page must be on the company's own domain"
+        )
+    return operation.url
 
 
 def terms_digest(operation: Operation) -> str:

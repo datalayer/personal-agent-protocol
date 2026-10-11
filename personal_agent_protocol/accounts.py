@@ -54,7 +54,13 @@ from .reactor import (
     TokenStore,
     first_contribution,
 )
-from .sessions import JWT_CLIENT_ASSERTION, ClientAssertionClaims, SessionToken, _opaque_id
+from .sessions import (
+    JWT_CLIENT_ASSERTION,
+    ClientAssertionClaims,
+    SessionToken,
+    _mcp_resource,
+    _opaque_id,
+)
 
 REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - OAuth grant type, not a credential
 _OPAQUE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
@@ -122,10 +128,24 @@ class AccountTokenClient:
         """Sign `session_id` in again with the Account Token behind `reference`.
 
         `scopes` narrows the request; omitted, the company grants what the
-        token holds. A `resource` is an RFC 8707 indicator (an MCP server's
-        `url` for a Bearer token is K-08's; here it narrows a DPoP token).
+        token holds. A `resource` is an RFC 8707 indicator narrowing the DPoP
+        token to one service (for an MCP server, use `bearer_for_mcp`).
         """
 
+        return await self._refresh(
+            reference, context=context, session_id=session_id, scopes=scopes, resource=resource
+        )
+
+    async def _refresh(
+        self,
+        reference: str,
+        *,
+        context: AccountTokenContext,
+        session_id: str,
+        scopes: tuple[str, ...] | None,
+        resource: str | None,
+        bearer: bool = False,
+    ) -> AccountRefreshResult:
         if not _OPAQUE.fullmatch(session_id):
             raise ValueError("session_id must be an opaque URL-safe identifier")
         requested = _scopes(scopes) if scopes is not None else None
@@ -153,7 +173,7 @@ class AccountTokenClient:
                     **({"scope": " ".join(requested)} if requested is not None else {}),
                     **({"resource": resource_url} if resource_url is not None else {}),
                 },
-                dpop=True,
+                dpop=not bearer,
             )
             if not response.is_success:
                 error = payload.get("error") if isinstance(payload, dict) else None
@@ -164,7 +184,7 @@ class AccountTokenClient:
                 if error == "invalid_scope":
                     return AccountRefreshResult(status="re_consent_required")
                 raise self._remote_error(response, payload, "Company refused the Account Token")
-            token = self._session_token(response, payload, session_id, requested)
+            token = self._session_token(response, payload, session_id, requested, bearer=bearer)
             rotated = token.refresh_token is not None
             if token.refresh_token is not None:
                 # The new token replaces the old before anyone can use either again.
@@ -178,6 +198,32 @@ class AccountTokenClient:
             missing_scopes=tuple(
                 scope for scope in (requested or ()) if scope not in public.scopes
             ),
+        )
+
+    async def bearer_for_mcp(
+        self,
+        reference: str,
+        *,
+        context: AccountTokenContext,
+        session_id: str,
+        resource: str,
+        scopes: tuple[str, ...] | None = None,
+    ) -> AccountRefreshResult:
+        """A signed-in Bearer Session Token for one MCP server (§4.3).
+
+        The Account Token request of the Session, without a DPoP proof, with
+        `resource` set to the MCP server's `url` from poppy.json. The Bearer
+        token works only at that server (`mcp.McpBearerAuth` refuses any
+        other URL); a rotated Account Token is stored as with `refresh`.
+        """
+
+        return await self._refresh(
+            reference,
+            context=context,
+            session_id=session_id,
+            scopes=scopes,
+            resource=_mcp_resource(resource),
+            bearer=True,
         )
 
     async def revoke(
@@ -283,6 +329,8 @@ class AccountTokenClient:
         payload: object,
         session_id: str,
         requested: tuple[str, ...] | None,
+        *,
+        bearer: bool = False,
     ) -> SessionToken:
         try:
             token = SessionToken.model_validate(payload)
@@ -293,13 +341,13 @@ class AccountTokenClient:
                 status_code=response.status_code,
             ) from exc
         if (
-            token.token_type != "DPoP"  # noqa: S105 - OAuth token type, not a credential
+            token.token_type != ("Bearer" if bearer else "DPoP")
             or not token.signed_in
             or token.session_id != session_id
         ):
             raise AuthorizationError(
                 "invalid_token_response",
-                "A refresh must sign in the same proof-bound Session",
+                "A refresh must sign in the same Session with the token type asked for",
                 status_code=response.status_code,
             )
         if requested is not None and any(scope not in requested for scope in token.scopes):

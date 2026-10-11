@@ -34,6 +34,7 @@ from ..errors import DiscoveryError
 from ..operations import STANDING_PERMISSION_STORES, InMemoryStandingPermissionStore
 from ..reactor import (
     AUTHORIZATION_STATE_STORES,
+    BROWSER_FORM_POSTS,
     BROWSER_HANDOFFS,
     CLOCKS,
     DPOP_PROOF_PROVIDERS,
@@ -211,6 +212,38 @@ class ScriptedBrowser:
             self.request_id = response.text.split(marker, 1)[1].split('"', 1)[0]
 
 
+class ControlledBrowser:
+    """The personal agent's own browser (`pap.browserFormPost`), never the user's (§5).
+
+    It has its own cookie jar, posts the browser assertion as a form, follows
+    the company's redirect, and remembers the page it landed on.
+    """
+
+    def __init__(self, http: httpx.AsyncClient) -> None:
+        self.http = http  # its own client: its own cookie jar
+        self.page: httpx.Response | None = None
+
+    async def post(self, url: str, form: dict[str, SecretStr]) -> None:
+        self.page = await self.http.post(
+            url,
+            data={name: value.get_secret_value() for name, value in form.items()},
+            follow_redirects=True,
+        )
+
+    async def get(self, url: str) -> httpx.Response:
+        self.page = await self.http.get(url, follow_redirects=True)
+        return self.page
+
+    async def submit(self, url: str, form: dict[str, str]) -> httpx.Response:
+        """Press a button on the company's page: a same-origin form POST."""
+
+        origin = f"https://{httpx.URL(url).host}"
+        self.page = await self.http.post(
+            url, data=form, headers={"Origin": origin}, follow_redirects=True
+        )
+        return self.page
+
+
 class DpopKeys:
     """One EC key per (tenant, user, company): the Session's proof-of-possession key."""
 
@@ -238,6 +271,7 @@ class PersonalAgentHost:
         default_factory=InMemoryStandingPermissionStore
     )
     browser: ScriptedBrowser | None = None
+    controlled_browser: ControlledBrowser | None = None
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
@@ -254,6 +288,8 @@ class PersonalAgentHost:
         contribute(STANDING_PERMISSION_STORES, self.standing, contribution_id="standing")
         if self.browser is not None:
             contribute(BROWSER_HANDOFFS, self.browser, contribution_id="browser")
+        if self.controlled_browser is not None:
+            contribute(BROWSER_FORM_POSTS, self.controlled_browser, contribution_id="own-browser")
 
 
 def personal_agent_reactor(

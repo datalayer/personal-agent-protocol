@@ -151,6 +151,16 @@
       "description": "After revocation, renewal returns a signed-out token for the same Session, and the revoked token is invalid_grant."
     },
     {
+      "id": "lifecycle.sign-out-every-session",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-4.9-01",
+        "PAP-4.8-05"
+      ],
+      "description": "Revoking the current, rotated Account Token signs out every Session signed in from the same sign-in, including tokens issued before the rotation; renewing with the assertion is signed out."
+    },
+    {
       "id": "lifecycle.disconnect-from-account-settings",
       "kind": "positive",
       "role": "company",

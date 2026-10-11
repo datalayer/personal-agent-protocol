@@ -1214,6 +1214,31 @@ async def _sign_out_continues(ctx: ConformanceContext, _: FixtureCase) -> None:
     expect_refusal(await ctx.token_request(user, form), 400, "invalid_grant", "a revoked token")
 
 
+@case("lifecycle.sign-out-every-session")
+async def _sign_out_every_session(ctx: ConformanceContext, _: FixtureCase) -> None:
+    metadata = await ctx.metadata()
+    user = ctx.new_user()
+    first = await ctx.session(user)
+    signed = await ctx.sign_in(user, first)
+    second = await ctx.session(user)
+    rotated = await ctx.agent.accounts.refresh(
+        signed.reference, context=await ctx.account_context(user), session_id=second.session_id
+    )
+    check(rotated.status == "signed_in" and rotated.token is not None, "a second Session signs in")
+    await ctx.agent.accounts.revoke(signed.reference, context=await ctx.account_context(user))
+    for token in (signed.token, cast(SessionToken, rotated.token)):
+        check(await _probe(ctx, user, token) == 403, "every Session from the sign-in is signed out")
+    renewed = await ctx.agent.sessions.renew(
+        client_id=ctx.agent.identity.client_id,
+        pairwise_user_id=user,
+        issuer=metadata.issuer,
+        token_endpoint=metadata.token_endpoint,
+        tenant_id=ctx.tenant_id,
+        session_id=first.session_id,
+    )
+    check(not renewed.signed_in, "renewing with the assertion gives a signed-out token")
+
+
 @case("lifecycle.disconnect-from-account-settings")
 async def _disconnect(ctx: ConformanceContext, _: FixtureCase) -> None:
     ctx.require("disconnect")
@@ -2414,6 +2439,31 @@ class ConformanceReport:
     profile: str
     started_at: datetime
     results: tuple[CaseResult, ...]
+
+    @classmethod
+    def from_json(cls, document: dict[str, Any]) -> ConformanceReport:
+        """Read back a report written by `to_json`."""
+
+        if document.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError("unsupported conformance report schema")
+        return cls(
+            target=document["target"],
+            agent=document["agent"],
+            profile=document["profile"],
+            started_at=datetime.fromisoformat(document["started_at"]),
+            results=tuple(
+                CaseResult(
+                    id=item["id"],
+                    suite=item["suite"],
+                    kind=item["kind"],
+                    requirements=tuple(item["requirements"]),
+                    outcome=item["outcome"],
+                    duration_seconds=float(item["duration_seconds"]),
+                    message=item.get("message"),
+                )
+                for item in document["cases"]
+            ),
+        )
 
     def counts(self) -> dict[str, int]:
         counts = {"passed": 0, "failed": 0, "skipped": 0}

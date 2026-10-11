@@ -852,6 +852,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - lifecycle.rotated-token
+  - lifecycle.sign-out-every-session
 - id: PAP-4.8-06
   section: '4.8'
   level: MUST
@@ -895,6 +896,7 @@ requirements:
   conformance:
   - lifecycle.sign-out-takes-effect
   - lifecycle.sign-out-session-continues
+  - lifecycle.sign-out-every-session
   - lifecycle.mcp-sign-out-takes-effect
 - id: PAP-4.9-02
   section: '4.9'

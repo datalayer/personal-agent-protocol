@@ -474,12 +474,17 @@ class CompanyService:
                 raise _RefusedError(400, "invalid_session")
             token_type: Literal["DPoP", "Bearer"] = "Bearer" if bearer else "DPoP"
             self._drop_tokens_of(session.session_id, token_type)
+            # Renewal with the assertion gives a signed-out token; a signed-in Session is
+            # renewed with its Account Token instead (§4.2, §4.8).
             session = replace(
                 session,
                 key_thumbprint=thumbprint,
                 expires_at=self._now() + self.config.session_lifetime,
                 token_type=token_type,
                 resource=form.get("resource"),
+                account_id=None,
+                scopes=(),
+                account_token=None,
             )
         return self._issue(session)
 
@@ -614,14 +619,21 @@ class CompanyService:
         key = _digest(form.get("token", ""))
         grant = self.store.account_tokens.get(key)
         if grant is not None and grant.client_id == client_id:
-            grant.revoked = True
-            # Every Session signed in with it continues signed out (§4.9).
-            for token_key, session in list(self.store.sessions.items()):
-                if session.account_token == key:
-                    self.store.sessions[token_key] = replace(
-                        session, account_id=None, scopes=(), account_token=None
-                    )
+            # The token and every one rotated from the same sign-in: each Session signed
+            # in with any of them continues signed out (§4.9).
+            self._sign_out(
+                {k for k, g in self.store.account_tokens.items() if g.family == grant.family}
+            )
         return CompanyResponse(200, {}, {"Cache-Control": "no-store"})
+
+    def _sign_out(self, account_tokens: set[str]) -> None:
+        for key in account_tokens:
+            self.store.account_tokens[key].revoked = True
+        for token_key, session in list(self.store.sessions.items()):
+            if session.account_token in account_tokens:
+                self.store.sessions[token_key] = replace(
+                    session, account_id=None, scopes=(), account_token=None
+                )
 
     def disconnect(self, client_id: str, account_id: str) -> int:
         """The user disconnects an agent in account settings: its tokens go, Sessions sign out.
@@ -629,16 +641,13 @@ class CompanyService:
         Returns how many Account Tokens were revoked (upstream guides, account settings).
         """
 
-        revoked = 0
-        for key, grant in self.store.account_tokens.items():
-            if (grant.client_id, grant.account_id) == (client_id, account_id) and not grant.revoked:
-                grant.revoked = True
-                revoked += 1
-                for token_key, session in list(self.store.sessions.items()):
-                    if session.account_token == key:
-                        self.store.sessions[token_key] = replace(
-                            session, account_id=None, scopes=(), account_token=None
-                        )
+        tokens = {
+            key
+            for key, grant in self.store.account_tokens.items()
+            if (grant.client_id, grant.account_id) == (client_id, account_id)
+        }
+        revoked = sum(not self.store.account_tokens[key].revoked for key in tokens)
+        self._sign_out(tokens)
         return revoked
 
     def _sign_in(
@@ -657,6 +666,7 @@ class CompanyService:
             pairwise_user_id=session.pairwise_user_id,
             scopes=scopes,
             expires_at=self._now() + self.config.account_token_lifetime,
+            family=_digest(account_token),
         )
         self._drop_tokens_of(session.session_id)
         signed_in = replace(

@@ -80,6 +80,8 @@ class AccountGrant:
     scopes: tuple[str, ...]
     expires_at: datetime
     revoked: bool = False
+    #: The sign-in it comes from: every token rotated from one sign-in shares it.
+    family: str = ""
 
 
 @dataclass

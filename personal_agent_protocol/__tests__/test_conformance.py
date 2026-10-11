@@ -49,6 +49,7 @@ async def test_reports_as_json_and_junit_and_a_failure_does_not_stop_the_suite()
         "lifecycle.account-mismatch",
         "lifecycle.sign-out-takes-effect",
         "lifecycle.sign-out-session-continues",
+        "lifecycle.sign-out-every-session",
         "lifecycle.mcp-sign-out-takes-effect",
     }
     # A driver with one account twice: the account-mismatch case cannot pass.
@@ -60,7 +61,7 @@ async def test_reports_as_json_and_junit_and_a_failure_does_not_stop_the_suite()
 
     payload = report.to_json()
     assert payload["schema_version"] == 1 and payload["profile"] == "0.1"
-    assert payload["summary"] == {"passed": 3, "failed": 1, "skipped": 0}
+    assert payload["summary"] == {"passed": 4, "failed": 1, "skipped": 0}
     text = json.dumps(payload)
     assert "acct_" not in text.replace("acct_ada", "")  # no Account Token in the report
     junit = ElementTree.fromstring(report.to_junit())  # noqa: S314 - our own report

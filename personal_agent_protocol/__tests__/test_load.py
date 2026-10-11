@@ -264,7 +264,7 @@ async def test_a_company_pause_holds_every_caller_and_long_waits_are_refused() -
     company = "https://shop.example:443"
     callers = SIZE + 64  # more than the burst and the rate can serve within max_wait
     await budget.defer(company, pause)
-    start = time.monotonic()
+    start = time.monotonic()  # the pause ends at start + pause
     went: list[float] = []
     asked: list[float] = []
 
@@ -278,9 +278,12 @@ async def test_a_company_pause_holds_every_caller_and_long_waits_are_refused() -
     refused = [o for o in outcomes if isinstance(o, TransportError)]
     waited = max(went)
     assert min(went) >= pause - 0.002  # nobody went before the company's pause ended
-    # Within max_wait: the burst at the pause's end, then what the rate allows until then
-    # (the last callers ask a little later, so their max_wait reaches a little further).
-    expected = burst + int((max_wait - pause) * rate)
+    # Within max_wait: the burst at the pause's end, then what the rate allows until then.
+    # A caller's max_wait runs from when it asked: the first asks a little after the pause
+    # began (`late`, long on a loaded runner) and the last later still (`spread`), so their
+    # max_wait reaches that much further past the pause's end.
+    late = min(min(asked) - start, pause)
+    expected = burst + int((max_wait - pause + late) * rate)
     spread = int((max(asked) - min(asked)) * rate)
     assert expected - 1 <= len(admitted) <= expected + 1 + spread
     assert len(admitted) + len(refused) == callers

@@ -41,6 +41,8 @@ test = [
   "pytest-asyncio>=0.21",
   "pytest-cov>=4.1",
   "uvicorn>=0.30",
+  # The displays' tests (the `ui` extra).
+  "datalayer_reactor>=1.1.0,<2",
 ]
 # Serve the reference company (and the demo worlds) over real sockets.
 server = ["uvicorn>=0.30"]

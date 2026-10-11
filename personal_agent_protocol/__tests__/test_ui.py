@@ -9,9 +9,6 @@ import json
 import pytest
 from pydantic import ValidationError
 
-# reactor.ui arrives with datalayer_reactor 1.1 (the `ui` extra).
-pytest.importorskip("reactor.ui", reason="needs datalayer_reactor>=1.1 (the ui extra)")
-
 from personal_agent_protocol import build_pap_reactor
 from personal_agent_protocol.ui import PAP_SIGN_IN_TYPE, PapSignIn
 

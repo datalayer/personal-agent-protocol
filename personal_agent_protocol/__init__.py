@@ -12,6 +12,12 @@ from .accounts import (
     AccountTokenClient,
     AccountTokenContext,
 )
+from .apis import (
+    ApiClient,
+    ApiError,
+    ApiResponse,
+    openapi_url,
+)
 from .auth import (
     AuthorizationCodeGrant,
     DirectSignInCallback,
@@ -197,6 +203,9 @@ __all__ = [
     "AccountTokenContext",
     "AccountTokenLock",
     "AgentIdentityClient",
+    "ApiClient",
+    "ApiError",
+    "ApiResponse",
     "AuthorizationCodeGrant",
     "AuthorizationError",
     "AuthorizationStateStore",
@@ -295,6 +304,7 @@ __all__ = [
     "covers",
     "generate_message_id",
     "generate_pairwise_user_id",
+    "openapi_url",
     "operations_endpoint",
     "resolve_pairwise_user_id",
     "terms_digest",

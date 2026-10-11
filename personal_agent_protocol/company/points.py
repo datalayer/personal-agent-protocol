@@ -19,6 +19,8 @@ without touching the service:
 - `pap.company.clientResolver` fetches a personal agent's client metadata
   and JWKS (over HTTPS through `AgentIdentityClient` by default).
 - `pap.company.replayCache` remembers assertion and proof IDs once.
+- `pap.company.api` answers the company's OpenAPI API (`/api/…`), its
+  consequential calls proposing operations (`202`, Operations §4.1).
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ OPERATION_EXECUTORS = define_contribution_point("pap.company.operationExecutor")
 CLIENT_POLICIES = define_contribution_point("pap.company.clientPolicy")
 CLIENT_RESOLVERS = define_contribution_point("pap.company.clientResolver")
 REPLAY_CACHES = define_contribution_point("pap.company.replayCache")
+COMPANY_APIS = define_contribution_point("pap.company.api")
 
 
 @dataclass
@@ -88,6 +91,30 @@ class PendingDevice:
 
 
 @dataclass
+class PendingAuthorization:
+    """A Direct Sign-In request waiting on the user's decision on the company's page."""
+
+    client_id: str
+    redirect_uri: str
+    scopes: tuple[str, ...]
+    state: str
+    code_challenge: str
+    expires_at: datetime
+
+
+@dataclass
+class IssuedCode:
+    """A one-use authorization code, at most a minute old."""
+
+    client_id: str
+    redirect_uri: str
+    code_challenge: str
+    account_id: str
+    scopes: tuple[str, ...]
+    expires_at: datetime
+
+
+@dataclass
 class PendingMediated:
     session_id: str
     account_id: str
@@ -131,6 +158,8 @@ class CompanyStore(Protocol):
     sessions: dict[str, IssuedSession]
     account_tokens: dict[str, AccountGrant]
     devices: dict[str, PendingDevice]
+    authorizations: dict[str, PendingAuthorization]
+    codes: dict[str, IssuedCode]
     mediated: dict[str, PendingMediated]
     conversations: dict[str, StoredConversation]
     operations: dict[str, StoredOperation]
@@ -144,6 +173,8 @@ class MemoryCompanyStore:
         self.sessions: dict[str, IssuedSession] = {}
         self.account_tokens: dict[str, AccountGrant] = {}
         self.devices: dict[str, PendingDevice] = {}
+        self.authorizations: dict[str, PendingAuthorization] = {}
+        self.codes: dict[str, IssuedCode] = {}
         self.mediated: dict[str, PendingMediated] = {}
         self.conversations: dict[str, StoredConversation] = {}
         self.operations: dict[str, StoredOperation] = {}
@@ -261,3 +292,48 @@ class MemoryReplayCache:
             return False
         self._seen[key] = expires_at
         return True
+
+
+@dataclass(frozen=True)
+class ApiCall:
+    """One verified call to the company's API: who, with what authority."""
+
+    method: str
+    path: str
+    query: dict[str, str]
+    body: Any
+    account_id: str | None
+    scopes: tuple[str, ...]
+    client_id: str
+
+
+@dataclass(frozen=True)
+class ApiResult:
+    """The API's answer: a JSON body, or an operation to propose (`202`)."""
+
+    status: int = 200
+    body: Any = None
+    operation: ProposedOperation | None = None
+
+    @staticmethod
+    def sign_in_required(scope: str) -> ApiResult:
+        return ApiResult(403, {"error": "sign_in_required", "scope": scope})
+
+    @staticmethod
+    def insufficient_scope(scope: str) -> ApiResult:
+        return ApiResult(403, {"error": "insufficient_scope", "scope": scope})
+
+    @staticmethod
+    def not_found() -> ApiResult:
+        return ApiResult(404, {"error": "not_found"})
+
+
+@runtime_checkable
+class CompanyApi(Protocol):
+    """The company's OpenAPI API: its description, and each call."""
+
+    description: str
+
+    def openapi(self) -> dict[str, Any]: ...
+
+    async def handle(self, call: ApiCall) -> ApiResult: ...

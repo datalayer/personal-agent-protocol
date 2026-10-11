@@ -27,7 +27,10 @@ from reactor import PluginManifest  # type: ignore[import-untyped]
 from ..company import (
     COMPANY_ACCOUNTS,
     COMPANY_AGENTS,
+    COMPANY_APIS,
     OPERATION_EXECUTORS,
+    ApiCall,
+    ApiResult,
     Authenticated,
     CompanyConfig,
     CompanyService,
@@ -113,6 +116,52 @@ class ManzanitaAgent:
         return [Reply(text="Your order ord_7Hk2: Ridge Jacket, size M, delivered.", data=ORDER)]
 
 
+class ManzanitaApi:
+    """Manzanita's OpenAPI API: orders, and exchanges proposed as operations."""
+
+    description = "Orders and exchanges"
+
+    def openapi(self) -> dict[str, object]:
+        return {
+            "openapi": "3.1.0",
+            "info": {"title": "Manzanita Outfitters", "version": "1"},
+            "paths": {
+                "/api/orders": {"get": {"summary": "Your orders (orders:read)"}},
+                "/api/orders/{order_id}/exchanges": {
+                    "post": {"summary": "Propose an exchange (orders:write): 202 and an operation"}
+                },
+            },
+        }
+
+    async def handle(self, call: ApiCall) -> ApiResult:
+        if call.method == "GET" and call.path == "/orders":
+            if call.account_id is None:
+                return ApiResult.sign_in_required("orders:read")
+            if "orders:read" not in call.scopes:
+                return ApiResult.insufficient_scope("orders:read")
+            return ApiResult(body={"orders": [ORDER]})
+        if call.method == "POST" and call.path == f"/orders/{ORDER['order_id']}/exchanges":
+            if call.account_id is None:
+                return ApiResult.sign_in_required("orders:write")
+            if "orders:write" not in call.scopes:
+                return ApiResult.insufficient_scope("orders:write")
+            return ApiResult(
+                operation=ProposedOperation(
+                    action="orders.exchange",
+                    summary=(
+                        "Exchange the Ridge Jacket (M) from order ord_7Hk2 for the "
+                        "insulated Ridge Jacket (M), USD 70.00 more."
+                    ),
+                    terms={
+                        "order_id": "ord_7Hk2",
+                        "price_difference": {"amount": "70.00", "currency": "USD"},
+                    },
+                    user_approval_required=True,
+                )
+            )
+        return ApiResult.not_found()
+
+
 class ExchangeExecutor:
     """Perform an exchange once: the operation ID is the downstream idempotency key."""
 
@@ -144,6 +193,7 @@ class ManzanitaPlugin:
         contribute(COMPANY_ACCOUNTS, ManzanitaAccounts(), contribution_id="accounts")
         contribute(COMPANY_AGENTS, ManzanitaAgent(), contribution_id="agent")
         contribute(OPERATION_EXECUTORS, self.executor, contribution_id="exchange")
+        contribute(COMPANY_APIS, ManzanitaApi(), contribution_id="api")
 
 
 def manzanita(

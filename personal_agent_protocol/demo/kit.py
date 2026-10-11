@@ -34,6 +34,7 @@ from ..errors import DiscoveryError
 from ..operations import STANDING_PERMISSION_STORES, InMemoryStandingPermissionStore
 from ..reactor import (
     AUTHORIZATION_STATE_STORES,
+    BROWSER_HANDOFFS,
     CLOCKS,
     DPOP_PROOF_PROVIDERS,
     PROTECTED_INPUTS,
@@ -184,6 +185,27 @@ class ScriptedInput:
         return {name: SecretStr(value) for name, value in self.answers.pop(0).items()}
 
 
+class ScriptedBrowser:
+    """The user's browser in a demo: opens the company's sign-in page and remembers it.
+
+    `request_id` is what the page shows the user (its form); the demo then
+    plays the user's decision on the company (`approve_authorization`) and
+    hands the redirect it answers back to the agent as the callback.
+    """
+
+    def __init__(self, http: httpx.AsyncClient) -> None:
+        self.http = http
+        self.pages: list[str] = []
+        self.request_id: str | None = None
+
+    async def open(self, authorization_url: SecretStr) -> None:
+        response = await self.http.get(authorization_url.get_secret_value())
+        self.pages.append(response.text)
+        marker = 'name="request_id" value="'
+        if marker in response.text:
+            self.request_id = response.text.split(marker, 1)[1].split('"', 1)[0]
+
+
 class DpopKeys:
     """One EC key per (tenant, user, company): the Session's proof-of-possession key."""
 
@@ -210,6 +232,7 @@ class PersonalAgentHost:
     standing: InMemoryStandingPermissionStore = field(
         default_factory=InMemoryStandingPermissionStore
     )
+    browser: ScriptedBrowser | None = None
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
@@ -224,6 +247,8 @@ class PersonalAgentHost:
         contribute(AUTHORIZATION_STATE_STORES, self.vault, contribution_id="vault")
         contribute(PROTECTED_INPUTS, self.protected_input, contribution_id="trusted-input")
         contribute(STANDING_PERMISSION_STORES, self.standing, contribution_id="standing")
+        if self.browser is not None:
+            contribute(BROWSER_HANDOFFS, self.browser, contribution_id="browser")
 
 
 def personal_agent_reactor(

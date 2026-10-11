@@ -52,8 +52,13 @@ def company_app(service: CompanyService) -> Callable[[Scope, Receive, Send], Awa
                 await send({"type": "http.response.body", "body": chunk, "more_body": True})
             await send({"type": "http.response.body", "body": b"", "more_body": False})
             return
-        payload = b"" if response.body is None else json.dumps(response.body).encode()
-        headers_out = {"Content-Type": "application/json", **response.headers}
+        if isinstance(response.body, str):
+            # A page (the consent page): its own Content-Type is in its headers.
+            payload = response.body.encode()
+            headers_out = dict(response.headers)
+        else:
+            payload = b"" if response.body is None else json.dumps(response.body).encode()
+            headers_out = {"Content-Type": "application/json", **response.headers}
         await send(
             {
                 "type": "http.response.start",

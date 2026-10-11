@@ -34,13 +34,16 @@ What it implements of draft 0.1 and Operations v1:
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
+import html
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Literal, cast
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import SecretStr
 from reactor import PluginPlatform  # type: ignore[import-untyped]
@@ -56,17 +59,23 @@ from .points import (
     CLIENT_RESOLVERS,
     COMPANY_ACCOUNTS,
     COMPANY_AGENTS,
+    COMPANY_APIS,
     COMPANY_STORES,
     OPERATION_EXECUTORS,
     REPLAY_CACHES,
     AccountDirectory,
     AccountGrant,
+    ApiCall,
+    ApiResult,
     ClientPolicy,
     ClientResolver,
     CompanyAgent,
+    CompanyApi,
     CompanyStore,
+    IssuedCode,
     IssuedSession,
     OperationExecutor,
+    PendingAuthorization,
     PendingDevice,
     PendingMediated,
     ReplayCache,
@@ -93,6 +102,7 @@ class CompanyConfig:
     write_scopes: tuple[str, ...] = ()
     mediated_fields: tuple[tuple[str, str, bool], ...] = ()
     device: bool = True
+    direct: bool = True
     operations: bool = True
     humans_available: bool = False
     session_lifetime: timedelta = timedelta(hours=1)
@@ -113,6 +123,14 @@ class CompanyConfig:
     @property
     def device_endpoint(self) -> str:
         return f"{self.base}/oauth/device"
+
+    @property
+    def authorization_endpoint(self) -> str:
+        return f"{self.base}/oauth/authorize"
+
+    @property
+    def api_description(self) -> str:
+        return f"{self.base}/api/openapi.json"
 
     @property
     def revocation_endpoint(self) -> str:
@@ -201,6 +219,12 @@ class CompanyService:
                 return CompanyResponse(200, self.oauth_metadata())
             if method == "POST" and path == "/oauth/token":
                 return await self._token(request)
+            if method == "GET" and path == "/oauth/authorize" and self.config.direct:
+                return await self._authorize(request)
+            if method == "GET" and path == "/api/openapi.json" and self._api() is not None:
+                return CompanyResponse(200, cast(CompanyApi, self._api()).openapi())
+            if path.startswith("/api/") and self._api() is not None:
+                return await self._api_call(request, method, path)
             if method == "POST" and path == "/oauth/device" and self.config.device:
                 return await self._device(request)
             if method == "POST" and path == "/oauth/revoke":
@@ -227,6 +251,8 @@ class CompanyService:
     def discovery_document(self) -> dict[str, Any]:
         config = self.config
         auth: dict[str, Any] = {"issuer": config.base}
+        if config.direct:
+            auth["direct"] = {"scopes": list(config.scopes)}
         if config.device:
             auth["device"] = {"scopes": list(config.scopes)}
         if config.mediated_fields:
@@ -246,6 +272,11 @@ class CompanyService:
             "auth": auth,
             "agent": {"protocols": [{"type": "poppy", "endpoint": config.conversations_endpoint}]},
         }
+        api = self._api()
+        if api is not None:
+            document["apis"] = [
+                {"type": "openapi", "url": config.api_description, "description": api.description}
+            ]
         if config.operations:
             document["extensions"] = {
                 "operations": {"version": "1", "endpoint": config.operations_endpoint}
@@ -263,6 +294,9 @@ class CompanyService:
         }
         if config.device:
             metadata["device_authorization_endpoint"] = config.device_endpoint
+        if config.direct:
+            metadata["authorization_endpoint"] = config.authorization_endpoint
+            metadata["code_challenge_methods_supported"] = ["S256"]
         return metadata
 
     # OAuth -------------------------------------------------------------------------
@@ -318,6 +352,8 @@ class CompanyService:
             return await self._session_grant(form, client_id, thumbprint)
         if grant == REFRESH_TOKEN_GRANT:
             return await self._refresh_grant(form, client_id, thumbprint)
+        if grant == "authorization_code" and self.config.direct:
+            return await self._code_grant(form, client_id, thumbprint)
         if grant == DEVICE_CODE_GRANT and self.config.device:
             return await self._device_grant(form, client_id, thumbprint)
         raise _RefusedError(400, "unsupported_grant_type")
@@ -548,6 +584,171 @@ class CompanyService:
     def _drop_tokens_of(self, session_id: str) -> None:
         for key in [k for k, s in self.store.sessions.items() if s.session_id == session_id]:
             del self.store.sessions[key]
+
+    # Direct Sign-In (§4.5) -------------------------------------------------------------
+
+    async def _authorize(self, request: CompanyRequest) -> CompanyResponse:
+        """The company's own sign-in and consent page for a personal agent's request."""
+
+        query = dict(parse_qsl(urlsplit(request.url).query))
+        client_id = query.get("client_id", "")
+        redirect_uri = query.get("redirect_uri", "")
+        policy = cast(ClientPolicy, first_contribution(self.reactor, CLIENT_POLICIES, "policy"))
+        resolver = cast(
+            ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
+        )
+        try:
+            metadata, _ = await resolver.resolve(client_id)
+        except (PersonalAgentProtocolError, ValueError):
+            return self._page(400, "This agent could not be verified.")
+        # An unknown client or redirect is never redirected to: that would be an open redirector.
+        if not await policy.allows(client_id) or redirect_uri not in metadata.redirect_uris:
+            return self._page(400, "This sign-in request is not valid.")
+        state = query.get("state", "")
+        scopes = tuple(scope for scope in query.get("scope", "").split(" ") if scope)
+        if query.get("response_type") != "code":
+            return self._redirect(redirect_uri, error="unsupported_response_type", state=state)
+        if query.get("code_challenge_method") != "S256" or not query.get("code_challenge"):
+            return self._redirect(redirect_uri, error="invalid_request", state=state)
+        if not scopes or any(scope not in self.config.scopes for scope in scopes):
+            return self._redirect(redirect_uri, error="invalid_scope", state=state)
+        request_id = self._id("authz")
+        self.store.authorizations[request_id] = PendingAuthorization(
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            scopes=scopes,
+            state=state,
+            code_challenge=query["code_challenge"],
+            expires_at=self._now() + timedelta(minutes=10),
+        )
+        agent = html.escape(metadata.client_name)
+        agent_domain = html.escape(urlsplit(client_id).hostname or "")
+        described = "".join(
+            f"<li>{html.escape(self.config.custom_scopes.get(scope, scope))}</li>"
+            for scope in scopes
+        )
+        return self._page(
+            200,
+            f"<h1>{html.escape(self.config.name)}</h1>"
+            f"<p><strong>{agent}</strong> ({agent_domain}) asks to:</p><ul>{described}</ul>"
+            f'<form method="post" data-request-id="{request_id}">'
+            f'<input type="hidden" name="request_id" value="{request_id}">'
+            '<button name="decision" value="allow">Allow</button>'
+            '<button name="decision" value="deny">Deny</button></form>',
+        )
+
+    def approve_authorization(
+        self, request_id: str, *, account_id: str, scopes: Sequence[str] | None = None
+    ) -> str:
+        """The user, signed in on the company's page, allowed: where their browser goes next.
+
+        `scopes` may be fewer than requested (partial consent); omitted, all.
+        """
+
+        pending = self._pending_authorization(request_id)
+        granted = tuple(s for s in (scopes or pending.scopes) if s in pending.scopes)
+        code = self._id("code")
+        self.store.codes[_digest(code)] = IssuedCode(
+            client_id=pending.client_id,
+            redirect_uri=pending.redirect_uri,
+            code_challenge=pending.code_challenge,
+            account_id=account_id,
+            scopes=granted,
+            expires_at=self._now() + timedelta(seconds=60),
+        )
+        return self._redirect_url(pending.redirect_uri, code=code, state=pending.state)
+
+    def deny_authorization(self, request_id: str) -> str:
+        """The user refused: the agent learns only `access_denied`."""
+
+        pending = self._pending_authorization(request_id)
+        return self._redirect_url(pending.redirect_uri, error="access_denied", state=pending.state)
+
+    def _pending_authorization(self, request_id: str) -> PendingAuthorization:
+        pending = self.store.authorizations.pop(request_id, None)
+        if pending is None or self._now() >= pending.expires_at:
+            raise KeyError("unknown, used, or expired sign-in request")
+        return pending
+
+    async def _code_grant(
+        self, form: Mapping[str, str], client_id: str, thumbprint: str
+    ) -> CompanyResponse:
+        issued = self.store.codes.pop(_digest(form.get("code", "")), None)
+        if (
+            issued is None
+            or self._now() >= issued.expires_at
+            or issued.client_id != client_id
+            or issued.redirect_uri != form.get("redirect_uri")
+        ):
+            raise _RefusedError(400, "invalid_grant")
+        verifier = form.get("code_verifier", "")
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(
+            b"="
+        )
+        if not hmac.compare_digest(challenge.decode(), issued.code_challenge):
+            raise _RefusedError(400, "invalid_grant")
+        session = self._session_by_id(form.get("session_id", ""))
+        if session is None or session.client_id != client_id:
+            raise _RefusedError(400, "invalid_session")
+        return self._sign_in(session, issued.account_id, issued.scopes, thumbprint)
+
+    def _redirect_url(self, redirect_uri: str, **values: str) -> str:
+        parts = urlsplit(redirect_uri)
+        query = parse_qsl(parts.query, keep_blank_values=True)
+        query.extend((k, v) for k, v in values.items() if v)
+        query.append(("iss", self.config.base))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+    def _redirect(self, redirect_uri: str, **values: str) -> CompanyResponse:
+        return CompanyResponse(
+            303,
+            None,
+            {"Location": self._redirect_url(redirect_uri, **values), "Cache-Control": "no-store"},
+        )
+
+    @staticmethod
+    def _page(status: int, body: str) -> CompanyResponse:
+        """A consent page: never framed, never cached (upstream guides, consent pages)."""
+
+        return CompanyResponse(
+            status,
+            f"<!doctype html><meta charset=utf-8><title>Sign in</title>{body}",
+            {
+                "Content-Type": "text/html; charset=utf-8",
+                "X-Frame-Options": "DENY",
+                "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'",
+                "Cache-Control": "no-store",
+            },
+        )
+
+    # OpenAPI API (§6, Operations §4.1) -----------------------------------------------------
+
+    def _api(self) -> CompanyApi | None:
+        contributions = self.reactor.get_contributions(COMPANY_APIS)
+        return cast(CompanyApi, contributions[0].value) if contributions else None
+
+    async def _api_call(self, request: CompanyRequest, method: str, path: str) -> CompanyResponse:
+        _, session = await self._caller(request)
+        body = loads_strict(request.body) if request.body else None
+        result: ApiResult = await cast(CompanyApi, self._api()).handle(
+            ApiCall(
+                method=method,
+                path=path.removeprefix("/api"),
+                query=dict(parse_qsl(urlsplit(request.url).query)),
+                body=body,
+                account_id=session.account_id,
+                scopes=session.scopes,
+                client_id=session.client_id,
+            )
+        )
+        if result.operation is None:
+            return CompanyResponse(result.status, result.body)
+        if session.account_id is None:
+            raise _RefusedError(403, "sign_in_required")
+        if "operations" not in self.extensions.get(session.client_id, frozenset()):
+            raise _RefusedError(403, "extension_required", extension="operations")
+        operation = self._propose(session, Reply(operation=result.operation))
+        return CompanyResponse(202, {"operation": operation.model_dump(mode="json")})
 
     # Resource requests ---------------------------------------------------------------
 

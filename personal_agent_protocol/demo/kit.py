@@ -254,3 +254,15 @@ class ClockPlugin:
 
     def provide_contributions(self, contributions: object) -> None:
         contributions.contribute(CLOCKS, self.clock, contribution_id="demo-clock")  # type: ignore[attr-defined]
+
+
+def one_origin(site: Asgi, app: Asgi, site_paths: Iterable[str]) -> Asgi:
+    """One domain serving both an agent's identity documents and a company's endpoints."""
+
+    paths = frozenset(site_paths)
+
+    async def combined(scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
+        target = site if scope.get("path") in paths else app
+        await target(scope, receive, send)
+
+    return combined

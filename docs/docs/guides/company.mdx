@@ -92,7 +92,7 @@ implements, of draft 0.1 and Operations v1:
 - Sessions with verified client and Session assertions, DPoP-bound tokens,
   and renewal by `session_id`;
 - Device Sign-In with `authorization_pending` and `slow_down`
-  (`approve_device()` stands for the company's own approval page);
+  (`await approve_device()` stands for the company's own approval page);
 - Mediated Sign-In with a one-time code, an attempt limit, and uniform
   failures;
 - Account Tokens rotated on every refresh, narrower scopes only,
@@ -112,7 +112,7 @@ plugins contribute with a lower `order` to replace a default.
 
 | Point | Contract | Default |
 | --- | --- | --- |
-| `pap.company.store` | `CompanyStore`: Sessions, Account Tokens, sign-ins, conversations, operations | `MemoryCompanyStore` (one process) |
+| `pap.company.store` | `CompanyStore`: versioned JSON records by kind and key (below) | `MemoryCompanyStore` (one process) |
 | `pap.company.accounts` | `AccountDirectory`: check credentials and second factors for Mediated Sign-In | None: the company contributes it |
 | `pap.company.agent` | `CompanyAgent.respond(turn)`: replies, `authorization` requests, proposed operations | None: the company contributes it |
 | `pap.company.operationExecutor` | `OperationExecutor.perform(operation, account_id)`, one per `action`; `operation_id` is the idempotency key | None: an unperformable operation stays `in_progress` |
@@ -122,6 +122,74 @@ plugins contribute with a lower `order` to replace a default.
 
 The PAP core points (`pap.clock`, `pap.randomSource`, and the rest) apply on
 the company side too.
+
+### The store
+
+Everything the company remembers — Sessions and their tokens, Account Tokens
+and the sign-ins they rotate from, pending device, Direct, and Mediated
+sign-ins, one-use codes, conversations and their events, message IDs,
+operations — is a JSON record in the `pap.company.store` contribution, by kind
+and key. The contract is six async methods:
+
+| Method | Does |
+| --- | --- |
+| `get(kind, key)` | The record (`value`, `version`, `expires_at`), or `None` when absent or expired |
+| `put(kind, key, value, *, expires_at=None)` | Write it unconditionally: a new version |
+| `create(kind, key, value, *, expires_at=None)` | Write it only if absent (or expired): `True` when written |
+| `replace(kind, key, version, value, *, expires_at=None)` | Compare-and-set: write it only if its version is still `version` |
+| `take(kind, key)` | Read and delete at once: exactly one caller gets it |
+| `delete(kind, key)` | Remove it, if present |
+
+In TypeScript the methods are the same, with `{ expiresAt }` options and
+`undefined` for absent.
+
+The service never changes a record in place: every change is an explicit
+write, so a database, a key-value service, or any store shared by several
+replicas sees all of it. Every transition that must not race goes through one
+of the atomic methods:
+
+- authorization codes, Direct Sign-In decisions, completed Mediated sign-ins,
+  and approved device sign-ins are taken once (`take`);
+- message IDs are recorded with `create`, so a retried message is answered
+  once however many replicas receive it;
+- device approval and polling, Account Token rotation (the presented token is
+  claimed by exactly one refresh; reusing it is `invalid_grant`), revocation
+  of a whole sign-in, Mediated attempt counting, conversation events and
+  status, and operation confirmation (one compare-and-set from `proposed` to
+  `in_progress`, whose winner alone calls the executor) use `replace`.
+
+A company restarted, replaced, or rolled back over the same store continues
+every flow: a pending device sign-in can be approved, a rotated-away Account
+Token stays refused, an operation proposed before is confirmed once after, and
+an event cursor resumes where it was.
+
+`approve_device`, `deny_device`, `approve_authorization`,
+`deny_authorization`, `authorization_request`, `revise`, `settle`,
+`forget_events`, `disconnect`, and `operation_record` read and write the store,
+so they are coroutines (promises in TypeScript).
+
+A backend checks itself with the conformance kit, which runs the same checks
+in both languages: absent and present records, expiry, `take` once under
+concurrency, `create` only if absent, compare-and-set conflicts, values copied
+rather than shared, and a round trip of every record kind.
+
+```python
+from personal_agent_protocol.company.testing import check_store
+
+
+async def test_my_store_conforms() -> None:
+    await check_store(lambda: MyDatabaseStore(url))
+```
+
+```ts
+import { checkStore } from "@datalayer/personal-agent-protocol/server";
+
+test("my store conforms", () => checkStore(() => new MyDatabaseStore(url)));
+```
+
+`MemoryCompanyStore` judges expiry by the company's own `pap.clock`
+(`build_company` binds it); a backend uses its own time source and passes it
+to the kit as `now`.
 
 ### What stays in the company
 
@@ -170,7 +238,7 @@ Both templates must be HTTPS URLs without a fragment.
 ### Before production
 
 The defaults keep state in one process. A deployment contributes a durable
-store, a distributed replay cache, its real account directory and agent, an
+store that passes `check_store`, a distributed replay cache, its real account directory and agent, an
 executor per action that is idempotent downstream, and a client policy. It
 also needs TLS, rate limits, and the operational controls above.
 

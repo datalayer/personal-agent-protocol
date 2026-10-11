@@ -5,8 +5,8 @@
  * without touching the service (the same ids as the Python SDK):
  *
  * - `pap.company.store` keeps Sessions, Account Tokens, sign-ins,
- *   conversations, and operations (in memory by default; a database in
- *   production).
+ *   conversations, and operations as versioned JSON records (`store.ts`; in
+ *   memory by default, a database in production).
  * - `pap.company.accounts` checks a user's credentials and second factor for
  *   Mediated Sign-In.
  * - `pap.company.agent` answers conversation messages: the company agent.
@@ -28,136 +28,9 @@ import type {
   OperationResult,
 } from "../models.js";
 import type { SecretValue } from "../secret.js";
+import type { CompanyStore } from "./store.js";
 
-/** A Session the company issued; its token is bound to a DPoP key. */
-export interface IssuedSession {
-  readonly sessionId: string;
-  readonly clientId: string;
-  readonly pairwiseUserId: string;
-  readonly keyThumbprint: string;
-  readonly expiresAt: Date;
-  readonly accountId?: string;
-  readonly scopes: readonly string[];
-  /** The digest of the Account Token this Session is signed in with. */
-  readonly accountToken?: string;
-  readonly resource?: string;
-}
-
-/** What an Account Token is: one account, one agent, one user, some scopes. */
-export interface AccountGrant {
-  /** The sign-in it comes from: every token rotated from it shares it (§4.9). */
-  readonly family: string;
-  readonly accountId: string;
-  readonly clientId: string;
-  readonly pairwiseUserId: string;
-  readonly scopes: readonly string[];
-  readonly expiresAt: Date;
-  revoked: boolean;
-}
-
-export interface PendingDevice {
-  readonly clientId: string;
-  readonly scopes: readonly string[];
-  readonly userCode: string;
-  readonly expiresAt: Date;
-  interval: number;
-  lastPoll?: Date;
-  accountId?: string;
-  granted: readonly string[];
-  denied: boolean;
-}
-
-/** A Direct Sign-In request waiting on the user's decision on the company's page. */
-export interface PendingAuthorization {
-  readonly clientId: string;
-  readonly redirectUri: string;
-  readonly scopes: readonly string[];
-  readonly state: string;
-  readonly codeChallenge: string;
-  readonly expiresAt: Date;
-  /** The agent's `client_name`, for a hosted consent page (`authorizationRequest`). */
-  readonly clientName?: string;
-}
-
-/** A one-use authorization code, at most a minute old. */
-export interface IssuedCode {
-  readonly clientId: string;
-  readonly redirectUri: string;
-  readonly codeChallenge: string;
-  readonly accountId: string;
-  readonly scopes: readonly string[];
-  readonly expiresAt: Date;
-}
-
-export interface PendingMediated {
-  readonly sessionId: string;
-  readonly accountId: string;
-  readonly scopes: readonly string[];
-  readonly codeReference: string;
-  readonly expiresAt: Date;
-  attempts: number;
-}
-
-export interface StoredEvent {
-  readonly id: string;
-  readonly payload: Readonly<Record<string, unknown>>;
-}
-
-export type StoredConversationStatus = "working" | "idle" | "queued" | "closed";
-
-export interface StoredConversation {
-  readonly conversationId: string;
-  /** `[client_id, pairwise user ID]`: only that pair sees the conversation. */
-  readonly owner: readonly [string, string];
-  status: StoredConversationStatus;
-  responder: "agent" | "human";
-  readonly parentId?: string;
-  directChild?: string;
-  /** The account the conversation used; from then on it belongs to that account. */
-  accountId?: string;
-  readonly events: StoredEvent[];
-  /** Event IDs the company no longer keeps: a cursor naming one is `cursor_expired`. */
-  readonly forgotten: Set<string>;
-}
-
-export interface StoredOperation {
-  operation: Operation;
-  readonly action: string;
-  readonly owner: readonly [string, string];
-  readonly accountId: string;
-  performed: boolean;
-}
-
-/** Everything a company remembers, by kind and key. */
-export interface CompanyStore {
-  /** Sessions by the digest of their access token. */
-  readonly sessions: Map<string, IssuedSession>;
-  /** Account Tokens by digest. */
-  readonly accountTokens: Map<string, AccountGrant>;
-  /** Pending device sign-ins by the digest of their device code. */
-  readonly devices: Map<string, PendingDevice>;
-  readonly authorizations: Map<string, PendingAuthorization>;
-  /** Authorization codes by digest. */
-  readonly codes: Map<string, IssuedCode>;
-  readonly mediated: Map<string, PendingMediated>;
-  readonly conversations: Map<string, StoredConversation>;
-  readonly operations: Map<string, StoredOperation>;
-  /** `conversation_id:digest` by `client_id`, pairwise user ID and message ID. */
-  readonly messageIds: Map<string, string>;
-}
-
-/** The default store: one process, nothing persisted. */
-export class MemoryCompanyStore implements CompanyStore {
-  readonly sessions = new Map<string, IssuedSession>();
-  readonly accountTokens = new Map<string, AccountGrant>();
-  readonly devices = new Map<string, PendingDevice>();
-  readonly authorizations = new Map<string, PendingAuthorization>();
-  readonly codes = new Map<string, IssuedCode>();
-  readonly mediated = new Map<string, PendingMediated>();
-  readonly conversations = new Map<string, StoredConversation>();
-  readonly operations = new Map<string, StoredOperation>();
-  readonly messageIds = new Map<string, string>();
-}
+export * from "./store.js";
 
 /** Mediated Sign-In's first step: the account, and a code to ask for when needed. */
 export interface Authenticated {

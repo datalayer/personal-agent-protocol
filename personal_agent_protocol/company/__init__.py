@@ -13,13 +13,22 @@ app = company_app(service)  # any ASGI server or httpx.ASGITransport
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
+from typing import cast
 
 import httpx
-from reactor import PluginManifest, hookimpl  # type: ignore[import-untyped]
+from reactor import PluginManifest, PluginPlatform, hookimpl  # type: ignore[import-untyped]
 
 from ..identity import AgentIdentityClient
 from ..models import ClientMetadata, JsonWebKeySet
-from ..reactor import AddressResolver, build_pap_reactor, resolve_addresses
+from ..reactor import (
+    CLOCKS,
+    AddressResolver,
+    Clock,
+    build_pap_reactor,
+    first_contribution,
+    resolve_addresses,
+)
 from .asgi import company_app
 from .points import (
     CLIENT_POLICIES,
@@ -53,6 +62,7 @@ from .points import (
     Turn,
 )
 from .service import CompanyConfig, CompanyRequest, CompanyResponse, CompanyService
+from .store import RECORD_KINDS, StoredRecord
 from .verify import verify_assertion
 
 
@@ -72,16 +82,28 @@ class IdentityClientResolver:
         )
 
 
+class ReactorClock:
+    """The clock a reactor's `pap.clock` contribution keeps, read at each call."""
+
+    def __init__(self, reactor: PluginPlatform) -> None:
+        self.reactor = reactor
+
+    def now(self) -> datetime:
+        return cast(Clock, first_contribution(self.reactor, CLOCKS, "clock")).now()
+
+
 class CompanyDefaultsPlugin:
     """The company side's defaults: memory store and replay cache, open policy."""
 
-    def __init__(self, resolver: ClientResolver) -> None:
+    def __init__(self, resolver: ClientResolver, clock: Clock | None = None) -> None:
         self.resolver = resolver
+        self.clock = clock
 
     @hookimpl
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
-        contribute(COMPANY_STORES, MemoryCompanyStore(), contribution_id="memory", order=100)
+        store = MemoryCompanyStore(self.clock)
+        contribute(COMPANY_STORES, store, contribution_id="memory", order=100)
         contribute(REPLAY_CACHES, MemoryReplayCache(), contribution_id="memory", order=100)
         contribute(CLIENT_POLICIES, AllowEveryAgent(), contribution_id="allow", order=100)
         contribute(CLIENT_RESOLVERS, self.resolver, contribution_id="https", order=100)
@@ -106,7 +128,7 @@ def build_company(
     reactor.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.company",
-            version="0.5.0",
+            version="0.6.0",
             contribution_points=[
                 COMPANY_STORES.id,
                 COMPANY_ACCOUNTS.id,
@@ -119,7 +141,7 @@ def build_company(
                 REPLAY_CACHES.id,
             ],
         ),
-        CompanyDefaultsPlugin(IdentityClientResolver(identity)),
+        CompanyDefaultsPlugin(IdentityClientResolver(identity), ReactorClock(reactor)),
     )
     for manifest, implementation in plugins:
         reactor.register_plugin(manifest, implementation)
@@ -135,6 +157,7 @@ __all__ = [
     "COMPANY_MCP",
     "COMPANY_STORES",
     "OPERATION_EXECUTORS",
+    "RECORD_KINDS",
     "REPLAY_CACHES",
     "AccountDirectory",
     "AllowEveryAgent",
@@ -159,7 +182,9 @@ __all__ = [
     "OperationFailed",
     "OperationOutcomeUnknown",
     "ProposedOperation",
+    "ReactorClock",
     "Reply",
+    "StoredRecord",
     "ToolResult",
     "Turn",
     "build_company",

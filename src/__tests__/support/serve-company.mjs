@@ -39,11 +39,11 @@ while (true) {
   const command = await lines.receive();
   try {
     if (command.op === "approve_authorization") {
-      lines.send({ callback: company.service.approveAuthorization(command.request_id, { accountId: command.account_id }) });
+      lines.send({ callback: await company.service.approveAuthorization(command.request_id, { accountId: command.account_id }) });
     } else if (command.op === "approve_device") {
       const scopes = command.scopes ?? undefined;
       lines.send({
-        granted: company.service.approveDevice(command.user_code, {
+        granted: await company.service.approveDevice(command.user_code, {
           accountId: command.account_id,
           ...(scopes ? { scopes } : {}),
         }),
@@ -60,17 +60,17 @@ while (true) {
       now += command.seconds * 1000;
       lines.send({ ok: new Date(now).toISOString() });
     } else if (command.op === "revise") {
-      const current = company.service.store.operations.get(command.operation_id).operation;
-      company.service.revise(command.operation_id, {
+      const current = (await company.service.operationRecord(command.operation_id)).operation;
+      await company.service.revise(command.operation_id, {
         summary: `${current.summary} Ships in 5 days instead of 2.`,
         terms: { ...(current.terms ?? {}), ships_in_days: 5 },
       });
       lines.send({ ok: true });
     } else if (command.op === "forget_events") {
-      company.service.forgetEvents(command.conversation_id, { keep: 1 });
+      await company.service.forgetEvents(command.conversation_id, { keep: 1 });
       lines.send({ ok: true });
     } else if (command.op === "disconnect") {
-      lines.send({ ok: company.service.disconnect(command.client_id, command.account_id) });
+      lines.send({ ok: await company.service.disconnect(command.client_id, command.account_id) });
     } else if (command.op === "close") {
       await company.close();
       lines.close();

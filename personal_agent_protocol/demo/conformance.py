@@ -80,24 +80,24 @@ class DemoDriver:
     async def approve_device(
         self, user_code: str, *, account: str, scopes: Sequence[str] | None = None
     ) -> None:
-        self.service.approve_device(user_code, account_id=account, scopes=scopes)
+        await self.service.approve_device(user_code, account_id=account, scopes=scopes)
 
     async def wait(self, seconds: float) -> None:
         self.clock.advance(seconds)
 
     async def revise(self, operation_id: str) -> None:
-        current = self.service.store.operations[operation_id].operation
-        self.service.revise(
+        current = (await self.service.operation_record(operation_id)).operation
+        await self.service.revise(
             operation_id,
             summary=f"{current.summary} Ships in 5 days instead of 2.",
             terms={**(current.terms or {}), "ships_in_days": 5},
         )
 
     async def forget_events(self, conversation_id: str) -> None:
-        self.service.forget_events(conversation_id, keep=1)
+        await self.service.forget_events(conversation_id, keep=1)
 
     async def disconnect(self, client_id: str, account: str) -> None:
-        self.service.disconnect(client_id, account)
+        await self.service.disconnect(client_id, account)
 
     async def performed(self, operation_id: str) -> int:
         executors = (

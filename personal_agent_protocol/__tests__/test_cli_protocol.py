@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from personal_agent_protocol.cli import create_app
 from personal_agent_protocol.cli_commands import EXIT_CODES, ExitCode
 from personal_agent_protocol.cli_host import local_host
 from personal_agent_protocol.cli_plugin import MANIFEST, PapCliPlugin
+from personal_agent_protocol.company.store import AUTHORIZATION, DEVICE, PendingDevice
 from personal_agent_protocol.config import ConfigStore
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
@@ -71,9 +73,12 @@ class Pap:
         async def wait(seconds: float) -> None:
             # The user approves on Manzanita's page while the CLI waits.
             if self.approve_on_wait:
-                for pending in self.shop.store.devices.values():
-                    if pending.account_id is None:
-                        self.shop.approve_device(pending.user_code, account_id="acct_ada")
+                store = self.shop.store
+                for key in store.keys(DEVICE):
+                    entry = await store.get(DEVICE, key)
+                    pending = PendingDevice.from_json(entry.value) if entry else None
+                    if pending is not None and pending.account_id is None:
+                        await self.shop.approve_device(pending.user_code, account_id="acct_ada")
             self.clock.advance(seconds)
 
         host = local_host(
@@ -296,8 +301,8 @@ def test_direct_sign_in_reads_the_callback_from_a_file_descriptor(tmp_path: Path
     callbacks: list[str] = []
 
     def approve_when_asked() -> str:
-        request_id = next(iter(shop.store.authorizations))
-        callbacks.append(original(request_id, account_id="acct_ada"))
+        request_id = shop.store.keys(AUTHORIZATION)[0]
+        callbacks.append(asyncio.run(original(request_id, account_id="acct_ada")))
         return callbacks[-1]
 
     read, write = os.pipe()
@@ -307,7 +312,7 @@ def test_direct_sign_in_reads_the_callback_from_a_file_descriptor(tmp_path: Path
         import time
 
         for _ in range(200):
-            if shop.store.authorizations:
+            if shop.store.keys(AUTHORIZATION):
                 break
             time.sleep(0.01)
         try:

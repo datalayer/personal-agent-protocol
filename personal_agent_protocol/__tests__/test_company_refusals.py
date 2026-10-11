@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import httpx
 import pytest
 from reactor import PluginManifest
 
 from personal_agent_protocol import ConversationError, Message, SessionError
 from personal_agent_protocol.company import CLIENT_POLICIES
+from personal_agent_protocol.company.store import DEVICE, PendingDevice
 from personal_agent_protocol.operations import OperationError, OperationsClient, approve
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
@@ -35,7 +38,7 @@ async def signed_in(world: World):  # type: ignore[no-untyped-def]
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
     )
-    world.shop.approve_device(started.user_code, account_id="acct_ada")
+    await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
     return (await device.poll(started.reference)).token
 
@@ -100,12 +103,18 @@ async def test_polling_too_fast_is_slow_down() -> None:
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
     )
-    pending = next(iter(world.shop.store.devices.values()))
+    store = world.shop.store
+    (key,) = store.keys(DEVICE)
+    entry = await store.get(DEVICE, key)
+    assert entry is not None
     world.clock.advance(started.poll_interval)
-    pending.last_poll = world.clock.now()
+    polled = replace(PendingDevice.from_json(entry.value), last_poll=world.clock.now())
+    await store.put(DEVICE, key, polled.to_json(), expires_at=entry.expires_at)
     first = await device.poll(started.reference)
     assert first.status == "pending"
-    assert pending.interval == started.poll_interval + 5
+    after = await store.get(DEVICE, key)
+    assert after is not None
+    assert PendingDevice.from_json(after.value).interval == started.poll_interval + 5
 
 
 @pytest.mark.asyncio
@@ -177,7 +186,7 @@ async def test_a_revised_operation_is_terms_changed_and_never_performed_twice() 
         **world.who,
     )
     proposal = page.events[-1].message.operation  # type: ignore[union-attr]
-    world.shop.revise(
+    await world.shop.revise(
         proposal.operation_id,
         summary="Exchange for USD 85.00 more.",  # type: ignore[union-attr]
         terms={"order_id": "ord_7Hk2", "price_difference": {"amount": "85.00", "currency": "USD"}},

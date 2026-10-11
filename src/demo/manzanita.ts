@@ -30,6 +30,7 @@ import {
   CompanyAgents,
   CompanyApis,
   CompanyConfig,
+  CompanyStores,
   OperationExecutors,
   OperationFailed,
   OperationOutcomeUnknown,
@@ -42,6 +43,7 @@ import {
   type CompanyAgent,
   type CompanyApi,
   type CompanyService,
+  type CompanyStore,
   type OperationExecutor,
   type ProposedOperation,
   type Reply,
@@ -297,15 +299,27 @@ export interface ManzanitaOptions extends PapCoreOptions {
   readonly clock?: Clock;
   /** Changes to Manzanita's configuration, e.g. hosted sign-in pages. */
   readonly config?: Partial<CompanyConfigOptions>;
+  /**
+   * Where Manzanita keeps its state: building it again over the same store is
+   * Manzanita restarted (or another replica of it).
+   */
+  readonly store?: CompanyStore;
 }
 
 /** Build Manzanita; serve it with `companyRequestListener` at `manzanita.example`. */
 export function manzanita(
   options: ManzanitaOptions = {},
 ): { readonly service: CompanyService; readonly plugin: ManzanitaPlugin } {
-  const { clock, config, ...core } = options;
+  const { clock, config, store, ...core } = options;
   const plugin = new ManzanitaPlugin();
   const plugins: PlatformInput[] = [plugin.plugin()];
+  if (store !== undefined) {
+    plugins.push({
+      name: "manzanita-store",
+      version: "1",
+      contributes: [{ point: CompanyStores, value: store, options: { id: "given-store", order: 0 } }],
+    } as PlatformInput);
+  }
   if (clock !== undefined) {
     plugins.push({
       name: "manzanita-clock",

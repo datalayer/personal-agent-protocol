@@ -15,6 +15,7 @@ from pydantic import SecretStr
 
 from personal_agent_protocol import DeviceSignInClient
 from personal_agent_protocol.company import CompanyConfig
+from personal_agent_protocol.company.store import AUTHORIZATION
 from personal_agent_protocol.demo.kit import personal_agent_reactor
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
@@ -98,8 +99,8 @@ async def test_authorize_redirects_to_the_hosted_consent_page_which_reads_the_re
     (request_id,) = query["request"]
 
     # The consent page asks who wants what; reading never consumes the request.
-    summary = world.shop.authorization_request(request_id)
-    assert summary == world.shop.authorization_request(request_id)
+    summary = await world.shop.authorization_request(request_id)
+    assert summary == await world.shop.authorization_request(request_id)
     assert summary["client_name"] == "Atlas"
     assert summary["client_domain"] == "atlas.example"
     assert summary["scopes"] == [
@@ -110,13 +111,13 @@ async def test_authorize_redirects_to_the_hosted_consent_page_which_reads_the_re
     assert set(summary) == {"request_id", "client_name", "client_domain", "scopes", "expires_at"}
 
     # The user allows on the hosted page; the sign-in completes as before.
-    callback = world.shop.approve_authorization(request_id, account_id="acct_ada")
+    callback = await world.shop.approve_authorization(request_id, account_id="acct_ada")
     result = await client.complete(callback)
     assert result.token.signed_in is True
     with pytest.raises(KeyError):
-        world.shop.authorization_request(request_id)
+        await world.shop.authorization_request(request_id)
     with pytest.raises(KeyError):
-        world.shop.authorization_request("authz_unknown")
+        await world.shop.authorization_request("authz_unknown")
 
 
 @pytest.mark.asyncio
@@ -140,13 +141,13 @@ async def test_an_unverified_redirect_is_never_sent_to_the_consent_page() -> Non
     response = await world.http.get(authorize("https://attacker.example/callback"))
     assert response.status_code == 400
     assert "location" not in response.headers
-    assert world.shop.store.authorizations == {}
+    assert world.shop.store.keys(AUTHORIZATION) == []
     # A request failing a later check goes back to the agent's verified redirect, not the page.
     callback = f"https://{world.atlas.domain}/oauth/callback"
     response = await world.http.get(authorize(callback, response_type="token"))
     assert response.status_code == 303
     assert response.headers["location"].startswith(f"{callback}?")
-    assert world.shop.store.authorizations == {}
+    assert world.shop.store.keys(AUTHORIZATION) == []
 
 
 @pytest.mark.asyncio

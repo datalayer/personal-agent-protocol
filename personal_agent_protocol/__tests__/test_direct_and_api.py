@@ -67,7 +67,7 @@ async def test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchang
     client = await begin(world, browser, session, ("orders:read", "orders:write"))
     page = browser.pages[-1]
     assert "Atlas" in page and "atlas.example" in page and "See your orders" in page
-    callback = world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
+    callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
     result = await client.complete(callback)
     assert result.token.signed_in and result.token.session_id == session.session_id
     signed_in = result.token
@@ -99,7 +99,7 @@ async def test_partial_consent_and_a_write_that_was_not_granted() -> None:
     world, browser = direct_world()
     session = await world.signed_out_session()
     client = await begin(world, browser, session, ("orders:read", "orders:write"))
-    callback = world.shop.approve_authorization(  # type: ignore[arg-type]
+    callback = await world.shop.approve_authorization(  # type: ignore[arg-type]
         browser.request_id, account_id="acct_ada", scopes=["orders:read"]
     )
     result = await client.complete(callback)
@@ -120,7 +120,7 @@ async def test_a_denial_reaches_the_agent_as_access_denied_only() -> None:
     world, browser = direct_world()
     session = await world.signed_out_session()
     client = await begin(world, browser, session)
-    callback = world.shop.deny_authorization(browser.request_id)  # type: ignore[arg-type]
+    callback = await world.shop.deny_authorization(browser.request_id)  # type: ignore[arg-type]
     assert "error=access_denied" in callback
     with pytest.raises(AuthorizationError) as raised:
         await client.complete(callback)
@@ -156,7 +156,7 @@ async def test_a_code_works_once() -> None:
     world, browser = direct_world()
     session = await world.signed_out_session()
     client = await begin(world, browser, session)
-    callback = world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
+    callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
     await client.complete(callback)
     with pytest.raises(AuthorizationError):
         await client.complete(callback)

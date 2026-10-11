@@ -74,7 +74,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
     )
-    firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
+    await firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
     clock.advance(started.poll_interval)
     token = (await device.poll(started.reference)).token
     assert token is not None and token.signed_in
@@ -89,7 +89,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
     page = await conversations.start(endpoint, say("Pay INV-0042"), token=token, wait=0, **who)
     connect = page.events[-1].message.data["connect"]  # type: ignore[union-attr,index]
     assert connect["verification_uri"] == "https://northwind.example/device"
-    bank.approve_device(connect["user_code"], account_id=ACCOUNT)
+    await bank.approve_device(connect["user_code"], account_id=ACCOUNT)
     clock.advance(5)
 
     # 2. Northwind's proposal comes back as a Ledgerly operation, quoting it as written.
@@ -116,7 +116,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         "Northwind Bank: Sent EUR 1250.00 to Acme GmbH for INV-0042"
     )
     assert len(bank_plugin.executor.performed) == 1
-    bank_record = bank.store.operations[bank_plugin.executor.performed[0]].operation
+    bank_record = (await bank.operation_record(bank_plugin.executor.performed[0])).operation
     assert bank_record.confirmation.approved_by == "user"  # type: ignore[union-attr]
 
     # 4. Ada grants a bounded standing permission, itself an operation she approves.
@@ -146,7 +146,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
     told = page.events[-1].message  # type: ignore[union-attr]
     assert told.operation is None  # type: ignore[union-attr]
     assert "Sent EUR 980.00 to Acme GmbH for INV-0043" in told.text  # type: ignore[union-attr,operator]
-    second = bank.store.operations[bank_plugin.executor.performed[1]].operation
+    second = (await bank.operation_record(bank_plugin.executor.performed[1])).operation
     assert second.confirmation.approved_by == "standing_permission"  # type: ignore[union-attr]
 
     # 6. Beyond the bounds: Ada is asked again.

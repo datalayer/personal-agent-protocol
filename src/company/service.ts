@@ -66,14 +66,32 @@ import {
   OperationOutcomeUnknown,
   ReplayCaches,
   type CompanyApi,
-  type CompanyStore,
-  type IssuedSession,
   type Reply,
   type ReplayCache,
+} from "./points.js";
+import {
+  RecordKinds,
+  type AccountAgent,
+  type AccountFamily,
+  type AccountGrant,
+  type CompanyStore,
+  type IssuedCode,
+  type IssuedSession,
+  type JsonObject,
+  type KnownClient,
+  type MessageReceipt,
+  type OperationProposal,
+  type PendingAuthorization,
+  type PendingDevice,
+  type PendingMediated,
+  type SessionPointer,
+  type StoreWriteOptions,
   type StoredConversation,
   type StoredEvent,
   type StoredOperation,
-} from "./points.js";
+  type StoredSession,
+  type UserCode,
+} from "./store.js";
 import { verifyAssertion } from "./verify.js";
 
 /** The `kid` a compact JWT's header names, if any (used only to look a key up). */
@@ -311,12 +329,46 @@ function plain(message: Message): Record<string, unknown> {
   return JSON.parse(JSON.stringify(message)) as Record<string, unknown>;
 }
 
+/** How often a compare-and-set is retried against concurrent writers before giving up. */
+const CAS_ATTEMPTS = 32;
+/** How long an expired device or Mediated sign-in is kept, to answer that it expired. */
+const KEPT_EXPIRED_MS = 10 * 60 * 1000;
+
+/** A record as the store keeps it. */
+function json(record: object): JsonObject {
+  return record as JsonObject;
+}
+
+function expiry(at: Date | string | undefined): StoreWriteOptions {
+  return at === undefined ? {} : { expiresAt: new Date(at) };
+}
+
+/** One store key for several values (never ambiguous). */
+function composite(...parts: readonly string[]): string {
+  return digest(JSON.stringify(parts));
+}
+
+function withItem(items: readonly string[], item: string | undefined): readonly string[] {
+  return item === undefined || items.includes(item) ? items : [...items, item];
+}
+
+/** JSON with every object's members sorted: equal values, equal text. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (isObject(value)) {
+    const members = Object.keys(value)
+      .sort()
+      .filter((key) => value[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`);
+    return `{${members.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 /** One company's PAP endpoints over Reactor contributions. */
 export class CompanyService {
   readonly config: CompanyConfig;
   readonly reactor: ReactorPlatformView;
-  /** The extensions each verified client declares, by `client_id`. */
-  readonly extensions = new Map<string, ReadonlySet<string>>();
 
   constructor(options: { readonly config: CompanyConfig; readonly reactor: ReactorPlatformView }) {
     this.config = options.config;
@@ -347,6 +399,39 @@ export class CompanyService {
 
   #later(seconds: number): Date {
     return new Date(this.#now().getTime() + seconds * 1000);
+  }
+
+  #passed(at: string): boolean {
+    return this.#now().getTime() >= new Date(at).getTime();
+  }
+
+  async #read<T>(kind: string, key: string): Promise<T | undefined> {
+    const entry = await this.store.get(kind, key);
+    return entry === undefined ? undefined : (entry.value as unknown as T);
+  }
+
+  /**
+   * Compare-and-set: `change` maps the current record to the next, retried on conflict.
+   *
+   * Returns `[before, after]`, or `undefined` when the record is absent; a change
+   * returning the same object writes nothing. Its expiry is kept.
+   */
+  async #change<T extends object>(
+    kind: string,
+    key: string,
+    change: (current: T) => T,
+  ): Promise<readonly [T, T] | undefined> {
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
+      const entry = await this.store.get(kind, key);
+      if (entry === undefined) return undefined;
+      const before = entry.value as unknown as T;
+      const after = change(before);
+      if (after === before) return [before, after];
+      if (await this.store.replace(kind, key, entry.version, json(after), expiry(entry.expiresAt))) {
+        return [before, after];
+      }
+    }
+    throw new Refused(503, "temporarily_unavailable");
   }
 
   // Routing -------------------------------------------------------------------------
@@ -480,8 +565,18 @@ export class CompanyService {
       replayCache: this.#replay(),
       now: this.#now(),
     });
-    this.extensions.set(clientId, new Set(Object.keys(metadata.extensions ?? {})));
+    const extensions = Object.keys(metadata.extensions ?? {}).sort();
+    const known = await this.#read<KnownClient>(RecordKinds.client, clientId);
+    if (known === undefined || canonical(known.extensions) !== canonical(extensions)) {
+      await this.store.put(RecordKinds.client, clientId, json({ extensions } satisfies KnownClient));
+    }
     return clientId;
+  }
+
+  /** Whether the agent declared the Operations extension when it last authenticated. */
+  async #supportsOperations(clientId: string): Promise<boolean> {
+    const known = await this.#read<KnownClient>(RecordKinds.client, clientId);
+    return known !== undefined && known.extensions.includes("operations");
   }
 
   async #dpop(request: CompanyRequest, accessToken?: string): Promise<string> {
@@ -543,19 +638,18 @@ export class CompanyService {
         clientId,
         pairwiseUserId: pairwise,
         keyThumbprint: thumbprint,
-        expiresAt: this.#later(this.config.sessionLifetimeSeconds),
+        expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
         scopes: [],
       };
     } else {
-      const known = this.#sessionById(sessionId);
+      const known = await this.#sessionById(sessionId);
       if (known === undefined || known.clientId !== clientId || known.pairwiseUserId !== pairwise) {
         throw new Refused(400, "invalid_session");
       }
-      this.#dropTokensOf(known.sessionId);
       session = {
         ...known,
         keyThumbprint: thumbprint,
-        expiresAt: this.#later(this.config.sessionLifetimeSeconds),
+        expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
       };
     }
     return this.#issue(session);
@@ -566,18 +660,19 @@ export class CompanyService {
     clientId: string,
     thumbprint: string,
   ): Promise<CompanyResponse> {
-    const presented = form.refresh_token ?? "";
-    const grant = this.store.accountTokens.get(digest(presented));
-    const now = this.#now();
+    const presented = digest(form.refresh_token ?? "");
+    const entry = await this.store.get(RecordKinds.accountToken, presented);
+    const grant = entry?.value as unknown as AccountGrant | undefined;
     if (
+      entry === undefined ||
       grant === undefined ||
       grant.revoked ||
-      now >= grant.expiresAt ||
+      this.#passed(grant.expiresAt) ||
       grant.clientId !== clientId
     ) {
       throw new Refused(400, "invalid_grant");
     }
-    const session = this.#sessionById(form.session_id ?? "");
+    const session = await this.#sessionById(form.session_id ?? "");
     if (
       session === undefined ||
       session.clientId !== clientId ||
@@ -593,11 +688,28 @@ export class CompanyService {
     if (requested.length && requested.some((scope) => !grant.scopes.includes(scope))) {
       throw new Refused(400, "invalid_scope");
     }
-    // Rotation: the presented token stops working the moment its successor exists.
-    grant.revoked = true;
+    // Rotation: exactly one refresh claims the presented token, which stops working the
+    // moment it is claimed; a concurrent or later reuse is `invalid_grant`.
+    const claimed = await this.store.replace(
+      RecordKinds.accountToken,
+      presented,
+      entry.version,
+      json({ ...grant, revoked: true } satisfies AccountGrant),
+      expiry(entry.expiresAt),
+    );
+    if (!claimed) throw new Refused(400, "invalid_grant");
     const rotated = this.#id("acct");
-    this.store.accountTokens.set(digest(rotated), { ...grant, revoked: false });
-    this.#dropTokensOf(session.sessionId);
+    await this.store.put(
+      RecordKinds.accountToken,
+      digest(rotated),
+      json({ ...grant, revoked: false } satisfies AccountGrant),
+      expiry(grant.expiresAt),
+    );
+    if (!(await this.#joinFamily(grant.family, digest(rotated), session.sessionId))) {
+      // The sign-in was revoked meanwhile: its new token is too.
+      await this.#revokeGrants([digest(rotated)]);
+      throw new Refused(400, "invalid_grant");
+    }
     const resource = form.resource;
     const signedIn: IssuedSession = {
       ...session,
@@ -605,11 +717,21 @@ export class CompanyService {
       accountId: grant.accountId,
       scopes: requested.length ? requested : grant.scopes,
       accountToken: digest(rotated),
-      expiresAt: new Date(now.getTime() + this.config.sessionLifetimeSeconds * 1000),
+      expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
     };
     // The resource is what this refresh asked for, never one an earlier refresh named.
     const { resource: _earlier, ...unbound } = signedIn;
-    return this.#issue(resource === undefined ? unbound : { ...unbound, resource }, rotated);
+    const response = await this.#issue(
+      resource === undefined ? unbound : { ...unbound, resource },
+      rotated,
+    );
+    const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, grant.family);
+    if (family === undefined || family.revoked) {
+      // Revoked while this token was issued: the Session continues signed out (§4.9).
+      await this.#signOutSession(session.sessionId, [digest(rotated)]);
+      throw new Refused(400, "invalid_grant");
+    }
+    return response;
   }
 
   async #device(request: CompanyRequest): Promise<CompanyResponse> {
@@ -620,18 +742,26 @@ export class CompanyService {
       throw new Refused(400, "invalid_scope");
     }
     const deviceCode = this.#id("dev");
-    let userCode = this.#id("u").slice(2, 10).toUpperCase().replaceAll("-", "X").replaceAll("_", "Y");
-    userCode = `${userCode.slice(0, 4)}-${userCode.slice(4)}`;
     const lifetime = 600;
-    this.store.devices.set(digest(deviceCode), {
+    const expiresAt = this.#later(lifetime);
+    const kept = expiry(new Date(expiresAt.getTime() + KEPT_EXPIRED_MS));
+    let userCode: string;
+    for (;;) {
+      const raw = this.#id("u").slice(2, 10).toUpperCase().replaceAll("-", "X").replaceAll("_", "Y");
+      userCode = `${raw.slice(0, 4)}-${raw.slice(4)}`;
+      const pointer: UserCode = { device: digest(deviceCode) };
+      if (await this.store.create(RecordKinds.userCode, userCode, json(pointer), kept)) break;
+    }
+    const pending: PendingDevice = {
       clientId,
       scopes,
       userCode,
-      expiresAt: this.#later(lifetime),
+      expiresAt: expiresAt.toISOString(),
       interval: this.config.deviceInterval,
       granted: [],
       denied: false,
-    });
+    };
+    await this.store.put(RecordKinds.device, digest(deviceCode), json(pending), kept);
     return {
       status: 200,
       body: {
@@ -659,32 +789,39 @@ export class CompanyService {
    * The user signed in on the company's page and approved: what they granted.
    *
    * `scopes` may be fewer than requested (partial consent); omitted, all.
+   * Approving twice, or an unknown code, rejects.
    */
-  approveDevice(
+  async approveDevice(
     userCode: string,
     options: { readonly accountId: string; readonly scopes?: readonly string[] },
-  ): readonly string[] {
-    for (const pending of this.store.devices.values()) {
-      if (pending.userCode === userCode && pending.accountId === undefined) {
-        const granted = (options.scopes?.length ? options.scopes : pending.scopes).filter((s) =>
-          pending.scopes.includes(s),
-        );
-        pending.accountId = options.accountId;
-        pending.granted = granted;
-        return granted;
-      }
-    }
-    throw new Error("unknown or already approved user code");
+  ): Promise<readonly string[]> {
+    const pointer = await this.#read<UserCode>(RecordKinds.userCode, userCode);
+    const changed =
+      pointer === undefined
+        ? undefined
+        : await this.#change<PendingDevice>(RecordKinds.device, pointer.device, (pending) => {
+            if (pending.userCode !== userCode || pending.accountId !== undefined) {
+              throw new Error("unknown or already approved user code");
+            }
+            const granted = (options.scopes?.length ? options.scopes : pending.scopes).filter(
+              (s) => pending.scopes.includes(s),
+            );
+            return { ...pending, accountId: options.accountId, granted };
+          });
+    if (changed === undefined) throw new Error("unknown or already approved user code");
+    return changed[1].granted;
   }
 
-  denyDevice(userCode: string): void {
-    for (const pending of this.store.devices.values()) {
-      if (pending.userCode === userCode) {
-        pending.denied = true;
-        return;
-      }
-    }
-    throw new Error("unknown user code");
+  async denyDevice(userCode: string): Promise<void> {
+    const pointer = await this.#read<UserCode>(RecordKinds.userCode, userCode);
+    const changed =
+      pointer === undefined
+        ? undefined
+        : await this.#change<PendingDevice>(RecordKinds.device, pointer.device, (pending) => ({
+            ...pending,
+            denied: true,
+          }));
+    if (changed === undefined) throw new Error("unknown user code");
   }
 
   async #deviceGrant(
@@ -693,51 +830,78 @@ export class CompanyService {
     thumbprint: string,
   ): Promise<CompanyResponse> {
     const key = digest(form.device_code ?? "");
-    const pending = this.store.devices.get(key);
-    const now = this.#now();
-    if (pending === undefined || pending.clientId !== clientId) {
-      throw new Refused(400, "invalid_grant");
+    let polled = false;
+    for (let attempt = 0; attempt < CAS_ATTEMPTS && !polled; attempt += 1) {
+      const entry = await this.store.get(RecordKinds.device, key);
+      const pending = entry?.value as unknown as PendingDevice | undefined;
+      const now = this.#now();
+      if (entry === undefined || pending === undefined || pending.clientId !== clientId) {
+        throw new Refused(400, "invalid_grant");
+      }
+      if (this.#passed(pending.expiresAt)) {
+        await this.#forgetDevice(key, pending);
+        throw new Refused(400, "expired_token");
+      }
+      if (pending.denied) {
+        await this.#forgetDevice(key, pending);
+        throw new Refused(400, "access_denied");
+      }
+      let next: PendingDevice;
+      let refusal: string;
+      if (
+        pending.lastPoll !== undefined &&
+        now.getTime() - new Date(pending.lastPoll).getTime() < pending.interval * 1000
+      ) {
+        next = { ...pending, interval: pending.interval + 5, lastPoll: now.toISOString() };
+        refusal = "slow_down";
+      } else if (pending.accountId === undefined) {
+        next = { ...pending, lastPoll: now.toISOString() };
+        refusal = "authorization_pending";
+      } else {
+        polled = true;
+        break;
+      }
+      if (
+        await this.store.replace(
+          RecordKinds.device,
+          key,
+          entry.version,
+          json(next),
+          expiry(entry.expiresAt),
+        )
+      ) {
+        throw new Refused(400, refusal);
+      }
     }
-    if (now >= pending.expiresAt) {
-      this.store.devices.delete(key);
-      throw new Refused(400, "expired_token");
-    }
-    if (pending.denied) {
-      this.store.devices.delete(key);
-      throw new Refused(400, "access_denied");
-    }
-    if (
-      pending.lastPoll !== undefined &&
-      now.getTime() - pending.lastPoll.getTime() < pending.interval * 1000
-    ) {
-      pending.interval += 5;
-      pending.lastPoll = now;
-      throw new Refused(400, "slow_down");
-    }
-    pending.lastPoll = now;
-    if (pending.accountId === undefined) throw new Refused(400, "authorization_pending");
-    const session = this.#sessionById(form.session_id ?? "");
+    if (!polled) throw new Refused(503, "temporarily_unavailable");
+    const session = await this.#sessionById(form.session_id ?? "");
     if (session === undefined || session.clientId !== clientId) {
       throw new Refused(400, "invalid_session");
     }
-    this.store.devices.delete(key);
-    return this.#signIn(session, pending.accountId, pending.granted, thumbprint);
+    // Consumed once: of concurrent polls, only the one that takes it signs in.
+    const approved = (await this.store.take(RecordKinds.device, key)) as unknown as
+      | PendingDevice
+      | undefined;
+    if (approved === undefined || approved.accountId === undefined) {
+      throw new Refused(400, "invalid_grant");
+    }
+    await this.store.delete(RecordKinds.userCode, approved.userCode);
+    return this.#signIn(session, approved.accountId, approved.granted, thumbprint);
+  }
+
+  async #forgetDevice(key: string, pending: PendingDevice): Promise<void> {
+    await this.store.delete(RecordKinds.device, key);
+    await this.store.delete(RecordKinds.userCode, pending.userCode);
   }
 
   async #revoke(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
     const clientId = await this.#client(form, this.config.revocationEndpoint);
-    const key = digest(form.token ?? "");
-    const grant = this.store.accountTokens.get(key);
+    const grant = await this.#read<AccountGrant>(RecordKinds.accountToken, digest(form.token ?? ""));
     if (grant !== undefined && grant.clientId === clientId) {
       // The token and every one rotated from the same sign-in: each Session signed
       // in with any of them continues signed out (§4.9).
-      for (const [other, sibling] of this.store.accountTokens) {
-        if (sibling.family === grant.family) {
-          sibling.revoked = true;
-          this.#signOutSessionsOf(other);
-        }
-      }
+      await this.#signOut([grant.family]);
     }
     return { status: 200, body: {}, headers: { ...NO_STORE } };
   }
@@ -745,68 +909,148 @@ export class CompanyService {
   /**
    * The user disconnects an agent in account settings: its tokens go, Sessions sign out.
    *
-   * Returns how many Account Tokens were revoked (upstream guides, account settings).
+   * Resolves to how many Account Tokens were revoked (upstream guides, account settings).
    */
-  disconnect(clientId: string, accountId: string): number {
+  async disconnect(clientId: string, accountId: string): Promise<number> {
+    const agent = await this.#read<AccountAgent>(
+      RecordKinds.accountAgent,
+      composite(clientId, accountId),
+    );
+    return agent === undefined ? 0 : this.#signOut(agent.families);
+  }
+
+  /** Revoke whole sign-ins: their tokens stop working, their Sessions sign out. */
+  async #signOut(families: readonly string[]): Promise<number> {
     let revoked = 0;
-    for (const [key, grant] of this.store.accountTokens) {
-      if (grant.clientId === clientId && grant.accountId === accountId && !grant.revoked) {
-        grant.revoked = true;
-        revoked += 1;
-        this.#signOutSessionsOf(key);
+    for (const familyId of families) {
+      const changed = await this.#change<AccountFamily>(
+        RecordKinds.accountFamily,
+        familyId,
+        (family) => (family.revoked ? family : { ...family, revoked: true }),
+      );
+      if (changed === undefined) continue;
+      const family = changed[1];
+      revoked += await this.#revokeGrants(family.tokens);
+      for (const sessionId of family.sessions) {
+        await this.#signOutSession(sessionId, family.tokens);
       }
     }
     return revoked;
   }
 
-  #signOutSessionsOf(accountTokenKey: string): void {
-    for (const [tokenKey, session] of [...this.store.sessions]) {
-      if (session.accountToken === accountTokenKey) {
-        const { accountId: _account, accountToken: _token, ...rest } = session;
-        this.store.sessions.set(tokenKey, { ...rest, scopes: [] });
-      }
+  async #revokeGrants(tokens: readonly string[]): Promise<number> {
+    let revoked = 0;
+    for (const token of tokens) {
+      const changed = await this.#change<AccountGrant>(RecordKinds.accountToken, token, (grant) =>
+        grant.revoked ? grant : { ...grant, revoked: true },
+      );
+      if (changed !== undefined && !changed[0].revoked) revoked += 1;
     }
+    return revoked;
   }
 
-  #signIn(
+  /** Each token of the Session signed in with one of `accountTokens` continues signed out. */
+  async #signOutSession(sessionId: string, accountTokens: readonly string[]): Promise<void> {
+    await this.#change<StoredSession>(RecordKinds.session, sessionId, (stored) => {
+      let changed = false;
+      const tokens: Record<string, IssuedSession> = {};
+      for (const [key, token] of Object.entries(stored.tokens)) {
+        if (token.accountToken !== undefined && accountTokens.includes(token.accountToken)) {
+          const { accountId: _account, accountToken: _token, ...rest } = token;
+          tokens[key] = { ...rest, scopes: [] };
+          changed = true;
+        } else {
+          tokens[key] = token;
+        }
+      }
+      return changed ? { ...stored, tokens } : stored;
+    });
+  }
+
+  /** Add a token and a Session to a sign-in; `false` once it is revoked. */
+  async #joinFamily(familyId: string, token: string, sessionId: string): Promise<boolean> {
+    const changed = await this.#change<AccountFamily>(
+      RecordKinds.accountFamily,
+      familyId,
+      (family) =>
+        family.revoked
+          ? family
+          : {
+              ...family,
+              tokens: withItem(family.tokens, token),
+              sessions: withItem(family.sessions, sessionId),
+            },
+    );
+    return changed !== undefined && !changed[1].revoked;
+  }
+
+  async #signIn(
     session: IssuedSession,
     accountId: string,
     scopes: readonly string[],
     thumbprint?: string,
-  ): CompanyResponse {
+  ): Promise<CompanyResponse> {
     if (session.accountId !== undefined && session.accountId !== accountId) {
       throw new Refused(400, "account_mismatch");
     }
     const accountToken = this.#id("acct");
-    this.store.accountTokens.set(digest(accountToken), {
-      family: digest(accountToken),
+    const family = digest(accountToken);
+    const expiresAt = this.#later(this.config.accountTokenLifetimeSeconds);
+    const grant: AccountGrant = {
+      family,
       accountId,
       clientId: session.clientId,
       pairwiseUserId: session.pairwiseUserId,
       scopes,
-      expiresAt: this.#later(this.config.accountTokenLifetimeSeconds),
+      expiresAt: expiresAt.toISOString(),
       revoked: false,
-    });
-    this.#dropTokensOf(session.sessionId);
+    };
+    await this.store.put(RecordKinds.accountToken, family, json(grant), expiry(expiresAt));
+    const signIn: AccountFamily = {
+      clientId: session.clientId,
+      accountId,
+      tokens: [family],
+      sessions: [session.sessionId],
+      revoked: false,
+    };
+    await this.store.put(RecordKinds.accountFamily, family, json(signIn), expiry(expiresAt));
+    await this.#rememberFamily(session.clientId, accountId, family);
     return this.#issue(
       {
         ...session,
         accountId,
         scopes,
-        accountToken: digest(accountToken),
+        accountToken: family,
         keyThumbprint: thumbprint || session.keyThumbprint,
       },
       accountToken,
     );
   }
 
-  #issue(session: IssuedSession, refreshToken?: string): CompanyResponse {
+  async #rememberFamily(clientId: string, accountId: string, family: string): Promise<void> {
+    const key = composite(clientId, accountId);
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
+      const first: AccountAgent = { families: [family] };
+      if (await this.store.create(RecordKinds.accountAgent, key, json(first))) return;
+      const changed = await this.#change<AccountAgent>(RecordKinds.accountAgent, key, (agent) => ({
+        families: withItem(agent.families, family),
+      }));
+      if (changed !== undefined) return;
+    }
+    throw new Refused(503, "temporarily_unavailable");
+  }
+
+  /** Issue a token for the Session; it replaces the Session's earlier tokens. */
+  async #issue(session: IssuedSession, refreshToken?: string): Promise<CompanyResponse> {
     const accessToken = this.#id("sat");
-    this.store.sessions.set(digest(accessToken), session);
+    const key = digest(accessToken);
+    await this.#recordToken(session, key);
+    const pointer: SessionPointer = { sessionId: session.sessionId };
+    await this.store.put(RecordKinds.sessionToken, key, json(pointer), expiry(session.expiresAt));
     const body: Record<string, unknown> = {
       access_token: accessToken,
       token_type: "DPoP",
-      expires_in: Math.trunc((session.expiresAt.getTime() - this.#now().getTime()) / 1000),
+      expires_in: Math.trunc((new Date(session.expiresAt).getTime() - this.#now().getTime()) / 1000),
       scope: session.scopes.join(" "),
       session_id: session.sessionId,
       signed_in: session.accountId !== undefined,
@@ -815,17 +1059,51 @@ export class CompanyService {
     return { status: 200, body, headers: { ...NO_STORE } };
   }
 
-  #sessionById(sessionId: string): IssuedSession | undefined {
-    for (const session of this.store.sessions.values()) {
-      if (session.sessionId === sessionId) return session;
+  /** One write: the new token is the Session's, the ones it replaces leave it. */
+  async #recordToken(session: IssuedSession, key: string): Promise<void> {
+    const stored: StoredSession = {
+      sessionId: session.sessionId,
+      clientId: session.clientId,
+      pairwiseUserId: session.pairwiseUserId,
+      tokens: { [key]: session },
+      latest: key,
+    };
+    // A Session is forgotten once no Account Token could renew it any more.
+    const kept = expiry(
+      new Date(
+        new Date(session.expiresAt).getTime() + this.config.accountTokenLifetimeSeconds * 1000,
+      ),
+    );
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
+      const entry = await this.store.get(RecordKinds.session, session.sessionId);
+      if (entry === undefined) {
+        if (await this.store.create(RecordKinds.session, session.sessionId, json(stored), kept)) {
+          return;
+        }
+        continue;
+      }
+      if (
+        await this.store.replace(RecordKinds.session, session.sessionId, entry.version, json(stored), kept)
+      ) {
+        return;
+      }
     }
-    return undefined;
+    throw new Refused(503, "temporarily_unavailable");
   }
 
-  #dropTokensOf(sessionId: string): void {
-    for (const [key, session] of [...this.store.sessions]) {
-      if (session.sessionId === sessionId) this.store.sessions.delete(key);
-    }
+  async #sessionById(sessionId: string): Promise<IssuedSession | undefined> {
+    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
+    if (stored === undefined) return undefined;
+    return stored.tokens[stored.latest];
+  }
+
+  /** The state of the Session token `token`, while the Session still holds it. */
+  async #tokenSession(token: string): Promise<IssuedSession | undefined> {
+    const key = digest(token);
+    const pointer = await this.#read<SessionPointer>(RecordKinds.sessionToken, key);
+    if (pointer === undefined) return undefined;
+    const stored = await this.#read<StoredSession>(RecordKinds.session, pointer.sessionId);
+    return stored?.tokens[key];
   }
 
   // Direct Sign-In (§4.5) -------------------------------------------------------------
@@ -859,15 +1137,17 @@ export class CompanyService {
       return this.#redirect(redirectUri, { error: "invalid_scope", state });
     }
     const requestId = this.#id("authz");
-    this.store.authorizations.set(requestId, {
+    const expiresAt = this.#later(10 * 60);
+    const pending: PendingAuthorization = {
       clientId,
       redirectUri,
       scopes,
       state,
       codeChallenge: query.code_challenge,
-      expiresAt: this.#later(10 * 60),
+      expiresAt: expiresAt.toISOString(),
       clientName: metadata.client_name,
-    });
+    };
+    await this.store.put(RecordKinds.authorization, requestId, json(pending), expiry(expiresAt));
     if (this.config.consentPage !== undefined) {
       // A hosted consent page reads the request back (`authorizationRequest`).
       return {
@@ -898,18 +1178,18 @@ export class CompanyService {
    * A pending Direct Sign-In request, for a consent page to show; not consumed.
    *
    * Who asks (`client_name`, the `client_id` domain), for what (each scope with its
-   * `customScopes` words), until when; never `state`, PKCE, or the redirect. Throws
+   * `customScopes` words), until when; never `state`, PKCE, or the redirect. Rejects
    * for an unknown, used, or expired request.
    */
-  authorizationRequest(requestId: string): {
+  async authorizationRequest(requestId: string): Promise<{
     readonly request_id: string;
     readonly client_name: string;
     readonly client_domain: string;
     readonly scopes: readonly { readonly scope: string; readonly description: string }[];
     readonly expires_at: string;
-  } {
-    const pending = this.store.authorizations.get(requestId);
-    if (pending === undefined || this.#now().getTime() >= pending.expiresAt.getTime()) {
+  }> {
+    const pending = await this.#read<PendingAuthorization>(RecordKinds.authorization, requestId);
+    if (pending === undefined || this.#passed(pending.expiresAt)) {
       throw new Error("unknown, used, or expired sign-in request");
     }
     return {
@@ -917,7 +1197,7 @@ export class CompanyService {
       client_name: pending.clientName ?? "",
       client_domain: new URL(pending.clientId).hostname,
       scopes: pending.scopes.map((scope) => ({ scope, description: this.config.customScopes[scope] ?? scope })),
-      expires_at: isoZ(pending.expiresAt),
+      expires_at: isoZ(new Date(pending.expiresAt)),
     };
   }
 
@@ -926,39 +1206,43 @@ export class CompanyService {
    *
    * `scopes` may be fewer than requested (partial consent); omitted, all.
    */
-  approveAuthorization(
+  async approveAuthorization(
     requestId: string,
     options: { readonly accountId: string; readonly scopes?: readonly string[] },
-  ): string {
-    const pending = this.#pendingAuthorization(requestId);
+  ): Promise<string> {
+    const pending = await this.#pendingAuthorization(requestId);
     const granted = (options.scopes?.length ? options.scopes : pending.scopes).filter((s) =>
       pending.scopes.includes(s),
     );
     const code = this.#id("code");
-    this.store.codes.set(digest(code), {
+    const expiresAt = this.#later(60);
+    const issued: IssuedCode = {
       clientId: pending.clientId,
       redirectUri: pending.redirectUri,
       codeChallenge: pending.codeChallenge,
       accountId: options.accountId,
       scopes: granted,
-      expiresAt: this.#later(60),
-    });
+      expiresAt: expiresAt.toISOString(),
+    };
+    await this.store.put(RecordKinds.code, digest(code), json(issued), expiry(expiresAt));
     return this.#redirectUrl(pending.redirectUri, { code, state: pending.state });
   }
 
   /** The user refused: the agent learns only `access_denied`. */
-  denyAuthorization(requestId: string): string {
-    const pending = this.#pendingAuthorization(requestId);
+  async denyAuthorization(requestId: string): Promise<string> {
+    const pending = await this.#pendingAuthorization(requestId);
     return this.#redirectUrl(pending.redirectUri, {
       error: "access_denied",
       state: pending.state,
     });
   }
 
-  #pendingAuthorization(requestId: string) {
-    const pending = this.store.authorizations.get(requestId);
-    this.store.authorizations.delete(requestId);
-    if (pending === undefined || this.#now() >= pending.expiresAt) {
+  /** The request, taken: of two decisions on it, only the first counts. */
+  async #pendingAuthorization(requestId: string): Promise<PendingAuthorization> {
+    const pending = (await this.store.take(RecordKinds.authorization, requestId)) as unknown as
+      | PendingAuthorization
+      | undefined;
+    if (pending === undefined || this.#passed(pending.expiresAt)) {
       throw new Error("unknown, used, or expired sign-in request");
     }
     return pending;
@@ -969,12 +1253,12 @@ export class CompanyService {
     clientId: string,
     thumbprint: string,
   ): Promise<CompanyResponse> {
-    const key = digest(form.code ?? "");
-    const issued = this.store.codes.get(key);
-    this.store.codes.delete(key);
+    const issued = (await this.store.take(RecordKinds.code, digest(form.code ?? ""))) as unknown as
+      | IssuedCode
+      | undefined;
     if (
       issued === undefined ||
-      this.#now() >= issued.expiresAt ||
+      this.#passed(issued.expiresAt) ||
       issued.clientId !== clientId ||
       issued.redirectUri !== form.redirect_uri
     ) {
@@ -988,7 +1272,7 @@ export class CompanyService {
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
       throw new Refused(400, "invalid_grant");
     }
-    const session = this.#sessionById(form.session_id ?? "");
+    const session = await this.#sessionById(form.session_id ?? "");
     if (session === undefined || session.clientId !== clientId) {
       throw new Refused(400, "invalid_session");
     }
@@ -1040,10 +1324,10 @@ export class CompanyService {
       return { status: result.status ?? 200, body: result.body, headers: {} };
     }
     if (session.accountId === undefined) throw new Refused(403, "sign_in_required");
-    if (!this.extensions.get(session.clientId)?.has("operations")) {
+    if (!(await this.#supportsOperations(session.clientId))) {
       throw new Refused(403, "extension_required", { extension: "operations" });
     }
-    const operation = this.#propose(session, { operation: result.operation });
+    const operation = await this.#propose(session, { operation: result.operation });
     return { status: 202, body: { operation }, headers: {} };
   }
 
@@ -1056,8 +1340,8 @@ export class CompanyService {
     const token = space < 0 ? "" : authorization.slice(space + 1);
     if (scheme !== "DPoP" || !token) throw new Refused(401, "invalid_token");
     const key = digest(token);
-    const session = this.store.sessions.get(key);
-    if (session === undefined || this.#now() >= session.expiresAt) {
+    const session = await this.#tokenSession(token);
+    if (session === undefined || this.#passed(session.expiresAt)) {
       throw new Refused(401, "invalid_token");
     }
     const thumbprint = await this.#dpop(request, token);
@@ -1092,14 +1376,20 @@ export class CompanyService {
     }
     const signInId = this.#id("si");
     const expiresAt = this.#later(5 * 60);
-    this.store.mediated.set(signInId, {
+    const pending: PendingMediated = {
       sessionId: session.sessionId,
       accountId: authenticated.accountId,
       scopes: granted,
       codeReference: authenticated.codeReference,
-      expiresAt,
+      expiresAt: expiresAt.toISOString(),
       attempts: 0,
-    });
+    };
+    await this.store.put(
+      RecordKinds.mediated,
+      signInId,
+      json(pending),
+      expiry(new Date(expiresAt.getTime() + KEPT_EXPIRED_MS)),
+    );
     return {
       status: 200,
       body: {
@@ -1114,28 +1404,34 @@ export class CompanyService {
 
   async #mediatedCode(request: CompanyRequest, signInId: string): Promise<CompanyResponse> {
     const [, session] = await this.#caller(request);
-    const pending = this.store.mediated.get(signInId);
+    const pending = await this.#read<PendingMediated>(RecordKinds.mediated, signInId);
     if (pending === undefined || pending.sessionId !== session.sessionId) {
       // Only the Session that started it can finish it; nothing else is said.
       throw new Refused(404, "not_found");
     }
-    if (this.#now() >= pending.expiresAt) {
-      this.store.mediated.delete(signInId);
+    if (this.#passed(pending.expiresAt)) {
+      await this.store.delete(RecordKinds.mediated, signInId);
       return { status: 200, body: { status: "expired" }, headers: { ...NO_STORE } };
     }
     const source = text(request.body);
     const body = source ? parseJsonStrict(source) : {};
     const code = isObject(body) ? body.code : undefined;
     const accounts = firstContribution(this.reactor, CompanyAccounts, "accounts");
+    const failed = { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
     if (
       typeof code !== "string" ||
       !code ||
       !(await accounts.checkCode(pending.codeReference, new SecretValue(code)))
     ) {
-      pending.attempts += 1;
-      if (pending.attempts >= this.config.maxCodeAttempts) {
-        this.store.mediated.delete(signInId);
-        return { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
+      // Every wrong code counts, however many replicas check them at once.
+      const counted = await this.#change<PendingMediated>(
+        RecordKinds.mediated,
+        signInId,
+        (current) => ({ ...current, attempts: current.attempts + 1 }),
+      );
+      if (counted === undefined || counted[1].attempts >= this.config.maxCodeAttempts) {
+        await this.store.delete(RecordKinds.mediated, signInId);
+        return failed;
       }
       return {
         status: 200,
@@ -1143,21 +1439,25 @@ export class CompanyService {
           status: "code_required",
           sign_in_id: signInId,
           code: {},
-          expires_at: isoZ(pending.expiresAt),
+          expires_at: isoZ(new Date(pending.expiresAt)),
         },
         headers: { ...NO_STORE },
       };
     }
-    this.store.mediated.delete(signInId);
-    return this.#signedInBody(session, pending.accountId, pending.scopes);
+    // One use: of two right codes sent at once, only the one that takes it signs in.
+    const completed = (await this.store.take(RecordKinds.mediated, signInId)) as unknown as
+      | PendingMediated
+      | undefined;
+    if (completed === undefined) return failed;
+    return this.#signedInBody(session, completed.accountId, completed.scopes);
   }
 
-  #signedInBody(
+  async #signedInBody(
     session: IssuedSession,
     accountId: string,
     scopes: readonly string[],
-  ): CompanyResponse {
-    const response = this.#signIn(session, accountId, scopes);
+  ): Promise<CompanyResponse> {
+    const response = await this.#signIn(session, accountId, scopes);
     return {
       ...response,
       body: { status: "complete", ...(response.body as Record<string, unknown>) },
@@ -1166,8 +1466,20 @@ export class CompanyService {
 
   // Conversations -------------------------------------------------------------------
 
-  #owned(conversationId: string, session: IssuedSession): StoredConversation {
-    const conversation = this.store.conversations.get(conversationId);
+  async #conversation(conversationId: string): Promise<StoredConversation> {
+    const conversation = await this.#read<StoredConversation>(
+      RecordKinds.conversation,
+      conversationId,
+    );
+    if (conversation === undefined) throw new Refused(404, "conversation_not_found");
+    return conversation;
+  }
+
+  async #owned(conversationId: string, session: IssuedSession): Promise<StoredConversation> {
+    const conversation = await this.#read<StoredConversation>(
+      RecordKinds.conversation,
+      conversationId,
+    );
     if (
       conversation === undefined ||
       !sameOwner(conversation.owner, [session.clientId, session.pairwiseUserId])
@@ -1182,17 +1494,23 @@ export class CompanyService {
     return conversation;
   }
 
-  #event(conversation: StoredConversation, payload: Readonly<Record<string, unknown>>): void {
+  #event(payload: Readonly<Record<string, unknown>>): StoredEvent {
     const id = this.#id("evt");
-    conversation.events.push({ id, payload: { id, created_at: isoZ(this.#now()), ...payload } });
+    return { id, payload: { id, created_at: isoZ(this.#now()), ...payload } };
   }
 
-  #state(conversation: StoredConversation): void {
-    this.#event(conversation, {
-      type: "state",
-      status: conversation.status,
-      responder: conversation.responder,
-    });
+  #state(status: string, responder: string): StoredEvent {
+    return this.#event({ type: "state", status, responder });
+  }
+
+  /** A message or handoff goes only to an open conversation with no Direct one open. */
+  #open(conversation: StoredConversation): void {
+    if (conversation.status === "closed") throw new Refused(409, "conversation_closed");
+    if (conversation.directChild !== undefined) {
+      throw new Refused(409, "direct_conversation_open", {
+        conversation_id: conversation.directChild,
+      });
+    }
   }
 
   async #startConversation(request: CompanyRequest): Promise<CompanyResponse> {
@@ -1200,41 +1518,62 @@ export class CompanyService {
     const body = parseJsonStrict(text(request.body));
     const message = parseMessage(isObject(body) ? body.message : undefined);
     const owner = [session.clientId, session.pairwiseUserId] as const;
-    const replay = this.#replayed(owner, message);
+    const replay = await this.#replayed(owner, message);
     if (replay !== undefined) {
-      return this.#answer(request, this.store.conversations.get(replay)!, 201);
+      return this.#answer(request, await this.#conversation(replay), 201);
     }
     const parentId = isObject(body) ? body.parent_conversation_id : undefined;
     let parent: StoredConversation | undefined;
     if (parentId !== undefined && parentId !== null) {
-      parent = this.#owned(String(parentId), session);
+      parent = await this.#owned(String(parentId), session);
       if (parent.status === "closed") throw new Refused(409, "conversation_closed");
       if (parent.parentId !== undefined) throw new Refused(404, "conversation_not_found");
-      if (parent.directChild !== undefined) {
-        throw new Refused(409, "direct_conversation_open", {
-          conversation_id: parent.directChild,
-        });
-      }
+      this.#open(parent);
     }
+    const conversationId = this.#id("cnv");
     const conversation: StoredConversation = {
-      conversationId: this.#id("cnv"),
+      conversationId,
       owner,
       status: "idle",
       responder: "agent",
       ...(parent === undefined ? {} : { parentId: parent.conversationId }),
       events: [],
-      forgotten: new Set(),
+      forgotten: [],
     };
-    this.store.conversations.set(conversation.conversationId, conversation);
-    if (parent !== undefined) {
-      parent.directChild = conversation.conversationId;
-      this.#event(parent, {
-        type: "direct_opened",
-        conversation_id: conversation.conversationId,
-      });
+    const claimed = await this.#claim(owner, message, conversationId);
+    if (claimed !== undefined) {
+      return this.#answer(request, await this.#conversation(claimed), 201);
     }
-    await this.#receive(conversation, session, message);
-    return this.#answer(request, conversation, 201);
+    await this.store.put(RecordKinds.conversation, conversationId, json(conversation));
+    if (parent !== undefined) {
+      await this.#openDirect(parent.conversationId, conversationId, owner, message);
+    }
+    return this.#answer(request, await this.#receive(conversationId, session, message), 201);
+  }
+
+  /** One write marks the parent's Direct Conversation; if it cannot, none was started. */
+  async #openDirect(
+    parentId: string,
+    conversationId: string,
+    owner: readonly [string, string],
+    message: Message,
+  ): Promise<void> {
+    const opened = this.#event({ type: "direct_opened", conversation_id: conversationId });
+    try {
+      const changed = await this.#change<StoredConversation>(
+        RecordKinds.conversation,
+        parentId,
+        (current) => {
+          this.#open(current);
+          return { ...current, directChild: conversationId, events: [...current.events, opened] };
+        },
+      );
+      if (changed === undefined) throw new Refused(404, "conversation_not_found");
+    } catch (error) {
+      await this.store.delete(RecordKinds.conversation, conversationId);
+      await this.store.delete(RecordKinds.messageId, this.#messageKey(owner, message.id));
+      throw error;
+    }
   }
 
   async #conversationRoute(
@@ -1246,7 +1585,7 @@ export class CompanyService {
     const conversationId = parts[3] ?? "";
     const action = parts[4] ?? "";
     const [, session] = await this.#caller(request);
-    const conversation = this.#owned(conversationId, session);
+    const conversation = await this.#owned(conversationId, session);
     if (method === "GET" && action === "events") {
       if ((request.headers.accept ?? "").includes("text/event-stream")) {
         return this.#stream(conversation, request.headers["last-event-id"]);
@@ -1255,70 +1594,116 @@ export class CompanyService {
     }
     if (method !== "POST") throw new Refused(405, "method_not_allowed");
     if (action === "close") {
-      this.#close(conversation);
-      return this.#receipt(conversation, 200);
+      await this.#close(conversationId);
+      return this.#receipt(await this.#conversation(conversationId), 200);
     }
-    if (conversation.status === "closed") throw new Refused(409, "conversation_closed");
-    if (conversation.directChild !== undefined) {
-      throw new Refused(409, "direct_conversation_open", {
-        conversation_id: conversation.directChild,
-      });
-    }
+    this.#open(conversation);
     if (action === "handoff") {
-      conversation.status = "queued";
-      this.#state(conversation);
-      if (this.config.humansAvailable) {
-        conversation.status = "idle";
-        conversation.responder = "human";
-      } else {
-        conversation.status = "idle";
-      }
-      this.#state(conversation);
-      return this.#receipt(conversation, 202);
+      const changed = await this.#change<StoredConversation>(
+        RecordKinds.conversation,
+        conversationId,
+        (current) => {
+          this.#open(current);
+          const responder = this.config.humansAvailable ? "human" : current.responder;
+          return {
+            ...current,
+            status: "idle",
+            responder,
+            events: [
+              ...current.events,
+              this.#state("queued", current.responder),
+              this.#state("idle", responder),
+            ],
+          };
+        },
+      );
+      if (changed === undefined) throw new Refused(404, "conversation_not_found");
+      return this.#receipt(changed[1], 202);
     }
     if (action === "messages") {
       const body = parseJsonStrict(text(request.body));
       const message = parseMessage(isObject(body) ? body.message : undefined);
-      const replay = this.#replayed([session.clientId, session.pairwiseUserId], message);
-      if (replay === undefined) await this.#receive(conversation, session, message);
-      return this.#answer(request, conversation, 202);
+      const owner = [session.clientId, session.pairwiseUserId] as const;
+      const replay = await this.#replayed(owner, message);
+      if (replay === undefined && (await this.#claim(owner, message, conversationId)) === undefined) {
+        await this.#receive(conversationId, session, message);
+      }
+      return this.#answer(request, await this.#conversation(conversationId), 202);
     }
     throw new Refused(404, "not_found");
   }
 
   #messageKey(owner: readonly [string, string], messageId: string): string {
-    return JSON.stringify([owner[0], owner[1], messageId]);
+    return composite(owner[0], owner[1], messageId);
   }
 
   /** A retried message returns its conversation; a reused ID with new content conflicts. */
-  #replayed(owner: readonly [string, string], message: Message): string | undefined {
-    const known = this.store.messageIds.get(this.#messageKey(owner, message.id));
+  async #replayed(owner: readonly [string, string], message: Message): Promise<string | undefined> {
+    const known = await this.#read<MessageReceipt>(
+      RecordKinds.messageId,
+      this.#messageKey(owner, message.id),
+    );
     if (known === undefined) return undefined;
-    const separator = known.indexOf(":");
-    const conversationId = known.slice(0, separator);
-    const knownDigest = known.slice(separator + 1);
-    if (knownDigest !== digest(JSON.stringify(plain(message)))) {
+    if (known.digest !== digest(JSON.stringify(plain(message)))) {
       throw new Refused(409, "message_id_conflict");
     }
-    return conversationId;
+    return known.conversationId;
+  }
+
+  /** Record the message ID, once: `undefined` when this call did, else the earlier conversation. */
+  async #claim(
+    owner: readonly [string, string],
+    message: Message,
+    conversationId: string,
+  ): Promise<string | undefined> {
+    const receipt: MessageReceipt = {
+      conversationId,
+      digest: digest(JSON.stringify(plain(message))),
+    };
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
+      const key = this.#messageKey(owner, message.id);
+      if (await this.store.create(RecordKinds.messageId, key, json(receipt))) return undefined;
+      const replay = await this.#replayed(owner, message);
+      if (replay !== undefined) return replay;
+    }
+    throw new Refused(503, "temporarily_unavailable");
   }
 
   async #receive(
-    conversation: StoredConversation,
+    conversationId: string,
     session: IssuedSession,
     message: Message,
-  ): Promise<void> {
+  ): Promise<StoredConversation> {
     const incoming = plain(message);
-    this.store.messageIds.set(
-      this.#messageKey(conversation.owner, message.id),
-      `${conversation.conversationId}:${digest(JSON.stringify(incoming))}`,
-    );
-    if (session.accountId !== undefined) conversation.accountId = session.accountId;
-    this.#event(conversation, { type: "message", message: { ...incoming, role: "user" } });
-    if (conversation.responder === "human") return;
+    const received = this.#event({ type: "message", message: { ...incoming, role: "user" } });
+    let changed: readonly [StoredConversation, StoredConversation] | undefined;
+    try {
+      changed = await this.#change<StoredConversation>(
+        RecordKinds.conversation,
+        conversationId,
+        (current) => {
+          this.#open(current);
+          const accountId = session.accountId ?? current.accountId;
+          return {
+            ...current,
+            ...(accountId === undefined ? {} : { accountId }),
+            events: [...current.events, received],
+          };
+        },
+      );
+      if (changed === undefined) throw new Refused(404, "conversation_not_found");
+    } catch (error) {
+      // Not received: the same message may be sent again.
+      const owner = [session.clientId, session.pairwiseUserId] as const;
+      await this.store.delete(RecordKinds.messageId, this.#messageKey(owner, message.id));
+      throw error;
+    }
+    if (changed === undefined) throw new Refused(404, "conversation_not_found");
+    const conversation = changed[1];
+    if (conversation.responder === "human") return conversation;
     const agent = firstContribution(this.reactor, CompanyAgents, "company agent");
     const replies = await agent.respond({
-      conversationId: conversation.conversationId,
+      conversationId,
       ...(message.text === undefined ? {} : { text: message.text }),
       ...(message.data === undefined ? {} : { data: message.data }),
       sender: message.sender,
@@ -1327,19 +1712,30 @@ export class CompanyService {
       clientId: session.clientId,
       isDirect: conversation.parentId !== undefined,
     });
-    for (const reply of replies) this.#reply(conversation, session, reply);
-    conversation.status = "idle";
+    const events: StoredEvent[] = [];
+    for (const reply of replies) {
+      const event = await this.#reply(session, reply);
+      if (event !== undefined) events.push(event);
+    }
+    const answered = await this.#change<StoredConversation>(
+      RecordKinds.conversation,
+      conversationId,
+      (current) => ({
+        ...current,
+        status: current.status === "closed" ? "closed" : "idle",
+        events: [...current.events, ...events],
+      }),
+    );
+    return answered === undefined ? conversation : answered[1];
   }
 
-  #reply(conversation: StoredConversation, session: IssuedSession, reply: Reply): void {
+  async #reply(session: IssuedSession, reply: Reply): Promise<StoredEvent | undefined> {
     if (reply.authorization !== undefined) {
       const [error, scope] = reply.authorization;
-      this.#event(conversation, { type: "authorization", error, scope });
-      return;
+      return this.#event({ type: "authorization", error, scope });
     }
     if (reply.userRequested !== undefined) {
-      this.#event(conversation, { type: "user_requested", reason: reply.userRequested });
-      return;
+      return this.#event({ type: "user_requested", reason: reply.userRequested });
     }
     const message: Record<string, unknown> = {
       id: this.#id("msg"),
@@ -1349,27 +1745,43 @@ export class CompanyService {
     if (reply.text !== undefined) message.text = reply.text;
     if (reply.data !== undefined) message.data = reply.data;
     if (reply.operation !== undefined && session.accountId !== undefined) {
-      if (this.extensions.get(session.clientId)?.has("operations")) {
-        message.operation = this.#propose(session, reply);
+      if (await this.#supportsOperations(session.clientId)) {
+        message.operation = await this.#propose(session, reply);
       }
     }
-    if (Object.keys(message).length > 3) this.#event(conversation, { type: "message", message });
+    return Object.keys(message).length > 3 ? this.#event({ type: "message", message }) : undefined;
   }
 
-  #close(conversation: StoredConversation): void {
-    if (conversation.status === "closed") return;
-    if (conversation.directChild !== undefined) {
-      this.#close(this.store.conversations.get(conversation.directChild)!);
-    }
-    conversation.status = "closed";
-    this.#state(conversation);
+  async #close(conversationId: string): Promise<void> {
+    const conversation = await this.#read<StoredConversation>(
+      RecordKinds.conversation,
+      conversationId,
+    );
+    if (conversation === undefined || conversation.status === "closed") return;
+    if (conversation.directChild !== undefined) await this.#close(conversation.directChild);
+    const changed = await this.#change<StoredConversation>(
+      RecordKinds.conversation,
+      conversationId,
+      (current) =>
+        current.status === "closed"
+          ? current
+          : {
+              ...current,
+              status: "closed",
+              events: [...current.events, this.#state("closed", current.responder)],
+            },
+    );
+    if (changed === undefined || changed[0].status === "closed") return;
     if (conversation.parentId !== undefined) {
-      const parent = this.store.conversations.get(conversation.parentId)!;
-      delete parent.directChild;
-      this.#event(parent, {
-        type: "direct_closed",
-        conversation_id: conversation.conversationId,
-      });
+      const closed = this.#event({ type: "direct_closed", conversation_id: conversationId });
+      await this.#change<StoredConversation>(
+        RecordKinds.conversation,
+        conversation.parentId,
+        (parent) => {
+          const { directChild: _child, ...rest } = parent;
+          return { ...rest, events: [...parent.events, closed] };
+        },
+      );
     }
   }
 
@@ -1422,18 +1834,30 @@ export class CompanyService {
   }
 
   /** Retention: drop all but the last `keep` events; their cursors expire (§7.5). */
-  forgetEvents(conversationId: string, options: { readonly keep?: number } = {}): void {
-    const conversation = this.store.conversations.get(conversationId);
-    if (conversation === undefined) throw new Error("unknown conversation");
-    const cut = Math.max(conversation.events.length - (options.keep ?? 0), 0);
-    for (const event of conversation.events.splice(0, cut)) conversation.forgotten.add(event.id);
+  async forgetEvents(conversationId: string, options: { readonly keep?: number } = {}): Promise<void> {
+    const changed = await this.#change<StoredConversation>(
+      RecordKinds.conversation,
+      conversationId,
+      (conversation) => {
+        const cut = Math.max(conversation.events.length - (options.keep ?? 0), 0);
+        return {
+          ...conversation,
+          events: conversation.events.slice(cut),
+          forgotten: [
+            ...conversation.forgotten,
+            ...conversation.events.slice(0, cut).map((event) => event.id),
+          ],
+        };
+      },
+    );
+    if (changed === undefined) throw new Error("unknown conversation");
   }
 
   #after(conversation: StoredConversation, cursor: string | undefined): StoredEvent[] {
     if (cursor === undefined || cursor === startCursor(conversation)) {
       return [...conversation.events];
     }
-    if (conversation.forgotten.has(cursor)) throw new Refused(410, "cursor_expired");
+    if (conversation.forgotten.includes(cursor)) throw new Refused(410, "cursor_expired");
     const index = conversation.events.findIndex((event) => event.id === cursor);
     if (index < 0) throw new Refused(400, "invalid_cursor");
     return conversation.events.slice(index + 1);
@@ -1465,84 +1889,122 @@ export class CompanyService {
   // Operations ----------------------------------------------------------------------
 
   /** A proposal as it goes on the wire: the same members, in the same order, as Python. */
-  #propose(session: IssuedSession, reply: Reply): Operation {
+  async #propose(session: IssuedSession, reply: Reply): Promise<Operation> {
     const proposal = reply.operation!;
     const owner = [session.clientId, session.pairwiseUserId] as const;
-    for (const stored of this.store.operations.values()) {
-      // The same action through another channel is the same operation (Operations §4).
-      this.#expire(stored);
+    const accountId = session.accountId!;
+    // The same action through another channel is the same operation (Operations §4).
+    const key = composite(
+      owner[0],
+      owner[1],
+      accountId,
+      proposal.action,
+      proposal.summary,
+      canonical(proposal.terms),
+    );
+    const known = await this.#read<OperationProposal>(RecordKinds.proposal, key);
+    if (known !== undefined) {
+      const current = await this.#currentOperation(known.operationId);
       if (
-        sameOwner(stored.owner, owner) &&
-        stored.accountId === session.accountId &&
-        stored.action === proposal.action &&
-        stored.operation.state === "proposed" &&
-        stored.operation.summary === proposal.summary &&
-        sameJson(stored.operation.terms, proposal.terms)
+        current !== undefined &&
+        sameOwner(current.owner, owner) &&
+        current.accountId === accountId &&
+        current.action === proposal.action &&
+        current.operation.state === "proposed" &&
+        current.operation.summary === proposal.summary &&
+        sameJson(current.operation.terms, proposal.terms)
       ) {
-        return stored.operation;
+        return current.operation;
       }
     }
     const operationId = this.#id("op");
+    const expiresAt = isoZ(this.#later(this.config.operationLifetimeSeconds));
     const operation = {
       operation_id: operationId,
       revision: 1,
       state: "proposed",
       summary: proposal.summary,
       terms: { ...proposal.terms },
-      expires_at: isoZ(this.#later(this.config.operationLifetimeSeconds)),
+      expires_at: expiresAt,
       user_approval_required: proposal.userApprovalRequired ?? false,
       url: `${this.config.base}/operations/${operationId}`,
       confirmation: null,
       result: null,
     } as unknown as Operation;
-    this.store.operations.set(operation.operation_id, {
+    const stored: StoredOperation = {
       operation,
       action: proposal.action,
       owner,
-      accountId: session.accountId!,
+      accountId,
       performed: false,
-    });
+    };
+    await this.store.put(RecordKinds.operation, operationId, json(stored));
+    const pointer: OperationProposal = { operationId };
+    await this.store.put(RecordKinds.proposal, key, json(pointer), expiry(expiresAt));
     return operation;
   }
 
+  /** An operation as the company keeps it: its record, action, owner, and account. */
+  async operationRecord(operationId: string): Promise<StoredOperation> {
+    const stored = await this.#currentOperation(operationId);
+    if (stored === undefined) throw new Error("unknown operation");
+    return stored;
+  }
+
   /** The company changes a proposal's terms: a new revision, the old one unconfirmable. */
-  revise(
+  async revise(
     operationId: string,
     changes: { readonly summary: string; readonly terms: Readonly<Record<string, unknown>> },
-  ): Operation {
-    const stored = this.store.operations.get(operationId);
-    if (stored === undefined) throw new Error("unknown operation");
-    if (stored.operation.state !== "proposed") {
-      throw new Error("only a proposed operation can be revised");
-    }
-    stored.operation = {
-      ...stored.operation,
-      revision: stored.operation.revision + 1,
-      summary: changes.summary,
-      terms: { ...changes.terms },
-      expires_at: isoZ(this.#later(this.config.operationLifetimeSeconds)),
-    };
-    return stored.operation;
+  ): Promise<Operation> {
+    const changed = await this.#change<StoredOperation>(
+      RecordKinds.operation,
+      operationId,
+      (stored) => {
+        if (stored.operation.state !== "proposed") {
+          throw new Error("only a proposed operation can be revised");
+        }
+        return {
+          ...stored,
+          operation: {
+            ...stored.operation,
+            revision: stored.operation.revision + 1,
+            summary: changes.summary,
+            terms: { ...changes.terms },
+            expires_at: isoZ(this.#later(this.config.operationLifetimeSeconds)),
+          },
+        };
+      },
+    );
+    if (changed === undefined) throw new Error("unknown operation");
+    return changed[1].operation;
   }
 
   /** The company found out how an operation left `in_progress` ended. */
-  settle(
+  async settle(
     operationId: string,
     result: OperationResult,
     options: { readonly succeeded: boolean },
-  ): Operation {
-    const stored = this.store.operations.get(operationId);
-    if (stored === undefined) throw new Error("unknown operation");
-    if (stored.operation.state !== "in_progress") {
-      throw new Error("only an operation in progress can be settled");
-    }
-    stored.performed = options.succeeded || stored.performed;
-    stored.operation = {
-      ...stored.operation,
-      state: options.succeeded ? "succeeded" : "failed",
-      result: resultJson(result),
-    } as unknown as Operation;
-    return stored.operation;
+  ): Promise<Operation> {
+    const changed = await this.#change<StoredOperation>(
+      RecordKinds.operation,
+      operationId,
+      (stored) => {
+        if (stored.operation.state !== "in_progress") {
+          throw new Error("only an operation in progress can be settled");
+        }
+        return {
+          ...stored,
+          performed: options.succeeded || stored.performed,
+          operation: {
+            ...stored.operation,
+            state: options.succeeded ? "succeeded" : "failed",
+            result: resultJson(result),
+          } as unknown as Operation,
+        };
+      },
+    );
+    if (changed === undefined) throw new Error("unknown operation");
+    return changed[1].operation;
   }
 
   async #operationRoute(
@@ -1554,10 +2016,10 @@ export class CompanyService {
     const operationId = parts[3] ?? "";
     const action = parts[4] ?? "";
     const [, session] = await this.#caller(request);
-    if (!this.extensions.get(session.clientId)?.has("operations")) {
+    if (!(await this.#supportsOperations(session.clientId))) {
       throw new Refused(403, "extension_required", { extension: "operations" });
     }
-    const stored = this.store.operations.get(operationId);
+    const stored = await this.#read<StoredOperation>(RecordKinds.operation, operationId);
     if (
       stored === undefined ||
       !sameOwner(stored.owner, [session.clientId, session.pairwiseUserId]) ||
@@ -1565,38 +2027,63 @@ export class CompanyService {
     ) {
       throw new Refused(404, "operation_not_found");
     }
-    this.#expire(stored);
-    if (method === "GET" && !action) return operationResponse(stored);
+    const current = await this.#currentOperation(operationId);
+    if (current === undefined) throw new Refused(404, "operation_not_found");
+    if (method === "GET" && !action) return operationResponse(current);
     if (method === "POST" && action === "cancel") {
-      if (stored.operation.state === "proposed") {
-        stored.operation = {
-          ...stored.operation,
-          state: "cancelled",
-          result: { summary: "Nothing was changed.", data: null },
-        } as unknown as Operation;
-      }
-      // In progress, it stays so until the company knows whether it stopped (§7).
-      return operationResponse(stored);
+      const changed = await this.#change<StoredOperation>(
+        RecordKinds.operation,
+        operationId,
+        (latest) => {
+          const now = this.#expired(latest);
+          // In progress, it stays so until the company knows whether it stopped (§7).
+          if (now.operation.state !== "proposed") return now;
+          return {
+            ...now,
+            operation: {
+              ...now.operation,
+              state: "cancelled",
+              result: { summary: "Nothing was changed.", data: null },
+            } as unknown as Operation,
+          };
+        },
+      );
+      if (changed === undefined) throw new Refused(404, "operation_not_found");
+      return operationResponse(changed[1]);
     }
     if (method === "POST" && action === "confirm") {
-      return this.#confirm(request, session, stored);
+      return this.#confirm(request, session, current);
     }
     throw new Refused(404, "not_found");
   }
 
-  #expire(stored: StoredOperation): void {
+  /** The operation now: a proposal past its expiry is recorded as expired. */
+  async #currentOperation(operationId: string): Promise<StoredOperation | undefined> {
+    const changed = await this.#change<StoredOperation>(
+      RecordKinds.operation,
+      operationId,
+      (stored) => this.#expired(stored),
+    );
+    return changed?.[1];
+  }
+
+  #expired(stored: StoredOperation): StoredOperation {
     const operation = stored.operation;
     if (
       operation.state === "proposed" &&
       operation.expires_at &&
-      this.#now() >= new Date(operation.expires_at)
+      this.#passed(operation.expires_at)
     ) {
-      stored.operation = {
-        ...operation,
-        state: "expired",
-        result: { summary: "Nothing was changed; the proposal expired.", data: null },
-      } as unknown as Operation;
+      return {
+        ...stored,
+        operation: {
+          ...operation,
+          state: "expired",
+          result: { summary: "Nothing was changed; the proposal expired.", data: null },
+        } as unknown as Operation,
+      };
     }
+    return stored;
   }
 
   async #confirm(
@@ -1624,52 +2111,90 @@ export class CompanyService {
     if (approvedBy === "standing_permission" && operation.user_approval_required) {
       throw new Refused(403, "user_approval_required");
     }
-    stored.operation = {
-      ...operation,
-      state: "in_progress",
-      confirmation: {
-        revision: operation.revision,
-        approved_by: approvedBy,
-        confirmed_at: isoZ(this.#now()),
+    const confirmation = {
+      revision: operation.revision,
+      approved_by: approvedBy,
+      confirmed_at: isoZ(this.#now()),
+    };
+    // The one compare-and-set from `proposed` to `in_progress`: only its winner performs.
+    const changed = await this.#change<StoredOperation>(
+      RecordKinds.operation,
+      operation.operation_id,
+      (latest) => {
+        const now = this.#expired(latest);
+        if (now.operation.state !== "proposed") return now;
+        if (now.operation.revision !== revision) {
+          throw new Refused(409, "terms_changed", { operation: now.operation });
+        }
+        return {
+          ...now,
+          operation: {
+            ...now.operation,
+            state: "in_progress",
+            confirmation,
+            expires_at: null,
+          } as unknown as Operation,
+        };
       },
-      expires_at: null,
-    } as unknown as Operation;
+    );
+    if (changed === undefined) throw new Refused(404, "operation_not_found");
+    const [before, confirmed] = changed;
+    if (before.operation.state !== "proposed" || confirmed.operation.state !== "in_progress") {
+      return { status: 200, body: confirmed.operation, headers: {} };
+    }
+    return this.#perform(confirmed);
+  }
+
+  /** Perform a just-confirmed operation with its one executor. */
+  async #perform(confirmed: StoredOperation): Promise<CompanyResponse> {
     const executors = this.reactor
       .getContributions(OperationExecutors)
       .map((contribution) => contribution.value)
-      .filter((executor) => executor.action === stored.action);
+      .filter((executor) => executor.action === confirmed.action);
     const executor = executors[0];
     if (executors.length !== 1 || executor === undefined) {
       // Nobody can perform it: it stays in progress rather than claim a failure.
-      return operationResponse(stored);
+      return operationResponse(confirmed);
     }
     let result: OperationResult;
     try {
-      result = await executor.perform(parseOperation(stored.operation), stored.accountId);
+      result = await executor.perform(parseOperation(confirmed.operation), confirmed.accountId);
     } catch (error) {
       if (error instanceof OperationFailed) {
         // Failed partway: the result says every change that was made (Operations §6).
-        stored.performed = true;
-        stored.operation = {
-          ...stored.operation,
-          state: "failed",
-          result: resultJson(error.result),
-        } as unknown as Operation;
-        return operationResponse(stored);
+        return this.#finish(confirmed, "failed", error.result);
       }
       if (error instanceof OperationOutcomeUnknown) {
         // Never `failed` while it may have taken effect: it stays in progress.
-        return operationResponse(stored);
+        return operationResponse(confirmed);
       }
       throw error;
     }
-    stored.performed = true;
-    stored.operation = {
-      ...stored.operation,
-      state: "succeeded",
-      result: resultJson(result),
-    } as unknown as Operation;
-    return operationResponse(stored);
+    return this.#finish(confirmed, "succeeded", result);
+  }
+
+  async #finish(
+    confirmed: StoredOperation,
+    state: "succeeded" | "failed",
+    result: OperationResult,
+  ): Promise<CompanyResponse> {
+    const changed = await this.#change<StoredOperation>(
+      RecordKinds.operation,
+      confirmed.operation.operation_id,
+      (current) =>
+        current.operation.state !== "in_progress"
+          ? current
+          : {
+              ...current,
+              performed: true,
+              operation: {
+                ...current.operation,
+                state,
+                result: resultJson(result),
+              } as unknown as Operation,
+            },
+    );
+    return operationResponse(changed === undefined ? confirmed : changed[1]);
   }
 }
 

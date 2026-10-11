@@ -6,6 +6,40 @@
 
 # Changelog
 
+## 0.6.0 (2026-10-11)
+
+- **Breaking — company store:** `pap.company.store` is an async keyed store of
+  versioned JSON records: `get`, `put`, `create` (only if absent), `replace`
+  (compare-and-set on a version), `take` (read and delete at once), and
+  `delete`, each by kind and key with an optional expiry; an expired record
+  reads as absent. The dict-of-records `CompanyStore` (Maps in TypeScript) is
+  gone, with no compatibility path. The service never mutates a stored record:
+  one-use codes, Direct Sign-In decisions, device approval and consumption,
+  Account Token rotation (one refresh claims the presented token), revocation
+  of a whole sign-in, Mediated attempts, message IDs, conversation events and
+  status, and operation confirmation (one compare-and-set to `in_progress`;
+  only its winner performs) go through `create`, `take`, or `replace`, so a
+  company restarted, replaced, or rolled back over a durable store continues
+  every flow. Records are frozen dataclasses with `to_json`/`from_json` in
+  Python and JSON-ready objects in TypeScript; `MemoryCompanyStore` keeps JSON
+  copies with real versions and judges expiry by the company's `pap.clock`.
+- **Breaking — company methods are async:** `approve_device`, `deny_device`,
+  `approve_authorization`, `deny_authorization`, `authorization_request`,
+  `revise`, `settle`, `forget_events`, and `disconnect` (and their TypeScript
+  names) now return coroutines or promises. `operation_record(operation_id)`
+  (`operationRecord`) reads an operation as the company keeps it. The
+  in-memory `CompanyService.extensions` map is gone: a client's declared
+  extensions are a store record.
+- **Store conformance kit:** `personal_agent_protocol.company.testing.check_store`
+  and `checkStore` (`@datalayer/personal-agent-protocol/server`) check any
+  backend: absent and present records, expiry, `take` once under concurrency,
+  `create` only if absent, compare-and-set conflicts, values copied rather than
+  shared, and a round trip of every record kind. Python and TypeScript tests
+  restart a company over one store mid-flow (device approval, Account Token
+  rotation, an operation confirmed once, an event cursor resumed).
+- The demo companies take a `store` (Manzanita in both languages), and
+  `demo.kit.StorePlugin` contributes one.
+
 ## 0.5.0 (2026-10-11)
 
 - **Security:** Direct Sign-In moves the Account Token into `pap.tokenStore`

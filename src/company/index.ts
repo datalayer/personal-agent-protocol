@@ -9,11 +9,22 @@
  * Server-only: exported from `@datalayer/personal-agent-protocol/server`.
  */
 
-import { contribution, definePlugin, type PlatformInput } from "@datalayer/reactor";
+import {
+  contribution,
+  definePlugin,
+  type PlatformInput,
+  type ReactorPlatformView,
+} from "@datalayer/reactor";
 
 import { AgentIdentityClient } from "../identity.js";
 import type { ClientMetadata, JsonWebKeySet } from "../models.js";
-import { buildPapReactor, type PapCoreOptions } from "../reactor.js";
+import {
+  Clocks,
+  buildPapReactor,
+  firstContribution,
+  type Clock,
+  type PapCoreOptions,
+} from "../reactor.js";
 import {
   AllowEveryAgent,
   ClientPolicies,
@@ -57,11 +68,26 @@ export class IdentityClientResolver implements ClientResolver {
   }
 }
 
+/** The clock a reactor's `pap.clock` contribution keeps, read at each call once bound. */
+export class ReactorClock implements Clock {
+  #reactor: ReactorPlatformView | undefined;
+
+  /** Read the company's clock once its Reactor exists (the system clock before). */
+  bind(reactor: ReactorPlatformView): void {
+    this.#reactor = reactor;
+  }
+
+  now(): Date {
+    const reactor = this.#reactor;
+    return reactor === undefined ? new Date() : firstContribution(reactor, Clocks, "clock").now();
+  }
+}
+
 /** The company side's defaults: memory store and replay cache, open policy, HTTPS identity. */
-export function createCompanyDefaultsPlugin(resolver: ClientResolver) {
+export function createCompanyDefaultsPlugin(resolver: ClientResolver, clock?: Clock) {
   return definePlugin({
     name: "personal-agent-protocol.company",
-    version: "0.5.0",
+    version: "0.6.0",
     contributionPoints: [
       CompanyStores,
       CompanyAccounts,
@@ -73,7 +99,11 @@ export function createCompanyDefaultsPlugin(resolver: ClientResolver) {
       ReplayCaches,
     ],
     contributes: [
-      contribution(CompanyStores, new MemoryCompanyStore(), { id: "memory", order: 100 }),
+      contribution(
+        CompanyStores,
+        new MemoryCompanyStore(clock === undefined ? {} : { clock }),
+        { id: "memory", order: 100 },
+      ),
       contribution(ReplayCaches, new MemoryReplayCache(), { id: "memory", order: 100 }),
       contribution(ClientPolicies, new AllowEveryAgent(), { id: "allow", order: 100 }),
       contribution(ClientResolvers, resolver, { id: "https", order: 100 }),
@@ -98,15 +128,18 @@ export function buildCompany(
   options: BuildCompanyOptions = {},
 ): CompanyService {
   const resolver = new IdentityClientResolver();
+  const clock = new ReactorClock();
   const { plugins = [], ...core } = options;
-  const reactor = buildPapReactor(core, [createCompanyDefaultsPlugin(resolver), ...plugins]);
+  const reactor = buildPapReactor(core, [createCompanyDefaultsPlugin(resolver, clock), ...plugins]);
   resolver.bind(new AgentIdentityClient({ reactor }));
+  clock.bind(reactor);
   return new CompanyService({ config, reactor });
 }
 
 export * from "./points.js";
 export * from "./service.js";
 export { verifyAssertion, type VerifyAssertionOptions } from "./verify.js";
+export { checkStore, recordSamples, StoreConformanceError } from "./testing.js";
 export {
   byHost,
   companyRequestListener,

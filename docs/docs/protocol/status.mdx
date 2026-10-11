@@ -81,7 +81,9 @@ can support more than one protocol profile.
   Operations client are aligned in Python and TypeScript. The company side
   (the reference company) and the demo worlds are Python only.
 - The reference company keeps state in one process by default. Production
-  companies contribute a durable `pap.company.store`, a distributed
+  companies contribute a durable `pap.company.store` (an async keyed store
+  with `create`, `take`, and compare-and-set, checked by `check_store`) over
+  which a restarted or replaced company continues every flow, a distributed
   `pap.company.replayCache`, their account directory, agent, and idempotent
   operation executors.
 - The SDK ships an in-memory standing permission store for examples and tests

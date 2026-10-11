@@ -8,8 +8,8 @@ A company assembles its PAP service from contributions, each replaceable
 without touching the service:
 
 - `pap.company.store` keeps Sessions, Account Tokens, sign-ins,
-  conversations, and operations (in memory by default; a database in
-  production).
+  conversations, and operations as versioned JSON records (`store`; in
+  memory by default, a database in production).
 - `pap.company.accounts` checks a user's credentials and second factor for
   Mediated Sign-In, and stands for the company's own sign-in page in Device
   Sign-In.
@@ -30,7 +30,7 @@ without touching the service:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -38,9 +38,21 @@ from pydantic import SecretStr
 from reactor import define_contribution_point  # type: ignore[import-untyped]
 
 from ..models import ClientMetadata, JsonWebKeySet, Operation, OperationResult
-
-#: The OAuth token type of a proof-bound Session Token.
-DPOP: Literal["DPoP"] = "DPoP"
+from .store import (
+    DPOP,
+    AccountGrant,
+    CompanyStore,
+    IssuedCode,
+    IssuedSession,
+    MemoryCompanyStore,
+    PendingAuthorization,
+    PendingDevice,
+    PendingMediated,
+    StoredConversation,
+    StoredEvent,
+    StoredOperation,
+    StoredRecord,
+)
 
 COMPANY_STORES = define_contribution_point("pap.company.store")
 COMPANY_ACCOUNTS = define_contribution_point("pap.company.accounts")
@@ -51,152 +63,6 @@ CLIENT_RESOLVERS = define_contribution_point("pap.company.clientResolver")
 REPLAY_CACHES = define_contribution_point("pap.company.replayCache")
 COMPANY_APIS = define_contribution_point("pap.company.api")
 COMPANY_MCP = define_contribution_point("pap.company.mcp")
-
-
-@dataclass
-class IssuedSession:
-    """A Session the company issued; its token is bound to a DPoP key."""
-
-    session_id: str
-    client_id: str
-    pairwise_user_id: str
-    key_thumbprint: str
-    expires_at: datetime
-    account_id: str | None = None
-    scopes: tuple[str, ...] = ()
-    account_token: str | None = None
-    token_type: Literal["DPoP", "Bearer"] = DPOP
-    resource: str | None = None
-
-    @property
-    def signed_in(self) -> bool:
-        return self.account_id is not None
-
-
-@dataclass
-class AccountGrant:
-    """What an Account Token is: one account, one agent, one user, some scopes."""
-
-    account_id: str
-    client_id: str
-    pairwise_user_id: str
-    scopes: tuple[str, ...]
-    expires_at: datetime
-    revoked: bool = False
-    #: The sign-in it comes from: every token rotated from one sign-in shares it.
-    family: str = ""
-
-
-@dataclass
-class PendingDevice:
-    client_id: str
-    scopes: tuple[str, ...]
-    user_code: str
-    expires_at: datetime
-    interval: int
-    last_poll: datetime | None = None
-    account_id: str | None = None
-    granted: tuple[str, ...] = ()
-    denied: bool = False
-
-
-@dataclass
-class PendingAuthorization:
-    """A Direct Sign-In request waiting on the user's decision on the company's page."""
-
-    client_id: str
-    redirect_uri: str
-    scopes: tuple[str, ...]
-    state: str
-    code_challenge: str
-    expires_at: datetime
-    client_name: str = ""
-
-
-@dataclass
-class IssuedCode:
-    """A one-use authorization code, at most a minute old."""
-
-    client_id: str
-    redirect_uri: str
-    code_challenge: str
-    account_id: str
-    scopes: tuple[str, ...]
-    expires_at: datetime
-
-
-@dataclass
-class PendingMediated:
-    session_id: str
-    account_id: str
-    scopes: tuple[str, ...]
-    code_reference: str
-    expires_at: datetime
-    attempts: int = 0
-
-
-@dataclass
-class StoredEvent:
-    id: str
-    payload: dict[str, Any]
-
-
-@dataclass
-class StoredConversation:
-    conversation_id: str
-    owner: tuple[str, str]
-    status: Literal["working", "idle", "queued", "closed"] = "idle"
-    responder: Literal["agent", "human"] = "agent"
-    parent_id: str | None = None
-    direct_child: str | None = None
-    #: The account the conversation used; from then on it belongs to that account.
-    account_id: str | None = None
-    events: list[StoredEvent] = field(default_factory=list)
-    message_ids: dict[str, str] = field(default_factory=dict)
-    #: Event IDs the company no longer keeps: a cursor naming one is `cursor_expired`.
-    forgotten: set[str] = field(default_factory=set)
-
-
-@dataclass
-class StoredOperation:
-    operation: Operation
-    action: str
-    owner: tuple[str, str]
-    account_id: str
-    performed: bool = False
-
-
-@runtime_checkable
-class CompanyStore(Protocol):
-    """Everything a company remembers, by kind and key."""
-
-    sessions: dict[str, IssuedSession]
-    account_tokens: dict[str, AccountGrant]
-    devices: dict[str, PendingDevice]
-    authorizations: dict[str, PendingAuthorization]
-    codes: dict[str, IssuedCode]
-    mediated: dict[str, PendingMediated]
-    conversations: dict[str, StoredConversation]
-    operations: dict[str, StoredOperation]
-    message_ids: dict[tuple[str, str, str], str]
-    browser_cookies: dict[str, str]
-
-
-class MemoryCompanyStore:
-    """The default store: one process, nothing persisted."""
-
-    def __init__(self) -> None:
-        self.sessions: dict[str, IssuedSession] = {}
-        self.account_tokens: dict[str, AccountGrant] = {}
-        self.devices: dict[str, PendingDevice] = {}
-        self.authorizations: dict[str, PendingAuthorization] = {}
-        self.codes: dict[str, IssuedCode] = {}
-        self.mediated: dict[str, PendingMediated] = {}
-        self.conversations: dict[str, StoredConversation] = {}
-        self.operations: dict[str, StoredOperation] = {}
-        self.message_ids: dict[tuple[str, str, str], str] = {}
-        #: The website's own cookies (by digest), each tied to one Session (§5).
-        self.browser_cookies: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -412,3 +278,48 @@ class CompanyMcp(Protocol):
     def tools(self) -> list[dict[str, Any]]: ...
 
     async def call(self, name: str, arguments: dict[str, Any], call: ApiCall) -> ToolResult: ...
+
+
+__all__ = [
+    "CLIENT_POLICIES",
+    "CLIENT_RESOLVERS",
+    "COMPANY_ACCOUNTS",
+    "COMPANY_AGENTS",
+    "COMPANY_APIS",
+    "COMPANY_MCP",
+    "COMPANY_STORES",
+    "DPOP",
+    "OPERATION_EXECUTORS",
+    "REPLAY_CACHES",
+    "AccountDirectory",
+    "AccountGrant",
+    "AllowEveryAgent",
+    "ApiCall",
+    "ApiResult",
+    "Authenticated",
+    "ClientPolicy",
+    "ClientResolver",
+    "CompanyAgent",
+    "CompanyApi",
+    "CompanyMcp",
+    "CompanyStore",
+    "IssuedCode",
+    "IssuedSession",
+    "MemoryCompanyStore",
+    "MemoryReplayCache",
+    "OperationExecutor",
+    "OperationFailed",
+    "OperationOutcomeUnknown",
+    "PendingAuthorization",
+    "PendingDevice",
+    "PendingMediated",
+    "ProposedOperation",
+    "ReplayCache",
+    "Reply",
+    "StoredConversation",
+    "StoredEvent",
+    "StoredOperation",
+    "StoredRecord",
+    "ToolResult",
+    "Turn",
+]

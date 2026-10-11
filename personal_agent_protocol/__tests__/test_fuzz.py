@@ -10,6 +10,8 @@ plain seeded `random.Random`: every run is reproducible, and
 (`PAP_FUZZ_ITERATIONS=5000 pytest personal_agent_protocol/__tests__/test_fuzz.py`).
 """
 
+# Seeded test data, not secrets; "0.0.0.0" is a generated address.
+# ruff: noqa: S311, S104
 from __future__ import annotations
 
 import ipaddress
@@ -65,7 +67,7 @@ def _escape(key: str, rng: random.Random) -> str:
     )
 
 
-def _with_duplicate(rng: random.Random, value: Any) -> str | None:
+def _with_duplicate(rng: random.Random, value: Any) -> str | None:  # noqa: C901
     """Serialize `value` with one object member repeated, or `None` if it has no object."""
 
     objects: list[dict[str, Any]] = []
@@ -220,7 +222,7 @@ async def test_url_safety_approves_only_https_public_addresses() -> None:
 
 
 @pytest.mark.asyncio
-async def test_random_operation_histories_keep_the_state_machine() -> None:
+async def test_random_operation_histories_keep_the_state_machine() -> None:  # noqa: C901
     """Confirm, cancel, revise and time passing, in any order: the invariants hold.
 
     A final state never changes; an operation is performed at most once; only a

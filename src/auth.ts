@@ -265,8 +265,10 @@ export interface DirectSignInStart {
 }
 
 /**
- * The signed-in Session. The Account Token never stays in `token`: it is moved
- * into `pap.tokenStore` behind `accountTokenReference` (§4.8).
+ * The signed-in Session, its scopes, and a reference to its stored Account Token.
+ *
+ * The Account Token never stays in `token`: it is moved into `pap.tokenStore`
+ * behind `accountTokenReference` (§4.8).
  */
 export interface DirectSignInResult {
   readonly token: SessionToken;

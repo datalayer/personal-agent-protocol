@@ -361,7 +361,7 @@ async def test_typescript_agent_with_the_python_company(tmp_path: Path) -> None:
                 if "failed" in line:
                     pytest.fail(f"TypeScript agent failed: {line['failed']}")
                 if line.get("ask") == "approve_authorization":
-                    callback = shop.approve_authorization(
+                    callback = await shop.approve_authorization(
                         line["request_id"], account_id=line["account_id"]
                     )
                     await node.send({"callback": callback})
@@ -463,7 +463,7 @@ async def test_python_agent_with_the_python_company_runs_the_same_scenario() -> 
         reactor = personal_agent_reactor(host, network=network, http_client=http)
 
         async def approve_authorization(request_id: str, account_id: str) -> str:
-            return shop.approve_authorization(request_id, account_id=account_id)
+            return await shop.approve_authorization(request_id, account_id=account_id)
 
         async def performed(action: str) -> list[str]:
             return list(plugin.executor.performed)

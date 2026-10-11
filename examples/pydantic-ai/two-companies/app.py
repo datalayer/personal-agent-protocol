@@ -93,7 +93,7 @@ async def run_two_companies() -> dict[str, Any]:
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
     )
-    firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
+    await firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
     clock.advance(started.poll_interval)
     token = (await device.poll(started.reference)).token
     if not (token is not None):
@@ -115,7 +115,7 @@ async def run_two_companies() -> dict[str, Any]:
 
     # 1. Ledgerly is not yet connected to Northwind: Ada approves it on Northwind's page.
     connect = (await say("Pay INV-0042")).data["connect"]
-    bank.approve_device(connect["user_code"], account_id=ACCOUNT)
+    await bank.approve_device(connect["user_code"], account_id=ACCOUNT)
     clock.advance(5)
 
     # 2. Northwind's proposal comes back as a Ledgerly operation quoting it as written.
@@ -124,7 +124,7 @@ async def run_two_companies() -> dict[str, Any]:
 
     # 3. Ada approves in Atlas; Ledgerly confirms that exact revision at Northwind.
     paid = await operations.confirm(ops, relayed, approval=approve(relayed), token=token, **who)
-    first = bank.store.operations[bank_plugin.executor.performed[0]].operation
+    first = (await bank.operation_record(bank_plugin.executor.performed[0])).operation
 
     # 4. A standing permission is itself an operation Ada approves.
     allow = "Allow Ledgerly to pay Acme invoices up to EUR 2000 without asking"
@@ -133,7 +133,7 @@ async def run_two_companies() -> dict[str, Any]:
 
     # 5. Within the bounds: paid under the permission, Ada told what was done.
     told = await say("Pay INV-0043")
-    second = bank.store.operations[bank_plugin.executor.performed[1]].operation
+    second = (await bank.operation_record(bank_plugin.executor.performed[1])).operation
 
     # 6. Beyond the bounds: Ada is asked again.
     over = (await say("Pay INV-0044")).operation

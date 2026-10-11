@@ -165,7 +165,7 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
     )
-    bank.approve_device(started.user_code, account_id=ACCOUNT)
+    await bank.approve_device(started.user_code, account_id=ACCOUNT)
     clock.advance(started.poll_interval)
     token = (await device.poll(started.reference)).token
     if not (token is not None):
@@ -207,7 +207,7 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
 
     # 2. Ada approves revision 1; the bank revises the terms before the confirm lands.
     approval = approve(first)
-    bank.revise(
+    await bank.revise(
         first.operation_id,
         summary=first.summary.replace("1250.00", "1262.50") + " Includes a EUR 12.50 fee.",
         terms={**(first.terms or {}), "amount": {"amount": "1262.50", "currency": "EUR"}},

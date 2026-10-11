@@ -37,6 +37,7 @@ from ..company import (
     Authenticated,
     CompanyConfig,
     CompanyService,
+    CompanyStore,
     OperationFailed,
     OperationOutcomeUnknown,
     ProposedOperation,
@@ -47,7 +48,7 @@ from ..company import (
     company_app,
 )
 from ..models import Operation, OperationResult
-from .kit import ClockPlugin, InProcessNetwork, MutableClock
+from .kit import ClockPlugin, InProcessNetwork, MutableClock, StorePlugin
 
 DOMAIN = "manzanita.example"
 ADA = {"email": "ada@example.com", "password": "correct horse battery staple"}
@@ -321,19 +322,26 @@ class ManzanitaPlugin:
 
 
 def manzanita(
-    network: InProcessNetwork, clock: MutableClock
+    network: InProcessNetwork, clock: MutableClock, *, store: CompanyStore | None = None
 ) -> tuple[CompanyService, ManzanitaPlugin]:
-    """Build Manzanita and put it on the network at `manzanita.example`."""
+    """Build Manzanita and put it on the network at `manzanita.example`.
+
+    With `store`, Manzanita keeps its state there: building it again over the
+    same store is Manzanita restarted (or another replica of it).
+    """
 
     plugin = ManzanitaPlugin()
+    plugins: list[tuple[PluginManifest, object]] = [
+        (PluginManifest(name="manzanita", version="1"), plugin),
+        (PluginManifest(name="manzanita-clock", version="1"), ClockPlugin(clock)),
+    ]
+    if store is not None:
+        plugins.append((PluginManifest(name="manzanita-store", version="1"), StorePlugin(store)))
     service = build_company(
         CONFIG,
         http_client=network.client(),
         address_resolver=network.resolve,
-        plugins=[
-            (PluginManifest(name="manzanita", version="1"), plugin),
-            (PluginManifest(name="manzanita-clock", version="1"), ClockPlugin(clock)),
-        ],
+        plugins=plugins,
     )
     network.add(DOMAIN, company_app(service))
     return service, plugin

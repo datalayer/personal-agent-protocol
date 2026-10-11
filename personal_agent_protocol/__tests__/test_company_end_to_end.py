@@ -19,6 +19,7 @@ from personal_agent_protocol import (
     generate_message_id,
 )
 from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
+from personal_agent_protocol.company import MemoryCompanyStore
 from personal_agent_protocol.conversations import StreamReconnected, TextDelta
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
@@ -38,12 +39,14 @@ PAIRWISE = "usr_ada_at_manzanita_000000"
 
 
 class World:
-    def __init__(self, *answers: dict[str, str]) -> None:
+    def __init__(self, *answers: dict[str, str], durable: bool = False) -> None:
         self.clock = MutableClock()
         self.network = InProcessNetwork()
         self.atlas = AgentIdentity(domain="atlas.example", name="Atlas")
         self.network.add(self.atlas.domain, self.atlas.website())
-        self.shop, self.plugin = manzanita(self.network, self.clock)
+        # Durable: the company's state is in a store that outlives it (`restart`).
+        self.store = MemoryCompanyStore(self.clock) if durable else None
+        self.shop, self.plugin = manzanita(self.network, self.clock, store=self.store)
         self.http = self.network.client()
         self.host = PersonalAgentHost(
             self.atlas, self.clock, protected_input=ScriptedInput(*answers)
@@ -72,6 +75,11 @@ class World:
             token_endpoint=company.oauth_metadata.token_endpoint,
             tenant_id=TENANT,
         )
+
+    def restart(self) -> None:
+        """Manzanita stops and starts again (or another replica answers) over its store."""
+
+        self.shop, self.plugin = manzanita(self.network, self.clock, store=self.store)
 
     def message(self, text: str) -> Message:
         return Message(id=generate_message_id(self.reactor), sender="human", text=text)
@@ -107,7 +115,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
     )
     world.clock.advance(started.poll_interval)
     assert (await device.poll(started.reference)).status == "pending"
-    world.shop.approve_device(started.user_code, account_id="acct_ada")
+    await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
     done = await device.poll(started.reference)
     assert done.status == "complete" and done.token is not None

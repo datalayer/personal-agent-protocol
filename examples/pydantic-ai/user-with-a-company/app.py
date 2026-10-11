@@ -107,7 +107,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
         session_id=session.session_id,
     )
     steps.append(f"Ada opened {started.verification_uri} and entered the code")
-    shop.approve_device(started.user_code, account_id="acct_ada")
+    await shop.approve_device(started.user_code, account_id="acct_ada")
     clock.advance(started.poll_interval)
     done = await device.poll(started.reference)
     signed_in = done.token

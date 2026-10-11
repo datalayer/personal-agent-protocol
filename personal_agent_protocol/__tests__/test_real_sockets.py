@@ -39,7 +39,7 @@ async def test_discovery_sign_in_read_and_operation_over_tls() -> None:
         client = await begin(world, browser, session, ("orders:read", "orders:write"))
         signed_in = (
             await client.complete(
-                world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
+                await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
             )
         ).token
         api = ApiClient(transport=world.transport)

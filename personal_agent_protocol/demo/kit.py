@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import SecretStr
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 
+from ..company.points import COMPANY_STORES, CompanyStore
 from ..crypto import DpopKeyMaterial, JoseDpopProofProvider, JoseSigner
 from ..errors import DiscoveryError
 from ..operations import STANDING_PERMISSION_STORES, InMemoryStandingPermissionStore
@@ -320,6 +321,18 @@ class ClockPlugin:
 
     def provide_contributions(self, contributions: object) -> None:
         contributions.contribute(CLOCKS, self.clock, contribution_id="demo-clock")  # type: ignore[attr-defined]
+
+
+class StorePlugin:
+    """Give a company a store that outlives it: a restarted company reads the same one."""
+
+    def __init__(self, store: CompanyStore) -> None:
+        self.store = store
+
+    def provide_contributions(self, contributions: object) -> None:
+        contributions.contribute(  # type: ignore[attr-defined]
+            COMPANY_STORES, self.store, contribution_id="given-store", order=0
+        )
 
 
 def one_origin(site: Asgi, app: Asgi, site_paths: Iterable[str]) -> Asgi:

@@ -181,6 +181,73 @@
         "error": "rate_limited",
         "retry_after": "30"
       }
+    },
+    {
+      "id": "lifecycle.mcp-protected-resource-metadata",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-6-06",
+        "PAP-6-03"
+      ],
+      "description": "The MCP server's protected resource metadata names it as the resource and the company's issuer among its authorization servers; an unauthenticated call is 401 with a Bearer challenge pointing there."
+    },
+    {
+      "id": "lifecycle.mcp-bearer-for-its-url",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-4.3-09",
+        "PAP-6-04",
+        "GUIDE-pa-tokens-01"
+      ],
+      "description": "A Session's token request without DPoP and with resource set to the MCP url returns a Bearer token for the same Session; the MCP server accepts it and enforces its scopes."
+    },
+    {
+      "id": "lifecycle.mcp-bearer-only-at-mcp",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-4.3-10",
+        "PAP-6-05"
+      ],
+      "description": "The Bearer token is refused at every API, conversation, and operations endpoint; the MCP server refuses a DPoP token; no Bearer is issued for another resource."
+    },
+    {
+      "id": "lifecycle.mcp-sign-out-takes-effect",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-4.9-01",
+        "PAP-6-04"
+      ],
+      "description": "After revocation the MCP server handles the Bearer token as signed out (sign_in_required)."
+    },
+    {
+      "id": "lifecycle.browser-joins-session",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-5-01",
+        "PAP-5-03",
+        "PAP-5-12",
+        "PAP-5-10",
+        "PAP-5-11"
+      ],
+      "description": "The agent's own browser posts a browser assertion and gets a Secure, HttpOnly, SameSite=Lax cookie with no lifetime of its own; the website follows the Session's sign-out on the next request."
+    },
+    {
+      "id": "lifecycle.browser-assertion-refused",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5-05",
+        "PAP-5-06",
+        "PAP-5-07",
+        "PAP-5-08",
+        "PAP-5-09"
+      ],
+      "description": "A replayed, Session-typed, foreign-return_to, other-user's, or long-lived browser assertion sets no cookie (HTTP 400)."
     }
   ]
 }

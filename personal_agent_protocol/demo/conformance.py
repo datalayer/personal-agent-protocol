@@ -51,6 +51,9 @@ MANZANITA_SCENARIO = Scenario(
     standing_too_low=(TermLimit("price.amount", maximum=Decimal("1.00")),),
     operation_prompt="The jacket is not warm enough: can we exchange it for a warmer one?",
     account_prompt="Where is my jacket order?",
+    mcp_read_tool="list_orders",
+    mcp_propose_tool="exchange_jacket",
+    web_confirm_form={"action": "confirm", "revision": "{revision}", "approved_by": "user"},
 )
 
 
@@ -129,4 +132,5 @@ class ManzanitaConformance:
             scenario=MANZANITA_SCENARIO,
             clock=self.clock,
             address_resolver=self.network.resolve,
+            browser_http=self.network.client(),
         )

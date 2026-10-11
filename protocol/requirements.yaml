@@ -479,22 +479,34 @@ requirements:
   text: To get one for an existing Session, the Personal Agent sends the request that renews the Session's
     token (4.2, or 4.8 for a signed-in Session) without the DPoP header, and MUST include resource set
     to the MCP server's url from poppy.json, as MCP authorization requires.
-  status: open
-  reason: Resource-bound MCP Bearer acquisition is not implemented yet.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.sessions:SessionClient.bearer_for_mcp
+  - personal_agent_protocol.accounts:AccountTokenClient.bearer_for_mcp
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_is_issued_only_for_the_mcp_url_and_an_existing_session
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_bearer_reads_and_proposes_through_mcp_the_same_operation
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-bearer-for-its-url
 - id: PAP-4.3-10
   section: '4.3'
   level: MUST
   role: company
   text: Companies MUST accept Bearer Session Tokens only on their MCP APIs (section 6), and MUST require
     DPoP everywhere else.
-  status: partial
+  status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._caller
+  - personal_agent_protocol.company.service:CompanyService._bearer_caller
+  - personal_agent_protocol.company.service:CompanyService._token
+  - personal_agent_protocol.mcp:McpBearerAuth
   tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_token_is_refused_everywhere_but_its_mcp_server
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
+  - lifecycle.mcp-bearer-only-at-mcp
   - security.dpop-token-as-bearer
-  reason: The reference company has no MCP API yet and refuses Bearer tokens everywhere.
 - id: PAP-4.3-11
   section: '4.3'
   level: MUST
@@ -883,6 +895,7 @@ requirements:
   conformance:
   - lifecycle.sign-out-takes-effect
   - lifecycle.sign-out-session-continues
+  - lifecycle.mcp-sign-out-takes-effect
 - id: PAP-4.9-02
   section: '4.9'
   level: SHOULD
@@ -901,6 +914,8 @@ requirements:
   - personal_agent_protocol.browser:BrowserSessionClient.join
   tests:
   - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+  conformance:
+  - lifecycle.browser-joins-session
 - id: PAP-5-02
   section: '5'
   level: MUST
@@ -924,6 +939,8 @@ requirements:
   - personal_agent_protocol.reactor:BROWSER_FORM_POSTS
   tests:
   - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+  conformance:
+  - lifecycle.browser-joins-session
 - id: PAP-5-04
   section: '5'
   level: MUST
@@ -946,11 +963,14 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
   - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
   - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
+  - lifecycle.browser-assertion-refused
   - security.browser-assertion-at-token-endpoint
 - id: PAP-5-06
   section: '5'
@@ -961,9 +981,14 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
   - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
   - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-assertion-refused
 - id: PAP-5-07
   section: '5'
   level: MUST
@@ -972,9 +997,14 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
   - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
   - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-assertion-refused
 - id: PAP-5-08
   section: '5'
   level: MUST
@@ -983,9 +1013,14 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
   - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
   - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-assertion-refused
 - id: PAP-5-09
   section: '5'
   level: MUST
@@ -994,31 +1029,56 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
   - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
   - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-assertion-refused
 - id: PAP-5-10
   section: '5'
   level: MUST
   role: company
   text: 'The cookie MUST follow the Session''s current state: when the Session signs in or out, or its
     scopes change, the website reflects it on the next request.'
-  status: open
-  reason: The reference company has no browser-session endpoint yet.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._web_session
+  - personal_agent_protocol.company.service:CompanyService._live_session
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-joins-session
 - id: PAP-5-11
   section: '5'
   level: MUST NOT
   role: company
   text: The cookie MUST NOT outlive the Session.
-  status: open
-  reason: The reference company has no browser-session endpoint yet.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._web_session
+  - personal_agent_protocol.company.service:CompanyService._browser_session
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_operation_confirmed_on_the_website_is_the_same_operation_once
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-joins-session
 - id: PAP-5-12
   section: '5'
   level: MUST
   role: company
   text: The cookie MUST be Secure and HttpOnly, and use SameSite=Lax or None, not Strict.
-  status: open
-  reason: The reference company has no browser-session endpoint yet.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._browser_session
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_operation_confirmed_on_the_website_is_the_same_operation_once
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-joins-session
 - id: PAP-6-01
   section: '6'
   level: MUST
@@ -1050,30 +1110,57 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._api_call
+  - personal_agent_protocol.company.service:CompanyService._mcp_route
   tests:
   - personal_agent_protocol/__tests__/test_direct_and_api.py::test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchange
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_bearer_reads_and_proposes_through_mcp_the_same_operation
+  conformance:
+  - lifecycle.mcp-protected-resource-metadata
 - id: PAP-6-04
   section: '6'
   level: MUST
   role: company
   text: A listed MCP server MUST accept Session Tokens as its access tokens and enforce their scopes.
-  status: open
-  reason: The reference company lists no MCP API yet.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._mcp_route
+  - personal_agent_protocol.company.service:CompanyService._mcp_tool
+  - personal_agent_protocol.company.points:ToolResult
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_is_issued_only_for_the_mcp_url_and_an_existing_session
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_signing_out_reaches_the_mcp_server_at_once
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-bearer-for-its-url
+  - lifecycle.mcp-sign-out-takes-effect
 - id: PAP-6-05
   section: '6'
   level: MUST
   role: company
   text: It MUST accept only tokens issued for its url (4.3).
-  status: open
-  reason: The reference company lists no MCP API yet.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._bearer_caller
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_token_is_refused_everywhere_but_its_mcp_server
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-bearer-only-at-mcp
 - id: PAP-6-06
   section: '6'
   level: MUST
   role: company
   text: MCP clients find where to get a token from the server's protected resource metadata (RFC 9728),
     and its authorization_servers MUST include auth.issuer.
-  status: open
-  reason: The reference company lists no MCP API yet.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.protected_resource_metadata
+  - personal_agent_protocol.company.service:CompanyService._bearer_refusal
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_company_advertises_its_mcp_server_and_its_issuer
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-protected-resource-metadata
 - id: PAP-7.2-01
   section: '7.2'
   level: MUST
@@ -1354,6 +1441,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - operations.confirm-succeeded
+  - operations.web-confirm-at-most-once
 - id: OPS-3-03
   source: operations
   section: '3'
@@ -1412,10 +1500,14 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._propose
+  - personal_agent_protocol.operations:operation_from
+  - personal_agent_protocol.mcp:McpClient.call_tool
   tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_bearer_reads_and_proposes_through_mcp_the_same_operation
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - operations.cross-channel-identity
+  - operations.cross-channel-mcp
 - id: OPS-4.1-01
   source: operations
   section: '4.1'
@@ -1531,12 +1623,15 @@ requirements:
     channels it is confirmed.
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._confirm
+  - personal_agent_protocol.company.service:CompanyService._confirm_operation
+  - personal_agent_protocol.company.service:CompanyService._operation_page
   tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_operation_confirmed_on_the_website_is_the_same_operation_once
   - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_revised_operation_is_terms_changed_and_never_performed_twice
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - operations.at-most-once
+  - operations.web-confirm-at-most-once
   - operations.cancel-proposed
 - id: OPS-6-03
   source: operations
@@ -1866,10 +1961,15 @@ guide:
   level: SHOULD
   role: personal-agent
   text: Request Bearer session tokens only for MCP (4.3). Each one is limited to one MCP server by resource.
-  status: open
+  status: implemented
   implementation:
+  - personal_agent_protocol.mcp:McpBearerAuth
   - personal_agent_protocol.transport:DpopHttpClient.request
-  reason: MCP Bearer acquisition is not implemented yet.
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_token_is_refused_everywhere_but_its_mcp_server
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-bearer-for-its-url
 - id: GUIDE-pa-tokens-02
   source: guide
   section: Storing tokens

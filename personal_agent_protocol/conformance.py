@@ -50,12 +50,14 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .accounts import AccountTokenClient, AccountTokenContext
 from .apis import ApiClient, ApiError, conversation_endpoint, openapi_url
+from .browser import BrowserSessionClient
 from .conversations import ConversationClient, TextDelta
 from .crypto import JoseDpopProofProvider
-from .demo.kit import AgentIdentity, MemoryVault, MutableClock, PersonalAgentHost
+from .demo.kit import AgentIdentity, ControlledBrowser, MemoryVault, MutableClock, PersonalAgentHost
 from .device import DeviceSignInClient
 from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError, TransportError
+from .mcp import McpClient, McpError, mcp_api
 from .models import ConversationEvent, DiscoveredCompany, Message, Operation
 from .operations import (
     STANDING_PERMISSION_STORES,
@@ -65,6 +67,7 @@ from .operations import (
     StandingPermission,
     TermLimit,
     approve,
+    operation_page,
     operations_endpoint,
 )
 from .reactor import (
@@ -188,7 +191,10 @@ class Scenario:
     (a standing permission may cover it), `fails` (fails partway), and
     `unknown` (its outcome stays unknown). `operation_prompt` makes the
     company agent propose the `user` proposal in a conversation;
-    `account_prompt` makes it ask for sign-in.
+    `account_prompt` makes it ask for sign-in. `mcp_read_tool` needs
+    `read_scope`; `mcp_propose_tool` proposes the `user` proposal.
+    `web_confirm_form` is what the operation's page posts to confirm it
+    (`{revision}` is replaced), since the website's form is the company's own.
     """
 
     read_path: str
@@ -201,6 +207,9 @@ class Scenario:
     operation_prompt: str | None = None
     account_prompt: str | None = None
     greeting: str = "Hello."
+    mcp_read_tool: str | None = None
+    mcp_propose_tool: str | None = None
+    web_confirm_form: dict[str, str] | None = None
 
 
 class SkipCase(Exception):  # noqa: N818 - control flow for a case that cannot run
@@ -231,16 +240,19 @@ class Agent:
         http: httpx.AsyncClient,
         clock: Clock,
         address_resolver: AddressResolver,
+        browser_http: httpx.AsyncClient | None = None,
     ) -> None:
         self.identity = identity
         self.http = http
         self.vault = MemoryVault()
         self.standing = InMemoryStandingPermissionStore()
+        self.browser = ControlledBrowser(browser_http) if browser_http is not None else None
         host = PersonalAgentHost(
             identity,
             cast(MutableClock, clock),
             vault=self.vault,
             standing=self.standing,
+            controlled_browser=self.browser,
         )
         self.reactor: PluginPlatform
         self.reactor, _ = build_pap_reactor(
@@ -285,6 +297,7 @@ class ConformanceContext:
         clock: Clock | None = None,
         address_resolver: AddressResolver = resolve_addresses,
         tenant_id: str = "pap-conformance",
+        browser_http: httpx.AsyncClient | None = None,
     ) -> None:
         parsed = urlsplit(base_url)
         if parsed.scheme != "https" or not parsed.hostname:
@@ -297,7 +310,13 @@ class ConformanceContext:
         self.tenant_id = tenant_id
         self.address_resolver = address_resolver
         self.clock: Clock = clock or SystemClock()
-        self.agent = Agent(identity, http=http, clock=self.clock, address_resolver=address_resolver)
+        self.agent = Agent(
+            identity,
+            http=http,
+            clock=self.clock,
+            address_resolver=address_resolver,
+            browser_http=browser_http,
+        )
         self._other: Agent | None = None
         self._company: DiscoveredCompany | None = None
 
@@ -2086,6 +2105,261 @@ async def _operation_not_found(ctx: ConformanceContext, _: FixtureCase) -> None:
         answers.append((raised.value.code, raised.value.status_code))
     check(answers[0] == answers[1], "another user's and an unknown operation look the same")
     check(answers[0] == ("operation_not_found", 404), f"got {answers[0]}")
+
+
+# MCP (§4.3, §6) ------------------------------------------------------------------------
+
+
+async def _mcp_url(ctx: ConformanceContext) -> str:
+    api = mcp_api((await ctx.company()).document)
+    if api is None:
+        raise SkipCase("the company lists no MCP server")
+    return api.url
+
+
+def _tool(name: str | None) -> str:
+    if name is None:
+        raise SkipCase("the scenario names no MCP tool for this")
+    return name
+
+
+async def _signed_in_bearer(ctx: ConformanceContext) -> tuple[str, SignedIn, SessionToken, str]:
+    url = await _mcp_url(ctx)
+    user, signed = await _signed_in_user(ctx)
+    result = await ctx.agent.accounts.bearer_for_mcp(
+        signed.reference,
+        context=await ctx.account_context(user),
+        session_id=signed.token.session_id,
+        resource=url,
+    )
+    check(result.status == "signed_in" and result.token is not None, "a signed-in Bearer")
+    return user, signed, cast(SessionToken, result.token), url
+
+
+@case("lifecycle.mcp-protected-resource-metadata")
+async def _mcp_metadata(ctx: ConformanceContext, _: FixtureCase) -> None:
+    url = await _mcp_url(ctx)
+    metadata = await ctx.metadata()
+    parts = urlsplit(url)
+    location = f"https://{parts.netloc}/.well-known/oauth-protected-resource{parts.path}"
+    document = (await ctx.send("GET", location)).json()
+    check(document.get("resource") == url, "the metadata names the MCP server as its resource")
+    check(
+        metadata.issuer in document.get("authorization_servers", []),
+        "authorization_servers includes auth.issuer",
+    )
+    bare = await ctx.send(
+        "POST",
+        url,
+        headers={"Content-Type": "application/json"},
+        content=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
+    )
+    check(bare.status_code == 401, "an unauthenticated MCP call is 401")
+    challenge = bare.headers.get("www-authenticate", "")
+    check(challenge.startswith("Bearer") and "resource_metadata" in challenge, "Bearer challenge")
+
+
+@case("lifecycle.mcp-bearer-for-its-url")
+async def _mcp_bearer(ctx: ConformanceContext, _: FixtureCase) -> None:
+    read_tool = _tool(ctx.scenario.mcp_read_tool)
+    user, signed, bearer, url = await _signed_in_bearer(ctx)
+    check(bearer.token_type == "Bearer", "a Bearer token")  # noqa: S105
+    check(bearer.session_id == signed.token.session_id, "for the same Session")
+    answer = await McpClient(http_client=ctx.http, token=bearer, url=url).call_tool(read_tool)
+    check(not answer.is_error, "the MCP server accepts it")
+    metadata = await ctx.metadata()
+    other = ctx.new_user()
+    session = await ctx.session(other)
+    signed_out = await ctx.agent.sessions.bearer_for_mcp(
+        client_id=ctx.agent.identity.client_id,
+        pairwise_user_id=other,
+        issuer=metadata.issuer,
+        token_endpoint=metadata.token_endpoint,
+        tenant_id=ctx.tenant_id,
+        session_id=session.session_id,
+        resource=url,
+    )
+    check(not signed_out.signed_in, "a signed-out Session gets a signed-out Bearer")
+    with _raises(McpError) as raised:
+        await McpClient(http_client=ctx.http, token=signed_out, url=url).call_tool(read_tool)
+    check(
+        raised.value.code in {"sign_in_required", "insufficient_scope"},
+        f"the MCP server enforces scopes, got {raised.value.code}",
+    )
+    del user
+
+
+@case("lifecycle.mcp-bearer-only-at-mcp")
+async def _mcp_only(ctx: ConformanceContext, _: FixtureCase) -> None:
+    user, signed, bearer, url = await _signed_in_bearer(ctx)
+    secret = bearer.access_token.get_secret_value()
+    targets = [("GET", ctx.url(ctx.scenario.read_path))]
+    with contextlib.suppress(SkipCase):
+        targets.append(("POST", await ctx.conversations_endpoint()))
+    with contextlib.suppress(SkipCase):
+        targets.append(("GET", f"{await ctx.operations_endpoint()}/op_conformance_any"))
+    for method, target in targets:
+        for scheme in ("Bearer", "DPoP"):
+            headers = {"Authorization": f"{scheme} {secret}", "Content-Type": "application/json"}
+            if scheme == "DPoP":
+                headers["DPoP"] = await ctx.proof(user, method, target, token=bearer)
+            response = await ctx.send(method, target, headers=headers, content=b"{}")
+            check(response.status_code == 401, f"a Bearer token is refused at {method} {target}")
+            check(secret not in response.text, "and never echoed")
+    dpop_at_mcp = await ctx.send(
+        "POST",
+        url,
+        headers={
+            "Authorization": f"Bearer {signed.token.access_token.get_secret_value()}",
+            "Content-Type": "application/json",
+        },
+        content=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+    )
+    check(dpop_at_mcp.status_code == 401, "the MCP server refuses a DPoP Session Token")
+    form = {
+        "grant_type": "refresh_token",
+        "refresh_token": (await ctx.account_token(signed.reference)).get_secret_value(),
+        "session_id": signed.token.session_id,
+        "resource": ctx.url(ctx.scenario.read_path),
+        **(await ctx.client_form()),
+    }
+    elsewhere = await ctx.token_request(user, form, dpop=None)
+    check(elsewhere.status_code == 400, "no Bearer token is issued for another resource")
+
+
+@case("lifecycle.mcp-sign-out-takes-effect")
+async def _mcp_sign_out(ctx: ConformanceContext, _: FixtureCase) -> None:
+    read_tool = _tool(ctx.scenario.mcp_read_tool)
+    user, signed, bearer, url = await _signed_in_bearer(ctx)
+    client = McpClient(http_client=ctx.http, token=bearer, url=url)
+    check(not (await client.call_tool(read_tool)).is_error, "signed in, the tool answers")
+    await ctx.agent.accounts.revoke(signed.reference, context=await ctx.account_context(user))
+    with _raises(McpError) as raised:
+        await client.call_tool(read_tool)
+    check(raised.value.code == "sign_in_required", f"got {raised.value.code}")
+
+
+@case("operations.cross-channel-mcp")
+async def _cross_channel_mcp(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_endpoint()
+    propose_tool = _tool(ctx.scenario.mcp_propose_tool)
+    user, signed, bearer, url = await _signed_in_bearer(ctx)
+    through_api = await _propose(ctx, user, signed, "user")
+    answer = await McpClient(http_client=ctx.http, token=bearer, url=url).call_tool(propose_tool)
+    check(answer.operation is not None, "the tool returns structuredContent.operation")
+    check(answer.operation == through_api, "the same operation as through the API")
+
+
+# The website (§5, Operations §4.4) ---------------------------------------------------
+
+
+async def _browser(ctx: ConformanceContext) -> tuple[ControlledBrowser, str]:
+    web = (await ctx.company()).document.web
+    if web is None or web.browser_session_endpoint is None:
+        raise SkipCase("the company offers no browser sessions")
+    if ctx.agent.browser is None:
+        raise SkipCase("the runner was given no browser of its own")
+    return ctx.agent.browser, web.browser_session_endpoint
+
+
+async def _join(ctx: ConformanceContext, user: str, session_id: str, return_to: str) -> None:
+    _, endpoint = await _browser(ctx)
+    await BrowserSessionClient(reactor=ctx.agent.reactor).join(
+        client_id=ctx.agent.identity.client_id,
+        pairwise_user_id=user,
+        browser_session_endpoint=endpoint,
+        session_id=session_id,
+        return_to=return_to,
+        company_domain=(await ctx.company()).document.organization.domain,
+    )
+
+
+@case("lifecycle.browser-joins-session")
+async def _browser_joins(ctx: ConformanceContext, _: FixtureCase) -> None:
+    browser, _endpoint = await _browser(ctx)
+    user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, user, signed, "standing")
+    page = operation_page(operation, (await ctx.company()).document.organization.domain)
+    await _join(ctx, user, signed.token.session_id, page)
+    landed = cast(httpx.Response, browser.page)
+    check(landed.history and landed.history[0].status_code == 303, "joined with 303 See Other")
+    cookie = landed.history[0].headers.get("set-cookie", "")
+    for flag in ("Secure", "HttpOnly"):
+        check(flag in cookie, f"the cookie is {flag}")
+    check("samesite=strict" not in cookie.lower(), "the cookie is not SameSite=Strict")
+    check("max-age" not in cookie.lower(), "the cookie has no lifetime of its own")
+    check(landed.status_code == 200, "the operation's page shows in the Session")
+    await ctx.agent.accounts.revoke(signed.reference, context=await ctx.account_context(user))
+    after = await browser.get(page)
+    check(after.status_code in {401, 403, 404}, "signed out, the website shows it no more")
+
+
+@case("lifecycle.browser-assertion-refused")
+async def _browser_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _, endpoint = await _browser(ctx)
+    domain = (await ctx.company()).document.organization.domain
+    user = ctx.new_user()
+    session = await ctx.session(user)
+
+    def claims(**changes: Any) -> dict[str, Any]:
+        value = ctx.claims(subject=user, audience=endpoint, lifetime=changes.pop("lifetime", 60))
+        return {**value, "session_id": session.session_id, "return_to": f"https://{domain}/"} | (
+            changes
+        )
+
+    browser_typ = {"typ": "poppy-browser+jwt"}
+    cases = {
+        "a foreign return_to": ctx.assertion(
+            claims(return_to="https://evil.example/"), headers=browser_typ
+        ),
+        "a Session assertion": ctx.assertion(claims()),
+        "another user's Session": ctx.assertion(claims(sub=ctx.new_user()), headers=browser_typ),
+        "a long-lived assertion": ctx.assertion(claims(lifetime=600), headers=browser_typ),
+        "another audience": ctx.assertion(claims(aud=ctx.url("/elsewhere")), headers=browser_typ),
+    }
+    replayed = ctx.assertion(claims(), headers=browser_typ)
+
+    async def post(assertion: str) -> httpx.Response:
+        return await ctx.send(
+            "POST",
+            endpoint,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            content=urlencode({"assertion": assertion}).encode(),
+        )
+
+    check((await post(replayed)).status_code == 303, "a valid browser assertion joins")
+    cases["a replayed assertion"] = replayed
+    for what, assertion in cases.items():
+        response = await post(assertion)
+        check(response.status_code == 400, f"{what} is refused")
+        check("set-cookie" not in response.headers, f"{what} sets no cookie")
+
+
+@case("operations.web-confirm-at-most-once")
+async def _web_confirm(ctx: ConformanceContext, _: FixtureCase) -> None:
+    endpoint = await ctx.operations_endpoint()
+    browser, _ = await _browser(ctx)
+    form = ctx.scenario.web_confirm_form
+    if form is None:
+        raise SkipCase("the scenario does not know the website's confirm form")
+    user, signed = await _signed_in_user(ctx)
+    who = await ctx.who(user)
+    operation = await _propose(ctx, user, signed, "user")
+    page = operation_page(operation, (await ctx.company()).document.organization.domain)
+    await _join(ctx, user, signed.token.session_id, page)
+    fields = {name: value.format(revision=operation.revision) for name, value in form.items()}
+    await browser.submit(page, fields)
+    read = await ctx.agent.operations.read(
+        endpoint, operation.operation_id, token=signed.token, **who
+    )
+    check(read.state != "proposed", "confirmed on the website")
+    check(read.confirmation is not None, "with its confirmation")
+    again = await ctx.agent.operations.confirm(
+        endpoint, operation, approval=approve(operation), token=signed.token, **who
+    )
+    check(again.operation == read, "confirming at the endpoint too changes nothing")
+    if "performed" in ctx.driver.capabilities:
+        check(await ctx.driver.performed(operation.operation_id) == 1, "performed once")
 
 
 # Running and reporting ----------------------------------------------------------------

@@ -103,6 +103,25 @@
       "description": "The same action through the API and then a conversation is the same operation ID."
     },
     {
+      "id": "operations.cross-channel-mcp",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-4-01"
+      ],
+      "description": "The same action proposed by an MCP tool, in structuredContent.operation, is the same operation as through the API."
+    },
+    {
+      "id": "operations.web-confirm-at-most-once",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-6-02",
+        "OPS-3-02"
+      ],
+      "description": "Confirming on the operation's page in the Session, then at the operations endpoint, performs it once; the endpoint reads back the same operation."
+    },
+    {
       "id": "operations.message-is-not-approval",
       "kind": "negative",
       "role": "company",

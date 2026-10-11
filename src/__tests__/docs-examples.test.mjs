@@ -15,8 +15,6 @@ import { readFileSync, readdirSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 
-import * as reactorPackage from "@datalayer/reactor";
-
 import * as portable from "../../lib/index.js";
 import * as server from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
@@ -34,7 +32,6 @@ const COMPANIES = {
 const MODULES = {
   "@datalayer/personal-agent-protocol": portable,
   "@datalayer/personal-agent-protocol/server": server,
-  "@datalayer/reactor": reactorPackage,
 };
 
 function mdxFiles(directory) {

@@ -243,3 +243,8 @@ async def test_the_conversation_streams_and_a_stranger_cannot_read_it() -> None:
             issuer=world.who["issuer"],
         )
     assert raised.value.code == "conversation_not_found"
+
+
+def test_a_demo_reactor_stops_cleanly() -> None:
+    world = World()
+    world.reactor.stop()

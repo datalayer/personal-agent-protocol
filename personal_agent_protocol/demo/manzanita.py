@@ -123,12 +123,15 @@ class ExchangeExecutor:
 
     async def perform(self, operation: Operation, account_id: str) -> OperationResult:
         self.performed.append(operation.operation_id)
+        terms = operation.terms or {}
+        difference = terms.get("price_difference") or {}
+        amount = f"{difference.get('currency', 'USD')} {difference.get('amount', '0.00')}"
         return OperationResult(
             summary=(
                 "Exchanged the Ridge Jacket (M) for the insulated Ridge Jacket (M). "
-                "USD 70.00 charged to the card ending 4242; a return label was emailed."
+                f"{amount} charged to the card ending 4242; a return label was emailed."
             ),
-            data={"order_id": "ord_7Hk2", "charged": {"amount": "70.00", "currency": "USD"}},
+            data={"order_id": terms.get("order_id"), "charged": difference},
         )
 
 

@@ -41,7 +41,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
     atlas = AgentIdentity(domain="atlas.example", name="Atlas")
     network.add(atlas.domain, atlas.website())
     bank, bank_plugin = northwind(network, clock)
-    firm, at_northwind = ledgerly(network, clock)
+    firm, _ = ledgerly(network, clock)
 
     http = network.client()
     reactor = personal_agent_reactor(

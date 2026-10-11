@@ -82,7 +82,7 @@ def json_site(documents: dict[str, Any]) -> Asgi:
     return app
 
 
-@dataclass
+@dataclass(eq=False)
 class AgentIdentity:
     """A personal agent's identity: its `client_id`, keys, and published metadata."""
 
@@ -199,7 +199,7 @@ class DpopKeys:
         return self.keys[key]
 
 
-@dataclass
+@dataclass(eq=False)
 class PersonalAgentHost:
     """The contributions a personal agent's host makes, for its Reactor."""
 

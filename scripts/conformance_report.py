@@ -75,6 +75,29 @@ def _cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
 
+def _reasons(reports: dict[str, dict[str, Any]], columns: list[tuple[str, str, str]]) -> list[str]:
+    """Each skip or failure reason, and the pairings it happened in."""
+
+    reasons: dict[str, set[str]] = {}
+    for stem, agent, company in columns:
+        for item in reports[stem]["cases"]:
+            if item["outcome"] != "passed" and item.get("message"):
+                key = f"{item['outcome']}: {item['message']}"
+                reasons.setdefault(key, set()).add(f"{agent} → {company}")
+    if not reasons:
+        return []
+    lines = [
+        "",
+        "## Skips and failures",
+        "",
+        "| Outcome and reason | Pairings |",
+        "| --- | --- |",
+    ]
+    for reason in sorted(reasons):
+        lines.append(f"| {_cell(reason)} | {', '.join(sorted(reasons[reason]))} |")
+    return lines
+
+
 def render(reports: dict[str, dict[str, Any]]) -> str:
     fixtures = _fixtures()
     company_cases = [case for case in fixtures if "check" not in case]
@@ -133,16 +156,7 @@ def render(reports: dict[str, dict[str, Any]]) -> str:
             lines.append(
                 f"| `{case['id']}` | {case['kind']} | {requirements} | {' | '.join(cells)} |"
             )
-    reasons: dict[str, set[str]] = {}
-    for stem, agent, company in columns:
-        for item in reports[stem]["cases"]:
-            if item["outcome"] != "passed" and item.get("message"):
-                key = f"{item['outcome']}: {item['message']}"
-                reasons.setdefault(key, set()).add(f"{agent} → {company}")
-    if reasons:
-        lines += ["", "## Skips and failures", "", "| Outcome and reason | Pairings |", "| --- | --- |"]
-        for reason in sorted(reasons):
-            lines.append(f"| {_cell(reason)} | {', '.join(sorted(reasons[reason]))} |")
+    lines += _reasons(reports, columns)
     lines += [
         "",
         "## Decided by each SDK alone",

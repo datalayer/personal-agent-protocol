@@ -68,14 +68,14 @@ AREAS = (
     Area(
         "identity-sessions",
         "Identity and Sessions",
-        "Personal-agent and user identity, Sessions, and proof of possession (§4.1–§4.3).",
+        "Personal-agent and user identity, Sessions, and proof of possession (§4.1 to §4.3).",
         "https://personalagentprotocol.org/docs/spec",
         _spec("4.1", "4.2", "4.3"),
     ),
     Area(
         "sign-in",
         "Sign-in and Account Tokens",
-        "Sign-in modes, consent, Account Tokens, and sign-out (§4.4–§4.9).",
+        "Sign-in modes, consent, Account Tokens, and sign-out (§4.4 to §4.9).",
         "https://personalagentprotocol.org/docs/spec",
         _spec("4.4", "4.5", "4.6", "4.7", "4.8", "4.9"),
     ),

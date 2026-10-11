@@ -17,6 +17,14 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | [`browser-session`](./browser-session/)                   | Controlled form POST and one-use assertion | Browser policy only               |
 | [`dpop-transport`](./dpop-transport/)                     | Nonce retry and safe redirect proofs       | Transport policy only             |
 | [`conversation-messages`](./conversation-messages/)       | Start and continue with idempotent IDs     | Conversation state only           |
+| [`conversation-events`](./conversation-events/) | Long poll, drain, recover, de-duplicate | Safe event content only |
+| [`conversation-streaming`](./conversation-streaming/) | SSE, `Last-Event-ID`, display-only deltas | Counts and complete messages |
+| [`conversation-control`](./conversation-control/) | Sign-in mid-conversation, Direct, handoff, close | Statuses and event types |
+| [`account-tokens`](./account-tokens/) | Refresh, rotation, narrowing, expiry, revocation | Statuses and scopes only |
+| [`mediated-sign-in`](./mediated-sign-in/) | Protected input, one endpoint, one-time code | Labels and statuses only |
+| [`operations`](./operations/) | Exact approval, `terms_changed`, recovery, standing permissions | States and company summaries |
+| [`user-with-a-company`](./user-with-a-company/) | The whole K-06 journey with Manzanita | Steps in plain words |
+| [`two-companies`](./two-companies/) | Ledgerly at Northwind for Ada (composition) | Summaries and approvers |
 
 Install and run from the PAP repository:
 
@@ -28,6 +36,11 @@ python examples/pydantic-ai/company-discovery/app.py
 
 Set `PAP_EXAMPLE_MODEL` to use another Pydantic AI model string. The default is
 `openai:gpt-4o-mini`.
+
+The `account-tokens`, `mediated-sign-in`, `conversation-*`, `operations`,
+`user-with-a-company`, and `two-companies` examples run against the reference
+company in `personal_agent_protocol.demo`: real keys and real HTTP over ASGI,
+in one process, with no network and no model in the tool.
 
 Validate all example definitions without calling a model:
 

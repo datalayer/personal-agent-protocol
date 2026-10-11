@@ -158,6 +158,8 @@ async def served_over_tls(network: InProcessNetwork) -> AsyncIterator[InProcessN
     with tempfile.TemporaryDirectory() as directory:
         ca, cert, key = _certificates(network.apps, Path(directory))
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Accepted connections inherit it: no Nagle wait on each small TLS record.
+        listener.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
         server = uvicorn.Server(

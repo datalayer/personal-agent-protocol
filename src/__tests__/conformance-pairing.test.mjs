@@ -48,23 +48,23 @@ test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", 
         capabilities: new Set(["revise", "forget_events", "disconnect", "performed", "clock", "second_identity"]),
         accounts: ["acct_ada", "acct_ada_business"],
         async approveDevice(userCode, { account, scopes }) {
-          company.service.approveDevice(userCode, { accountId: account, ...(scopes ? { scopes } : {}) });
+          await company.service.approveDevice(userCode, { accountId: account, ...(scopes ? { scopes } : {}) });
         },
         async wait(seconds) {
           clock.advance(seconds);
         },
         async revise(operationId) {
-          const current = company.service.store.operations.get(operationId).operation;
-          company.service.revise(operationId, {
+          const current = (await company.service.operationRecord(operationId)).operation;
+          await company.service.revise(operationId, {
             summary: `${current.summary} Ships in 5 days instead of 2.`,
             terms: { ...(current.terms ?? {}), ships_in_days: 5 },
           });
         },
         async forgetEvents(conversationId) {
-          company.service.forgetEvents(conversationId, { keep: 1 });
+          await company.service.forgetEvents(conversationId, { keep: 1 });
         },
         async disconnect(clientId, account) {
-          company.service.disconnect(clientId, account);
+          await company.service.disconnect(clientId, account);
         },
         async performed(operationId) {
           return executors.flatMap((executor) => executor.performed).filter((id) => id === operationId).length;

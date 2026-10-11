@@ -62,7 +62,7 @@ async function directSignIn(w, session, scopes = ["orders:read", "orders:write"]
     pairwiseUserId: PAIRWISE,
     sessionId: session.sessionId,
   });
-  const callbackUrl = w.shop.approveAuthorization(w.host.browser.requestId, { accountId: "acct_ada", ...(grant ? { scopes: grant } : {}) });
+  const callbackUrl = await w.shop.approveAuthorization(w.host.browser.requestId, { accountId: "acct_ada", ...(grant ? { scopes: grant } : {}) });
   return { client, callbackUrl, result: await client.complete({ callbackUrl }) };
 }
 
@@ -115,7 +115,7 @@ test("Device Sign-In paces polling, then signs the Session in; Account Tokens ro
   assert.match(started.userCode, /^[A-Z0-9XY]{4}-[A-Z0-9XY]{4}$/);
   w.clock.advance(started.pollInterval);
   assert.equal((await device.poll(started.reference)).status, "pending");
-  w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
+  await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
   const done = await device.poll(started.reference);
   assert.equal(done.status, "complete");
@@ -158,7 +158,7 @@ test("a denied device code is access_denied", async () => {
     sessionId: session.sessionId,
   });
   const started = await begin();
-  w.shop.denyDevice(started.userCode);
+  await w.shop.denyDevice(started.userCode);
   w.clock.advance(started.pollInterval);
   await assert.rejects(device.poll(started.reference), (error) => error.code === "access_denied");
 });
@@ -217,7 +217,7 @@ test("Direct Sign-In: partial consent, a denial, a code used once, and the conse
     issuer: w.metadata.issuer, clientId: w.identity.clientId, redirectUri: "https://atlas.example/oauth/callback",
     scopes: ["orders:read"], tenantId: TENANT, pairwiseUserId: PAIRWISE, sessionId: session.sessionId,
   });
-  const denied = w.shop.denyAuthorization(w.host.browser.requestId);
+  const denied = await w.shop.denyAuthorization(w.host.browser.requestId);
   assert.match(denied, /error=access_denied/);
   await assert.rejects(client.complete({ callbackUrl: denied }), (error) => error.code === "authorization_denied");
 
@@ -288,7 +288,7 @@ test("operations: revision races, standing permission refused, failure, unknown 
   const target = operationsEndpoint(w.company.document, parseClientMetadata(w.identity.metadata));
 
   const exchange = await proposeAt(w, token, "exchanges");
-  w.shop.revise(exchange.operation_id, { summary: "Exchange it, USD 75.00 more.", terms: { order_id: "ord_7Hk2", price_difference: { amount: "75.00", currency: "USD" } } });
+  await w.shop.revise(exchange.operation_id, { summary: "Exchange it, USD 75.00 more.", terms: { order_id: "ord_7Hk2", price_difference: { amount: "75.00", currency: "USD" } } });
   const raced = await operations.confirm(target, exchange, { ...w.who, token, approval: await approve(exchange) });
   assert.equal(raced.status, "terms_changed");
   assert.equal(raced.operation.revision, 2);
@@ -303,7 +303,7 @@ test("operations: revision races, standing permission refused, failure, unknown 
   const unknown = await operations.confirm(target, repair, { ...w.who, token, approval: await approve(repair) });
   assert.equal(unknown.operation.state, "in_progress");
   assert.equal(unknown.retryAfter, 5);
-  const settled = w.shop.settle(repair.operation_id, { summary: "The zip was repaired." }, { succeeded: true });
+  const settled = await w.shop.settle(repair.operation_id, { summary: "The zip was repaired." }, { succeeded: true });
   assert.equal(settled.state, "succeeded");
   assert.equal((await operations.read(target, repair.operation_id, { ...w.who, token })).state, "succeeded");
 
@@ -390,7 +390,7 @@ test("conversations: an idempotent retry, a reused ID, handoff, Direct Conversat
   assert.equal(handed.responder, "agent");
 
   const cursor = parent.events[0].id;
-  w.shop.forgetEvents(page.conversation_id, { keep: 1 });
+  await w.shop.forgetEvents(page.conversation_id, { keep: 1 });
   const gone = await w.transport.request("GET", `${w.endpoint}/${page.conversation_id}/events?cursor=${cursor}`, { ...w.who, token: session });
   assert.equal(gone.status, 410);
   assert.deepEqual(await gone.json(), { error: "cursor_expired" });
@@ -440,7 +440,7 @@ test("a conversation that used the account stays with it; disconnecting signs Se
   const { result } = await directSignIn(w, session);
   const page = await w.conversations.start(w.endpoint, w.message("Where is my order?"), { ...w.who, token: result.token, wait: 0 });
   assert.equal(page.events.at(-1).message.data.order_id, "ord_7Hk2");
-  assert.equal(w.shop.disconnect(w.identity.clientId, "acct_ada"), 1);
+  assert.equal(await w.shop.disconnect(w.identity.clientId, "acct_ada"), 1);
   const out = await w.transport.request("GET", `${w.endpoint}/${page.conversation_id}/events`, { ...w.who, token: result.token });
   assert.equal(out.status, 403);
   assert.deepEqual(await out.json(), { error: "sign_in_required" });
@@ -501,8 +501,8 @@ test("authorize redirects to the hosted consent page, which reads the request ba
   assert.equal(`${location.origin}${location.pathname}`, "https://datalayer.ai/pap/consent");
   assert.equal(location.searchParams.get("slug"), "orders-helper");
   const requestId = location.searchParams.get("request");
-  const summary = w.shop.authorizationRequest(requestId);
-  assert.deepEqual(w.shop.authorizationRequest(requestId), summary);
+  const summary = await w.shop.authorizationRequest(requestId);
+  assert.deepEqual(await w.shop.authorizationRequest(requestId), summary);
   assert.equal(summary.client_name, "Atlas");
   assert.equal(summary.client_domain, "atlas.example");
   assert.deepEqual(summary.scopes, [
@@ -511,10 +511,10 @@ test("authorize redirects to the hosted consent page, which reads the request ba
   ]);
   assert.match(summary.expires_at, /Z$/);
   assert.deepEqual(Object.keys(summary).sort(), ["client_domain", "client_name", "expires_at", "request_id", "scopes"]);
-  const callbackUrl = w.shop.approveAuthorization(requestId, { accountId: "acct_ada" });
+  const callbackUrl = await w.shop.approveAuthorization(requestId, { accountId: "acct_ada" });
   const result = await client.complete({ callbackUrl });
   assert.equal(result.token.signedIn, true);
-  assert.throws(() => w.shop.authorizationRequest(requestId));
+  await assert.rejects(() => w.shop.authorizationRequest(requestId));
 });
 
 test("an unverified redirect is never sent to the hosted consent page", async () => {
@@ -532,9 +532,9 @@ test("an unverified redirect is never sent to the hosted consent page", async ()
   const refusedPage = await w.fetch(authorize("https://attacker.example/callback"), { method: "GET" });
   assert.equal(refusedPage.status, 400);
   assert.equal(refusedPage.headers.get("location"), null);
-  assert.equal(w.shop.store.authorizations.size, 0);
+  assert.deepEqual(w.shop.store.keys("authorization"), []);
   const back = await w.fetch(authorize("https://atlas.example/oauth/callback", "token"), { method: "GET" });
   assert.equal(back.status, 303);
   assert.ok(back.headers.get("location").startsWith("https://atlas.example/oauth/callback?"));
-  assert.equal(w.shop.store.authorizations.size, 0);
+  assert.deepEqual(w.shop.store.keys("authorization"), []);
 });

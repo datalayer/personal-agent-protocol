@@ -37,6 +37,9 @@ from .conversations import (
     ConversationReceipt,
     ConversationResponse,
     CursorExpiredHandler,
+    StreamItem,
+    StreamReconnected,
+    TextDelta,
     generate_message_id,
 )
 from .crypto import (
@@ -242,8 +245,11 @@ __all__ = [
     "SessionToken",
     "Signer",
     "SqlitePairwiseUserIdStore",
+    "StreamItem",
+    "StreamReconnected",
     "SystemClock",
     "SystemRandomSource",
+    "TextDelta",
     "TokenStore",
     "TransportError",
     "VerifiedBrowserAssertion",

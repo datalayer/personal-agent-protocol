@@ -1182,8 +1182,8 @@ export class CompanyService {
     const expiresAt = this.#later(10 * 60);
     // The company's own page binds the request to this browser: its consent cookie
     // (kept if it has one) and a form token only that cookie yields.
-    const browser =
-      this.config.consentPage === undefined ? (cookie(request, CONSENT_COOKIE) ?? this.#id("consent")) : undefined;
+    const hosted = this.config.consentPage;
+    const browser = cookie(request, CONSENT_COOKIE) ?? this.#id("consent");
     const pending: PendingAuthorization = {
       clientId,
       redirectUri,
@@ -1192,15 +1192,15 @@ export class CompanyService {
       codeChallenge: query.code_challenge,
       expiresAt: expiresAt.toISOString(),
       clientName: metadata.client_name,
-      ...(browser === undefined ? {} : { browserBinding: digest(browser) }),
+      ...(hosted === undefined ? { browserBinding: digest(browser) } : {}),
     };
     await this.store.put(RecordKinds.authorization, requestId, json(pending), expiry(expiresAt));
-    if (browser === undefined) {
+    if (hosted !== undefined) {
       // A hosted consent page reads the request back (`authorizationRequest`).
       return {
         status: 303,
         headers: {
-          Location: (this.config.consentPage ?? "").replaceAll("{request_id}", encodeURIComponent(requestId)),
+          Location: hosted.replaceAll("{request_id}", encodeURIComponent(requestId)),
           ...NO_STORE,
         },
       };

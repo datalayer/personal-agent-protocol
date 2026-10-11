@@ -1119,9 +1119,8 @@ class CompanyService:
         expires_at = self._now() + timedelta(minutes=10)
         # The company's own page binds the request to this browser: its consent cookie
         # (kept if it has one) and a form token only that cookie yields.
-        browser = None
-        if self.config.consent_page is None:
-            browser = _cookie(request, CONSENT_COOKIE) or self._id("consent")
+        hosted = self.config.consent_page
+        browser = _cookie(request, CONSENT_COOKIE) or self._id("consent")
         await self.store.put(
             AUTHORIZATION,
             request_id,
@@ -1133,19 +1132,17 @@ class CompanyService:
                 code_challenge=query["code_challenge"],
                 expires_at=expires_at,
                 client_name=metadata.client_name,
-                browser_binding=None if browser is None else _digest(browser),
+                browser_binding=None if hosted is not None else _digest(browser),
             ).to_json(),
             expires_at=expires_at,
         )
-        if browser is None:
+        if hosted is not None:
             # A hosted consent page reads the request back (`authorization_request`).
             return CompanyResponse(
                 303,
                 None,
                 {
-                    "Location": self.config.consent_page.replace(
-                        "{request_id}", quote(request_id, safe="")
-                    ),
+                    "Location": hosted.replace("{request_id}", quote(request_id, safe="")),
                     "Cache-Control": "no-store",
                 },
             )

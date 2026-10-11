@@ -104,6 +104,48 @@ export interface DpopProofProvider {
   create(request: DpopProofRequest): Promise<SecretValue>;
 }
 
+/** Serialize every use of one Account Token: rotation invalidates the one replaced (PAP §4.8). */
+export interface AccountTokenLock {
+  hold<T>(reference: string, work: () => Promise<T>): Promise<T>;
+}
+
+export interface ProtectedInputField {
+  readonly name: string;
+  readonly label: string;
+  readonly secret: boolean;
+}
+
+/** What the host must ask the user for, outside any model (PAP §4.7). */
+export interface ProtectedInputRequest {
+  readonly purpose: "credentials" | "one_time_code";
+  readonly companyName: string;
+  readonly companyDomain: string;
+  readonly fields: readonly ProtectedInputField[];
+  readonly sentTo?: string;
+}
+
+/** The host's trusted input surface: answers never pass through a model. */
+export interface ProtectedInput {
+  collect(request: ProtectedInputRequest): Promise<Record<string, SecretValue>>;
+}
+
+/** One in-process lock per reference: the default Account Token lock. */
+export class InProcessAccountTokenLock implements AccountTokenLock {
+  readonly #tails = new Map<string, Promise<unknown>>();
+
+  async hold<T>(reference: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.#tails.get(reference) ?? Promise.resolve();
+    const run = previous.then(work, work);
+    const tail = run.catch(() => undefined);
+    this.#tails.set(reference, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.#tails.get(reference) === tail) this.#tails.delete(reference);
+    }
+  }
+}
+
 export const DiscoveryTransports = defineContributionPoint<DiscoveryTransport>(
   "pap.discoveryTransport",
 );
@@ -136,6 +178,12 @@ export const BrowserFormPosts = defineContributionPoint<BrowserFormPost>(
 );
 export const DpopProofProviders = defineContributionPoint<DpopProofProvider>(
   "pap.dpopProofProvider",
+);
+export const AccountTokenLocks = defineContributionPoint<AccountTokenLock>(
+  "pap.accountTokenLock",
+);
+export const ProtectedInputs = defineContributionPoint<ProtectedInput>(
+  "pap.protectedInput",
 );
 
 export interface PapCoreOptions {
@@ -199,6 +247,8 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       BrowserHandoffs,
       BrowserFormPosts,
       DpopProofProviders,
+      AccountTokenLocks,
+      ProtectedInputs,
     ],
     contributes: [
       contribution(
@@ -219,6 +269,10 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       contribution(ProtocolProfiles, { version: "0.1" }, { id: "0.1", order: 100 }),
       contribution(Clocks, systemClock, { id: "system", order: 100 }),
       contribution(RandomSources, systemRandom, { id: "system", order: 100 }),
+      contribution(AccountTokenLocks, new InProcessAccountTokenLock(), {
+        id: "in-process",
+        order: 100,
+      }),
     ],
   });
 }

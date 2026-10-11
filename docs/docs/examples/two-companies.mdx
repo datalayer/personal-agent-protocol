@@ -1,0 +1,73 @@
+---
+title: Two companies
+description: Ledgerly pays Ada's invoices at Northwind Bank, by composing two PAP relationships.
+---
+
+# Two companies
+
+:::caution Composition, not a draft 0.1 feature
+
+PAP draft 0.1 defines no company-to-company protocol. This example composes
+two ordinary PAP relationships for the same user. Ledgerly is a **company** to
+Ada's personal agent, Atlas, and a **personal agent** at Northwind Bank for
+the same Ada, with its own `client_id` and keys on its own domain.
+
+:::
+
+Ledgerly, an accounting firm, pays Ada's supplier invoices from her Northwind
+account. Every approval is an Operation, never a chat message, and a standing
+permission is itself an Operation Ada approves.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ada
+  participant Atlas as Atlas (Ada's agent)
+  participant L as Ledgerly (company to Atlas, agent at Northwind)
+  participant N as Northwind Bank
+  Atlas->>L: Pay INV-0042 (signed in to Ledgerly)
+  L-->>Atlas: Connect Ledgerly: open northwind.example/device
+  Ada->>N: Approves Ledgerly's code on Northwind's page
+  Atlas->>L: Done. Pay INV-0042
+  L->>N: Conversation: pay INV-0042
+  N-->>L: Operation n_1: EUR 1250.00 to Acme GmbH
+  L-->>Atlas: Operation l_1 quoting n_1 as written
+  Ada->>Atlas: Approve l_1
+  Atlas->>L: Confirm l_1 (approved_by user)
+  L->>N: n_1 unchanged? Confirm n_1 (approved_by user)
+  N-->>L: Sent … Bank reference NW-0001
+  L-->>Atlas: Northwind Bank: Sent … NW-0001
+  Atlas->>L: Allow Acme payments up to EUR 2000 without asking
+  L-->>Atlas: Operation: standing permission, 5 uses, 30 days
+  Ada->>Atlas: Approve it
+  Atlas->>L: Pay INV-0043
+  L->>N: Pay, n_2 EUR 980.00 within bounds
+  L->>N: Confirm n_2 (approved_by standing_permission)
+  L-->>Atlas: Paid under your standing permission: …
+  Atlas->>L: Pay INV-0044
+  L->>N: n_3 EUR 3400.00 beyond bounds
+  L-->>Atlas: Operation for Ada to approve
+```
+
+What each party enforces:
+
+- **Northwind** sees a personal agent called Ledgerly, signed in by Ada on
+  Northwind's own page, confirming its proposals. Its records say who approved
+  each payment: `user` for the first, `standing_permission` for the second.
+- **Ledgerly** confirms at Northwind only the exact revision Ada approved: its
+  executor checks Northwind's revision and terms are unchanged before
+  confirming, and relays Northwind's `result.summary` as written. Within the
+  standing permission's term-by-term bounds it confirms itself and tells Ada
+  what was done; beyond them, it proposes a new operation for her.
+- **Atlas** treats Ledgerly like any company: it shows each operation's
+  summary and terms, and confirms only what Ada approved.
+
+The model sees summaries as the companies wrote them, who approved each
+payment, and that the composition involves no company-to-company protocol.
+It never sees a token, code, or proof of any of the three parties.
+
+The same world runs in `personal_agent_protocol/__tests__/test_two_companies.py`.
+
+- Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/two-companies).
+- Run the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/two-companies).
+- Read the [Operations guide](/guides/operations/) and the [company guide](/guides/company/).

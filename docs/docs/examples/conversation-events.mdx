@@ -50,8 +50,8 @@ missing.
 
 Session Tokens, DPoP proofs, pairwise identity, and the saved cursor remain in
 the trusted host. A model or UI receives only the event fields it needs. A
-future SSE slice will add reconnect and `text-delta` handling; applications
-must not treat a `text-delta` as an actionable final message.
+company that streams can be read over SSE instead, with reconnects and
+display-only `text-delta` frames: see [conversation streaming](./conversation-streaming).
 
 Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/conversation-events)
 or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/conversation-events).

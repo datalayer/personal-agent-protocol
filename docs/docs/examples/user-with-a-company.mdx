@@ -1,0 +1,62 @@
+---
+title: A user with a company
+description: One user, one company, from a first question to a confirmed exchange and sign-out.
+---
+
+# A user with a company
+
+The whole journey of the upstream home page's example: Ada's jacket is not
+warm enough, and she asks her personal agent, Atlas, to exchange it at
+Manzanita Outfitters. Both sides come from this SDK. Manzanita is the
+[reference company](/guides/company/) assembled from Reactor contributions,
+Atlas is a personal agent with a real ES256 identity, and they talk real HTTP
+over ASGI in one process, with no network and no model in the protocol path.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ada
+  participant Atlas as Atlas (personal agent)
+  participant M as Manzanita (company)
+  Atlas->>M: Discovery + OAuth metadata
+  Atlas->>M: Signed-out Session (assertion + DPoP)
+  Ada->>Atlas: Where is my jacket order?
+  Atlas->>M: Start conversation
+  M-->>Atlas: Sign in first + authorization: sign_in_required
+  Atlas->>M: Device authorization for the same Session
+  Atlas->>Ada: Open manzanita.example/device and enter the code
+  Ada->>M: Signs in and approves on Manzanita's page
+  Atlas->>M: Poll → signed-in Session + Account Token
+  Ada->>Atlas: Exchange it for something warmer
+  Atlas->>M: Same conversation, signed in
+  M-->>Atlas: Operation op_1 rev 1: USD 70.00 more
+  Atlas->>Ada: Show summary and terms
+  Ada->>Atlas: Approve this revision
+  Atlas->>M: Confirm rev 1 (approved_by user)
+  M-->>Atlas: succeeded + result.summary
+  Atlas->>M: Confirm again (a retry)
+  M-->>Atlas: Same record, performed once
+  Atlas->>M: Refresh narrowed to orders:read
+  Ada->>Atlas: Sign me out
+  Atlas->>M: Revoke the Account Token
+```
+
+Each step is one feature, documented on its own page:
+[company discovery](./company-discovery), [session lifecycle](./session-lifecycle),
+[conversation control](./conversation-control) for the `authorization`
+event, [Device Sign-In](./device-sign-in), [Operations](./operations), and
+[Account Tokens](./account-tokens).
+
+The model sees the steps in plain words: what the company asked, where Ada
+signed in, what was proposed, what she approved, and what Manzanita did, in
+its own words. It never sees the device code, a token, an assertion, or a
+proof. Ada approves in the host's interface; the model can explain the
+proposal but cannot approve it.
+
+The same world runs in `personal_agent_protocol/__tests__/test_company_end_to_end.py`,
+which also covers Mediated Sign-In with a one-time code, streaming, and a
+stranger refused with `conversation_not_found`.
+
+- Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/user-with-a-company).
+- Run the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/user-with-a-company).
+- Read the [company guide](/guides/company/).

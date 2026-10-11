@@ -71,6 +71,49 @@ prevents accidental imports into browser and Canvas bundles; production key
 custody must still use a KMS/HSM-backed Reactor signer or an equivalent remote
 signing service.
 
+## Credentials stay out of logs, errors, URLs, and model context
+
+A canary suite proves it, in both SDKs (`test_canaries.py`,
+`canaries.test.mjs`). The demo worlds run end to end — Manzanita (Device,
+Direct, and Mediated Sign-In, Account Tokens, conversations, operations, MCP
+with a Bearer token, the website), Northwind with Ledgerly, every conformance
+case, and the Pydantic AI examples' tools — with a `pap.randomSource` that
+writes `CANARY` and a counter into every value it mints, and canary passwords.
+Every credential exchanged is harvested from the wire by kind (Session and
+Bearer tokens, Account Tokens, DPoP proofs and private keys, client, Session
+and browser assertions, authorization and device codes, PKCE verifiers,
+mediated passwords and one-time codes, website cookies), and the suite fails
+if any of them appears in:
+
+- a log record of any logger at `DEBUG` (Python), or a console line
+  (TypeScript);
+- an exception the SDK raises: its message, `str`/`repr` or `util.inspect`,
+  and its attributes (Python 3.12+ records every raise in SDK code through
+  `sys.monitoring`; older versions record every `PersonalAgentProtocolError`);
+- a URL any party requests;
+- what a model reads: every response body except the token and device
+  endpoints', each message's text, every `PapSignIn.model_view()`, and the
+  examples' tool results.
+
+Two values travel in URLs because the protocol puts them there, and neither is
+requested by an agent: the authorization code, in the redirect to the agent's
+`redirect_uri` (OAuth 2.0), and the device `user_code`, in
+`verification_uri_complete` (RFC 8628), which the user's browser opens. The
+user code may also travel in a message's `data` for the person's page, never
+in its text. The one conformance probe that puts a Session Token in a URL on
+purpose, to see the company refuse it (`security.token-in-url-refused`), is
+left out of the run.
+
+The TypeScript suite also reads the npm package as built (`lib/`, with its
+source maps): it carries no PEM or JWK private key material, compact JWT,
+literal Bearer or DPoP token, or canary, and the browser entry
+(`lib/index.js` and every module it imports) reaches neither `lib/demo` nor
+the demo's fictional credentials.
+
+The suite found one leak, now fixed: Ledgerly's reply asking Ada to connect
+her Northwind account put the bank's device user code in the message text,
+which a model reads; the code now travels only in the message's `data`.
+
 ## Current limitations
 
 The SDK implements asymmetric assertion signing and DPoP proof creation and

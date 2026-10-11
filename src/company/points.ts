@@ -45,6 +45,8 @@ export interface IssuedSession {
 
 /** What an Account Token is: one account, one agent, one user, some scopes. */
 export interface AccountGrant {
+  /** The sign-in it comes from: every token rotated from it shares it (§4.9). */
+  readonly family: string;
   readonly accountId: string;
   readonly clientId: string;
   readonly pairwiseUserId: string;

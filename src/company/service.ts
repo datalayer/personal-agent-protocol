@@ -696,9 +696,14 @@ export class CompanyService {
     const key = digest(form.token ?? "");
     const grant = this.store.accountTokens.get(key);
     if (grant !== undefined && grant.clientId === clientId) {
-      grant.revoked = true;
-      // Every Session signed in with it continues signed out (§4.9).
-      this.#signOutSessionsOf(key);
+      // The token and every one rotated from the same sign-in: each Session signed
+      // in with any of them continues signed out (§4.9).
+      for (const [other, sibling] of this.store.accountTokens) {
+        if (sibling.family === grant.family) {
+          sibling.revoked = true;
+          this.#signOutSessionsOf(other);
+        }
+      }
     }
     return { status: 200, body: {}, headers: { ...NO_STORE } };
   }
@@ -740,6 +745,7 @@ export class CompanyService {
     }
     const accountToken = this.#id("acct");
     this.store.accountTokens.set(digest(accountToken), {
+      family: digest(accountToken),
       accountId,
       clientId: session.clientId,
       pairwiseUserId: session.pairwiseUserId,

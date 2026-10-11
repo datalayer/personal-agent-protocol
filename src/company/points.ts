@@ -75,6 +75,8 @@ export interface PendingAuthorization {
   readonly state: string;
   readonly codeChallenge: string;
   readonly expiresAt: Date;
+  /** The agent's `client_name`, for a hosted consent page (`authorizationRequest`). */
+  readonly clientName?: string;
 }
 
 /** A one-use authorization code, at most a minute old. */

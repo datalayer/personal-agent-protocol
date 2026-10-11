@@ -133,6 +133,40 @@ the company side too.
 - Errors are generic codes that do not disclose whether another user's
   conversation or operation exists.
 
+### Hosted sign-in pages
+
+By default the reference company serves its own Device Sign-In and consent
+pages. A company whose sign-in lives elsewhere sets two URL templates:
+
+```python
+config = CompanyConfig(
+    name="Orders helper",
+    domain="orders.example",
+    scopes=("orders:read",),
+    device_page="https://datalayer.ai/pap/device?slug=orders-helper",
+    consent_page="https://datalayer.ai/pap/consent?slug=orders-helper&request={request_id}",
+)
+```
+
+- `device_page` (`devicePage` in TypeScript) becomes the device authorization
+  response's `verification_uri`; `verification_uri_complete` adds
+  `&code=<user_code>`.
+- `consent_page` (`consentPage`) must contain `{request_id}`. `GET
+  /oauth/authorize` runs every check first — the agent's metadata, its
+  registered `redirect_uri`, the response type, PKCE, and the scopes — and
+  creates the pending request exactly as before; it then answers `303` to the
+  consent page instead of HTML. A request with an unverified `redirect_uri`
+  gets the company's own error page and is never redirected anywhere.
+- The consent page reads the request with
+  `service.authorization_request(request_id)` (`authorizationRequest`): the
+  agent's `client_name`, its `client_id` domain, each requested scope with its
+  `custom_scopes` words, and `expires_at`. Reading does not consume the
+  request, and the summary carries no `state`, PKCE challenge, or redirect.
+  The user's decision then goes to `approve_authorization` or
+  `deny_authorization` as before.
+
+Both templates must be HTTPS URLs without a fragment.
+
 ### Before production
 
 The defaults keep state in one process. A deployment contributes a durable

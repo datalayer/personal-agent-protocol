@@ -110,6 +110,7 @@ class PendingAuthorization:
     state: str
     code_challenge: str
     expires_at: datetime
+    client_name: str = ""
 
 
 @dataclass

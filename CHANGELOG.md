@@ -13,6 +13,13 @@
   result's token no longer carries `refresh_token`, and the new
   `account_token_reference` (`accountTokenReference` in TypeScript) names it
   (§4.8). Hosts that read `result.token.refresh_token` read the token store.
+- **Company:** hosted sign-in pages. `CompanyConfig.device_page` (`devicePage`)
+  becomes the Device Sign-In `verification_uri` (`&code=<user_code>` completes
+  it); `consent_page` (`consentPage`, with `{request_id}`) makes
+  `GET /oauth/authorize` answer `303` to it after every check, never for an
+  unverified `redirect_uri`. `authorization_request(request_id)`
+  (`authorizationRequest`) reads a pending request back for that page without
+  consuming it.
 
 ## 0.4.0 (2026-10-11)
 

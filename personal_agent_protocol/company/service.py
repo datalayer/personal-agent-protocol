@@ -30,6 +30,15 @@ What it implements of draft 0.1 and Operations v1:
 - Operations v1: proposals from the company agent, read, confirm (latest
   revision, approval rules, scope, extension negotiation), at most once, and
   cancel.
+- MCP (§4.3, §6), when a `pap.company.mcp` contribution is present: a
+  Streamable HTTP endpoint at `/mcp` accepting only Bearer Session Tokens
+  issued for its url (requested without DPoP, `resource` = that url), its
+  protected resource metadata (RFC 9728), and tools that propose operations
+  in `structuredContent` (Operations §4.2). Bearer tokens work nowhere else.
+- Web browsing (§5), with `web=True`: the browser-session endpoint sets the
+  company's own cookie for a Session, and each operation's `url` shows it in
+  that Session, where it can be confirmed or cancelled — the same operation,
+  performed at most once (Operations §4.4).
 """
 
 from __future__ import annotations
@@ -42,12 +51,15 @@ import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from http.cookies import CookieError, SimpleCookie
 from typing import Any, Literal, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import jwt
 from pydantic import SecretStr
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
+from ..browser import verify_browser_assertion
 from ..crypto import verify_dpop_proof
 from ..errors import PersonalAgentProtocolError, ProofError, SessionError
 from ..json import loads_strict
@@ -60,6 +72,7 @@ from .points import (
     COMPANY_ACCOUNTS,
     COMPANY_AGENTS,
     COMPANY_APIS,
+    COMPANY_MCP,
     COMPANY_STORES,
     OPERATION_EXECUTORS,
     REPLAY_CACHES,
@@ -71,6 +84,7 @@ from .points import (
     ClientResolver,
     CompanyAgent,
     CompanyApi,
+    CompanyMcp,
     CompanyStore,
     IssuedCode,
     IssuedSession,
@@ -113,6 +127,7 @@ class CompanyConfig:
     device_interval: int = 5
     max_code_attempts: int = 3
     custom_scopes: Mapping[str, str] = field(default_factory=dict)
+    web: bool = False
 
     @property
     def base(self) -> str:
@@ -149,6 +164,18 @@ class CompanyConfig:
     @property
     def operations_endpoint(self) -> str:
         return f"{self.base}/poppy/operations"
+
+    @property
+    def mcp_url(self) -> str:
+        return f"{self.base}/mcp"
+
+    @property
+    def mcp_resource_metadata(self) -> str:
+        return f"{self.base}/.well-known/oauth-protected-resource/mcp"
+
+    @property
+    def browser_session_endpoint(self) -> str:
+        return f"{self.base}/poppy/browser-session"
 
 
 @dataclass(frozen=True)
@@ -232,6 +259,14 @@ class CompanyService:
                 return CompanyResponse(200, self.discovery_document())
             if method == "GET" and path == "/.well-known/oauth-authorization-server":
                 return CompanyResponse(200, self.oauth_metadata())
+            if path == "/.well-known/oauth-protected-resource/mcp" and self._mcp() is not None:
+                return CompanyResponse(200, self.protected_resource_metadata())
+            if path == "/mcp" and self._mcp() is not None:
+                return await self._mcp_route(request)
+            if method == "POST" and path == "/poppy/browser-session" and self.config.web:
+                return await self._browser_session(request)
+            if path.startswith("/operations/") and self.config.web and self.config.operations:
+                return await self._operation_page(request, method, path.split("/")[2])
             if method == "POST" and path == "/oauth/token":
                 return await self._token(request)
             if method == "GET" and path == "/oauth/authorize" and self.config.direct:
@@ -287,16 +322,34 @@ class CompanyService:
             "auth": auth,
             "agent": {"protocols": [{"type": "poppy", "endpoint": config.conversations_endpoint}]},
         }
+        apis: list[dict[str, str]] = []
         api = self._api()
         if api is not None:
-            document["apis"] = [
+            apis.append(
                 {"type": "openapi", "url": config.api_description, "description": api.description}
-            ]
+            )
+        mcp = self._mcp()
+        if mcp is not None:
+            apis.append({"type": "mcp", "url": config.mcp_url, "description": mcp.description})
+        if apis:
+            document["apis"] = apis
+        if config.web:
+            document["web"] = {"browser_session_endpoint": config.browser_session_endpoint}
         if config.operations:
             document["extensions"] = {
                 "operations": {"version": "1", "endpoint": config.operations_endpoint}
             }
         return document
+
+    def protected_resource_metadata(self) -> dict[str, Any]:
+        """RFC 9728 metadata for the MCP server: its issuer is the company's (§6)."""
+
+        return {
+            "resource": self.config.mcp_url,
+            "authorization_servers": [self.config.base],
+            "scopes_supported": list(self.config.scopes),
+            "bearer_methods_supported": ["header"],
+        }
 
     def oauth_metadata(self) -> dict[str, Any]:
         config = self.config
@@ -366,6 +419,15 @@ class CompanyService:
         form = dict(parse_qsl(request.body.decode()))
         grant = form.get("grant_type")
         client_id = await self._client(form, self.config.token_endpoint)
+        if "dpop" not in request.headers and self._mcp() is not None:
+            # A Bearer token, only for the MCP server's url and an existing Session (§4.3).
+            if form.get("resource") != self.config.mcp_url:
+                raise _RefusedError(400, "invalid_dpop_proof")
+            if grant not in {JWT_BEARER_GRANT, REFRESH_TOKEN_GRANT} or not form.get("session_id"):
+                raise _RefusedError(400, "invalid_request")
+            if grant == JWT_BEARER_GRANT:
+                return await self._session_grant(form, client_id, "", bearer=True)
+            return await self._refresh_grant(form, client_id, "", bearer=True)
         thumbprint = await self._dpop(request)
         if grant == JWT_BEARER_GRANT:
             return await self._session_grant(form, client_id, thumbprint)
@@ -378,7 +440,7 @@ class CompanyService:
         raise _RefusedError(400, "unsupported_grant_type")
 
     async def _session_grant(
-        self, form: Mapping[str, str], client_id: str, thumbprint: str
+        self, form: Mapping[str, str], client_id: str, thumbprint: str, *, bearer: bool = False
     ) -> CompanyResponse:
         resolver = cast(
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
@@ -410,16 +472,19 @@ class CompanyService:
                 pairwise,
             ):
                 raise _RefusedError(400, "invalid_session")
-            self._drop_tokens_of(session.session_id)
+            token_type: Literal["DPoP", "Bearer"] = "Bearer" if bearer else "DPoP"
+            self._drop_tokens_of(session.session_id, token_type)
             session = replace(
                 session,
                 key_thumbprint=thumbprint,
                 expires_at=self._now() + self.config.session_lifetime,
+                token_type=token_type,
+                resource=form.get("resource"),
             )
         return self._issue(session)
 
     async def _refresh_grant(
-        self, form: Mapping[str, str], client_id: str, thumbprint: str
+        self, form: Mapping[str, str], client_id: str, thumbprint: str, *, bearer: bool = False
     ) -> CompanyResponse:
         presented = form.get("refresh_token", "")
         grant = self.store.account_tokens.get(_digest(presented))
@@ -447,7 +512,8 @@ class CompanyService:
         grant.revoked = True
         rotated = self._id("acct")
         self.store.account_tokens[_digest(rotated)] = replace(grant, revoked=False)
-        self._drop_tokens_of(session.session_id)
+        token_type: Literal["DPoP", "Bearer"] = "Bearer" if bearer else "DPoP"
+        self._drop_tokens_of(session.session_id, token_type)
         signed_in = replace(
             session,
             key_thumbprint=thumbprint,
@@ -456,6 +522,7 @@ class CompanyService:
             account_token=_digest(rotated),
             expires_at=now + self.config.session_lifetime,
             resource=form.get("resource"),
+            token_type=token_type,
         )
         return self._issue(signed_in, refresh_token=rotated)
 
@@ -608,7 +675,7 @@ class CompanyService:
         self.store.sessions[_digest(access_token)] = session
         body: dict[str, object] = {
             "access_token": access_token,
-            "token_type": "DPoP",
+            "token_type": session.token_type,
             "expires_in": int((session.expires_at - self._now()).total_seconds()),
             "scope": " ".join(session.scopes),
             "session_id": session.session_id,
@@ -624,9 +691,12 @@ class CompanyService:
                 return session
         return None
 
-    def _drop_tokens_of(self, session_id: str) -> None:
-        for key in [k for k, s in self.store.sessions.items() if s.session_id == session_id]:
-            del self.store.sessions[key]
+    def _drop_tokens_of(self, session_id: str, token_type: str | None = None) -> None:
+        """A new token replaces the Session's earlier ones (of one type, when given)."""
+
+        for key, session in list(self.store.sessions.items()):
+            if session.session_id == session_id and token_type in {None, session.token_type}:
+                del self.store.sessions[key]
 
     # Direct Sign-In (§4.5) -------------------------------------------------------------
 
@@ -802,7 +872,9 @@ class CompanyService:
             raise _RefusedError(401, "invalid_token")
         key = _digest(token)
         session = self.store.sessions.get(key)
-        if session is None or self._now() >= session.expires_at:
+        bearer = session is not None and session.token_type != "DPoP"  # noqa: S105
+        if session is None or self._now() >= session.expires_at or bearer:
+            # A Bearer token works only at the MCP server it was issued for (§4.3).
             raise _RefusedError(401, "invalid_token")
         thumbprint = await self._dpop(request, access_token=token)
         if thumbprint != session.key_thumbprint:
@@ -1227,6 +1299,29 @@ class CompanyService:
         _, session = await self._caller(request)
         if "operations" not in self.extensions.get(session.client_id, frozenset()):
             raise _RefusedError(403, "extension_required", extension="operations")
+        stored = self._usable(operation_id, session)
+        if method == "GET" and not action:
+            return self._operation_response(stored)
+        if method == "POST" and action == "cancel":
+            return self._cancel_operation(stored)
+        if method == "POST" and action == "confirm":
+            return await self._confirm(request, session, stored)
+        raise _RefusedError(404, "not_found")
+
+    def _cancel_operation(self, stored: StoredOperation) -> CompanyResponse:
+        if stored.operation.state == "proposed":
+            stored.operation = stored.operation.model_copy(
+                update={
+                    "state": "cancelled",
+                    "result": OperationResult(summary="Nothing was changed."),
+                }
+            )
+        # In progress, it stays so until the company knows whether it stopped (§7).
+        return self._operation_response(stored)
+
+    def _usable(self, operation_id: str, session: IssuedSession) -> StoredOperation:
+        """The operation, if this Session may use it (Operations §3.2)."""
+
         stored = self.store.operations.get(operation_id)
         if (
             stored is None
@@ -1235,21 +1330,7 @@ class CompanyService:
         ):
             raise _RefusedError(404, "operation_not_found")
         self._expire(stored)
-        if method == "GET" and not action:
-            return self._operation_response(stored)
-        if method == "POST" and action == "cancel":
-            if stored.operation.state == "proposed":
-                stored.operation = stored.operation.model_copy(
-                    update={
-                        "state": "cancelled",
-                        "result": OperationResult(summary="Nothing was changed."),
-                    }
-                )
-            # In progress, it stays so until the company knows whether it stopped (§7).
-            return self._operation_response(stored)
-        if method == "POST" and action == "confirm":
-            return await self._confirm(request, session, stored)
-        raise _RefusedError(404, "not_found")
+        return stored
 
     def _expire(self, stored: StoredOperation) -> None:
         operation = stored.operation
@@ -1269,8 +1350,21 @@ class CompanyService:
         self, request: CompanyRequest, session: IssuedSession, stored: StoredOperation
     ) -> CompanyResponse:
         body = loads_strict(request.body)
-        revision = body.get("revision")
-        approved_by = body.get("approved_by")
+        if not isinstance(body, dict):
+            raise _RefusedError(400, "invalid_request")
+        return await self._confirm_operation(
+            session, stored, body.get("revision"), body.get("approved_by")
+        )
+
+    async def _confirm_operation(
+        self,
+        session: IssuedSession,
+        stored: StoredOperation,
+        revision: object,
+        approved_by: object,
+    ) -> CompanyResponse:
+        """Confirm, whichever channel it comes through: at most once (Operations §4.4, §6)."""
+
         operation = stored.operation
         if any(scope not in session.scopes for scope in self.config.write_scopes):
             raise _RefusedError(403, "insufficient_scope", scope=" ".join(self.config.write_scopes))
@@ -1321,3 +1415,274 @@ class CompanyService:
     def _operation_response(stored: StoredOperation) -> CompanyResponse:
         headers = {"Retry-After": "5"} if stored.operation.state == "in_progress" else {}
         return CompanyResponse(200, stored.operation.model_dump(mode="json"), headers)
+
+    # MCP (§4.3, §6, Operations §4.2) -------------------------------------------------------
+
+    def _mcp(self) -> CompanyMcp | None:
+        contributions = self.reactor.get_contributions(COMPANY_MCP)
+        return cast(CompanyMcp, contributions[0].value) if contributions else None
+
+    def _bearer_refusal(self, status: int, error: str, scope: str | None = None) -> CompanyResponse:
+        challenge = (
+            f'Bearer error="{error}", resource_metadata="{self.config.mcp_resource_metadata}"'
+        )
+        if scope is not None:
+            challenge += f', scope="{scope}"'
+        body: dict[str, object] = {"error": error}
+        if scope is not None:
+            body["scope"] = scope
+        return CompanyResponse(
+            status, body, {"WWW-Authenticate": challenge, "Cache-Control": "no-store"}
+        )
+
+    def _bearer_caller(self, request: CompanyRequest) -> IssuedSession | None:
+        """The Session of a Bearer token issued for this MCP server, else `None`."""
+
+        scheme, _, token = request.headers.get("authorization", "").partition(" ")
+        if scheme != "Bearer" or not token:
+            return None
+        session = self.store.sessions.get(_digest(token))
+        if (
+            session is None
+            or self._now() >= session.expires_at
+            or session.token_type != "Bearer"  # noqa: S105 - OAuth token type
+            or session.resource != self.config.mcp_url
+        ):
+            return None
+        return session
+
+    async def _mcp_route(  # noqa: C901 - the JSON-RPC methods
+        self, request: CompanyRequest
+    ) -> CompanyResponse:
+        session = self._bearer_caller(request)
+        if session is None:
+            # A missing, expired, DPoP, or other-resource token: none is accepted here.
+            return self._bearer_refusal(401, "invalid_token")
+        if request.method.upper() != "POST":
+            return CompanyResponse(405, {"error": "method_not_allowed"}, {"Allow": "POST"})
+        try:
+            message = loads_strict(request.body)
+        except (ValueError, PersonalAgentProtocolError):
+            return _rpc_error(None, -32700, "Parse error")
+        if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+            return _rpc_error(None, -32600, "Invalid Request")
+        request_id = message.get("id")
+        method = message.get("method")
+        if request_id is None:
+            return CompanyResponse(202, None)  # a notification, such as notifications/initialized
+        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        mcp = cast(CompanyMcp, self._mcp())
+        if method == "initialize":
+            result: object = {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": self.config.name, "version": "1"},
+            }
+        elif method == "ping":
+            result = {}
+        elif method == "tools/list":
+            result = {"tools": mcp.tools()}
+        elif method == "tools/call":
+            outcome = await self._mcp_tool(session, mcp, cast(dict, params))
+            if isinstance(outcome, CompanyResponse):
+                return outcome
+            result = outcome
+        else:
+            return _rpc_error(request_id, -32601, "Method not found")
+        return CompanyResponse(200, {"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    async def _mcp_tool(
+        self, session: IssuedSession, mcp: CompanyMcp, params: dict[str, Any]
+    ) -> dict[str, Any] | CompanyResponse:
+        name = params.get("name")
+        arguments = params.get("arguments") or {}
+        if not isinstance(name, str) or not isinstance(arguments, dict):
+            return _rpc_error(None, -32602, "Invalid params")
+        answer = await mcp.call(
+            name,
+            arguments,
+            ApiCall(
+                method="TOOL",
+                path=name,
+                query={},
+                body=arguments,
+                account_id=session.account_id,
+                scopes=session.scopes,
+                client_id=session.client_id,
+            ),
+        )
+        if answer.refusal is not None:
+            status, error, scope = answer.refusal
+            return self._bearer_refusal(status, error, scope)
+        if answer.operation is not None:
+            if session.account_id is None:
+                return self._bearer_refusal(403, "sign_in_required")
+            if "operations" not in self.extensions.get(session.client_id, frozenset()):
+                return _json_error(403, "extension_required", extension="operations")
+            operation = self._propose(session, Reply(operation=answer.operation))
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Proposed: {operation.summary} Not done until confirmed.",
+                    }
+                ],
+                "structuredContent": {"operation": operation.model_dump(mode="json")},
+            }
+        text = answer.text if answer.text is not None else json.dumps(answer.structured or {})
+        result: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
+        if answer.structured is not None:
+            result["structuredContent"] = answer.structured
+        if answer.is_error:
+            result["isError"] = True
+        return result
+
+    # Web browsing (§5, Operations §4.4) --------------------------------------------------
+
+    def _live_session(self, session_id: str) -> IssuedSession | None:
+        """The Session as it is now: its latest unexpired DPoP token's record."""
+
+        now = self._now()
+        live = [
+            session
+            for session in self.store.sessions.values()
+            if session.session_id == session_id
+            and session.token_type == "DPoP"  # noqa: S105 - OAuth token type
+            and now < session.expires_at
+        ]
+        return max(live, key=lambda session: session.expires_at) if live else None
+
+    async def _browser_session(self, request: CompanyRequest) -> CompanyResponse:
+        refused = self._page(400, "This browser could not join the session.")
+        assertion = dict(parse_qsl(request.body.decode())).get("assertion", "")
+        try:
+            claims = jwt.decode(assertion, options={"verify_signature": False})
+            header = jwt.get_unverified_header(assertion)
+            client_id = str(claims["iss"])
+            resolver = cast(
+                ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
+            )
+            _, keys = await resolver.resolve(client_id)
+        except (KeyError, TypeError, ValueError, jwt.PyJWTError, PersonalAgentProtocolError):
+            return refused
+        algorithm = str(header.get("alg", ""))
+        verified = None
+        for key in keys.keys:
+            if header.get("kid") not in {None, key.kid} or key.alg not in {None, algorithm}:
+                continue
+            try:
+                public = jwt.PyJWK.from_dict(
+                    json.loads(key.model_dump_json(exclude_none=True)), algorithm=algorithm
+                ).key
+                verified = await verify_browser_assertion(
+                    assertion,
+                    public_key=public,
+                    expected_endpoint=self.config.browser_session_endpoint,
+                    company_domain=self.config.domain,
+                    expected_client_id=client_id,
+                    expected_pairwise_user_id=str(claims.get("sub", "")),
+                    expected_session_id=str(claims.get("session_id", "")),
+                    replay_cache=self._replay(),
+                    now=self._now(),
+                )
+                break
+            except (PersonalAgentProtocolError, jwt.PyJWTError, ValueError, TypeError):
+                continue
+        if verified is None:
+            return refused
+        if verified.expires_at - timedelta(seconds=60) > datetime.fromtimestamp(
+            int(claims["iat"]), verified.expires_at.tzinfo
+        ):
+            return refused  # exp is at most 60 seconds after iat
+        session = self._live_session(verified.session_id)
+        if session is None or (session.client_id, session.pairwise_user_id) != (
+            verified.client_id,
+            verified.pairwise_user_id,
+        ):
+            return refused
+        cookie = self._id("web")
+        self.store.browser_cookies[_digest(cookie)] = session.session_id
+        return CompanyResponse(
+            303,
+            None,
+            {
+                "Location": verified.return_to,
+                # The company's own cookie: no Max-Age, and only as alive as its Session.
+                "Set-Cookie": f"poppy_session={cookie}; Path=/; Secure; HttpOnly; SameSite=Lax",
+                "Cache-Control": "no-store",
+            },
+        )
+
+    def _web_session(self, request: CompanyRequest) -> IssuedSession | None:
+        """The Session a browser's cookie stands for, as it is now (§5)."""
+
+        cookies = SimpleCookie()
+        try:
+            cookies.load(request.headers.get("cookie", ""))
+        except CookieError:
+            return None
+        morsel = cookies.get("poppy_session")
+        if morsel is None:
+            return None
+        session_id = self.store.browser_cookies.get(_digest(morsel.value))
+        if session_id is None:
+            return None
+        session = self._live_session(session_id)
+        if session is None:
+            # The cookie does not outlive the Session.
+            self.store.browser_cookies.pop(_digest(morsel.value), None)
+        return session
+
+    async def _operation_page(
+        self, request: CompanyRequest, method: str, operation_id: str
+    ) -> CompanyResponse:
+        session = self._web_session(request)
+        if session is None:
+            return self._page(401, "Your agent's session has ended. Ask it to open this again.")
+        try:
+            stored = self._usable(operation_id, session)
+        except _RefusedError:
+            return self._page(404, "There is nothing to show here.")
+        page_url = f"{self.config.base}/operations/{operation_id}"
+        if method == "POST":
+            origin = request.headers.get("origin")
+            if origin is not None and origin != self.config.base:
+                return self._page(403, "This request did not come from this site.")
+            form = dict(parse_qsl(request.body.decode()))
+            try:
+                if form.get("action") == "cancel":
+                    self._cancel_operation(stored)
+                else:
+                    revision = int(form["revision"]) if form.get("revision", "").isdigit() else None
+                    await self._confirm_operation(
+                        session, stored, revision, form.get("approved_by", "user")
+                    )
+            except _RefusedError as refusal:
+                return self._page(refusal.status, f"Not done: {html.escape(refusal.error)}.")
+            return CompanyResponse(303, None, {"Location": page_url, "Cache-Control": "no-store"})
+        if method != "GET":
+            return self._page(405, "Not allowed.")
+        operation = stored.operation
+        body = (
+            f"<h1>{html.escape(self.config.name)}</h1>"
+            f'<section data-operation-id="{html.escape(operation.operation_id)}" '
+            f'data-revision="{operation.revision}" data-state="{operation.state}">'
+            f"<p>{html.escape(operation.summary)}</p><p>Status: {operation.state}</p>"
+        )
+        if operation.result is not None:
+            body += f"<p>{html.escape(operation.result.summary)}</p>"
+        if operation.state == "proposed":
+            body += (
+                f'<form method="post" action="{page_url}">'
+                f'<input type="hidden" name="revision" value="{operation.revision}">'
+                '<input type="hidden" name="approved_by" value="user">'
+                '<button name="action" value="confirm">Confirm</button>'
+                '<button name="action" value="cancel">Cancel</button></form>'
+            )
+        return self._page(200, body + "</section>")
+
+
+def _rpc_error(request_id: object, code: int, message: str) -> CompanyResponse:
+    return CompanyResponse(
+        200, {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+    )

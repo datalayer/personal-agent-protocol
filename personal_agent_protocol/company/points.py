@@ -21,6 +21,10 @@ without touching the service:
 - `pap.company.replayCache` remembers assertion and proof IDs once.
 - `pap.company.api` answers the company's OpenAPI API (`/api/…`), its
   consequential calls proposing operations (`202`, Operations §4.1).
+- `pap.company.mcp` answers the company's MCP server (`/mcp`): its tools,
+  called with resource-bound Bearer Session Tokens (§4.3, §6), a
+  consequential tool proposing an operation in `structuredContent`
+  (Operations §4.2).
 """
 
 from __future__ import annotations
@@ -43,6 +47,7 @@ CLIENT_POLICIES = define_contribution_point("pap.company.clientPolicy")
 CLIENT_RESOLVERS = define_contribution_point("pap.company.clientResolver")
 REPLAY_CACHES = define_contribution_point("pap.company.replayCache")
 COMPANY_APIS = define_contribution_point("pap.company.api")
+COMPANY_MCP = define_contribution_point("pap.company.mcp")
 
 
 @dataclass
@@ -168,6 +173,7 @@ class CompanyStore(Protocol):
     conversations: dict[str, StoredConversation]
     operations: dict[str, StoredOperation]
     message_ids: dict[tuple[str, str, str], str]
+    browser_cookies: dict[str, str]
 
 
 class MemoryCompanyStore:
@@ -183,6 +189,8 @@ class MemoryCompanyStore:
         self.conversations: dict[str, StoredConversation] = {}
         self.operations: dict[str, StoredOperation] = {}
         self.message_ids: dict[tuple[str, str, str], str] = {}
+        #: The website's own cookies (by digest), each tied to one Session (§5).
+        self.browser_cookies: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -358,3 +366,37 @@ class CompanyApi(Protocol):
     def openapi(self) -> dict[str, Any]: ...
 
     async def handle(self, call: ApiCall) -> ApiResult: ...
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """An MCP tool's answer: text and structured content, or an operation to propose.
+
+    `refusal` is `(status, error, scope)` for a token error the server returns
+    over HTTP with a Bearer challenge (`sign_in_required`, `insufficient_scope`).
+    """
+
+    text: str | None = None
+    structured: dict[str, Any] | None = None
+    operation: ProposedOperation | None = None
+    is_error: bool = False
+    refusal: tuple[int, str, str | None] | None = None
+
+    @staticmethod
+    def sign_in_required(scope: str) -> ToolResult:
+        return ToolResult(refusal=(403, "sign_in_required", scope))
+
+    @staticmethod
+    def insufficient_scope(scope: str) -> ToolResult:
+        return ToolResult(refusal=(403, "insufficient_scope", scope))
+
+
+@runtime_checkable
+class CompanyMcp(Protocol):
+    """The company's MCP server: its tools, and each call (with the caller's authority)."""
+
+    description: str
+
+    def tools(self) -> list[dict[str, Any]]: ...
+
+    async def call(self, name: str, arguments: dict[str, Any], call: ApiCall) -> ToolResult: ...

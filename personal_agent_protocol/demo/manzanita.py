@@ -30,6 +30,7 @@ from ..company import (
     COMPANY_ACCOUNTS,
     COMPANY_AGENTS,
     COMPANY_APIS,
+    COMPANY_MCP,
     OPERATION_EXECUTORS,
     ApiCall,
     ApiResult,
@@ -40,6 +41,7 @@ from ..company import (
     OperationOutcomeUnknown,
     ProposedOperation,
     Reply,
+    ToolResult,
     Turn,
     build_company,
     company_app,
@@ -59,6 +61,7 @@ CONFIG = CompanyConfig(
     write_scopes=("orders:write",),
     mediated_fields=(("email", "Email", False), ("password", "Password", True)),
     custom_scopes={"orders:read": "See your orders", "orders:write": "Exchange and return items"},
+    web=True,
 )
 
 
@@ -260,6 +263,44 @@ class RepairExecutor:
         raise OperationOutcomeUnknown("the carrier did not answer")
 
 
+class ManzanitaMcp:
+    """Manzanita's MCP server: the same orders and exchange, as tools (§6, Operations §4.2)."""
+
+    description = "Orders and exchanges, as MCP tools"
+
+    def tools(self) -> list[dict[str, object]]:
+        return [
+            {
+                "name": "list_orders",
+                "description": "Your orders (orders:read).",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "exchange_jacket",
+                "description": "Propose the insulated jacket in exchange (orders:write).",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+        ]
+
+    async def call(self, name: str, arguments: dict[str, object], call: ApiCall) -> ToolResult:
+        if name == "list_orders":
+            if call.account_id is None:
+                return ToolResult.sign_in_required("orders:read")
+            if "orders:read" not in call.scopes:
+                return ToolResult.insufficient_scope("orders:read")
+            return ToolResult(
+                text="Order ord_7Hk2: Ridge Jacket, size M, delivered.",
+                structured={"orders": [ORDER]},
+            )
+        if name == "exchange_jacket":
+            if call.account_id is None:
+                return ToolResult.sign_in_required("orders:write")
+            if "orders:write" not in call.scopes:
+                return ToolResult.insufficient_scope("orders:write")
+            return ToolResult(operation=EXCHANGE)
+        return ToolResult(text=f"Unknown tool {name}.", is_error=True)
+
+
 class ManzanitaPlugin:
     def __init__(self) -> None:
         self.executor = ExchangeExecutor()
@@ -276,6 +317,7 @@ class ManzanitaPlugin:
         contribute(OPERATION_EXECUTORS, self.returns, contribution_id="returns")
         contribute(OPERATION_EXECUTORS, self.repairs, contribution_id="repairs")
         contribute(COMPANY_APIS, ManzanitaApi(), contribution_id="api")
+        contribute(COMPANY_MCP, ManzanitaMcp(), contribution_id="mcp")
 
 
 def manzanita(

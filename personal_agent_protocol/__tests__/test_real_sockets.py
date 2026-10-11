@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import pytest
 
+from personal_agent_protocol.apis import ApiClient
+from personal_agent_protocol.demo.sockets import served_over_tls
+from personal_agent_protocol.operations import OperationsClient, approve
+
+from .test_direct_and_api import begin, direct_world
+
 pytest.importorskip("uvicorn")
-
-from personal_agent_protocol.apis import ApiClient  # noqa: E402
-from personal_agent_protocol.demo.sockets import served_over_tls  # noqa: E402
-from personal_agent_protocol.operations import OperationsClient, approve  # noqa: E402
-
-from .test_direct_and_api import begin, direct_world  # noqa: E402
 
 
 @pytest.mark.asyncio

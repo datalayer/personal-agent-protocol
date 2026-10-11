@@ -32,9 +32,7 @@ import httpx
 import jwt
 import pytest
 
-pytest.importorskip("uvicorn")
-
-from personal_agent_protocol import (  # noqa: E402
+from personal_agent_protocol import (
     ConversationClient,
     DirectSignInClient,
     DiscoveryClient,
@@ -43,26 +41,28 @@ from personal_agent_protocol import (  # noqa: E402
     SessionClient,
     generate_message_id,
 )
-from personal_agent_protocol.apis import ApiClient  # noqa: E402
-from personal_agent_protocol.demo.kit import (  # noqa: E402
+from personal_agent_protocol.apis import ApiClient
+from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
     PersonalAgentHost,
     ScriptedBrowser,
     personal_agent_reactor,
 )
-from personal_agent_protocol.demo.manzanita import manzanita  # noqa: E402
-from personal_agent_protocol.demo.sockets import (  # noqa: E402
+from personal_agent_protocol.demo.manzanita import manzanita
+from personal_agent_protocol.demo.sockets import (
     _certificates,
     _DialLocal,
     served_over_tls,
 )
-from personal_agent_protocol.models import ClientMetadata  # noqa: E402
-from personal_agent_protocol.operations import (  # noqa: E402
+from personal_agent_protocol.models import ClientMetadata
+from personal_agent_protocol.operations import (
     OperationsClient,
     approve,
     operations_endpoint,
 )
+
+pytest.importorskip("uvicorn")
 
 ROOT = Path(__file__).parents[2]
 SCENARIO = json.loads((ROOT / "protocol" / "scenarios" / "user-with-a-company.json").read_text())
@@ -140,6 +140,160 @@ class NodeProcess:
 # The Python agent's journey ---------------------------------------------------------------
 
 
+class _Journey:
+    """The Python personal agent's state through the shared scenario, one method per step."""
+
+    def __init__(
+        self,
+        *,
+        reactor: Any,
+        http: httpx.AsyncClient,
+        browser: ScriptedBrowser,
+        identity: AgentIdentity,
+        approve_authorization: Callable[[str, str], Awaitable[str]],
+        performed: Callable[[str], Awaitable[list[str]]],
+    ) -> None:
+        self.reactor = reactor
+        self.http = http
+        self.browser = browser
+        self.identity = identity
+        self.approve_authorization = approve_authorization
+        self.performed = performed
+        self.agent = SCENARIO["agent"]
+        self.domain = SCENARIO["company"]["domain"]
+        self.transport = DpopHttpClient(reactor=reactor, http_client=http)
+        self.conversations = ConversationClient(transport=self.transport)
+        self.company: Any = None
+        self.who: dict[str, str] = {}
+        self.session: Any = None
+        self.signed_in: Any = None
+        self.page: Any = None
+        self.proposal: Any = None
+        self.seen: dict[str, Any] = {}
+
+    def message(self, text: str) -> Message:
+        return Message(id=generate_message_id(self.reactor), sender="human", text=text)
+
+    async def discover(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
+        agent = self.agent
+        self.company = await DiscoveryClient(reactor=self.reactor, http_client=self.http).discover(
+            self.domain
+        )
+        assert self.company.document.organization.name == expect["organization"]
+        assert ("operations" in self.company.document.extensions) is expect["operations"]
+        self.who = {
+            "tenant_id": agent["tenant_id"],
+            "pairwise_user_id": agent["pairwise_user_id"],
+            "issuer": self.company.oauth_metadata.issuer,
+        }
+
+    async def session_step(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
+        agent = self.agent
+        self.session = await SessionClient(reactor=self.reactor, http_client=self.http).start(
+            client_id=self.identity.client_id,
+            pairwise_user_id=agent["pairwise_user_id"],
+            issuer=self.who["issuer"],
+            token_endpoint=self.company.oauth_metadata.token_endpoint,
+            tenant_id=agent["tenant_id"],
+        )
+        assert self.session.signed_in is expect["signed_in"]
+
+    async def ask(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
+        endpoint = self.company.document.agent.protocols[0].endpoint
+        self.page = await self.conversations.start(
+            endpoint, self.message(step["text"]), token=self.session, wait=0, **self.who
+        )
+        assert [event.type for event in self.page.events] == expect["events"]
+        assert self.page.events[-1].error == expect["error"]
+        self.seen["authorization"] = self.page.events[-1].error
+
+    async def sign_in(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
+        assert step["method"] == "direct"
+        agent = self.agent
+        metadata = self.company.oauth_metadata
+        client = DirectSignInClient(reactor=self.reactor, http_client=self.http)
+        await client.begin(
+            authorization_endpoint=metadata.authorization_endpoint,
+            token_endpoint=metadata.token_endpoint,
+            issuer=metadata.issuer,
+            client_id=self.identity.client_id,
+            redirect_uri=f"https://{agent['domain']}{agent['redirect_path']}",
+            scopes=tuple(step["scopes"]),
+            tenant_id=agent["tenant_id"],
+            pairwise_user_id=agent["pairwise_user_id"],
+            session_id=self.session.session_id,
+        )
+        for text in expect["consent_page"]:
+            assert text in self.browser.pages[-1]
+        assert self.browser.request_id is not None
+        callback = await self.approve_authorization(
+            self.browser.request_id, SCENARIO["company"]["account_id"]
+        )
+        result = await client.complete(callback)
+        self.signed_in = result.token
+        assert self.signed_in.signed_in is expect["signed_in"]
+        assert self.signed_in.session_id == self.session.session_id
+        assert list(result.granted_scopes) == expect["granted"]
+
+    async def api_read(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
+        answer = await ApiClient(transport=self.transport).call(
+            step["method"],
+            f"https://{self.domain}{step['path']}",
+            token=self.signed_in,
+            **self.who,
+        )
+        assert answer.status == expect["status"]
+        assert answer.body == expect["body"]
+        self.seen["read"] = True
+
+    async def continue_step(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
+        endpoint = self.company.document.agent.protocols[0].endpoint
+        self.page = await self.conversations.send(
+            endpoint,
+            self.page.conversation_id,
+            self.message(step["text"]),
+            token=self.signed_in,
+            cursor=self.page.cursor,
+            wait=0,
+            **self.who,
+        )
+        self.proposal = self.page.events[-1].message.operation
+        assert self.proposal.state == expect["operation_state"]
+        assert self.proposal.user_approval_required is expect["user_approval_required"]
+
+    async def confirm(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
+        proposal = self.proposal
+        target = operations_endpoint(
+            self.company.document, ClientMetadata.model_validate(self.identity.metadata)
+        )
+        assert target is not None
+        operations = OperationsClient(transport=self.transport)
+        outcome: Any = None
+        for _ in range(step["times"]):
+            outcome = await operations.confirm(
+                target, proposal, approval=approve(proposal), token=self.signed_in, **self.who
+            )
+            assert outcome.status == "confirmed"
+            assert outcome.operation.state == expect["state"]
+            assert outcome.operation.confirmation.approved_by == step["approved_by"]
+        assert outcome.operation.result.summary.startswith(expect["summary_starts_with"])
+        done = await self.performed("orders.exchange")
+        assert done == [proposal.operation_id]
+        assert len(done) == expect["performed"]
+        self.seen["operation"] = {"operation_id": proposal.operation_id, "performed": len(done)}
+
+
+_STEPS = {
+    "discover": _Journey.discover,
+    "session": _Journey.session_step,
+    "ask": _Journey.ask,
+    "sign_in": _Journey.sign_in,
+    "api_read": _Journey.api_read,
+    "continue": _Journey.continue_step,
+    "confirm": _Journey.confirm,
+}
+
+
 async def run_journey(
     *,
     reactor: Any,
@@ -151,118 +305,20 @@ async def run_journey(
 ) -> dict[str, Any]:
     """Every step of the shared scenario, as the Python personal agent."""
 
-    agent = SCENARIO["agent"]
-    domain = SCENARIO["company"]["domain"]
-    transport = DpopHttpClient(reactor=reactor, http_client=http)
-    conversations = ConversationClient(transport=transport)
-    company: Any = None
-    who: dict[str, str] = {}
-    session: Any = None
-    signed_in: Any = None
-    page: Any = None
-    proposal: Any = None
-    seen: dict[str, Any] = {}
-
-    def message(text: str) -> Message:
-        return Message(id=generate_message_id(reactor), sender="human", text=text)
-
+    journey = _Journey(
+        reactor=reactor,
+        http=http,
+        browser=browser,
+        identity=identity,
+        approve_authorization=approve_authorization,
+        performed=performed,
+    )
     for step in SCENARIO["steps"]:
-        expect = step["expect"]
-        if step["step"] == "discover":
-            company = await DiscoveryClient(reactor=reactor, http_client=http).discover(domain)
-            assert company.document.organization.name == expect["organization"]
-            assert ("operations" in company.document.extensions) is expect["operations"]
-            who = {
-                "tenant_id": agent["tenant_id"],
-                "pairwise_user_id": agent["pairwise_user_id"],
-                "issuer": company.oauth_metadata.issuer,
-            }
-        elif step["step"] == "session":
-            session = await SessionClient(reactor=reactor, http_client=http).start(
-                client_id=identity.client_id,
-                pairwise_user_id=agent["pairwise_user_id"],
-                issuer=who["issuer"],
-                token_endpoint=company.oauth_metadata.token_endpoint,
-                tenant_id=agent["tenant_id"],
-            )
-            assert session.signed_in is expect["signed_in"]
-        elif step["step"] == "ask":
-            endpoint = company.document.agent.protocols[0].endpoint
-            page = await conversations.start(
-                endpoint, message(step["text"]), token=session, wait=0, **who
-            )
-            assert [event.type for event in page.events] == expect["events"]
-            assert page.events[-1].error == expect["error"]
-            seen["authorization"] = page.events[-1].error
-        elif step["step"] == "sign_in":
-            assert step["method"] == "direct"
-            metadata = company.oauth_metadata
-            client = DirectSignInClient(reactor=reactor, http_client=http)
-            await client.begin(
-                authorization_endpoint=metadata.authorization_endpoint,
-                token_endpoint=metadata.token_endpoint,
-                issuer=metadata.issuer,
-                client_id=identity.client_id,
-                redirect_uri=f"https://{agent['domain']}{agent['redirect_path']}",
-                scopes=tuple(step["scopes"]),
-                tenant_id=agent["tenant_id"],
-                pairwise_user_id=agent["pairwise_user_id"],
-                session_id=session.session_id,
-            )
-            for text in expect["consent_page"]:
-                assert text in browser.pages[-1]
-            assert browser.request_id is not None
-            callback = await approve_authorization(
-                browser.request_id, SCENARIO["company"]["account_id"]
-            )
-            result = await client.complete(callback)
-            signed_in = result.token
-            assert signed_in.signed_in is expect["signed_in"]
-            assert signed_in.session_id == session.session_id
-            assert list(result.granted_scopes) == expect["granted"]
-        elif step["step"] == "api_read":
-            answer = await ApiClient(transport=transport).call(
-                step["method"], f"https://{domain}{step['path']}", token=signed_in, **who
-            )
-            assert answer.status == expect["status"]
-            assert answer.body == expect["body"]
-            seen["read"] = True
-        elif step["step"] == "continue":
-            endpoint = company.document.agent.protocols[0].endpoint
-            page = await conversations.send(
-                endpoint,
-                page.conversation_id,
-                message(step["text"]),
-                token=signed_in,
-                cursor=page.cursor,
-                wait=0,
-                **who,
-            )
-            proposal = page.events[-1].message.operation
-            assert proposal.state == expect["operation_state"]
-            assert proposal.user_approval_required is expect["user_approval_required"]
-        elif step["step"] == "confirm":
-            target = operations_endpoint(
-                company.document, ClientMetadata.model_validate(identity.metadata)
-            )
-            assert target is not None
-            operations = OperationsClient(transport=transport)
-            outcome: Any = None
-            for _ in range(step["times"]):
-                outcome = await operations.confirm(
-                    target, proposal, approval=approve(proposal), token=signed_in, **who
-                )
-                assert outcome.status == "confirmed"
-                assert outcome.operation.state == expect["state"]
-                assert outcome.operation.confirmation.approved_by == step["approved_by"]
-            assert outcome.operation.result.summary.startswith(expect["summary_starts_with"])
-            done = await performed("orders.exchange")
-            assert done == [proposal.operation_id]
-            assert len(done) == expect["performed"]
-            seen["operation"] = {"operation_id": proposal.operation_id, "performed": len(done)}
-        else:
+        run = _STEPS.get(step["step"])
+        if run is None:
             raise AssertionError(f"unknown step {step['step']}")
-    return {"steps": [step["step"] for step in SCENARIO["steps"]], **seen}
+        await run(journey, step, step["expect"])
+    return {"steps": [step["step"] for step in SCENARIO["steps"]], **journey.seen}
 
 
 # TypeScript agent ↔ Python company ------------------------------------------------------
@@ -425,4 +481,3 @@ async def test_python_agent_with_the_python_company_runs_the_same_scenario() -> 
             reactor.stop()
             await http.aclose()
     assert result["operation"]["performed"] == 1
-

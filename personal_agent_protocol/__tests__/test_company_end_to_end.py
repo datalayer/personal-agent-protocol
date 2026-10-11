@@ -222,7 +222,7 @@ async def test_the_conversation_streams_and_a_stranger_cannot_read_it() -> None:
         )
     ]
     deltas = [item for item in items if isinstance(item, TextDelta)]
-    events = [item for item in items if not isinstance(item, (TextDelta, StreamReconnected))]
+    events = [item for item in items if not isinstance(item, TextDelta | StreamReconnected)]
     assert deltas and all(delta.actionable is False for delta in deltas)
     assert events[-1].type == "state" and events[-1].status == "closed"
 

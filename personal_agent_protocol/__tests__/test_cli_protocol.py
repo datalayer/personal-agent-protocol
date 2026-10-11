@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import click
 import typer
 from cryptography.hazmat.primitives import serialization
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
@@ -30,6 +29,16 @@ from personal_agent_protocol.demo.kit import (
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
 from personal_agent_protocol.reactor import BROWSER_HANDOFFS
+
+
+def _is_group(command: object) -> bool:
+    """A command group, whether Typer uses click or its vendored copy (Typer >= 0.22)."""
+
+    return isinstance(getattr(command, "commands", None), dict)
+
+
+#: Plain help and output, as a user's pipe sees it, even where CI forces colour.
+PLAIN = {"NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200", "FORCE_COLOR": None}
 
 GROUPS = ("sessions", "auth", "api", "conversations", "operations", "requirements", "conformance")
 
@@ -84,14 +93,17 @@ class Pap:
             MANIFEST, PapCliPlugin(ConfigStore(tmp_path / "config.json"), host)
         )
         self.app = create_app(platform)
-        self.runner = CliRunner()
+        self.runner = CliRunner(env=PLAIN)
 
     def __call__(self, *arguments: str, input: str | None = None, code: int = 0) -> Any:  # noqa: A002
         result = self.runner.invoke(self.app, list(arguments), input=input)
         self.outputs.append(result.output)
         assert result.exit_code == code, (arguments, result.exit_code, result.output)
         if "--json" in arguments and result.exit_code == 0:
-            payload = json.loads(result.stdout)
+            # CliRunner echoes what the user types at a prompt onto stdout; a terminal
+            # does not. The document starts at its first line.
+            lines = result.stdout.splitlines()
+            payload = json.loads("\n".join(lines[lines.index("{") :]))
             assert payload["schema_version"] == 1
             return payload
         return result
@@ -116,10 +128,10 @@ class Pap:
 def test_every_group_and_command_has_help_and_completion(tmp_path: Path) -> None:
     pap = Pap(tmp_path)
     command = typer.main.get_command(pap.app)
-    assert isinstance(command, click.Group)
+    assert _is_group(command)
     for group in (*GROUPS, "agent"):
         sub = command.commands[group]
-        assert isinstance(sub, click.Group)
+        assert _is_group(sub)
         pap(group, "--help")
         for name in sub.commands:
             assert "Usage" in pap(group, name, "--help").output
@@ -130,14 +142,14 @@ def test_every_group_and_command_has_help_and_completion(tmp_path: Path) -> None
 def test_no_protected_value_is_ever_a_command_line_option(tmp_path: Path) -> None:
     forbidden = ("token", "password", "secret", "credential", "assertion", "pem", "private")
     command = typer.main.get_command(Pap(tmp_path).app)
-    assert isinstance(command, click.Group)
+    assert _is_group(command)
     for group in (*GROUPS, "agent"):
         sub = command.commands[group]
-        assert isinstance(sub, click.Group)
+        assert _is_group(sub)
         commands = [
             leaf
             for leaf in sub.commands.values()
-            for leaf in (leaf.commands.values() if isinstance(leaf, click.Group) else [leaf])
+            for leaf in (leaf.commands.values() if _is_group(leaf) else [leaf])
         ]
         for leaf in commands:
             for parameter in leaf.params:
@@ -267,7 +279,7 @@ def test_exit_codes_for_setup_input_refusals_and_usage(tmp_path: Path) -> None:
     pap("sessions", "renew", "ses_unknown", code=3)
     pap("sessions", "start", "--no-such-option", code=2)
     listed = pap("exit-codes", "--json")["exit_codes"]
-    assert set(listed) == {str(int(code)) for code in ExitCode} == {str(c) for c in EXIT_CODES}
+    assert set(listed) == {str(int(code)) for code in ExitCode} == {str(int(c)) for c in EXIT_CODES}
 
 
 def test_direct_sign_in_reads_the_callback_from_a_file_descriptor(tmp_path: Path) -> None:
@@ -324,7 +336,7 @@ def test_a_broken_extension_does_not_take_the_command_line_down(tmp_path: Path) 
     platform = PluginPlatform()
     platform.register_plugin(MANIFEST, PapCliPlugin(ConfigStore(tmp_path / "c.json")))
     platform.register_plugin(PluginManifest(name="example.broken", version="1"), Broken())
-    result = CliRunner().invoke(create_app(platform), ["--help"])
+    result = CliRunner(env=PLAIN).invoke(create_app(platform), ["--help"])
     assert result.exit_code == 0
     for group in GROUPS:
         assert group in result.output

@@ -24,7 +24,7 @@ LEDGER = load_ledger()
 def _functions(path: Path) -> frozenset[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     return frozenset(
-        node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     )
 
 

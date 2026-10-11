@@ -66,7 +66,7 @@ from ..operations import (
     approve,
     operations_endpoint,
 )
-from ..sessions import SessionClient, SessionToken, generate_pairwise_user_id
+from ..sessions import SessionClient, SessionToken, Who, generate_pairwise_user_id
 from ..transport import DpopHttpClient
 from .kit import (
     AgentIdentity,
@@ -134,7 +134,7 @@ class LedgerlyAsPersonalAgent:
             ).discover(NORTHWIND)
         return self.company
 
-    def who(self, link: NorthwindLink, company: DiscoveredCompany) -> dict[str, str]:
+    def who(self, link: NorthwindLink, company: DiscoveredCompany) -> Who:
         return {
             "tenant_id": TENANT,
             "pairwise_user_id": link.pairwise_user_id,

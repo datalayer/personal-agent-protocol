@@ -157,7 +157,7 @@ class _Routing(httpx.AsyncBaseTransport):
         app = self.network.apps.get(request.url.host)
         if request.url.scheme != "https" or app is None:
             raise httpx.ConnectError(f"{request.url.host} is not on the network", request=request)
-        return await httpx.ASGITransport(app=app).handle_async_request(request)  # type: ignore[arg-type]
+        return await httpx.ASGITransport(app=app).handle_async_request(request)
 
 
 class MemoryVault:

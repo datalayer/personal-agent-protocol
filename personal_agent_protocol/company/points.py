@@ -39,6 +39,9 @@ from reactor import define_contribution_point  # type: ignore[import-untyped]
 
 from ..models import ClientMetadata, JsonWebKeySet, Operation, OperationResult
 
+#: The OAuth token type of a proof-bound Session Token.
+DPOP: Literal["DPoP"] = "DPoP"
+
 COMPANY_STORES = define_contribution_point("pap.company.store")
 COMPANY_ACCOUNTS = define_contribution_point("pap.company.accounts")
 COMPANY_AGENTS = define_contribution_point("pap.company.agent")
@@ -62,7 +65,7 @@ class IssuedSession:
     account_id: str | None = None
     scopes: tuple[str, ...] = ()
     account_token: str | None = None
-    token_type: Literal["DPoP", "Bearer"] = "DPoP"  # noqa: S105 - OAuth token type
+    token_type: Literal["DPoP", "Bearer"] = DPOP
     resource: str | None = None
 
     @property

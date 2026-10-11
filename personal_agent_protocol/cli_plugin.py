@@ -132,7 +132,7 @@ class PapCliPlugin:
 
         if self._host is None:
             timeout = self.config.resolve().get("timeout")
-            self._host = local_host(timeout=float(timeout.value) if timeout else 10.0)
+            self._host = local_host(timeout=float(str(timeout.value)) if timeout else 10.0)
         return self._host
 
     def provide_cli(self, cli: typer.Typer) -> None:

@@ -10,7 +10,7 @@ import base64
 import secrets
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Literal, cast
+from typing import Literal, TypedDict, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -145,6 +145,14 @@ class SessionGrant(ProtocolModel):
         if self.resource is not None:
             values["resource"] = self.resource
         return values
+
+
+class Who(TypedDict):
+    """Whose Session a request is for: the keyword arguments every client call takes."""
+
+    tenant_id: str
+    pairwise_user_id: str
+    issuer: str
 
 
 class SessionToken(ProtocolModel):

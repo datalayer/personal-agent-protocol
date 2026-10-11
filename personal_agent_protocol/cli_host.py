@@ -71,6 +71,7 @@ from .reactor import (
 )
 
 HOST_PLUGIN_GROUP = "personal_agent_protocol.plugins"
+_DPOP = "DPoP"  # the OAuth token type of a proof-bound Session Token
 
 
 class InputRequiredError(PersonalAgentProtocolError):
@@ -314,7 +315,7 @@ class SessionRecord:
     scope: str
     expires_at: str
     account_reference: str | None = None
-    token_type: str = "DPoP"  # noqa: S105 - OAuth token type
+    token_type: str = _DPOP
 
     def public(self) -> dict[str, Any]:
         """What may be printed: opaque references, never a token or the User ID."""

@@ -118,12 +118,30 @@ class _DialLocal(httpcore.AsyncNetworkBackend):
         self.port = port
         self.backend = httpcore.AnyIOBackend()
 
-    async def connect_tcp(self, host: str, port: int, **kwargs: Any) -> httpcore.AsyncNetworkStream:
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
         if host not in self.domains:
             raise httpcore.ConnectError(f"{host} is not on the network")
-        return await self.backend.connect_tcp("127.0.0.1", self.port, **kwargs)
+        return await self.backend.connect_tcp(
+            "127.0.0.1",
+            self.port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
 
-    async def connect_unix_socket(self, path: str, **kwargs: Any) -> httpcore.AsyncNetworkStream:
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
         raise httpcore.ConnectError("no unix sockets on the demo network")
 
     async def sleep(self, seconds: float) -> None:

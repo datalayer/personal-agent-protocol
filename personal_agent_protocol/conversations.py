@@ -9,7 +9,7 @@ import base64
 import inspect
 import json
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from typing import Literal, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
@@ -192,7 +192,7 @@ class ConversationClient:
         wait: int = 30,
         on_cursor_expired: CursorExpiredHandler | None = None,
         max_seen_event_ids: int = 10_000,
-    ) -> AsyncIterator[ConversationEvent]:
+    ) -> AsyncGenerator[ConversationEvent, None]:
         """Yield ordered, de-duplicated events until the conversation closes.
 
         ``has_more`` pages are drained immediately. Long polls use ``wait``.
@@ -320,7 +320,7 @@ class ConversationClient:
         last_event_id: str | None = None,
         max_reconnects: int = 5,
         max_seen_event_ids: int = 10_000,
-    ) -> AsyncIterator[StreamItem]:
+    ) -> AsyncGenerator[StreamItem, None]:
         """Yield events from the company's SSE stream until the conversation closes.
 
         Reconnects with `Last-Event-ID` set to the last event handled when the
@@ -556,12 +556,14 @@ async def _sse_frames(
 ) -> AsyncIterator[tuple[str, str, str | None]]:
     """Parse SSE into `(event name, data, id)`; comments (keep-alives) are skipped."""
 
-    name, data, event_id, size = "message", [], None, 0
+    name, event_id, size = "message", None, 0
+    data: list[str] = []
     async for line in lines:
         if line == "":
             if data:
                 yield name, "\n".join(data), event_id
-            name, data, event_id, size = "message", [], None, 0
+            name, event_id, size = "message", None, 0
+            data = []
             continue
         if line.startswith(":"):
             continue

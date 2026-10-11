@@ -347,19 +347,27 @@ class OperationsClient:
         body = json.dumps(
             {"revision": operation.revision, "approved_by": approved_by}, separators=(",", ":")
         ).encode()
-        who = {
-            "token": token,
-            "tenant_id": tenant_id,
-            "pairwise_user_id": pairwise_user_id,
-            "issuer": issuer,
-        }
         try:
             response = await self._request(
-                "POST", endpoint, f"{operation.operation_id}/confirm", body, **who
+                "POST",
+                endpoint,
+                f"{operation.operation_id}/confirm",
+                body,
+                token,
+                tenant_id,
+                pairwise_user_id,
+                issuer,
             )
         except TransportError:
             # The answer was lost: the company may have performed it. Read it back.
-            current = await self.read(endpoint, operation.operation_id, **who)
+            current = await self.read(
+                endpoint,
+                operation.operation_id,
+                token=token,
+                tenant_id=tenant_id,
+                pairwise_user_id=pairwise_user_id,
+                issuer=issuer,
+            )
             await _settle(held, spent=current.state != "proposed")
             if current.state == "proposed":
                 raise OperationError(

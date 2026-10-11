@@ -65,7 +65,7 @@ from .operations import OperationsClient, UserApproval, approve, operations_endp
 from .pairwise import resolve_pairwise_user_id
 from .reactor import SIGNERS
 from .requirements import load_ledger
-from .sessions import SessionClient, SessionToken
+from .sessions import SessionClient, SessionToken, Who
 from .transport import DpopHttpClient
 
 if TYPE_CHECKING:
@@ -194,7 +194,7 @@ async def _company(runtime: CliRuntime, domain: str) -> DiscoveredCompany:
     return await DiscoveryClient(reactor=runtime.reactor).discover(domain)
 
 
-def _who(record: SessionRecord) -> dict[str, str]:
+def _who(record: SessionRecord) -> Who:
     return {
         "tenant_id": record.tenant_id,
         "pairwise_user_id": record.pairwise_user_id,

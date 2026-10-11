@@ -466,18 +466,18 @@ class CompanyService:
                 expires_at=self._now() + self.config.session_lifetime,
             )
         else:
-            session = self._session_by_id(session_id)
-            if session is None or (session.client_id, session.pairwise_user_id) != (
+            known = self._session_by_id(session_id)
+            if known is None or (known.client_id, known.pairwise_user_id) != (
                 client_id,
                 pairwise,
             ):
                 raise _RefusedError(400, "invalid_session")
             token_type: Literal["DPoP", "Bearer"] = "Bearer" if bearer else "DPoP"
-            self._drop_tokens_of(session.session_id, token_type)
+            self._drop_tokens_of(known.session_id, token_type)
             # Renewal with the assertion gives a signed-out token; a signed-in Session is
             # renewed with its Account Token instead (§4.2, §4.8).
             session = replace(
-                session,
+                known,
                 key_thumbprint=thumbprint,
                 expires_at=self._now() + self.config.session_lifetime,
                 token_type=token_type,
@@ -1389,7 +1389,7 @@ class CompanyService:
             raise _RefusedError(403, "user_approval_required")
         confirmation = OperationConfirmation(
             revision=operation.revision,
-            approved_by=cast(Literal["user", "standing_permission"], approved_by),
+            approved_by=approved_by,
             confirmed_at=self._now(),
         )
         stored.operation = operation.model_copy(

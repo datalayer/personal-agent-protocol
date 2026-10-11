@@ -82,7 +82,7 @@ from .reactor import (
     resolve_addresses,
 )
 from .requirements import protocol_path
-from .sessions import SessionClient, SessionToken
+from .sessions import SessionClient, SessionToken, Who
 from .transport import DpopHttpClient
 
 Kind = Literal["positive", "negative", "recovery"]
@@ -270,7 +270,7 @@ class Agent:
 
 
 def _manifest(identity: AgentIdentity) -> Any:
-    from reactor import PluginManifest  # type: ignore[import-untyped]
+    from reactor import PluginManifest
 
     return PluginManifest(name=f"{identity.domain}-conformance", version="1")
 
@@ -385,7 +385,7 @@ class ConformanceContext:
 
         return "usr_conf_" + base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
 
-    async def who(self, user: str) -> dict[str, str]:
+    async def who(self, user: str) -> Who:
         metadata = await self.metadata()
         return {"tenant_id": self.tenant_id, "pairwise_user_id": user, "issuer": metadata.issuer}
 
@@ -525,8 +525,8 @@ class ConformanceContext:
             signing_input = f"{_segment({**header, 'alg': 'HS256'})}.{_segment(claims)}"
             import hmac
 
-            signature = hmac.new(secret, signing_input.encode(), hashlib.sha256).digest()
-            return f"{signing_input}.{_b64(signature)}"
+            mac = hmac.new(secret, signing_input.encode(), hashlib.sha256).digest()
+            return f"{signing_input}.{_b64(mac)}"
         token = jwt.encode(claims, signer.private_key, algorithm="ES256", headers=header)
         if algorithm == "RS256":
             _, payload, signature = token.split(".")
@@ -813,8 +813,8 @@ async def _resource_dpop(  # noqa: C901 - one branch per proof mutation
         )
     elif mutation.get("replay"):
         replayed = await valid()
-        first = await ctx.send("GET", url, headers={**headers, "DPoP": replayed})
-        check(first.status_code not in {400, 401}, "the first use of the proof is accepted")
+        used = await ctx.send("GET", url, headers={**headers, "DPoP": replayed})
+        check(used.status_code not in {400, 401}, "the first use of the proof is accepted")
         headers["DPoP"] = replayed
     elif "ath" in mutation:
         headers["DPoP"] = await ctx.proof(user, "GET", url, token=SecretStr(mutation["ath"]))
@@ -2321,7 +2321,7 @@ async def _browser_joins(ctx: ConformanceContext, _: FixtureCase) -> None:
 
 @case("lifecycle.browser-assertion-refused")
 async def _browser_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
-    _, endpoint = await _browser(ctx)
+    _browser_unused, endpoint = await _browser(ctx)
     domain = (await ctx.company()).document.organization.domain
     user = ctx.new_user()
     session = await ctx.session(user)
@@ -2363,7 +2363,7 @@ async def _browser_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
 @case("operations.web-confirm-at-most-once")
 async def _web_confirm(ctx: ConformanceContext, _: FixtureCase) -> None:
     endpoint = await ctx.operations_endpoint()
-    browser, _ = await _browser(ctx)
+    browser, _endpoint = await _browser(ctx)
     form = ctx.scenario.web_confirm_form
     if form is None:
         raise SkipCase("the scenario does not know the website's confirm form")

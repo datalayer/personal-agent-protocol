@@ -18,7 +18,7 @@ import test from "node:test";
 import { inspect } from "node:util";
 
 import * as pap from "../../lib/index.js";
-import { CompanyService } from "../../lib/company/index.js";
+import { CompanyService } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
 import { Context, identityFrom, runConformance } from "./support/conformance.mjs";
 import { scenario as journeyScenario, runJourney } from "./support/journey.mjs";

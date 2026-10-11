@@ -5,7 +5,7 @@ import test from "node:test";
 
 import { DirectSignInClient, SessionClient, discoverCompany } from "../../lib/index.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
-import { CONSENT_COOKIE } from "../../lib/company/service.js";
+import { CONSENT_COOKIE } from "../../lib/server.js";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
 const TENANT = "atlas-demo";

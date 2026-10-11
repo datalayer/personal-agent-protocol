@@ -13,7 +13,9 @@ a company agent, and the Operations extension. Its parts are contributions:
 - `ManzanitaAgent` (`pap.company.agent`): reads the order once signed in
   (`authorization` until then) and proposes the exchange as an operation.
 - `ExchangeExecutor` (`pap.company.operationExecutor`): performs the
-  exchange, once.
+  exchange, once. Gift wrap (a small charge a standing permission can
+  cover), a return that fails partway, and a repair whose carrier never
+  answers show the other ends of an operation.
 """
 
 from __future__ import annotations
@@ -34,6 +36,8 @@ from ..company import (
     Authenticated,
     CompanyConfig,
     CompanyService,
+    OperationFailed,
+    OperationOutcomeUnknown,
     ProposedOperation,
     Reply,
     Turn,
@@ -99,18 +103,7 @@ class ManzanitaAgent:
             return [
                 Reply(
                     text="The insulated Ridge Jacket is in stock. Here is the exchange.",
-                    operation=ProposedOperation(
-                        action="orders.exchange",
-                        summary=(
-                            "Exchange the Ridge Jacket (M) from order ord_7Hk2 for the "
-                            "insulated Ridge Jacket (M), USD 70.00 more."
-                        ),
-                        terms={
-                            "order_id": "ord_7Hk2",
-                            "price_difference": {"amount": "70.00", "currency": "USD"},
-                        },
-                        user_approval_required=True,
-                    ),
+                    operation=EXCHANGE,
                 )
             ]
         return [Reply(text="Your order ord_7Hk2: Ridge Jacket, size M, delivered.", data=ORDER)]
@@ -130,6 +123,15 @@ class ManzanitaApi:
                 "/api/orders/{order_id}/exchanges": {
                     "post": {"summary": "Propose an exchange (orders:write): 202 and an operation"}
                 },
+                "/api/orders/{order_id}/gift-wrap": {
+                    "post": {"summary": "Propose gift wrap (orders:write): 202 and an operation"}
+                },
+                "/api/orders/{order_id}/returns": {
+                    "post": {"summary": "Propose a return (orders:write): 202 and an operation"}
+                },
+                "/api/orders/{order_id}/repairs": {
+                    "post": {"summary": "Propose a repair (orders:write): 202 and an operation"}
+                },
             },
         }
 
@@ -140,26 +142,53 @@ class ManzanitaApi:
             if "orders:read" not in call.scopes:
                 return ApiResult.insufficient_scope("orders:read")
             return ApiResult(body={"orders": [ORDER]})
-        if call.method == "POST" and call.path == f"/orders/{ORDER['order_id']}/exchanges":
+        prefix = f"/orders/{ORDER['order_id']}/"
+        if call.method == "POST" and call.path.startswith(prefix):
+            proposal = PROPOSALS.get(call.path.removeprefix(prefix))
+            if proposal is None:
+                return ApiResult.not_found()
             if call.account_id is None:
                 return ApiResult.sign_in_required("orders:write")
             if "orders:write" not in call.scopes:
                 return ApiResult.insufficient_scope("orders:write")
-            return ApiResult(
-                operation=ProposedOperation(
-                    action="orders.exchange",
-                    summary=(
-                        "Exchange the Ridge Jacket (M) from order ord_7Hk2 for the "
-                        "insulated Ridge Jacket (M), USD 70.00 more."
-                    ),
-                    terms={
-                        "order_id": "ord_7Hk2",
-                        "price_difference": {"amount": "70.00", "currency": "USD"},
-                    },
-                    user_approval_required=True,
-                )
-            )
+            return ApiResult(operation=proposal)
         return ApiResult.not_found()
+
+
+EXCHANGE = ProposedOperation(
+    action="orders.exchange",
+    summary=(
+        "Exchange the Ridge Jacket (M) from order ord_7Hk2 for the "
+        "insulated Ridge Jacket (M), USD 70.00 more."
+    ),
+    terms={
+        "order_id": "ord_7Hk2",
+        "price_difference": {"amount": "70.00", "currency": "USD"},
+    },
+    user_approval_required=True,
+)
+
+#: What each consequential API path proposes (Operations §4.1).
+PROPOSALS = {
+    "exchanges": EXCHANGE,
+    "gift-wrap": ProposedOperation(
+        action="orders.gift_wrap",
+        summary="Gift-wrap order ord_7Hk2 before it ships again, USD 5.00.",
+        terms={"order_id": "ord_7Hk2", "price": {"amount": "5.00", "currency": "USD"}},
+    ),
+    "returns": ProposedOperation(
+        action="orders.return",
+        summary="Return the Ridge Jacket (M) from order ord_7Hk2 for a refund of USD 180.00.",
+        terms={"order_id": "ord_7Hk2", "refund": {"amount": "180.00", "currency": "USD"}},
+        user_approval_required=True,
+    ),
+    "repairs": ProposedOperation(
+        action="orders.repair",
+        summary="Send the Ridge Jacket (M) from order ord_7Hk2 for a zip repair, free.",
+        terms={"order_id": "ord_7Hk2", "price": {"amount": "0.00", "currency": "USD"}},
+        user_approval_required=True,
+    ),
+}
 
 
 class ExchangeExecutor:
@@ -184,15 +213,68 @@ class ExchangeExecutor:
         )
 
 
+class GiftWrapExecutor:
+    action = "orders.gift_wrap"
+
+    def __init__(self) -> None:
+        self.performed: list[str] = []
+
+    async def perform(self, operation: Operation, account_id: str) -> OperationResult:
+        self.performed.append(operation.operation_id)
+        return OperationResult(
+            summary="Order ord_7Hk2 will be gift-wrapped. USD 5.00 charged to the card ending 4242."
+        )
+
+
+class ReturnExecutor:
+    """A return that fails partway: the label exists, the refund did not go through."""
+
+    action = "orders.return"
+
+    def __init__(self) -> None:
+        self.performed: list[str] = []
+
+    async def perform(self, operation: Operation, account_id: str) -> OperationResult:
+        self.performed.append(operation.operation_id)
+        raise OperationFailed(
+            OperationResult(
+                summary=(
+                    "A return label for the Ridge Jacket (M) was emailed, but the refund of "
+                    "USD 180.00 could not be issued; no money moved."
+                ),
+                data={"return_label": "rtn_8Lp3", "refunded": None},
+            )
+        )
+
+
+class RepairExecutor:
+    """A repair booked with a carrier that never answers: the outcome is unknown."""
+
+    action = "orders.repair"
+
+    def __init__(self) -> None:
+        self.performed: list[str] = []
+
+    async def perform(self, operation: Operation, account_id: str) -> OperationResult:
+        self.performed.append(operation.operation_id)
+        raise OperationOutcomeUnknown("the carrier did not answer")
+
+
 class ManzanitaPlugin:
     def __init__(self) -> None:
         self.executor = ExchangeExecutor()
+        self.gift_wrap = GiftWrapExecutor()
+        self.returns = ReturnExecutor()
+        self.repairs = RepairExecutor()
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         contribute(COMPANY_ACCOUNTS, ManzanitaAccounts(), contribution_id="accounts")
         contribute(COMPANY_AGENTS, ManzanitaAgent(), contribution_id="agent")
         contribute(OPERATION_EXECUTORS, self.executor, contribution_id="exchange")
+        contribute(OPERATION_EXECUTORS, self.gift_wrap, contribution_id="gift-wrap")
+        contribute(OPERATION_EXECUTORS, self.returns, contribution_id="returns")
+        contribute(OPERATION_EXECUTORS, self.repairs, contribution_id="repairs")
         contribute(COMPANY_APIS, ManzanitaApi(), contribution_id="api")
 
 

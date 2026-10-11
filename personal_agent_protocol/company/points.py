@@ -138,8 +138,12 @@ class StoredConversation:
     responder: Literal["agent", "human"] = "agent"
     parent_id: str | None = None
     direct_child: str | None = None
+    #: The account the conversation used; from then on it belongs to that account.
+    account_id: str | None = None
     events: list[StoredEvent] = field(default_factory=list)
     message_ids: dict[str, str] = field(default_factory=dict)
+    #: Event IDs the company no longer keeps: a cursor naming one is `cursor_expired`.
+    forgotten: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -246,9 +250,26 @@ class CompanyAgent(Protocol):
     async def respond(self, turn: Turn) -> Sequence[Reply]: ...
 
 
+class OperationFailed(Exception):  # noqa: N818 - an outcome, raised by an executor
+    """The action was not completed; `result.summary` says every change that was made."""
+
+    def __init__(self, result: OperationResult) -> None:
+        super().__init__(result.summary)
+        self.result = result
+
+
+class OperationOutcomeUnknown(Exception):  # noqa: N818 - an outcome, raised by an executor
+    """A downstream system did not answer: the operation stays `in_progress` (Operations §6)."""
+
+
 @runtime_checkable
 class OperationExecutor(Protocol):
-    """Perform one confirmed operation; `operation_id` is its idempotency key."""
+    """Perform one confirmed operation; `operation_id` is its idempotency key.
+
+    Return the result of a completed action; raise `OperationFailed` with the
+    changes made when it failed partway, or `OperationOutcomeUnknown` while it
+    is not known whether it took effect (never reported as failed).
+    """
 
     action: str
 

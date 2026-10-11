@@ -47,6 +47,9 @@ async def verify_assertion(
         raise SessionError(error, "Assertion is invalid", status_code=_status(error)) from exc
     if claims is None:
         raise SessionError(error, "Assertion signature is invalid", status_code=_status(error))
+    if not isinstance(claims.get("aud"), str):
+        # `aud` is one string, the token endpoint, so the assertion works at one company (§4.2).
+        raise SessionError(error, "Assertion audience is invalid", status_code=_status(error))
 
     issued = datetime.fromtimestamp(int(claims["iat"]), timezone.utc)
     expires = datetime.fromtimestamp(int(claims["exp"]), timezone.utc)
@@ -71,6 +74,9 @@ def _decode(
     algorithm = str(header.get("alg", ""))
     if algorithm not in _ALGORITHMS:
         raise ValueError("assertion algorithm is not allowed")
+    if header.get("typ") not in (None, "JWT"):
+        # A browser assertion (`poppy-browser+jwt`) or a DPoP proof is never a token assertion.
+        raise ValueError("assertion type is not allowed")
     kid = header.get("kid")
     for key in keys.keys:
         if kid is not None and key.kid is not None and key.kid != kid:

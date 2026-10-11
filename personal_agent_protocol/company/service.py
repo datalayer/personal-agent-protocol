@@ -75,6 +75,8 @@ from .points import (
     IssuedCode,
     IssuedSession,
     OperationExecutor,
+    OperationFailed,
+    OperationOutcomeUnknown,
     PendingAuthorization,
     PendingDevice,
     PendingMediated,
@@ -175,8 +177,21 @@ class _RefusedError(Exception):
         self.extra = extra
 
 
+_CHALLENGED = frozenset(
+    {"invalid_token", "sign_in_required", "insufficient_scope", "invalid_dpop_proof"}
+)
+
+
 def _json_error(status: int, error: str, **extra: object) -> CompanyResponse:
-    return CompanyResponse(status, {"error": error, **extra}, {"Cache-Control": "no-store"})
+    headers = {"Cache-Control": "no-store"}
+    if error in _CHALLENGED and status in {401, 403}:
+        # Token errors are also in WWW-Authenticate (§6, RFC 9449).
+        scope = extra.get("scope")
+        challenge = f'DPoP error="{error}"'
+        if isinstance(scope, str):
+            challenge += f', scope="{scope}"'
+        headers["WWW-Authenticate"] = challenge
+    return CompanyResponse(status, {"error": error, **extra}, headers)
 
 
 def _digest(token: str) -> str:
@@ -330,17 +345,21 @@ class CompanyService:
         return client_id
 
     async def _dpop(self, request: CompanyRequest, access_token: str | None = None) -> str:
+        status = 400 if access_token is None else 401
         proof = request.headers.get("dpop")
         if not proof:
-            raise _RefusedError(400 if access_token is None else 401, "invalid_dpop_proof")
-        verified = await verify_dpop_proof(
-            proof,
-            method=request.method,
-            url=request.url,
-            replay_cache=self._replay(),
-            access_token=SecretStr(access_token) if access_token is not None else None,
-            now=self._now(),
-        )
+            raise _RefusedError(status, "invalid_dpop_proof")
+        try:
+            verified = await verify_dpop_proof(
+                proof,
+                method=request.method,
+                url=request.url,
+                replay_cache=self._replay(),
+                access_token=SecretStr(access_token) if access_token is not None else None,
+                now=self._now(),
+            )
+        except ProofError as error:
+            raise _RefusedError(status, error.code) from error
         return verified.key_thumbprint
 
     async def _token(self, request: CompanyRequest) -> CompanyResponse:
@@ -413,9 +432,13 @@ class CompanyService:
         ):
             raise _RefusedError(400, "invalid_grant")
         session = self._session_by_id(form.get("session_id", ""))
-        if session is None or session.client_id != client_id:
+        if session is None or (session.client_id, session.pairwise_user_id) != (
+            client_id,
+            grant.pairwise_user_id,
+        ):
             raise _RefusedError(400, "invalid_session")
-        if session.pairwise_user_id != grant.pairwise_user_id:
+        if session.account_id is not None and session.account_id != grant.account_id:
+            # A Session signed in to one account never switches to another (§4.4).
             raise _RefusedError(400, "account_mismatch")
         requested = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
         if requested and any(scope not in grant.scopes for scope in requested):
@@ -533,6 +556,24 @@ class CompanyService:
                     )
         return CompanyResponse(200, {}, {"Cache-Control": "no-store"})
 
+    def disconnect(self, client_id: str, account_id: str) -> int:
+        """The user disconnects an agent in account settings: its tokens go, Sessions sign out.
+
+        Returns how many Account Tokens were revoked (upstream guides, account settings).
+        """
+
+        revoked = 0
+        for key, grant in self.store.account_tokens.items():
+            if (grant.client_id, grant.account_id) == (client_id, account_id) and not grant.revoked:
+                grant.revoked = True
+                revoked += 1
+                for token_key, session in list(self.store.sessions.items()):
+                    if session.account_token == key:
+                        self.store.sessions[token_key] = replace(
+                            session, account_id=None, scopes=(), account_token=None
+                        )
+        return revoked
+
     def _sign_in(
         self,
         session: IssuedSession,
@@ -540,6 +581,8 @@ class CompanyService:
         scopes: tuple[str, ...],
         thumbprint: str | None = None,
     ) -> CompanyResponse:
+        if session.account_id is not None and session.account_id != account_id:
+            raise _RefusedError(400, "account_mismatch")
         account_token = self._id("acct")
         self.store.account_tokens[_digest(account_token)] = AccountGrant(
             account_id=account_id,
@@ -854,6 +897,11 @@ class CompanyService:
             session.pairwise_user_id,
         ):
             raise _RefusedError(404, "conversation_not_found")
+        if conversation.account_id is not None and session.account_id != conversation.account_id:
+            # Once it used the account, it belongs to that account (§7.2, §7.11).
+            if session.account_id is None:
+                raise _RefusedError(403, "sign_in_required")
+            raise _RefusedError(404, "conversation_not_found")
         return conversation
 
     def _event(self, conversation: StoredConversation, **payload: object) -> None:
@@ -961,6 +1009,8 @@ class CompanyService:
         self.store.message_ids[(*conversation.owner, message.id)] = (
             f"{conversation.conversation_id}:{digest}"
         )
+        if session.account_id is not None:
+            conversation.account_id = session.account_id
         incoming = message.model_dump(mode="json", exclude_none=True)
         self._event(conversation, type="message", message={**incoming, "role": "user"})
         if conversation.responder == "human":
@@ -1057,9 +1107,19 @@ class CompanyService:
     def _start_cursor(self, conversation: StoredConversation) -> str:
         return f"start_{conversation.conversation_id}"
 
+    def forget_events(self, conversation_id: str, *, keep: int = 0) -> None:
+        """Retention: drop all but the last `keep` events; their cursors expire (§7.5)."""
+
+        conversation = self.store.conversations[conversation_id]
+        cut = max(len(conversation.events) - keep, 0)
+        conversation.forgotten.update(event.id for event in conversation.events[:cut])
+        del conversation.events[:cut]
+
     def _after(self, conversation: StoredConversation, cursor: str | None) -> list[StoredEvent]:
         if cursor is None or cursor == self._start_cursor(conversation):
             return list(conversation.events)
+        if cursor in conversation.forgotten:
+            raise _RefusedError(410, "cursor_expired")
         for index, event in enumerate(conversation.events):
             if event.id == cursor:
                 return conversation.events[index + 1 :]
@@ -1095,14 +1155,29 @@ class CompanyService:
 
     def _propose(self, session: IssuedSession, reply: Reply) -> Operation:
         proposal = cast(Any, reply.operation)
+        owner = (session.client_id, session.pairwise_user_id)
+        for stored in self.store.operations.values():
+            # The same action through another channel is the same operation (Operations §4).
+            self._expire(stored)
+            if (
+                stored.owner == owner
+                and stored.account_id == session.account_id
+                and stored.action == proposal.action
+                and stored.operation.state == "proposed"
+                and stored.operation.summary == proposal.summary
+                and stored.operation.terms == proposal.terms
+            ):
+                return stored.operation
+        operation_id = self._id("op")
         operation = Operation(
-            operation_id=self._id("op"),
+            operation_id=operation_id,
             revision=1,
             state="proposed",
             summary=proposal.summary,
             terms=proposal.terms,
             expires_at=self._now() + self.config.operation_lifetime,
             user_approval_required=proposal.user_approval_required,
+            url=f"{self.config.base}/operations/{operation_id}",
             confirmation=None,
             result=None,
         )
@@ -1119,8 +1194,27 @@ class CompanyService:
 
         stored = self.store.operations[operation_id]
         current = stored.operation
+        if current.state != "proposed":
+            raise ValueError("only a proposed operation can be revised")
         stored.operation = current.model_copy(
-            update={"revision": current.revision + 1, "summary": summary, "terms": terms}
+            update={
+                "revision": current.revision + 1,
+                "summary": summary,
+                "terms": terms,
+                "expires_at": self._now() + self.config.operation_lifetime,
+            }
+        )
+        return stored.operation
+
+    def settle(self, operation_id: str, result: OperationResult, *, succeeded: bool) -> Operation:
+        """The company found out how an operation left `in_progress` ended."""
+
+        stored = self.store.operations[operation_id]
+        if stored.operation.state != "in_progress":
+            raise ValueError("only an operation in progress can be settled")
+        stored.performed = succeeded or stored.performed
+        stored.operation = stored.operation.model_copy(
+            update={"state": "succeeded" if succeeded else "failed", "result": result}
         )
         return stored.operation
 
@@ -1142,7 +1236,7 @@ class CompanyService:
             raise _RefusedError(404, "operation_not_found")
         self._expire(stored)
         if method == "GET" and not action:
-            return CompanyResponse(200, stored.operation.model_dump(mode="json"))
+            return self._operation_response(stored)
         if method == "POST" and action == "cancel":
             if stored.operation.state == "proposed":
                 stored.operation = stored.operation.model_copy(
@@ -1151,7 +1245,8 @@ class CompanyService:
                         "result": OperationResult(summary="Nothing was changed."),
                     }
                 )
-            return CompanyResponse(200, stored.operation.model_dump(mode="json"))
+            # In progress, it stays so until the company knows whether it stopped (§7).
+            return self._operation_response(stored)
         if method == "POST" and action == "confirm":
             return await self._confirm(request, session, stored)
         raise _RefusedError(404, "not_found")
@@ -1203,12 +1298,26 @@ class CompanyService:
         ]
         if len(executors) != 1:
             # Nobody can perform it: it stays in progress rather than claim a failure.
-            return CompanyResponse(
-                200, stored.operation.model_dump(mode="json"), {"Retry-After": "5"}
+            return self._operation_response(stored)
+        try:
+            result = await executors[0].perform(stored.operation, stored.account_id)
+        except OperationFailed as failed:
+            # Failed partway: the result says every change that was made (Operations §6).
+            stored.performed = True
+            stored.operation = stored.operation.model_copy(
+                update={"state": "failed", "result": failed.result}
             )
-        result = await executors[0].perform(stored.operation, stored.account_id)
+            return self._operation_response(stored)
+        except OperationOutcomeUnknown:
+            # Never `failed` while it may have taken effect: it stays in progress.
+            return self._operation_response(stored)
         stored.performed = True
         stored.operation = stored.operation.model_copy(
             update={"state": "succeeded", "result": result}
         )
-        return CompanyResponse(200, stored.operation.model_dump(mode="json"))
+        return self._operation_response(stored)
+
+    @staticmethod
+    def _operation_response(stored: StoredOperation) -> CompanyResponse:
+        headers = {"Retry-After": "5"} if stored.operation.state == "in_progress" else {}
+        return CompanyResponse(200, stored.operation.model_dump(mode="json"), headers)

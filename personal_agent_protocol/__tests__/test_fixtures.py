@@ -16,9 +16,10 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
-from personal_agent_protocol import DiscoveryClient, SessionClient
-from personal_agent_protocol.apis import conversation_endpoint, known_apis
+from personal_agent_protocol import DiscoveryClient, DpopHttpClient, SessionClient, SessionToken
+from personal_agent_protocol.apis import ApiClient, conversation_endpoint, known_apis
 from personal_agent_protocol.conformance import load_fixture_cases
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
@@ -38,6 +39,7 @@ from personal_agent_protocol.models import (
     ConversationEventPage,
     DiscoveryDocument,
     ExtensionDescriptor,
+    Message,
     Operation,
 )
 from personal_agent_protocol.reactor import PublicUrlSafetyPolicy
@@ -108,6 +110,12 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         assert [event.type for event in page.events if event.known] == expect["known_types"]
         assert [event.type for event in page.events if not event.known] == expect["unknown_types"]
         assert (page.model_extra or {}) == {"region": "eu"}
+    elif case.check == "message_context":
+        for context in given["valid"]:
+            assert Message(id="msg_ctx", sender="agent", context=context).context == context
+        for context in given["invalid"]:
+            with pytest.raises(ValueError):
+                Message(id="msg_ctx", sender="agent", context=context)
     elif case.check == "operation":
         operation = Operation.model_validate(given)
         for key, value in expect.get("extra", {}).items():
@@ -167,9 +175,28 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
                 token_endpoint="https://shop.example/oauth/token",  # noqa: S106 - a URL
                 tenant_id="t",
             )
-        await http.aclose()
         assert raised.value.code == expect["error"]
         assert raised.value.details == {"retry_after": expect["retry_after"]}
+        # An API call is not retried either: the caller is told how long to wait.
+        token = SessionToken(
+            access_token=SecretStr("sat_rate_limited"),
+            token_type="DPoP",  # noqa: S106 - the OAuth token type
+            expires_in=60,
+            session_id="ses_rate_limited",
+            signed_in=False,
+        )
+        with pytest.raises(PersonalAgentProtocolError) as refused:
+            await ApiClient(transport=DpopHttpClient(reactor=reactor, http_client=http)).call(
+                "GET",
+                "https://shop.example/api/orders",
+                token=token,
+                tenant_id="t",
+                pairwise_user_id="usr_rate_limited_0000000",
+                issuer="https://shop.example",
+            )
+        await http.aclose()
+        assert refused.value.code == expect["error"]
+        assert refused.value.details == {"retry_after": expect["retry_after"]}
     else:  # pragma: no cover - a fixture with a check this test does not know
         raise AssertionError(f"unknown fixture check {case.check!r}")
 

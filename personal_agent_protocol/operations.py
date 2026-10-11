@@ -480,6 +480,9 @@ class OperationsClient:
             extension = payload.get("extension")
             if isinstance(extension, str):
                 details["extension"] = extension
+        retry_after = response.headers.get("retry-after")
+        if response.status_code == 429 and retry_after:
+            details["retry_after"] = retry_after
         return OperationError(
             code if isinstance(code, str) else "operation_request_failed",
             "the operation request was refused",

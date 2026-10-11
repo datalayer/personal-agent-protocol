@@ -451,6 +451,10 @@ class ConversationClient:
             open_id = payload.get("conversation_id")
             if isinstance(open_id, str) and _IDENTIFIER.fullmatch(open_id):
                 details["conversation_id"] = open_id
+        retry_after = response.headers.get("retry-after")
+        if response.status_code == 429 and retry_after:
+            # Never retried here: the caller waits at least this long (§4.3).
+            details["retry_after"] = retry_after
         return ConversationError(
             code if isinstance(code, str) else "conversation_request_failed",
             "conversation request was rejected",

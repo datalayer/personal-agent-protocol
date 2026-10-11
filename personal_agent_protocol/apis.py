@@ -130,11 +130,16 @@ class ApiClient:
         if not isinstance(error, str):
             # Token errors may come only in WWW-Authenticate (§6).
             error, scope = _challenge(response.headers.get("www-authenticate", ""))
+        details: dict[str, object] = {"scope": scope} if isinstance(scope, str) else {}
+        retry_after = response.headers.get("retry-after")
+        if response.status_code == 429 and retry_after:
+            # Never retried here: the caller waits at least this long (§4.3).
+            details["retry_after"] = retry_after
         raise ApiError(
             error if isinstance(error, str) else "api_request_failed",
             "the company refused the API call",
             status_code=response.status_code,
-            details={"scope": scope} if isinstance(scope, str) else None,
+            details=details or None,
         )
 
     def _payload(self, response: httpx.Response) -> object:

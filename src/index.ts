@@ -18,7 +18,11 @@ export {
   type ConversationReceipt,
   type ConversationRequestOptions,
   type ConversationResponse,
+  type ConversationStreamOptions,
   type StartConversationOptions,
+  type StreamItem,
+  type StreamReconnected,
+  type TextDelta,
 } from "./conversations.js";
 export {
   DpopFetchClient,
@@ -55,6 +59,14 @@ export {
   type DirectSignInResult,
   type DirectSignInStart,
 } from "./auth.js";
+export {
+  DEVICE_CODE_GRANT,
+  DeviceSignInClient,
+  type DeviceSignInBeginOptions,
+  type DeviceSignInClientOptions,
+  type DeviceSignInPoll,
+  type DeviceSignInStart,
+} from "./device.js";
 export { discoverCompany, type DiscoveryOptions } from "./discovery.js";
 export {
   AgentIdentityClient,
@@ -69,8 +81,11 @@ export {
   Caches,
   Clocks,
   DpopProofProviders,
+  AccountTokenLocks,
   DiscoveryTransports,
   ExtensionHandlers,
+  InProcessAccountTokenLock,
+  ProtectedInputs,
   KeyStores,
   PairwiseUserIdStores,
   ProtocolProfiles,
@@ -81,8 +96,12 @@ export {
   buildPapReactor,
   createPapCorePlugin,
   firstContribution,
+  type AccountTokenLock,
   type BrowserHandoff,
   type BrowserFormPost,
+  type ProtectedInput,
+  type ProtectedInputField,
+  type ProtectedInputRequest,
   type AuthorizationStateStore,
   type Clock,
   type DiscoveryTransport,
@@ -151,3 +170,42 @@ export {
   type Organization,
   type WebDescriptor,
 } from "./models.js";
+export {
+  AccountTokenClient,
+  REFRESH_TOKEN_GRANT,
+  type AccountRefreshOptions,
+  type AccountRefreshResult,
+  type AccountRevocationResult,
+  type AccountTokenClientOptions,
+  type AccountTokenContext,
+} from "./accounts.js";
+export {
+  MediatedSignInClient,
+  type MediatedCodeOptions,
+  type MediatedField,
+  type MediatedSignInClientOptions,
+  type MediatedSignInDescriptor,
+  type MediatedSignInOptions,
+  type MediatedSignInResult,
+} from "./mediated.js";
+export {
+  InMemoryStandingPermissionStore,
+  OPERATIONS_EXTENSION,
+  OPERATIONS_VERSION,
+  OperationError,
+  OperationsClient,
+  StandingPermissionStores,
+  approve,
+  covers,
+  operationsEndpoint,
+  termsDigest,
+  type ConfirmOptions,
+  type ConfirmOutcome,
+  type OperationRequestOptions,
+  type OperationsClientOptions,
+  type StandingPermission,
+  type StandingPermissionRequest,
+  type StandingPermissionStore,
+  type TermLimit,
+  type UserApproval,
+} from "./operations.js";

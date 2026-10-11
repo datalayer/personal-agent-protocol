@@ -16,18 +16,92 @@ python -m pip install personal-agent-protocol
 pap --help
 ```
 
-The current command groups are:
+The command groups are:
 
-| Command          | Purpose                                                                   |
-| ---------------- | ------------------------------------------------------------------------- |
-| `pap config`     | Show, get, set, unset, and list non-secret profiles and value provenance. |
-| `pap company`    | Discover and verify a company's PAP document.                             |
-| `pap agent`      | Verify personal-agent metadata and public JWKS.                           |
-| `pap extensions` | List advertised PAP extensions and check one required major version.      |
+| Command              | Purpose                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| `pap config`         | Show, get, set, unset, and list non-secret profiles and value provenance.               |
+| `pap company`        | Discover and verify a company's PAP document.                                           |
+| `pap agent`          | Verify personal-agent metadata and public JWKS; import the agent's signing key.         |
+| `pap extensions`     | List advertised PAP extensions and check one required major version.                    |
+| `pap sessions`       | `start`, `renew`, `show`, and `end` Sessions (§4.2).                                    |
+| `pap auth`           | `direct`, `device`, and `mediated` sign-in, and `disconnect` (sign out, §4.4–§4.9).     |
+| `pap api`            | `openapi` calls with DPoP, and `mcp` tools with a Bearer for the MCP url only (§4.3, §6). |
+| `pap conversations`  | `start`, `send`, `events`, `follow` (SSE), `handoff`, `direct`, `close` (§7).           |
+| `pap operations`     | `show`, `approve`, `confirm`, `cancel` (Operations v1).                                 |
+| `pap requirements`   | `list` and `show` the normative requirement ledger.                                     |
+| `pap conformance`    | `run` the conformance suite (`--demo`, `--tls`) and `report` JSON or JUnit.             |
+| `pap exit-codes`     | List every exit code.                                                                   |
 
-Session, sign-in, conversation, Operations, and conformance commands remain
-planned. Their SDK services and protected-store boundaries must exist before
-the CLI exposes them.
+Every protocol command is a thin adapter over the public SDK and prints either
+friendly text or versioned JSON (`--json`, `schema_version: 1`).
+
+## Protected input and local state
+
+A token, code, password, private key, or callback URL is never a command-line
+option. It is typed at a hidden prompt, or read one value per line from stdin
+(`--stdin`) or a file descriptor (`--input-fd N`). With `--no-input`, a
+command that needs input stops with exit code 4 instead of asking.
+
+```bash
+pap config set client_id https://agent.example/agent.json
+pap agent key import --stdin < agent-signing-key.pem   # printed: key:key-1 and its thumbprint
+pap sessions start example.com --json
+pap auth device ses_… --scope poppy:read               # the user signs in on any device
+pap auth mediated ses_… --stdin < credentials.txt      # one field per line, then the code
+pap api openapi ses_… GET /orders
+pap api mcp ses_… search_products --arguments '{"q": "jacket"}'
+```
+
+The CLI's personal agent is a Reactor host. Its defaults live under
+`$XDG_STATE_HOME/pap` (or `~/.local/state/pap`), owner-only and written
+atomically: the token store (`secrets.json`, `pap.tokenStore`), the signing
+and DPoP keys (`keys.json`), pairwise User IDs (`pairwise.sqlite3`), and the
+non-secret Session records and approvals (`state.json`). Plugins installed
+under the `personal_agent_protocol.plugins` entry-point group are discovered
+after these defaults and can replace any of them, for example with a system
+keyring. Only opaque references (`session:…`, `account:…`, `key:…`) are
+printed.
+
+## Operations: approve, then confirm
+
+```bash
+pap operations approve ses_… exc_5Rt2 --revision 1    # shows the company and summary;
+                                                       # the user types the operation ID
+pap operations confirm ses_… exc_5Rt2 --revision 1
+```
+
+Approval is taken at the CLI's own prompt for one exact operation ID and
+revision; no message, option, or piped text counts as approval. `confirm`
+sends only a revision the user approved, and stops with exit code 6 when the
+revision or terms changed.
+
+## Exit codes
+
+| Code | Meaning                                                                                  |
+| ---- | ---------------------------------------------------------------------------------------- |
+| 0    | Done.                                                                                    |
+| 1    | The company refused, or the protocol failed (its error code is printed).                 |
+| 2    | Usage error: an unknown command, option, or value.                                       |
+| 3    | Not configured: no signing key, no `client_id` or `domain`, or an unknown Session.       |
+| 4    | Input required, but `--no-input` was given or no terminal is attached.                   |
+| 5    | Still pending: the user has not finished signing in before `--timeout`.                  |
+| 6    | Not approved: no approval for this exact operation ID and revision, or the terms changed. |
+| 130  | Interrupted.                                                                             |
+
+## Conformance
+
+```bash
+pap conformance run --demo --tls --format junit --output pap.xml
+pap conformance run --demo --suite operations --format json --output report.json
+pap conformance report report.json --format junit
+pap requirements show OPS-6-02
+```
+
+`--demo` runs the personal-agent suite against the in-process Manzanita
+reference company. Against your own company, use
+`personal_agent_protocol.conformance` with a `UserDriver` and `Scenario` for
+it.
 
 ## Configure a profile
 
@@ -53,9 +127,8 @@ with `schema_version: 1`.
 
 The configuration store deliberately rejects unknown keys. Do not put Account
 Tokens, passwords, authorization codes, private keys, assertions, DPoP proofs,
-or mediated secrets in this file or in command arguments. Future commands that
-need secrets will resolve Reactor `TokenStore` and `KeyStore` contributions and
-will expose only opaque references.
+or mediated secrets in this file or in command arguments. Commands that need
+secrets resolve Reactor contributions and expose only opaque references.
 
 ## Inspect a company
 
@@ -103,8 +176,8 @@ standard entry-point group:
 pap = "personal_agent_protocol.cli_plugin:plugin"
 ```
 
-`PapCliPlugin.provide_cli` contributes the `config`, `company`, `agent`, and
-`extensions` Typer applications. A broken third-party CLI extension is warned
+`PapCliPlugin.provide_cli` contributes the `config`, `company`, `agent`,
+`extensions`, and protocol Typer applications. A broken third-party CLI extension is warned
 about and skipped by Reactor. Installed companion distributions can add their
 own groups without importing PAP CLI internals or changing the `pap` host:
 

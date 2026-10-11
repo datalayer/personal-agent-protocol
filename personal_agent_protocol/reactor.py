@@ -10,10 +10,11 @@ import asyncio
 import ipaddress
 import secrets
 import socket
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 import httpx
@@ -167,6 +168,63 @@ class DpopProofProvider(Protocol):
     async def create(self, request: DpopProofRequest) -> SecretStr: ...
 
 
+@runtime_checkable
+class AccountTokenLock(Protocol):
+    """Serialize every use of one Account Token (PAP §4.8 rotation).
+
+    A rotated Account Token invalidates the one it replaces, so two refreshes
+    racing on the same reference would leave one of them holding a revoked
+    credential. A multi-process host contributes a distributed lock here.
+    """
+
+    def hold(self, reference: str) -> AbstractAsyncContextManager[None]: ...
+
+
+class InProcessAccountTokenLock:
+    """Default Account Token lock for a single process."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    @asynccontextmanager
+    async def hold(self, reference: str) -> AsyncIterator[None]:
+        lock = self._locks.setdefault(reference, asyncio.Lock())
+        async with lock:
+            yield
+
+
+@dataclass(frozen=True)
+class ProtectedInputField:
+    """One field a human types into the host's own trusted surface."""
+
+    name: str
+    label: str
+    secret: bool
+
+
+@dataclass(frozen=True)
+class ProtectedInputRequest:
+    """What the host must ask the user for, and for which company.
+
+    `purpose` is `credentials` (Mediated Sign-In's declared fields) or
+    `one_time_code` (its `code_required` continuation, `sent_to` saying where
+    the company sent it). The answers never pass through a model.
+    """
+
+    purpose: Literal["credentials", "one_time_code"]
+    company_name: str
+    company_domain: str
+    fields: tuple[ProtectedInputField, ...]
+    sent_to: str | None = None
+
+
+@runtime_checkable
+class ProtectedInput(Protocol):
+    """Collect protected values from the user outside model context (PAP §4.7)."""
+
+    async def collect(self, request: ProtectedInputRequest) -> dict[str, SecretStr]: ...
+
+
 class SystemClock:
     """Default UTC wall clock."""
 
@@ -212,6 +270,8 @@ CACHES = define_contribution_point("pap.cache")
 BROWSER_HANDOFFS = define_contribution_point("pap.browserHandoff")
 BROWSER_FORM_POSTS = define_contribution_point("pap.browserFormPost")
 DPOP_PROOF_PROVIDERS = define_contribution_point("pap.dpopProofProvider")
+ACCOUNT_TOKEN_LOCKS = define_contribution_point("pap.accountTokenLock")
+PROTECTED_INPUTS = define_contribution_point("pap.protectedInput")
 
 
 async def resolve_addresses(host: str) -> list[str]:
@@ -302,6 +362,12 @@ class PapCorePlugin:
             contribution_id="system",
             order=100,
         )
+        contribute(
+            ACCOUNT_TOKEN_LOCKS,
+            InProcessAccountTokenLock(),
+            contribution_id="in-process",
+            order=100,
+        )
 
 
 def build_pap_reactor(
@@ -325,7 +391,7 @@ def build_pap_reactor(
     platform.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.core",
-            version="0.3.2",
+            version="0.4.0",
             contribution_points=[
                 DISCOVERY_TRANSPORTS.id,
                 URL_SAFETY_POLICIES.id,
@@ -342,6 +408,8 @@ def build_pap_reactor(
                 BROWSER_HANDOFFS.id,
                 BROWSER_FORM_POSTS.id,
                 DPOP_PROOF_PROVIDERS.id,
+                ACCOUNT_TOKEN_LOCKS.id,
+                PROTECTED_INPUTS.id,
             ],
         ),
         PapCorePlugin(

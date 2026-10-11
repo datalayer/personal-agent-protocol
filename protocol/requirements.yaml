@@ -1,121 +1,2203 @@
+# Personal Agent Protocol draft 0.1 and Operations v1: the normative requirement ledger.
+#
+# requirements: every MUST, MUST NOT, SHOULD, and SHOULD NOT of the specification
+# (source: spec, the default) and the Operations extension (source: operations),
+# one atomic statement per entry, with the upstream text that states it.
+# guide: recommendations from the upstream Guides (source: guide), kept apart.
+#
+# implementation: module:symbol under personal_agent_protocol.
+# tests: file::test name; conformance: fixture case IDs (protocol/fixtures/conformance),
+# run by test_fixtures.py (decided by the SDK) or by the conformance runner
+# (test_conformance.py, against the reference company over TLS).
+# status: implemented | partial | open | not-applicable, with a reason unless implemented.
+# test_requirements.py checks every test and case exists.
+
 protocol: personal-agent-protocol
-profile: "0.1"
-upstream_revision: "2026-10-09"
+profile: '0.1'
+upstream_revision: '2026-10-09'
+reviewed: '2026-10-11'
+sources:
+  spec: https://personalagentprotocol.org/docs/spec
+  operations: https://personalagentprotocol.org/docs/extensions/operations
+  guide: https://personalagentprotocol.org/docs/guides
 requirements:
-  - id: PAP-1-SHOULD-EXTENSIBLE
-    section: "1.2"
-    role: sdk
-    statement: Preserve PAP extensibility and ignore unknown fields and extensions.
-    status: partial
-    python: personal_agent_protocol.reactor.EXTENSION_HANDLERS
-    typescript: ExtensionHandlers
-  - id: PAP-3-MUST-01
-    section: "3"
-    role: company
-    statement: Publish poppy.json at the HTTPS well-known URL.
-    status: planned
-  - id: PAP-3-MUST-02
-    section: "3"
-    role: personal-agent
-    statement: Follow discovery redirects only to HTTPS URLs.
-    status: implemented
-    python: personal_agent_protocol.discovery.DiscoveryClient
-    typescript: discoverCompany
-  - id: PAP-3-MUST-03
-    section: "3.1"
-    role: personal-agent
-    statement: Reject an unsupported protocol major version.
-    status: implemented
-    python: personal_agent_protocol.models.DiscoveryDocument
-    typescript: parseDiscoveryDocument
-  - id: PAP-3-MUST-04
-    section: "3.1"
-    role: personal-agent
-    statement: Match organization.domain to the requested discovery domain.
-    status: implemented
-    python: personal_agent_protocol.discovery.DiscoveryClient
-    typescript: discoverCompany
-  - id: PAP-3.2-MUST-01
-    section: "3.2"
-    role: personal-agent
-    statement: Verify exact issuer and company membership in poppy_domains.
-    status: implemented
-    python: personal_agent_protocol.discovery.DiscoveryClient
-    typescript: discoverCompany
-  - id: PAP-4.1-MUST-01
-    section: "4.1"
-    role: company
-    statement: Validate personal-agent client metadata and same-domain URLs.
-    status: partial
-    python: personal_agent_protocol.identity.AgentIdentityClient
-    typescript: AgentIdentityClient
-  - id: PAP-4.2-MUST-01
-    section: "4.2"
-    role: personal-agent
-    statement: Start a session with a signed JWT bearer assertion.
-    status: partial
-    python: personal_agent_protocol.sessions.SessionClient
-    typescript: SessionClient
-  - id: PAP-4.2-MUST-02
-    section: "4.2"
-    role: personal-agent
-    statement: Use a stable opaque non-PII User ID per user and company issuer.
-    status: implemented
-    python: personal_agent_protocol.pairwise.resolve_pairwise_user_id
-    typescript: resolvePairwiseUserId
-  - id: PAP-4.2-MUST-03
-    section: "4.2"
-    role: personal-agent
-    statement: Treat Session Tokens as opaque and do not depend on their contents.
-    status: implemented
-    python: personal_agent_protocol.sessions.SessionToken
-    typescript: parseSessionToken
-  - id: PAP-4.3-MUST-01
-    section: "4.3"
-    role: both
-    statement: Bind and verify non-MCP session tokens with DPoP.
-    status: partial
-    python: personal_agent_protocol.crypto.JoseDpopProofProvider; personal_agent_protocol.crypto.verify_dpop_proof
-    typescript: JoseDpopProofProvider; verifyDpopProof
-  - id: PAP-4.5-MUST-01
-    section: "4.5"
-    role: personal-agent
-    statement: Use random one-use state and S256 PKCE for Direct Sign-In.
-    status: implemented
-    python: personal_agent_protocol.auth.DirectSignInClient
-    typescript: DirectSignInClient
-  - id: PAP-4.5-MUST-02
-    section: "4.5"
-    role: personal-agent
-    statement: Validate callback state and exact company issuer before exchanging a code.
-    status: implemented
-    python: personal_agent_protocol.auth.validate_direct_sign_in_callback
-    typescript: validateDirectSignInCallback
-  - id: PAP-4.5-MUST-03
-    section: "4.5"
-    role: personal-agent
-    statement: Include the existing session ID in the authorization-code exchange.
-    status: implemented
-    python: personal_agent_protocol.auth.DirectSignInClient
-    typescript: DirectSignInClient
-  - id: PAP-7.3-MUST-01
-    section: "7.3"
-    role: both
-    statement: Retry a message idempotently with the same message ID.
-    status: model-only
-    python: personal_agent_protocol.models.Message
-    typescript: parseMessage
-  - id: PAP-7.5-MUST-01
-    section: "7.5"
-    role: both
-    statement: Preserve ordered events, opaque cursors, status, responder, and unknown event types.
-    status: model-only
-    python: personal_agent_protocol.models.ConversationEventPage
-    typescript: parseConversationEventPage
-  - id: PAP-OPS-5-MUST-01
-    section: "operations 5"
-    role: both
-    statement: Confirm only the exact current operation revision.
-    status: model-only
-    python: personal_agent_protocol.models.Operation
-    typescript: parseOperation
+- id: PAP-3-01
+  section: '3'
+  level: MUST
+  role: company
+  text: A Company MUST publish its poppy.json document at https://{domain}/.well-known/poppy.json over
+    HTTPS, where {domain} is the Company's domain or a subdomain it controls.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_a_user_and_a_company_from_question_to_confirmed_exchange
+- id: PAP-3-02
+  section: '3'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents MUST follow redirects, and every redirect MUST be to an HTTPS URL.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient._get_json
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.organization-domain-after-redirect
+  - security.discovery-redirect-followed
+- id: PAP-3-03
+  section: '3'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents MUST follow redirects, and every redirect MUST be to an HTTPS URL.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient._get_json
+  - personal_agent_protocol.reactor:PublicUrlSafetyPolicy.assert_safe
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - security.discovery-redirect-to-http
+  - security.discovery-redirect-followed
+- id: PAP-3-04
+  section: '3'
+  level: SHOULD
+  role: personal-agent
+  text: Personal Agents SHOULD cache the document according to its HTTP caching headers.
+  status: open
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient
+  reason: DiscoveryClient fetches on every call; the pap.cache contribution point exists but discovery
+    does not use it yet.
+- id: PAP-3.1-01
+  section: '3.1'
+  level: MUST NOT
+  role: personal-agent
+  text: A Personal Agent MUST NOT use a document whose major version it doesn't support.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveryDocument.validate_protocol_version
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.major-version-unsupported
+  - protocol.minor-version-newer
+  - protocol.version-not-major-minor
+- id: PAP-3.1-02
+  section: '3.1'
+  level: MUST
+  role: personal-agent
+  text: domain MUST match the host of the well-known URL the Personal Agent requested, ignoring a leading
+    www..
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.organization-domain-www
+  - protocol.organization-domain-after-redirect
+- id: PAP-3.2-01
+  section: '3.2'
+  level: MUST
+  role: company
+  text: The issuer MUST publish OAuth Authorization Server Metadata (RFC 8414), and poppy_domains in it
+    MUST list every domain whose poppy.json names the issuer.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.oauth_metadata
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_a_user_and_a_company_from_question_to_confirmed_exchange
+- id: PAP-3.2-02
+  section: '3.2'
+  level: MUST
+  role: company
+  text: The issuer MUST publish OAuth Authorization Server Metadata (RFC 8414), and poppy_domains in it
+    MUST list every domain whose poppy.json names the issuer.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.oauth_metadata
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_a_user_and_a_company_from_question_to_confirmed_exchange
+- id: PAP-3.2-03
+  section: '3.2'
+  level: MUST
+  role: personal-agent
+  text: Before using a Company's poppy.json, the Personal Agent fetches the metadata and MUST check that
+    its issuer exactly matches auth.issuer and that poppy_domains includes organization.domain.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_discovers_and_authenticates_company
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.multi-domain-issuer
+  - protocol.issuer-mismatch
+- id: PAP-3.2-04
+  section: '3.2'
+  level: MUST
+  role: personal-agent
+  text: Before using a Company's poppy.json, the Personal Agent fetches the metadata and MUST check that
+    its issuer exactly matches auth.issuer and that poppy_domains includes organization.domain.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_rejects_issuer_that_does_not_authorize_domain
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.multi-domain-issuer
+  - protocol.issuer-not-claiming-domain
+- id: PAP-3.2-05
+  section: '3.2'
+  level: SHOULD
+  role: personal-agent
+  text: Personal Agents SHOULD cache it according to its HTTP caching headers.
+  status: open
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient
+  reason: OAuth metadata is fetched with every discovery; no bounded cache yet.
+- id: PAP-3.3-01
+  section: '3.3'
+  level: MUST
+  role: both
+  text: Anyone else MUST start an extension's name with a domain they control, such as example.com/gift-wrap.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.extensions:extension_name_kind
+  - personal_agent_protocol.extensions:negotiate_extensions
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.third-party-extension-name
+- id: PAP-3.3-02
+  section: '3.3'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents and Companies MUST ignore extensions they don't support and fields they don't
+    recognize, so either side can work with the other under this specification alone.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.extensions:negotiate_extensions
+  - personal_agent_protocol.operations:operations_endpoint
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_operations_are_used_only_when_both_sides_list_version_1
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.unknown-extension-ignored
+  - protocol.extension-version-mismatch
+- id: PAP-3.3-03
+  section: '3.3'
+  level: MUST
+  role: company
+  text: Personal Agents and Companies MUST ignore extensions they don't support and fields they don't
+    recognize, so either side can work with the other under this specification alone.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._client
+  - personal_agent_protocol.models:ClientMetadata
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_an_agent_without_the_extension_gets_no_operations
+  conformance:
+  - protocol.extension-required-company
+- id: PAP-3.3-04
+  section: '3.3'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents and Companies MUST ignore extensions they don't support and fields they don't
+    recognize, so either side can work with the other under this specification alone.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:ProtocolModel
+  tests:
+  - personal_agent_protocol/__tests__/test_models.py::test_discovery_fixture_round_trips_and_preserves_extensions
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.minor-version-newer
+  - protocol.unknown-api-type
+  - protocol.unknown-conversation-protocol
+  - protocol.third-party-extension-name
+  - protocol.unknown-event-type
+  - protocol.unknown-operation-fields
+- id: PAP-3.3-05
+  section: '3.3'
+  level: MUST
+  role: company
+  text: Personal Agents and Companies MUST ignore extensions they don't support and fields they don't
+    recognize, so either side can work with the other under this specification alone.
+  status: partial
+  implementation:
+  - personal_agent_protocol.models:ProtocolModel
+  - personal_agent_protocol.company.service:CompanyService._token
+  reason: The company parses requests with the same extra-tolerant models and ignores unknown form fields,
+    but no test sends it unknown fields.
+- id: PAP-4.1-01
+  section: '4.1'
+  level: MUST
+  role: personal-agent
+  text: A Personal Agent's client_id MUST be an HTTPS URL that returns its metadata document.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:ClientMetadata.validate_urls
+  - personal_agent_protocol.demo.kit:AgentIdentity.website
+  tests:
+  - personal_agent_protocol/__tests__/test_identity.py::test_fetches_metadata_and_public_jwks
+- id: PAP-4.1-02
+  section: '4.1'
+  level: MUST
+  role: both
+  text: client_id MUST equal the URL the document was fetched from.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.identity:AgentIdentityClient.fetch_metadata
+  tests:
+  - personal_agent_protocol/__tests__/test_identity.py::test_rejects_substituted_client_id
+  - personal_agent_protocol/__tests__/test_identity.py::test_client_metadata_does_not_follow_redirects
+  conformance:
+  - security.client-assertion-alg-none
+- id: PAP-4.1-03
+  section: '4.1'
+  level: MUST
+  role: both
+  text: jwks_uri and every entry in redirect_uris MUST be HTTPS URLs on the same domain as client_id.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:ClientMetadata.validate_same_domain_urls
+  tests:
+  - personal_agent_protocol/__tests__/test_models.py::test_client_metadata_requires_same_domain_for_security_urls
+  - personal_agent_protocol/__tests__/test_identity.py::test_rejects_cross_domain_jwks_redirect
+- id: PAP-4.2-01
+  section: '4.2'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent MUST give each of its Users a User ID for each Company, where a Company is
+    identified by its auth.issuer (3.2).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.pairwise:SqlitePairwiseUserIdStore
+  - personal_agent_protocol.reactor:PAIRWISE_USER_ID_STORES
+  tests:
+  - personal_agent_protocol/__tests__/test_pairwise.py::test_persists_stable_pairwise_ids_by_exact_tenant_user_and_issuer
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.parallel-sessions
+- id: PAP-4.2-02
+  section: '4.2'
+  level: MUST NOT
+  role: personal-agent
+  text: It MUST NOT contain or be derived from personal information, such as an email address, phone number,
+    or name, even with a keyed hash.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.sessions:generate_pairwise_user_id
+  tests:
+  - personal_agent_protocol/__tests__/test_sessions.py::test_generates_random_pairwise_identifier_without_personal_data
+- id: PAP-4.2-03
+  section: '4.2'
+  level: MUST
+  role: company
+  text: The Company chooses the value, and it MUST be greater than 0.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._issue
+  - personal_agent_protocol.sessions:SessionToken
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.signed-out-session
+- id: PAP-4.2-04
+  section: '4.2'
+  level: SHOULD
+  role: company
+  text: Session Tokens SHOULD last hours, not days.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.session_lifetime
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.signed-out-session
+- id: PAP-4.2-05
+  section: '4.2'
+  level: MUST NOT
+  role: personal-agent
+  text: Personal Agents MUST NOT depend on their contents; everything they need is in the response.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.sessions:SessionToken
+  tests:
+  - personal_agent_protocol/__tests__/test_sessions.py::test_parses_session_token_as_opaque_secret
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.signed-out-session
+- id: PAP-4.2-06
+  section: '4.2'
+  level: MUST
+  role: company
+  text: A Company MAY include its own Session credentials in a token so its existing systems can read
+    them. If it does, it MUST encrypt the token.
+  status: not-applicable
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._issue
+  reason: The reference company issues random opaque tokens (sat_…) that carry nothing; the Session is
+    looked up by the token's digest.
+- id: PAP-4.3-01
+  section: '4.3'
+  level: MUST
+  role: personal-agent
+  text: API calls and conversations MUST carry the Session Token in the Authorization header with the
+    DPoP scheme, together with a DPoP Proof (RFC 9449).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  tests:
+  - personal_agent_protocol/__tests__/test_transport.py::test_nonce_retry_and_redirect_each_use_fresh_bound_proof
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.start-and-reply
+  - security.dpop-missing
+- id: PAP-4.3-02
+  section: '4.3'
+  level: MUST
+  role: company
+  text: 'On every request, it MUST check that: The proof''s signature verifies with the key in its header.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:verify_dpop_proof
+  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
+  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.dpop-alg-none
+  - security.dpop-wrong-signature
+- id: PAP-4.3-03
+  section: '4.3'
+  level: MUST
+  role: company
+  text: 'On every request, it MUST check that: That key is the one the Session Token is bound to.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:verify_dpop_proof
+  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
+  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.dpop-other-key
+- id: PAP-4.3-04
+  section: '4.3'
+  level: MUST
+  role: company
+  text: 'On every request, it MUST check that: htm and htu match the request.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:verify_dpop_proof
+  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
+  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.dpop-method-mismatch
+  - security.dpop-url-mismatch
+- id: PAP-4.3-05
+  section: '4.3'
+  level: MUST
+  role: company
+  text: 'On every request, it MUST check that: iat is within the Company''s acceptance window, such as
+    one minute.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:verify_dpop_proof
+  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
+  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.dpop-stale
+- id: PAP-4.3-06
+  section: '4.3'
+  level: MUST
+  role: company
+  text: 'On every request, it MUST check that: It hasn''t accepted the same jti within that window.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:verify_dpop_proof
+  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
+  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.dpop-replay
+- id: PAP-4.3-07
+  section: '4.3'
+  level: MUST
+  role: company
+  text: 'On every request, it MUST check that: ath matches the Session Token.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:verify_dpop_proof
+  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
+  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.token-dpop-with-ath
+  - security.dpop-token-hash-mismatch
+- id: PAP-4.3-08
+  section: '4.3'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents MUST support nonces.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.sessions:SessionClient._request
+  - personal_agent_protocol.accounts:AccountTokenClient._post_with_nonce
+  tests:
+  - personal_agent_protocol/__tests__/test_sessions.py::test_retries_once_with_a_fresh_dpop_nonce_and_assertions
+  - personal_agent_protocol/__tests__/test_transport.py::test_nonce_retry_and_redirect_each_use_fresh_bound_proof
+  - personal_agent_protocol/__tests__/test_accounts.py::test_one_dpop_nonce_retry_with_a_fresh_proof
+- id: PAP-4.3-09
+  section: '4.3'
+  level: MUST
+  role: personal-agent
+  text: To get one for an existing Session, the Personal Agent sends the request that renews the Session's
+    token (4.2, or 4.8 for a signed-in Session) without the DPoP header, and MUST include resource set
+    to the MCP server's url from poppy.json, as MCP authorization requires.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.sessions:SessionClient.bearer_for_mcp
+  - personal_agent_protocol.accounts:AccountTokenClient.bearer_for_mcp
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_is_issued_only_for_the_mcp_url_and_an_existing_session
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_bearer_reads_and_proposes_through_mcp_the_same_operation
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-bearer-for-its-url
+- id: PAP-4.3-10
+  section: '4.3'
+  level: MUST
+  role: company
+  text: Companies MUST accept Bearer Session Tokens only on their MCP APIs (section 6), and MUST require
+    DPoP everywhere else.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  - personal_agent_protocol.company.service:CompanyService._bearer_caller
+  - personal_agent_protocol.company.service:CompanyService._token
+  - personal_agent_protocol.mcp:McpBearerAuth
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_token_is_refused_everywhere_but_its_mcp_server
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-bearer-only-at-mcp
+  - security.dpop-token-as-bearer
+- id: PAP-4.3-11
+  section: '4.3'
+  level: MUST
+  role: company
+  text: Companies MUST accept Bearer Session Tokens only on their MCP APIs (section 6), and MUST require
+    DPoP everywhere else.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  - personal_agent_protocol.company.service:CompanyService._token
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.token-request-without-dpop
+  - security.dpop-missing
+  - security.dpop-token-as-bearer
+- id: PAP-4.3-12
+  section: '4.3'
+  level: MUST
+  role: company
+  text: Companies MUST accept the token in the Authorization header without requiring cookies.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.authorization-header-without-cookies
+- id: PAP-4.3-13
+  section: '4.3'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents MUST send a Session Token on every API and conversation request, and MUST NOT
+    leave it out to appear to the Company as a person on their own.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.conversations:ConversationClient
+  - personal_agent_protocol.apis:ApiClient.call
+  tests:
+  - personal_agent_protocol/__tests__/test_conversations.py::test_start_and_continue_preserve_message_ids_and_parse_waited_events
+- id: PAP-4.3-14
+  section: '4.3'
+  level: MUST NOT
+  role: personal-agent
+  text: Personal Agents MUST send a Session Token on every API and conversation request, and MUST NOT
+    leave it out to appear to the Company as a person on their own.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  tests:
+  - personal_agent_protocol/__tests__/test_conversations.py::test_start_and_continue_preserve_message_ids_and_parse_waited_events
+- id: PAP-4.3-15
+  section: '4.3'
+  level: MUST
+  role: personal-agent
+  text: Whenever the Personal Agent gets a new Session Token for a Session, it MUST use the new token
+    from then on.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.sessions:SessionClient.renew
+  - personal_agent_protocol.accounts:AccountTokenClient.refresh
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.renew-signed-out
+- id: PAP-4.3-16
+  section: '4.3'
+  level: MUST NOT
+  role: personal-agent
+  text: Personal Agents MUST NOT send tokens in a URL, and Companies MUST NOT accept them from one.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.conversations:ConversationClient._query
+  tests:
+  - personal_agent_protocol/__tests__/test_transport.py::test_nonce_retry_and_redirect_each_use_fresh_bound_proof
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.token-in-url-refused
+- id: PAP-4.3-17
+  section: '4.3'
+  level: MUST NOT
+  role: company
+  text: Personal Agents MUST NOT send tokens in a URL, and Companies MUST NOT accept them from one.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.token-in-url-refused
+- id: PAP-4.3-18
+  section: '4.3'
+  level: MUST
+  role: personal-agent
+  text: A Company that limits how often a Personal Agent can make requests returns HTTP 429 with a Retry-After
+    header when a request goes over the limit, on any of its endpoints, APIs, conversations, or website.
+    The Personal Agent MUST wait at least that long before sending the request again.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.apis:ApiClient.call
+  - personal_agent_protocol.conversations:ConversationClient._rejected
+  - personal_agent_protocol.sessions:SessionClient._request
+  tests:
+  - personal_agent_protocol/__tests__/test_mediated.py::test_rate_limited_is_reported_with_retry_after_and_no_credential
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - lifecycle.rate-limit-retry-after
+- id: PAP-4.4-01
+  section: '4.4'
+  level: MUST
+  role: personal-agent
+  text: 'The types work on trust: a Personal Agent MUST use direct or Device Sign-In only when the User
+    signs in themselves.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.auth:DirectSignInClient.begin
+  - personal_agent_protocol.device:DeviceSignInClient.begin
+  tests:
+  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchange
+  - personal_agent_protocol/__tests__/test_device.py::test_device_sign_in_paces_polling_and_protects_tokens
+- id: PAP-4.4-02
+  section: '4.4'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT grant scopes beyond those requested and allowed for the type used.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.approve_device
+  - personal_agent_protocol.company.service:CompanyService.approve_authorization
+  - personal_agent_protocol.company.service:CompanyService._refresh_grant
+  - personal_agent_protocol.company.service:CompanyService._mediated
+  tests:
+  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_partial_consent_and_a_write_that_was_not_granted
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.sign-in-scopes
+  - lifecycle.wider-scopes-refused
+- id: PAP-4.4-03
+  section: '4.4'
+  level: MUST
+  role: personal-agent
+  text: Each sign-in request MUST include scope as a space-separated string, following OAuth scope syntax.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.auth:_scopes
+  - personal_agent_protocol.device:DeviceSignInClient.begin
+  - personal_agent_protocol.mediated:MediatedSignInClient.sign_in
+  tests:
+  - personal_agent_protocol/__tests__/test_auth.py::test_builds_direct_sign_in_url_with_s256_pkce
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.sign-in-scopes
+  - lifecycle.unknown-scope-refused
+- id: PAP-4.4-04
+  section: '4.4'
+  level: SHOULD
+  role: personal-agent
+  text: The new Account Token replaces the old one, which the Personal Agent SHOULD revoke (4.9).
+  status: open
+  implementation:
+  - personal_agent_protocol.accounts:AccountTokenClient.revoke
+  reason: No helper replaces and revokes the previous Account Token after a wider sign-in; the host calls
+    revoke().
+- id: PAP-4.4-05
+  section: '4.4'
+  level: SHOULD
+  role: personal-agent
+  text: Before starting a new sign-in, the Personal Agent SHOULD check whether it already holds an Account
+    Token that covers the task (4.8).
+  status: open
+  reason: No helper maps a task's scopes to a held Account Token; the host decides.
+- id: PAP-4.5-01
+  section: '4.5'
+  level: MUST
+  role: company
+  text: redirect_uri MUST exactly match an entry in the Personal Agent's redirect_uris (4.1).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._authorize
+  - personal_agent_protocol.company.service:CompanyService._code_grant
+  tests:
+  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_the_consent_page_is_never_framed_and_bad_redirects_are_not_followed
+- id: PAP-4.5-02
+  section: '4.5'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent checks state, and MUST check that iss exactly matches the auth.issuer of the
+    Company it started sign-in with.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.auth:validate_direct_sign_in_callback
+  tests:
+  - personal_agent_protocol/__tests__/test_auth.py::test_validates_callback_and_redacts_code_exchange
+  - personal_agent_protocol/__tests__/test_auth.py::test_rejects_invalid_callbacks
+- id: PAP-4.6-01
+  section: '4.6'
+  level: MUST NOT
+  role: company
+  text: Opening the link MUST NOT approve the request by itself.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.approve_device
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_a_user_and_a_company_from_question_to_confirmed_exchange
+- id: PAP-4.7-01
+  section: '4.7'
+  level: MUST
+  role: personal-agent
+  text: 'secret marks a value the Personal Agent MUST protect: never shown back to the User, written to
+    logs, or sent anywhere else.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.mediated:MediatedSignInClient
+  - personal_agent_protocol.reactor:PROTECTED_INPUTS
+  tests:
+  - personal_agent_protocol/__tests__/test_mediated.py::test_the_declared_fields_go_to_the_endpoint_and_the_session_is_signed_in
+  - personal_agent_protocol/__tests__/test_mediated.py::test_a_one_time_code_continues_without_the_credentials
+- id: PAP-4.7-02
+  section: '4.7'
+  level: MUST
+  role: company
+  text: A Company that offers Mediated Sign-In MUST rate-limit attempts, MUST NOT return credentials in
+    any response, and SHOULD require a one-time code when a sign-in looks unusual.
+  status: partial
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._mediated_code
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_mediated_sign_in_with_a_one_time_code
+  reason: Wrong one-time codes are capped (max_code_attempts); credential attempts are not yet rate-limited
+    by account, client_id, or user.
+- id: PAP-4.7-03
+  section: '4.7'
+  level: MUST NOT
+  role: company
+  text: A Company that offers Mediated Sign-In MUST rate-limit attempts, MUST NOT return credentials in
+    any response, and SHOULD require a one-time code when a sign-in looks unusual.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._mediated
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_mediated_sign_in_with_a_one_time_code
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.refusals-disclose-no-credential
+- id: PAP-4.7-04
+  section: '4.7'
+  level: SHOULD
+  role: company
+  text: A Company that offers Mediated Sign-In MUST rate-limit attempts, MUST NOT return credentials in
+    any response, and SHOULD require a one-time code when a sign-in looks unusual.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.points:AccountDirectory.authenticate
+  - personal_agent_protocol.company.service:CompanyService._mediated
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_mediated_sign_in_with_a_one_time_code
+- id: PAP-4.7-05
+  section: '4.7'
+  level: MUST NOT
+  role: personal-agent
+  text: Personal Agents MUST NOT send credentials to any endpoint other than the Company's auth.mediated.endpoint.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.mediated:MediatedSignInClient._endpoint_on_company_domain
+  - personal_agent_protocol.mediated:MediatedSignInClient._post
+  tests:
+  - personal_agent_protocol/__tests__/test_mediated.py::test_a_redirect_never_carries_the_credentials_elsewhere
+  - personal_agent_protocol/__tests__/test_mediated.py::test_an_endpoint_off_the_company_domain_is_refused_before_asking
+- id: PAP-4.8-01
+  section: '4.8'
+  level: MUST
+  role: company
+  text: Companies MUST accept an Account Token only at their token_endpoint and revocation_endpoint, and
+    only from the client_id it was issued to, authenticated by its client assertion.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._refresh_grant
+  - personal_agent_protocol.company.service:CompanyService._revoke
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.account-token-signs-in-new-session
+  - lifecycle.narrower-scopes
+  - lifecycle.account-token-at-api
+- id: PAP-4.8-02
+  section: '4.8'
+  level: MUST
+  role: company
+  text: Companies MUST accept an Account Token only at their token_endpoint and revocation_endpoint, and
+    only from the client_id it was issued to, authenticated by its client assertion.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._client
+  - personal_agent_protocol.company.service:CompanyService._refresh_grant
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.account-token-from-another-client
+  - security.client-assertion-bad-audience
+- id: PAP-4.8-03
+  section: '4.8'
+  level: MUST
+  role: company
+  text: The Session MUST belong to the same client_id and User ID as the Account Token, and be signed
+    out or signed in to the same account.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._refresh_grant
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.renew-for-another-user
+  - lifecycle.account-token-for-another-users-session
+- id: PAP-4.8-04
+  section: '4.8'
+  level: MUST
+  role: company
+  text: The Session MUST belong to the same client_id and User ID as the Account Token, and be signed
+    out or signed in to the same account.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._refresh_grant
+  - personal_agent_protocol.company.service:CompanyService._sign_in
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.account-mismatch
+- id: PAP-4.8-05
+  section: '4.8'
+  level: MUST
+  role: personal-agent
+  text: A Company MAY return a new Account Token in refresh_token. The Personal Agent then MUST use the
+    new one from then on.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.accounts:AccountTokenClient.refresh
+  tests:
+  - personal_agent_protocol/__tests__/test_accounts.py::test_refresh_signs_the_session_in_and_rotates_the_stored_token
+  - personal_agent_protocol/__tests__/test_accounts.py::test_concurrent_refreshes_rotate_one_after_the_other
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.rotated-token
+  - lifecycle.sign-out-every-session
+- id: PAP-4.8-06
+  section: '4.8'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents MUST store Account Tokens as secrets, and MUST NOT put them in model context,
+    conversation messages, logs, or URLs.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:TokenStore
+  - personal_agent_protocol.device:DeviceSignInClient._complete
+  - personal_agent_protocol.auth:DirectSignInClient._result
+  tests:
+  - personal_agent_protocol/__tests__/test_device.py::test_device_sign_in_paces_polling_and_protects_tokens
+- id: PAP-4.8-07
+  section: '4.8'
+  level: MUST NOT
+  role: personal-agent
+  text: Personal Agents MUST store Account Tokens as secrets, and MUST NOT put them in model context,
+    conversation messages, logs, or URLs.
+  status: partial
+  implementation:
+  - personal_agent_protocol.accounts:AccountTokenClient
+  - personal_agent_protocol.accounts:AccountRefreshResult
+  tests:
+  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_account_token
+  reason: Results and errors never carry the token, but no test yet proves logs and traces stay free of
+    credentials (plan §2).
+- id: PAP-4.9-01
+  section: '4.9'
+  level: SHOULD
+  role: company
+  text: Companies SHOULD check on each request whether the Session is still signed in, so sign-out takes
+    effect right away.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._revoke
+  - personal_agent_protocol.company.service:CompanyService.disconnect
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.sign-out-takes-effect
+  - lifecycle.sign-out-session-continues
+  - lifecycle.sign-out-every-session
+  - lifecycle.mcp-sign-out-takes-effect
+- id: PAP-4.9-02
+  section: '4.9'
+  level: SHOULD
+  role: company
+  text: A Company that doesn't SHOULD use much shorter Session Token lifetimes, such as a few minutes.
+  status: not-applicable
+  reason: The reference company checks on each request (PAP-4.9-01).
+- id: PAP-5-01
+  section: '5'
+  level: MUST
+  role: personal-agent
+  text: When it does, the Personal Agent MUST join its browser to a Session before browsing the Company's
+    website.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser:BrowserSessionClient.join
+  tests:
+  - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+  conformance:
+  - lifecycle.browser-joins-session
+- id: PAP-5-02
+  section: '5'
+  level: MUST
+  role: personal-agent
+  text: return_to is the page to open afterward. It MUST be an HTTPS URL on the Company's organization.domain
+    or one of its subdomains.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser:_company_return_to
+  - personal_agent_protocol.browser:build_browser_assertion_claims
+  tests:
+  - personal_agent_protocol/__tests__/test_browser.py::test_builds_short_lived_company_bound_claims
+- id: PAP-5-03
+  section: '5'
+  level: MUST
+  role: personal-agent
+  text: The assertion MUST go in the request body, never in the URL.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser:BrowserSessionClient.join
+  - personal_agent_protocol.reactor:BROWSER_FORM_POSTS
+  tests:
+  - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+  conformance:
+  - lifecycle.browser-joins-session
+- id: PAP-5-04
+  section: '5'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent MUST post browser assertions only from a browser it controls, never from the
+    User's own browser, which would then be using the Personal Agent's Session.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:BROWSER_FORM_POSTS
+  - personal_agent_protocol.reactor:BROWSER_HANDOFFS
+  tests:
+  - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+- id: PAP-5-05
+  section: '5'
+  level: MUST
+  role: company
+  text: 'The Company MUST check that: The signature verifies with a key from the iss client''s jwks_uri,
+    and typ is poppy-browser+jwt. A Session assertion isn''t accepted here, and a browser assertion isn''t
+    accepted at the token endpoint.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
+  tests:
+  - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+  - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-assertion-refused
+  - security.browser-assertion-at-token-endpoint
+- id: PAP-5-06
+  section: '5'
+  level: MUST
+  role: company
+  text: 'The Company MUST check that: aud is its endpoint, the assertion hasn''t expired, and exp is no
+    more than 60 seconds after iat.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
+  tests:
+  - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+  - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-assertion-refused
+- id: PAP-5-07
+  section: '5'
+  level: MUST
+  role: company
+  text: 'The Company MUST check that: It hasn''t accepted the same jti before.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
+  tests:
+  - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+  - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-assertion-refused
+- id: PAP-5-08
+  section: '5'
+  level: MUST
+  role: company
+  text: 'The Company MUST check that: The Session is active and belongs to the same client_id and User.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
+  tests:
+  - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+  - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-assertion-refused
+- id: PAP-5-09
+  section: '5'
+  level: MUST
+  role: company
+  text: 'The Company MUST check that: return_to is on its own domain.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser:verify_browser_assertion
+  - personal_agent_protocol.company.service:CompanyService._browser_session
+  tests:
+  - personal_agent_protocol/__tests__/test_browser.py::test_posts_and_verifies_browser_assertion_once
+  - personal_agent_protocol/__tests__/test_browser.py::test_rejects_wrong_type_owner_and_expiry
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-assertion-refused
+- id: PAP-5-10
+  section: '5'
+  level: MUST
+  role: company
+  text: 'The cookie MUST follow the Session''s current state: when the Session signs in or out, or its
+    scopes change, the website reflects it on the next request.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._web_session
+  - personal_agent_protocol.company.service:CompanyService._live_session
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-joins-session
+- id: PAP-5-11
+  section: '5'
+  level: MUST NOT
+  role: company
+  text: The cookie MUST NOT outlive the Session.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._web_session
+  - personal_agent_protocol.company.service:CompanyService._browser_session
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_operation_confirmed_on_the_website_is_the_same_operation_once
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-joins-session
+- id: PAP-5-12
+  section: '5'
+  level: MUST
+  role: company
+  text: The cookie MUST be Secure and HttpOnly, and use SameSite=Lax or None, not Strict.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._browser_session
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_operation_confirmed_on_the_website_is_the_same_operation_once
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.browser-joins-session
+- id: PAP-6-01
+  section: '6'
+  level: MUST
+  role: company
+  text: 'Each API''s type MUST be one of these: openapi, mcp.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchange
+- id: PAP-6-02
+  section: '6'
+  level: SHOULD
+  role: personal-agent
+  text: Personal Agents SHOULD skip API types they don't recognize, so later versions can add types.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.apis:known_apis
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.unknown-api-type
+- id: PAP-6-03
+  section: '6'
+  level: MUST
+  role: company
+  text: 'Every listed API MUST accept Session Tokens as described in 4.3: DPoP for OpenAPI, and Bearer
+    for MCP.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._api_call
+  - personal_agent_protocol.company.service:CompanyService._mcp_route
+  tests:
+  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchange
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_bearer_reads_and_proposes_through_mcp_the_same_operation
+  conformance:
+  - lifecycle.mcp-protected-resource-metadata
+- id: PAP-6-04
+  section: '6'
+  level: MUST
+  role: company
+  text: A listed MCP server MUST accept Session Tokens as its access tokens and enforce their scopes.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._mcp_route
+  - personal_agent_protocol.company.service:CompanyService._mcp_tool
+  - personal_agent_protocol.company.points:ToolResult
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_is_issued_only_for_the_mcp_url_and_an_existing_session
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_signing_out_reaches_the_mcp_server_at_once
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-bearer-for-its-url
+  - lifecycle.mcp-sign-out-takes-effect
+- id: PAP-6-05
+  section: '6'
+  level: MUST
+  role: company
+  text: It MUST accept only tokens issued for its url (4.3).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._bearer_caller
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_token_is_refused_everywhere_but_its_mcp_server
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-bearer-only-at-mcp
+- id: PAP-6-06
+  section: '6'
+  level: MUST
+  role: company
+  text: MCP clients find where to get a token from the server's protected resource metadata (RFC 9728),
+    and its authorization_servers MUST include auth.issuer.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.protected_resource_metadata
+  - personal_agent_protocol.company.service:CompanyService._bearer_refusal
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_company_advertises_its_mcp_server_and_its_issuer
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-protected-resource-metadata
+- id: PAP-7.2-01
+  section: '7.2'
+  level: MUST
+  role: company
+  text: The Company MUST reject requests from any other client_id, User, or account.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._owned
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_the_conversation_streams_and_a_stranger_cannot_read_it
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.not-found-indistinguishable
+  - conversations.signed-out-token-on-account-conversation
+- id: PAP-7.2-02
+  section: '7.2'
+  level: SHOULD
+  role: both
+  text: They SHOULD start with a short prefix for their kind, such as cnv_, msg_, or evt_.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:generate_message_id
+  - personal_agent_protocol.company.service:CompanyService._id
+  tests:
+  - personal_agent_protocol/__tests__/test_conversations.py::test_start_and_continue_preserve_message_ids_and_parse_waited_events
+- id: PAP-7.2-03
+  section: '7.2'
+  level: MUST NOT
+  role: both
+  text: Beyond these rules, the side that chooses an ID decides its format, and the other side MUST NOT
+    depend on it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Message.validate_id
+  - personal_agent_protocol.models:ConversationEventPage.validate_ids
+  tests:
+  - personal_agent_protocol/__tests__/test_models.py::test_shared_client_conversation_and_operation_fixtures
+- id: PAP-7.3-01
+  section: '7.3'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent chooses each message's id, and MUST make it unique for the User.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:generate_message_id
+  tests:
+  - personal_agent_protocol/__tests__/test_conversations.py::test_start_and_continue_preserve_message_ids_and_parse_waited_events
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.retry-replays
+  - conversations.message-id-conflict
+- id: PAP-7.4-01
+  section: '7.4'
+  level: MUST
+  role: both
+  text: A message MUST have at least one of text, data, or context.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Message.validate_content
+  tests:
+  - personal_agent_protocol/__tests__/test_models.py::test_message_requires_content
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.message-context-fields
+- id: PAP-7.4-02
+  section: '7.4'
+  level: SHOULD NOT
+  role: both
+  text: Personal Agents and Company Agents SHOULD NOT put JSON or other markup in text.
+  status: not-applicable
+  reason: Message text is written by the host's agent and the company agent; the SDK carries it unchanged.
+- id: PAP-7.4-03
+  section: '7.4'
+  level: MUST
+  role: personal-agent
+  text: 'When a Personal Agent shares one of these facts, it MUST use the field and format defined here:
+    locale, time_zone, user_available.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Message.validate_context
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.message-context-fields
+- id: PAP-7.4-04
+  section: '7.4'
+  level: SHOULD
+  role: personal-agent
+  text: Personal Agents SHOULD share only what the task needs.
+  status: not-applicable
+  reason: What a message shares is the host's decision; the SDK adds nothing to it.
+- id: PAP-7.5-01
+  section: '7.5'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents MUST skip event types they don't recognize, so later versions and extensions can
+    add types.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:ConversationEvent.known
+  - personal_agent_protocol.conversations:ConversationClient.events
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.unknown-event-type
+- id: PAP-7.5-02
+  section: '7.5'
+  level: MUST NOT
+  role: personal-agent
+  text: Cursors are opaque, so the Personal Agent MUST NOT compare or sort them.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient.events
+  tests:
+  - personal_agent_protocol/__tests__/test_conversations.py::test_events_recover_cursor_drain_backlog_and_suppress_duplicates
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.invalid-cursor
+- id: PAP-7.5-03
+  section: '7.5'
+  level: MUST
+  role: company
+  text: Every successful read MUST include cursor, has_more, status, and responder, even with no events.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._page_response
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.start-and-reply
+  - conversations.has-more-drained
+  - conversations.empty-read
+- id: PAP-7.5-04
+  section: '7.5'
+  level: SHOULD
+  role: personal-agent
+  text: The Personal Agent then reads from the beginning and SHOULD tell the User that part of the conversation
+    is missing.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient.events
+  tests:
+  - personal_agent_protocol/__tests__/test_conversations.py::test_events_recover_cursor_drain_backlog_and_suppress_duplicates
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.cursor-expired-recovery
+- id: PAP-7.6-01
+  section: '7.6'
+  level: MUST NOT
+  role: personal-agent
+  text: It MUST NOT act on text from a text-delta event.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:TextDelta
+  - personal_agent_protocol.conversations:ConversationClient.stream
+  tests:
+  - personal_agent_protocol/__tests__/test_conversation_control.py::test_stream_yields_events_and_deltas_and_stops_at_closed
+  - personal_agent_protocol/__tests__/test_conversation_control.py::test_a_closed_stream_reopens_from_last_event_id_and_drops_partial_text
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.sse-reconnect
+  - conversations.text-delta-not-actionable
+- id: PAP-7.7-01
+  section: '7.7'
+  level: MUST
+  role: company
+  text: Every successful response to a POST or a read MUST include status and responder.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._receipt
+  - personal_agent_protocol.company.service:CompanyService._page_response
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.start-and-reply
+  - conversations.handoff
+  - conversations.closed
+- id: PAP-7.7-02
+  section: '7.7'
+  level: MUST
+  role: company
+  text: Each Company message MUST also include sender, with agent or human, to identify who wrote it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._reply
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.start-and-reply
+  - conversations.attribution
+- id: PAP-7.8-01
+  section: '7.8'
+  level: MUST
+  role: personal-agent
+  text: 'On the Personal Agent''s side, the Personal Agent MUST set each message''s sender: agent when
+    the Personal Agent wrote it, and human only when it carries the User''s own words.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Message.sender
+  tests:
+  - personal_agent_protocol/__tests__/test_conversation_control.py::test_a_direct_conversation_names_its_parent_and_the_parent_points_to_it
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.attribution
+- id: PAP-7.10-01
+  section: '7.10'
+  level: MUST
+  role: company
+  text: The parent conversation MUST be open, belong to the same owner (7.2), and not be a Direct Conversation
+    itself.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._start_conversation
+  tests:
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_direct_conversation_locks_its_parent_until_it_closes
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.direct-conversation
+  - conversations.direct-of-direct-refused
+- id: PAP-7.11-01
+  section: '7.11'
+  level: SHOULD
+  role: company
+  text: When the Company Agent needs the User's account, the Company adds an authorization event. It SHOULD
+    also ask in a message, so a User in a Direct Conversation sees the request.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.points:Reply.authorization
+  - personal_agent_protocol.demo.manzanita:ManzanitaAgent.respond
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.authorization-then-same-conversation
+- id: OPS-2-01
+  source: operations
+  section: '2'
+  level: MUST NOT
+  role: company
+  text: A Company MUST NOT return operations to a Personal Agent that doesn't list the extension.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._api_call
+  - personal_agent_protocol.company.service:CompanyService._reply
+  - personal_agent_protocol.company.service:CompanyService._operation_route
+  tests:
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_an_agent_without_the_extension_gets_no_operations
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.extension-required-error
+  - protocol.extension-required-company
+- id: OPS-3-01
+  source: operations
+  section: '3'
+  level: MUST
+  role: company
+  text: Everything that affects the action, such as the item, quantity, price, recipient, date, or a condition
+    for cancelling, MUST be in the revision's summary, and in terms if present.
+  status: partial
+  implementation:
+  - personal_agent_protocol.company.points:ProposedOperation
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.proposed-not-performed
+  reason: The service requires a summary and carries terms unchanged; whether the summary names every
+    term is the proposing contribution's job.
+- id: OPS-3-02
+  source: operations
+  section: '3'
+  level: MUST
+  role: company
+  text: The Company MUST perform only what the confirmed revision describes.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._confirm
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.confirm-succeeded
+  - operations.web-confirm-at-most-once
+- id: OPS-3-03
+  source: operations
+  section: '3'
+  level: MUST NOT
+  role: company
+  text: Proposing an operation doesn't perform it, and the Company MUST NOT start the action before it
+    is confirmed.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._propose
+  tests:
+  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchange
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.proposed-not-performed
+- id: OPS-3.1-01
+  source: operations
+  section: '3.1'
+  level: MUST NOT
+  role: company
+  text: 'Each revision is fixed once issued: the Company MUST NOT change the terms of a revision, and
+    only the latest revision can be confirmed.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.revise
+  - personal_agent_protocol.company.service:CompanyService._confirm
+  tests:
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_revised_operation_is_terms_changed_and_never_performed_twice
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.terms-changed
+- id: OPS-3.2-01
+  source: operations
+  section: '3.2'
+  level: MUST
+  role: company
+  text: The Company MUST keep an operation readable at least until it is final.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._operation_route
+  - personal_agent_protocol.company.points:MemoryCompanyStore
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.readable-until-final
+  - operations.expired
+  - operations.not-found-indistinguishable
+- id: OPS-4-01
+  source: operations
+  section: '4'
+  level: SHOULD
+  role: company
+  text: If the same action comes up again through another channel, for example in an API call after a
+    conversation proposed it, the Company SHOULD return the existing operation instead of proposing a
+    new one.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._propose
+  - personal_agent_protocol.operations:operation_from
+  - personal_agent_protocol.mcp:McpClient.call_tool
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_bearer_reads_and_proposes_through_mcp_the_same_operation
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.cross-channel-identity
+  - operations.cross-channel-mcp
+- id: OPS-4.1-01
+  source: operations
+  section: '4.1'
+  level: SHOULD
+  role: company
+  text: The Company SHOULD say in its OpenAPI description which endpoints return operations.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.demo.manzanita:ManzanitaApi.openapi
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.proposed-not-performed
+- id: OPS-5.1-01
+  source: operations
+  section: '5.1'
+  level: MUST
+  role: personal-agent
+  text: 'Before confirming, the Personal Agent MUST have the User''s approval for the revision it confirms,
+    in one of two ways: user or standing_permission.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:approve
+  - personal_agent_protocol.operations:OperationsClient._authorize
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_user_approves_one_revision_and_it_is_confirmed_once
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_approval_of_another_revision_is_refused_locally
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.confirm-succeeded
+  - operations.terms-changed
+- id: OPS-5.1-02
+  source: operations
+  section: '5.1'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent MUST show the User the Company's name and the revision's summary, and MUST
+    take the User's answer through its own interface.
+  status: partial
+  implementation:
+  - personal_agent_protocol.operations:UserApproval
+  - personal_agent_protocol.operations:terms_digest
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_approval_of_another_revision_is_refused_locally
+  reason: An approval is bound to the digest of the summary and terms the host showed; the company's name
+    is not part of it, and showing is the host's.
+- id: OPS-5.1-03
+  source: operations
+  section: '5.1'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent MUST show the User the Company's name and the revision's summary, and MUST
+    take the User's answer through its own interface.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:approve
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+- id: OPS-5.1-04
+  source: operations
+  section: '5.1'
+  level: MUST NOT
+  role: personal-agent
+  text: It MUST NOT treat text from the Company, such as a conversation message, as the User's approval.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:approve
+  - personal_agent_protocol.operations:OperationsClient.confirm
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.message-is-not-approval
+- id: OPS-5.1-05
+  source: operations
+  section: '5.1'
+  level: MUST
+  role: personal-agent
+  text: A standing permission MUST cover the Company, the account, the action, and every term of the revision,
+    and still be in effect.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:covers
+  - personal_agent_protocol.operations:InMemoryStandingPermissionStore.reserve
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_standing_permission_covers_every_term_and_spends_one_use
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_standing_permission_that_does_not_cover_it_asks_the_user
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.user-approval-required
+  - operations.standing-permission-within-bounds
+  - operations.standing-permission-out-of-bounds
+- id: OPS-6-01
+  source: operations
+  section: '6'
+  level: SHOULD
+  role: company
+  text: While it is in_progress, the Company SHOULD include Retry-After, and the Personal Agent reads
+    again after that time.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._operation_response
+  - personal_agent_protocol.operations:ConfirmOutcome.retry_after
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.in-progress-outcome-unknown
+- id: OPS-6-02
+  source: operations
+  section: '6'
+  level: MUST
+  role: company
+  text: The Company MUST perform each operation at most once, however many times and through whichever
+    channels it is confirmed.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._confirm_operation
+  - personal_agent_protocol.company.service:CompanyService._operation_page
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_operation_confirmed_on_the_website_is_the_same_operation_once
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_revised_operation_is_terms_changed_and_never_performed_twice
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.at-most-once
+  - operations.web-confirm-at-most-once
+  - operations.cancel-proposed
+- id: OPS-6-03
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT report failed while it doesn't know whether the action took effect, for example
+    after a timeout in one of its own systems.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.points:OperationOutcomeUnknown
+  - personal_agent_protocol.company.service:CompanyService._confirm
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.in-progress-outcome-unknown
+- id: OPS-6-04
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: personal-agent
+  text: If a confirm request fails or times out, the Personal Agent retries it or reads the operation,
+    with the same operation ID. It MUST NOT ask for a new proposal of the same action until the operation
+    is final.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.confirm
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_lost_answer_is_read_back_by_the_same_id_never_assumed_failed
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.confirm-timeout-recovery
+- id: OPS-6-05
+  source: operations
+  section: '6'
+  level: MUST
+  role: company
+  text: In a final state, result.summary MUST describe every change that was made, including any made
+    by an operation that failed or was cancelled partway.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.points:OperationFailed
+  - personal_agent_protocol.company.service:CompanyService._confirm
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.confirm-succeeded
+  - operations.failed-partial-result
+guide:
+- id: GUIDE-secrets-01
+  source: guide
+  section: Handling secrets
+  level: SHOULD
+  role: both
+  text: Keep them out of logs, telemetry, error reports, model context, conversation messages, and URLs.
+  status: partial
+  implementation:
+  - personal_agent_protocol.errors:PersonalAgentProtocolError
+  tests:
+  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_account_token
+  - personal_agent_protocol/__tests__/test_sessions.py::test_session_error_never_includes_remote_error_description
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.refusals-disclose-no-credential
+  reason: Errors and results are credential-free; logs and traces are not yet covered by a test.
+- id: GUIDE-secrets-02
+  source: guide
+  section: Handling secrets
+  level: SHOULD
+  role: both
+  text: Redact the Authorization, DPoP, and Cookie headers and credential fields before a request reaches
+    a logger or tracer.
+  status: open
+  reason: No logging or tracing hook redacts headers yet.
+- id: GUIDE-secrets-03
+  source: guide
+  section: Handling secrets
+  level: SHOULD
+  role: company
+  text: 'Send Cache-Control: no-store on every response that carries a token or code.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._issue
+  - personal_agent_protocol.company.service:CompanyService._device
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.token-responses-not-cached
+- id: GUIDE-jwt-01
+  source: guide
+  section: Signing and verifying JWTs
+  level: SHOULD
+  role: both
+  text: Support ES256 and RS256, and sign with ES256 when you can. Use RSA keys of at least 2048 bits.
+  status: partial
+  implementation:
+  - personal_agent_protocol.crypto:JoseSigner
+  - personal_agent_protocol.crypto:_algorithm
+  tests:
+  - personal_agent_protocol/__tests__/test_crypto.py::test_signs_and_verifies_only_asymmetric_pap_assertions
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.client-assertion-rs256-header-on-ec-key
+  reason: RSA key size is not checked.
+- id: GUIDE-jwt-02
+  source: guide
+  section: Signing and verifying JWTs
+  level: SHOULD
+  role: both
+  text: 'Reject alg: none and symmetric algorithms such as HS256.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:_algorithm
+  - personal_agent_protocol.company.verify:verify_assertion
+  tests:
+  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_symmetric_and_none_algorithms
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.client-assertion-alg-none
+  - security.client-assertion-hs256-public-key
+  - security.client-assertion-rs256-header-on-ec-key
+  - security.dpop-alg-none
+- id: GUIDE-jwt-03
+  source: guide
+  section: Signing and verifying JWTs
+  level: SHOULD
+  role: company
+  text: Verify assertions only with keys from the personal agent's verified jwks_uri (4.1). Ignore jku,
+    x5u, and any key embedded in an assertion.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.verify:verify_assertion
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.client-assertion-embedded-key-ignored
+  - security.session-assertion-wrong-issuer
+- id: GUIDE-jwt-04
+  source: guide
+  section: Signing and verifying JWTs
+  level: SHOULD
+  role: company
+  text: Check aud, exp, and iat. Allow a small clock skew, such as 30 seconds, and reject assertions that
+    claim a long lifetime.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.verify:verify_assertion
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.client-assertion-bad-audience
+  - security.client-assertion-audience-array
+  - security.session-assertion-bad-audience
+  - security.session-assertion-clock-skew-tolerated
+  - security.session-assertion-from-the-future
+  - security.session-assertion-expired
+  - security.session-assertion-long-lived
+- id: GUIDE-jwt-05
+  source: guide
+  section: Signing and verifying JWTs
+  level: SHOULD
+  role: both
+  text: Make each jti at least 128 random bits.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.sessions:_opaque_id
+  tests:
+  - personal_agent_protocol/__tests__/test_sessions.py::test_builds_short_lived_session_assertion_claims
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - security.session-assertion-replay
+- id: GUIDE-keys-01
+  source: guide
+  section: Rotating keys
+  level: SHOULD
+  role: personal-agent
+  text: Give every key a kid.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:JoseSigner
+  - personal_agent_protocol.demo.kit:AgentIdentity.jwks
+  tests:
+  - personal_agent_protocol/__tests__/test_identity.py::test_fetches_metadata_and_public_jwks
+- id: GUIDE-keys-02
+  source: guide
+  section: Rotating keys
+  level: SHOULD
+  role: company
+  text: Companies refetch jwks_uri when they see an unknown kid, with a rate limit so a stream of bad
+    assertions can't trigger a fetch each time.
+  status: open
+  reason: The company resolver fetches metadata and keys on every assertion; no cache, refetch rule, or
+    rate limit.
+- id: GUIDE-fetch-01
+  source: guide
+  section: Fetching metadata safely
+  level: SHOULD
+  role: both
+  text: 'Set limits: a few redirects at most, a response size such as 100 KB, and a timeout of a few seconds.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient._get_json
+  - personal_agent_protocol.identity:AgentIdentityClient._get_json
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - security.discovery-redirect-limit
+  - security.oversized-metadata
+  - security.metadata-not-json
+- id: GUIDE-fetch-02
+  source: guide
+  section: Fetching metadata safely
+  level: SHOULD
+  role: both
+  text: Never send cookies, tokens, or other credentials on these fetches.
+  status: partial
+  implementation:
+  - personal_agent_protocol.reactor:HttpxDiscoveryTransport.get
+  reason: Discovery sends no credential of its own, but uses the host's httpx client, whose cookie jar
+    is not cleared.
+- id: GUIDE-fetch-03
+  source: guide
+  section: Fetching metadata safely
+  level: SHOULD
+  role: both
+  text: Reject loopback, private, and link-local addresses unless you've configured them on purpose. Check
+    the address you actually connect to, not only the one DNS returned first.
+  status: partial
+  implementation:
+  - personal_agent_protocol.reactor:PublicUrlSafetyPolicy.assert_safe
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_rejects_private_discovery_address
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - security.ssrf-loopback
+  - security.ssrf-private
+  - security.ssrf-link-local-metadata
+  - security.ssrf-ipv6-loopback-and-unique-local
+  - security.ssrf-ipv4-mapped
+  - security.dns-rebinding-mixed-answers
+  - security.public-address-allowed
+  reason: Every resolved address must be public, but the connection is not pinned to a checked address
+    (DNS rebinding between check and connect).
+- id: GUIDE-fetch-04
+  source: guide
+  section: Fetching metadata safely
+  level: SHOULD
+  role: both
+  text: Cache according to HTTP caching headers, within bounds you set, such as at least a minute and
+    at most a day.
+  status: open
+  reason: No bounded metadata cache yet (see PAP-3-04, PAP-3.2-05).
+- id: GUIDE-retry-01
+  source: guide
+  section: Retries
+  level: SHOULD
+  role: personal-agent
+  text: Send an Idempotency-Key on API writes that accept one. Use a random UUID (version 4), and reuse
+    the same key when you retry the same request.
+  status: open
+  reason: ApiClient sends no Idempotency-Key.
+- id: GUIDE-retry-02
+  source: guide
+  section: Retries
+  level: SHOULD
+  role: personal-agent
+  text: Each retry needs a new DPoP proof, and a retried token request needs a new assertion.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.sessions:SessionClient._request
+  tests:
+  - personal_agent_protocol/__tests__/test_sessions.py::test_retries_once_with_a_fresh_dpop_nonce_and_assertions
+- id: GUIDE-retry-03
+  source: guide
+  section: Retries
+  level: SHOULD
+  role: personal-agent
+  text: Otherwise, back off exponentially with jitter, cap the delay, and limit the number of attempts.
+  status: open
+  reason: The SDK does not retry on its own; no backoff helper.
+- id: GUIDE-rate-01
+  source: guide
+  section: Rate limits
+  level: SHOULD
+  role: company
+  text: Limit by client_id, by user, and by session; also send the RateLimit and RateLimit-Policy headers.
+  status: open
+  reason: The reference company does not rate-limit.
+- id: GUIDE-rate-02
+  source: guide
+  section: Rate limits
+  level: SHOULD
+  role: personal-agent
+  text: Keep track of limits for each company and share them across your tasks and users.
+  status: open
+  reason: No shared rate-limit budget contribution yet.
+- id: GUIDE-json-01
+  source: guide
+  section: Transport and JSON
+  level: SHOULD
+  role: both
+  text: Encode JSON as UTF-8 and reject objects with duplicate member names.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.json:loads_strict
+  tests:
+  - personal_agent_protocol/__tests__/test_models.py::test_strict_json_rejects_duplicate_members
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - security.duplicate-json-members
+- id: GUIDE-pa-dpop-01
+  source: guide
+  section: DPoP keys and proofs
+  level: SHOULD
+  role: personal-agent
+  text: Generate a DPoP key pair for each user at each company (4.3).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:DpopProofRequest
+  - personal_agent_protocol.demo.kit:DpopKeys
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+- id: GUIDE-pa-tokens-01
+  source: guide
+  section: Storing tokens
+  level: SHOULD
+  role: personal-agent
+  text: Request Bearer session tokens only for MCP (4.3). Each one is limited to one MCP server by resource.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.mcp:McpBearerAuth
+  - personal_agent_protocol.transport:DpopHttpClient.request
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_bearer_token_is_refused_everywhere_but_its_mcp_server
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.mcp-bearer-for-its-url
+- id: GUIDE-pa-tokens-02
+  source: guide
+  section: Storing tokens
+  level: SHOULD
+  role: personal-agent
+  text: On invalid_grant for an account token, delete it and continue signed out.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.accounts:AccountTokenClient.refresh
+  tests:
+  - personal_agent_protocol/__tests__/test_accounts.py::test_invalid_grant_deletes_the_token_and_leaves_the_session_signed_out
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+- id: GUIDE-pa-signin-01
+  source: guide
+  section: Choosing how to sign in
+  level: SHOULD
+  role: personal-agent
+  text: Prefer direct sign-in, then device sign-in, then mediated sign-in.
+  status: open
+  reason: The SDK offers all three; no helper chooses among them.
+- id: GUIDE-pa-browser-01
+  source: guide
+  section: Web browsing
+  level: SHOULD
+  role: personal-agent
+  text: Use a separate browser storage context, with its own cookies and local storage, for each session.
+  status: open
+  reason: The browser is a host contribution (pap.browserFormPost); isolation is not checked.
+- id: GUIDE-pa-conv-01
+  source: guide
+  section: Conversations
+  level: SHOULD
+  role: personal-agent
+  text: Read events with a long wait, such as 30 seconds, or a stream, rather than many short polls (7.5).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient.events
+  tests:
+  - personal_agent_protocol/__tests__/test_conversations.py::test_events_recover_cursor_drain_backlog_and_suppress_duplicates
+- id: GUIDE-co-consent-01
+  source: guide
+  section: Consent pages
+  level: SHOULD
+  role: company
+  text: 'Protect the page against cross-site request forgery, and against framing by other sites with
+    Content-Security-Policy: frame-ancestors.'
+  status: partial
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._page
+  tests:
+  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_the_consent_page_is_never_framed_and_bad_redirects_are_not_followed
+  reason: Framing is refused; the consent form has no CSRF token (the decision is played through approve_authorization).
+- id: GUIDE-co-consent-02
+  source: guide
+  section: Consent pages
+  level: SHOULD
+  role: company
+  text: Accept PKCE with S256 only, and reject plain.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._authorize
+  tests:
+  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_the_consent_page_is_never_framed_and_bad_redirects_are_not_followed
+- id: GUIDE-co-consent-03
+  source: guide
+  section: Consent pages
+  level: SHOULD
+  role: company
+  text: Return iss in every redirect, success or error (MUST, 4.5).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._redirect_url
+  tests:
+  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_a_denial_reaches_the_agent_as_access_denied_only
+- id: GUIDE-co-device-01
+  source: guide
+  section: Device sign-in
+  level: SHOULD
+  role: company
+  text: Return slow_down to personal agents that poll faster than interval, and keep expires_in short,
+    such as 10 minutes.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._device_grant
+  - personal_agent_protocol.company.service:CompanyService._device
+  tests:
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_polling_too_fast_is_slow_down
+- id: GUIDE-co-mediated-01
+  source: guide
+  section: Mediated sign-in
+  level: SHOULD
+  role: company
+  text: Return the same failed response for an unknown account and a wrong password, so responses don't
+    reveal whether an account exists.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._mediated
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_mediated_sign_in_with_a_one_time_code
+- id: GUIDE-co-account-01
+  source: guide
+  section: Account settings
+  level: SHOULD
+  role: company
+  text: Offer a control to disconnect each one. Disconnecting revokes its account tokens and signs out
+    its sessions (4.9).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.disconnect
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - lifecycle.disconnect-from-account-settings
+- id: GUIDE-co-conv-01
+  source: guide
+  section: Conversations
+  level: SHOULD
+  role: company
+  text: On a stream with nothing to send, send an SSE comment every 15 to 30 seconds, so proxies don't
+    close it (7.6).
+  status: partial
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._stream
+  reason: The stream opens with a comment and ends after the backlog; it does not stay open with keep-alives.
+- id: GUIDE-co-conv-02
+  source: guide
+  section: Conversations
+  level: SHOULD
+  role: company
+  text: When a session signs out, close its conversations that used the account, so their account details
+    can't be read signed out (7.11).
+  status: partial
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._owned
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  reason: A signed-out token gets sign_in_required on them; they are not closed.
+- id: GUIDE-co-errors-01
+  source: guide
+  section: Error messages
+  level: SHOULD
+  role: company
+  text: Return the same error for "doesn't exist" and "belongs to someone else", as conversation_not_found
+    does (7.13).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._owned
+  - personal_agent_protocol.company.service:CompanyService._operation_route
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+- id: GUIDE-ops-pa-01
+  source: guide
+  section: 'Operations: personal agents'
+  level: SHOULD
+  role: personal-agent
+  text: When a new revision arrives, show the user what changed before asking them to approve it again.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:ConfirmOutcome.changed
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_terms_changed_returns_the_new_revision_and_what_changed
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+- id: GUIDE-ops-pa-02
+  source: guide
+  section: 'Operations: personal agents'
+  level: SHOULD
+  role: personal-agent
+  text: If a term you need to check is missing from terms, ask the user instead.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:covers
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_standing_permission_that_does_not_cover_it_asks_the_user
+- id: GUIDE-ops-pa-03
+  source: guide
+  section: 'Operations: personal agents'
+  level: SHOULD
+  role: personal-agent
+  text: For a permission with a limited number of uses, reserve a use before you confirm, so two tasks
+    running at once can't both use the last one. Release the reservation if the company rejects the confirmation.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:StandingPermissionStore
+  - personal_agent_protocol.operations:OperationsClient.confirm
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_refused_confirmation_gives_the_use_back
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.standing-permission-within-bounds
+  - operations.standing-permission-concurrent-use
+- id: GUIDE-ops-pa-04
+  source: guide
+  section: 'Operations: personal agents'
+  level: SHOULD
+  role: personal-agent
+  text: After a confirm times out, read the operation or confirm again with the same revision. Wait for
+    Retry-After between reads.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.confirm
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_lost_answer_is_read_back_by_the_same_id_never_assumed_failed
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.confirm-timeout-recovery
+- id: GUIDE-ops-co-01
+  source: guide
+  section: 'Operations: companies'
+  level: SHOULD
+  role: company
+  text: When you call another system to perform the action, derive its idempotency key from the operation
+    ID.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.points:OperationExecutor
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+- id: GUIDE-ops-co-02
+  source: guide
+  section: 'Operations: companies'
+  level: SHOULD
+  role: company
+  text: To spot the same action coming up in another channel, look for an open operation in the same session
+    or account with the same terms before proposing a new one.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._propose
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls

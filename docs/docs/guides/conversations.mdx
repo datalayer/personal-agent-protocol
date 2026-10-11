@@ -1,0 +1,86 @@
+---
+title: Conversations
+---
+
+# Conversations
+
+A PAP conversation is how a personal agent talks to a company's agent (draft
+0.1 §7). `ConversationClient` sends idempotent messages and reads an ordered
+event log by long polling (see [conversation messages](/examples/conversation-messages/)
+and [conversation events](/examples/conversation-events/)). This guide covers
+streaming and the controls: sign-in mid-conversation, Direct Conversations,
+handoff, and closing.
+
+## Streaming over SSE (§7.6)
+
+```python
+async for item in conversations.stream(endpoint, conversation_id, token=token, **who):
+    if isinstance(item, TextDelta):
+        ui.show_typing(item.message_id, item.text)   # display only
+    elif isinstance(item, StreamReconnected):
+        ui.drop_partial(item.discarded_message_ids)
+    else:
+        handle_event(item)                           # the ConversationEvent to act on
+```
+
+```typescript
+for await (const item of conversations.stream(endpoint, conversationId, { token, tenantId, pairwiseUserId, issuer })) {
+  if ('kind' in item && item.kind === 'text-delta') ui.showTyping(item.message_id, item.text);
+  else if ('kind' in item && item.kind === 'reconnected') ui.dropPartial(item.discardedMessageIds);
+  else handleEvent(item);
+}
+```
+
+- **Deltas never act.** `TextDelta.actionable` is always false. The complete
+  `message` event replaces the pieces; route deltas to display only.
+- **Reconnect from `Last-Event-ID`.** When the company ends the stream before
+  the conversation closes, the client reopens it from the last event handled
+  and yields `StreamReconnected`. Pieces of a message whose complete event did
+  not arrive are listed as discarded.
+- **No duplicates.** Replayed events are suppressed by ID, in a bounded set
+  that fails closed (`event_history_too_large`).
+- **Bounded.** `max_reconnects` reconnects in a row without a new event end in
+  `stream_unavailable`. A company that answers JSON instead of
+  `text/event-stream` is `sse_unsupported`: use `events()`.
+- The iterator ends on a `state` event with `closed`.
+
+## Sign-in mid-conversation (§7.11)
+
+When the company needs the user signed in, or more scopes, it answers with an
+`authorization` event (`sign_in_required` or `insufficient_scope`, and the
+`scope` it needs). The host runs any sign-in mode the company offers for the
+**same Session**, then keeps sending to the **same conversation ID** with the
+new Session Token. Nothing in the conversation is restarted; the model never
+sees the sign-in's codes or tokens.
+
+## Direct Conversations (§7.10)
+
+`start_direct(endpoint, parent_id, message)` (`startDirect` in TypeScript)
+opens a conversation under an open parent for the user to talk with the
+company through the agent's interface. Only the personal agent starts one.
+While it is open, the parent refuses messages and handoff with
+`direct_conversation_open`; the client exposes the open conversation's ID in
+`error.details["conversation_id"]` so the host can route the user there. The
+parent receives `direct_opened` and `direct_closed` events.
+
+## Handoff (§7.9) and closing (§7.12)
+
+`handoff()` asks for a person at the company: the conversation is `queued`,
+then `responder` becomes `human` when someone takes it, or the company says
+none is available and its agent continues. `close()` ends the conversation;
+the company refuses later messages with `conversation_closed`. Closing does
+not cancel operations the conversation proposed or started: cancel those
+through [Operations](/guides/operations/).
+
+## Security boundary
+
+- Session Tokens, DPoP proofs, pairwise IDs, and cursors stay in the host.
+- A model receives the event fields it needs: company text, data, event types,
+  and statuses. It never treats conversation text, from either side, as the
+  user's approval of anything.
+- Errors carry codes (and, for `direct_conversation_open`, a validated
+  conversation ID), never response bodies.
+
+See the runnable [conversation streaming](/examples/conversation-streaming/)
+and [conversation control](/examples/conversation-control/) examples, and the
+upstream [conversations specification](https://personalagentprotocol.org/docs/spec#7-conversations).

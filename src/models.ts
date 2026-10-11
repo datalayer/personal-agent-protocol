@@ -254,6 +254,26 @@ function optionalRecord(
   return value === undefined ? undefined : record(value, label);
 }
 
+/**
+ * An object whose optional members may be JSON `null`, read as absent.
+ *
+ * Python's models declare these members `X | None` and serialize `None` as
+ * `null`; both SDKs accept either spelling and treat them the same.
+ */
+function nullsAbsent(
+  value: unknown,
+  label: string,
+  members: readonly string[],
+): Record<string, unknown> {
+  const source = record(value, label);
+  if (!members.some((member) => source[member] === null)) return source;
+  const copy: Record<string, unknown> = { ...source };
+  for (const member of members) {
+    if (copy[member] === null) delete copy[member];
+  }
+  return copy;
+}
+
 function extensions(
   value: unknown,
   label: string,
@@ -614,7 +634,7 @@ export function parseJsonWebKeySet(value: unknown): JsonWebKeySet {
 }
 
 export function parseOperation(value: unknown): Operation {
-  const source = record(value, "operation");
+  const source = nullsAbsent(value, "operation", ["terms", "expires_at", "url"]);
   const state = oneOf(
     source.state,
     ["proposed", "in_progress", "succeeded", "failed", "cancelled", "expired"] as const,
@@ -637,7 +657,7 @@ export function parseOperation(value: unknown): Operation {
   }
   let result: OperationResult | null = null;
   if (source.result !== undefined && source.result !== null) {
-    const item = record(source.result, "operation.result");
+    const item = nullsAbsent(source.result, "operation.result", ["data"]);
     result = {
       ...item,
       summary: string(item.summary, "operation.result.summary"),
@@ -695,7 +715,13 @@ export function parseOperation(value: unknown): Operation {
 }
 
 export function parseMessage(value: unknown): Message {
-  const source = record(value, "message");
+  const source = nullsAbsent(value, "message", [
+    "role",
+    "text",
+    "data",
+    "context",
+    "operation",
+  ]);
   const text = source.text === undefined ? undefined : string(source.text, "message.text");
   const data = optionalRecord(source.data, "message.data");
   const context = optionalRecord(source.context, "message.context");
@@ -722,7 +748,15 @@ export function parseMessage(value: unknown): Message {
 }
 
 export function parseConversationEvent(value: unknown): ConversationEvent {
-  const source = record(value, "conversation event");
+  const source = nullsAbsent(value, "conversation event", [
+    "message",
+    "status",
+    "responder",
+    "error",
+    "scope",
+    "reason",
+    "conversation_id",
+  ]);
   const type = string(source.type, "conversation event.type");
   const parsed: ConversationEvent = {
     ...source,

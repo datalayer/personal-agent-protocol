@@ -1,0 +1,73 @@
+---
+title: Account Tokens
+description: Keep a user signed in with a rotating Account Token that never leaves the host.
+---
+
+# Account Tokens
+
+A sign-in returns an Account Token (the OAuth `refresh_token`). The personal
+agent uses it only at the company's token and revocation endpoints, to sign a
+Session in again after its short-lived Session Token expires. The paired
+examples run the real `AccountTokenClient` against Manzanita Outfitters, the
+reference company in `personal_agent_protocol.demo`, with real keys over HTTP
+in one process.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Tool as Agent tool
+  participant SDK as AccountTokenClient
+  participant Lock as pap.accountTokenLock
+  participant Vault as pap.tokenStore
+  participant Company as Company token endpoint
+  Tool->>SDK: refresh(reference, session_id)
+  SDK->>Lock: Hold the reference
+  SDK->>Vault: Read Account Token
+  SDK->>Company: refresh_token grant + session_id + assertion + DPoP
+  Company-->>SDK: Signed-in Session Token + rotated Account Token
+  SDK->>Vault: Replace the old token before releasing the lock
+  SDK-->>Tool: signed_in, rotated, granted scopes
+  Tool->>SDK: refresh(reference, scopes=orders:read)
+  SDK->>Company: Narrower scope
+  Company-->>SDK: Session with orders:read
+  Tool->>SDK: refresh(reference, scopes=orders:admin)
+  Company-->>SDK: invalid_scope
+  SDK-->>Tool: re_consent_required (sign the user in again)
+  Note over Company: Ninety-one days later
+  SDK->>Company: refresh_token grant
+  Company-->>SDK: invalid_grant
+  SDK->>Vault: Delete the stored copy
+  SDK-->>Tool: signed_out
+  Tool->>SDK: revoke(reference)
+  SDK->>Company: RFC 7009 revocation
+  Company-->>SDK: 200, every Session signed in with it is signed out
+  SDK->>Vault: Delete once the company answered
+```
+
+The walkthrough:
+
+1. **Refresh** signs the same Session in again (`session_id` unchanged) and the
+   company rotates the token. The new one replaces the old in the token store
+   before the call returns.
+2. **Two refreshes at once** both succeed: the Reactor `pap.accountTokenLock`
+   serializes them, so the second presents the token the first rotated in, not
+   the one the company already revoked.
+3. **Narrower** scopes are granted; **wider** scopes come back as
+   `re_consent_required`, a decision for the user, never a retry.
+4. An **expired** token draws `invalid_grant`; the SDK deletes it and the
+   Session continues signed out.
+5. **Revocation** signs out every Session signed in with the token. The next
+   question to the company draws an `authorization` event again.
+
+The model sees statuses (`signed_in`, `re_consent_required`, `signed_out`),
+whether a rotation happened, and scope names. The Account Token, Session
+Tokens, client assertions, and DPoP proofs stay host-only, behind opaque
+references in Reactor stores.
+
+TypeScript has the same client: `new AccountTokenClient({ reactor, fetch })`,
+with `refresh(reference, { context, sessionId, scopes })` and `revoke()`, and
+the lock contributed at `AccountTokenLocks`.
+
+- Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/account-tokens).
+- Run the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/account-tokens).
+- Read the [Account Tokens guide](/guides/account-tokens/).

@@ -1,0 +1,590 @@
+{
+  "suite": "protocol",
+  "profile": "0.1",
+  "description": "Protocol versions, unknown fields and types, extensions, and extension_required.",
+  "cases": [
+    {
+      "id": "protocol.major-version-unsupported",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.1-01"
+      ],
+      "check": "discovery_document",
+      "input": {
+        "protocol_version": "1.0",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "web": {}
+      },
+      "expect": {
+        "valid": false
+      }
+    },
+    {
+      "id": "protocol.minor-version-newer",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.1-01",
+        "PAP-3.3-04"
+      ],
+      "check": "discovery_document",
+      "input": {
+        "protocol_version": "0.7",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com",
+          "logo": "https://example.com/l.png"
+        },
+        "auth": {
+          "issuer": "https://auth.example.com",
+          "passkey": {
+            "scopes": [
+              "poppy:read"
+            ]
+          }
+        },
+        "agent": {
+          "protocols": [
+            {
+              "type": "poppy",
+              "endpoint": "https://api.example.com/poppy/conversations"
+            }
+          ]
+        },
+        "support_hours": "9-17"
+      },
+      "expect": {
+        "valid": true,
+        "extra": {
+          "support_hours": "9-17"
+        }
+      }
+    },
+    {
+      "id": "protocol.version-not-major-minor",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.1-01"
+      ],
+      "check": "discovery_document",
+      "input": {
+        "protocol_version": "0.1.2",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "web": {}
+      },
+      "expect": {
+        "valid": false
+      }
+    },
+    {
+      "id": "protocol.unknown-api-type",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-6-02",
+        "PAP-3.3-04"
+      ],
+      "check": "discovery_document",
+      "input": {
+        "protocol_version": "0.1",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "auth": {
+          "issuer": "https://auth.example.com"
+        },
+        "apis": [
+          {
+            "type": "graphql",
+            "url": "https://api.example.com/graphql",
+            "description": "Catalog"
+          },
+          {
+            "type": "openapi",
+            "url": "https://api.example.com/openapi.json",
+            "description": "Orders"
+          }
+        ]
+      },
+      "expect": {
+        "valid": true,
+        "known_api_types": [
+          "openapi"
+        ]
+      }
+    },
+    {
+      "id": "protocol.unknown-conversation-protocol",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.3-04"
+      ],
+      "check": "discovery_document",
+      "input": {
+        "protocol_version": "0.1",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "auth": {
+          "issuer": "https://auth.example.com"
+        },
+        "agent": {
+          "protocols": [
+            {
+              "type": "a2a",
+              "endpoint": "https://api.example.com/a2a"
+            },
+            {
+              "type": "poppy",
+              "endpoint": "https://api.example.com/poppy/conversations"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "valid": true,
+        "conversation_endpoint": "https://api.example.com/poppy/conversations"
+      }
+    },
+    {
+      "id": "protocol.unknown-extension-ignored",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.3-02"
+      ],
+      "check": "extension_negotiation",
+      "input": {
+        "company": {
+          "gift-wrap": {
+            "version": "1"
+          },
+          "operations": {
+            "version": "1",
+            "endpoint": "https://api.example.com/poppy/operations"
+          }
+        },
+        "agent": {
+          "operations": {
+            "version": "1"
+          }
+        }
+      },
+      "expect": {
+        "negotiated": {
+          "operations": "1"
+        }
+      }
+    },
+    {
+      "id": "protocol.extension-version-mismatch",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.3-02"
+      ],
+      "check": "extension_negotiation",
+      "input": {
+        "company": {
+          "operations": {
+            "version": "2",
+            "endpoint": "https://api.example.com/poppy/operations"
+          }
+        },
+        "agent": {
+          "operations": {
+            "version": "1"
+          }
+        }
+      },
+      "expect": {
+        "negotiated": {}
+      }
+    },
+    {
+      "id": "protocol.third-party-extension-name",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.3-01",
+        "PAP-3.3-04"
+      ],
+      "check": "extension_names",
+      "input": {
+        "example.com/gift-wrap": {
+          "version": "2",
+          "color": "red"
+        },
+        "operations": {
+          "version": "1"
+        },
+        "gift-wrap": {
+          "version": "1"
+        },
+        "Gift Wrap!": {
+          "version": "1"
+        },
+        "localhost/x": {
+          "version": "1"
+        }
+      },
+      "expect": {
+        "third_party": [
+          "example.com/gift-wrap"
+        ],
+        "plain": [
+          "gift-wrap",
+          "operations"
+        ],
+        "invalid": [
+          "Gift Wrap!",
+          "localhost/x"
+        ]
+      }
+    },
+    {
+      "id": "protocol.extension-required-error",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "OPS-2-01"
+      ],
+      "check": "extension_required",
+      "input": {
+        "status": 403,
+        "body": {
+          "error": "extension_required",
+          "extension": "operations"
+        }
+      },
+      "expect": {
+        "extension": "operations"
+      }
+    },
+    {
+      "id": "protocol.unknown-event-type",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-7.5-01",
+        "PAP-3.3-04"
+      ],
+      "check": "conversation_page",
+      "input": {
+        "conversation_id": "cnv_8f3Kd2",
+        "events": [
+          {
+            "id": "evt_a1",
+            "type": "reaction",
+            "created_at": "2026-10-08T19:03:00Z",
+            "emoji": "+1"
+          },
+          {
+            "id": "evt_a2",
+            "type": "message",
+            "created_at": "2026-10-08T19:03:01Z",
+            "message": {
+              "id": "msg_r2Kq",
+              "role": "company",
+              "sender": "agent",
+              "text": "Hi.",
+              "mood": "calm"
+            }
+          }
+        ],
+        "cursor": "evt_a2",
+        "has_more": false,
+        "status": "idle",
+        "responder": "agent",
+        "region": "eu"
+      },
+      "expect": {
+        "valid": true,
+        "known_types": [
+          "message"
+        ],
+        "unknown_types": [
+          "reaction"
+        ]
+      }
+    },
+    {
+      "id": "protocol.unknown-operation-fields",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.3-04"
+      ],
+      "check": "operation",
+      "input": {
+        "operation_id": "exc_5Rt2",
+        "revision": 2,
+        "state": "proposed",
+        "summary": "Exchange the jacket for USD 70.00 more.",
+        "expires_at": "2026-10-10T18:00:00Z",
+        "confirmation": null,
+        "result": null,
+        "loyalty_points": 120
+      },
+      "expect": {
+        "valid": true,
+        "extra": {
+          "loyalty_points": 120
+        }
+      }
+    },
+    {
+      "id": "protocol.message-context-fields",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-7.4-03",
+        "PAP-7.4-01"
+      ],
+      "check": "message_context",
+      "input": {
+        "valid": [
+          {
+            "locale": "en-US",
+            "time_zone": "America/Los_Angeles",
+            "user_available": true
+          },
+          {
+            "user_available": false
+          },
+          {
+            "locale": "fr",
+            "units": "metric"
+          }
+        ],
+        "invalid": [
+          {
+            "locale": "English (US)"
+          },
+          {
+            "time_zone": "PST8PDT-ish"
+          },
+          {
+            "time_zone": "../../etc/passwd"
+          },
+          {
+            "user_available": "yes"
+          }
+        ]
+      },
+      "expect": {}
+    },
+    {
+      "id": "protocol.multi-domain-issuer",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-03",
+        "PAP-3.2-04"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "example.co.uk",
+        "responses": {
+          "https://example.co.uk/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.1",
+              "organization": {
+                "name": "Example UK",
+                "domain": "example.co.uk"
+              },
+              "auth": {
+                "issuer": "https://auth.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "poppy_domains": [
+                "example.com",
+                "example.co.uk"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "issuer": "https://auth.example.com"
+      }
+    },
+    {
+      "id": "protocol.issuer-not-claiming-domain",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-04"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "example.fr",
+        "responses": {
+          "https://example.fr/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.1",
+              "organization": {
+                "name": "Example FR",
+                "domain": "example.fr"
+              },
+              "auth": {
+                "issuer": "https://auth.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "poppy_domains": [
+                "example.com"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "domain_not_authorized"
+      }
+    },
+    {
+      "id": "protocol.issuer-mismatch",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-03"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.1",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "auth": {
+                "issuer": "https://auth.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://login.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "poppy_domains": [
+                "example.com"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "issuer_mismatch"
+      }
+    },
+    {
+      "id": "protocol.organization-domain-www",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.1-02"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "www.example.com",
+        "responses": {
+          "https://www.example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.1",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {}
+            }
+          }
+        }
+      },
+      "expect": {
+        "organization_domain": "example.com"
+      }
+    },
+    {
+      "id": "protocol.organization-domain-after-redirect",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.1-02",
+        "PAP-3-02"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 302,
+            "headers": {
+              "location": "https://host.provider.example/example.json"
+            }
+          },
+          "https://host.provider.example/example.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.1",
+              "organization": {
+                "name": "Provider",
+                "domain": "provider.example"
+              },
+              "web": {}
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "organization_domain_mismatch"
+      }
+    },
+    {
+      "id": "protocol.extension-required-company",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "OPS-2-01",
+        "PAP-3.3-03"
+      ],
+      "description": "A personal agent that does not list operations gets extension_required (403) from a channel that would propose one, never an operation."
+    }
+  ]
+}

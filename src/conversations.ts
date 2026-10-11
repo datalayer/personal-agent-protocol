@@ -3,6 +3,7 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 import { ConversationError, ProtocolValidationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import {
+  parseConversationEvent,
   parseConversationEventPage,
   parseMessage,
   type ConversationEvent,
@@ -24,6 +25,33 @@ export interface ConversationReceipt {
 }
 
 export type ConversationResponse = ConversationReceipt | ConversationEventPage;
+
+/**
+ * A piece of a message still being written (SSE `text-delta`, §7.6): for
+ * display only. The complete `message` event replaces the pieces, and a
+ * personal agent MUST NOT act on a delta's text, so `actionable` is `false`.
+ */
+export interface TextDelta {
+  readonly kind: "text-delta";
+  readonly message_id: string;
+  readonly text: string;
+  readonly actionable: false;
+}
+
+/** The stream was reopened from `Last-Event-ID`; drop the partial messages named. */
+export interface StreamReconnected {
+  readonly kind: "reconnected";
+  readonly lastEventId: string | undefined;
+  readonly discardedMessageIds: readonly string[];
+}
+
+export type StreamItem = ConversationEvent | TextDelta | StreamReconnected;
+
+export interface ConversationStreamOptions extends ConversationRequestOptions {
+  readonly lastEventId?: string;
+  readonly maxReconnects?: number;
+  readonly maxSeenEventIds?: number;
+}
 
 export interface ConversationRequestOptions {
   readonly token: SessionToken;
@@ -247,6 +275,146 @@ export class ConversationClient {
     }
   }
 
+  /** Open a Direct Conversation under an open parent (§7.10). */
+  async startDirect(
+    endpoint: string,
+    parentConversationId: string,
+    message: Message,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationResponse> {
+    return this.start(endpoint, message, { ...options, parentConversationId });
+  }
+
+  /** Ask for a person at the company (§7.9): `queued` while one is found. */
+  async handoff(
+    endpoint: string,
+    conversationId: string,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationReceipt> {
+    return this.#control(endpoint, conversationId, "handoff", 202, options);
+  }
+
+  /** Close the conversation (§7.12); what it started is not cancelled. */
+  async close(
+    endpoint: string,
+    conversationId: string,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationReceipt> {
+    return this.#control(endpoint, conversationId, "close", 200, options);
+  }
+
+  /**
+   * Yield events from the company's SSE stream until the conversation closes,
+   * reopening from `Last-Event-ID` when the company ends the stream (§7.6).
+   * A company that does not stream answers `sse_unsupported`.
+   */
+  async *stream(
+    endpoint: string,
+    conversationId: string,
+    options: ConversationStreamOptions,
+  ): AsyncGenerator<StreamItem> {
+    assertIdentifier(conversationId, "conversation ID");
+    const maxReconnects = options.maxReconnects ?? 5;
+    const maximum = options.maxSeenEventIds ?? 10_000;
+    let lastEventId = options.lastEventId;
+    if (lastEventId !== undefined) assertIdentifier(lastEventId, "last event ID");
+    const url = `${endpoint.replace(/\/$/, "")}/${conversationId}/events`;
+    const seen = new Set<string>();
+    let idle = 0;
+    while (true) {
+      let progressed = false;
+      const partial: string[] = [];
+      const response = await this.#transport.request("GET", url, {
+        token: options.token,
+        tenantId: options.tenantId,
+        pairwiseUserId: options.pairwiseUserId,
+        issuer: options.issuer,
+        headers: {
+          Accept: "text/event-stream",
+          ...(lastEventId === undefined ? {} : { "Last-Event-ID": lastEventId }),
+        },
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      if (response.status !== 200) {
+        await this.#responsePayload(response, 200);
+      }
+      const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+      if (type !== "text/event-stream" || !response.body) {
+        await response.body?.cancel();
+        throw new ConversationError("sse_unsupported", "the company does not stream this conversation");
+      }
+      for await (const frame of sseFrames(response.body, this.#maxResponseBytes)) {
+        if (frame.event === "text-delta") {
+          const delta = parseDelta(frame.data);
+          if (!partial.includes(delta.message_id)) partial.push(delta.message_id);
+          yield delta;
+          continue;
+        }
+        let event: ConversationEvent;
+        try {
+          event = parseConversationEvent(parseJsonStrict(frame.data));
+        } catch (cause) {
+          throw new ConversationError("invalid_response", "conversation event was malformed", { cause });
+        }
+        if (frame.id !== undefined && frame.id !== event.id) {
+          throw new ConversationError("invalid_response", "SSE id and event id disagree");
+        }
+        lastEventId = event.id;
+        if (seen.has(event.id)) continue;
+        if (seen.size >= maximum) {
+          throw new ConversationError(
+            "event_history_too_large",
+            "conversation event de-duplication limit was exceeded",
+          );
+        }
+        seen.add(event.id);
+        progressed = true;
+        const messageId = event.message?.id;
+        if (messageId !== undefined && partial.includes(messageId)) {
+          partial.splice(partial.indexOf(messageId), 1);
+        }
+        yield event;
+        if (event.type === "state" && event.status === "closed") return;
+      }
+      idle = progressed ? 0 : idle + 1;
+      if (idle > maxReconnects) {
+        throw new ConversationError(
+          "stream_unavailable",
+          "the conversation stream kept closing without events",
+        );
+      }
+      yield { kind: "reconnected", lastEventId, discardedMessageIds: [...partial] };
+    }
+  }
+
+  async #control(
+    endpoint: string,
+    conversationId: string,
+    action: "handoff" | "close",
+    expectedStatus: number,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationReceipt> {
+    assertIdentifier(conversationId, "conversation ID");
+    const response = await this.#transport.request(
+      "POST",
+      `${endpoint.replace(/\/$/, "")}/${conversationId}/${action}`,
+      {
+        token: options.token,
+        tenantId: options.tenantId,
+        pairwiseUserId: options.pairwiseUserId,
+        issuer: options.issuer,
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      },
+    );
+    const parsed = parseConversationResponse(await this.#responsePayload(response, expectedStatus));
+    if ("events" in parsed) {
+      throw new ConversationError("invalid_response", "conversation response was malformed");
+    }
+    return parsed;
+  }
+
   #outgoing(message: Message): Message {
     const parsed = parseMessage(message);
     if (parsed.role !== undefined) {
@@ -360,10 +528,19 @@ export class ConversationClient {
         !Array.isArray(payload)
           ? (payload as Record<string, unknown>).error
           : undefined;
+      const openId =
+        error === "direct_conversation_open" &&
+        typeof (payload as Record<string, unknown>).conversation_id === "string" &&
+        identifier.test((payload as Record<string, unknown>).conversation_id as string)
+          ? ((payload as Record<string, unknown>).conversation_id as string)
+          : undefined;
       throw new ConversationError(
         typeof error === "string" ? error : "conversation_request_failed",
         "conversation request was rejected",
-        { statusCode: response.status },
+        {
+          statusCode: response.status,
+          ...(openId === undefined ? {} : { details: { conversation_id: openId } }),
+        },
       );
     }
     return payload;
@@ -407,4 +584,85 @@ function parseConversationResponse(value: unknown): ConversationResponse {
     status: source.status as ConversationStatus,
     responder: source.responder as ConversationResponder,
   };
+}
+
+interface SseFrame {
+  readonly event: string;
+  readonly data: string;
+  readonly id: string | undefined;
+}
+
+/** Parse SSE into frames; comments (keep-alives) are skipped. */
+async function* sseFrames(
+  body: ReadableStream<Uint8Array>,
+  maxEventBytes: number,
+): AsyncGenerator<SseFrame> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let event = "message";
+  let data: string[] = [];
+  let id: string | undefined;
+  let size = 0;
+  const dispatch = (): SseFrame | undefined => {
+    const frame = data.length ? { event, data: data.join("\n"), id } : undefined;
+    event = "message";
+    data = [];
+    id = undefined;
+    size = 0;
+    return frame;
+  };
+  const reader = body.getReader();
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      let newline: number;
+      while ((newline = buffer.search(/\r?\n/)) >= 0) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(buffer[newline] === "\r" ? newline + 2 : newline + 1);
+        if (line === "") {
+          const frame = dispatch();
+          if (frame) yield frame;
+          continue;
+        }
+        if (line.startsWith(":")) continue;
+        const colon = line.indexOf(":");
+        const field = colon < 0 ? line : line.slice(0, colon);
+        let content = colon < 0 ? "" : line.slice(colon + 1);
+        if (content.startsWith(" ")) content = content.slice(1);
+        size += content.length;
+        if (size > maxEventBytes) {
+          throw new ConversationError("response_too_large", "conversation event exceeded limit");
+        }
+        if (field === "event") event = content;
+        else if (field === "data") data.push(content);
+        else if (field === "id") id = content || undefined;
+      }
+      if (done) break;
+    }
+    const last = dispatch();
+    if (last) yield last;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseDelta(data: string): TextDelta {
+  let source: unknown;
+  try {
+    source = parseJsonStrict(data);
+  } catch (cause) {
+    throw new ConversationError("invalid_response", "text-delta was malformed", { cause });
+  }
+  const value = source as Record<string, unknown>;
+  if (
+    typeof source !== "object" ||
+    source === null ||
+    typeof value.message_id !== "string" ||
+    !identifier.test(value.message_id) ||
+    typeof value.text !== "string"
+  ) {
+    throw new ConversationError("invalid_response", "text-delta was malformed");
+  }
+  return { kind: "text-delta", message_id: value.message_id, text: value.text, actionable: false };
 }

@@ -1,0 +1,60 @@
+---
+title: Mediated Sign-In
+description: Relay the user's credentials to one company endpoint, once, without a model seeing them.
+---
+
+# Mediated Sign-In
+
+Some companies cannot send their users to a browser. They declare the fields
+they need (`auth.mediated.fields`) and an endpoint on their own domain, and
+the personal agent relays what the user types. It is the one sign-in mode
+where a password passes through the agent's host, so the SDK narrows what the
+host can do with it. The paired examples run the real `MediatedSignInClient`
+against Manzanita Outfitters, which asks for an email, a password, and then a
+one-time code.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor User
+  participant Tool as Agent tool
+  participant SDK as MediatedSignInClient
+  participant Input as pap.protectedInput (host surface)
+  participant Company as Company mediated endpoint
+  Tool->>SDK: sign_in(declared fields, signed-out Session)
+  SDK->>SDK: Endpoint on the company's domain? Otherwise refuse before asking
+  SDK->>Input: Ask for Email and Password for manzanita.example
+  User->>Input: Types them (never into the chat)
+  SDK->>Company: POST credentials once + DPoP, no redirect followed
+  SDK->>SDK: Drop the values
+  Company-->>SDK: code_required, sign_in_id, sent_to a•••@example.com
+  SDK-->>Tool: code_required + opaque reference + masked sent_to
+  Tool->>SDK: submit_code(reference, same Session)
+  SDK->>Input: Ask for the code
+  User->>Input: Types the code
+  SDK->>Company: POST code only to …/sign_in_id
+  Company-->>SDK: complete + signed-in Session + Account Token
+  SDK-->>Tool: complete, granted scopes, Account Token reference
+```
+
+The walkthrough also shows the refusals:
+
+- An endpoint off the company's domain is `unsafe_mediated_endpoint`, raised
+  before the user is asked anything.
+- The protected input must answer exactly the declared fields, none empty.
+- Only the Session that started a sign-in can finish it
+  (`session_mismatch`); the pending state is kept for the right one.
+- A wrong code is `code_required` again with the same reference; the company
+  ends the sign-in with `failed` after its attempt limit.
+
+The model sees field labels, which fields are secret, the company's domain,
+the masked destination of the code, statuses, and granted scopes. The
+credentials and the code exist only in the host's protected input and in the
+one request body; the Session Token and Account Token stay in Reactor stores.
+
+TypeScript: `new MediatedSignInClient({ reactor, fetch })` with `signIn()` and
+`submitCode()`, the trusted surface contributed at `ProtectedInputs`.
+
+- Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/mediated-sign-in).
+- Run the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/mediated-sign-in).
+- Read the [Mediated Sign-In guide](/guides/mediated-sign-in/).

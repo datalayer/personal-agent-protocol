@@ -10,6 +10,7 @@ import re
 from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -21,6 +22,17 @@ _DOMAIN = re.compile(
     re.IGNORECASE,
 )
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+_LOCALE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$")
+
+
+def _iana_zone(value: object) -> bool:
+    if not isinstance(value, str) or not value or len(value) > 64 or ".." in value:
+        return False
+    try:
+        ZoneInfo(value)
+    except (ValueError, ZoneInfoNotFoundError):
+        return False
+    return True
 
 
 def _https_url(value: str, label: str) -> str:
@@ -337,11 +349,35 @@ class Message(ProtocolModel):
             raise ValueError("message ID must use the URL-safe base64 alphabet")
         return value
 
+    @field_validator("context")
+    @classmethod
+    def validate_context(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The facts §7.4 defines use its field names and formats; others pass through."""
+
+        if value is None:
+            return value
+        locale = value.get("locale")
+        if locale is not None and (not isinstance(locale, str) or not _LOCALE.fullmatch(locale)):
+            raise ValueError("context.locale must be a language tag such as en-US")
+        zone = value.get("time_zone")
+        if zone is not None and not _iana_zone(zone):
+            raise ValueError("context.time_zone must be an IANA time zone name")
+        available = value.get("user_available")
+        if available is not None and not isinstance(available, bool):
+            raise ValueError("context.user_available must be true or false")
+        return value
+
     @model_validator(mode="after")
     def validate_content(self) -> Message:
         if all(value is None for value in (self.text, self.data, self.context, self.operation)):
             raise ValueError("a message requires text, data, context, or operation")
         return self
+
+
+#: Event types draft 0.1 defines (§7.5); a personal agent skips any other type.
+KNOWN_EVENT_TYPES = frozenset(
+    {"message", "state", "authorization", "user_requested", "direct_opened", "direct_closed"}
+)
 
 
 class ConversationEvent(ProtocolModel):
@@ -364,6 +400,12 @@ class ConversationEvent(ProtocolModel):
         if value is not None and not _IDENTIFIER.fullmatch(value):
             raise ValueError("conversation event IDs must use the URL-safe base64 alphabet")
         return value
+
+    @property
+    def known(self) -> bool:
+        """Whether this SDK knows the type; an unknown one is skipped, never an error."""
+
+        return self.type in KNOWN_EVENT_TYPES
 
     @field_validator("created_at")
     @classmethod

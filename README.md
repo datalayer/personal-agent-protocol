@@ -8,11 +8,11 @@
 
 # 🤖 🌸 Personal Agent Protocol
 
-![Personal Agent Protocol demo](https://images.datalayer.io/products/personal-agent-protocol/pap-demo.gif)
-
 Python and TypeScript SDKs for the
 [Personal Agent Protocol](https://personalagentprotocol.org), currently
 targeting [draft 0.1](https://personalagentprotocol.org/docs/spec).
+
+![Personal Agent Protocol demo](https://images.datalayer.io/products/personal-agent-protocol/pap-demo.gif)
 
 PAP lets a personal agent discover and talk to a company's agent on behalf of
 a person. The company remains responsible for its identity, authorization,

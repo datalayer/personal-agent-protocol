@@ -178,9 +178,11 @@ future event types while enforcing the required shapes of known draft 0.1 and
 Operations v1 objects.
 
 The models are aligned with Python through shared fixtures. Conversation
-creation, continuation, and JSON event polling are implemented; SSE and the
-Operations HTTP client remain planned. Parsing an object alone does not
-perform durable cursor persistence, approval, or confirmation.
+creation, continuation, JSON event polling, SSE streaming, handoff, Direct
+Conversations, and closing are implemented in `ConversationClient`, and
+`OperationsClient` confirms operations (see the [Operations guide](/guides/operations/)).
+Parsing an object alone does not perform durable cursor persistence,
+approval, or confirmation.
 
 ## Server-side URL safety
 

@@ -63,16 +63,19 @@ implemented boundary.
 
 ## Lifecycle status
 
-The high-level client now implements the first step. The remaining lifecycle
-is planned:
+The lifecycle, in Python and TypeScript:
 
 1. **Implemented:** start or renew a signed-out session;
-1. **Planned:** choose direct, device, or mediated sign-in;
-1. **Planned:** obtain the smallest scopes and resource needed for the task;
-1. **Planned:** call an API, browse, or open a conversation;
-1. **Planned:** confirm exact operation revisions for consequential actions;
-1. **Planned:** discard session credentials and revoke account access when
-   requested.
+1. **Implemented:** sign in with [Direct](/guides/direct-sign-in/),
+   [Device](/guides/device-sign-in/), or [Mediated](/guides/mediated-sign-in/)
+   Sign-In;
+1. **Implemented:** narrow scopes or a resource when refreshing with the
+   [Account Token](/guides/account-tokens/);
+1. **Implemented:** browse with a Browser Session or open a
+   [conversation](/guides/conversations/); **planned:** OpenAPI and MCP helpers;
+1. **Implemented:** confirm exact [operation](/guides/operations/) revisions
+   for consequential actions;
+1. **Implemented:** revoke account access when the user signs out.
 
-Do not treat the remaining value objects as production PAP support. Track
-readiness on [Protocol status](/protocol/status/).
+Hosts still provide the protected stores, keys, and user interface each step
+relies on. Track readiness on [Protocol status](/protocol/status/).

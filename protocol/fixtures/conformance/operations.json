@@ -1,0 +1,190 @@
+{
+  "suite": "operations",
+  "profile": "0.1",
+  "extension": {
+    "operations": "1"
+  },
+  "description": "Every state and error, revision races, standing permissions, cross-channel identity, recovery, cancellation, and partial results.",
+  "cases": [
+    {
+      "id": "operations.proposed-not-performed",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-3-03",
+        "OPS-3-01",
+        "OPS-4.1-01"
+      ],
+      "description": "An API call that would act answers 202 with a proposed operation; nothing is performed until it is confirmed."
+    },
+    {
+      "id": "operations.readable-until-final",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-3.2-01"
+      ],
+      "description": "The operation is readable at the operations endpoint by the same ID."
+    },
+    {
+      "id": "operations.confirm-succeeded",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-5.1-01",
+        "OPS-3-02",
+        "OPS-6-05"
+      ],
+      "description": "The user's approval of the revision confirms it: succeeded, with the confirmation and a result summary."
+    },
+    {
+      "id": "operations.at-most-once",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-6-02"
+      ],
+      "description": "Confirming again returns the record unchanged; the action is performed once."
+    },
+    {
+      "id": "operations.terms-changed",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "OPS-3.1-01",
+        "OPS-5.1-01"
+      ],
+      "description": "A new revision makes the old one unconfirmable: terms_changed (409) with the current operation and what changed."
+    },
+    {
+      "id": "operations.user-approval-required",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "OPS-5.1-05"
+      ],
+      "description": "A standing-permission confirmation of a revision that requires the user's approval is user_approval_required (403)."
+    },
+    {
+      "id": "operations.standing-permission-within-bounds",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-5.1-05",
+        "GUIDE-ops-pa-03"
+      ],
+      "description": "A standing permission covering the company, account, action, and every term confirms it and spends one use."
+    },
+    {
+      "id": "operations.standing-permission-out-of-bounds",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "OPS-5.1-05"
+      ],
+      "description": "A standing permission whose limit the terms exceed is refused before anything is sent: ask the user."
+    },
+    {
+      "id": "operations.standing-permission-concurrent-use",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-ops-pa-03"
+      ],
+      "description": "Two confirmations racing for a permission's last use: one reserves it, the other is refused."
+    },
+    {
+      "id": "operations.cross-channel-identity",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-4-01"
+      ],
+      "description": "The same action through the API and then a conversation is the same operation ID."
+    },
+    {
+      "id": "operations.cross-channel-mcp",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-4-01"
+      ],
+      "description": "The same action proposed by an MCP tool, in structuredContent.operation, is the same operation as through the API."
+    },
+    {
+      "id": "operations.web-confirm-at-most-once",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-6-02",
+        "OPS-3-02"
+      ],
+      "description": "Confirming on the operation's page in the Session, then at the operations endpoint, performs it once; the endpoint reads back the same operation."
+    },
+    {
+      "id": "operations.message-is-not-approval",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "OPS-5.1-04"
+      ],
+      "description": "A company message that says 'confirmed' does not confirm: the operation stays proposed."
+    },
+    {
+      "id": "operations.confirm-timeout-recovery",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "OPS-6-04",
+        "GUIDE-ops-pa-04"
+      ],
+      "description": "A confirm whose answer is lost is recovered by reading or confirming the same ID: confirmed once, never re-proposed."
+    },
+    {
+      "id": "operations.cancel-proposed",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-6-02"
+      ],
+      "description": "Cancelling a proposal makes it cancelled with a result; a later confirm returns it unchanged."
+    },
+    {
+      "id": "operations.in-progress-outcome-unknown",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "OPS-6-03",
+        "OPS-6-01"
+      ],
+      "description": "An action whose outcome is unknown stays in_progress with Retry-After, never failed; cancelling leaves it in_progress."
+    },
+    {
+      "id": "operations.failed-partial-result",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-6-05"
+      ],
+      "description": "A failed operation's result.summary describes the changes that were made."
+    },
+    {
+      "id": "operations.expired",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "OPS-3.2-01"
+      ],
+      "description": "A proposal not confirmed before expires_at is expired; a confirm returns it unchanged."
+    },
+    {
+      "id": "operations.not-found-indistinguishable",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "OPS-3.2-01"
+      ],
+      "description": "An unknown operation and another user's operation give the same operation_not_found (404)."
+    }
+  ]
+}

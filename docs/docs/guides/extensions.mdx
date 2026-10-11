@@ -56,8 +56,11 @@ const plugin = definePlugin({
 });
 ```
 
-This registers capability metadata only; it is not an Operations implementation.
-An executable handler contract and example remain planned.
+This registers capability metadata only. The Operations behavior itself lives
+in `OperationsClient` (Python and TypeScript), negotiated with
+`operations_endpoint()` / `operationsEndpoint()`; see the
+[Operations guide](/guides/operations/). A general executable handler contract
+for other extensions remains planned.
 
 Extensions cannot weaken mandatory protocol checks such as issuer binding,
 secret redaction, proof verification, replay protection, or exact operation

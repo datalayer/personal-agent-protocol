@@ -10,7 +10,7 @@ import base64
 import secrets
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Literal, cast
+from typing import Literal, TypedDict, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -120,6 +120,7 @@ class SessionGrant(ProtocolModel):
     )
     client_assertion: SecretStr
     session_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,256}$")
+    resource: str | None = None
 
     @field_validator("client_id")
     @classmethod
@@ -141,7 +142,17 @@ class SessionGrant(ProtocolModel):
         }
         if self.session_id is not None:
             values["session_id"] = self.session_id
+        if self.resource is not None:
+            values["resource"] = self.resource
         return values
+
+
+class Who(TypedDict):
+    """Whose Session a request is for: the keyword arguments every client call takes."""
+
+    tenant_id: str
+    pairwise_user_id: str
+    issuer: str
 
 
 class SessionToken(ProtocolModel):
@@ -185,6 +196,21 @@ class ClientAssertionClaims(ProtocolModel):
         if self.exp <= self.iat:
             raise ValueError("assertion expiration must be after issuance")
         return self
+
+
+def _mcp_resource(value: str) -> str:
+    """An MCP server's `url` as a `resource` indicator: HTTPS, no fragment (RFC 8707)."""
+
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise ValueError("an MCP resource must be an HTTPS URL without a fragment")
+    return value
 
 
 class SessionClient:
@@ -244,6 +270,34 @@ class SessionClient:
             session_id=session_id,
         )
 
+    async def bearer_for_mcp(
+        self,
+        *,
+        client_id: str,
+        pairwise_user_id: str,
+        issuer: str,
+        token_endpoint: str,
+        tenant_id: str,
+        session_id: str,
+        resource: str,
+    ) -> SessionToken:
+        """A signed-out Bearer Session Token for one MCP server (§4.3).
+
+        The renewal request of the Session, without a DPoP proof, with
+        `resource` set to the MCP server's `url` from poppy.json. The token
+        works only there: hand it to `mcp.McpBearerAuth`, never to an API.
+        """
+
+        return await self._request(
+            client_id=client_id,
+            pairwise_user_id=pairwise_user_id,
+            issuer=issuer,
+            token_endpoint=token_endpoint,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            bearer_resource=_mcp_resource(resource),
+        )
+
     async def _request(
         self,
         *,
@@ -253,6 +307,7 @@ class SessionClient:
         token_endpoint: str,
         tenant_id: str,
         session_id: str | None,
+        bearer_resource: str | None = None,
     ) -> SessionToken:
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
         random_source = cast(
@@ -291,30 +346,31 @@ class SessionClient:
             client_assertion = await signer.sign(
                 client_claims.model_dump(), purpose="client_assertion"
             )
-            proof = await dpop.create(
-                DpopProofRequest(
-                    method="POST",
-                    url=token_endpoint,
-                    tenant_id=tenant_id,
-                    subject=pairwise_user_id,
-                    issuer=issuer,
-                    nonce=nonce,
+            headers = {"Accept": "application/json"}
+            if bearer_resource is None:
+                proof = await dpop.create(
+                    DpopProofRequest(
+                        method="POST",
+                        url=token_endpoint,
+                        tenant_id=tenant_id,
+                        subject=pairwise_user_id,
+                        issuer=issuer,
+                        nonce=nonce,
+                    )
                 )
-            )
+                headers["DPoP"] = proof.get_secret_value()
             grant = SessionGrant(
                 assertion=assertion,
                 client_id=client_id,
                 client_assertion=client_assertion,
                 session_id=session_id,
+                resource=bearer_resource,
             )
             try:
                 response = await self.http.post(
                     token_endpoint,
                     data=grant.as_form(),
-                    headers={
-                        "Accept": "application/json",
-                        "DPoP": proof.get_secret_value(),
-                    },
+                    headers=headers,
                     follow_redirects=False,
                 )
             except httpx.HTTPError as exc:
@@ -336,10 +392,13 @@ class SessionClient:
                         "Session token response is malformed",
                         status_code=response.status_code,
                     ) from exc
-                if token.token_type != "DPoP":  # noqa: S105 - OAuth token type, not a secret
+                expected = "DPoP" if bearer_resource is None else "Bearer"
+                if token.token_type != expected or (
+                    bearer_resource is not None and token.session_id != session_id
+                ):
                     raise SessionError(
                         "unexpected_token_type",
-                        "A proof-bound session request must return a DPoP token",
+                        f"The Session request must return a {expected} token for this Session",
                         status_code=response.status_code,
                     )
                 return token

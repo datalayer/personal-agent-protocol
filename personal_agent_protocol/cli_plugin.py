@@ -15,6 +15,8 @@ import typer
 from reactor import PluginManifest  # type: ignore[import-untyped]
 
 from .__version__ import __version__
+from .cli_commands import add_protocol_groups
+from .cli_host import HostFactory, local_host
 from .config import CONFIG_KEYS, ConfigStore
 from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError
@@ -119,14 +121,26 @@ def _run_identity(client_id: str, *, jwks: bool = False) -> dict[str, object]:
 class PapCliPlugin:
     """Add PAP-owned groups to a CLI and safe actions to live sessions."""
 
-    def __init__(self, config: ConfigStore | None = None) -> None:
+    def __init__(self, config: ConfigStore | None = None, host: HostFactory | None = None) -> None:
         self.config = config or ConfigStore()
+        self._host = host
+        self.agent_group = typer.Typer(name="agent", help="Inspect PAP personal-agent identity.")
+
+    @property
+    def host(self) -> HostFactory:
+        """The personal agent the protocol commands run (local files by default)."""
+
+        if self._host is None:
+            timeout = self.config.resolve().get("timeout")
+            self._host = local_host(timeout=float(str(timeout.value)) if timeout else 10.0)
+        return self._host
 
     def provide_cli(self, cli: typer.Typer) -> None:
         cli.add_typer(self._config_app())
         cli.add_typer(self._company_app())
         cli.add_typer(self._agent_app())
         cli.add_typer(self._extensions_app())
+        add_protocol_groups(cli, self)
 
     def provide_slash_commands(self, commands: Any) -> None:
         commands.add(
@@ -265,7 +279,7 @@ class PapCliPlugin:
         return app
 
     def _agent_app(self) -> typer.Typer:
-        app = typer.Typer(name="agent", help="Inspect PAP personal-agent identity.")
+        app = self.agent_group
 
         def selected_client_id(client_id: str | None, profile: str | None) -> str:
             configured = self.config.resolve(profile)

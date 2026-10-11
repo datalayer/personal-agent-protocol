@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from typing import cast
 from urllib.parse import urljoin, urlsplit
 
@@ -140,3 +141,76 @@ class DpopHttpClient:
             if response.status_code == 303:
                 current_method = "GET"
                 current_content = None
+
+    @asynccontextmanager
+    async def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        token: SessionToken,
+        tenant_id: str,
+        pairwise_user_id: str,
+        issuer: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[httpx.Response]:
+        """Open a streamed DPoP response (SSE): one nonce retry, no redirect followed."""
+
+        if token.token_type != "DPoP":  # noqa: S105 - OAuth token type
+            raise TransportError(
+                "unexpected_token_type", "PAP resource requests require a DPoP token"
+            )
+        target = _https_url(url)
+        supplied = dict(headers or {})
+        if any(name.lower() in {"authorization", "dpop"} for name in supplied):
+            raise TransportError(
+                "protected_header", "Authorization and DPoP headers are host-owned"
+            )
+        dpop = cast(
+            DpopProofProvider,
+            first_contribution(self.reactor, DPOP_PROOF_PROVIDERS, "DPoP proof provider"),
+        )
+        nonce: str | None = None
+        for attempt in range(2):
+            proof = await dpop.create(
+                DpopProofRequest(
+                    method=method.upper(),
+                    url=target,
+                    tenant_id=tenant_id,
+                    subject=pairwise_user_id,
+                    issuer=issuer,
+                    access_token=token.access_token,
+                    nonce=nonce,
+                )
+            )
+            request = self.http.build_request(
+                method.upper(),
+                target,
+                headers={
+                    **supplied,
+                    "Authorization": f"DPoP {token.access_token.get_secret_value()}",
+                    "DPoP": proof.get_secret_value(),
+                },
+            )
+            try:
+                response = await self.http.send(request, stream=True, follow_redirects=False)
+            except httpx.HTTPError as exc:
+                raise TransportError("request_failed", "PAP stream request failed") from exc
+            try:
+                challenge = response.headers.get("www-authenticate", "").lower()
+                if "use_dpop_nonce" in challenge and attempt == 0:
+                    nonce = response.headers.get("dpop-nonce")
+                    if not nonce:
+                        raise TransportError(
+                            "missing_dpop_nonce", "DPoP nonce challenge omitted its nonce"
+                        )
+                    continue
+                if response.status_code in _REDIRECTS:
+                    raise TransportError(
+                        "stream_redirect", "A PAP stream is never followed through a redirect"
+                    )
+                yield response
+                return
+            finally:
+                await response.aclose()
+        raise TransportError("use_dpop_nonce", "Company rejected the refreshed DPoP proof")

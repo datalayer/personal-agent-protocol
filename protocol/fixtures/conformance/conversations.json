@@ -1,0 +1,164 @@
+{
+  "suite": "conversations",
+  "profile": "0.1",
+  "description": "Message IDs, cursors, has_more, SSE, text-delta, attribution, handoff, Direct Conversations, closure, and errors.",
+  "cases": [
+    {
+      "id": "conversations.start-and-reply",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.7-01",
+        "PAP-7.7-02",
+        "PAP-7.5-03",
+        "PAP-4.3-01"
+      ],
+      "description": "Starting a conversation returns 201 with status and responder; every read has cursor, has_more, status, responder; company messages have sender."
+    },
+    {
+      "id": "conversations.retry-replays",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.3-01"
+      ],
+      "description": "Sending the same message (same ID, same content) again returns the same conversation and adds nothing."
+    },
+    {
+      "id": "conversations.message-id-conflict",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-7.3-01"
+      ],
+      "description": "Reusing a message ID with different content is message_id_conflict (409)."
+    },
+    {
+      "id": "conversations.invalid-cursor",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-7.5-02"
+      ],
+      "description": "A cursor the company never issued is invalid_cursor (400)."
+    },
+    {
+      "id": "conversations.cursor-expired-recovery",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "PAP-7.5-04"
+      ],
+      "description": "A cursor for forgotten events is cursor_expired (410); the SDK reads from the beginning and tells the host part is missing."
+    },
+    {
+      "id": "conversations.has-more-drained",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.5-03"
+      ],
+      "description": "With more events than a page, has_more is true and the SDK drains every page in order without duplicates."
+    },
+    {
+      "id": "conversations.empty-read",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.5-03"
+      ],
+      "description": "A read with nothing new returns no events, the request's cursor, has_more false, status, and responder."
+    },
+    {
+      "id": "conversations.sse-reconnect",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "PAP-7.6-01"
+      ],
+      "description": "A stream reopened with Last-Event-ID resumes after the last handled event, without repeating it."
+    },
+    {
+      "id": "conversations.text-delta-not-actionable",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.6-01"
+      ],
+      "description": "text-delta pieces arrive as non-actionable display text; only the complete message event carries the reply."
+    },
+    {
+      "id": "conversations.attribution",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.8-01",
+        "PAP-7.7-02"
+      ],
+      "description": "The user's own words go as sender human and come back with role user; company messages carry role company and a sender."
+    },
+    {
+      "id": "conversations.handoff",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.7-01"
+      ],
+      "description": "Handoff answers 202 with status and responder, and a state event records each change."
+    },
+    {
+      "id": "conversations.direct-conversation",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.10-01"
+      ],
+      "description": "A Direct Conversation names its parent; the parent gets direct_opened, refuses messages with direct_conversation_open, and gets direct_closed when it closes."
+    },
+    {
+      "id": "conversations.direct-of-direct-refused",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-7.10-01"
+      ],
+      "description": "A Direct Conversation cannot be the parent of another."
+    },
+    {
+      "id": "conversations.authorization-then-same-conversation",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.11-01"
+      ],
+      "description": "A signed-out question gets an authorization event (and a message saying so); after sign-in the same conversation continues with the new token."
+    },
+    {
+      "id": "conversations.closed",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-7.7-01"
+      ],
+      "description": "Closing answers 200 with status closed; a later message is conversation_closed (409); the events stay readable."
+    },
+    {
+      "id": "conversations.not-found-indistinguishable",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-7.2-01"
+      ],
+      "description": "An unknown conversation and another user's conversation give the same conversation_not_found (404) body."
+    },
+    {
+      "id": "conversations.signed-out-token-on-account-conversation",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-7.2-01"
+      ],
+      "description": "Once a conversation used the account, a signed-out token for the same user gets sign_in_required."
+    }
+  ]
+}

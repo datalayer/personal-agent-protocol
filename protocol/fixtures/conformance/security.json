@@ -1,0 +1,429 @@
+{
+  "suite": "security",
+  "profile": "0.1",
+  "description": "Duplicate JSON members, SSRF, redirects, oversized metadata, JOSE algorithm confusion, audiences, clock skew, replay, and DPoP mismatches.",
+  "cases": [
+    {
+      "id": "security.duplicate-json-members",
+      "kind": "negative",
+      "role": "both",
+      "requirements": ["GUIDE-json-01"],
+      "check": "strict_json",
+      "input": [
+        "{\"issuer\":\"https://a.example\",\"issuer\":\"https://b.example\"}",
+        "{\"auth\":{\"issuer\":\"x\",\"issuer\":\"y\"}}",
+        "[{\"id\":\"evt_1\",\"id\":\"evt_2\"}]",
+        "{\"a\":1,\"\\u0061\":2}"
+      ],
+      "expect": {"error": "duplicate_json_member"}
+    },
+    {
+      "id": "security.ssrf-loopback",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-03"],
+      "check": "url_safety",
+      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["127.0.0.1"]},
+      "expect": {"error": "unsafe_address"}
+    },
+    {
+      "id": "security.ssrf-private",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-03"],
+      "check": "url_safety",
+      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["10.0.0.7"]},
+      "expect": {"error": "unsafe_address"}
+    },
+    {
+      "id": "security.ssrf-link-local-metadata",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-03"],
+      "check": "url_safety",
+      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["169.254.169.254"]},
+      "expect": {"error": "unsafe_address"}
+    },
+    {
+      "id": "security.ssrf-ipv6-loopback-and-unique-local",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-03"],
+      "check": "url_safety",
+      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["::1", "fd00::5"]},
+      "expect": {"error": "unsafe_address"}
+    },
+    {
+      "id": "security.ssrf-ipv4-mapped",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-03"],
+      "check": "url_safety",
+      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["::ffff:127.0.0.1"]},
+      "expect": {"error": "unsafe_address"}
+    },
+    {
+      "id": "security.dns-rebinding-mixed-answers",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-03"],
+      "check": "url_safety",
+      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["93.184.216.34", "192.168.1.1"]},
+      "expect": {"error": "unsafe_address"}
+    },
+    {
+      "id": "security.public-address-allowed",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-03"],
+      "check": "url_safety",
+      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["93.184.216.34"]},
+      "expect": {"safe": true}
+    },
+    {
+      "id": "security.discovery-redirect-to-http",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["PAP-3-03"],
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {"status": 301, "headers": {"location": "http://example.com/poppy.json"}}
+        }
+      },
+      "expect": {"error": "unsafe_url"}
+    },
+    {
+      "id": "security.discovery-redirect-followed",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": ["PAP-3-02", "PAP-3-03"],
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {"status": 302, "headers": {"location": "https://docs.provider.example/example.com/poppy.json"}},
+          "https://docs.provider.example/example.com/poppy.json": {"status": 200, "json": {
+            "protocol_version": "0.1",
+            "organization": {"name": "Example", "domain": "example.com"},
+            "web": {}
+          }}
+        }
+      },
+      "expect": {"organization_domain": "example.com", "discovery_url": "https://docs.provider.example/example.com/poppy.json"}
+    },
+    {
+      "id": "security.discovery-redirect-limit",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-01"],
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {"status": 302, "headers": {"location": "https://example.com/r1"}},
+          "https://example.com/r1": {"status": 302, "headers": {"location": "https://example.com/r2"}},
+          "https://example.com/r2": {"status": 302, "headers": {"location": "https://example.com/r3"}},
+          "https://example.com/r3": {"status": 302, "headers": {"location": "https://example.com/r4"}},
+          "https://example.com/r4": {"status": 200, "json": {}}
+        }
+      },
+      "expect": {"error": "too_many_redirects"}
+    },
+    {
+      "id": "security.oversized-metadata",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-01"],
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {"status": 200, "padding_bytes": 102401, "json": {
+            "protocol_version": "0.1",
+            "organization": {"name": "Example", "domain": "example.com"},
+            "web": {}
+          }}
+        }
+      },
+      "expect": {"error": "response_too_large"}
+    },
+    {
+      "id": "security.metadata-not-json",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": ["GUIDE-fetch-01"],
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {"status": 200, "content_type": "text/html", "text": "<html></html>"}
+        }
+      },
+      "expect": {"error": "invalid_content_type"}
+    },
+    {
+      "id": "security.client-assertion-alg-none",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-02", "PAP-4.1-02"],
+      "target": "client_assertion",
+      "mutation": {"alg": "none"},
+      "expect": {"status": 401, "error": "invalid_client"}
+    },
+    {
+      "id": "security.client-assertion-hs256-public-key",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-02"],
+      "target": "client_assertion",
+      "mutation": {"alg": "HS256"},
+      "expect": {"status": 401, "error": "invalid_client"}
+    },
+    {
+      "id": "security.client-assertion-rs256-header-on-ec-key",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-01", "GUIDE-jwt-02"],
+      "target": "client_assertion",
+      "mutation": {"alg": "RS256"},
+      "expect": {"status": 401, "error": "invalid_client"}
+    },
+    {
+      "id": "security.client-assertion-embedded-key-ignored",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-03"],
+      "target": "client_assertion",
+      "mutation": {"signer": "stranger", "embed_jwk": true},
+      "expect": {"status": 401, "error": "invalid_client"}
+    },
+    {
+      "id": "security.client-assertion-bad-audience",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-04", "PAP-4.8-02"],
+      "target": "client_assertion",
+      "mutation": {"aud": "https://other-company.example/oauth/token"},
+      "expect": {"status": 401, "error": "invalid_client"}
+    },
+    {
+      "id": "security.client-assertion-audience-array",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-04"],
+      "target": "client_assertion",
+      "mutation": {"aud_array": true},
+      "expect": {"status": 401, "error": "invalid_client"}
+    },
+    {
+      "id": "security.session-assertion-bad-audience",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-04"],
+      "target": "session_assertion",
+      "mutation": {"aud": "https://other-company.example/oauth/token"},
+      "expect": {"status": 400, "error": "invalid_grant"}
+    },
+    {
+      "id": "security.session-assertion-wrong-issuer",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-03"],
+      "target": "session_assertion",
+      "mutation": {"iss": "https://stranger.example/agent.json"},
+      "expect": {"status": 400, "error": "invalid_grant"}
+    },
+    {
+      "id": "security.session-assertion-clock-skew-tolerated",
+      "kind": "positive",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-04"],
+      "target": "session_assertion",
+      "mutation": {"iat_offset": 10},
+      "expect": {"status": 200}
+    },
+    {
+      "id": "security.session-assertion-from-the-future",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-04"],
+      "target": "session_assertion",
+      "mutation": {"iat_offset": 300},
+      "expect": {"status": 400, "error": "invalid_grant"}
+    },
+    {
+      "id": "security.session-assertion-expired",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-04"],
+      "target": "session_assertion",
+      "mutation": {"iat_offset": -600},
+      "expect": {"status": 400, "error": "invalid_grant"}
+    },
+    {
+      "id": "security.session-assertion-long-lived",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-04"],
+      "target": "session_assertion",
+      "mutation": {"lifetime": 3600},
+      "expect": {"status": 400, "error": "invalid_grant"}
+    },
+    {
+      "id": "security.session-assertion-replay",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-jwt-05"],
+      "target": "session_assertion",
+      "mutation": {"replay": true},
+      "expect": {"status": 400, "error": "invalid_grant"}
+    },
+    {
+      "id": "security.browser-assertion-at-token-endpoint",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-5-05"],
+      "target": "session_assertion",
+      "mutation": {"typ": "poppy-browser+jwt"},
+      "expect": {"status": 400, "error": "invalid_grant"}
+    },
+    {
+      "id": "security.token-request-without-dpop",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-11"],
+      "target": "token_dpop",
+      "mutation": {"omit": true},
+      "expect": {"status": 400, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.token-dpop-with-ath",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-07"],
+      "target": "token_dpop",
+      "mutation": {"ath": "some-token"},
+      "expect": {"status": 400, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-alg-none",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-02", "GUIDE-jwt-02"],
+      "target": "resource_dpop",
+      "mutation": {"alg": "none"},
+      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-wrong-signature",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-02"],
+      "target": "resource_dpop",
+      "mutation": {"tamper_signature": true},
+      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-other-key",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-03"],
+      "target": "resource_dpop",
+      "mutation": {"key": "other"},
+      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-method-mismatch",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-04"],
+      "target": "resource_dpop",
+      "mutation": {"htm": "POST"},
+      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-url-mismatch",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-04"],
+      "target": "resource_dpop",
+      "mutation": {"htu": "https://elsewhere.example/api/orders"},
+      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-stale",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-05"],
+      "target": "resource_dpop",
+      "mutation": {"iat_offset": -300},
+      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-replay",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-06"],
+      "target": "resource_dpop",
+      "mutation": {"replay": true},
+      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-token-hash-mismatch",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-07"],
+      "target": "resource_dpop",
+      "mutation": {"ath": "another-token"},
+      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-missing",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-01", "PAP-4.3-11"],
+      "target": "resource_dpop",
+      "mutation": {"omit": true},
+      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-token-as-bearer",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-10", "PAP-4.3-11"],
+      "target": "resource_dpop",
+      "mutation": {"scheme": "Bearer"},
+      "expect": {"status": 401, "error": "invalid_token"}
+    },
+    {
+      "id": "security.token-in-url-refused",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-17", "PAP-4.3-16"],
+      "description": "A Session Token in the query string, with no Authorization header, is not accepted."
+    },
+    {
+      "id": "security.authorization-header-without-cookies",
+      "kind": "positive",
+      "role": "company",
+      "requirements": ["PAP-4.3-12"],
+      "description": "A request carrying only Authorization and DPoP, no cookie, is served."
+    },
+    {
+      "id": "security.token-responses-not-cached",
+      "kind": "positive",
+      "role": "company",
+      "requirements": ["GUIDE-secrets-03"],
+      "description": "Every response carrying a token or code has Cache-Control: no-store."
+    },
+    {
+      "id": "security.refusals-disclose-no-credential",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["GUIDE-secrets-01", "PAP-4.7-03"],
+      "description": "A refused request's body never echoes the token, assertion, or credential it carried."
+    }
+  ]
+}

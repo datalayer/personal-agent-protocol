@@ -53,10 +53,29 @@ possible: secret redaction, safe metadata fetches, key and token custody,
 fresh proofs, retries, rate limits, sign-in preferences, consent presentation,
 and safe errors.
 
-Operations will be implemented as an optional Reactor-backed PAP extension.
-Its conformance suite must cover exact revisions, ownership, expiry,
+Operations is implemented as an optional Reactor-backed PAP extension: the
+client in Python and TypeScript, the company side in the Python reference
+company. Its conformance suite must cover exact revisions, ownership, expiry,
 idempotent confirmation, recovery, and cancellation regardless of the channel
 where an operation was proposed.
+
+## Where each area stands
+
+| Area | Personal-agent client | Company side | Runnable flow |
+| --- | --- | --- | --- |
+| Discovery, identity, Sessions, DPoP | Python and TypeScript | Python reference company | [Company discovery](/examples/company-discovery/), [Session lifecycle](/examples/session-lifecycle/) |
+| Direct and Device Sign-In | Python and TypeScript | Device: Python reference company | [Device Sign-In](/examples/device-sign-in/) |
+| Mediated Sign-In | Python and TypeScript | Python reference company | [Mediated Sign-In](/examples/mediated-sign-in/) |
+| Account Tokens | Python and TypeScript | Python reference company | [Account Tokens](/examples/account-tokens/) |
+| Conversations: messages, events, SSE, handoff, Direct, sign-in, close | Python and TypeScript | Python reference company | [Streaming](/examples/conversation-streaming/), [control](/examples/conversation-control/) |
+| Operations v1 | Python and TypeScript | Python reference company | [Operations](/examples/operations/) |
+| Web (Browser Session) | Python and TypeScript | Verification helpers | [Browser Session](/examples/browser-session/) |
+| OpenAPI and MCP helpers | Planned | Planned | |
+
+The end-to-end journeys, [a user with a company](/examples/user-with-a-company/)
+and [two companies](/examples/two-companies/) (composition, not a draft 0.1
+company-to-company feature), run in Python only, on the demo worlds in
+`personal_agent_protocol.demo`.
 
 ## Deliberate boundaries
 

@@ -6,8 +6,11 @@ title: Integrate a company
 
 :::info SDK status
 
-The company/server SDK is planned. This page is initial integration guidance,
-not documentation for released server handlers.
+The Python SDK ships a **reference company**,
+`personal_agent_protocol.company`: a framework-neutral PAP company over plain
+ASGI, assembled from Reactor contributions. It is the counterpart the SDK's
+own end-to-end tests and demo worlds run against, and a starting point for a
+real integration. The TypeScript SDK has no company side yet.
 
 :::
 
@@ -62,6 +65,88 @@ model to enforce scopes.
   sessions, company-agent tools, and human-support tools.
 - Generic external errors that do not disclose whether another user's resource
   exists.
+
+## The reference company
+
+```python
+from personal_agent_protocol.company import CompanyConfig, build_company, company_app
+
+config = CompanyConfig(
+    name="Manzanita Outfitters",
+    domain="manzanita.example",
+    scopes=("orders:read", "orders:write"),
+    write_scopes=("orders:write",),
+    mediated_fields=(("email", "Email", False), ("password", "Password", True)),
+)
+service = build_company(config, http_client=http, plugins=[(manifest, my_company_plugin)])
+app = company_app(service)  # any ASGI server, or httpx.ASGITransport in tests
+```
+
+`CompanyService.handle()` takes a neutral request and returns a neutral
+response, so any web framework can serve it; `company_app()` serves it over
+plain ASGI and rebuilds each request URL on the company's published origin so
+DPoP `htu` checks compare against what the personal agent signed. It
+implements, of draft 0.1 and Operations v1:
+
+- discovery (`/.well-known/poppy.json`) and OAuth metadata on one issuer;
+- Sessions with verified client and Session assertions, DPoP-bound tokens,
+  and renewal by `session_id`;
+- Device Sign-In with `authorization_pending` and `slow_down`
+  (`approve_device()` stands for the company's own approval page);
+- Mediated Sign-In with a one-time code, an attempt limit, and uniform
+  failures;
+- Account Tokens rotated on every refresh, narrower scopes only,
+  `invalid_grant` for expired, revoked, or rotated-away tokens, and revocation
+  that signs out every Session signed in with the token;
+- conversations with idempotent messages, cursor events, waited replies, SSE,
+  handoff, Direct Conversations, `authorization` events, and closing; a
+  conversation that is not yours is `conversation_not_found`;
+- Operations proposed by the company agent, read, confirmed at most once
+  (latest revision, approval rules, write scopes, extension negotiation),
+  revised (`revise()`), and cancelled.
+
+### Reactor points
+
+Every part a company replaces is a Reactor contribution. The company's own
+plugins contribute with a lower `order` to replace a default.
+
+| Point | Contract | Default |
+| --- | --- | --- |
+| `pap.company.store` | `CompanyStore`: Sessions, Account Tokens, sign-ins, conversations, operations | `MemoryCompanyStore` (one process) |
+| `pap.company.accounts` | `AccountDirectory`: check credentials and second factors for Mediated Sign-In | None: the company contributes it |
+| `pap.company.agent` | `CompanyAgent.respond(turn)`: replies, `authorization` requests, proposed operations | None: the company contributes it |
+| `pap.company.operationExecutor` | `OperationExecutor.perform(operation, account_id)`, one per `action`; `operation_id` is the idempotency key | None: an unperformable operation stays `in_progress` |
+| `pap.company.clientPolicy` | `ClientPolicy.allows(client_id)` | `AllowEveryAgent` |
+| `pap.company.clientResolver` | Verified client metadata and JWKS for a `client_id` | `IdentityClientResolver` over HTTPS |
+| `pap.company.replayCache` | `mark_once(key)` for assertion and proof IDs | `MemoryReplayCache` (one process) |
+
+The PAP core points (`pap.clock`, `pap.randomSource`, and the rest) apply on
+the company side too.
+
+### What stays in the company
+
+- Credentials sent to the mediated endpoint go to the account directory as
+  `SecretStr` and are cleared after the check.
+- Account Tokens and device codes are stored as digests.
+- A company agent receives a `Turn` with the account, scopes, and whether the
+  conversation is direct; it never sees tokens.
+- Errors are generic codes that do not disclose whether another user's
+  conversation or operation exists.
+
+### Before production
+
+The defaults keep state in one process. A deployment contributes a durable
+store, a distributed replay cache, its real account directory and agent, an
+executor per action that is idempotent downstream, and a client policy. It
+also needs TLS, rate limits, and the operational controls above.
+
+### Demo worlds
+
+`personal_agent_protocol.demo` assembles fictional companies from these
+points, on an in-process network with real keys: Manzanita Outfitters (one
+user with a company), and Northwind Bank with Ledgerly (two companies,
+composed). See [A user with a company](/examples/user-with-a-company/) and
+[Two companies](/examples/two-companies/).
 
 Use the upstream [company implementation guidance](https://personalagentprotocol.org/docs/guides)
 alongside the normative specification.

@@ -1,0 +1,101 @@
+---
+title: Operations
+---
+
+# Operations
+
+The Operations extension (version 1) gives actions an exact, durable
+approval. A company proposes an operation (from an API's `202`, an MCP tool's
+`structuredContent`, a conversation `message`, or its website) and performs it
+only once it is confirmed at `{endpoint}/{operation_id}/confirm`. The
+`OperationsClient` is the personal agent's side.
+
+## Negotiate
+
+```python
+from personal_agent_protocol import OperationsClient, approve, operations_endpoint
+
+endpoint = operations_endpoint(discovered.document, my_client_metadata)
+if endpoint is None:
+    ...  # one side does not list operations version 1: do not use Operations
+operations = OperationsClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+```
+
+A company answers an agent that did not negotiate the extension with
+`extension_required`; the client puts the extension name in `error.details`.
+
+## Approve exactly what the user saw
+
+```python
+show_to_user(operation.summary, operation.terms)        # the host's own interface
+approval = approve(operation)                           # revision + digest of summary and terms
+outcome = await operations.confirm(endpoint, operation, approval=approval, token=token, **who)
+if outcome.status == "terms_changed":
+    show_changes(outcome.operation, outcome.changed)    # e.g. ("summary", "amount.amount")
+    # ask again; the old approval cannot confirm the new revision
+```
+
+```typescript
+const approval = await approve(operation);   // async: the digest uses Web Crypto
+const outcome = await operations.confirm(endpoint, operation, { approval, token, tenantId, pairwiseUserId, issuer });
+```
+
+- `approve()` is called by the host when the user approves in its interface,
+  never because a model or a chat message said so.
+- A confirmation for any other revision, or for different terms, is refused
+  locally (`approval_mismatch`). Only the latest revision can be confirmed at
+  the company; an older one is `terms_changed`, returned with the new revision
+  and the changed term paths.
+- The company's `result.summary` is returned as written: show it, do not
+  paraphrase it into something it did not say.
+
+## Recover, never re-propose
+
+A confirmation whose answer is lost may have been performed. The client reads
+the same operation back by ID: a final or `in_progress` state is the outcome;
+still `proposed` means it did not arrive (`confirm_not_received`) and the host
+may retry. Confirming is idempotent at the company, so a retry returns the
+same record. `in_progress` may carry `retry_after`; poll with `read()`.
+
+## Standing permissions
+
+A user may allow some operations in advance. A `StandingPermission` names one
+company, account, and action, with limits on term paths (`TermLimit`: a
+decimal `maximum` or a set of `allowed` values), an expiry, and optional uses.
+
+```python
+outcome = await operations.confirm(
+    endpoint, operation,
+    standing=("Northwind Bank", account, "payments.transfer"),
+    token=token, **who,
+)
+```
+
+The client asks the Reactor `pap.standingPermissionStore`
+(`StandingPermissionStores` in TypeScript) to **reserve** a use. A permission
+covers a revision only when every limit's term is present and within bounds,
+it has not expired, and it has uses left. The use is **committed** when the
+company confirms and **released** when it refuses. Nothing covers it:
+`no_standing_permission`, ask the user. A revision with
+`user_approval_required` is never confirmed this way, and a company that
+insists answers `user_approval_required` (`approval_required`).
+
+`InMemoryStandingPermissionStore` is for examples and tests. A production
+store is durable and atomic, and the act of granting a permission deserves its
+own exact approval: in the [two companies](/examples/two-companies/) example a
+standing permission is itself an operation the user approves.
+
+## Cancel
+
+`cancel()` turns a proposal into `cancelled`; an operation in progress stops
+if the company can stop it. Closing a conversation does not cancel anything.
+
+## Security boundary
+
+- Conversation text never confirms an operation, whoever wrote it.
+- The model may explain a proposal and its changes; the approval is the
+  user's, in the host's interface, bound to one revision.
+- Tokens and proofs stay host-only; errors carry codes only.
+
+See the runnable [Operations example](/examples/operations/) and the upstream
+[Operations extension](https://personalagentprotocol.org/docs/extensions/operations).

@@ -1,0 +1,90 @@
+---
+title: Account Tokens
+---
+
+# Account Tokens
+
+A Direct, Device, or Mediated Sign-In returns an Account Token: the OAuth
+`refresh_token` that keeps the user signed in after the short-lived Session
+Token expires (PAP draft 0.1 §4.8, §4.9). It is the most valuable credential a
+personal agent holds for a user, so the SDK never hands it to a caller. It is
+written straight into the Reactor `pap.tokenStore` by the sign-in client and
+used only at the company's `token_endpoint` and `revocation_endpoint`.
+
+## Refresh
+
+```python
+from personal_agent_protocol import AccountTokenClient, AccountTokenContext
+
+accounts = AccountTokenClient(reactor=reactor, http_client=http)
+context = AccountTokenContext(
+    token_endpoint=metadata.token_endpoint,
+    revocation_endpoint=metadata.revocation_endpoint,
+    issuer=metadata.issuer,
+    client_id="https://agent.example/agent.json",
+    tenant_id="application-42",
+    pairwise_user_id=pairwise_user_id,
+)
+result = await accounts.refresh(
+    account_token_reference, context=context, session_id=session.session_id
+)
+if result.status == "signed_in":
+    session = result.token  # signed in again; refresh_token removed
+elif result.status == "re_consent_required":
+    ask_the_user_to_sign_in_again()
+else:  # "signed_out"
+    continue_signed_out()
+```
+
+```typescript
+const accounts = new AccountTokenClient({ reactor, fetch });
+const result = await accounts.refresh(accountTokenReference, {
+  context: { tokenEndpoint, revocationEndpoint, issuer, clientId, tenantId, pairwiseUserId },
+  sessionId: session.sessionId,
+  scopes: ['orders:read'],
+});
+```
+
+A refresh is a `refresh_token` grant carrying the Session's `session_id`, a
+fresh client assertion, and a fresh DPoP proof (one nonce retry). The company
+must sign in **the same Session**: a token for another Session, a Bearer
+token, or a signed-out answer is `invalid_token_response`.
+
+## Rotation is serialized
+
+A company may rotate the Account Token on every refresh, and a rotated token
+invalidates the one it replaces. Two refreshes racing on the same reference
+would leave one holding a revoked credential. Every use of a reference is
+therefore held under the Reactor `pap.accountTokenLock` contribution
+(`AccountTokenLocks` in TypeScript), and the new token replaces the old in the
+store before the lock is released. The default `InProcessAccountTokenLock` is
+for one process; a host with several workers contributes a distributed lock.
+
+## Narrower, never wider
+
+`scopes` and an RFC 8707 `resource` narrow a refresh. A scope the company
+returns that was not requested is `scope_escalation`. Asking for more than the
+token holds draws the company's `invalid_scope`, reported as
+`re_consent_required`: the user decides on wider access by signing in again,
+and the SDK does not retry.
+
+## Expiry and revocation
+
+- `invalid_grant` (expired, revoked, or rotated away) deletes the stored copy;
+  the Session continues signed out (`signed_out`).
+- `revoke()` sends an RFC 7009 revocation, without DPoP, with
+  `token_type_hint=refresh_token`. The company signs out every Session signed
+  in with the token. The local copy is deleted **only after** the company has
+  answered; a refused revocation keeps it so the host can retry, because a
+  token the user believes revoked must be.
+
+## Security boundary
+
+- The Account Token never reaches a model, a conversation, a URL, a log, or an
+  error: errors carry the company's error code, never a response body.
+- Store tokens encrypted and tenant-isolated; the SDK ships no default
+  `pap.tokenStore`.
+- Sign-out in the product revokes, then deletes.
+
+See the runnable [Account Tokens example](/examples/account-tokens/) and the
+upstream [Account Tokens specification](https://personalagentprotocol.org/docs/spec#48-account-tokens).

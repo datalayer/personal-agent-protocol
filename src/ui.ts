@@ -78,7 +78,7 @@ export type PapConfirmDisplay = {
 };
 
 /** Anything shaped like a display: Reactor's `Display`, or a tool result's `_meta["reactor.ui/display"]`. */
-export type DisplayLike = { type: string; version: number; id?: string; text?: string; data?: unknown };
+export type DisplayLike = { type: string; version?: number; id?: string; text?: string; data?: unknown };
 
 const DATA_KEYS = [
   "company",

@@ -1,18 +1,62 @@
 header:
   license:
+    spdx-id: Datalayer
+    copyright-owner: Datalayer, Inc.
+    copyright-year: 2025-2026
     content: |
-      Copyright (c) 2023-2024 Datalayer, Inc.
+      Copyright (c) [year] [owner]
 
       BSD 3-Clause License
 
-
   paths-ignore:
+    - '**/*.toml'
+    - '**/*.lock'
+    - '**/*.css'
+    - '**/*.pem'
+    - '**/*.apt'
+    - '**/*.cedar'
+    - '**/*.csv'
+    - '**/*.dash'
+    - '**/*.fga'
     - '**/*.ipynb'
+    - '**/*.j2'
     - '**/*.json'
+    - '**/*.mamba'
+    - '**/*.md'
+    - '**/*.mdx'
+    - '**/*.mod'
+    - '**/*.nblink'
+    - '**/*.rego'
+    - '**/*.sse'
+    - '**/*.sum'
+    - '**/*.svg'
+    - '**/*.template'
+    - '**/*.tsbuildinfo'
+    - '**/*.txt'
     - '**/*.yaml'
     - '**/*.yml'
+    - '**/*_key'
+    - '**/*_key.pub'
     - '**/.*'
-    - 'docs/**/*'
+    - '**/LICENSE.txt'
+    - '**/MANIFEST.in'
+    - '**/build'
+    - '**/lib'
+    - '**/node_modules'
+    - 'node_modules/**'
+    - '**/schemas'
+    - '**/ssh/*'
+    - '**/static'
+    - '**/themes'
+    - '**/typings'
+    - '**/*.patch'
+    - '**/*.bundle.js'
+    - '**/*.map.js'
+    - '**/*.pyc'
+    - '**/__pycache__'
+    - '**/CODEOWNERS'
     - 'LICENSE'
+    - 'Dockerfile'
+    - 'Makefile'
 
   comment: on-failure

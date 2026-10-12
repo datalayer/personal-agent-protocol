@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Guide-level behaviour at the TypeScript reference company: overlapping JWKS
 // (operational-limits.mdx) and the consent page's CSRF binding and framing (company.mdx).
 import assert from "node:assert/strict";

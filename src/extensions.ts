@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Extension names, negotiation, and `extension_required` (§3.3), as in Python's
 // personal_agent_protocol.extensions.
 //

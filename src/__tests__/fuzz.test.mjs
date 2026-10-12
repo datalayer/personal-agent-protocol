@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Seeded fuzzing of strict JSON and URL safety (the TypeScript side of test_fuzz.py).
 // fast-check is not a dependency of this repository: a seeded PRNG keeps every run
 // reproducible; PAP_FUZZ_SEED and PAP_FUZZ_ITERATIONS widen a local run.

@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Bounded caching of public PAP metadata (PAP §3, §3.2; Guides, fetching metadata).
 //
 // Discovery documents, OAuth metadata, client metadata, and JWKS are cached by

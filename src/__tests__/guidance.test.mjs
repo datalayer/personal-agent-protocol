@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Guide-level behaviour: bounded metadata caching, overlapping JWKS, retries, shared budgets
 // (the TypeScript side of personal_agent_protocol/__tests__/test_guidance.py).
 import assert from "node:assert/strict";

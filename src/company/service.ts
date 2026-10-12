@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 /**
  * A framework-neutral PAP company: discovery, Sessions, sign-in, conversations, operations.
  *

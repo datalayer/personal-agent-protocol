@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Regression tests for the findings of the 0.10.0 security review (docs: security/review):
 // each is a reviewer's probe turned into an assertion, failing before its fix.
 import assert from "node:assert/strict";

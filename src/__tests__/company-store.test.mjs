@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The company store contract: the conformance kit, and a company restarted over its store
 // (the same cases as the Python `test_company_store.py`).
 import assert from "node:assert/strict";

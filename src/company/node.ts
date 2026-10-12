@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 /**
  * Serve a `CompanyService` with `node:http` or `node:https` (no web framework needed).
  *

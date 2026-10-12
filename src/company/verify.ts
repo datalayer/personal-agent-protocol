@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 /** Verify a personal agent's client and Session assertions (§4.1, §4.2). */
 
 import {

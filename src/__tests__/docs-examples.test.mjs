@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Every TypeScript code example in the README and the docs runs, as written (as
 // Python's test_docs_examples.py runs the Python ones).
 //

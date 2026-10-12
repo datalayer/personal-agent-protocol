@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // TypeScript agent ↔ TypeScript company over real TCP and TLS (PAP §5 pairings).
 // The Python pairings (Python agent ↔ TypeScript company, TypeScript agent ↔ Python
 // company) live in personal_agent_protocol/__tests__/test_pairings.py and run the same

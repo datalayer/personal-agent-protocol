@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 import { ProtocolValidationError } from "./errors.js";
 
 /** Parse JSON while rejecting duplicate object member names at every depth. */

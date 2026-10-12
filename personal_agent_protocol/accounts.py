@@ -61,6 +61,7 @@ from .sessions import (
     _mcp_resource,
     _opaque_id,
 )
+from .telemetry import sign_in_result, signed_in_as, traced
 
 REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - OAuth grant type, not a credential
 _OPAQUE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
@@ -116,6 +117,11 @@ class AccountTokenClient:
         self.http = http_client
         self.max_response_bytes = max_response_bytes
 
+    @traced(
+        "pap.sign_in.account_token.refresh",
+        before=signed_in_as("account_token"),
+        after=sign_in_result,
+    )
     async def refresh(
         self,
         reference: str,
@@ -226,6 +232,11 @@ class AccountTokenClient:
             bearer=True,
         )
 
+    @traced(
+        "pap.sign_in.account_token.revoke",
+        before=signed_in_as("account_token"),
+        after=sign_in_result,
+    )
     async def revoke(
         self, reference: str, *, context: AccountTokenContext
     ) -> AccountRevocationResult:

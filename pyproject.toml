@@ -43,6 +43,8 @@ test = [
   "uvicorn>=0.30",
   # The displays' tests (the `ui` extra).
   "datalayer_reactor>=1.1.0,<2",
+  # The OpenTelemetry adapter's tests and the trace canaries (the `telemetry` extra).
+  "opentelemetry-sdk>=1.27,<2",
 ]
 # Serve the reference company (and the demo worlds) over real sockets.
 server = ["uvicorn>=0.30"]
@@ -51,6 +53,8 @@ typing = ["mypy>=0.990"]
 examples = ["pydantic-ai-slim[openai]>=2.35.0,<3"]
 # `personal_agent_protocol.ui`: PAP's displays for reactor.ui.
 ui = ["datalayer_reactor>=1.1.0,<2"]
+# `telemetry.OpenTelemetrySink`: the SDK's protocol stages as OpenTelemetry spans.
+telemetry = ["opentelemetry-api>=1.27,<2"]
 
 [project.license]
 file = "LICENSE"

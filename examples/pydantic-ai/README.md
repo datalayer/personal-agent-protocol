@@ -25,6 +25,8 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | [`operations`](./operations/)                             | Exact approval, `terms_changed`, recovery, standing permissions | States and company summaries      |
 | [`user-with-a-company`](./user-with-a-company/)           | The whole K-06 journey with Manzanita                           | Steps in plain words              |
 | [`two-companies`](./two-companies/)                       | Ledgerly at Northwind for Ada (composition)                     | Summaries and approvers           |
+| [`live-session-actions`](./live-session-actions/)         | Actions by ID, as Studio, a REPL and `pap commands run` invoke  | Answers and refusal codes         |
+| [`telemetry`](./telemetry/)                               | One allowlisted event per protocol stage, OpenTelemetry-ready   | Stage events only                 |
 
 Install and run from the PAP repository:
 
@@ -38,7 +40,8 @@ Set `PAP_EXAMPLE_MODEL` to use another Pydantic AI model string. The default is
 `openai:gpt-4o-mini`.
 
 The `account-tokens`, `mediated-sign-in`, `conversation-*`, `operations`,
-`user-with-a-company`, and `two-companies` examples run against the reference
+`user-with-a-company`, `two-companies`, `live-session-actions`, and `telemetry`
+examples run against the reference
 company in `personal_agent_protocol.demo`: real keys and real HTTP over ASGI,
 in one process, with no network and no model in the tool.
 

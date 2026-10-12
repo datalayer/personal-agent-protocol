@@ -1,5 +1,5 @@
 {
-  "description": "Every Reactor contribution point both SDKs define: one id, one contract. test_reactor_points.py and reactor-points.test.mjs hold each SDK to this file, and docs/docs/concepts/contribution-points.mdx lists it. members are the contract's methods and attributes in Python's spelling; TypeScript spells them in camelCase, except where typescript_members says otherwise. default is the contribution id of the SDK's own default (order 100), null when the host must contribute one. tenant names what a tenant-scoped contract receives, null when the point is not tenant-scoped.",
+  "description": "Every Reactor contribution point the SDKs define: one id, one contract, in both SDKs unless typescript is null (a point only Python hosts use, its note saying why). test_reactor_points.py and reactor-points.test.mjs hold each SDK to this file, and docs/docs/concepts/contribution-points.mdx lists it. members are the contract's methods and attributes in Python's spelling; TypeScript spells them in camelCase, except where typescript_members says otherwise. default is the contribution id of the SDK's own default (order 100), null when the host must contribute one. tenant names what a tenant-scoped contract receives, null when the point is not tenant-scoped.",
   "points": [
     {
       "id": "pap.discoveryTransport",
@@ -189,6 +189,30 @@
       "default": null,
       "resolution": "single",
       "tenant": null
+    },
+    {
+      "id": "pap.telemetry",
+      "role": "personal-agent",
+      "python": "TELEMETRY_SINKS",
+      "typescript": "TelemetrySinks",
+      "contract": "TelemetrySink",
+      "members": ["record"],
+      "default": null,
+      "resolution": "optional",
+      "tenant": null,
+      "note": "No sink, no telemetry. Each event is one finished protocol stage whose attributes are an allowlist (telemetry.py, telemetry.ts); an OpenTelemetry adapter makes spans of them."
+    },
+    {
+      "id": "pap.approvalSurface",
+      "role": "personal-agent",
+      "python": "APPROVAL_SURFACES",
+      "typescript": null,
+      "contract": "ApprovalSurface",
+      "members": ["approve"],
+      "default": null,
+      "resolution": "optional",
+      "tenant": null,
+      "note": "Python hosts only: it gates the live-session actions (actions.py) that Studio, a REPL and `pap commands run` invoke through Reactor's command registries, which only the Python SDK registers. Without one, a destructive action is refused."
     },
     {
       "id": "pap.company.store",

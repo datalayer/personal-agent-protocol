@@ -15,6 +15,7 @@ import {
   type DiscoveryTransport,
   type UrlSafetyPolicy,
 } from "./reactor.js";
+import { traced } from "./telemetry.js";
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
 export interface DiscoveryOptions {
@@ -138,10 +139,20 @@ async function fetchJson(
   throw new DiscoveryError("too_many_redirects", "Discovery exceeded redirect limit");
 }
 
-export async function discoverCompany(
+export function discoverCompany(
   domain: string,
   options: DiscoveryOptions = {},
 ): Promise<DiscoveredCompany> {
+  return traced(
+    options.reactor,
+    "pap.discovery.discover",
+    { "pap.company.domain": domain.replace(/\.$/, "").toLowerCase() },
+    () => discover(domain, options),
+    (company) => ({ "pap.company.issuer": company.oauthMetadata?.issuer }),
+  );
+}
+
+async function discover(domain: string, options: DiscoveryOptions): Promise<DiscoveredCompany> {
   const requestedDomain = normalizeDomain(domain);
   const reactor = options.reactor ?? buildPapReactor(options);
   const transport = firstContribution<DiscoveryTransport>(

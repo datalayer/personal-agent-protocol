@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Credentials never reach logs, errors, model context, or URLs (PAP plan, K-08 and release gates).
+"""Credentials never reach logs, errors, model input, URLs, traces, or analytics (K-08, gates).
 
 The demo worlds — Manzanita (Device, Direct, and Mediated Sign-In, Account
 Tokens, conversations, operations, MCP with a Bearer token, the website),
@@ -23,6 +23,11 @@ verifiers, mediated passwords and one-time codes, website cookies), and none
 may appear in:
 
 - a log record of any logger at DEBUG, with its traceback;
+- a trace or an analytics event: every Reactor of the run (the agents' and the
+  companies') has a `pap.telemetry` sink, each `TelemetryEvent` is kept as the
+  JSON an analytics pipeline would get, and, where `opentelemetry-sdk` is
+  installed, as the span the `OpenTelemetrySink` exports (name, attributes,
+  status);
 - an exception the SDK raises: its `str`, `repr`, and attributes;
 - a URL any party requests (the protocol puts a credential in no requested
   URL; the authorization code travels in the redirect back to the agent's
@@ -39,6 +44,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
 import inspect
 import json
 import logging
@@ -59,7 +65,8 @@ import pytest
 import personal_agent_protocol
 from personal_agent_protocol.demo import kit, manzanita
 from personal_agent_protocol.errors import PersonalAgentProtocolError
-from personal_agent_protocol.reactor import SystemRandomSource
+from personal_agent_protocol.reactor import TELEMETRY_SINKS, PapCorePlugin, SystemRandomSource
+from personal_agent_protocol.telemetry import OpenTelemetrySink, TelemetryEvent
 
 from . import (
     test_company_end_to_end,
@@ -111,6 +118,8 @@ class Harvest:
     errors: list[str] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
     callbacks: list[str] = field(default_factory=list)
+    telemetry: list[str] = field(default_factory=list)
+    stages: set[str] = field(default_factory=set)
 
     def secret(self, kind: str, value: object) -> None:
         if isinstance(value, str) and len(value) >= SHORTEST:
@@ -206,6 +215,7 @@ def harvest(monkeypatch: pytest.MonkeyPatch) -> Iterator[Harvest]:
     monkeypatch.setattr(test_company_end_to_end, "ADA_CODE", ONE_TIME_CODE)
     _record_the_wire(monkeypatch, found)
     _record_private_keys(monkeypatch, found)
+    _record_telemetry(monkeypatch, found)
     with _recorded_errors(monkeypatch, found), _recorded_logs(found):
         yield found
 
@@ -223,6 +233,56 @@ def _record_the_wire(monkeypatch: pytest.MonkeyPatch, found: Harvest) -> None:
         return response
 
     monkeypatch.setattr(kit._Routing, "handle_async_request", recording)
+
+
+class _Telemetry:
+    """`pap.telemetry` on every Reactor: each event as analytics JSON and as an exported span."""
+
+    def __init__(self, found: Harvest) -> None:
+        self.found = found
+        self.spans: Any = None
+        try:
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+            from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+                InMemorySpanExporter,
+            )
+        except ImportError:  # the adapter is optional; the analytics JSON is always kept
+            self.otel = None
+            return
+        self.spans = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(self.spans))
+        self.otel = OpenTelemetrySink(provider.get_tracer("canaries"))
+
+    def record(self, event: TelemetryEvent) -> None:
+        self.found.stages.add(event.stage)
+        self.found.telemetry.append(json.dumps(event.as_dict()))
+        if self.otel is not None:
+            self.otel.record(event)
+            for span in self.spans.get_finished_spans():
+                self.found.telemetry.append(
+                    json.dumps(
+                        {
+                            "span": span.name,
+                            "attributes": dict(span.attributes or {}),
+                            "status": str(span.status.description),
+                        }
+                    )
+                )
+            self.spans.clear()
+
+
+def _record_telemetry(monkeypatch: pytest.MonkeyPatch, found: Harvest) -> None:
+    sink = _Telemetry(found)
+    original = PapCorePlugin.provide_contributions
+
+    @functools.wraps(original)
+    def with_sink(self: PapCorePlugin, contributions: Any) -> None:
+        original(self, contributions)
+        contributions.contribute(TELEMETRY_SINKS, sink, contribution_id="canaries", order=100)
+
+    monkeypatch.setattr(PapCorePlugin, "provide_contributions", with_sink)
 
 
 def _record_private_keys(monkeypatch: pytest.MonkeyPatch, found: Harvest) -> None:
@@ -351,10 +411,18 @@ def _assert_nothing_leaked(harvest: Harvest) -> None:
     assert minted, "minted credentials carry the canary"
     assert harvest.logs, "the run logged nothing: the log capture is not wired"
     assert harvest.errors, "the run raised nothing: the error capture is not wired"
+    assert harvest.stages == {
+        "discovery",
+        "session",
+        "sign_in",
+        "conversation",
+        "operation",
+    }, "a protocol stage emitted no telemetry: the trace capture is not wired"
     counts = ", ".join(f"{kind} {len(found)}" for kind, found in sorted(harvest.secrets.items()))
     sys.stdout.write(  # the numbers, in the test output (`-s`)
         f"canaries: {len(values)} credentials ({counts}); searched {len(harvest.logs)} log "
         f"records, {len(harvest.errors)} errors, {len(harvest.urls)} URLs, "
+        f"{len(harvest.telemetry)} telemetry events and spans, "
         f"{len(harvest.model_texts)} model-readable bodies, {len(harvest.chat_texts)} messages\n"
     )
 
@@ -365,6 +433,8 @@ def _assert_no_leak(harvest: Harvest) -> None:
     # Logs and errors: no credential at all.
     assert _leaks(harvest, [("a log record", record) for record in harvest.logs]) == []
     assert _leaks(harvest, [("an error", error) for error in harvest.errors]) == []
+    # Traces and analytics: no credential at all, the user code included.
+    assert _leaks(harvest, [("a telemetry event", event) for event in harvest.telemetry]) == []
     # Requested URLs: no credential. The user code is in `verification_uri_complete`
     # (RFC 8628 §3.3.1), which the user's browser opens; no agent requests it.
     assert _leaks(harvest, [(url, url) for url in harvest.urls]) == []

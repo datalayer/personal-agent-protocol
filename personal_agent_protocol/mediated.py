@@ -52,6 +52,7 @@ from .reactor import (
     first_contribution,
 )
 from .sessions import SessionToken, _opaque_id
+from .telemetry import sign_in_result, signed_in_as, traced
 from .transport import DpopHttpClient
 
 _SIGN_IN_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
@@ -114,6 +115,7 @@ class MediatedSignInClient:
         self.transport = DpopHttpClient(reactor=reactor, http_client=http_client, max_redirects=0)
         self.max_response_bytes = max_response_bytes
 
+    @traced("pap.sign_in.mediated.sign_in", before=signed_in_as("mediated"), after=sign_in_result)
     async def sign_in(
         self,
         *,
@@ -167,6 +169,9 @@ class MediatedSignInClient:
             ),
         )
 
+    @traced(
+        "pap.sign_in.mediated.submit_code", before=signed_in_as("mediated"), after=sign_in_result
+    )
     async def submit_code(
         self,
         reference: str,

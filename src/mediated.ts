@@ -12,6 +12,7 @@ import {
 } from "./reactor.js";
 import type { SecretValue } from "./secret.js";
 import { parseSessionToken, type SessionToken } from "./sessions.js";
+import { byIssuer, signInResult, traced } from "./telemetry.js";
 import { DpopFetchClient } from "./transport.js";
 
 /**
@@ -119,7 +120,17 @@ export class MediatedSignInClient {
     this.#maxResponseBytes = limit;
   }
 
-  async signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
+  signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.mediated.sign_in",
+      byIssuer(options.issuer, "mediated"),
+      () => this.#signIn(options),
+      signInResult,
+    );
+  }
+
+  async #signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
     const endpoint = endpointOnCompanyDomain(options.mediated.endpoint, options.organization.domain);
     const requested = [...new Set(options.scopes)];
     const credentials = await this.#collect(
@@ -155,7 +166,17 @@ export class MediatedSignInClient {
     });
   }
 
-  async submitCode(reference: string, options: MediatedCodeOptions): Promise<MediatedSignInResult> {
+  submitCode(reference: string, options: MediatedCodeOptions): Promise<MediatedSignInResult> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.mediated.submit_code",
+      byIssuer(options.issuer, "mediated"),
+      () => this.#submitCode(reference, options),
+      signInResult,
+    );
+  }
+
+  async #submitCode(reference: string, options: MediatedCodeOptions): Promise<MediatedSignInResult> {
     const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
     const pending = await store.take(reference);
     if (!isPending(pending)) {

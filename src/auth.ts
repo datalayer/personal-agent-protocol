@@ -19,6 +19,7 @@ import {
   TokenStores,
   firstContribution,
 } from "./reactor.js";
+import { byIssuer, signInResult, traced } from "./telemetry.js";
 
 function defaultRandomBytes(length: number): Uint8Array {
   if (!globalThis.crypto) {
@@ -361,7 +362,17 @@ export class DirectSignInClient {
     this.#maxResponseBytes = maxResponseBytes;
   }
 
-  async begin(options: DirectSignInBeginOptions): Promise<DirectSignInStart> {
+  begin(options: DirectSignInBeginOptions): Promise<DirectSignInStart> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.direct.begin",
+      byIssuer(options.issuer, "direct"),
+      () => this.#begin(options),
+      () => ({ "pap.sign_in.status": "started" }),
+    );
+  }
+
+  async #begin(options: DirectSignInBeginOptions): Promise<DirectSignInStart> {
     const lifetimeSeconds = options.lifetimeSeconds ?? 600;
     if (!Number.isInteger(lifetimeSeconds) || lifetimeSeconds < 1 || lifetimeSeconds > 900) {
       throw new RangeError("Direct Sign-In state lifetime must be between 1 and 900 seconds");
@@ -416,7 +427,17 @@ export class DirectSignInClient {
     return { expiresAt, requestedScopes: request.scopes };
   }
 
-  async complete(options: DirectSignInCompleteOptions): Promise<DirectSignInResult> {
+  complete(options: DirectSignInCompleteOptions): Promise<DirectSignInResult> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.direct.complete",
+      { "pap.sign_in.method": "direct" },
+      () => this.#complete(options),
+      signInResult,
+    );
+  }
+
+  async #complete(options: DirectSignInCompleteOptions): Promise<DirectSignInResult> {
     const state = callbackState(options.callbackUrl);
     const store = firstContribution(
       this.#reactor,

@@ -48,6 +48,7 @@ from .json import loads_strict
 from .models import ClientMetadata, DiscoveryDocument, Message, Operation, ProtocolModel
 from .reactor import CLOCKS, STANDING_PERMISSION_STORES, Clock, first_contribution
 from .sessions import SessionToken
+from .telemetry import by_endpoint, operation_result, traced
 from .transport import DpopHttpClient
 
 OPERATIONS_EXTENSION = "operations"
@@ -303,6 +304,7 @@ class OperationsClient:
         self.reactor: PluginPlatform = transport.reactor
         self.max_response_bytes = max_response_bytes
 
+    @traced("pap.operation.read", before=by_endpoint, after=operation_result)
     async def read(
         self,
         endpoint: str,
@@ -321,6 +323,7 @@ class OperationsClient:
             raise self._error(response, payload)
         return self._operation(payload, operation_id)
 
+    @traced("pap.operation.confirm", before=by_endpoint, after=operation_result)
     async def confirm(
         self,
         endpoint: str,
@@ -449,6 +452,7 @@ class OperationsClient:
             )
         return "standing_permission", _Held(store, reservation)
 
+    @traced("pap.operation.cancel", before=by_endpoint, after=operation_result)
     async def cancel(
         self,
         endpoint: str,

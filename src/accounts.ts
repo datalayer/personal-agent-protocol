@@ -12,6 +12,7 @@ import {
   firstContribution,
 } from "./reactor.js";
 import { JWT_CLIENT_ASSERTION, mcpResource, parseSessionToken, type SessionToken } from "./sessions.js";
+import { byIssuer, signInResult, traced } from "./telemetry.js";
 
 /**
  * PAP Account Tokens: refresh, rotation, narrowing, and revocation (§4.8, §4.9).
@@ -118,7 +119,17 @@ export class AccountTokenClient {
    * A `resource` is an RFC 8707 indicator narrowing the DPoP token to one service (for
    * an MCP server, use `bearerForMcp`).
    */
-  async refresh(reference: string, options: AccountRefreshOptions): Promise<AccountRefreshResult> {
+  refresh(reference: string, options: AccountRefreshOptions): Promise<AccountRefreshResult> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.account_token.refresh",
+      byIssuer(options.context.issuer, "account_token"),
+      () => this.#refreshAccount(reference, options),
+      signInResult,
+    );
+  }
+
+  async #refreshAccount(reference: string, options: AccountRefreshOptions): Promise<AccountRefreshResult> {
     const resource = options.resource === undefined ? undefined : httpsUrl(options.resource, "resource");
     return this.#refresh(reference, options, resource, false);
   }
@@ -232,7 +243,20 @@ export class AccountTokenClient {
     });
   }
 
-  async revoke(
+  revoke(
+    reference: string,
+    options: { readonly context: AccountTokenContext; readonly signal?: AbortSignal },
+  ): Promise<AccountRevocationResult> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.account_token.revoke",
+      byIssuer(options.context.issuer, "account_token"),
+      () => this.#revoke(reference, options),
+      signInResult,
+    );
+  }
+
+  async #revoke(
     reference: string,
     options: { readonly context: AccountTokenContext; readonly signal?: AbortSignal },
   ): Promise<AccountRevocationResult> {

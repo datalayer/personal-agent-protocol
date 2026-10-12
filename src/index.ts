@@ -91,6 +91,7 @@ export {
   RateLimitBudgets,
   RetryPolicies,
   Signers,
+  TelemetrySinks,
   TokenStores,
   UrlSafetyPolicies,
   buildPapReactor,
@@ -113,9 +114,23 @@ export {
   type ProtocolCache,
   type RandomSource,
   type Signer,
+  type TelemetrySink,
   type TokenStore,
   type UrlSafetyPolicy,
 } from "./reactor.js";
+export {
+  RecordingTelemetrySink,
+  TELEMETRY_ATTRIBUTES,
+  TELEMETRY_EVENTS,
+  TELEMETRY_STAGES,
+  TelemetryEvent,
+  openTelemetrySink,
+  safeAttributes,
+  type OpenTelemetryTracer,
+  type TelemetryAttributes,
+  type TelemetryStage,
+  type TelemetryValue,
+} from "./telemetry.js";
 export {
   JWT_BEARER_GRANT,
   JWT_CLIENT_ASSERTION,

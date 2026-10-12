@@ -13,6 +13,7 @@ import {
 } from "./reactor.js";
 import { SecretValue } from "./secret.js";
 import { JWT_CLIENT_ASSERTION, parseSessionToken, type SessionToken } from "./sessions.js";
+import { byIssuer, signInResult, traced } from "./telemetry.js";
 
 export const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
@@ -198,7 +199,17 @@ export class DeviceSignInClient {
     this.#maxResponseBytes = limit;
   }
 
-  async begin(options: DeviceSignInBeginOptions): Promise<DeviceSignInStart> {
+  begin(options: DeviceSignInBeginOptions): Promise<DeviceSignInStart> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.device.begin",
+      byIssuer(options.issuer, "device"),
+      () => this.#begin(options),
+      () => ({ "pap.sign_in.status": "started" }),
+    );
+  }
+
+  async #begin(options: DeviceSignInBeginOptions): Promise<DeviceSignInStart> {
     this.#validateContext(options);
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     const random = firstContribution(this.#reactor, RandomSources, "random source");
@@ -258,7 +269,17 @@ export class DeviceSignInClient {
     };
   }
 
-  async poll(reference: string, signal?: AbortSignal): Promise<DeviceSignInPoll> {
+  poll(reference: string, signal?: AbortSignal): Promise<DeviceSignInPoll> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.device.poll",
+      { "pap.sign_in.method": "device" },
+      () => this.#poll(reference, signal),
+      signInResult,
+    );
+  }
+
+  async #poll(reference: string, signal?: AbortSignal): Promise<DeviceSignInPoll> {
     const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
     const pending = await store.take(reference);
     if (!isPending(pending)) {

@@ -35,6 +35,7 @@ from .reactor import (
     first_contribution,
 )
 from .sessions import JWT_CLIENT_ASSERTION, ClientAssertionClaims, SessionToken, _opaque_id
+from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
@@ -109,6 +110,7 @@ class DeviceSignInClient:
         self.http = http_client
         self.max_response_bytes = max_response_bytes
 
+    @traced("pap.sign_in.device.begin", before=signed_in_as("device"), after=sign_in_result)
     async def begin(
         self,
         *,
@@ -189,6 +191,7 @@ class DeviceSignInClient:
             requested_scopes=requested_scopes,
         )
 
+    @traced("pap.sign_in.device.poll", before=sign_in_method("device"), after=sign_in_result)
     async def poll(self, reference: str) -> DeviceSignInPoll:
         """Perform at most one protocol poll and enforce RFC 8628 pacing."""
 

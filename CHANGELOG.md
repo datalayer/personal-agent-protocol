@@ -6,6 +6,31 @@
 
 # Changelog
 
+## Unreleased
+
+- **Live-session actions, one implementation on every surface:** the `pap`
+  plugin registers seven read-only actions (`pap.company.discover`,
+  `pap.sessions.show`, `pap.conversations.events|follow`,
+  `pap.operations.show`, `pap.requirements.list|show`) and three that change
+  what the user holds (`pap.operations.cancel`, `pap.sessions.end`,
+  `pap.auth.disconnect`) in Reactor's command registry (Studio's palette) or a
+  REPL's `SlashCommandRegistry`; the new `pap commands list|run <id>` runs them
+  too. Each runs the coroutine of the `pap` command of the same name and
+  answers its versioned JSON. The three run only when the host contributes the
+  new `pap.approvalSurface` (Python hosts) and it answers yes;
+  configuration, credential entry, sign-in, messages, API calls and approvals
+  stay CLI-only. `pap.company.discover` now discovers through the agent's own
+  Reactor.
+- **Telemetry, redacted by construction, in both SDKs:** a `pap.telemetry` sink
+  receives one `TelemetryEvent` per discovery, Session, sign-in, conversation,
+  and operation stage, with attributes from an allowlist; an OpenTelemetry
+  adapter (`OpenTelemetrySink`, the `telemetry` extra; `openTelemetrySink` in
+  TypeScript) makes them spans. The canary suites now also prove no credential
+  reaches a trace or an analytics event.
+- **Safety demonstrations:** replay, issuer mix-up, cross-tenant access, stale
+  approval, retries, restart, rollback, revocation, and rotation, one
+  end-to-end test each in both SDKs (`docs/docs/security/demonstrations.mdx`).
+
 ## 0.9.0 (2026-10-11)
 
 - **The exact draft, in code:** `PROTOCOL_PROFILE` (`0.1`) and

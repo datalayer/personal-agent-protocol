@@ -71,7 +71,7 @@ prevents accidental imports into browser and Canvas bundles; production key
 custody must still use a KMS/HSM-backed Reactor signer or an equivalent remote
 signing service.
 
-## Credentials stay out of logs, errors, URLs, and model context
+## Credentials stay out of logs, errors, URLs, traces, analytics, and model context
 
 A canary suite proves it, in both SDKs (`test_canaries.py`,
 `canaries.test.mjs`). The demo worlds run end to end — Manzanita (Device,
@@ -91,6 +91,10 @@ if any of them appears in:
   and its attributes (Python 3.12+ records every raise in SDK code through
   `sys.monitoring`; older versions record every `PersonalAgentProtocolError`);
 - a URL any party requests;
+- a trace or an analytics event: every Reactor of the run has a
+  `pap.telemetry` sink, and each [telemetry](/guides/telemetry/) event is
+  searched as the JSON an analytics pipeline gets and as the span the
+  OpenTelemetry adapter starts (its name, attributes, and status);
 - what a model reads: every response body except the token and device
   endpoints', each message's text, every `PapSignIn.model_view()`, and the
   examples' tool results.
@@ -124,3 +128,10 @@ primitives as a complete authorization service.
 
 See the official [implementation guides](https://personalagentprotocol.org/docs/guides)
 for the complete upstream guidance.
+
+## Demonstrations
+
+Replay, issuer mix-up, cross-tenant access, stale approval, retries, restart,
+rollback, revocation, and rotation each have one end-to-end test, in both
+SDKs, against the reference company: see [Safety
+demonstrations](/security/demonstrations/).

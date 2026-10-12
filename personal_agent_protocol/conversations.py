@@ -22,6 +22,7 @@ from .json import loads_strict
 from .models import ConversationEvent, ConversationEventPage, Message, ProtocolModel
 from .reactor import RANDOM_SOURCES, RandomSource, first_contribution
 from .sessions import SessionToken
+from .telemetry import by_endpoint, conversation_result, traced
 from .transport import DpopHttpClient
 
 
@@ -82,6 +83,7 @@ class ConversationClient:
         self.transport = transport
         self.max_response_bytes = max_response_bytes
 
+    @traced("pap.conversation.start", before=by_endpoint, after=conversation_result)
     async def start(
         self,
         endpoint: str,
@@ -113,6 +115,7 @@ class ConversationClient:
             wait=wait,
         )
 
+    @traced("pap.conversation.send", before=by_endpoint, after=conversation_result)
     async def send(
         self,
         endpoint: str,
@@ -142,6 +145,7 @@ class ConversationClient:
             wait=wait,
         )
 
+    @traced("pap.conversation.read_events", before=by_endpoint, after=conversation_result)
     async def read_events(
         self,
         endpoint: str,
@@ -247,6 +251,7 @@ class ConversationClient:
             # long poll. Once drained, return to the caller's requested wait.
             drain_backlog = page.has_more
 
+    @traced("pap.conversation.start_direct", before=by_endpoint, after=conversation_result)
     async def start_direct(
         self,
         endpoint: str,
@@ -276,6 +281,7 @@ class ConversationClient:
             parent_conversation_id=parent_conversation_id,
         )
 
+    @traced("pap.conversation.handoff", before=by_endpoint, after=conversation_result)
     async def handoff(
         self,
         endpoint: str,
@@ -292,6 +298,7 @@ class ConversationClient:
             endpoint, conversation_id, "handoff", 202, token, tenant_id, pairwise_user_id, issuer
         )
 
+    @traced("pap.conversation.close", before=by_endpoint, after=conversation_result)
     async def close(
         self,
         endpoint: str,

@@ -5,6 +5,7 @@ import { parseJsonStrict } from "./json.js";
 import { parseOperation, type ClientMetadata, type DiscoveryDocument, type Operation } from "./models.js";
 import { Clocks, StandingPermissionStores, firstContribution } from "./reactor.js";
 import type { SessionToken } from "./sessions.js";
+import { byEndpoint, operationResult, traced } from "./telemetry.js";
 import type { DpopFetchClient } from "./transport.js";
 
 /**
@@ -295,14 +296,42 @@ export class OperationsClient {
     this.#maxResponseBytes = limit;
   }
 
-  async read(endpoint: string, operationId: string, options: OperationRequestOptions): Promise<Operation> {
+  read(
+    endpoint: string,
+    operationId: string,
+    options: OperationRequestOptions,
+  ): Promise<Operation> {
+    return traced(
+      this.#reactor,
+      "pap.operation.read",
+      byEndpoint(endpoint),
+      () => this.#read(endpoint, operationId, options),
+      operationResult,
+    );
+  }
+
+  async #read(endpoint: string, operationId: string, options: OperationRequestOptions): Promise<Operation> {
     const response = await this.#request("GET", endpoint, operationId, undefined, options);
     const payload = await this.#payload(response);
     if (response.status !== 200) throw operationError(response, payload);
     return expectOperation(payload, operationId);
   }
 
-  async confirm(endpoint: string, operation: Operation, options: ConfirmOptions): Promise<ConfirmOutcome> {
+  confirm(
+    endpoint: string,
+    operation: Operation,
+    options: ConfirmOptions,
+  ): Promise<ConfirmOutcome> {
+    return traced(
+      this.#reactor,
+      "pap.operation.confirm",
+      byEndpoint(endpoint),
+      () => this.#confirm(endpoint, operation, options),
+      operationResult,
+    );
+  }
+
+  async #confirm(endpoint: string, operation: Operation, options: ConfirmOptions): Promise<ConfirmOutcome> {
     const { approvedBy, held } = await this.#authorize(operation, options);
     const body = JSON.stringify({ revision: operation.revision, approved_by: approvedBy });
     let response: Response;
@@ -349,7 +378,21 @@ export class OperationsClient {
     throw operationError(response, payload);
   }
 
-  async cancel(endpoint: string, operationId: string, options: OperationRequestOptions): Promise<Operation> {
+  cancel(
+    endpoint: string,
+    operationId: string,
+    options: OperationRequestOptions,
+  ): Promise<Operation> {
+    return traced(
+      this.#reactor,
+      "pap.operation.cancel",
+      byEndpoint(endpoint),
+      () => this.#cancel(endpoint, operationId, options),
+      operationResult,
+    );
+  }
+
+  async #cancel(endpoint: string, operationId: string, options: OperationRequestOptions): Promise<Operation> {
     const response = await this.#request("POST", endpoint, `${operationId}/cancel`, "{}", options);
     const payload = await this.#payload(response);
     if (response.status !== 200) throw operationError(response, payload);

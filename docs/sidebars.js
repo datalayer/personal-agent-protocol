@@ -79,6 +79,7 @@ const sidebars = {
         "guides/extensions",
         "guides/operational-limits",
         "guides/cli",
+        "guides/telemetry",
         "guides/conformance",
       ],
     },
@@ -126,6 +127,7 @@ const sidebars = {
     },
     "studio/integration",
     "security/index",
+    "security/demonstrations",
     "protocol/status",
   ],
 };

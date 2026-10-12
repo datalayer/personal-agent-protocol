@@ -449,6 +449,29 @@ example("docs/docs/guides/company.mdx#0", async () => {
   ];
 });
 
+example("docs/docs/guides/telemetry.mdx#0", async () => {
+  const spans = [];
+  const tracer = {
+    startSpan(name, options) {
+      spans.push({ name, attributes: options.attributes });
+      return { setStatus() {}, end() {} };
+    },
+  };
+  return [{ tracer }, async (values) => {
+    assert.equal(values.company.document.organization.domain, "example.com");
+    assert.deepEqual(spans, [{
+      name: "pap.discovery.discover",
+      attributes: {
+        "pap.company.domain": "example.com",
+        "pap.company.issuer": "https://example.com",
+        "pap.stage": "discovery",
+        "pap.outcome": "ok",
+      },
+    }]);
+    values.reactor.stop();
+  }];
+});
+
 example("docs/docs/guides/extensions.mdx#0", async () => [
   {},
   async (values) => assert.deepEqual(values.negotiated, { operations: "1" }),

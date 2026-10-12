@@ -25,14 +25,13 @@ Exit codes (`pap exit-codes`):
 | 3 | Not configured: no signing key, no `client_id` or `domain`, or an unknown Session. |
 | 4 | Input required, but `--no-input` was given or no terminal is attached. |
 | 5 | Still pending: the user has not finished signing in before `--timeout`. |
-| 6 | Not approved: no approval for this exact operation ID and revision, or the terms changed. |
+| 6 | Not approved: not this exact operation ID and revision, or a live-session action. |
 | 130 | Interrupted. |
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import sys
 from collections.abc import Awaitable, Callable
@@ -43,8 +42,29 @@ from typing import TYPE_CHECKING, Any, cast
 import typer
 from pydantic import SecretStr
 
-from .accounts import AccountTokenClient, AccountTokenContext
-from .apis import ApiClient, conversation_endpoint
+from .accounts import AccountTokenClient
+from .actions import (
+    ActionUsageError,
+    ApprovalRequiredError,
+    account_context,
+    cancel_operation,
+    company_of,
+    conversation_client,
+    disconnect,
+    end_session,
+    follow_events,
+    list_requirements,
+    operation_view,
+    operations_client,
+    read_events,
+    session_token,
+    session_view,
+    show_operation,
+    show_requirement,
+    show_sessions,
+    who_of,
+)
+from .apis import ApiClient
 from .auth import DirectSignInClient
 from .cli_host import (
     CliRuntime,
@@ -53,19 +73,17 @@ from .cli_host import (
     NotConfiguredError,
     SessionRecord,
 )
-from .conversations import ConversationClient, StreamReconnected, TextDelta, generate_message_id
+from .conversations import generate_message_id
 from .device import DeviceSignInClient
-from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError
 from .identity import AgentIdentityClient
 from .mcp import McpClient, mcp_api
 from .mediated import MediatedSignInClient
-from .models import ConversationEvent, DiscoveredCompany, Message, Operation
-from .operations import OperationsClient, UserApproval, approve, operations_endpoint
+from .models import DiscoveredCompany, Message, Operation
+from .operations import UserApproval, approve
 from .pairwise import resolve_pairwise_user_id
 from .reactor import SIGNERS
-from .requirements import load_ledger
-from .sessions import SessionClient, SessionToken, Who
+from .sessions import SessionClient, SessionToken
 from .transport import DpopHttpClient
 
 if TYPE_CHECKING:
@@ -93,7 +111,8 @@ EXIT_CODES: dict[int, str] = {
     ExitCode.INPUT_REQUIRED: "Input required, but --no-input was given or no terminal is attached.",
     ExitCode.PENDING: "Still pending: the user has not finished signing in before --timeout.",
     ExitCode.NOT_APPROVED: (
-        "Not approved: no approval for this exact operation ID and revision, or the terms changed."
+        "Not approved: no approval for this exact operation ID and revision, or the terms changed;"
+        " or a live-session action the host's approval surface did not approve."
     ),
     ExitCode.INTERRUPTED: "Interrupted.",
 }
@@ -112,7 +131,16 @@ _EXIT_FOR = (
     (NotConfiguredError, ExitCode.NOT_CONFIGURED),
     (PendingError, ExitCode.PENDING),
     (NotApprovedError, ExitCode.NOT_APPROVED),
+    (ApprovalRequiredError, ExitCode.NOT_APPROVED),
+    (ActionUsageError, ExitCode.USAGE),
 )
+
+
+def exit_code_for(error: PersonalAgentProtocolError) -> ExitCode:
+    """The exit code a refused or failed command ends with."""
+
+    return next((code for kind, code in _EXIT_FOR if isinstance(error, kind)), ExitCode.REFUSED)
+
 
 PROFILE = typer.Option(None, "--profile", help="Configuration profile (domain, client_id).")
 JSON = typer.Option(False, "--json", help="Print versioned JSON (schema_version 1).")
@@ -178,8 +206,7 @@ class Runner:
         except typer.Exit:
             raise
         except PersonalAgentProtocolError as error:
-            code = next((c for kind, c in _EXIT_FOR if isinstance(error, kind)), ExitCode.REFUSED)
-            raise _fail(error, code) from error
+            raise _fail(error, exit_code_for(error)) from error
         except RuntimeError as error:
             if "signer" in str(error):
                 missing = NotConfiguredError(
@@ -191,32 +218,6 @@ class Runner:
 
 
 # Shared steps --------------------------------------------------------------------------
-
-
-async def _company(runtime: CliRuntime, domain: str) -> DiscoveredCompany:
-    return await DiscoveryClient(reactor=runtime.reactor).discover(domain)
-
-
-def _who(record: SessionRecord) -> Who:
-    return {
-        "tenant_id": record.tenant_id,
-        "pairwise_user_id": record.pairwise_user_id,
-        "issuer": record.issuer,
-    }
-
-
-async def _token(runtime: CliRuntime, record: SessionRecord) -> SessionToken:
-    secret = await runtime.secrets.get(record.token_reference)
-    if secret is None:
-        raise NotConfiguredError("no_session_token", "The Session's token is gone: renew it")
-    return SessionToken(
-        access_token=secret,
-        token_type=cast(Any, record.token_type),
-        expires_in=3600,
-        scope=record.scope,
-        session_id=record.session_id,
-        signed_in=record.signed_in,
-    )
 
 
 async def _keep(
@@ -241,10 +242,6 @@ async def _keep(
     runtime.state.save()
 
 
-def _session_view(record: SessionRecord) -> dict[str, Any]:
-    return {"session": record.public()}
-
-
 def _render_session(payload: dict) -> None:
     session = payload["session"]
     state = "signed in" if session["signed_in"] else "signed out"
@@ -256,17 +253,6 @@ def _render_session(payload: dict) -> None:
         typer.echo(f"account token: {session['account_reference']}")
 
 
-def _account_context(record: SessionRecord) -> AccountTokenContext:
-    return AccountTokenContext(
-        token_endpoint=record.token_endpoint,
-        issuer=record.issuer,
-        client_id=record.client_id,
-        tenant_id=record.tenant_id,
-        pairwise_user_id=record.pairwise_user_id,
-        revocation_endpoint=record.revocation_endpoint,
-    )
-
-
 def _scopes(scope: list[str] | None, company: DiscoveredCompany, kind: str) -> tuple[str, ...]:
     if scope:
         return tuple(scope)
@@ -275,10 +261,6 @@ def _scopes(scope: list[str] | None, company: DiscoveredCompany, kind: str) -> t
     if option is None or not option.scopes:
         raise NotConfiguredError("no_scopes", f"The company offers no {kind} sign-in scopes")
     return tuple(option.scopes)
-
-
-def _operation_view(operation: Operation) -> dict[str, Any]:
-    return {"operation": operation.model_dump(mode="json")}
 
 
 def _render_operation(payload: dict) -> None:
@@ -354,7 +336,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 raise NotConfiguredError(
                     "no_signing_key", "No signing key: run `pap agent key import`"
                 )
-            company = await _company(runtime, str(selected))
+            company = await company_of(runtime, str(selected))
             metadata = company.oauth_metadata
             if metadata is None:
                 raise NotConfiguredError("no_sessions", "The company offers no Sessions")
@@ -388,7 +370,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 expires_at=runtime.expires_at(token.expires_in),
             )
             await _keep(runtime, record, token)
-            return _session_view(record)
+            return session_view(record)
 
         run(work, json_output=json_output, render=_render_session, no_input=no_input)
 
@@ -407,12 +389,12 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                     reactor=runtime.reactor, http_client=runtime.http
                 ).refresh(
                     record.account_reference,
-                    context=_account_context(record),
+                    context=account_context(record),
                     session_id=session_id,
                 )
                 if result.status == "signed_in" and result.token is not None:
                     await _keep(runtime, record, result.token)
-                    return _session_view(record)
+                    return session_view(record)
                 record.account_reference = None  # gone at the company: continue signed out
             token = await SessionClient(reactor=runtime.reactor, http_client=runtime.http).renew(
                 client_id=record.client_id,
@@ -423,7 +405,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 session_id=session_id,
             )
             await _keep(runtime, record, token)
-            return _session_view(record)
+            return session_view(record)
 
         run(work, json_output=json_output, render=_render_session, no_input=no_input)
 
@@ -435,9 +417,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Show the Sessions this agent holds (opaque references, never tokens)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            if session_id is not None:
-                return _session_view(runtime.session(session_id))
-            return {"sessions": [record.public() for record in runtime.sessions()]}
+            return await show_sessions(runtime, session_id)
 
         def render(payload: dict) -> None:
             if "session" in payload:
@@ -453,12 +433,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Stop using a Session; its Account Token is kept for new ones (§4.9)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_id)
-            await runtime.secrets.delete(record.token_reference)
-            await runtime.secrets.delete(f"mcp:{session_id}")
-            del runtime.state.sessions[session_id]
-            runtime.state.save()
-            return {"ended": session_id, "account_reference": record.account_reference}
+            return await end_session(runtime, session_id)
 
         def render(payload: dict) -> None:
             typer.echo(f"Ended {payload['ended']}.")
@@ -487,7 +462,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            company = await _company(runtime, record.domain)
+            company = await company_of(runtime, record.domain)
             metadata = company.oauth_metadata
             if metadata is None or metadata.authorization_endpoint is None:
                 raise NotConfiguredError("no_direct", "The company offers no Direct Sign-In")
@@ -515,7 +490,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             await _keep(
                 runtime, record, result.token, account_reference=result.account_token_reference
             )
-            return {**_session_view(record), "missing_scopes": list(result.missing_scopes)}
+            return {**session_view(record), "missing_scopes": list(result.missing_scopes)}
 
         run(
             work,
@@ -538,7 +513,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            company = await _company(runtime, record.domain)
+            company = await company_of(runtime, record.domain)
             metadata = company.oauth_metadata
             if metadata is None or metadata.device_authorization_endpoint is None:
                 raise NotConfiguredError("no_device", "The company offers no Device Sign-In")
@@ -567,7 +542,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                         polled.token,
                         account_reference=polled.account_token_reference,
                     )
-                    return {**_session_view(record), "missing_scopes": list(polled.missing_scopes)}
+                    return {**session_view(record), "missing_scopes": list(polled.missing_scopes)}
             raise PendingError("authorization_pending", "The user has not signed in yet")
 
         run(work, json_output=json_output, render=_render_session, no_input=no_input)
@@ -589,12 +564,12 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            company = await _company(runtime, record.domain)
+            company = await company_of(runtime, record.domain)
             auth_document = company.document.auth
             if auth_document is None or auth_document.mediated is None:
                 raise NotConfiguredError("no_mediated", "The company offers no Mediated Sign-In")
             client = MediatedSignInClient(reactor=runtime.reactor, http_client=runtime.http)
-            token = await _token(runtime, record)
+            token = await session_token(runtime, record)
             result = await client.sign_in(
                 mediated=auth_document.mediated,
                 organization=company.document.organization,
@@ -605,7 +580,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 pairwise_user_id=record.pairwise_user_id,
             )
             while result.status == "code_required" and result.reference is not None:
-                result = await client.submit_code(result.reference, token=token, **_who(record))
+                result = await client.submit_code(result.reference, token=token, **who_of(record))
             if result.status != "complete" or result.token is None:
                 raise PersonalAgentProtocolError(
                     f"sign_in_{result.status}", "Mediated Sign-In did not complete"
@@ -613,7 +588,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             await _keep(
                 runtime, record, result.token, account_reference=result.account_token_reference
             )
-            return {**_session_view(record), "missing_scopes": list(result.missing_scopes)}
+            return {**session_view(record), "missing_scopes": list(result.missing_scopes)}
 
         run(
             work,
@@ -629,19 +604,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Sign out: revoke the Account Token; Sessions continue signed out (§4.9)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_id)
-            if record.account_reference is None:
-                raise NotConfiguredError("not_signed_in", "This Session holds no Account Token")
-            await AccountTokenClient(reactor=runtime.reactor, http_client=runtime.http).revoke(
-                record.account_reference, context=_account_context(record)
-            )
-            for other in runtime.sessions():
-                if other.account_reference == record.account_reference:
-                    other.account_reference = None
-                    other.signed_in = False
-                    other.scope = ""
-            runtime.state.save()
-            return _session_view(record)
+            return await disconnect(runtime, session_id)
 
         run(work, json_output=json_output, render=_render_session)
 
@@ -669,12 +632,12 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             ).call(
                 method.upper(),
                 url,
-                token=await _token(runtime, record),
+                token=await session_token(runtime, record),
                 body=body if body is not None or method.upper() == "GET" else {},
-                **_who(record),
+                **who_of(record),
             )
             if answer.operation is not None:
-                return {"status": answer.status, **_operation_view(answer.operation)}
+                return {"status": answer.status, **operation_view(answer.operation)}
             return {"status": answer.status, "body": answer.body}
 
         def render(payload: dict) -> None:
@@ -697,7 +660,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            company = await _company(runtime, record.domain)
+            company = await company_of(runtime, record.domain)
             server = mcp_api(company.document)
             if server is None:
                 raise NotConfiguredError("no_mcp", "The company lists no MCP server")
@@ -706,7 +669,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                     reactor=runtime.reactor, http_client=runtime.http
                 ).bearer_for_mcp(
                     record.account_reference,
-                    context=_account_context(record),
+                    context=account_context(record),
                     session_id=session_id,
                     resource=server.url,
                 )
@@ -736,7 +699,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 "is_error": answer.is_error,
             }
             if answer.operation is not None:
-                payload.update(_operation_view(answer.operation))
+                payload.update(operation_view(answer.operation))
             return payload
 
         def render(payload: dict) -> None:
@@ -754,16 +717,6 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     # conversations ---------------------------------------------------------------------
 
-    async def _conversation(runtime: CliRuntime, record: SessionRecord) -> tuple[Any, str]:
-        company = await _company(runtime, record.domain)
-        endpoint = conversation_endpoint(company.document)
-        if endpoint is None:
-            raise NotConfiguredError("no_conversations", "The company lists no poppy agent")
-        client = ConversationClient(
-            transport=DpopHttpClient(reactor=runtime.reactor, http_client=runtime.http)
-        )
-        return client, endpoint
-
     @conversations.command("start")
     def conversations_start(
         session_id: str = typer.Argument(...),
@@ -776,15 +729,15 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            client, endpoint = await _conversation(runtime, record)
+            client, endpoint = await conversation_client(runtime, record)
             answer = await client.start(
                 endpoint,
                 _message(runtime.reactor, text, human),
-                token=await _token(runtime, record),
+                token=await session_token(runtime, record),
                 wait=wait,
-                **_who(record),
+                **who_of(record),
             )
-            return cast(dict[str, Any], answer.model_dump(mode="json"))
+            return answer.model_dump(mode="json")
 
         run(work, json_output=json_output, render=_render_receipt_or_page)
 
@@ -801,16 +754,16 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            client, endpoint = await _conversation(runtime, record)
+            client, endpoint = await conversation_client(runtime, record)
             answer = await client.send(
                 endpoint,
                 conversation_id,
                 _message(runtime.reactor, text, human),
-                token=await _token(runtime, record),
+                token=await session_token(runtime, record),
                 wait=wait,
-                **_who(record),
+                **who_of(record),
             )
-            return cast(dict[str, Any], answer.model_dump(mode="json"))
+            return answer.model_dump(mode="json")
 
         run(work, json_output=json_output, render=_render_receipt_or_page)
 
@@ -824,16 +777,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Read one page of events (§7.5)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_id)
-            client, endpoint = await _conversation(runtime, record)
-            page = await client.read_events(
-                endpoint,
-                conversation_id,
-                token=await _token(runtime, record),
-                cursor=cursor,
-                **_who(record),
-            )
-            return cast(dict[str, Any], page.model_dump(mode="json"))
+            return await read_events(runtime, session_id, conversation_id, cursor)
 
         run(work, json_output=json_output, render=_render_page)
 
@@ -850,31 +794,19 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         Text pieces are shown as they arrive and are never acted on.
         """
 
+        def show(text: str) -> None:
+            if not json_output:
+                typer.echo(f"… {text}", err=True)
+
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_id)
-            client, endpoint = await _conversation(runtime, record)
-            events: list[dict[str, Any]] = []
-            stream = client.stream(
-                endpoint,
+            return await follow_events(
+                runtime,
+                session_id,
                 conversation_id,
-                token=await _token(runtime, record),
                 last_event_id=last_event_id,
-                max_reconnects=0,
-                **_who(record),
+                max_events=max_events,
+                on_text=show,
             )
-            with contextlib.suppress(PersonalAgentProtocolError):
-                async with contextlib.aclosing(stream) as items:
-                    async for item in items:
-                        if isinstance(item, TextDelta):
-                            if not json_output:
-                                typer.echo(f"… {item.text}", err=True)
-                        elif isinstance(item, ConversationEvent):
-                            events.append(item.model_dump(mode="json", exclude_none=True))
-                            if len(events) >= max_events:
-                                break
-                        elif isinstance(item, StreamReconnected):
-                            break
-            return {"conversation_id": conversation_id, "events": events}
 
         run(work, json_output=json_output, render=_render_page)
 
@@ -888,11 +820,14 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            client, endpoint = await _conversation(runtime, record)
+            client, endpoint = await conversation_client(runtime, record)
             receipt = await client.handoff(
-                endpoint, conversation_id, token=await _token(runtime, record), **_who(record)
+                endpoint,
+                conversation_id,
+                token=await session_token(runtime, record),
+                **who_of(record),
             )
-            return cast(dict[str, Any], receipt.model_dump(mode="json"))
+            return receipt.model_dump(mode="json")
 
         run(work, json_output=json_output, render=_render_receipt_or_page)
 
@@ -907,15 +842,15 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            client, endpoint = await _conversation(runtime, record)
+            client, endpoint = await conversation_client(runtime, record)
             answer = await client.start_direct(
                 endpoint,
                 parent_id,
                 _message(runtime.reactor, text, True),
-                token=await _token(runtime, record),
-                **_who(record),
+                token=await session_token(runtime, record),
+                **who_of(record),
             )
-            return cast(dict[str, Any], answer.model_dump(mode="json"))
+            return answer.model_dump(mode="json")
 
         run(work, json_output=json_output, render=_render_receipt_or_page)
 
@@ -929,27 +864,18 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            client, endpoint = await _conversation(runtime, record)
+            client, endpoint = await conversation_client(runtime, record)
             receipt = await client.close(
-                endpoint, conversation_id, token=await _token(runtime, record), **_who(record)
+                endpoint,
+                conversation_id,
+                token=await session_token(runtime, record),
+                **who_of(record),
             )
-            return cast(dict[str, Any], receipt.model_dump(mode="json"))
+            return receipt.model_dump(mode="json")
 
         run(work, json_output=json_output, render=_render_receipt_or_page)
 
     # operations ------------------------------------------------------------------------
-
-    async def _operations(runtime: CliRuntime, record: SessionRecord) -> tuple[Any, str, str]:
-        company = await _company(runtime, record.domain)
-        identity = AgentIdentityClient(reactor=runtime.reactor, http_client=runtime.http)
-        metadata = await identity.fetch_metadata(record.client_id)
-        endpoint = operations_endpoint(company.document, metadata)
-        if endpoint is None:
-            raise NotConfiguredError("no_operations", "Operations v1 is not negotiated")
-        client = OperationsClient(
-            transport=DpopHttpClient(reactor=runtime.reactor, http_client=runtime.http)
-        )
-        return client, endpoint, company.document.organization.name
 
     @operations.command("show")
     def operations_show(
@@ -960,12 +886,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Read an operation by its ID (Operations §6)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_id)
-            client, endpoint, _ = await _operations(runtime, record)
-            operation = await client.read(
-                endpoint, operation_id, token=await _token(runtime, record), **_who(record)
-            )
-            return _operation_view(operation)
+            return await show_operation(runtime, session_id, operation_id)
 
         run(work, json_output=json_output, render=_render_operation)
 
@@ -985,9 +906,9 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
-            client, endpoint, company_name = await _operations(runtime, record)
+            client, endpoint, company_name = await operations_client(runtime, record)
             operation = await client.read(
-                endpoint, operation_id, token=await _token(runtime, record), **_who(record)
+                endpoint, operation_id, token=await session_token(runtime, record), **who_of(record)
             )
             if operation.revision != revision:
                 raise NotApprovedError(
@@ -1031,15 +952,15 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 raise NotApprovedError(
                     "not_approved", "No approval for this operation ID and revision"
                 )
-            client, endpoint, _ = await _operations(runtime, record)
-            token = await _token(runtime, record)
-            operation = await client.read(endpoint, operation_id, token=token, **_who(record))
+            client, endpoint, _ = await operations_client(runtime, record)
+            token = await session_token(runtime, record)
+            operation = await client.read(endpoint, operation_id, token=token, **who_of(record))
             approval = UserApproval.model_validate(
                 {key: approved[key] for key in ("operation_id", "revision", "digest")}
             )
             try:
                 outcome = await client.confirm(
-                    endpoint, operation, approval=approval, token=token, **_who(record)
+                    endpoint, operation, approval=approval, token=token, **who_of(record)
                 )
             except PersonalAgentProtocolError as error:
                 if error.code in {"approval_mismatch", "not_proposed"}:
@@ -1051,7 +972,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 raise NotApprovedError("user_approval_required", "The user must approve")
             runtime.state.approvals.pop(operation_id, None)
             runtime.state.save()
-            payload = _operation_view(cast(Operation, outcome.operation))
+            payload = operation_view(cast(Operation, outcome.operation))
             return {**payload, "status": outcome.status, "retry_after": outcome.retry_after}
 
         run(work, json_output=json_output, render=_render_operation)
@@ -1065,14 +986,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Decline a proposal, or ask the company to stop one in progress (Operations §7)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_id)
-            client, endpoint, _ = await _operations(runtime, record)
-            operation = await client.cancel(
-                endpoint, operation_id, token=await _token(runtime, record), **_who(record)
-            )
-            runtime.state.approvals.pop(operation_id, None)
-            runtime.state.save()
-            return _operation_view(operation)
+            return await cancel_operation(runtime, session_id, operation_id)
 
         run(work, json_output=json_output, render=_render_operation)
 
@@ -1088,9 +1002,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
     ) -> None:
         """List ledger entries, filtered."""
 
-        ledger = load_ledger()
-        items = ledger.select(role=role, level=level, status=status, source=source)
-        payload = {"profile": ledger.profile, "requirements": [i.as_dict() for i in items]}
+        payload = list_requirements(role=role, level=level, status=status, source=source)
 
         def render(value: dict) -> None:
             for item in value["requirements"]:
@@ -1107,7 +1019,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Show one ledger entry: its text, implementation, tests, and cases."""
 
         try:
-            item = load_ledger().get(requirement_id)
+            payload = show_requirement(requirement_id)
         except KeyError as error:
             raise _fail(
                 NotConfiguredError("unknown_requirement", f"No requirement {requirement_id}"),
@@ -1126,7 +1038,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 for value_ in entry[label]:
                     typer.echo(f"{label}: {value_}")
 
-        _emit({"requirement": item.as_dict()}, json_output, render)
+        _emit(payload, json_output, render)
 
     # conformance -----------------------------------------------------------------------
 

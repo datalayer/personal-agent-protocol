@@ -18,6 +18,7 @@ import {
 } from "./limits.js";
 import type { StandingPermissionStore } from "./operations.js";
 import type { SecretValue } from "./secret.js";
+import type { TelemetryEvent } from "./telemetry.js";
 
 export interface DiscoveryTransport {
   fetch(input: URL, init: RequestInit): Promise<Response>;
@@ -115,6 +116,14 @@ export interface ProtectedInput {
   collect(request: ProtectedInputRequest): Promise<Record<string, SecretValue>>;
 }
 
+/**
+ * Receive each finished protocol stage (`TelemetryEvent` of telemetry.ts), redacted already.
+ * No contribution, no telemetry.
+ */
+export interface TelemetrySink {
+  record(event: TelemetryEvent): void;
+}
+
 /** One in-process lock per reference: the default Account Token lock. */
 export class InProcessAccountTokenLock implements AccountTokenLock {
   readonly #tails = new Map<string, Promise<unknown>>();
@@ -173,6 +182,8 @@ export const RateLimitBudgets = defineContributionPoint<RateLimitBudget>(
 export const StandingPermissionStores = defineContributionPoint<StandingPermissionStore>(
   "pap.standingPermissionStore",
 );
+/** `TelemetrySink`: where traces and analytics events go; none, and nothing is emitted. */
+export const TelemetrySinks = defineContributionPoint<TelemetrySink>("pap.telemetry");
 
 export interface PapCoreOptions {
   readonly fetch?: typeof globalThis.fetch;
@@ -237,6 +248,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       RetryPolicies,
       RateLimitBudgets,
       StandingPermissionStores,
+      TelemetrySinks,
     ],
     contributes: [
       contribution(

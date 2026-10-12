@@ -14,6 +14,7 @@ import {
 } from "./models.js";
 import { RandomSources, firstContribution } from "./reactor.js";
 import type { SessionToken } from "./sessions.js";
+import { byEndpoint, conversationResult, traced } from "./telemetry.js";
 import { DpopFetchClient } from "./transport.js";
 
 const identifier = /^[A-Za-z0-9_-]{1,256}$/;
@@ -142,7 +143,21 @@ export class ConversationClient {
     return generateMessageId(this.#reactor);
   }
 
-  async start(
+  start(
+    endpoint: string,
+    message: Message,
+    options: StartConversationOptions,
+  ): Promise<ConversationResponse> {
+    return traced(
+      this.#reactor,
+      "pap.conversation.start",
+      byEndpoint(endpoint),
+      () => this.#start(endpoint, message, options),
+      conversationResult,
+    );
+  }
+
+  async #start(
     endpoint: string,
     message: Message,
     options: StartConversationOptions,
@@ -155,7 +170,22 @@ export class ConversationClient {
     return this.#send(endpoint, body, 201, options);
   }
 
-  async send(
+  send(
+    endpoint: string,
+    conversationId: string,
+    message: Message,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationResponse> {
+    return traced(
+      this.#reactor,
+      "pap.conversation.send",
+      byEndpoint(endpoint),
+      () => this.#sendMessage(endpoint, conversationId, message, options),
+      conversationResult,
+    );
+  }
+
+  async #sendMessage(
     endpoint: string,
     conversationId: string,
     message: Message,
@@ -171,7 +201,21 @@ export class ConversationClient {
   }
 
   /** Read one ordered page of events after an opaque cursor. */
-  async readEvents(
+  readEvents(
+    endpoint: string,
+    conversationId: string,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationEventPage> {
+    return traced(
+      this.#reactor,
+      "pap.conversation.read_events",
+      byEndpoint(endpoint),
+      () => this.#readEvents(endpoint, conversationId, options),
+      conversationResult,
+    );
+  }
+
+  async #readEvents(
     endpoint: string,
     conversationId: string,
     options: ConversationRequestOptions,
@@ -276,7 +320,22 @@ export class ConversationClient {
   }
 
   /** Open a Direct Conversation under an open parent (§7.10). */
-  async startDirect(
+  startDirect(
+    endpoint: string,
+    parentConversationId: string,
+    message: Message,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationResponse> {
+    return traced(
+      this.#reactor,
+      "pap.conversation.start_direct",
+      byEndpoint(endpoint),
+      () => this.#startDirect(endpoint, parentConversationId, message, options),
+      conversationResult,
+    );
+  }
+
+  async #startDirect(
     endpoint: string,
     parentConversationId: string,
     message: Message,
@@ -286,7 +345,21 @@ export class ConversationClient {
   }
 
   /** Ask for a person at the company (§7.9): `queued` while one is found. */
-  async handoff(
+  handoff(
+    endpoint: string,
+    conversationId: string,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationReceipt> {
+    return traced(
+      this.#reactor,
+      "pap.conversation.handoff",
+      byEndpoint(endpoint),
+      () => this.#handoff(endpoint, conversationId, options),
+      conversationResult,
+    );
+  }
+
+  async #handoff(
     endpoint: string,
     conversationId: string,
     options: ConversationRequestOptions,
@@ -295,7 +368,21 @@ export class ConversationClient {
   }
 
   /** Close the conversation (§7.12); what it started is not cancelled. */
-  async close(
+  close(
+    endpoint: string,
+    conversationId: string,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationReceipt> {
+    return traced(
+      this.#reactor,
+      "pap.conversation.close",
+      byEndpoint(endpoint),
+      () => this.#close(endpoint, conversationId, options),
+      conversationResult,
+    );
+  }
+
+  async #close(
     endpoint: string,
     conversationId: string,
     options: ConversationRequestOptions,

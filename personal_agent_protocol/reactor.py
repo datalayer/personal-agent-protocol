@@ -229,6 +229,39 @@ class ProtectedInput(Protocol):
     async def collect(self, request: ProtectedInputRequest) -> dict[str, SecretStr]: ...
 
 
+@dataclass(frozen=True)
+class ApprovalRequest:
+    """A live-session action that changes or ends what the user holds, to approve first.
+
+    `summary` says what it does in plain words; `arguments` are the action's own
+    (Session and operation IDs, never a credential). Nothing has been done yet.
+    """
+
+    action_id: str
+    action_name: str
+    summary: str
+    arguments: Mapping[str, str]
+    tenant_id: str
+
+
+@runtime_checkable
+class ApprovalSurface(Protocol):
+    """The host's own approval surface: the user, not a model, answers.
+
+    Only `True` approves. Without a contribution, a destructive live-session
+    action is refused (`approval_required`); it stays available from `pap`.
+    """
+
+    async def approve(self, request: ApprovalRequest) -> bool: ...
+
+
+@runtime_checkable
+class TelemetrySink(Protocol):
+    """Receive each finished protocol stage (`telemetry.TelemetryEvent`), redacted already."""
+
+    def record(self, event: Any) -> None: ...
+
+
 class InMemoryProtocolCache:
     """Default `pap.cache`: a bounded, least-recently-used map in one process."""
 
@@ -452,6 +485,10 @@ RETRY_POLICIES = define_contribution_point("pap.retryPolicy")
 RATE_LIMIT_BUDGETS = define_contribution_point("pap.rateLimitBudget")
 #: `operations.StandingPermissionStore`: the user's standing permissions (Operations).
 STANDING_PERMISSION_STORES = define_contribution_point("pap.standingPermissionStore")
+#: `TelemetrySink`: where traces and analytics events go; none, and nothing is emitted.
+TELEMETRY_SINKS = define_contribution_point("pap.telemetry")
+#: `ApprovalSurface`: a host's approval for destructive live-session actions (Python hosts).
+APPROVAL_SURFACES = define_contribution_point("pap.approvalSurface")
 
 
 async def resolve_addresses(host: str) -> list[str]:
@@ -736,6 +773,8 @@ def build_pap_reactor(
                 RETRY_POLICIES.id,
                 RATE_LIMIT_BUDGETS.id,
                 STANDING_PERMISSION_STORES.id,
+                TELEMETRY_SINKS.id,
+                APPROVAL_SURFACES.id,
             ],
         ),
         PapCorePlugin(

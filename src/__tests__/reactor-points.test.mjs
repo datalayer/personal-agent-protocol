@@ -10,7 +10,9 @@ import * as portable from "../../lib/index.js";
 import * as server from "../../lib/server.js";
 
 const ROOT = new URL("../../", import.meta.url);
-const { points } = JSON.parse(readFileSync(new URL("protocol/reactor-points.json", ROOT), "utf8"));
+const inventory = JSON.parse(readFileSync(new URL("protocol/reactor-points.json", ROOT), "utf8"));
+/** The points TypeScript defines: all but those for Python hosts only (`typescript: null`). */
+const points = inventory.points.filter((entry) => entry.typescript !== null);
 
 function sources(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -124,7 +126,7 @@ for (const entry of points) {
 
 test("the tenant-scoped points are the inventory's", () => {
   assert.deepEqual(
-    points.filter((entry) => entry.tenant !== null).map((entry) => entry.id).sort(),
+    inventory.points.filter((entry) => entry.tenant !== null).map((entry) => entry.id).sort(),
     ["pap.dpopProofProvider", "pap.pairwiseUserIdStore"],
   );
 });

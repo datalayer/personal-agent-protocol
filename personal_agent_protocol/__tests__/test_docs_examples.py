@@ -145,6 +145,8 @@ class Docs:
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         self.namespace: dict[str, Any] = {}
+        self.monkeypatch = monkeypatch
+        self.tmp_path = tmp_path
         self.clock = MutableClock()
         self.network = network = InProcessNetwork()
 
@@ -662,6 +664,62 @@ async def _cli_plugin(docs: Docs) -> tuple[dict[str, Any], Check]:
         implementation.provide_cli(cli)
         result = CliRunner().invoke(cli, ["acme", "inspect"])
         assert result.exit_code == 0 and "Acme inspection" in result.output
+
+    return {}, check
+
+
+@case("docs/docs/guides/cli.mdx#1")
+async def _live_session_actions(docs: Docs) -> tuple[dict[str, Any], Check]:
+    from personal_agent_protocol.cli_host import NotConfiguredError
+
+    # The CLI's personal agent keeps its state and profile under the test's directory.
+    docs.monkeypatch.setenv("XDG_STATE_HOME", str(docs.tmp_path / "state"))
+    docs.monkeypatch.setenv("XDG_CONFIG_HOME", str(docs.tmp_path / "config"))
+    asked: list[tuple[str, str]] = []
+
+    class Studio:
+        async def confirm(self, *, title: str, text: str) -> bool:
+            asked.append((title, text))
+            return True
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert out.strip() == "[]"
+        assert "pap.sessions.end" in namespace["repl"]
+        # Approved by Studio's dialog, then: no such Session.
+        with pytest.raises(NotConfiguredError):
+            await namespace["platform"].execute_command(
+                "pap.sessions.end", {"session_id": "ses_docs_0000000000000"}
+            )
+        assert asked == [
+            ("End a PAP Session", "End Session ses_docs_0000000000000 and forget its token.")
+        ]
+
+    return {"studio": Studio()}, check
+
+
+@case("docs/docs/guides/telemetry.mdx#0")
+async def _telemetry(docs: Docs) -> tuple[dict[str, Any], Check]:
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    # The host's tracer provider, as the example's `trace.get_tracer` finds it.
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    docs.monkeypatch.setattr(trace, "get_tracer", provider.get_tracer)
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        (span,) = exporter.get_finished_spans()
+        assert span.name == "pap.discovery.discover"
+        assert dict(span.attributes or {}) == {
+            "pap.company.domain": "example.com",
+            "pap.company.issuer": "https://example.com",
+            "pap.stage": "discovery",
+            "pap.outcome": "ok",
+        }
 
     return {}, check
 

@@ -1,0 +1,133 @@
+---
+title: Telemetry
+---
+
+# Traces and analytics, without secrets
+
+Both SDKs report each protocol stage they complete — discovery, a Session
+start or renewal, each sign-in step, each conversation call, each operation
+read, confirmation or cancellation — to a `pap.telemetry` sink the host
+contributes through Reactor. Without a sink nothing is emitted, and nothing
+changes.
+
+Each stage is one `TelemetryEvent`: its name, its stage, `ok` or `error`, its
+duration, and attributes. One event is what a trace exporter turns into a span
+and what an analytics pipeline counts, so traces and analytics see the same
+data.
+
+## Redacted by construction
+
+Attributes come from an allowlist (`TELEMETRY_ATTRIBUTES`), and each value
+must pass its rule; a value that fails is dropped, and a name outside the list
+is a programming error the SDK refuses:
+
+| Attribute | Value |
+| --- | --- |
+| `pap.stage` | `discovery`, `session`, `sign_in`, `conversation`, or `operation` |
+| `pap.outcome` | `ok` or `error` |
+| `pap.error` | the refusal's error code, a lowercase identifier; `unexpected` for anything else |
+| `pap.company.domain` | a DNS name |
+| `pap.company.issuer` | an `https` origin with at most a plain path: no user information, query, or fragment |
+| `pap.sign_in.method` | `direct`, `device`, `mediated`, or `account_token` |
+| `pap.sign_in.status` | the step's status, a lowercase identifier (`pending`, `complete`, `signed_out`, …) |
+| `pap.session.signed_in` | a flag |
+| `pap.scopes.granted`, `pap.scopes.missing` | counts |
+| `pap.conversation.status` | a lowercase identifier (`idle`, `closed`, …) |
+| `pap.conversation.events` | a count |
+| `pap.operation.state`, `pap.operation.status` | lowercase identifiers (`proposed`, `succeeded`, `confirmed`, `terms_changed`, …) |
+| `pap.operation.revision` | a count |
+
+No rule admits a token, an assertion, a DPoP proof, a code, a cookie, a
+password, a mediated field, a Session, conversation or operation ID, a
+pairwise User ID, or a URL with a query: the SDK never offers them, and none
+could pass. An error event carries the refusal's code only, never its message
+or the company's answer. A sink that throws is logged by its exception type
+alone and never fails the protocol call; two sinks at the winning order fail
+closed, as every optional point does.
+
+The canary suites hold this to a real run in both languages
+(`test_canaries.py`, `canaries.test.mjs`): every Reactor of the demo worlds
+has a sink, and no credential exchanged on the wire may appear in any event,
+as analytics JSON or as the span the OpenTelemetry adapter starts. See
+[Security](/security/).
+
+| Event | Stage |
+| --- | --- |
+| `pap.discovery.discover` | discovery |
+| `pap.session.start`, `pap.session.renew` | session |
+| `pap.sign_in.direct.begin`, `pap.sign_in.direct.complete` | sign_in |
+| `pap.sign_in.device.begin`, `pap.sign_in.device.poll` | sign_in |
+| `pap.sign_in.mediated.sign_in`, `pap.sign_in.mediated.submit_code` | sign_in |
+| `pap.sign_in.account_token.refresh`, `pap.sign_in.account_token.revoke` | sign_in |
+| `pap.conversation.start`, `.send`, `.read_events`, `.start_direct`, `.handoff`, `.close` | conversation |
+| `pap.operation.read`, `.confirm`, `.cancel` | operation |
+
+## OpenTelemetry
+
+The OpenTelemetry adapter makes each event a span of the host's tracer, under
+the span current when the stage ran; a failed stage's span has an error status
+and no description. The dependency stays optional: in Python install the
+`telemetry` extra (`opentelemetry-api`); in TypeScript pass any
+`@opentelemetry/api` tracer, which the adapter uses structurally.
+
+```python
+import asyncio
+
+from opentelemetry import trace
+from reactor import PluginManifest
+
+from personal_agent_protocol import (
+    TELEMETRY_SINKS,
+    DiscoveryClient,
+    OpenTelemetrySink,
+    build_pap_reactor,
+)
+
+
+class Telemetry:
+    """The host's sink: the SDK's protocol stages as spans of the host's tracer."""
+
+    def provide_contributions(self, contributions) -> None:
+        sink = OpenTelemetrySink(trace.get_tracer("my-personal-agent"))
+        contributions.contribute(TELEMETRY_SINKS, sink, contribution_id="otel", order=50)
+
+
+async def main() -> None:
+    reactor, _ = build_pap_reactor(
+        plugins=[(PluginManifest(name="telemetry", version="1"), Telemetry())]
+    )
+    async with DiscoveryClient(reactor=reactor) as client:
+        await client.discover("example.com")  # one span: pap.discovery.discover
+
+
+asyncio.run(main())
+```
+
+```ts
+import {
+  TelemetrySinks,
+  buildPapReactor,
+  discoverCompany,
+  openTelemetrySink,
+} from "@datalayer/personal-agent-protocol";
+
+// `tracer` is the host's OpenTelemetry tracer: trace.getTracer("my-personal-agent").
+const reactor = buildPapReactor({}, [
+  {
+    name: "telemetry",
+    contributes: [
+      { point: TelemetrySinks, value: openTelemetrySink(tracer), options: { id: "otel", order: 50 } },
+    ],
+  },
+]);
+const company = await discoverCompany("example.com", { reactor }); // one span: pap.discovery.discover
+```
+
+## Analytics
+
+For analytics, contribute any object with `record(event)`: `event.as_dict()`
+(`JSON.stringify(event)` in TypeScript) is the event as JSON, ready for a
+pipeline. `RecordingTelemetrySink` keeps events in memory, for tests. The
+[`telemetry`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/telemetry)
+Pydantic AI example hands a model the events of a whole journey with
+Manzanita, which is safe precisely because they hold nothing secret.

@@ -12,6 +12,7 @@ import {
   firstContribution,
   type PairwiseUserIdStore,
 } from "./reactor.js";
+import { byIssuer, sessionResult, traced } from "./telemetry.js";
 
 export const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 export const JWT_CLIENT_ASSERTION =
@@ -323,10 +324,30 @@ export class SessionClient {
   }
 
   start(options: SessionRequestOptions): Promise<SessionToken> {
+    return traced(
+      this.#reactor,
+      "pap.session.start",
+      byIssuer(options.issuer),
+      () => this.#start(options),
+      sessionResult,
+    );
+  }
+
+  #start(options: SessionRequestOptions): Promise<SessionToken> {
     return this.#request(options);
   }
 
   renew(options: SessionRenewOptions): Promise<SessionToken> {
+    return traced(
+      this.#reactor,
+      "pap.session.renew",
+      byIssuer(options.issuer),
+      () => this.#renew(options),
+      sessionResult,
+    );
+  }
+
+  #renew(options: SessionRenewOptions): Promise<SessionToken> {
     return this.#request(options, options.sessionId);
   }
 

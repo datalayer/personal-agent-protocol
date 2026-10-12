@@ -60,7 +60,13 @@ class UsersBrowser:
 class Pap:
     """A user's terminal: one Manzanita world, one `pap` with its own state directory."""
 
-    def __init__(self, tmp_path: Path, *, approve_on_wait: bool = True) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        approve_on_wait: bool = True,
+        plugins: tuple[tuple[PluginManifest, object], ...] = (),
+    ) -> None:
         self.clock = MutableClock()
         self.network = InProcessNetwork()
         self.atlas = AgentIdentity(domain="atlas.example", name="Atlas")
@@ -90,14 +96,17 @@ class Pap:
             plugins=[
                 (PluginManifest(name="demo-clock", version="1"), ClockPlugin(self.clock)),
                 (PluginManifest(name="users-browser", version="1"), UsersBrowser(self.network)),
+                *plugins,
             ],
             sleep=wait,
         )
-        platform = PluginPlatform()
-        platform.register_plugin(
-            MANIFEST, PapCliPlugin(ConfigStore(tmp_path / "config.json"), host)
+        self.printed: list[str] = []
+        self.pap = PapCliPlugin(
+            ConfigStore(tmp_path / "config.json"), host, printer=self.printed.append
         )
-        self.app = create_app(platform)
+        self.platform = PluginPlatform()
+        self.platform.register_plugin(MANIFEST, self.pap)
+        self.app = create_app(self.platform)
         self.runner = CliRunner(env=PLAIN)
 
     def __call__(self, *arguments: str, input: str | None = None, code: int = 0) -> Any:  # noqa: A002

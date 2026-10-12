@@ -1,5 +1,5 @@
-// Credentials never reach logs, errors, model context, URLs, or the browser bundle: the
-// TypeScript twin of personal_agent_protocol/__tests__/test_canaries.py.
+// Credentials never reach logs, errors, model context, URLs, traces, analytics, or the
+// browser bundle: the TypeScript twin of personal_agent_protocol/__tests__/test_canaries.py.
 //
 // The TypeScript demo (Manzanita, the reference company) runs the shared journey (Direct
 // Sign-In through the consent page, conversations, an operation), Mediated Sign-In with a
@@ -8,7 +8,9 @@
 // Ada's password is a canary. Every credential exchanged on the wire is harvested by kind,
 // and none may appear in a console line, an error an SDK client or the company's methods
 // throw (its message, `String`, and `util.inspect`), a requested URL, or what a model reads
-// (every response body but the token and device endpoints', and each message's text).
+// (every response body but the token and device endpoints', and each message's text), or
+// a telemetry event: every agent Reactor of the run has a `pap.telemetry` sink keeping each
+// event as the JSON an analytics pipeline gets and as the span `openTelemetrySink` starts.
 // The TypeScript company has no MCP server, so no Bearer token is exchanged here.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -39,6 +41,31 @@ class Harvest {
     this.chatTexts = [];
     this.errors = [];
     this.logs = [];
+    this.telemetry = [];
+    this.stages = new Set();
+  }
+
+  /** A plugin contributing this harvest's `pap.telemetry` sink, for an agent's Reactor. */
+  telemetryPlugin(name) {
+    const spans = [];
+    const tracer = {
+      startSpan(spanName, options) {
+        const span = { name: spanName, attributes: options?.attributes, status: undefined };
+        spans.push(span);
+        return { setStatus: (status) => void (span.status = status), end: () => {} };
+      },
+    };
+    const otel = pap.openTelemetrySink(tracer);
+    const harvest = this;
+    const sink = {
+      record(event) {
+        harvest.stages.add(event.stage);
+        harvest.telemetry.push(JSON.stringify(event));
+        otel.record(event);
+        harvest.telemetry.push(JSON.stringify(spans.splice(0)));
+      },
+    };
+    return { name, contributes: [{ point: pap.TelemetrySinks, value: sink, options: { id: name, order: 50 } }] };
   }
   secret(kind, value) {
     if (typeof value !== "string") return;
@@ -187,10 +214,11 @@ function leaks(harvest, sinks, options) {
   return found;
 }
 
-async function mediatedSignIn(fetch, clock, sites) {
+async function mediatedSignIn(fetch, clock, sites, harvest) {
   const identity = await agentIdentity({ domain: "mediated.example", name: "Atlas" });
   sites["mediated.example"] = identity.documents;
   const host = await agentHost({ identity, fetch, clock, answers: [{ ...ADA }, { code: "975313" }, { code: ADA_CODE }] });
+  await host.reactor.install(harvest.telemetryPlugin("mediated-telemetry"));
   const company = await pap.discoverCompany("manzanita.example", { reactor: host.reactor });
   const issuer = company.oauthMetadata.issuer;
   const who = { tenantId: "atlas-demo", pairwiseUserId: "usr_ada_at_manzanita_000000", issuer };
@@ -216,7 +244,7 @@ async function mediatedSignIn(fetch, clock, sites) {
   assert.equal((await mediated.submitCode(started.reference, { token: session, ...who })).status, "complete");
 }
 
-test("no credential reaches a console line, an error, a URL, or model text", async () => {
+test("no credential reaches a console line, an error, a URL, a trace, analytics, or model text", async () => {
   const harvest = new Harvest();
   const password = ADA.password;
   ADA.password = PASSWORD;
@@ -232,6 +260,7 @@ test("no credential reaches a console line, an error, a URL, or model text", asy
       const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
       sites["atlas.example"] = identity.documents;
       const host = await agentHost({ identity, fetch, clock });
+      await host.reactor.install(harvest.telemetryPlugin("atlas-telemetry"));
       await runJourney({
         reactor: host.reactor,
         fetch,
@@ -245,7 +274,7 @@ test("no credential reaches a console line, an error, a URL, or model text", asy
       assert.equal(journeyScenario.company.domain, "manzanita.example");
 
       // Mediated Sign-In: the password and the one-time code.
-      await mediatedSignIn(fetch, clock, sites);
+      await mediatedSignIn(fetch, clock, sites, harvest);
 
       // The conformance cases, in process, but the probe that puts a Session Token in a
       // URL on purpose to see the company refuse it; a company of their own.
@@ -288,6 +317,7 @@ test("no credential reaches a console line, an error, a URL, or model text", asy
           },
         },
       });
+      await context.agent.reactor.install(harvest.telemetryPlugin("conformance-telemetry"));
       const { companyCases } = await import("./support/conformance.mjs");
       const cases = companyCases().filter((item) => item.id !== "security.token-in-url-refused");
       const report = await runConformance(context, { cases });
@@ -318,16 +348,24 @@ test("no credential reaches a console line, an error, a URL, or model text", asy
   }
   assert.ok([...harvest.all().keys()].some((value) => value.includes("CANARY")), "minted credentials carry the canary");
   assert.ok(harvest.errors.length > 0, "nothing was thrown: the error capture is not wired");
+  assert.deepEqual(
+    [...harvest.stages].sort(),
+    ["conversation", "discovery", "operation", "session", "sign_in"],
+    "a protocol stage emitted no telemetry: the trace capture is not wired",
+  );
 
   assert.deepEqual(leaks(harvest, harvest.logs.map((line) => ["a console line", line])), []);
   assert.deepEqual(leaks(harvest, harvest.errors.map((error) => ["an error", error])), []);
   assert.deepEqual(leaks(harvest, harvest.urls.map((url) => [url, url])), []);
+  // Traces and analytics: no credential at all, the user code included.
+  assert.deepEqual(leaks(harvest, harvest.telemetry.map((event) => ["a telemetry event", event])), []);
   assert.deepEqual(leaks(harvest, harvest.modelTexts, { but: ["user code"] }), []);
   assert.deepEqual(leaks(harvest, harvest.chatTexts), []);
   const counts = [...harvest.secrets].map(([kind, found]) => `${kind} ${found.size}`).sort().join(", ");
   process.stdout.write(
     `canaries: ${harvest.all().size} credentials (${counts}); searched ${harvest.logs.length} console lines, ` +
-      `${harvest.errors.length} errors, ${harvest.urls.length} URLs, ${harvest.modelTexts.length} model-readable bodies, ` +
+      `${harvest.errors.length} errors, ${harvest.urls.length} URLs, ${harvest.telemetry.length} telemetry events and spans, ` +
+      `${harvest.modelTexts.length} model-readable bodies, ` +
       `${harvest.chatTexts.length} messages\n`,
   );
 });

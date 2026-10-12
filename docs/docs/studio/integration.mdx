@@ -205,3 +205,14 @@ operation ID and revision become part of the Studio audit record.
   operations, secret, replay, rate-limit, tenant, and Appspec tests.
 - **Ship and Activity:** domain health gates, public metadata, verification,
   Pause/Revoke/rollback, and safe protocol event filters.
+
+Two SDK contracts serve these surfaces. A Python Studio host registers the
+`pap` plugin in its Reactor and runs the [live-session
+actions](/guides/cli/#live-session-actions) from its palette with
+`execute_command` — the same implementation a REPL's slash commands and
+`pap commands run` invoke — and contributes its confirmation dialog as the
+`pap.approvalSurface`, without which ending a Session, signing out, or
+cancelling an operation is refused. Activity's protocol events can come from a
+`pap.telemetry` sink: one [allowlisted event](/guides/telemetry/) per
+protocol stage, in either SDK, safe to store and display because no
+credential or identifier can be in it.

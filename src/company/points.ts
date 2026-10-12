@@ -71,6 +71,15 @@ export interface AccountDirectory {
     context: SignInContext,
   ): Promise<Authenticated | undefined>;
   checkCode(codeReference: string, code: SecretValue): Promise<boolean>;
+  /**
+   * Since when the account's earlier sign-ins are over, or `undefined` when nothing ended
+   * them: a password reset, an account locked or recovered. Every sign-in to the account
+   * from before that moment ends — its Account Tokens refused and revoked, the Sessions
+   * signed in with them continuing signed out — while a sign-in after it works. Asked on
+   * every signed-in request, so a directory answers from a cache it keeps short. Python's
+   * `AccountSignOuts`.
+   */
+  signedOutBefore?(accountId: string): Promise<Date | undefined>;
 }
 
 /** One message the company agent answers, and who it is answering. */

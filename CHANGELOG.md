@@ -6,6 +6,18 @@
 
 # Changelog
 
+## Unreleased
+
+- **A password reset ends the sign-ins from before it**
+  ([docs](docs/docs/guides/company.mdx)): a company's `AccountDirectory` that
+  also answers `signed_out_before(account_id)` (`AccountSignOuts`; TypeScript:
+  the optional `signedOutBefore`) is asked on every signed-in request and
+  Account Token refresh; a sign-in from before that moment is refused
+  (`invalid_token`, `invalid_grant`) and revoked whole — its Account Tokens,
+  and the Sessions signed in with them continuing signed out — while a sign-in
+  after it works. Account Tokens record when their sign-in happened
+  (`signed_in_at`); one without it is taken for earlier.
+
 ## 0.14.0 (2026-10-12)
 
 - **Every request to a company on the safe path**

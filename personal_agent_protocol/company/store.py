@@ -333,6 +333,10 @@ class AccountGrant:
     revoked: bool = False
     #: The sign-in it comes from: every token rotated from one sign-in shares it.
     family: str = ""
+    #: When that sign-in happened, carried by every token rotated from it: a
+    #: sign-in from before the account's sign-ins all ended (a password reset)
+    #: ends. Unknown (`None`) is taken for before any such moment.
+    signed_in_at: datetime | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -343,6 +347,7 @@ class AccountGrant:
             "expires_at": _time(self.expires_at),
             "revoked": self.revoked,
             "family": self.family,
+            "signed_in_at": _maybe_time(self.signed_in_at),
         }
 
     @classmethod
@@ -355,6 +360,7 @@ class AccountGrant:
             expires_at=_parse(value["expires_at"]),
             revoked=value["revoked"],
             family=value["family"],
+            signed_in_at=_maybe_parse(value.get("signed_in_at")),
         )
 
 

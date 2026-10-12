@@ -867,6 +867,9 @@ export class CompanyService {
     ) {
       throw new Refused(400, "invalid_grant");
     }
+    if (await this.#signInEnded(grant)) {
+      throw new Refused(400, "invalid_grant");
+    }
     const session = await this.#sessionById(form.session_id ?? "");
     if (
       session === undefined ||
@@ -1207,6 +1210,7 @@ export class CompanyService {
       scopes,
       expiresAt: expiresAt.toISOString(),
       revoked: false,
+      signedInAt: this.#now().toISOString(),
     };
     await this.store.put(RecordKinds.accountToken, family, json(grant), expiry(expiresAt));
     const signIn: AccountFamily = {
@@ -1335,7 +1339,38 @@ export class CompanyService {
     const pointer = await this.#read<SessionPointer>(RecordKinds.sessionToken, key);
     if (pointer === undefined) return undefined;
     const stored = await this.#read<StoredSession>(RecordKinds.session, pointer.sessionId);
-    return stored?.tokens[key];
+    const session = stored?.tokens[key];
+    if (session !== undefined && (await this.#signedInBeforeItsEnd(session))) return undefined;
+    return session;
+  }
+
+  /** Whether this signed-in token's sign-in ended since (`signedOutBefore`); ends it if so. */
+  async #signedInBeforeItsEnd(session: IssuedSession): Promise<boolean> {
+    if (session.accountId === undefined || session.accountToken === undefined) return false;
+    const grant = await this.#read<AccountGrant>(RecordKinds.accountToken, session.accountToken);
+    if (grant === undefined) {
+      // Its Account Token is gone (expired, deleted): nothing to hold it to.
+      return (await this.#signedOutBefore(session.accountId)) !== undefined;
+    }
+    return this.#signInEnded(grant);
+  }
+
+  async #signedOutBefore(accountId: string): Promise<Date | undefined> {
+    const accounts = optionalContribution(this.reactor, CompanyAccounts, "accounts");
+    return accounts?.signedOutBefore === undefined ? undefined : accounts.signedOutBefore(accountId);
+  }
+
+  /**
+   * Whether the account's sign-ins ended after this one: then it ends, whole — a password
+   * reset, an account locked: its Account Tokens revoked, the Sessions signed in with them
+   * continuing signed out (`#signOut`).
+   */
+  async #signInEnded(grant: AccountGrant): Promise<boolean> {
+    const before = await this.#signedOutBefore(grant.accountId);
+    if (before === undefined) return false;
+    if (grant.signedInAt !== undefined && new Date(grant.signedInAt) >= before) return false;
+    await this.#signOut([grant.family]);
+    return true;
   }
 
   // Direct Sign-In (§4.5) -------------------------------------------------------------
@@ -2768,6 +2803,7 @@ export class CompanyService {
       if ((token.tokenType ?? "DPoP") !== "DPoP" || this.#passed(token.expiresAt)) continue;
       if (live === undefined || new Date(token.expiresAt) > new Date(live.expiresAt)) live = token;
     }
+    if (live !== undefined && (await this.#signedInBeforeItsEnd(live))) return undefined;
     return live;
   }
 

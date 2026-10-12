@@ -105,6 +105,20 @@ class AccountDirectory(Protocol):
     async def check_code(self, code_reference: str, code: SecretStr) -> bool: ...
 
 
+@runtime_checkable
+class AccountSignOuts(Protocol):
+    """What an `AccountDirectory` may also say: since when an account's earlier sign-ins are over.
+
+    A password reset, an account locked or recovered: every sign-in to the
+    account from before that moment ends — its Account Tokens are refused and
+    revoked, and the Sessions signed in with them continue signed out — while
+    a sign-in after it works. `None` when nothing ended them. Asked on every
+    signed-in request, so a directory answers from a cache it keeps short.
+    """
+
+    async def signed_out_before(self, account_id: str) -> datetime | None: ...
+
+
 @dataclass(frozen=True)
 class Turn:
     """One message the company agent answers, and who it is answering."""

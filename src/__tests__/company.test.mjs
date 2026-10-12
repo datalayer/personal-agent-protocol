@@ -26,6 +26,7 @@ import {
   operationsEndpoint,
   parseClientMetadata,
 } from "../../lib/index.js";
+import { CompanyAccounts } from "../../lib/company/index.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
 import { runJourney } from "./support/journey.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -33,13 +34,13 @@ import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./suppor
 const TENANT = "atlas-demo";
 const PAIRWISE = "usr_ada_at_manzanita_000000";
 
-async function world({ answers = [], extensions, config } = {}) {
+async function world({ answers = [], extensions, config, plugins } = {}) {
   const clock = new MutableClock();
   const sites = {};
   const fetch = inProcessFetch(sites);
   const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas", ...(extensions ? { extensions } : {}) });
   sites["atlas.example"] = identity.documents;
-  const { service: shop, plugin } = manzanita({ fetch, clock, ...(config ? { config } : {}) });
+  const { service: shop, plugin } = manzanita({ fetch, clock, ...(config ? { config } : {}), ...(plugins ? { plugins } : {}) });
   sites["manzanita.example"] = shop;
   const host = await agentHost({ identity, fetch, clock, answers });
   const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
@@ -196,6 +197,65 @@ test("a scope no longer offered ends the Sessions holding it; the Account Token 
   const within = await accounts.refresh(done.accountTokenReference, { context, sessionId: fresh.sessionId, scopes: ["orders:read"] });
   assert.equal(within.status, "signed_in");
   await w.conversations.start(w.endpoint, w.message("hi"), { ...w.who, token: within.token, wait: 0 });
+});
+
+test("a password reset ends the sign-ins from before it; signing in again works", async () => {
+  // An account's sign-ins all end at a password reset (PAP_DATALAYER V-06): the directory
+  // says since when (`signedOutBefore`), as Python's `AccountSignOuts` does.
+  const before = new Map();
+  const directory = {
+    authenticate: async () => undefined,
+    checkCode: async () => false,
+    signedOutBefore: async (accountId) => before.get(accountId),
+  };
+  const w = await world({
+    plugins: [{ name: "resets", version: "1", contributes: [{ point: CompanyAccounts, value: directory, options: { id: "resets", order: -1 } }] }],
+  });
+  const signIn = async () => {
+    const session = await w.start();
+    const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
+    const started = await device.begin({
+      deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
+      tokenEndpoint: w.metadata.token_endpoint,
+      issuer: w.metadata.issuer,
+      clientId: w.identity.clientId,
+      scopes: ["orders:read"],
+      tenantId: TENANT,
+      pairwiseUserId: PAIRWISE,
+      sessionId: session.sessionId,
+    });
+    await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
+    w.clock.advance(started.pollInterval);
+    return device.poll(started.reference);
+  };
+  const done = await signIn();
+  await w.conversations.start(w.endpoint, w.message("hi"), { ...w.who, token: done.token, wait: 0 });
+  // Another person's reset ends nothing of Ada's.
+  before.set("acct_bob", w.clock.now());
+  await w.conversations.start(w.endpoint, w.message("hi"), { ...w.who, token: done.token, wait: 0 });
+
+  w.clock.advance(60);
+  before.set("acct_ada", w.clock.now());
+  await assert.rejects(
+    w.conversations.start(w.endpoint, w.message("hi"), { ...w.who, token: done.token, wait: 0 }),
+    (error) => error instanceof ConversationError && error.statusCode === 401,
+  );
+  const accounts = new AccountTokenClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const context = {
+    tokenEndpoint: w.metadata.token_endpoint,
+    revocationEndpoint: w.metadata.revocation_endpoint,
+    issuer: w.metadata.issuer,
+    clientId: w.identity.clientId,
+    tenantId: TENANT,
+    pairwiseUserId: PAIRWISE,
+  };
+  const fresh = await w.start();
+  const refreshed = await accounts.refresh(done.accountTokenReference, { context, sessionId: fresh.sessionId });
+  assert.equal(refreshed.status, "signed_out");
+
+  w.clock.advance(1);
+  const again = await signIn();
+  await w.conversations.start(w.endpoint, w.message("hi"), { ...w.who, token: again.token, wait: 0 });
 });
 
 test("a denied device code is access_denied", async () => {

@@ -315,3 +315,97 @@ async def test_a_scope_no_longer_offered_ends_the_sessions_holding_it() -> None:
     await world.conversations.start(
         endpoint, world.message("hi"), token=within.token, wait=0, **world.who
     )
+
+
+@pytest.mark.asyncio
+async def test_a_password_reset_ends_the_sign_ins_from_before_it() -> None:
+    """An account's sign-ins all end at a password reset (PAP_DATALAYER V-06).
+
+    A directory that is also `AccountSignOuts` says since when: a signed-in
+    Session from before is refused, its Account Token is not refreshed (and is
+    revoked), the Session continues signed out, and signing in again works.
+    """
+
+    from datetime import datetime
+
+    from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
+    from personal_agent_protocol.company import COMPANY_ACCOUNTS, AccountSignOuts
+
+    class Directory:
+        def __init__(self) -> None:
+            self.before: dict[str, datetime] = {}
+
+        async def authenticate(self, credentials, context):  # type: ignore[no-untyped-def]
+            return None
+
+        async def check_code(self, code_reference, code):  # type: ignore[no-untyped-def]
+            return False
+
+        async def signed_out_before(self, account_id: str) -> datetime | None:
+            return self.before.get(account_id)
+
+    directory = Directory()
+    assert isinstance(directory, AccountSignOuts)
+
+    class Accounts:
+        def provide_contributions(self, contributions):  # type: ignore[no-untyped-def]
+            contributions.contribute(COMPANY_ACCOUNTS, directory, contribution_id="resets", order=-1)
+
+    world = World()
+    world.shop.reactor.register_plugin(PluginManifest(name="resets", version="1"), Accounts())
+    session = await world.signed_out_session()
+    metadata = world.company.oauth_metadata
+    assert metadata is not None
+    from personal_agent_protocol.device import DeviceSignInClient
+
+    device = DeviceSignInClient(reactor=world.reactor, http_client=world.http)
+    started = await device.begin(
+        device_authorization_endpoint=metadata.device_authorization_endpoint,  # type: ignore[arg-type]
+        token_endpoint=metadata.token_endpoint,
+        issuer=metadata.issuer,
+        client_id=world.atlas.client_id,
+        scopes=("orders:read",),
+        tenant_id=TENANT,
+        pairwise_user_id=PAIRWISE,
+        session_id=session.session_id,
+    )
+    await world.shop.approve_device(started.user_code, account_id="acct_ada")
+    world.clock.advance(started.poll_interval)
+    done = await device.poll(started.reference)
+    assert done.token is not None and done.account_token_reference is not None
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    await world.conversations.start(endpoint, world.message("hi"), token=done.token, wait=0, **world.who)
+    # Another person's reset ends nothing of Ada's.
+    directory.before["acct_bob"] = world.clock.now()
+    await world.conversations.start(endpoint, world.message("hi"), token=done.token, wait=0, **world.who)
+
+    # Ada resets her password a minute later.
+    world.clock.advance(60)
+    directory.before["acct_ada"] = world.clock.now()
+    with pytest.raises(ConversationError) as raised:
+        await world.conversations.start(endpoint, world.message("hi"), token=done.token, wait=0, **world.who)
+    assert raised.value.status_code == 401
+
+    accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
+    context = AccountTokenContext(
+        token_endpoint=metadata.token_endpoint,
+        revocation_endpoint=metadata.revocation_endpoint,
+        issuer=metadata.issuer,
+        client_id=world.atlas.client_id,
+        tenant_id=TENANT,
+        pairwise_user_id=PAIRWISE,
+    )
+    fresh = await world.signed_out_session()
+    refreshed = await accounts.refresh(done.account_token_reference, context=context, session_id=fresh.session_id)
+    assert refreshed.status == "signed_out" and refreshed.token is None
+    # Ended whole: its Session goes on signed out, even once nothing is said ended any more.
+    directory.before.clear()
+    kept = await world.shop._token_session(done.token.access_token.get_secret_value())
+    assert kept is not None and not kept.signed_in and kept.account_token is None
+
+    # A sign-in after the reset works.
+    directory.before["acct_ada"] = world.clock.now()
+    world.clock.advance(1)
+    again = await signed_in(world)
+    assert again is not None
+    await world.conversations.start(endpoint, world.message("hi"), token=again, wait=0, **world.who)

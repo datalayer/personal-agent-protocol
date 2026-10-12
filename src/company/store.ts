@@ -251,6 +251,12 @@ export interface AccountGrant {
   readonly scopes: readonly string[];
   readonly expiresAt: string;
   readonly revoked: boolean;
+  /**
+   * When that sign-in happened, carried by every token rotated from it: a sign-in from
+   * before the account's sign-ins all ended (a password reset) ends. Unknown is taken for
+   * before any such moment.
+   */
+  readonly signedInAt?: string;
 }
 
 /** One sign-in: every Account Token rotated from it, and the Sessions signed in with them. */

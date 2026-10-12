@@ -69,6 +69,12 @@ model to enforce scopes.
 - `Cache-Control: no-store` on responses carrying credentials or codes.
 - Immediate sign-out propagation, or very short token lifetimes when that is
   not possible.
+- Every sign-in ended when the account's password is reset, or the account is
+  locked or recovered: a directory that also answers `signed_out_before(account_id)`
+  (`AccountSignOuts`; TypeScript: `signedOutBefore`) is asked on each signed-in
+  request, and a sign-in from before that moment is refused and revoked whole —
+  its Account Tokens, and the Sessions signed in with them continuing signed out —
+  while a sign-in after it works.
 - Identical authorization semantics across APIs, conversations, browser
   sessions, company-agent tools, and human-support tools.
 - Generic external errors that do not disclose whether another user's resource
@@ -125,7 +131,7 @@ plugins contribute with a lower `order` to replace a default.
 | Point | Contract | Default |
 | --- | --- | --- |
 | `pap.company.store` | `CompanyStore`: versioned JSON records by kind and key (below) | `MemoryCompanyStore` (one process) |
-| `pap.company.accounts` | `AccountDirectory`: `authenticate(credentials, context)` and `check_code` for Mediated Sign-In; `context` (`SignInContext`) names the agent and Session, and the directory must throttle its own checks too | None: the company contributes it |
+| `pap.company.accounts` | `AccountDirectory`: `authenticate(credentials, context)` and `check_code` for Mediated Sign-In; `context` (`SignInContext`) names the agent and Session, and the directory must throttle its own checks too; optionally `AccountSignOuts.signed_out_before(account_id)`, since when the account's earlier sign-ins are over (a password reset) | None: the company contributes it |
 | `pap.company.agent` | `CompanyAgent.respond(turn)`: replies, `authorization` requests, proposed operations | None: the company contributes it |
 | `pap.company.operationExecutor` | `OperationExecutor.perform(operation, account_id)`, one per `action`; `operation_id` is the idempotency key | None: an unperformable operation stays `in_progress` |
 | `pap.company.clientPolicy` | `ClientPolicy.allows(client_id)` | `AllowEveryAgent` |

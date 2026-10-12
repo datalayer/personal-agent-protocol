@@ -92,6 +92,7 @@ from .points import (
     OPERATION_EXECUTORS,
     REPLAY_CACHES,
     AccountDirectory,
+    AccountSignOuts,
     ApiCall,
     ApiResult,
     ClientPolicy,
@@ -728,6 +729,8 @@ class CompanyService:
             or grant.client_id != client_id
         ):
             raise _RefusedError(400, "invalid_grant")
+        if await self._sign_in_ended(grant):
+            raise _RefusedError(400, "invalid_grant")
         session = await self._session_by_id(form.get("session_id", ""))
         if session is None or (session.client_id, session.pairwise_user_id) != (
             client_id,
@@ -1036,6 +1039,7 @@ class CompanyService:
                 scopes=scopes,
                 expires_at=expires_at,
                 family=family,
+                signed_in_at=self._now(),
             ).to_json(),
             expires_at=expires_at,
         )
@@ -1183,7 +1187,40 @@ class CompanyService:
         if pointer is None:
             return None
         stored = await self._read(SESSION, pointer.session_id, StoredSession.from_json)
-        return None if stored is None else stored.tokens.get(digest)
+        session = None if stored is None else stored.tokens.get(digest)
+        if session is not None and await self._signed_in_before_its_end(session):
+            return None
+        return session
+
+    async def _signed_in_before_its_end(self, session: IssuedSession) -> bool:
+        """Whether this signed-in token's sign-in ended since (`AccountSignOuts`); ends it if so."""
+
+        if session.account_id is None or session.account_token is None:
+            return False
+        grant = await self._read(ACCOUNT_TOKEN, session.account_token, AccountGrant.from_json)
+        if grant is None:
+            # Its Account Token is gone (expired, deleted): nothing to hold it to.
+            return await self._signed_out_before(session.account_id) is not None
+        return await self._sign_in_ended(grant)
+
+    async def _signed_out_before(self, account_id: str) -> datetime | None:
+        accounts = optional_contribution(self.reactor, COMPANY_ACCOUNTS, "accounts")
+        if not isinstance(accounts, AccountSignOuts):
+            return None
+        return await accounts.signed_out_before(account_id)
+
+    async def _sign_in_ended(self, grant: AccountGrant) -> bool:
+        """Whether the account's sign-ins ended after this one: then it ends, whole.
+
+        A password reset, an account locked: its Account Tokens are revoked and
+        the Sessions signed in with them continue signed out (`_sign_out`).
+        """
+
+        before = await self._signed_out_before(grant.account_id)
+        if before is None or (grant.signed_in_at is not None and grant.signed_in_at >= before):
+            return False
+        await self._sign_out((grant.family,))
+        return True
 
     # Direct Sign-In (§4.5) -------------------------------------------------------------
 
@@ -2538,7 +2575,10 @@ class CompanyService:
             if session.token_type == "DPoP"  # noqa: S105 - OAuth token type
             and now < session.expires_at
         ]
-        return max(live, key=lambda session: session.expires_at) if live else None
+        latest = max(live, key=lambda session: session.expires_at) if live else None
+        if latest is not None and await self._signed_in_before_its_end(latest):
+            return None
+        return latest
 
     async def _browser_session(self, request: CompanyRequest) -> CompanyResponse:
         refused = self._page(400, "This browser could not join the session.")

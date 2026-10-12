@@ -590,13 +590,14 @@ export class CompanyService {
     attributes: Readonly<Record<string, unknown>>,
   ): void {
     const sink = telemetrySink(this.reactor);
+    if (sink === undefined) return;
+    // Outside a request (the host signing an account out, say): no route, no agent.
     const exchange = exchanges.getStore();
-    if (sink === undefined || exchange === undefined) return;
-    emit(sink, name, outcome, performance.now() - exchange.started, {
+    emit(sink, name, outcome, exchange === undefined ? 0 : performance.now() - exchange.started, {
       "pap.company.issuer": this.config.base,
       "pap.company.domain": this.config.domain,
-      "pap.company.route": exchange.route,
-      "pap.client.id": exchange.clientId,
+      "pap.company.route": exchange?.route,
+      "pap.client.id": exchange?.clientId,
       ...attributes,
     });
   }
@@ -1271,6 +1272,10 @@ export class CompanyService {
       );
       if (changed === undefined) continue;
       const family = changed[1];
+      if (!changed[0].revoked) {
+        // A whole sign-in ended: by its agent, a password reset, or its host.
+        this.#report("pap.company.sign_out", "ok", { "pap.session.signed_in": false });
+      }
       revoked += await this.#revokeGrants(family.tokens);
       for (const sessionId of family.sessions) {
         await this.#signOutSession(sessionId, family.tokens);

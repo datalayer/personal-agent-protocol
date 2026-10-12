@@ -66,7 +66,7 @@ as analytics JSON or as the span the OpenTelemetry adapter starts. See
 | `pap.sign_in.account_token.refresh`, `pap.sign_in.account_token.revoke` | sign_in |
 | `pap.conversation.start`, `.send`, `.read_events`, `.start_direct`, `.handoff`, `.close` | conversation |
 | `pap.operation.read`, `.confirm`, `.cancel` | operation |
-| `pap.company.identity.check`, `.session.start`, `.session.renew`, `.interface.switch`, `.refused` | company |
+| `pap.company.identity.check`, `.session.start`, `.session.renew`, `.interface.switch`, `.sign_out`, `.refused` | company |
 
 ## What a company reports
 
@@ -80,6 +80,9 @@ the TypeScript `CompanyService`) reports through the same point, with stage
   renewed with its assertion or an Account Token;
 - `pap.company.interface.switch` — a Session moved to another interface: a
   Bearer token for the MCP server (`mcp`), a browser joining it (`web`);
+- `pap.company.sign_out` — a whole sign-in ended: revoked by its agent, by a
+  password reset, or by the host (outside a request it carries no route or
+  agent);
 - `pap.company.refused` — each request it refused, as `error`, with the
   protocol's code, the route, the status and whether a proof or assertion was
   a replay. The device flow's `authorization_pending` and `slow_down` are

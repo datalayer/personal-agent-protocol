@@ -84,6 +84,7 @@ TELEMETRY_EVENTS: dict[str, Stage] = {
     "pap.company.session.start": "company",
     "pap.company.session.renew": "company",
     "pap.company.interface.switch": "company",
+    "pap.company.sign_out": "company",
     "pap.company.refused": "company",
 }
 

@@ -76,6 +76,7 @@ export const TELEMETRY_EVENTS: Readonly<Record<string, TelemetryStage>> = Object
   "pap.company.session.start": "company",
   "pap.company.session.renew": "company",
   "pap.company.interface.switch": "company",
+  "pap.company.sign_out": "company",
   "pap.company.refused": "company",
 });
 

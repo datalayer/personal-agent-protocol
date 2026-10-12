@@ -106,6 +106,10 @@ async def test_each_stage_of_a_journey_is_one_event(recorded: RecordingTelemetry
         "pap.conversation.send",
         "pap.conversation.close",
         "pap.operation.confirm",
+        # The company's own: a Session, the agent verified, a sign-in ended by its revocation.
+        "pap.company.identity.check",
+        "pap.company.session.start",
+        "pap.company.sign_out",
     } <= _names(recorded)
     # The stranger's read is refused: an error event with the refusal's code only.
     (refused,) = [e for e in recorded.events if e.name == "pap.conversation.read_events"]

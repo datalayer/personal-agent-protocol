@@ -13,7 +13,8 @@
   company service in both languages emits to `pap.telemetry` (stage
   `company`) an agent's identity verified for the first time or with new
   metadata, a Session started or renewed, a Session moved to the MCP server or
-  a browser (`pap.company.interface.switch`), and each refused request with
+  a browser (`pap.company.interface.switch`), a sign-in ended
+  (`pap.company.sign_out`), and each refused request with
   the protocol's code, the route, the status and whether a proof or assertion
   was a replay (`pap.replayed`). New attributes `pap.client.id`,
   `pap.interface`, `pap.company.route`, `pap.http.status`, `pap.replayed`;

@@ -516,19 +516,20 @@ class CompanyService:
         """One `pap.telemetry` event of this request, when the host contributes a sink."""
 
         sink = telemetry_sink(self.reactor)
-        exchange = _EXCHANGE.get()
-        if sink is None or exchange is None:
+        if sink is None:
             return
+        # Outside a request (the host signing an account out, say): no route, no agent.
+        exchange = _EXCHANGE.get()
         emit(
             sink,
             name,
             outcome,
-            (time.perf_counter() - exchange.started) * 1000,
+            (time.perf_counter() - exchange.started) * 1000 if exchange is not None else 0.0,
             {
                 "pap.company.issuer": self.config.base,
                 "pap.company.domain": self.config.domain,
-                "pap.company.route": exchange.route,
-                "pap.client.id": exchange.client_id,
+                "pap.company.route": exchange.route if exchange is not None else None,
+                "pap.client.id": exchange.client_id if exchange is not None else None,
                 **attributes,
             },
         )
@@ -1103,6 +1104,9 @@ class CompanyService:
             if changed is None:
                 continue
             family = changed[1]
+            if not changed[0].revoked:
+                # A whole sign-in ended: by its agent, a password reset, or its host.
+                self._report("pap.company.sign_out", "ok", {"pap.session.signed_in": False})
             revoked += await self._revoke_grants(family.tokens)
             for session_id in family.sessions:
                 await self._sign_out_session(session_id, set(family.tokens))

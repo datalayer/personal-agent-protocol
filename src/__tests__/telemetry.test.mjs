@@ -97,13 +97,17 @@ test("a company reports what it did and refused: identity, Sessions, replays", a
   const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
   sites["atlas.example"] = identity.documents;
   const host = await agentHost({ identity, fetch, clock });
+  let approved;
   await runJourney({
     reactor: host.reactor,
     fetch,
     browser: host.browser,
     identity,
     company: {
-      approveAuthorization: async (requestId, accountId) => service.approveAuthorization(requestId, { accountId }),
+      approveAuthorization: async (requestId, accountId) => {
+        approved = accountId;
+        return service.approveAuthorization(requestId, { accountId });
+      },
       performed: async () => [...plugin.executor.performed],
     },
   });
@@ -130,6 +134,17 @@ test("a company reports what it did and refused: identity, Sessions, replays", a
   assert.equal(refused[0].attributes["pap.http.status"], replay.status);
   assert.equal(refused[0].attributes["pap.replayed"], true);
   assert.equal(refused[0].attributes["pap.company.route"], "oauth_token");
+
+  // The person disconnects the agent in their account settings: the sign-in ends, said
+  // outside any request (no route, no agent).
+  assert.ok((await service.disconnect(identity.clientId, approved)) > 0);
+  const signedOut = sink.events.filter((event) => event.name === "pap.company.sign_out");
+  assert.equal(signedOut.length, 1);
+  assert.deepEqual({ ...signedOut[0].attributes }, {
+    "pap.company.issuer": "https://manzanita.example",
+    "pap.company.domain": "manzanita.example",
+    "pap.session.signed_in": false,
+  });
 
   // A path the company does not serve is nobody's refusal, and a path's words never leave.
   await inProcess("https://manzanita.example/oauth/secret-path-words");

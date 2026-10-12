@@ -6,6 +6,19 @@
 
 # Changelog
 
+## 0.11.0 (2026-10-12)
+
+The SDKs of 0.10.0, released as the first complete Python and TypeScript
+SDKs: no API or wire change since 0.10.0, and no migration.
+
+- **Docs: Open security points** ([docs](docs/docs/security/review.mdx))
+  replaces the record of the 0.10.0 review with what is open now: residual
+  risks (unbounded known-client records, the account directory's own
+  throttling), what a deployment provides (a durable shared company store, key
+  custody, the agent's stores, Node network policy), the draft's open
+  questions, and interoperability not yet exercised.
+- **Docs: a blog**, with the 0.11.0 announcement.
+
 ## 0.10.0 (2026-10-12)
 
 - **Security review** ([docs](docs/docs/security/review.mdx)): an independent

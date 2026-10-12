@@ -6,7 +6,23 @@
 
 # Changelog
 
-## Unreleased
+## 0.10.0 (2026-10-12)
+
+- **TypeScript: OpenAPI and MCP at a company, with a resource-bound Bearer:**
+  `ApiClient` (`src/apis.ts`) calls a company's OpenAPI API as Python's does
+  (a `202` returns its operation, refusals carry their scope, a `429` its
+  `retry_after`, bodies bounded); `McpClient` and `McpBearerAuth`
+  (`src/mcp.ts`) reach its MCP server with a Bearer token sent only to that
+  server's exact URL; `SessionClient.bearerForMcp` and
+  `AccountTokenClient.bearerForMcp` acquire it, resource-bound, without DPoP.
+- **TypeScript company: browser sessions.** `web.browser_session_endpoint`,
+  a one-use browser assertion from a live Session, a `Secure`, `HttpOnly`,
+  `SameSite=Lax` session cookie, and operation pages confirmed or cancelled
+  through a same-site form bound to a CSRF token — one confirmation path with
+  the API, at most once.
+- **All four language pairings pass every conformance case:** 91 passed, 0
+  failed, 0 skipped in each (the TypeScript agent gained an MCP client and a
+  controlled browser).
 
 - **Live-session actions, one implementation on every surface:** the `pap`
   plugin registers seven read-only actions (`pap.company.discover`,

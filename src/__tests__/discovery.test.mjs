@@ -70,7 +70,24 @@ test("passes AbortSignal to discovery requests", async () => {
 
   await discoverCompany("example.com", { fetch, signal: controller.signal });
 
-  assert.deepEqual(receivedSignals, [controller.signal, controller.signal]);
+  // Each request is given a signal of its own that follows the caller's
+  // (combined with the SDK's deadline), not the caller's object itself.
+  assert.equal(receivedSignals.length, 2);
+  for (const signal of receivedSignals) {
+    assert.ok(signal instanceof AbortSignal);
+    assert.equal(signal.aborted, false);
+  }
+
+  // The caller aborting while a request is under way aborts that request.
+  const stopping = new AbortController();
+  let followed;
+  const aborting = async (_input, init) => {
+    stopping.abort(new Error("stop"));
+    followed = init.signal.aborted;
+    throw init.signal.reason ?? new Error("aborted");
+  };
+  await assert.rejects(discoverCompany("example.com", { fetch: aborting, signal: stopping.signal }));
+  assert.equal(followed, true);
 });
 
 test("rejects an OAuth issuer that does not authorize the company domain", async () => {

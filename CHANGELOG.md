@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.15.0 (2026-10-12)
 
 - **A password reset ends the sign-ins from before it**
   ([docs](docs/docs/guides/company.mdx)): a company's `AccountDirectory` that

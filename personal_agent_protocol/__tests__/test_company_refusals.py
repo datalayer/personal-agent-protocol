@@ -243,3 +243,75 @@ async def test_a_blocked_agent_cannot_start_a_session() -> None:
     with pytest.raises(SessionError) as raised:
         await world.signed_out_session()
     assert raised.value.code == "invalid_client"
+
+
+@pytest.mark.asyncio
+async def test_a_scope_no_longer_offered_ends_the_sessions_holding_it() -> None:
+    """A company rolled back to a version that no longer offers a scope (PAP_DATALAYER D-05).
+
+    A Session holding it is refused (`invalid_token`): the personal agent starts a
+    new Session within what is offered. Its Account Token is not refreshed for that
+    scope (`invalid_scope`, re-consent) but still serves when asked within it.
+    """
+
+    from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
+    from personal_agent_protocol.device import DeviceSignInClient
+
+    world = World()
+    session = await world.signed_out_session()
+    metadata = world.company.oauth_metadata
+    assert metadata is not None
+    device = DeviceSignInClient(reactor=world.reactor, http_client=world.http)
+    started = await device.begin(
+        device_authorization_endpoint=metadata.device_authorization_endpoint,  # type: ignore[arg-type]
+        token_endpoint=metadata.token_endpoint,
+        issuer=metadata.issuer,
+        client_id=world.atlas.client_id,
+        scopes=("orders:read", "orders:write"),
+        tenant_id=TENANT,
+        pairwise_user_id=PAIRWISE,
+        session_id=session.session_id,
+    )
+    await world.shop.approve_device(started.user_code, account_id="acct_ada")
+    world.clock.advance(started.poll_interval)
+    done = await device.poll(started.reference)
+    assert done.token is not None and done.account_token_reference is not None
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    await world.conversations.start(
+        endpoint, world.message("hi"), token=done.token, wait=0, **world.who
+    )
+
+    # Rolled back: the version now served offers no `orders:write`, so no operations either.
+    config = world.shop.config
+    world.shop.config = replace(
+        config,
+        scopes=tuple(s for s in config.scopes if s != "orders:write"),
+        write_scopes=(),
+        operations=False,
+    )
+    with pytest.raises(ConversationError) as raised:
+        await world.conversations.start(
+            endpoint, world.message("hi"), token=done.token, wait=0, **world.who
+        )
+    assert raised.value.status_code == 401
+
+    accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
+    context = AccountTokenContext(
+        token_endpoint=metadata.token_endpoint,
+        revocation_endpoint=metadata.revocation_endpoint,
+        issuer=metadata.issuer,
+        client_id=world.atlas.client_id,
+        tenant_id=TENANT,
+        pairwise_user_id=PAIRWISE,
+    )
+    fresh = await world.signed_out_session()
+    reference = done.account_token_reference
+    asked_all = await accounts.refresh(reference, context=context, session_id=fresh.session_id)
+    assert asked_all.status == "re_consent_required"
+    within = await accounts.refresh(
+        reference, context=context, session_id=fresh.session_id, scopes=("orders:read",)
+    )
+    assert within.status == "signed_in" and within.token is not None
+    await world.conversations.start(
+        endpoint, world.message("hi"), token=within.token, wait=0, **world.who
+    )

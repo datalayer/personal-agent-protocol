@@ -149,6 +149,55 @@ test("Device Sign-In paces polling, then signs the Session in; Account Tokens ro
   assert.equal(after.status, "signed_out");
 });
 
+test("a scope no longer offered ends the Sessions holding it; the Account Token serves within what is offered", async () => {
+  // A company rolled back to a version that no longer offers a scope (PAP_DATALAYER D-05).
+  const w = await world();
+  const session = await w.start();
+  const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const started = await device.begin({
+    deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
+    tokenEndpoint: w.metadata.token_endpoint,
+    issuer: w.metadata.issuer,
+    clientId: w.identity.clientId,
+    scopes: ["orders:read", "orders:write"],
+    tenantId: TENANT,
+    pairwiseUserId: PAIRWISE,
+    sessionId: session.sessionId,
+  });
+  await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
+  w.clock.advance(started.pollInterval);
+  const done = await device.poll(started.reference);
+  await w.conversations.start(w.endpoint, w.message("hi"), { ...w.who, token: done.token, wait: 0 });
+
+  // Rolled back: the version now served offers no `orders:write`, so no operations either.
+  const before = w.shop.config;
+  w.shop.config = Object.assign(Object.create(Object.getPrototypeOf(before)), before, {
+    scopes: ["orders:read"],
+    writeScopes: [],
+    operations: false,
+  });
+  await assert.rejects(
+    w.conversations.start(w.endpoint, w.message("hi"), { ...w.who, token: done.token, wait: 0 }),
+    (error) => error instanceof ConversationError && error.statusCode === 401,
+  );
+
+  const accounts = new AccountTokenClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const context = {
+    tokenEndpoint: w.metadata.token_endpoint,
+    revocationEndpoint: w.metadata.revocation_endpoint,
+    issuer: w.metadata.issuer,
+    clientId: w.identity.clientId,
+    tenantId: TENANT,
+    pairwiseUserId: PAIRWISE,
+  };
+  const fresh = await w.start();
+  const all = await accounts.refresh(done.accountTokenReference, { context, sessionId: fresh.sessionId });
+  assert.equal(all.status, "re_consent_required");
+  const within = await accounts.refresh(done.accountTokenReference, { context, sessionId: fresh.sessionId, scopes: ["orders:read"] });
+  assert.equal(within.status, "signed_in");
+  await w.conversations.start(w.endpoint, w.message("hi"), { ...w.who, token: within.token, wait: 0 });
+});
+
 test("a denied device code is access_denied", async () => {
   const w = await world();
   const session = await w.start();

@@ -740,6 +740,10 @@ class CompanyService:
         requested = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
         if requested and any(scope not in grant.scopes for scope in requested):
             raise _RefusedError(400, "invalid_scope")
+        if not self._offers(requested or grant.scopes):
+            # A scope the company no longer offers (a rollback, a narrower version): asked
+            # within what it offers now, the same Account Token still serves.
+            raise _RefusedError(400, "invalid_scope")
         # Rotation: exactly one refresh claims the presented token, which stops working
         # the moment it is claimed; a concurrent or later reuse is `invalid_grant`.
         if not await self.store.replace(
@@ -1449,6 +1453,10 @@ class CompanyService:
         bearer = session is not None and session.token_type != "DPoP"  # noqa: S105
         if session is None or self._now() >= session.expires_at or bearer:
             # A Bearer token works only at the MCP server it was issued for (§4.3).
+            raise _RefusedError(401, "invalid_token")
+        if not self._offers(session.scopes):
+            # The company no longer offers a scope this Session holds (a rollback, a narrower
+            # version): the Session ends here, and a new one is the way back.
             raise _RefusedError(401, "invalid_token")
         if not await self._allowed(session.client_id):
             raise _RefusedError(401, "invalid_token")
@@ -2414,10 +2422,22 @@ class CompanyService:
             or self._now() >= session.expires_at
             or session.token_type != "Bearer"  # noqa: S105 - OAuth token type
             or session.resource != self.config.mcp_url
+            or not self._offers(session.scopes)
             or not await self._allowed(session.client_id)
         ):
             return None
         return session
+
+    def _offers(self, scopes: Sequence[str]) -> bool:
+        """Whether this company offers every one of these scopes now.
+
+        A Session holding a scope the company no longer offers — rolled back
+        to a version without it, or narrowed — is refused as `invalid_token`,
+        so the personal agent starts a new one within what is offered; an
+        Account Token refreshed for such a scope is `invalid_scope`, and
+        serves again when asked within what is offered.
+        """
+        return all(scope in self.config.scopes for scope in scopes)
 
     async def _mcp_route(  # noqa: C901 - the JSON-RPC methods
         self, request: CompanyRequest

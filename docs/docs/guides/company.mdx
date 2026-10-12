@@ -175,6 +175,13 @@ every flow: a pending device sign-in can be approved, a rotated-away Account
 Token stays refused, an operation proposed before is confirmed once after, and
 an event cursor resumes where it was.
 
+A version that no longer offers a scope — rolled back to one without it, or
+narrowed — does not honour what was granted for it: a Session holding that
+scope is refused as `invalid_token`, so the personal agent starts a new
+Session within what is offered, and an Account Token refreshed for it is
+`invalid_scope` (the agent's client says `re_consent_required`), while a
+refresh asking only for scopes still offered succeeds with the same token.
+
 `approve_device`, `deny_device`, `approve_authorization`,
 `deny_authorization`, `authorization_request`, `revise`, `settle`,
 `forget_events`, `disconnect`, and `operation_record` read and write the store,

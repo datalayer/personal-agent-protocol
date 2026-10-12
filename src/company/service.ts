@@ -883,6 +883,11 @@ export class CompanyService {
     if (requested.length && requested.some((scope) => !grant.scopes.includes(scope))) {
       throw new Refused(400, "invalid_scope");
     }
+    if (!this.#offers(requested.length ? requested : grant.scopes)) {
+      // A scope the company no longer offers (a rollback, a narrower version): asked
+      // within what it offers now, the same Account Token still serves.
+      throw new Refused(400, "invalid_scope");
+    }
     // Rotation: exactly one refresh claims the presented token, which stops working the
     // moment it is claimed; a concurrent or later reuse is `invalid_grant`.
     const claimed = await this.store.replace(
@@ -1627,11 +1632,23 @@ export class CompanyService {
       this.#passed(session.expiresAt) ||
       session.tokenType !== "Bearer" ||
       session.resource !== this.config.mcpUrl ||
+      !this.#offers(session.scopes) ||
       !(await this.#allowed(session.clientId))
     ) {
       return undefined;
     }
     return session;
+  }
+
+  /**
+   * Whether this company offers every one of these scopes now. A Session holding
+   * a scope it no longer offers (rolled back to a version without it, or
+   * narrowed) is refused as `invalid_token`, so the personal agent starts a new
+   * one within what is offered; an Account Token refreshed for such a scope is
+   * `invalid_scope`, and serves again when asked within what is offered.
+   */
+  #offers(scopes: readonly string[]): boolean {
+    return scopes.every((scope) => this.config.scopes.includes(scope));
   }
 
   async #mcpRoute(request: CompanyRequest, mcp: CompanyMcp): Promise<CompanyResponse> {
@@ -1736,6 +1753,11 @@ export class CompanyService {
     const session = await this.#tokenSession(token);
     if (session === undefined || this.#passed(session.expiresAt) || session.tokenType === "Bearer") {
       // A Bearer token works only at the MCP server it was issued for (§4.3).
+      throw new Refused(401, "invalid_token");
+    }
+    if (!this.#offers(session.scopes)) {
+      // The company no longer offers a scope this Session holds (a rollback, a narrower
+      // version): the Session ends here, and a new one is the way back.
       throw new Refused(401, "invalid_token");
     }
     if (!(await this.#allowed(session.clientId))) throw new Refused(401, "invalid_token");

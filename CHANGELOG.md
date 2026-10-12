@@ -17,6 +17,12 @@
   plugin registers it. TypeScript: `PapOutcomeData`, `isPapOutcome`,
   `papOutcomeText`, `papOutcomeDisplay`, checked against
   `protocol/fixtures/pap-outcome-display.json`.
+- **A scope no longer offered ends the Sessions holding it**
+  ([docs](docs/docs/guides/company.mdx)): both reference companies refuse a
+  Session whose scopes the current configuration no longer offers (a rollback,
+  a narrower version) as `invalid_token`, and an Account Token refresh for such
+  a scope as `invalid_scope`; asked within what is offered, the same token
+  serves.
 
 ## 0.12.0 (2026-10-12)
 

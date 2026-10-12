@@ -41,6 +41,7 @@ from .reactor import (
     Signer,
     TokenStore,
     first_contribution,
+    send_bounded,
 )
 from .sessions import (
     JWT_CLIENT_ASSERTION,
@@ -446,11 +447,15 @@ class DirectSignInClient:
                 client_assertion=assertion,
             )
             try:
-                response = await self.http.post(
-                    pending.token_endpoint,
-                    data=grant.as_form(),
-                    headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
-                    follow_redirects=False,
+                response = await send_bounded(
+                    self.http,
+                    self.http.build_request(
+                        "POST",
+                        pending.token_endpoint,
+                        data=grant.as_form(),
+                        headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
+                    ),
+                    max_bytes=self.max_response_bytes,
                 )
             except httpx.HTTPError as exc:
                 raise AuthorizationError(

@@ -16,6 +16,7 @@ import { RandomSources, firstContribution } from "./reactor.js";
 import type { SessionToken } from "./sessions.js";
 import { byEndpoint, conversationResult, traced } from "./telemetry.js";
 import { DpopFetchClient } from "./transport.js";
+import { readLimited } from "./limits.js";
 
 const identifier = /^[A-Za-z0-9_-]{1,256}$/;
 
@@ -587,7 +588,7 @@ export class ConversationClient {
     response: Response,
     expectedStatus: number,
   ): Promise<unknown> {
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = await readLimited(response, this.#maxResponseBytes);
     if (bytes.byteLength > this.#maxResponseBytes) {
       throw new ConversationError(
         "response_too_large",

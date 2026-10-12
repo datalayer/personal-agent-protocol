@@ -13,6 +13,7 @@ import {
 } from "./reactor.js";
 import { JWT_CLIENT_ASSERTION, mcpResource, parseSessionToken, type SessionToken } from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
+import { readLimitedText } from "./limits.js";
 
 /**
  * PAP Account Tokens: refresh, rotation, narrowing, and revocation (§4.8, §4.9).
@@ -360,7 +361,7 @@ export class AccountTokenClient {
   }
 
   async #decode(response: Response): Promise<unknown> {
-    const body = await response.text();
+    const body = await readLimitedText(response, this.#maxResponseBytes);
     if (new TextEncoder().encode(body).byteLength > this.#maxResponseBytes) {
       throw new AuthorizationError("response_too_large", "Account Token response exceeds size limit", {
         statusCode: response.status,

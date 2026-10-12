@@ -583,3 +583,126 @@ async def test_finding_13_a_host_resolving_to_nat64_loopback_is_refused() -> Non
     with pytest.raises(DiscoveryError) as refused:
         await PublicUrlSafetyPolicy(nat64).assert_safe("https://metadata.example/agent.json")
     assert refused.value.code == "unsafe_address"
+
+
+class _Endless(httpx.AsyncByteStream):
+    """A body that never ends, counting how much of it was read."""
+
+    def __init__(self) -> None:
+        self.sent = 0
+
+    async def __aiter__(self):  # type: ignore[no-untyped-def,override]
+        while True:
+            self.sent += 1
+            yield b"x" * 65536
+
+
+@pytest.mark.asyncio
+async def test_finding_15_a_token_response_is_read_only_up_to_its_limit() -> None:
+    from personal_agent_protocol import SessionError
+
+    world = World()
+    await world.signed_out_session()
+    endless = _Endless()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "application/json"}, stream=endless)
+
+    client = SessionClient(
+        reactor=world.reactor,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        max_response_bytes=100 * 1024,
+    )
+    md = world.company.oauth_metadata
+    with pytest.raises(SessionError) as refused:
+        await client.start(
+            client_id=world.atlas.client_id,
+            pairwise_user_id=PAIRWISE,
+            issuer=md.issuer,  # type: ignore[union-attr]
+            token_endpoint=md.token_endpoint,  # type: ignore[union-attr]
+            tenant_id=TENANT,
+        )
+    assert refused.value.code == "response_too_large"
+    assert endless.sent <= 3  # 64 KiB chunks: stopped just past 100 KiB
+
+
+@pytest.mark.asyncio
+async def test_finding_15_a_dpop_resource_response_is_read_only_up_to_its_limit() -> None:
+    from personal_agent_protocol.transport import DpopHttpClient
+
+    world = World()
+    session = await world.signed_out_session()
+    endless = _Endless()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "application/json"}, stream=endless)
+
+    transport = DpopHttpClient(
+        reactor=world.reactor,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        max_response_bytes=100 * 1024,
+    )
+    response = await transport.request("GET", MEDIATED, token=session, **world.who)
+    assert len(response.content) == 100 * 1024 + 1
+    assert endless.sent <= 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+async def test_finding_7_a_body_is_never_sent_to_a_redirect(status: int) -> None:
+    from personal_agent_protocol.errors import TransportError
+    from personal_agent_protocol.transport import DpopHttpClient
+
+    world = World()
+    session = await world.signed_out_session()
+    seen: list[tuple[str, str, bytes]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, request.content))
+        return httpx.Response(status, headers={"location": "/collect-credentials"})
+
+    transport = DpopHttpClient(
+        reactor=world.reactor, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    with pytest.raises(TransportError) as refused:
+        await transport.request(
+            "POST",
+            MEDIATED,
+            token=session,
+            content=b'{"credentials":{"password":"x"}}',
+            **world.who,
+        )
+    assert refused.value.code == "redirect_refused"
+    assert [path for _, path, _ in seen] == ["/poppy/sign-in"]
+
+
+@pytest.mark.asyncio
+async def test_finding_7_the_mediated_client_sends_credentials_once_and_follows_no_redirect() -> (
+    None
+):
+    from personal_agent_protocol.errors import AuthorizationError
+    from personal_agent_protocol.mediated import MediatedSignInClient
+
+    world = World(dict(ADA))
+    session = await world.signed_out_session()
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(307, headers={"location": "/collect-credentials"})
+
+    client = MediatedSignInClient(
+        reactor=world.reactor, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    auth = world.company.document.auth
+    with pytest.raises(AuthorizationError):
+        await client.sign_in(
+            mediated=auth.mediated,  # type: ignore[union-attr,arg-type]
+            organization=world.company.document.organization,
+            issuer=auth.issuer,  # type: ignore[union-attr]
+            scopes=("orders:read",),
+            token=session,
+            tenant_id=TENANT,
+            pairwise_user_id=PAIRWISE,
+        )
+    assert seen == ["/poppy/sign-in"]

@@ -324,6 +324,10 @@ def _recorded_errors(monkeypatch: pytest.MonkeyPatch, found: Harvest) -> Iterato
     monitoring.use_tool_id(tool, "pap-canaries")
 
     def raised(code: Any, _offset: int, error: BaseException) -> None:
+        # A StopIteration is how an awaited step hands its value back (a body chunk read
+        # within a size limit): control flow, never an error anything reports.
+        if isinstance(error, StopIteration | StopAsyncIteration):
+            return
         if code.co_filename.startswith(str(PACKAGE)) and "__tests__" not in code.co_filename:
             found.errors.append(_describe(error))
 

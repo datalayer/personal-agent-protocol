@@ -7,6 +7,7 @@ import { Clocks, StandingPermissionStores, firstContribution } from "./reactor.j
 import type { SessionToken } from "./sessions.js";
 import { byEndpoint, operationResult, traced } from "./telemetry.js";
 import type { DpopFetchClient } from "./transport.js";
+import { readLimitedText } from "./limits.js";
 
 /**
  * PAP Operations extension v1 on the personal agent's side, as in Python:
@@ -458,7 +459,7 @@ export class OperationsClient {
   }
 
   async #payload(response: Response): Promise<unknown> {
-    const text = await response.text();
+    const text = await readLimitedText(response, this.#maxResponseBytes);
     if (new TextEncoder().encode(text).byteLength > this.#maxResponseBytes) {
       throw new OperationError("response_too_large", "operation response exceeded limit");
     }

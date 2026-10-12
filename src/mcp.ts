@@ -22,6 +22,7 @@ import { parseJsonStrict } from "./json.js";
 import type { ApiDescriptor, DiscoveryDocument, Operation } from "./models.js";
 import { operationFrom } from "./operations.js";
 import type { SessionToken } from "./sessions.js";
+import { readLimited, readLimitedText } from "./limits.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -250,7 +251,7 @@ export class McpClient {
       await response.body?.cancel().catch(() => undefined);
       throw new McpError("http_error", "MCP request failed", { statusCode: response.status });
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = await readLimited(response, this.#maxResponseBytes);
     if (bytes.byteLength > this.#maxResponseBytes) {
       throw new McpError("response_too_large", "MCP response exceeded limit");
     }
@@ -283,7 +284,7 @@ async function refusal(response: Response): Promise<McpError> {
   }
   let payload: unknown;
   try {
-    payload = parseJsonStrict(await response.text());
+    payload = parseJsonStrict(await readLimitedText(response, 64 * 1024));
   } catch {
     payload = undefined;
   }

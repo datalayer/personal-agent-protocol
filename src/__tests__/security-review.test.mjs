@@ -508,3 +508,61 @@ test("finding 14: a metadata deadline aborts the request itself, and a redirect'
   await assert.rejects(discover("slow.example", { fetch: redirecting }));
   assert.equal(cancelled, 1);
 });
+
+/** A JSON response whose body never ends, counting the chunks pulled from it. */
+function endless() {
+  const counter = { pulled: 0, cancelled: false };
+  const body = new ReadableStream({
+    pull(controller) {
+      counter.pulled += 1;
+      controller.enqueue(new Uint8Array(65536).fill(32));
+    },
+    cancel() {
+      counter.cancelled = true;
+    },
+  });
+  return { counter, response: () => new Response(body, { status: 200, headers: { "content-type": "application/json" } }) };
+}
+
+test("finding 15: a token response is read only up to its limit", async () => {
+  const w = await world();
+  const { counter, response } = endless();
+  const sessions = new SessionClient({ reactor: w.host.reactor, fetch: async () => response(), maxResponseBytes: 100 * 1024 });
+  await assert.rejects(
+    sessions.start({ clientId: w.identity.clientId, pairwiseUserId: PAIRWISE, issuer: w.metadata.issuer, tokenEndpoint: w.metadata.token_endpoint, tenantId: TENANT }),
+    (error) => error.code === "response_too_large",
+  );
+  assert.ok(counter.pulled <= 4, `pulled ${counter.pulled}`);
+  assert.equal(counter.cancelled, true);
+});
+
+test("finding 15: an MCP response is read only up to its limit", async () => {
+  const { McpClient } = await import("../../lib/index.js");
+  const w = await world();
+  const session = await w.start();
+  const token = await bearer(w, session);
+  const { counter, response } = endless();
+  const mcp = new McpClient({ url: "https://manzanita.example/mcp", token, fetch: async () => response(), maxResponseBytes: 100 * 1024 });
+  await assert.rejects(mcp.listTools(), (error) => error.code === "response_too_large");
+  assert.ok(counter.pulled <= 4, `pulled ${counter.pulled}`);
+});
+
+for (const status of [301, 302, 307, 308]) {
+  test(`finding 7: a body is never sent to a ${status} redirect`, async () => {
+    const w = await world();
+    const session = await w.start();
+    const seen = [];
+    const transport = new DpopFetchClient({
+      reactor: w.host.reactor,
+      fetch: async (input) => {
+        seen.push(new URL(String(input)).pathname);
+        return new Response(null, { status, headers: { location: "/collect-credentials" } });
+      },
+    });
+    await assert.rejects(
+      transport.request("POST", MEDIATED, { token: session, ...w.who, body: '{"credentials":{"password":"x"}}' }),
+      (error) => error.code === "redirect_refused",
+    );
+    assert.deepEqual(seen, ["/poppy/sign-in"]);
+  });
+}

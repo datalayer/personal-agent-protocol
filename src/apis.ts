@@ -13,6 +13,7 @@ import { parseJsonStrict } from "./json.js";
 import { parseOperation, type ApiDescriptor, type DiscoveryDocument, type Operation } from "./models.js";
 import type { SessionToken } from "./sessions.js";
 import type { DpopFetchClient } from "./transport.js";
+import { readLimited } from "./limits.js";
 
 /** The API types this SDK speaks. */
 export const KNOWN_API_TYPES: ReadonlySet<string> = new Set(["openapi", "mcp"]);
@@ -144,7 +145,7 @@ export class ApiClient {
   }
 
   async #payload(response: Response): Promise<unknown> {
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = await readLimited(response, this.#maxResponseBytes);
     if (bytes.byteLength > this.#maxResponseBytes) {
       throw new ApiError("response_too_large", "API response exceeded limit");
     }

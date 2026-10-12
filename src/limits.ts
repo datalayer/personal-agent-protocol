@@ -258,6 +258,43 @@ export function budgetKey(url: URL | string): string {
 }
 
 /**
+ * At most `maxBytes + 1` bytes of a body: the rest is never read (the stream is
+ * cancelled), so a caller's size check refuses a larger body without it filling memory.
+ */
+export async function readLimited(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total <= maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    if (total > maxBytes) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  const kept = Math.min(total, maxBytes + 1);
+  const body = new Uint8Array(kept);
+  let offset = 0;
+  for (const chunk of chunks) {
+    if (offset >= kept) break;
+    const part = chunk.subarray(0, kept - offset);
+    body.set(part, offset);
+    offset += part.byteLength;
+  }
+  return body;
+}
+
+/** `readLimited`, as text. */
+export async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
+  return new TextDecoder().decode(await readLimited(response, maxBytes));
+}
+
+/**
  * Read a metadata body: at most `maxBytes`, and within `timeoutMs` in all, however
  * slowly the server sends (each read races the deadline).
  */

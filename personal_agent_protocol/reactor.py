@@ -525,6 +525,47 @@ def is_global_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) ->
     return address.is_global and not address.is_multicast
 
 
+#: Headers that described the body as the server sent it, not as it is read back.
+_FRAMING = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+async def send_bounded(
+    http: httpx.AsyncClient,
+    request: httpx.Request,
+    *,
+    max_bytes: int,
+    auth: httpx.Auth | None = None,
+) -> httpx.Response:
+    """Send `request` (no redirect followed) and read at most `max_bytes + 1` of the body.
+
+    The response is read back with that much: a caller's `len(content) >
+    max_bytes` check refuses a larger body without the rest ever being read
+    into memory, however much the server sends.
+    """
+
+    response = await http.send(
+        request,
+        stream=True,
+        follow_redirects=False,
+        **({} if auth is None else {"auth": auth}),
+    )
+    body = bytearray()
+    try:
+        async for chunk in response.aiter_bytes():
+            body.extend(chunk)
+            if len(body) > max_bytes:
+                break
+    finally:
+        await response.aclose()
+    headers = [(k, v) for k, v in response.headers.multi_items() if k.lower() not in _FRAMING]
+    return httpx.Response(
+        response.status_code,
+        headers=headers,
+        content=bytes(body[: max_bytes + 1]),
+        request=request,
+    )
+
+
 async def resolve_addresses(host: str) -> list[str]:
     """Resolve a host off the event loop."""
 

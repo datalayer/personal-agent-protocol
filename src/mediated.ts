@@ -14,6 +14,7 @@ import type { SecretValue } from "./secret.js";
 import { parseSessionToken, type SessionToken } from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
 import { DpopFetchClient } from "./transport.js";
+import { readLimitedText } from "./limits.js";
 
 /**
  * PAP Mediated Sign-In: the user's credentials, relayed to one endpoint (§4.7).
@@ -342,7 +343,7 @@ export class MediatedSignInClient {
   }
 
   async #decode(response: Response): Promise<unknown> {
-    const body = await response.text();
+    const body = await readLimitedText(response, this.#maxResponseBytes);
     if (new TextEncoder().encode(body).byteLength > this.#maxResponseBytes) {
       throw new AuthorizationError("response_too_large", "Mediated Sign-In response exceeds size limit", {
         statusCode: response.status,

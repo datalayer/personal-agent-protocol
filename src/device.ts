@@ -14,6 +14,7 @@ import {
 import { SecretValue } from "./secret.js";
 import { JWT_CLIENT_ASSERTION, parseSessionToken, type SessionToken } from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
+import { readLimitedText } from "./limits.js";
 
 export const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
@@ -430,7 +431,7 @@ export class DeviceSignInClient {
         statusCode: response.status,
       });
     }
-    const body = await response.text();
+    const body = await readLimitedText(response, this.#maxResponseBytes);
     if (new TextEncoder().encode(body).byteLength > this.#maxResponseBytes) {
       throw new AuthorizationError("response_too_large", `${label} response exceeds size limit`, {
         statusCode: response.status,

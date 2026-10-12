@@ -112,7 +112,12 @@ class MediatedSignInClient:
             raise ValueError("max_response_bytes must be positive")
         self.reactor = reactor
         # Credentials go to one URL: a redirect is refused, never followed.
-        self.transport = DpopHttpClient(reactor=reactor, http_client=http_client, max_redirects=0)
+        self.transport = DpopHttpClient(
+            reactor=reactor,
+            http_client=http_client,
+            max_redirects=0,
+            max_response_bytes=max_response_bytes,
+        )
         self.max_response_bytes = max_response_bytes
 
     @traced("pap.sign_in.mediated.sign_in", before=signed_in_as("mediated"), after=sign_in_result)

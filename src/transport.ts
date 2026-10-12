@@ -203,6 +203,12 @@ export class DpopFetchClient {
         continue;
       }
       if (!redirects.has(response.status)) return response;
+      if (currentBody !== undefined && response.status !== 303) {
+        // A body (credentials, a code, a confirmation) is sent once, to the URL it was
+        // meant for: never again to wherever a redirect points.
+        await response.body?.cancel().catch(() => undefined);
+        throw new TransportError("redirect_refused", "A request with a body is never sent to a redirect");
+      }
       if (redirectCount >= this.#maxRedirects) {
         throw new TransportError(
           "too_many_redirects",

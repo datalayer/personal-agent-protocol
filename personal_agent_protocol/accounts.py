@@ -53,6 +53,7 @@ from .reactor import (
     Signer,
     TokenStore,
     first_contribution,
+    send_bounded,
 )
 from .sessions import (
     JWT_CLIENT_ASSERTION,
@@ -312,11 +313,12 @@ class AccountTokenClient:
                 )
                 headers["DPoP"] = proof.get_secret_value()
             try:
-                response = await self.http.post(
-                    url,
-                    data=build(assertion.get_secret_value()),
-                    headers=headers,
-                    follow_redirects=False,
+                response = await send_bounded(
+                    self.http,
+                    self.http.build_request(
+                        "POST", url, data=build(assertion.get_secret_value()), headers=headers
+                    ),
+                    max_bytes=self.max_response_bytes,
                 )
             except httpx.HTTPError as exc:
                 raise AuthorizationError("request_failed", "Account Token request failed") from exc

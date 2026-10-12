@@ -13,6 +13,7 @@ import {
   type PairwiseUserIdStore,
 } from "./reactor.js";
 import { byIssuer, sessionResult, traced } from "./telemetry.js";
+import { readLimitedText } from "./limits.js";
 
 export const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 export const JWT_CLIENT_ASSERTION =
@@ -446,7 +447,7 @@ export class SessionClient {
           { statusCode: response.status },
         );
       }
-      const body = await response.text();
+      const body = await readLimitedText(response, this.#maxResponseBytes);
       if (new TextEncoder().encode(body).byteLength > this.#maxResponseBytes) {
         throw new SessionError(
           "response_too_large",

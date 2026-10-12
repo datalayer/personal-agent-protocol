@@ -654,14 +654,17 @@ def pin_connections(client: httpx.AsyncClient) -> httpx.AsyncClient:
     left as they are. Idempotent.
     """
 
-    transports = [client._transport, *client._mounts.values()]
-    for transport in transports:
-        pool = getattr(transport, "_pool", None)
-        backend = getattr(pool, "_network_backend", None)
-        if pool is None or backend is None or isinstance(backend, PinnedNetworkBackend):
-            continue
-        pool._network_backend = PinnedNetworkBackend(backend)
+    for transport in [client._transport, *client._mounts.values()]:
+        _pin_transport(transport)
     return client
+
+
+def _pin_transport(transport: object) -> None:
+    pool = getattr(transport, "_pool", None)
+    backend = getattr(pool, "_network_backend", None)
+    if pool is None or backend is None or isinstance(backend, PinnedNetworkBackend):
+        return
+    pool._network_backend = PinnedNetworkBackend(backend)
 
 
 @asynccontextmanager
@@ -675,6 +678,65 @@ async def pinned(approved: ApprovedUrl) -> AsyncIterator[None]:
         yield
     finally:
         _PINNED.reset(token)
+
+
+class ResolvingTransport(httpx.AsyncBaseTransport):
+    """Every request to an untrusted host resolved, vetted, and pinned.
+
+    Python's `createResolvingFetch`, for everything a personal agent sends a
+    company once its metadata is read: Sessions and sign-ins, conversations,
+    API calls, Operations, the company's MCP server. Before each request —
+    each hop of a redirect the caller follows included — the URL safety
+    policy resolves the host and refuses the request unless it is HTTPS and
+    every address is public (`DiscoveryError`: `unsafe_url`, `unsafe_address`,
+    `dns_failed`); nothing is sent, and nothing is tried elsewhere. The
+    connection then dials only the approved addresses, TLS still naming the
+    host, so a name that rebinds after the check reaches no private address.
+    """
+
+    def __init__(
+        self,
+        inner: httpx.AsyncBaseTransport | None = None,
+        *,
+        resolver: AddressResolver = resolve_addresses,
+        allow_private_networks: bool = False,
+    ) -> None:
+        self._inner = inner if inner is not None else httpx.AsyncHTTPTransport()
+        _pin_transport(self._inner)
+        self._policy = PublicUrlSafetyPolicy(resolver, allow_private_networks=allow_private_networks)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        approved = await self._policy.assert_safe(str(request.url))
+        async with pinned(approved):
+            return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def create_resolving_client(
+    *,
+    resolver: AddressResolver = resolve_addresses,
+    allow_private_networks: bool = False,
+    transport: httpx.AsyncBaseTransport | None = None,
+    timeout: float = 10.0,
+) -> httpx.AsyncClient:
+    """An `httpx` client whose every request goes through a `ResolvingTransport`.
+
+    Redirects are never followed by the client (the SDK follows those it
+    allows, each hop vetted again), and no proxy from the environment is
+    used: a proxy would dial the host itself, unpinned. `transport` replaces
+    the socket transport underneath (a test network, a custom TLS context).
+    """
+
+    return httpx.AsyncClient(
+        transport=ResolvingTransport(
+            transport, resolver=resolver, allow_private_networks=allow_private_networks
+        ),
+        timeout=timeout,
+        follow_redirects=False,
+        trust_env=False,
+    )
 
 
 class HttpxDiscoveryTransport:

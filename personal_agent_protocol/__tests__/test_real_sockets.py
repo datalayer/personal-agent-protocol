@@ -171,3 +171,64 @@ async def test_metadata_connects_to_the_approved_address() -> None:
     assert company.document.organization.domain == "pinned.example"
     assert resolutions == ["pinned.example"]
     assert dial.dialed == ["127.0.0.1"]
+
+
+@pytest.mark.asyncio
+async def test_a_resource_request_connects_to_the_approved_address() -> None:
+    """A POST through the resolving client dials only the address the policy approved.
+
+    As for metadata: `pinned.example` resolves nowhere, the backend refuses a
+    host name, and the certificate is still checked against the name.
+    """
+
+    import uvicorn
+
+    from personal_agent_protocol import create_resolving_client
+
+    received: list[bytes] = []
+
+    async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] == "lifespan":
+            while (message := await receive())["type"] != "lifespan.shutdown":
+                if message["type"] == "lifespan.startup":
+                    await send({"type": "lifespan.startup.complete"})
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        received.append((await receive()).get("body", b""))
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    resolutions: list[str] = []
+
+    async def approve_loopback(host: str) -> list[str]:
+        resolutions.append(host)
+        return ["127.0.0.1"]
+
+    with tempfile.TemporaryDirectory() as directory:
+        ca, cert, key = _certificates(["pinned.example"], Path(directory))
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        server = uvicorn.Server(
+            uvicorn.Config(app, ssl_certfile=str(cert), ssl_keyfile=str(key), log_level="warning")
+        )
+        task = asyncio.create_task(server.serve(sockets=[listener]))
+        try:
+            while not server.started:
+                if task.done():
+                    task.result()
+                await asyncio.sleep(0.01)
+            transport = httpx.AsyncHTTPTransport(verify=ssl.create_default_context(cafile=ca))
+            dial = _ToLocalPort(listener.getsockname()[1])
+            transport._pool._network_backend = dial
+            async with create_resolving_client(
+                resolver=approve_loopback, allow_private_networks=True, transport=transport
+            ) as http:
+                answered = await http.post("https://pinned.example/api/orders", content=b"{}")
+        finally:
+            server.should_exit = True
+            await task
+            listener.close()
+
+    assert answered.status_code == 200 and received == [b"{}"]
+    assert resolutions == ["pinned.example"]
+    assert dial.dialed == ["127.0.0.1"]

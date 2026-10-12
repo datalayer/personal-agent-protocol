@@ -158,6 +158,7 @@ from .reactor import (
     ProtocolCache,
     RandomSource,
     RateLimitBudget,
+    ResolvingTransport,
     RetryPolicy,
     SharedRateLimitBudget,
     Signer,
@@ -166,6 +167,7 @@ from .reactor import (
     TelemetrySink,
     TokenStore,
     build_pap_reactor,
+    create_resolving_client,
     pin_connections,
 )
 from .sessions import (
@@ -302,6 +304,7 @@ __all__ = [
     "RandomSource",
     "RateLimitBudget",
     "RecordingTelemetrySink",
+    "ResolvingTransport",
     "RetryPolicy",
     "SessionAssertionClaims",
     "SessionClient",
@@ -334,6 +337,7 @@ __all__ = [
     "build_pap_reactor",
     "build_session_assertion_claims",
     "covers",
+    "create_resolving_client",
     "generate_message_id",
     "generate_pairwise_user_id",
     "openapi_url",

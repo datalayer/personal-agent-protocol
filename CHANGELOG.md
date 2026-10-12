@@ -6,6 +6,16 @@
 
 # Changelog
 
+## Unreleased
+
+- **Every request to a company on the safe path**
+  ([docs](docs/docs/guides/operational-limits.mdx)): `create_resolving_client`
+  (`ResolvingTransport`) resolves the host before each request — Sessions,
+  sign-ins, conversations, API calls, Operations, MCP — refuses it unless it is
+  HTTPS and every address is public (`unsafe_url`, `unsafe_address`), and dials
+  only the approved addresses; no redirect followed, no environment proxy.
+  Python's counterpart of `createResolvingFetch`.
+
 ## 0.13.0 (2026-10-12)
 
 - **`PapOutcome`, what a confirmed operation came to, as a Reactor display**

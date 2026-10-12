@@ -34,6 +34,21 @@ client metadata, and JWKS are public, and each fetch is bounded:
   `metadata_timeout`.
 - **No credentials.** No cookie, `Authorization`, or `DPoP` header is sent.
 
+## Everything else sent to a company
+
+A company's metadata names its other endpoints — token, sign-in,
+conversations, API, Operations, MCP — and a company can point those names
+anywhere, its own network included. A host that acts for many people (a
+gateway inside a cluster) sends them through `create_resolving_client` in
+Python, the same boundary as `createResolvingFetch` on Node: before every
+request, and every redirect hop the SDK follows, the host is resolved and the
+request refused unless it is HTTPS and every address is public
+(`DiscoveryError`: `unsafe_url`, `unsafe_address`, `dns_failed`); nothing is
+sent and nothing is tried elsewhere. The connection then dials only the
+approved addresses (`ResolvingTransport`), TLS still naming the host. It
+follows no redirect itself and uses no proxy from the environment. Keep the
+host's own calls (its identity provider, its stores) on another client.
+
 ## Caching by `Cache-Control`, within bounds
 
 A fetched document is kept as long as its `Cache-Control` says, clamped to at

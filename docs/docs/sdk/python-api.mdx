@@ -55,6 +55,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`ConversationReceipt`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Class. State returned after a message when the caller does not wait for events.
 - [`ConversationResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `ConversationResponse` constant.
 - [`covers`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Whether a standing permission covers this revision, term by term.
+- [`create_resolving_client`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. An `httpx` client whose every request goes through a `ResolvingTransport`.
 - [`CursorExpiredHandler`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `CursorExpiredHandler` constant.
 - [`DEVICE_CODE_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/device.py) — Constant. Public `DEVICE_CODE_GRANT` constant.
 - [`DeviceAuthorizationResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/device.py) — Class. Validated response from the OAuth device authorization endpoint.
@@ -128,6 +129,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`RecordingTelemetrySink`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/telemetry.py) — Class. `pap.telemetry` in memory: every event, in order.
 - [`REFRESH_TOKEN_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Constant. Public `REFRESH_TOKEN_GRANT` constant.
 - [`resolve_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pairwise.py) — Function. Resolve the active Reactor store and return its stable pairwise ID.
+- [`ResolvingTransport`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Every request to an untrusted host resolved, vetted, and pinned.
 - [`RETRY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `RETRY_POLICIES` constant.
 - [`RetryPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. When to retry a refused request (Guides, retries).
 - [`SessionAssertionClaims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Claims signed by the personal agent when starting or renewing a session.

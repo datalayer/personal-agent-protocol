@@ -97,6 +97,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`DiscoveryOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/discovery.ts) — Interface; entry `.`. Public TypeScript interface `DiscoveryOptions`.
 - [`DiscoveryTransport`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `DiscoveryTransport`.
 - [`DiscoveryTransports`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `DiscoveryTransports`.
+- [`DisplayLike`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. Anything shaped like a display: Reactor's `Display`, or a tool result's `_meta["reactor.ui/display"]`.
 - [`DpopFetchClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/transport.ts) — Class; entry `.`. Send proof-bound PAP requests with fresh proofs and safe redirect handling.
 - [`DpopFetchClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/transport.ts) — Interface; entry `.`. Public TypeScript interface `DpopFetchClientOptions`.
 - [`DpopFetchRequestOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/transport.ts) — Interface; entry `.`. Public TypeScript interface `DpopFetchRequestOptions`.
@@ -117,6 +118,11 @@ Unknown or internal symbols are deliberately excluded.
 - [`InMemoryProtocolCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/limits.ts) — Class; entry `.`. Default `pap.cache`: a bounded, least-recently-used map in one process.
 - [`InMemoryStandingPermissionStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Class; entry `.`. A single-process store of standing permissions, for examples and tests.
 - [`InProcessAccountTokenLock`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Class; entry `.`. One in-process lock per reference: the default Account Token lock.
+- [`isPapConfirm`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. Whether a display is an operation to confirm, of the version this SDK reads.
+- [`isPapConfirmData`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. Whether a value is an operation to confirm's `data`, as `PapConfirm` sends
+- [`isPapOutcome`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. Whether a display is what a confirmed operation came to, of the version this SDK reads.
+- [`isPapOutcomeData`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. Whether a value is an outcome's `data`, as `PapOutcome` sends it: every
+- [`isPapSessionShown`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. Whether a value is a `PapSessionShown`: a 12-hex-digit reference and `signed_in`, nothing else.
 - [`JoseAlgorithm`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Type; entry `.`. Public TypeScript type `JoseAlgorithm`.
 - [`JoseDpopProofProvider`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Class; entry `.`. Create fresh RFC 9449 proofs using per-user/company key material.
 - [`JoseDpopProofProviderOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `.`. Public TypeScript interface `JoseDpopProofProviderOptions`.
@@ -166,7 +172,25 @@ Unknown or internal symbols are deliberately excluded.
 - [`Organization`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `Organization`.
 - [`PairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `PairwiseUserIdStore`.
 - [`PairwiseUserIdStores`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `PairwiseUserIdStores`.
+- [`PAP_ACTION_CLASSES`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Const; entry `.`. Every `PapActionClass`, in the Rules' order.
+- [`PAP_CONFIRM_TYPE`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Const; entry `.`. The display type of an operation waiting for the person to confirm it.
+- [`PAP_CONFIRM_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Const; entry `.`. The version of `PAP_CONFIRM_TYPE` this module reads.
+- [`PAP_OUTCOME_STATES`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Const; entry `.`. Every `PapOutcomeState`.
+- [`PAP_OUTCOME_TYPE`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Const; entry `.`. The display type of what a confirmed operation came to.
+- [`PAP_OUTCOME_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Const; entry `.`. The version of `PAP_OUTCOME_TYPE` this module reads.
+- [`PapActionClass`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. What confirming an operation does, as an application's Rules class it.
+- [`PapConfirmData`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. An operation to confirm, as a display's `data` (`PapConfirm`'s fields).
+- [`papConfirmDisplay`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. An operation to confirm as its display, `text` included; throws when `data` is not one.
+- [`PapConfirmDisplay`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. A display of an operation to confirm, as the page receives it.
+- [`papConfirmText`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. What an operation to confirm reads as without a renderer: `PapConfirm.text()`, word for word.
 - [`PapCoreOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `PapCoreOptions`.
+- [`PapOutcomeData`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. What a confirmed operation came to, as a display's `data` (`PapOutcome`'s fields).
+- [`papOutcomeDisplay`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. An outcome as its display, `text` included; throws when `data` is not one.
+- [`PapOutcomeDisplay`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. A display of what a confirmed operation came to, as the page receives it.
+- [`PapOutcomeState`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. What a confirmed operation came to: every operation state but `proposed`.
+- [`papOutcomeText`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. What an outcome reads as without a renderer: `PapOutcome.text()`, word for word.
+- [`PapSessionShown`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. The Session an operation is confirmed in: a one-way reference (12 hex
+- [`PapTermsWas`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. The revision a revised operation replaced, and its terms.
 - [`parseClientMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Public TypeScript function `parseClientMetadata`.
 - [`parseConversationEvent`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Public TypeScript function `parseConversationEvent`.
 - [`parseConversationEventPage`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Public TypeScript function `parseConversationEventPage`.

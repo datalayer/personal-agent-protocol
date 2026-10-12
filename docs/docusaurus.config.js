@@ -66,6 +66,7 @@ module.exports = {
             {type: 'doc', docId: 'sdk/typescript', label: 'TypeScript SDK'},
           ],
         },
+        {to: '/blog', label: 'Blog', position: 'left'},
         {
           href: 'https://discord.gg/YQFwvmSSuR',
           position: 'right',
@@ -134,6 +135,10 @@ module.exports = {
               label: 'Security',
               to: '/security/',
             },
+            {
+              label: 'Blog',
+              to: '/blog',
+            },
           ],
         },
         {
@@ -185,6 +190,12 @@ module.exports = {
         docs: {
           routeBasePath: '/',
           sidebarPath: require.resolve('./sidebars.js'),
+          editUrl: 'https://github.com/datalayer/personal-agent-protocol/edit/main/docs/',
+        },
+        blog: {
+          blogTitle: 'Personal Agent Protocol blog',
+          blogDescription: 'Releases and news of the Personal Agent Protocol SDKs',
+          showReadingTime: true,
           editUrl: 'https://github.com/datalayer/personal-agent-protocol/edit/main/docs/',
         },
         theme: {

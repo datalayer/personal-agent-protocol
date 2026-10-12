@@ -21,10 +21,9 @@ requirements:
 - Use resource-bound Bearer tokens only for MCP; require DPoP elsewhere.
 - Require exact current-revision approval before confirming an operation.
 
-The [security review](/security/review/) of the 0.10.0 SDKs lists every
-finding, its severity, how it was confirmed, and its fix, with the external
-interoperability exercise that followed; the [safety
-demonstrations](/security/demonstrations/) show the release gate's
+[Open security points](/security/review/) lists what is open now: residual
+risks, what a deployment must provide, and the draft's open questions; the
+[safety demonstrations](/security/demonstrations/) show the release gate's
 properties end to end.
 
 ## Trust boundaries
@@ -125,17 +124,13 @@ literal Bearer or DPoP token, or canary, and the browser entry
 (`lib/index.js` and every module it imports) reaches neither `lib/demo` nor
 the demo's fictional credentials.
 
-The suite found one leak, now fixed: Ledgerly's reply asking Ada to connect
-her Northwind account put the bank's device user code in the message text,
-which a model reads; the code now travels only in the message's `data`.
-
 ## Current limitations
 
-The SDK implements asymmetric assertion signing and DPoP proof creation and
-verification. Applications still provide key custody and an atomic replay
-cache; the SDK does not provide durable replay storage, token persistence,
-browser handoff, or complete server middleware. Do not interpret the current
-primitives as a complete authorization service.
+The SDKs' defaults are correct in one process. A deployment provides a
+durable, shared company store (which also holds the replay cache), key
+custody, and the agent's token, pairwise ID, and authorization-state stores
+and browser handoff; [Open security points](/security/review/) lists them
+with the residual risks.
 
 See the official [implementation guides](https://personalagentprotocol.org/docs/guides)
 for the complete upstream guidance.

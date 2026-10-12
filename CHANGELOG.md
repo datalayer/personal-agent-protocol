@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.12.0 (2026-10-12)
 
 - **`PapConfirm`, an operation to confirm as a Reactor display**
   ([docs](docs/docs/guides/operations.mdx)): `personal_agent_protocol.ui`

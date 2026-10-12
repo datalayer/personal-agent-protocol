@@ -9,6 +9,14 @@ emitted. Each discovery, Session, sign-in, conversation, and operation call then
 produces one `TelemetryEvent` when it finishes: its name (`TELEMETRY_EVENTS`), its stage,
 `ok` or `error`, its duration, and attributes.
 
+A company built on `personal_agent_protocol.company` reports through the same
+point (stage `company`): an agent's identity verified for the first time or
+with new metadata, a Session started or renewed, a Session moved to another
+interface (a Bearer token for the MCP server, a browser joining it), and each
+request it refused, with the protocol's code, the route, the status, and
+whether a proof or assertion was a replay. The device flow's
+`authorization_pending` and `slow_down` are progress, not refusals.
+
 Attributes are an allowlist (`TELEMETRY_ATTRIBUTES`). An attribute outside it is
 a programming error (`ValueError`); a value that fails its rule (a lowercase
 identifier, a domain, an `https` issuer, a number, a flag) is dropped. No rule
@@ -39,8 +47,15 @@ from .reactor import TELEMETRY_SINKS, TelemetrySink, optional_contribution
 
 logger = logging.getLogger(__name__)
 
-Stage = Literal["discovery", "session", "sign_in", "conversation", "operation"]
-STAGES: tuple[Stage, ...] = ("discovery", "session", "sign_in", "conversation", "operation")
+Stage = Literal["discovery", "session", "sign_in", "conversation", "operation", "company"]
+STAGES: tuple[Stage, ...] = (
+    "discovery",
+    "session",
+    "sign_in",
+    "conversation",
+    "operation",
+    "company",
+)
 
 #: Every event the SDK emits, and its stage.
 TELEMETRY_EVENTS: dict[str, Stage] = {
@@ -64,7 +79,16 @@ TELEMETRY_EVENTS: dict[str, Stage] = {
     "pap.operation.read": "operation",
     "pap.operation.confirm": "operation",
     "pap.operation.cancel": "operation",
+    # What a company built on `personal_agent_protocol.company` did and refused.
+    "pap.company.identity.check": "company",
+    "pap.company.session.start": "company",
+    "pap.company.session.renew": "company",
+    "pap.company.interface.switch": "company",
+    "pap.company.refused": "company",
 }
+
+#: The interfaces a company offers a personal agent (`pap.interface`).
+INTERFACES: tuple[str, ...] = ("agent", "openapi", "mcp", "web")
 
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
@@ -128,6 +152,11 @@ TELEMETRY_ATTRIBUTES: dict[str, Callable[[object], bool]] = {
     "pap.operation.state": _identifier,
     "pap.operation.status": _identifier,
     "pap.operation.revision": _count,
+    "pap.client.id": _issuer,
+    "pap.interface": _one_of(*INTERFACES),
+    "pap.company.route": _identifier,
+    "pap.http.status": _count,
+    "pap.replayed": _flag,
 }
 
 AttributeValue = str | int | bool

@@ -82,6 +82,64 @@ test("each stage of the journey is one event, its attributes allowlisted", async
   }
 });
 
+test("a company reports what it did and refused: identity, Sessions, replays", async () => {
+  const sink = new pap.RecordingTelemetrySink();
+  const clock = new MutableClock();
+  const sites = {};
+  const inProcess = inProcessFetch(sites);
+  const tokenRequests = [];
+  const fetch = async (input, init = {}) => {
+    if (String(input).endsWith("/oauth/token")) tokenRequests.push([String(input), init]);
+    return inProcess(input, init);
+  };
+  const { service, plugin } = manzanita({ fetch, clock, plugins: [sinkPlugin("company-tests", sink)] });
+  sites["manzanita.example"] = service;
+  const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
+  sites["atlas.example"] = identity.documents;
+  const host = await agentHost({ identity, fetch, clock });
+  await runJourney({
+    reactor: host.reactor,
+    fetch,
+    browser: host.browser,
+    identity,
+    company: {
+      approveAuthorization: async (requestId, accountId) => service.approveAuthorization(requestId, { accountId }),
+      performed: async () => [...plugin.executor.performed],
+    },
+  });
+  const company = sink.events.filter((event) => event.stage === "company");
+  const checks = company.filter((event) => event.name === "pap.company.identity.check");
+  assert.equal(checks.length, 1, "verified once: later requests of the same agent are not checks again");
+  assert.deepEqual({ ...checks[0].attributes }, {
+    "pap.company.issuer": "https://manzanita.example",
+    "pap.company.domain": "manzanita.example",
+    "pap.company.route": "oauth_token",
+    "pap.client.id": identity.clientId,
+  });
+  const started = company.find((event) => event.name === "pap.company.session.start");
+  assert.equal(started.attributes["pap.session.signed_in"], false);
+  assert.equal(company.filter((event) => event.name === "pap.company.refused").length, 0);
+
+  // The first token request sent again: refused, and said to be a replay.
+  const [url, init] = tokenRequests[0];
+  const replay = await inProcess(url, init);
+  const refused = sink.events.filter((event) => event.name === "pap.company.refused");
+  assert.equal(refused.length, 1);
+  assert.equal(refused[0].outcome, "error");
+  assert.equal(refused[0].attributes["pap.error"], (await replay.json()).error);
+  assert.equal(refused[0].attributes["pap.http.status"], replay.status);
+  assert.equal(refused[0].attributes["pap.replayed"], true);
+  assert.equal(refused[0].attributes["pap.company.route"], "oauth_token");
+
+  // A path the company does not serve is nobody's refusal, and a path's words never leave.
+  await inProcess("https://manzanita.example/oauth/secret-path-words");
+  assert.equal(sink.events.filter((event) => event.name === "pap.company.refused").length, 1);
+  for (const event of sink.events) {
+    for (const name of Object.keys(event.attributes)) assert.ok(name in pap.TELEMETRY_ATTRIBUTES, name);
+    assert.ok(!JSON.stringify(event).includes("secret"));
+  }
+});
+
 test("a refusal is an error event carrying its code only", async () => {
   const sink = new pap.RecordingTelemetrySink();
   const { host, fetch } = await journey(sinkPlugin("tests", sink));

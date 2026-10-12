@@ -17,6 +17,13 @@
  * assertion, a proof, a code, a cookie, a password, a mediated field, an identifier, or a
  * URL with a query.
  *
+ * A company built on the SDK's company service reports through the same point (stage
+ * `company`): an agent's identity verified for the first time or with new metadata, a
+ * Session started or renewed, a Session moved to another interface (a Bearer token for the
+ * MCP server, a browser joining it), and each request it refused, with the protocol's
+ * code, the route, the status, and whether a proof or assertion was a replay. The device
+ * flow's `authorization_pending` and `slow_down` are progress, not refusals.
+ *
  * `openTelemetrySink(tracer)` makes each event a span of any OpenTelemetry API tracer
  * (`@opentelemetry/api` stays the host's optional dependency); `RecordingTelemetrySink`
  * keeps events in memory.
@@ -26,13 +33,20 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 import { PersonalAgentProtocolError } from "./errors.js";
 import { TelemetrySinks, optionalContribution, type TelemetrySink } from "./reactor.js";
 
-export type TelemetryStage = "discovery" | "session" | "sign_in" | "conversation" | "operation";
+export type TelemetryStage =
+  | "discovery"
+  | "session"
+  | "sign_in"
+  | "conversation"
+  | "operation"
+  | "company";
 export const TELEMETRY_STAGES: readonly TelemetryStage[] = [
   "discovery",
   "session",
   "sign_in",
   "conversation",
   "operation",
+  "company",
 ];
 
 /** Every event the SDK emits, and its stage. */
@@ -57,7 +71,17 @@ export const TELEMETRY_EVENTS: Readonly<Record<string, TelemetryStage>> = Object
   "pap.operation.read": "operation",
   "pap.operation.confirm": "operation",
   "pap.operation.cancel": "operation",
+  // What a company built on the SDK's company service did and refused.
+  "pap.company.identity.check": "company",
+  "pap.company.session.start": "company",
+  "pap.company.session.renew": "company",
+  "pap.company.interface.switch": "company",
+  "pap.company.refused": "company",
 });
+
+/** The interfaces a company offers a personal agent (`pap.interface`). */
+export const TELEMETRY_INTERFACES = ["agent", "openapi", "mcp", "web"] as const;
+export type TelemetryInterface = (typeof TELEMETRY_INTERFACES)[number];
 
 export type TelemetryValue = string | number | boolean;
 export type TelemetryAttributes = Readonly<Record<string, TelemetryValue>>;
@@ -112,6 +136,11 @@ export const TELEMETRY_ATTRIBUTES: Readonly<Record<string, (value: unknown) => b
     "pap.operation.state": identifier,
     "pap.operation.status": identifier,
     "pap.operation.revision": count,
+    "pap.client.id": issuer,
+    "pap.interface": oneOf(...TELEMETRY_INTERFACES),
+    "pap.company.route": identifier,
+    "pap.http.status": count,
+    "pap.replayed": flag,
   });
 
 /** The allowlisted attributes of `values`; `undefined` and failing values are dropped. */
@@ -228,7 +257,8 @@ export function telemetrySink(reactor: ReactorPlatformView | undefined): Telemet
 
 const now = (): number => globalThis.performance?.now() ?? Date.now();
 
-function emit(
+/** Record one event; a failing sink is logged by its type and never fails the call. */
+export function emit(
   sink: TelemetrySink,
   name: string,
   outcome: "ok" | "error",

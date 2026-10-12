@@ -50,6 +50,7 @@
  *   it: the same operation, performed at most once whichever channel confirms it.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
@@ -73,6 +74,7 @@ import { PROTOCOL_PROFILE } from "../profile.js";
 import { Clocks, RandomSources, firstContribution, optionalContribution } from "../reactor.js";
 import { SecretValue } from "../secret.js";
 import { JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION } from "../sessions.js";
+import { emit, telemetrySink, type TelemetryInterface } from "../telemetry.js";
 import {
   ClientPolicies,
   ClientResolvers,
@@ -312,6 +314,64 @@ class Refused extends Error {
 
 const NO_STORE = { "Cache-Control": "no-store" } as const;
 
+/** The device flow's progress: answered as errors by OAuth, never refusals (RFC 8628 §3.5). */
+const PROGRESS = new Set(["authorization_pending", "slow_down"]);
+
+/** The routes a request may be reported under: never a path's own words or an ID. */
+const NAMED_ROUTES = new Set([
+  "oauth_token",
+  "oauth_authorize",
+  "oauth_device",
+  "oauth_revoke",
+  "poppy_browser_session",
+  "poppy_sign_in",
+  "poppy_conversations",
+  "poppy_operations",
+]);
+const ROUTES: Readonly<Record<string, string>> = {
+  operations: "operation_page",
+  api: "api",
+  mcp: "mcp",
+  ".well-known": "discovery",
+};
+
+/** What a request came to, so far: for the telemetry reported when it ends. */
+interface Exchange {
+  readonly started: number;
+  readonly route: string;
+  clientId?: string;
+  replayed: boolean;
+}
+
+const exchanges = new AsyncLocalStorage<Exchange>();
+
+function routeOf(path: string): string {
+  const parts = path.split("/").filter((part) => part !== "");
+  const [first, second] = parts;
+  if (first === undefined) return "unknown";
+  if ((first === "oauth" || first === "poppy") && second !== undefined) {
+    const route = `${first}_${second.replaceAll("-", "_")}`;
+    return NAMED_ROUTES.has(route) ? route : "unknown";
+  }
+  return Object.hasOwn(ROUTES, first) ? (ROUTES[first] as string) : "unknown";
+}
+
+/** The company's replay cache, noting on the request when it refused a replay. */
+class WatchedReplayCache implements ReplayCache {
+  readonly #cache: ReplayCache;
+
+  constructor(cache: ReplayCache) {
+    this.#cache = cache;
+  }
+
+  async markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean> {
+    const first = await this.#cache.markOnce(key, options);
+    const exchange = exchanges.getStore();
+    if (!first && exchange !== undefined) exchange.replayed = true;
+    return first;
+  }
+}
+
 const CHALLENGED = new Set([
   "invalid_token",
   "sign_in_required",
@@ -518,7 +578,60 @@ export class CompanyService {
   }
 
   #replay(): ReplayCache {
-    return firstContribution(this.reactor, ReplayCaches, "replay cache");
+    return new WatchedReplayCache(firstContribution(this.reactor, ReplayCaches, "replay cache"));
+  }
+
+  // Telemetry -----------------------------------------------------------------------
+
+  /** One `pap.telemetry` event of this request, when the host contributes a sink. */
+  #report(
+    name: string,
+    outcome: "ok" | "error",
+    attributes: Readonly<Record<string, unknown>>,
+  ): void {
+    const sink = telemetrySink(this.reactor);
+    const exchange = exchanges.getStore();
+    if (sink === undefined || exchange === undefined) return;
+    emit(sink, name, outcome, performance.now() - exchange.started, {
+      "pap.company.issuer": this.config.base,
+      "pap.company.domain": this.config.domain,
+      "pap.company.route": exchange.route,
+      "pap.client.id": exchange.clientId,
+      ...attributes,
+    });
+  }
+
+  /** A request answered with an error: the protocol's code, never the body's text. */
+  #reportRefusal(response: CompanyResponse): void {
+    const body: Readonly<Record<string, unknown>> = isObject(response.body) ? response.body : {};
+    const code = typeof body.error === "string" ? body.error : "refused";
+    // Progress, or a path the company does not serve.
+    if (PROGRESS.has(code) || (response.status === 404 && code === "not_found")) return;
+    this.#report("pap.company.refused", "error", {
+      "pap.error": code,
+      "pap.http.status": response.status,
+      "pap.replayed": exchanges.getStore()?.replayed === true,
+    });
+  }
+
+  /** A Session started or renewed; a Bearer token for the MCP server moves it there. */
+  #reportSession(session: IssuedSession, renewed: boolean, tokenType: TokenType): void {
+    const signedIn = session.accountId !== undefined;
+    if (tokenType === "Bearer") {
+      this.#reportSwitch("mcp", signedIn);
+      return;
+    }
+    this.#report(renewed ? "pap.company.session.renew" : "pap.company.session.start", "ok", {
+      "pap.session.signed_in": signedIn,
+      "pap.scopes.granted": session.scopes.length,
+    });
+  }
+
+  #reportSwitch(to: TelemetryInterface, signedIn: boolean): void {
+    this.#report("pap.company.interface.switch", "ok", {
+      "pap.interface": to,
+      "pap.session.signed_in": signedIn,
+    });
   }
 
   #later(seconds: number): Date {
@@ -560,7 +673,21 @@ export class CompanyService {
 
   // Routing -------------------------------------------------------------------------
 
+  /** Answer one request; what it came to is reported to `pap.telemetry`. */
   async handle(request: CompanyRequest): Promise<CompanyResponse> {
+    const exchange: Exchange = {
+      started: performance.now(),
+      route: routeOf(new URL(request.url).pathname),
+      replayed: false,
+    };
+    return exchanges.run(exchange, async () => {
+      const response = await this.#dispatch(request);
+      if (response.status >= 400) this.#reportRefusal(response);
+      return response;
+    });
+  }
+
+  async #dispatch(request: CompanyRequest): Promise<CompanyResponse> {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method.toUpperCase();
@@ -726,9 +853,13 @@ export class CompanyService {
       now: this.#now(),
     });
     const extensions = Object.keys(metadata.extensions ?? {}).sort();
+    const exchange = exchanges.getStore();
+    if (exchange !== undefined) exchange.clientId = clientId;
     const known = await this.#read<KnownClient>(RecordKinds.client, clientId);
     if (known === undefined || canonical(known.extensions) !== canonical(extensions)) {
       await this.store.put(RecordKinds.client, clientId, json({ extensions } satisfies KnownClient));
+      // Its identity verified for the first time, or with new metadata.
+      this.#report("pap.company.identity.check", "ok", {});
     }
     return clientId;
   }
@@ -844,9 +975,13 @@ export class CompanyService {
         ...(form.resource === undefined ? {} : { resource: form.resource }),
         ...(tokenType === "Bearer" ? { tokenType } : {}),
       };
-      return this.#issue(session, undefined, [tokenType]);
+      const renewed = await this.#issue(session, undefined, [tokenType]);
+      this.#reportSession(session, true, tokenType);
+      return renewed;
     }
-    return this.#issue(session);
+    const started = await this.#issue(session);
+    this.#reportSession(session, false, tokenType);
+    return started;
   }
 
   async #refreshGrant(
@@ -936,6 +1071,7 @@ export class CompanyService {
       await this.#signOutSession(session.sessionId, [digest(rotated)]);
       throw new Refused(400, "invalid_grant");
     }
+    this.#reportSession(typed, true, tokenType);
     return response;
   }
 
@@ -2875,6 +3011,9 @@ export class CompanyService {
       json(pointer),
       expiry(new Date(new Date(session.expiresAt).getTime() + this.config.accountTokenLifetimeSeconds * 1000)),
     );
+    const exchange = exchanges.getStore();
+    if (exchange !== undefined) exchange.clientId = verified.clientId;
+    this.#reportSwitch("web", session.accountId !== undefined);
     return {
       status: 303,
       headers: {

@@ -49,7 +49,9 @@ import hmac
 import html
 import json
 import math
+import time
 from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from http.cookies import CookieError, SimpleCookie
@@ -81,6 +83,7 @@ from ..reactor import (
     optional_contribution,
 )
 from ..sessions import JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION, _opaque_id
+from ..telemetry import emit, telemetry_sink
 from .points import (
     CLIENT_POLICIES,
     CLIENT_RESOLVERS,
@@ -388,6 +391,68 @@ def _with(items: tuple[str, ...], item: str | None) -> tuple[str, ...]:
     return items if item is None or item in items else (*items, item)
 
 
+#: The device flow's progress: answered as errors by OAuth, never refusals (RFC 8628 §3.5).
+_PROGRESS = frozenset({"authorization_pending", "slow_down"})
+
+#: The route a request took, for telemetry: its path's first part, never an ID.
+_NAMED_ROUTES = frozenset(
+    {
+        "oauth_token",
+        "oauth_authorize",
+        "oauth_device",
+        "oauth_revoke",
+        "poppy_browser_session",
+        "poppy_sign_in",
+        "poppy_conversations",
+        "poppy_operations",
+    }
+)
+_ROUTES: dict[str, str] = {
+    "operations": "operation_page",
+    "api": "api",
+    "mcp": "mcp",
+    ".well-known": "discovery",
+}
+
+
+@dataclass
+class _Exchange:
+    """What a request came to, so far: for the telemetry reported when it ends."""
+
+    started: float
+    route: str
+    client_id: str | None = None
+    replayed: bool = False
+
+
+_EXCHANGE: ContextVar[_Exchange | None] = ContextVar("pap_company_exchange", default=None)
+
+
+def _route_of(path: str) -> str:
+    parts = [part for part in path.split("/") if part]
+    if not parts:
+        return "unknown"
+    if parts[0] in {"oauth", "poppy"} and len(parts) > 1:
+        route = f"{parts[0]}_{parts[1].replace('-', '_')}"
+        # Only the routes the company serves: a path never carries its own words out.
+        return route if route in _NAMED_ROUTES else "unknown"
+    return _ROUTES.get(parts[0], "unknown")
+
+
+class _WatchedReplayCache:
+    """The company's replay cache, noting on the request when it refused a replay."""
+
+    def __init__(self, cache: ReplayCache) -> None:
+        self.cache = cache
+
+    async def mark_once(self, key: str, *, expires_at: datetime) -> bool:
+        first = await self.cache.mark_once(key, expires_at=expires_at)
+        exchange = _EXCHANGE.get()
+        if not first and exchange is not None:
+            exchange.replayed = True
+        return first
+
+
 class CompanyService:
     """One company's PAP endpoints over Reactor contributions."""
 
@@ -440,11 +505,85 @@ class CompanyService:
         return _opaque_id(prefix, random.bytes)
 
     def _replay(self) -> ReplayCache:
-        return cast(ReplayCache, first_contribution(self.reactor, REPLAY_CACHES, "replay cache"))
+        cache = cast(ReplayCache, first_contribution(self.reactor, REPLAY_CACHES, "replay cache"))
+        return _WatchedReplayCache(cache)
+
+    # Telemetry ---------------------------------------------------------------------
+
+    def _report(
+        self, name: str, outcome: Literal["ok", "error"], attributes: Mapping[str, object]
+    ) -> None:
+        """One `pap.telemetry` event of this request, when the host contributes a sink."""
+
+        sink = telemetry_sink(self.reactor)
+        exchange = _EXCHANGE.get()
+        if sink is None or exchange is None:
+            return
+        emit(
+            sink,
+            name,
+            outcome,
+            (time.perf_counter() - exchange.started) * 1000,
+            {
+                "pap.company.issuer": self.config.base,
+                "pap.company.domain": self.config.domain,
+                "pap.company.route": exchange.route,
+                "pap.client.id": exchange.client_id,
+                **attributes,
+            },
+        )
+
+    def _report_refusal(self, response: CompanyResponse) -> None:
+        """A request answered with an error: the protocol's code, never the body's text."""
+
+        body = response.body if isinstance(response.body, dict) else {}
+        error = body.get("error")
+        code = error if isinstance(error, str) else "refused"
+        if code in _PROGRESS or (response.status == 404 and code == "not_found"):
+            return  # progress, or a path the company does not serve
+        exchange = _EXCHANGE.get()
+        self._report(
+            "pap.company.refused",
+            "error",
+            {
+                "pap.error": code,
+                "pap.http.status": response.status,
+                "pap.replayed": bool(exchange and exchange.replayed),
+            },
+        )
+
+    def _report_session(self, session: IssuedSession, *, renewed: bool, bearer: bool) -> None:
+        """A Session started or renewed; a Bearer token for the MCP server moves it there."""
+
+        if bearer:
+            self._report(
+                "pap.company.interface.switch",
+                "ok",
+                {"pap.interface": "mcp", "pap.session.signed_in": session.signed_in},
+            )
+            return
+        self._report(
+            "pap.company.session.renew" if renewed else "pap.company.session.start",
+            "ok",
+            {"pap.session.signed_in": session.signed_in, "pap.scopes.granted": len(session.scopes)},
+        )
 
     # Routing -----------------------------------------------------------------------
 
-    async def handle(self, request: CompanyRequest) -> CompanyResponse:  # noqa: C901 - the route table
+    async def handle(self, request: CompanyRequest) -> CompanyResponse:
+        """Answer one request; what it came to is reported to `pap.telemetry`."""
+
+        path = urlsplit(request.url).path
+        token = _EXCHANGE.set(_Exchange(started=time.perf_counter(), route=_route_of(path)))
+        try:
+            response = await self._dispatch(request)
+            if response.status >= 400:
+                self._report_refusal(response)
+            return response
+        finally:
+            _EXCHANGE.reset(token)
+
+    async def _dispatch(self, request: CompanyRequest) -> CompanyResponse:  # noqa: C901 - the route table
         path = urlsplit(request.url).path
         method = request.method.upper()
         if any(
@@ -606,9 +745,14 @@ class CompanyService:
             now=self._now(),
         )
         extensions = tuple(sorted(metadata.extensions))
+        exchange = _EXCHANGE.get()
+        if exchange is not None:
+            exchange.client_id = client_id
         known = await self._read(CLIENT, client_id, KnownClient.from_json)
         if known is None or known.extensions != extensions:
             await self.store.put(CLIENT, client_id, KnownClient(extensions).to_json())
+            # Its identity verified for the first time, or with new metadata.
+            self._report("pap.company.identity.check", "ok", {})
         return client_id
 
     async def _allowed(self, client_id: str) -> bool:
@@ -695,7 +839,9 @@ class CompanyService:
                 key_thumbprint=thumbprint,
                 expires_at=self._now() + self.config.session_lifetime,
             )
-            return await self._issue(session)
+            response = await self._issue(session)
+            self._report_session(session, renewed=False, bearer=False)
+            return response
         known = await self._session_by_id(session_id)
         if known is None or (known.client_id, known.pairwise_user_id) != (client_id, pairwise):
             raise _RefusedError(400, "invalid_session")
@@ -712,7 +858,9 @@ class CompanyService:
             scopes=(),
             account_token=None,
         )
-        return await self._issue(session, replacing={token_type})
+        response = await self._issue(session, replacing={token_type})
+        self._report_session(session, renewed=True, bearer=bearer)
+        return response
 
     async def _refresh_grant(
         self, form: Mapping[str, str], client_id: str, thumbprint: str, *, bearer: bool = False
@@ -785,6 +933,7 @@ class CompanyService:
             # Revoked while this token was issued: the Session continues signed out (§4.9).
             await self._sign_out_session(session.session_id, {_digest(rotated)})
             raise _RefusedError(400, "invalid_grant")
+        self._report_session(signed_in, renewed=True, bearer=bearer)
         return response
 
     async def _device(self, request: CompanyRequest) -> CompanyResponse:
@@ -2636,6 +2785,14 @@ class CompanyService:
             _digest(cookie),
             SessionPointer(session.session_id).to_json(),
             expires_at=session.expires_at + self.config.account_token_lifetime,
+        )
+        exchange = _EXCHANGE.get()
+        if exchange is not None:
+            exchange.client_id = verified.client_id
+        self._report(
+            "pap.company.interface.switch",
+            "ok",
+            {"pap.interface": "web", "pap.session.signed_in": session.signed_in},
         )
         return CompanyResponse(
             303,

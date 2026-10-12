@@ -422,6 +422,7 @@ def _assert_nothing_leaked(harvest: Harvest) -> None:
         "sign_in",
         "conversation",
         "operation",
+        "company",
     }, "a protocol stage emitted no telemetry: the trace capture is not wired"
     counts = ", ".join(f"{kind} {len(found)}" for kind, found in sorted(harvest.secrets.items()))
     sys.stdout.write(  # the numbers, in the test output (`-s`)

@@ -6,6 +6,19 @@
 
 # Changelog
 
+## Unreleased
+
+- **A company reports what it did and refused**
+  ([docs](docs/docs/guides/telemetry.mdx#what-a-company-reports)): the
+  company service in both languages emits to `pap.telemetry` (stage
+  `company`) an agent's identity verified for the first time or with new
+  metadata, a Session started or renewed, a Session moved to the MCP server or
+  a browser (`pap.company.interface.switch`), and each refused request with
+  the protocol's code, the route, the status and whether a proof or assertion
+  was a replay (`pap.replayed`). New attributes `pap.client.id`,
+  `pap.interface`, `pap.company.route`, `pap.http.status`, `pap.replayed`;
+  device-flow progress is not a refusal.
+
 ## 0.15.0 (2026-10-12)
 
 - **A password reset ends the sign-ins from before it**

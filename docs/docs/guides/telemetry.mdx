@@ -23,7 +23,7 @@ is a programming error the SDK refuses:
 
 | Attribute | Value |
 | --- | --- |
-| `pap.stage` | `discovery`, `session`, `sign_in`, `conversation`, or `operation` |
+| `pap.stage` | `discovery`, `session`, `sign_in`, `conversation`, `operation`, or `company` |
 | `pap.outcome` | `ok` or `error` |
 | `pap.error` | the refusal's error code, a lowercase identifier; `unexpected` for anything else |
 | `pap.company.domain` | a DNS name |
@@ -36,6 +36,11 @@ is a programming error the SDK refuses:
 | `pap.conversation.events` | a count |
 | `pap.operation.state`, `pap.operation.status` | lowercase identifiers (`proposed`, `succeeded`, `confirmed`, `terms_changed`, …) |
 | `pap.operation.revision` | a count |
+| `pap.client.id` | the personal agent's `client_id`, once the company verified it: an `https` URL with a plain path |
+| `pap.interface` | `agent`, `openapi`, `mcp`, or `web` |
+| `pap.company.route` | the company route a request took (`oauth_token`, `poppy_conversations`, `mcp`, …), never its path |
+| `pap.http.status` | the status the company answered |
+| `pap.replayed` | a flag: the refusal was a proof or assertion already used |
 
 No rule admits a token, an assertion, a DPoP proof, a code, a cookie, a
 password, a mediated field, a Session, conversation or operation ID, a
@@ -61,6 +66,28 @@ as analytics JSON or as the span the OpenTelemetry adapter starts. See
 | `pap.sign_in.account_token.refresh`, `pap.sign_in.account_token.revoke` | sign_in |
 | `pap.conversation.start`, `.send`, `.read_events`, `.start_direct`, `.handoff`, `.close` | conversation |
 | `pap.operation.read`, `.confirm`, `.cancel` | operation |
+| `pap.company.identity.check`, `.session.start`, `.session.renew`, `.interface.switch`, `.refused` | company |
+
+## What a company reports
+
+A company built on the SDK's company service (`personal_agent_protocol.company`,
+the TypeScript `CompanyService`) reports through the same point, with stage
+`company`, when its Reactor has a sink:
+
+- `pap.company.identity.check` — a personal agent's identity verified for the
+  first time, or with new metadata (not every request it signs);
+- `pap.company.session.start` and `.session.renew` — a Session started, or
+  renewed with its assertion or an Account Token;
+- `pap.company.interface.switch` — a Session moved to another interface: a
+  Bearer token for the MCP server (`mcp`), a browser joining it (`web`);
+- `pap.company.refused` — each request it refused, as `error`, with the
+  protocol's code, the route, the status and whether a proof or assertion was
+  a replay. The device flow's `authorization_pending` and `slow_down` are
+  progress, not refusals, and a path the company does not serve is nobody's.
+
+A host that keeps an audit — who did what at its company — turns these events
+into its own records: they carry the issuer, the agent's `client_id` and the
+code, never what was sent.
 
 ## OpenTelemetry
 

@@ -35,7 +35,7 @@ from personal_agent_protocol.reactor import PapCorePlugin
 from personal_agent_protocol.telemetry import safe_attributes
 
 from . import test_company_end_to_end as journeys
-from .test_company_end_to_end import World
+from .test_company_end_to_end import PAIRWISE, TENANT, World
 
 FORBIDDEN = (
     "token",
@@ -91,6 +91,7 @@ async def test_each_stage_of_a_journey_is_one_event(recorded: RecordingTelemetry
         "sign_in",
         "conversation",
         "operation",
+        "company",
     }
     assert {
         "pap.discovery.discover",
@@ -120,6 +121,13 @@ async def test_each_stage_of_a_journey_is_one_event(recorded: RecordingTelemetry
     }
     polls = [e.attributes for e in recorded.events if e.name == "pap.sign_in.device.poll"]
     assert [p["pap.sign_in.status"] for p in polls] == ["pending", "complete"]
+    # The company's answer to the pending poll is progress, never reported as a refusal.
+    assert not [
+        e
+        for e in recorded.events
+        if e.name == "pap.company.refused"
+        and e.attributes["pap.error"] in {"authorization_pending", "slow_down"}
+    ]
     assert polls[-1]["pap.session.signed_in"] is True
     confirms = [e.attributes for e in recorded.events if e.name == "pap.operation.confirm"]
     assert confirms[0] == {
@@ -138,6 +146,81 @@ async def test_each_stage_of_a_journey_is_one_event(recorded: RecordingTelemetry
     for event in recorded.events:
         assert set(event.attributes) <= set(TELEMETRY_ATTRIBUTES)
         assert event.as_attributes()["pap.stage"] == TELEMETRY_EVENTS[event.name]
+
+
+@pytest.mark.asyncio
+async def test_a_company_reports_what_it_did_and_refused(
+    recorded: RecordingTelemetrySink,
+) -> None:
+    """The reference company's own events: identity, Sessions, interfaces, refusals."""
+
+    import httpx
+
+    from personal_agent_protocol import SessionClient
+
+    world = World()
+    session = await world.signed_out_session()
+    metadata = world.company.oauth_metadata
+    assert metadata is not None
+    sessions = SessionClient(reactor=world.reactor, http_client=world.http)
+    who = {
+        "client_id": world.atlas.client_id,
+        "pairwise_user_id": PAIRWISE,
+        "issuer": metadata.issuer,
+        "token_endpoint": metadata.token_endpoint,
+        "tenant_id": TENANT,
+        "session_id": session.session_id,
+    }
+    await sessions.renew(**who)
+    await sessions.bearer_for_mcp(**who, resource="https://manzanita.example/mcp")
+    company = [e for e in recorded.events if e.stage == "company"]
+    by_name = {e.name: e for e in company}
+    agent = world.atlas.client_id
+    checked = by_name["pap.company.identity.check"]
+    assert checked.attributes == {
+        "pap.company.issuer": "https://manzanita.example",
+        "pap.company.domain": "manzanita.example",
+        "pap.company.route": "oauth_token",
+        "pap.client.id": agent,
+    }
+    # Verified once: later requests of the same agent are not checks again.
+    assert [e.name for e in company].count("pap.company.identity.check") == 1
+    started = by_name["pap.company.session.start"]
+    assert started.attributes["pap.session.signed_in"] is False
+    renewed = by_name["pap.company.session.renew"]
+    assert renewed.attributes["pap.session.signed_in"] is False
+    # A Bearer token for its MCP server moves the Session there.
+    switched = by_name["pap.company.interface.switch"]
+    assert switched.attributes["pap.interface"] == "mcp"
+    assert not [e for e in company if e.name == "pap.company.refused"]
+
+    # The same token request sent again: refused, and said to be a replay.
+    captured: list[httpx.Request] = []
+    original = world.http._transport.handle_async_request  # type: ignore[attr-defined]
+
+    async def spy(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return await original(request)
+
+    world.http._transport.handle_async_request = spy  # type: ignore[attr-defined,method-assign]
+    await world.signed_out_session()
+    token_request = next(r for r in captured if r.url.path == "/oauth/token")
+    replay = await world.http.post(
+        str(token_request.url), content=token_request.content, headers=dict(token_request.headers)
+    )
+    (refused,) = [e for e in recorded.events if e.name == "pap.company.refused"]
+    assert refused.outcome == "error"
+    assert refused.attributes["pap.error"] == replay.json()["error"]
+    assert refused.attributes["pap.http.status"] == replay.status_code
+    assert refused.attributes["pap.replayed"] is True
+    assert refused.attributes["pap.company.route"] == "oauth_token"
+
+    # A path the company does not serve is nobody's refusal, and a path's words never leave.
+    await world.http.get("https://manzanita.example/oauth/secret-path-words")
+    assert [e.name for e in recorded.events].count("pap.company.refused") == 1
+    for event in recorded.events:
+        assert set(event.attributes) <= set(TELEMETRY_ATTRIBUTES)
+        assert "secret" not in str(event.as_dict())
 
 
 @pytest.mark.asyncio

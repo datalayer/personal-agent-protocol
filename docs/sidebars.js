@@ -128,6 +128,7 @@ const sidebars = {
     "studio/integration",
     "security/index",
     "security/demonstrations",
+    "security/review",
     "protocol/status",
   ],
 };

@@ -10,6 +10,43 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.9 → 0.10
+
+The [security review](/security/review/) changed these contracts:
+
+- **`AccountDirectory.authenticate(credentials, context)`** takes a
+  `SignInContext` (`client_id`, `session_id`; `clientId`, `sessionId` in
+  TypeScript). The company limits Mediated Sign-In attempts itself; a
+  directory must also throttle its own checks.
+- **`CompanyConfig` with `operations` needs `write_scopes`** (among `scopes`):
+  without one it raises. Set `operations=False` for a company without
+  Operations. An operation records the scopes confirming it requires
+  (`ProposedOperation.scopes`, else `write_scopes`).
+- **`Turn.supports_operations`** (`supportsOperations`) says whether the
+  agent negotiated Operations; a company agent must not promise an operation
+  to one that did not.
+- **The default `pap.company.replayCache` is `StoreReplayCache`** (id
+  `store`), in the company store. A contributed store must accept the
+  `replay` and `sign_in_attempts` kinds (`check_store` / `checkStore` checks
+  them). `createCompanyDefaultsPlugin` and `CompanyDefaultsPlugin` take the
+  store to use.
+- **Stored records changed:** operations keep `scopes`, Mediated sign-ins
+  `attempt_keys`. Records written by 0.9 are refused, not translated: drain
+  pending sign-ins and proposals before upgrading.
+- **The web cookie is `__Host-poppy_session`.** Browsers holding the old
+  `poppy_session` open the page again from the agent.
+- **TypeScript `./server`:** `isPublicIpAddress` is `isGlobalAddress`;
+  `createResolvingFetch` is the Node company's default `fetch`.
+- **Assertions** live at most 120 seconds and carry a `jti` of at least 16
+  characters (DPoP proofs too); their `aud` may be the issuer, the token
+  endpoint, or the endpoint called.
+- **Conversations** frame each agent reply with `working` and `idle` state
+  events: read the last message or `authorization` event, not the last event.
+- **An operation past `proposed`** has no `expires_at` member (never `null`).
+- **`pap operations approve`** takes the user's answer at a terminal or from
+  the host's `pap.approvalSurface`, never piped input; approvals stored by 0.9
+  are refused at `confirm`: approve again.
+
 ## 0.8 → 0.9
 
 - **Removed contribution points that nothing used.** `pap.protocolProfile`

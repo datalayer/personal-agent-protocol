@@ -8,6 +8,52 @@
 
 ## 0.10.0 (2026-10-12)
 
+- **Security review** ([docs](docs/docs/security/review.mdx)): an independent
+  review of both SDKs, each finding confirmed by a probe and fixed in both
+  SDKs where the behaviour exists, with a regression test per finding
+  (`test_security_review.py`, `security-review.test.mjs`); contract changes in
+  the [migration guide](docs/docs/releases/migration.mdx).
+
+  - A sign-in after an MCP Bearer token no longer downgrades the Session: the
+    signed-in token is DPoP, for no resource, replacing only DPoP tokens.
+  - Mediated Sign-In attempts are limited in the store (by account identifier,
+    agent's user, Session; wrong codes per account across sign-ins), then
+    `429 rate_limited` with `Retry-After`, the lockout doubling;
+    `AccountDirectory.authenticate` takes a `SignInContext`. A missing or
+    unknown scope is `invalid_scope`.
+  - The default replay cache lives in the company store (`StoreReplayCache`):
+    a store shared by replicas is a shared cache. The memory store sweeps
+    expired records.
+  - A retried conversation start answers through the ownership check.
+  - Operations record the scopes confirming them requires; `operations`
+    without `write_scopes` is a configuration error.
+  - TypeScript SSRF: `isGlobalAddress`, a textual check that refuses every
+    non-global literal and local name, and `createResolvingFetch` (resolve,
+    vet every address, dial the vetted one) as the Node company's default.
+    Python judges NAT64, IPv4-compatible, and 6to4 addresses by the IPv4
+    address they carry.
+  - Responses are read only up to their limit; a request with a body is never
+    re-sent to a redirect; TypeScript metadata deadlines abort the request.
+  - The client policy is asked before any `client_id` is resolved and on
+    every token use; malformed bodies are `400`, repeated `Authorization` or
+    `DPoP` headers refused.
+  - `pap operations approve` needs a terminal or an approval surface; stored
+    approvals carry a MAC under a key in the token store; the CLI's files
+    change under a lock.
+  - The web cookie is `__Host-poppy_session`; the demo agents read nothing
+    without the read scope; approval summaries quote only identifiers.
+
+- **External interoperability exercise** (pi-poppy, poppy-agent, poppy-demo,
+  poppyseed): an operation past `proposed` omits `expires_at` instead of
+  `null`; a client assertion's `aud` may be the issuer, the token endpoint, or
+  the endpoint called; token-endpoint DPoP refusals carry `WWW-Authenticate`;
+  a token in the query is refused everywhere; Mediated credentials may go to
+  the issuer's host; assertions live at most 120 s with a 16+ character `jti`
+  (DPoP proofs too), and an unfetchable `client_id` is remembered briefly;
+  agent replies are framed by `working`/`idle` state events; the conformance
+  suite accepts any refusal of a token in the URL, resolves API paths at the
+  API's origin, and has a Direct Sign-In driver hook.
+
 - **TypeScript: OpenAPI and MCP at a company, with a resource-bound Bearer:**
   `ApiClient` (`src/apis.ts`) calls a company's OpenAPI API as Python's does
   (a `202` returns its operation, refusals carry their scope, a `429` its
@@ -15,11 +61,13 @@
   (`src/mcp.ts`) reach its MCP server with a Bearer token sent only to that
   server's exact URL; `SessionClient.bearerForMcp` and
   `AccountTokenClient.bearerForMcp` acquire it, resource-bound, without DPoP.
+
 - **TypeScript company: browser sessions.** `web.browser_session_endpoint`,
   a one-use browser assertion from a live Session, a `Secure`, `HttpOnly`,
   `SameSite=Lax` session cookie, and operation pages confirmed or cancelled
   through a same-site form bound to a CSRF token — one confirmation path with
   the API, at most once.
+
 - **All four language pairings pass every conformance case:** 91 passed, 0
   failed, 0 skipped in each (the TypeScript agent gained an MCP client and a
   controlled browser).
@@ -37,12 +85,14 @@
   configuration, credential entry, sign-in, messages, API calls and approvals
   stay CLI-only. `pap.company.discover` now discovers through the agent's own
   Reactor.
+
 - **Telemetry, redacted by construction, in both SDKs:** a `pap.telemetry` sink
   receives one `TelemetryEvent` per discovery, Session, sign-in, conversation,
   and operation stage, with attributes from an allowlist; an OpenTelemetry
   adapter (`OpenTelemetrySink`, the `telemetry` extra; `openTelemetrySink` in
   TypeScript) makes them spans. The canary suites now also prove no credential
   reaches a trace or an analytics event.
+
 - **Safety demonstrations:** replay, issuer mix-up, cross-tenant access, stale
   approval, retries, restart, rollback, revocation, and rotation, one
   end-to-end test each in both SDKs (`docs/docs/security/demonstrations.mdx`).

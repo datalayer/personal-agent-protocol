@@ -242,16 +242,20 @@ Unknown or internal symbols are deliberately excluded.
 - [`validateDirectSignInCallback`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/auth.ts) — Function; entry `.`. Public TypeScript function `validateDirectSignInCallback`.
 - [`WebDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `WebDescriptor`.
 - [`BrowserAssertionReplayCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/browser-server.ts) — Interface; entry `./server`. Public TypeScript interface `BrowserAssertionReplayCache`.
+- [`createResolvingFetch`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Function; entry `./server`. A `fetch` that resolves, vets, and pins: `dns.lookup` every address of the host, refuse
 - [`DpopReplayCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `DpopReplayCache`.
-- [`isPublicIpAddress`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Function; entry `./server`. Public TypeScript function `isPublicIpAddress`.
+- [`isGlobalAddress`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/addresses.ts) — Function; entry `./server`. Whether a textual IP address is global unicast: never loopback, private, link-local,
 - [`JoseSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Class; entry `./server`. Sign PAP assertions with an injected asymmetric private key or handle.
 - [`JoseSignerOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `JoseSignerOptions`.
-- [`NodeAddressResolver`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Type; entry `./server`. Public TypeScript type `NodeAddressResolver`.
-- [`NodeUrlSafetyPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Class; entry `./server`. DNS-aware server policy for untrusted PAP discovery and metadata URLs.
+- [`NodeAddressResolver`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Type; entry `./server`. Every address a host name resolves to (A and AAAA).
+- [`NodeUrlSafetyPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Class; entry `./server`. DNS-aware server policy for untrusted PAP discovery and metadata URLs: every address
 - [`NodeUrlSafetyPolicyOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Interface; entry `./server`. Public TypeScript interface `NodeUrlSafetyPolicyOptions`.
+- [`resolveAddresses`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Value; entry `./server`. Public TypeScript value `resolveAddresses`.
+- [`ResolvingFetchOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Interface; entry `./server`. Public TypeScript interface `ResolvingFetchOptions`.
 - [`VerifiedBrowserAssertion`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/browser-server.ts) — Interface; entry `./server`. Public TypeScript interface `VerifiedBrowserAssertion`.
 - [`VerifiedDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `VerifiedDpopProof`.
 - [`verifyBrowserAssertion`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/browser-server.ts) — Value; entry `./server`. Public TypeScript value `verifyBrowserAssertion`.
 - [`VerifyBrowserAssertionOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/browser-server.ts) — Interface; entry `./server`. Public TypeScript interface `VerifyBrowserAssertionOptions`.
 - [`verifyDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Value; entry `./server`. Public TypeScript value `verifyDpopProof`.
 - [`VerifyDpopProofOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `VerifyDpopProofOptions`.
+- [`vetHost`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Value; entry `./server`. Public TypeScript value `vetHost`.

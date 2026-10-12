@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.14.0 (2026-10-12)
 
 - **Every request to a company on the safe path**
   ([docs](docs/docs/guides/operational-limits.mdx)): `create_resolving_client`

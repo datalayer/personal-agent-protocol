@@ -118,7 +118,7 @@ export const TELEMETRY_ATTRIBUTES: Readonly<Record<string, (value: unknown) => b
 export function safeAttributes(values: Readonly<Record<string, unknown>>): TelemetryAttributes {
   const safe: Record<string, TelemetryValue> = {};
   for (const [name, value] of Object.entries(values)) {
-    const rule = TELEMETRY_ATTRIBUTES[name];
+    const rule = Object.hasOwn(TELEMETRY_ATTRIBUTES, name) ? TELEMETRY_ATTRIBUTES[name] : undefined;
     if (rule === undefined) throw new TypeError(`${name} is not a telemetry attribute`);
     if (value !== undefined && value !== null && rule(value)) safe[name] = value as TelemetryValue;
   }
@@ -138,7 +138,7 @@ export class TelemetryEvent {
     readonly durationMs: number;
     readonly attributes?: Readonly<Record<string, unknown>>;
   }) {
-    if (!(options.name in TELEMETRY_EVENTS)) {
+    if (!Object.hasOwn(TELEMETRY_EVENTS, options.name)) {
       throw new TypeError(`${options.name} is not a telemetry event`);
     }
     if (options.outcome !== "ok" && options.outcome !== "error") {
@@ -260,7 +260,7 @@ export async function traced<T>(
   work: () => Promise<T>,
   after?: (result: T) => Readonly<Record<string, unknown>>,
 ): Promise<T> {
-  if (!(name in TELEMETRY_EVENTS)) throw new TypeError(`${name} is not a telemetry event`);
+  if (!Object.hasOwn(TELEMETRY_EVENTS, name)) throw new TypeError(`${name} is not a telemetry event`);
   const sink = telemetrySink(reactor);
   if (sink === undefined) return work();
   const started = now();

@@ -179,7 +179,9 @@ export class MemoryReplayCache implements ReplayCache {
   async markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean> {
     const now = this.clock.now().getTime();
     const seen = this.#seen.get(key);
-    if (seen !== undefined && now < seen) return false;
+    // Seen until its expiry, inclusive: a proof accepted at its last instant
+    // is not accepted again at that same instant.
+    if (seen !== undefined && now <= seen) return false;
     this.#seen.set(key, options.expiresAt.getTime());
     if (this.#seen.size >= this.#sweepAt) {
       this.#seen = new Map([...this.#seen].filter(([, until]) => now < until));

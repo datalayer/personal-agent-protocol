@@ -12,6 +12,10 @@ from typing import Any
 
 from .service import CompanyRequest, CompanyService
 
+#: The largest request body the company reads; larger is `413`, as in the
+#: TypeScript company's Node adapter.
+MAX_BODY_BYTES = 1 << 20
+
 Scope = MutableMapping[str, Any]
 Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
@@ -32,6 +36,16 @@ def company_app(service: CompanyService) -> Callable[[Scope, Receive, Send], Awa
         while True:
             message = await receive()
             body += message.get("body", b"")
+            if len(body) > MAX_BODY_BYTES:
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 413,
+                        "headers": [(b"content-type", b"application/json")],
+                    }
+                )
+                await send({"type": "http.response.body", "body": b'{"error":"request_too_large"}'})
+                return
             if not message.get("more_body"):
                 break
         query = scope.get("query_string", b"").decode()

@@ -213,7 +213,8 @@ class MemoryReplayCache:
     async def mark_once(self, key: str, *, expires_at: datetime) -> bool:
         now = self.clock.now()
         seen = self._seen.get(key)
-        if seen is not None and now < seen:
+        # Seen until its expiry, inclusive.
+        if seen is not None and now <= seen:
             return False
         self._seen[key] = expires_at
         if len(self._seen) >= self._sweep_at:

@@ -56,7 +56,14 @@ class StrictJsonParser {
       this.#skipWhitespace();
       if (!this.#consume(":")) this.#invalid("Expected ':' after an object member name");
       this.#skipWhitespace();
-      result[name] = this.#parseValue();
+      // Defined, never assigned: a member named `__proto__` is a member, as in
+      // JSON.parse and Python, and never the parsed object's prototype.
+      Object.defineProperty(result, name, {
+        value: this.#parseValue(),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
       this.#skipWhitespace();
       if (this.#consume("}")) return result;
       if (!this.#consume(",")) this.#invalid("Expected ',' or '}' in a JSON object");

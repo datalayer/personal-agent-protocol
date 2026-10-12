@@ -216,6 +216,8 @@ export async function verifyDpopProof(
       algorithms: [alg],
       typ: "dpop+jwt",
       requiredClaims: ["jti", "htm", "htu", "iat"],
+      // A proof's optional exp/nbf are read on the verifier's clock, not the wall's.
+      currentDate: now,
     }));
   } catch (cause) {
     if (cause instanceof ProofError) throw cause;
@@ -238,7 +240,10 @@ export async function verifyDpopProof(
     throw new ProofError("use_dpop_nonce", "DPoP proof nonce is missing or invalid");
   }
   if (options.accessToken !== undefined) {
-    if (payload.ath !== (await accessTokenHash(options.accessToken))) {
+    if (
+      typeof payload.ath !== "string" ||
+      !constantTimeEqual(payload.ath, await accessTokenHash(options.accessToken))
+    ) {
       throw new ProofError("invalid_dpop_proof", "DPoP access-token hash is invalid");
     }
   } else if (payload.ath !== undefined) {
@@ -257,4 +262,14 @@ export async function verifyDpopProof(
     throw new ProofError("invalid_dpop_proof", "DPoP proof has already been used");
   }
   return { jti: payload.jti, issuedAt, publicJwk: jwk, keyThumbprint };
+}
+
+/** Whether two strings are equal, in time that does not depend on where they differ. */
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
 }

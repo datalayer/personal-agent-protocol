@@ -51,8 +51,20 @@ async def verify_assertion(
         # `aud` is one string, the token endpoint, so the assertion works at one company (§4.2).
         raise SessionError(error, "Assertion audience is invalid", status_code=_status(error))
 
-    issued = datetime.fromtimestamp(int(claims["iat"]), timezone.utc)
-    expires = datetime.fromtimestamp(int(claims["exp"]), timezone.utc)
+    try:
+        # Numbers, as JWT says (RFC 7519 §2): a string, a boolean or a time out
+        # of range is an invalid assertion, never a 500.
+        if not all(
+            isinstance(claims[name], (int, float)) and not isinstance(claims[name], bool)
+            for name in ("iat", "exp")
+        ):
+            raise TypeError("iat and exp are NumericDate")
+        issued = datetime.fromtimestamp(int(claims["iat"]), timezone.utc)
+        expires = datetime.fromtimestamp(int(claims["exp"]), timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError) as exc:
+        raise SessionError(
+            error, "Assertion times are invalid", status_code=_status(error)
+        ) from exc
     if expires - issued > _MAX_LIFETIME:
         raise SessionError(error, "Assertion lives too long", status_code=_status(error))
     if subject is not None and claims["sub"] != subject:

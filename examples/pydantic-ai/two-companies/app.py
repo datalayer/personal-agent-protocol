@@ -111,7 +111,7 @@ async def run_two_companies() -> dict[str, Any]:
                 chat, cursor["id"], message, token=token, cursor=cursor["at"], wait=0, **who
             )
         cursor.update(id=page.conversation_id, at=page.cursor)
-        return page.events[-1].message
+        return [e for e in page.events if e.type != "state"][-1].message
 
     # 1. Ledgerly is not yet connected to Northwind: Ada approves it on Northwind's page.
     connect = (await say("Pay INV-0042")).data["connect"]

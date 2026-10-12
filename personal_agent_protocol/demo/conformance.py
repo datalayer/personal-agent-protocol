@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from decimal import Decimal
 
-from ..company import CompanyService
+from ..company import CompanyRequest, CompanyService
 from ..conformance import ConformanceContext, Proposal, Scenario
 from ..operations import TermLimit
 from .kit import AgentIdentity, InProcessNetwork, MutableClock
@@ -61,7 +61,15 @@ class DemoDriver:
     """Ada, and Manzanita's operator: everything the runner cannot do as an agent."""
 
     capabilities = frozenset(
-        {"revise", "forget_events", "disconnect", "performed", "clock", "second_identity"}
+        {
+            "revise",
+            "forget_events",
+            "disconnect",
+            "performed",
+            "clock",
+            "second_identity",
+            "direct_sign_in",
+        }
     )
 
     def __init__(
@@ -84,6 +92,18 @@ class DemoDriver:
 
     async def wait(self, seconds: float) -> None:
         self.clock.advance(seconds)
+
+    async def approve_authorization(
+        self, authorization_url: str, *, account: str, scopes: Sequence[str] | None = None
+    ) -> str:
+        """Ada opens the consent page and allows: the callback URL her browser goes to."""
+
+        page = await self.service.handle(CompanyRequest("GET", authorization_url, {}))
+        marker = 'name="request_id" value="'
+        request_id = str(page.body).split(marker, 1)[1].split('"', 1)[0]
+        return await self.service.approve_authorization(
+            request_id, account_id=account, scopes=scopes
+        )
 
     async def revise(self, operation_id: str) -> None:
         current = (await self.service.operation_record(operation_id)).operation

@@ -50,6 +50,7 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .accounts import AccountTokenClient, AccountTokenContext
 from .apis import ApiClient, ApiError, conversation_endpoint, openapi_url
+from .auth import DirectSignInClient
 from .browser import BrowserSessionClient
 from .conversations import ConversationClient, TextDelta
 from .crypto import JoseDpopProofProvider
@@ -148,8 +149,11 @@ class UserDriver(Protocol):
 
     `capabilities` names the optional ones a case may need: `revise`,
     `forget_events`, `disconnect`, `performed`, `clock` (`wait` moves a shared
-    clock instead of sleeping), and `second_identity` (`other_identity` is a
-    second agent the company can resolve, listing no extensions).
+    clock instead of sleeping), `second_identity` (`other_identity` is a
+    second agent the company can resolve, listing no extensions), and
+    `direct_sign_in` (`approve_authorization` plays the user on the company's
+    consent page, for a company that offers Direct Sign-In and no Device
+    Sign-In: it answers the callback URL the company redirected to).
     """
 
     capabilities: frozenset[str]
@@ -161,6 +165,10 @@ class UserDriver(Protocol):
     ) -> None: ...
 
     async def wait(self, seconds: float) -> None: ...
+
+    async def approve_authorization(
+        self, authorization_url: str, *, account: str, scopes: Sequence[str] | None = None
+    ) -> str: ...
 
     async def revise(self, operation_id: str) -> None: ...
 
@@ -248,12 +256,15 @@ class Agent:
         self.vault = MemoryVault()
         self.standing = InMemoryStandingPermissionStore()
         self.browser = ControlledBrowser(browser_http) if browser_http is not None else None
+        #: The user's browser: the authorization URLs Direct Sign-In opened, for the driver.
+        self.user_browser = _UserBrowser()
         host = PersonalAgentHost(
             identity,
             cast(MutableClock, clock),
             vault=self.vault,
             standing=self.standing,
             controlled_browser=self.browser,
+            browser=cast(Any, self.user_browser),
         )
         self.reactor: PluginPlatform
         self.reactor, _ = build_pap_reactor(
@@ -268,6 +279,16 @@ class Agent:
         self.api = ApiClient(transport=self.transport)
         self.conversations = ConversationClient(transport=self.transport)
         self.operations = OperationsClient(transport=self.transport)
+
+
+class _UserBrowser:
+    """`pap.browserHandoff` for the suite: it keeps the URL; the driver plays the user."""
+
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    async def open(self, authorization_url: SecretStr) -> None:
+        self.urls.append(authorization_url.get_secret_value())
 
 
 def _manifest(identity: AgentIdentity) -> Any:
@@ -320,6 +341,8 @@ class ConformanceContext:
         )
         self._other: Agent | None = None
         self._company: DiscoveredCompany | None = None
+        #: Where API paths resolve: the origin of the company's OpenAPI API, once discovered.
+        self._api_base: str | None = None
 
     # The company -------------------------------------------------------------------
 
@@ -327,6 +350,12 @@ class ConformanceContext:
         if self._company is None:
             client = DiscoveryClient(reactor=self.agent.reactor)
             self._company = await client.discover(self.domain)
+            api = next(
+                (api for api in self._company.document.apis or () if api.type == "openapi"), None
+            )
+            if api is not None:
+                parsed = urlsplit(str(api.url))
+                self._api_base = f"{parsed.scheme}://{parsed.netloc}"
         return self._company
 
     async def metadata(self) -> Any:
@@ -351,7 +380,9 @@ class ConformanceContext:
         return endpoint
 
     def url(self, path: str) -> str:
-        return f"{self.base_url}{path}"
+        """An API path at the company's API (its OpenAPI `url`'s origin), else its origin."""
+
+        return f"{self._api_base or self.base_url}{path}"
 
     # Capabilities ------------------------------------------------------------------
 
@@ -414,9 +445,16 @@ class ConformanceContext:
         """Device Sign-In, the user approving on the company's page through the driver."""
 
         metadata = await self.metadata()
-        if metadata.device_authorization_endpoint is None:
-            raise SkipCase("the company offers no Device Sign-In")
         actor = agent or self.agent
+        if metadata.device_authorization_endpoint is None:
+            if (
+                "direct_sign_in" in self.driver.capabilities
+                and metadata.authorization_endpoint is not None
+            ):
+                return await self._direct_sign_in(
+                    actor, user, session, scopes=scopes, granted=granted, account=account
+                )
+            raise SkipCase("the company offers no Device Sign-In")
         started = await actor.device.begin(
             device_authorization_endpoint=metadata.device_authorization_endpoint,
             token_endpoint=metadata.token_endpoint,
@@ -438,6 +476,40 @@ class ConformanceContext:
                 check(token is not None and reference is not None, "sign-in returns its token")
                 return SignedIn(cast(SessionToken, token), cast(str, reference))
         raise ConformanceFailure("Device Sign-In did not complete after approval")
+
+    async def _direct_sign_in(
+        self,
+        actor: Agent,
+        user: str,
+        session: SessionToken,
+        *,
+        scopes: Sequence[str] | None,
+        granted: Sequence[str] | None,
+        account: str | None,
+    ) -> SignedIn:
+        """Direct Sign-In, the driver playing the user on the company's consent page."""
+
+        metadata = await self.metadata()
+        client = DirectSignInClient(reactor=actor.reactor, http_client=self.http)
+        await client.begin(
+            authorization_endpoint=cast(str, metadata.authorization_endpoint),
+            token_endpoint=metadata.token_endpoint,
+            issuer=metadata.issuer,
+            client_id=actor.identity.client_id,
+            redirect_uri=str(actor.identity.metadata["redirect_uris"][0]),
+            scopes=tuple(scopes or self.scenario.scopes),
+            tenant_id=self.tenant_id,
+            pairwise_user_id=user,
+            session_id=session.session_id,
+        )
+        callback = await self.driver.approve_authorization(
+            actor.user_browser.urls[-1],
+            account=account or self.driver.accounts[0],
+            scopes=granted,
+        )
+        done = await client.complete(callback)
+        check(done.account_token_reference is not None, "sign-in returns its Account Token")
+        return SignedIn(done.token, cast(str, done.account_token_reference))
 
     async def account_context(self, user: str, agent: Agent | None = None) -> AccountTokenContext:
         metadata = await self.metadata()
@@ -841,7 +913,12 @@ async def _token_in_url(ctx: ConformanceContext, _: FixtureCase) -> None:
     response = await ctx.send(
         "GET", f"{url}?{urlencode({'access_token': token})}", headers={"DPoP": proof}
     )
-    expect_refusal(response, 401, "invalid_token", "a token in the URL")
+    # Any refusal will do (§4.3 says only MUST NOT accept): 400 or 401 are both seen.
+    check(
+        400 <= response.status_code < 500,
+        f"a token in the URL: expected a refusal, got {response.status_code}",
+    )
+    check(token not in response.text, "a refusal never echoes the Session Token")
 
 
 @case("security.authorization-header-without-cookies")
@@ -991,7 +1068,8 @@ async def _renew(ctx: ConformanceContext, _: FixtureCase) -> None:
     )
     check(new.session_id == old.session_id, "renewal keeps the Session")
     check(await _probe(ctx, user, new) == 403, "the new token is served (signed out)")
-    check(await _probe(ctx, user, old) == 401, "the replaced token stops working")
+    # Whether the replaced token stops at once is the company's choice (no MUST in §4.2):
+    # it is not checked here.
 
 
 @case("lifecycle.renew-for-another-user")

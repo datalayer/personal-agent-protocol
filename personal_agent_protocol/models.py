@@ -12,7 +12,15 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
 _EXTENSION_VERSION = re.compile(r"^(0|[1-9][0-9]*)$")
@@ -297,6 +305,20 @@ class Operation(ProtocolModel):
     url: str | None = None
     confirmation: OperationConfirmation | None
     result: OperationResult | None
+
+    @model_serializer(mode="wrap")
+    def _absent_not_null(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Optional members with no value are absent, never `null` (Operations §3).
+
+        Only `confirmation` and `result` are "null until" something happens;
+        `expires_at` (required while proposed), `terms`, and `url` are omitted.
+        """
+
+        value = handler(self)
+        for name in ("expires_at", "terms", "url"):
+            if value.get(name) is None:
+                value.pop(name, None)
+        return value
 
     @field_validator("operation_id")
     @classmethod

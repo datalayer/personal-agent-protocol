@@ -319,7 +319,9 @@ function jsonError(
   extra: Readonly<Record<string, unknown>> = {},
 ): CompanyResponse {
   const headers: Record<string, string> = { ...NO_STORE };
-  if (CHALLENGED.has(error) && (status === 401 || status === 403)) {
+  // A DPoP refusal carries its challenge whatever its status, the token endpoint's 400
+  // included (§4.3, RFC 9449 §7.1).
+  if (CHALLENGED.has(error) && (status === 401 || status === 403 || error === "invalid_dpop_proof")) {
     // Token errors are also in WWW-Authenticate (§6, RFC 9449).
     const scope = extra.scope;
     headers["WWW-Authenticate"] =
@@ -553,8 +555,15 @@ export class CompanyService {
   // Routing -------------------------------------------------------------------------
 
   async handle(request: CompanyRequest): Promise<CompanyResponse> {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
     const method = request.method.toUpperCase();
+    if (url.searchParams.has("access_token")) {
+      // A token in a URL is logged, cached, and leaked in Referer: never accepted, even
+      // beside a header that would be (§4.3, RFC 6750 §2.3).
+      if (path === "/mcp" && this.#mcp() !== undefined) return this.#bearerRefusal(400, "invalid_request");
+      return jsonError(400, "invalid_request");
+    }
     try {
       if (method === "GET" && path === "/.well-known/poppy.json") {
         return { status: 200, body: this.discoveryDocument(), headers: {} };
@@ -704,7 +713,8 @@ export class CompanyService {
     await verifyAssertion(form.client_assertion ?? "", {
       keys,
       issuer: clientId,
-      audience,
+      // The issuer, the token endpoint, or the endpoint called (RFC 7523 §3).
+      audience: [...new Set([this.config.base, this.config.tokenEndpoint, audience])],
       subject: clientId,
       replayCache: this.#replay(),
       now: this.#now(),
@@ -2167,10 +2177,16 @@ export class CompanyService {
         (current) => {
           this.#open(current);
           const accountId = session.accountId ?? current.accountId;
+          const account = accountId === undefined ? {} : { accountId };
+          if (current.responder === "human") {
+            return { ...current, ...account, events: [...current.events, received] };
+          }
+          // The agent works on it: every change of status adds a state event (§7).
           return {
             ...current,
-            ...(accountId === undefined ? {} : { accountId }),
-            events: [...current.events, received],
+            ...account,
+            status: "working",
+            events: [...current.events, received, this.#state("working", current.responder)],
           };
         },
       );
@@ -2194,6 +2210,7 @@ export class CompanyService {
       scopes: session.scopes,
       clientId: session.clientId,
       isDirect: conversation.parentId !== undefined,
+      supportsOperations: await this.#supportsOperations(session.clientId),
     });
     const events: StoredEvent[] = [];
     for (const reply of replies) {
@@ -2203,11 +2220,14 @@ export class CompanyService {
     const answered = await this.#change<StoredConversation>(
       RecordKinds.conversation,
       conversationId,
-      (current) => ({
-        ...current,
-        status: current.status === "closed" ? "closed" : "idle",
-        events: [...current.events, ...events],
-      }),
+      (current) =>
+        current.status === "closed"
+          ? { ...current, events: [...current.events, ...events] }
+          : {
+              ...current,
+              status: "idle",
+              events: [...current.events, ...events, this.#state("idle", current.responder)],
+            },
     );
     return answered === undefined ? conversation : answered[1];
   }
@@ -2639,14 +2659,12 @@ export class CompanyService {
         if (now.operation.revision !== revision) {
           throw new Refused(409, "terms_changed", { operation: now.operation });
         }
+        // `expires_at` is the proposal's (Operations §3: required while proposed): once
+        // confirmed it is absent, never `null`, which no member of an operation may be.
+        const { expires_at: _proposalExpiry, ...rest } = now.operation;
         return {
           ...now,
-          operation: {
-            ...now.operation,
-            state: "in_progress",
-            confirmation,
-            expires_at: null,
-          } as unknown as Operation,
+          operation: { ...rest, state: "in_progress", confirmation } as unknown as Operation,
         };
       },
     );

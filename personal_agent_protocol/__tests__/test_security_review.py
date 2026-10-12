@@ -530,6 +530,7 @@ async def test_finding_9_the_demo_agents_read_nothing_without_the_read_scope() -
             scopes=scopes,
             client_id="https://atlas.example/agent.json",
             is_direct=False,
+            supports_operations=True,
         )
 
     manzanita = await ManzanitaAgent().respond(turn("Where is my order?", ("orders:write",)))
@@ -799,3 +800,258 @@ async def test_finding_o7_an_unfetchable_client_id_is_not_fetched_again_at_once(
             with pytest.raises(IdentityError):
                 await client.fetch_metadata("https://gone.example/agent.json")
     assert len(fetched) == 1
+
+
+# The external interoperability exercise ------------------------------------------------
+
+
+async def _signed_in_with_proposal(world: World):  # type: ignore[no-untyped-def]
+    token = await signed_in(world)
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    page = await world.conversations.start(
+        endpoint,
+        world.message("Exchange my jacket for a warmer one"),
+        token=token,
+        wait=0,
+        **world.who,
+    )
+    proposal = next(e.message.operation for e in page.events if e.message and e.message.operation)
+    return token, page, proposal
+
+
+@pytest.mark.asyncio
+async def test_o1_an_operation_past_proposed_has_no_null_expires_at() -> None:
+    from personal_agent_protocol.operations import OperationsClient, approve
+
+    world = World()
+    token, _, proposal = await _signed_in_with_proposal(world)
+    ops = world.company.document.extensions["operations"].endpoint  # type: ignore[index,union-attr]
+    await OperationsClient(transport=world.transport).confirm(
+        ops, proposal, approval=approve(proposal), token=token, **world.who
+    )
+    read = await world.transport.request(
+        "GET", f"{ops}/{proposal.operation_id}", token=token, **world.who
+    )
+    body = read.json()
+    assert body["state"] == "succeeded"
+    assert "expires_at" not in body
+    assert [name for name, value in body.items() if value is None] == []
+
+
+async def _assertion(
+    world: World, audience: str, *, lifetime: int = 60, jti: str | None = None
+) -> str:
+    import secrets as random
+
+    now = int(world.clock.now().timestamp())
+    signed = await world.atlas.signer().sign(
+        {
+            "iss": world.atlas.client_id,
+            "sub": world.atlas.client_id,
+            "aud": audience,
+            "iat": now,
+            "exp": now + lifetime,
+            "jti": jti or random.token_urlsafe(16),
+        },
+        purpose="client_assertion",
+    )
+    return signed.get_secret_value()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("audience", "status"),
+    [
+        ("https://manzanita.example/oauth/device", 200),
+        ("https://manzanita.example/oauth/token", 200),
+        ("https://manzanita.example", 200),
+        ("https://other.example/oauth/token", 401),
+    ],
+)
+async def test_o2_a_client_assertion_names_the_issuer_the_token_or_the_called_endpoint(
+    audience: str, status: int
+) -> None:
+    from personal_agent_protocol.sessions import JWT_CLIENT_ASSERTION
+
+    world = World()
+    await world.signed_out_session()
+    answer = await world.http.post(
+        "https://manzanita.example/oauth/device",
+        data={
+            "client_id": world.atlas.client_id,
+            "client_assertion_type": JWT_CLIENT_ASSERTION,
+            "client_assertion": await _assertion(world, audience),
+            "scope": "orders:read",
+        },
+    )
+    assert answer.status_code == status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lifetime", "jti", "status"),
+    [(300, None, 401), (121, None, 401), (120, None, 200), (60, "short-jti", 401)],
+)
+async def test_o7_an_assertion_lives_at_most_120_seconds_and_names_a_long_jti(
+    lifetime: int, jti: str | None, status: int
+) -> None:
+    from personal_agent_protocol.sessions import JWT_CLIENT_ASSERTION
+
+    world = World()
+    await world.signed_out_session()
+    answer = await world.http.post(
+        "https://manzanita.example/oauth/device",
+        data={
+            "client_id": world.atlas.client_id,
+            "client_assertion_type": JWT_CLIENT_ASSERTION,
+            "client_assertion": await _assertion(
+                world, "https://manzanita.example/oauth/device", lifetime=lifetime, jti=jti
+            ),
+            "scope": "orders:read",
+        },
+    )
+    assert answer.status_code == status
+
+
+@pytest.mark.asyncio
+async def test_o7_a_dpop_proof_with_a_short_jti_is_refused() -> None:
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from personal_agent_protocol.company.points import MemoryReplayCache
+    from personal_agent_protocol.crypto import verify_dpop_proof
+    from personal_agent_protocol.errors import ProofError
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    public = json.loads(pyjwt.algorithms.ECAlgorithm.to_jwk(key.public_key()))
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    proof = pyjwt.encode(
+        {
+            "jti": "short",
+            "htm": "GET",
+            "htu": "https://shop.example/x",
+            "iat": int(now.timestamp()),
+        },
+        key,
+        algorithm="ES256",
+        headers={"typ": "dpop+jwt", "jwk": public},
+    )
+    with pytest.raises(ProofError):
+        await verify_dpop_proof(
+            proof,
+            method="GET",
+            url="https://shop.example/x",
+            replay_cache=MemoryReplayCache(),
+            now=now,
+        )
+
+
+@pytest.mark.asyncio
+async def test_o3_a_token_endpoint_dpop_refusal_carries_its_challenge() -> None:
+    from personal_agent_protocol.sessions import JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION
+
+    world = World()
+    await world.signed_out_session()
+    answer = await world.http.post(
+        "https://manzanita.example/oauth/token",
+        data={
+            "grant_type": JWT_BEARER_GRANT,
+            "client_id": world.atlas.client_id,
+            "client_assertion_type": JWT_CLIENT_ASSERTION,
+            "client_assertion": await _assertion(world, "https://manzanita.example/oauth/token"),
+            "assertion": "x",
+        },
+    )
+    assert answer.status_code == 400 and answer.json()["error"] == "invalid_dpop_proof"
+    assert answer.headers["www-authenticate"].startswith('DPoP error="invalid_dpop_proof"')
+
+
+@pytest.mark.asyncio
+async def test_o4_a_token_in_the_query_is_refused_even_beside_a_valid_header() -> None:
+    world = World()
+    session = await world.signed_out_session()
+    md = world.company.oauth_metadata
+    bearer = await SessionClient(reactor=world.reactor, http_client=world.http).bearer_for_mcp(
+        client_id=world.atlas.client_id,
+        pairwise_user_id=PAIRWISE,
+        issuer=md.issuer,  # type: ignore[union-attr]
+        token_endpoint=md.token_endpoint,  # type: ignore[union-attr]
+        tenant_id=TENANT,
+        session_id=session.session_id,
+        resource="https://manzanita.example/mcp",
+    )
+    value = bearer.access_token.get_secret_value()
+    for query in (f"access_token={value}", "access_token="):
+        answer = await world.http.post(
+            f"https://manzanita.example/mcp?{query}",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers={"authorization": f"Bearer {value}"},
+        )
+        assert answer.status_code == 400
+        assert answer.json()["error"] == "invalid_request"
+
+
+def test_o5_mediated_credentials_may_go_to_the_issuer_host() -> None:
+    from personal_agent_protocol.errors import AuthorizationError
+    from personal_agent_protocol.mediated import MediatedSignInClient
+
+    check = MediatedSignInClient._endpoint_on_company_domain
+    issuer = "https://auth.shop-login.example"
+    assert check("https://auth.shop-login.example/poppy/sign-in", "shop.example", issuer)
+    assert check("https://api.shop.example/poppy/sign-in", "shop.example", issuer)
+    for endpoint in ("https://evil.example/sign-in", "http://shop.example/sign-in"):
+        with pytest.raises(AuthorizationError):
+            check(endpoint, "shop.example", issuer)
+
+
+@pytest.mark.asyncio
+async def test_o8_a_reply_is_framed_by_working_and_idle_state_events() -> None:
+    world = World()
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    page = await world.conversations.start(
+        endpoint, world.message("Hello"), token=session, wait=0, **world.who
+    )
+    kinds = [(e.type, e.status) for e in page.events]
+    assert kinds == [("message", None), ("state", "working"), ("message", None), ("state", "idle")]
+    assert page.status == "idle"
+
+
+@pytest.mark.asyncio
+async def test_o9_the_demo_promises_no_operation_to_an_agent_without_operations() -> None:
+    from personal_agent_protocol.company import Turn
+    from personal_agent_protocol.demo.manzanita import ManzanitaAgent
+
+    replies = await ManzanitaAgent().respond(
+        Turn(
+            conversation_id="cnv_1",
+            text="Exchange it for something warmer",
+            data=None,
+            sender="human",
+            account_id="acct_ada",
+            scopes=("orders:read", "orders:write"),
+            client_id="https://atlas.example/agent.json",
+            is_direct=False,
+            supports_operations=False,
+        )
+    )
+    assert [r.operation for r in replies] == [None]
+    assert "Here is the exchange" not in (replies[0].text or "")
+
+
+@pytest.mark.asyncio
+async def test_o6_the_suite_signs_in_through_direct_sign_in_with_the_drivers_hook() -> None:
+    from personal_agent_protocol.demo.conformance import ManzanitaConformance
+
+    demo = ManzanitaConformance()
+    ctx = demo.context()
+    metadata = await ctx.metadata()
+    # A company offering Direct Sign-In and no Device Sign-In.
+    object.__setattr__(metadata, "device_authorization_endpoint", None)
+    user = ctx.new_user()
+    session = await ctx.session(user)
+    signed = await ctx.sign_in(user, session, granted=("orders:read",))
+    assert signed.token.signed_in and signed.token.session_id == session.session_id
+    assert ctx.url("/api/orders") == "https://manzanita.example/api/orders"

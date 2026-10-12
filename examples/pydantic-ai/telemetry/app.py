@@ -131,7 +131,7 @@ async def read_pap_telemetry() -> dict[str, Any]:
         wait=0,
         **who,
     )
-    proposal = page.events[-1].message.operation  # type: ignore[union-attr]
+    proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     ops = operations_endpoint(company.document, ClientMetadata.model_validate(atlas.metadata))
     if proposal is None or ops is None:
         raise RuntimeError("the example world is incomplete")

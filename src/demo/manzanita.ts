@@ -165,6 +165,16 @@ export class ManzanitaAgent implements CompanyAgent {
       if (!turn.scopes.includes("orders:write")) {
         return [{ authorization: ["insufficient_scope", "orders:write"] }];
       }
+      if (!turn.supportsOperations) {
+        // No operation can reach this agent: say so, never "here is the exchange".
+        return [
+          {
+            text:
+              "The insulated Ridge Jacket is in stock. Your agent cannot confirm exchanges " +
+              "with us: exchange it on manzanita.example.",
+          },
+        ];
+      }
       return [
         {
           text: "The insulated Ridge Jacket is in stock. Here is the exchange.",

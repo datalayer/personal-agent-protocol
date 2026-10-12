@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -18,21 +19,29 @@ from ..models import JsonWebKeySet
 from .points import ReplayCache
 
 _ALGORITHMS = ("ES256", "RS256")
-_MAX_LIFETIME = timedelta(minutes=5)
+#: An assertion lives at most this long (`exp - iat`): long enough for any clock, short
+#: enough that a captured one is soon useless. The SDKs' own assertions live 60 seconds.
+_MAX_LIFETIME = timedelta(seconds=120)
+#: A `jti` this short is guessable: its replay key could collide with another's.
+_MIN_JTI = 16
 
 
-async def verify_assertion(
+async def verify_assertion(  # noqa: C901 - one check per claim, in order
     assertion: SecretStr | str,
     *,
     keys: JsonWebKeySet,
     issuer: str,
-    audience: str,
+    audience: str | Sequence[str],
     replay_cache: ReplayCache,
     now: datetime,
     subject: str | None = None,
     error: str = "invalid_client",
 ) -> dict[str, Any]:
     """Verify signature, `iss`, `aud`, lifetime, and one-time `jti`.
+
+    `audience` is the one value `aud` must be, or the values it may be: a
+    client assertion names the authorization server's issuer, its token
+    endpoint, or the endpoint it is sent to (RFC 7523 §3).
 
     A client assertion's `sub` is the `client_id` (`subject=issuer`); a
     Session assertion's is the pairwise user ID (`subject=None` returns it
@@ -55,7 +64,7 @@ async def verify_assertion(
         # Numbers, as JWT says (RFC 7519 §2): a string, a boolean or a time out
         # of range is an invalid assertion, never a 500.
         if not all(
-            isinstance(claims[name], (int, float)) and not isinstance(claims[name], bool)
+            isinstance(claims[name], int | float) and not isinstance(claims[name], bool)
             for name in ("iat", "exp")
         ):
             raise TypeError("iat and exp are NumericDate")
@@ -65,8 +74,11 @@ async def verify_assertion(
         raise SessionError(
             error, "Assertion times are invalid", status_code=_status(error)
         ) from exc
-    if expires - issued > _MAX_LIFETIME:
-        raise SessionError(error, "Assertion lives too long", status_code=_status(error))
+    if expires - issued > _MAX_LIFETIME or expires <= issued:
+        raise SessionError(error, "Assertion lifetime is invalid", status_code=_status(error))
+    jti = claims["jti"]
+    if not isinstance(jti, str) or not _MIN_JTI <= len(jti) <= 256:
+        raise SessionError(error, "Assertion jti is invalid", status_code=_status(error))
     if subject is not None and claims["sub"] != subject:
         raise SessionError(error, "Assertion subject is invalid", status_code=_status(error))
     skew = timedelta(seconds=30)
@@ -80,7 +92,7 @@ async def verify_assertion(
 
 
 def _decode(
-    compact: str, keys: JsonWebKeySet, *, issuer: str, audience: str
+    compact: str, keys: JsonWebKeySet, *, issuer: str, audience: str | Sequence[str]
 ) -> dict[str, Any] | None:
     """The verified claims, or `None` when no published key signed them."""
 
@@ -105,7 +117,7 @@ def _decode(
                 compact,
                 public,
                 algorithms=[algorithm],
-                audience=audience,
+                audience=audience if isinstance(audience, str) else list(audience),
                 issuer=issuer,
                 # Lifetimes are checked against the company's own clock, below.
                 options={

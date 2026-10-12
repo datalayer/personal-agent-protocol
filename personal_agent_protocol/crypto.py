@@ -230,7 +230,8 @@ async def verify_dpop_proof(  # noqa: C901 - every bound claim is checked in seq
 
     jti = claims.get("jti")
     issued = claims.get("iat")
-    if not isinstance(jti, str) or not jti or not isinstance(issued, int):
+    # At least 16 characters (96+ bits): a short `jti` is guessable, so a replay key collides.
+    if not isinstance(jti, str) or not 16 <= len(jti) <= 256 or not isinstance(issued, int):
         raise ProofError("invalid_dpop_proof", "DPoP proof identity is invalid")
     issued_at = datetime.fromtimestamp(issued, timezone.utc)
     window = timedelta(seconds=acceptance_window_seconds)

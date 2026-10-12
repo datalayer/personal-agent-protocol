@@ -225,7 +225,13 @@ export async function verifyDpopProof(
       cause,
     });
   }
-  if (typeof payload.jti !== "string" || !payload.jti || typeof payload.iat !== "number") {
+  // At least 16 characters (96+ bits): a short `jti` is guessable, so a replay key collides.
+  if (
+    typeof payload.jti !== "string" ||
+    payload.jti.length < 16 ||
+    payload.jti.length > 256 ||
+    typeof payload.iat !== "number"
+  ) {
     throw new ProofError("invalid_dpop_proof", "DPoP proof identity is invalid");
   }
   const issuedAt = new Date(payload.iat * 1000);

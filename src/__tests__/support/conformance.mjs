@@ -225,7 +225,12 @@ export class Context {
   }
 
   async company() {
-    this.discovered ??= await discoverCompany(this.domain, { reactor: this.agent.reactor });
+    if (this.discovered === undefined) {
+      this.discovered = await discoverCompany(this.domain, { reactor: this.agent.reactor });
+      // API paths resolve at the company's OpenAPI API (its url's origin), not discovery's.
+      const api = (this.discovered.document.apis ?? []).find((item) => item.type === "openapi");
+      if (api !== undefined) this.apiBase = new URL(api.url).origin;
+    }
     return this.discovered;
   }
 
@@ -248,7 +253,7 @@ export class Context {
   }
 
   url(path) {
-    return `${this.baseUrl}${path}`;
+    return `${this.apiBase ?? this.baseUrl}${path}`;
   }
 
   require(...capabilities) {
@@ -612,7 +617,9 @@ caseFor("security.token-in-url-refused")(async (ctx) => {
   const response = await ctx.send("GET", `${url}?${new URLSearchParams({ access_token: session.accessToken.reveal() })}`, {
     headers: { DPoP: proof },
   });
-  await expectRefusal(response, 401, "invalid_token", "a token in the URL");
+  // Any refusal will do (§4.3 says only MUST NOT accept): 400 or 401 are both seen.
+  check(response.status >= 400 && response.status < 500, `a token in the URL: expected a refusal, got ${response.status}`);
+  check(!(await response.text()).includes(session.accessToken.reveal()), "a refusal never echoes the Session Token");
 });
 
 caseFor("security.authorization-header-without-cookies")(async (ctx) => {
@@ -713,7 +720,7 @@ caseFor("lifecycle.renew-signed-out")(async (ctx) => {
   const renewed = await ctx.renew(user, old.sessionId);
   check(renewed.sessionId === old.sessionId, "renewal keeps the Session");
   check((await probe(ctx, user, renewed)) === 403, "the new token is served (signed out)");
-  check((await probe(ctx, user, old)) === 401, "the replaced token stops working");
+  // Whether the replaced token stops at once is the company's choice (no MUST in §4.2).
 });
 
 caseFor("lifecycle.renew-for-another-user")(async (ctx) => {

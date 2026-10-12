@@ -253,7 +253,7 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
         "conversations", "send", session, conversation, "Where is my order?", "--human",
         "--wait", "0", "--json",
     )  # fmt: skip
-    assert any(e["message"]["sender"] == "human" for e in page["events"] if "message" in e)
+    assert any(e["message"]["sender"] == "human" for e in page["events"] if e.get("message"))
     events = pap("conversations", "events", session, conversation, "--json")
     assert events["status"] == "idle" and events["has_more"] is False
     followed = pap("conversations", "follow", session, conversation, "--max-events", "2", "--json")

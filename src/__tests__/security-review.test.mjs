@@ -397,7 +397,7 @@ test("finding 4: the memory store forgets expired records; the store replay cach
 
 test("finding 9: the demo agent reads no order without orders:read", async () => {
   const { ManzanitaAgent } = await import("../../lib/demo/manzanita.js");
-  const turn = (scopes) => ({ conversationId: "cnv_1", text: "Where is my order?", sender: "human", accountId: "acct_ada", scopes, clientId: "https://atlas.example/agent.json", isDirect: false });
+  const turn = (scopes) => ({ conversationId: "cnv_1", text: "Where is my order?", sender: "human", accountId: "acct_ada", scopes, clientId: "https://atlas.example/agent.json", isDirect: false, supportsOperations: true });
   assert.deepEqual(await new ManzanitaAgent().respond(turn(["orders:write"])), [{ authorization: ["insufficient_scope", "orders:read"] }]);
   assert.ok((await new ManzanitaAgent().respond(turn(["orders:read"])))[0].data);
 });
@@ -581,4 +581,141 @@ test("finding 11 and O7: an unfetchable client_id is fetched once, and the refet
   // Thousands of distinct unfetchable IDs: each is remembered, the table stays bounded (no throw, no growth).
   for (let i = 0; i < 3000; i += 1) await assert.rejects(client.fetchMetadata(`https://gone-${i}.example/agent.json`));
   assert.equal(fetched.length, 3001);
+});
+
+// The external interoperability exercise --------------------------------------------------
+
+async function signedInWithProposal(w) {
+  const session = await w.start();
+  const done = await deviceSignIn(w, session);
+  const page = await w.conversations.start(w.endpoint, w.message("Exchange my jacket for a warmer one"), { token: done.token, wait: 0, ...w.who });
+  return { token: done.token, page, proposal: page.events.find((event) => event.message?.operation).message.operation };
+}
+
+test("O1: an operation past proposed has no null expires_at", async () => {
+  const w = await world();
+  const { token, proposal } = await signedInWithProposal(w);
+  const ops = w.company.document.extensions.operations.endpoint;
+  const operations = new OperationsClient({ reactor: w.host.reactor, transport: w.transport });
+  await operations.confirm(ops, proposal, { approval: await approve(proposal), token, ...w.who });
+  const body = await (await w.transport.request("GET", `${ops}/${proposal.operation_id}`, { token, ...w.who })).json();
+  assert.equal(body.state, "succeeded");
+  assert.equal("expires_at" in body, false);
+  assert.deepEqual(Object.entries(body).filter(([, value]) => value === null), []);
+});
+
+async function assertion(w, audience, { lifetime = 60, jti } = {}) {
+  const now = Math.floor(w.clock.now().getTime() / 1000);
+  const signed = await w.identity.signer.sign(
+    { iss: w.identity.clientId, sub: w.identity.clientId, aud: audience, iat: now, exp: now + lifetime, jti: jti ?? `jti_${crypto.randomUUID()}` },
+    { purpose: "client_assertion" },
+  );
+  return signed.reveal();
+}
+
+async function deviceWith(w, clientAssertion) {
+  return w.fetch("https://manzanita.example/oauth/device", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: w.identity.clientId,
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: clientAssertion,
+      scope: "orders:read",
+    }).toString(),
+  });
+}
+
+for (const [audience, status] of [
+  ["https://manzanita.example/oauth/device", 200],
+  ["https://manzanita.example/oauth/token", 200],
+  ["https://manzanita.example", 200],
+  ["https://other.example/oauth/token", 401],
+]) {
+  test(`O2: a client assertion for ${audience} at /oauth/device is ${status}`, async () => {
+    const w = await world();
+    assert.equal((await deviceWith(w, await assertion(w, audience))).status, status);
+  });
+}
+
+for (const [lifetime, jti, status] of [[300, undefined, 401], [121, undefined, 401], [120, undefined, 200], [60, "short-jti", 401]]) {
+  test(`O7: an assertion living ${lifetime}s with jti ${jti ?? "long"} is ${status}`, async () => {
+    const w = await world();
+    const device = "https://manzanita.example/oauth/device";
+    assert.equal((await deviceWith(w, await assertion(w, device, { lifetime, jti }))).status, status);
+  });
+}
+
+test("O3: a token-endpoint DPoP refusal carries its challenge", async () => {
+  const w = await world();
+  const response = await w.fetch("https://manzanita.example/oauth/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      client_id: w.identity.clientId,
+      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+      client_assertion: await assertion(w, "https://manzanita.example/oauth/token"),
+      assertion: "x",
+    }).toString(),
+  });
+  assert.equal(response.status, 400);
+  assert.match(response.headers.get("www-authenticate") ?? "", /^DPoP error="invalid_dpop_proof"/);
+});
+
+test("O4: a token in the query is refused even beside a valid header", async () => {
+  const w = await world();
+  const token = await bearer(w, await w.start());
+  for (const query of [`access_token=${token.accessToken.reveal()}`, "access_token="]) {
+    const response = await w.fetch(`https://manzanita.example/mcp?${query}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token.accessToken.reveal()}`, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "invalid_request");
+  }
+});
+
+test("O5: mediated credentials may go to the issuer's host, and nowhere else", async () => {
+  const { MediatedSignInClient } = await import("../../lib/index.js");
+  const w = await world();
+  const session = await w.start();
+  const reached = [];
+  const client = new MediatedSignInClient({
+    reactor: w.host.reactor,
+    fetch: async (input) => {
+      reached.push(new URL(String(input)).host);
+      return new Response('{"status":"failed"}', { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  w.host.input.answers.push({ email: "a@b.example", password: "x" });
+  const options = (endpoint) => ({
+    ...w.who,
+    mediated: { endpoint, fields: [{ name: "email", label: "Email", secret: false }, { name: "password", label: "Password", secret: true }] },
+    organization: { name: "Shop", domain: "shop.example" },
+    issuer: "https://auth.shop-login.example",
+    scopes: ["orders:read"],
+    token: session,
+  });
+  assert.equal((await client.signIn(options("https://auth.shop-login.example/poppy/sign-in"))).status, "failed");
+  await assert.rejects(client.signIn(options("https://evil.example/sign-in")), (error) => error.code === "unsafe_mediated_endpoint");
+  assert.deepEqual(reached, ["auth.shop-login.example"]);
+});
+
+test("O8: a reply is framed by working and idle state events", async () => {
+  const w = await world();
+  const page = await w.conversations.start(w.endpoint, w.message("Hello"), { token: await w.start(), wait: 0, ...w.who });
+  assert.deepEqual(page.events.map((event) => `${event.type}${event.status ? `:${event.status}` : ""}`), ["message", "state:working", "message", "state:idle"]);
+});
+
+test("O9: the demo promises no operation to an agent without Operations", async () => {
+  const { ManzanitaAgent } = await import("../../lib/demo/manzanita.js");
+  const replies = await new ManzanitaAgent().respond({
+    conversationId: "cnv_1", text: "Exchange it for something warmer", sender: "human", accountId: "acct_ada",
+    scopes: ["orders:read", "orders:write"], clientId: "https://atlas.example/agent.json", isDirect: false, supportsOperations: false,
+  });
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].operation, undefined);
+  assert.equal(replies[0].text.includes("Here is the exchange"), false);
 });

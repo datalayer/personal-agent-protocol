@@ -142,7 +142,7 @@ async def proposal(world: World, token: SessionToken) -> Any:
         endpoint, world.message("Exchange it for something warmer"), token=token, wait=0,
         **world.who,
     )  # fmt: skip
-    operation = page.events[-1].message.operation  # type: ignore[union-attr]
+    operation = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert operation is not None and operation.state == "proposed"
     return operation
 

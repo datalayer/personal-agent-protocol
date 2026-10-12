@@ -96,7 +96,7 @@ async def explain_conversation_control() -> dict[str, Any]:
         endpoint, say("Where is my jacket order?"), token=session, wait=0, **who
     )
     parent = page.conversation_id
-    asked = page.events[-1]
+    asked = [e for e in page.events if e.type != "state"][-1]
 
     # 2. The host signs Ada in (Device Sign-In on Manzanita's page); the same
     #    conversation continues with the signed-in token.
@@ -125,7 +125,7 @@ async def explain_conversation_control() -> dict[str, Any]:
         wait=0,
         **who,
     )
-    answered = page.events[-1].message
+    answered = [e for e in page.events if e.type != "state"][-1].message
 
     # 3. Ada wants to talk to Manzanita herself: a Direct Conversation under the parent.
     direct = await conversations.start_direct(

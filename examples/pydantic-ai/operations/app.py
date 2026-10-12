@@ -189,7 +189,7 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
             wait=0,
             **who,
         )
-        proposal = page.events[-1].message.operation  # type: ignore[union-attr]
+        proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
         if not (proposal is not None):
             raise RuntimeError("the example world is incomplete")
         return proposal

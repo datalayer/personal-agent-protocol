@@ -131,7 +131,7 @@ async function deviceSignIn(w, session) {
 
 async function proposal(w, token) {
   const page = await w.conversations.start(w.endpoint, w.message("Exchange it for something warmer"), { token, wait: 0, ...w.who });
-  const operation = page.events.at(-1).message.operation;
+  const operation = page.events.filter((e) => e.type !== "state").at(-1).message.operation;
   assert.equal(operation.state, "proposed");
   return operation;
 }

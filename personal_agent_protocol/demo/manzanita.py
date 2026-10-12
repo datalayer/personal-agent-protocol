@@ -107,6 +107,14 @@ class ManzanitaAgent:
         if "exchange" in text or "warmer" in text:
             if "orders:write" not in turn.scopes:
                 return [Reply(authorization=("insufficient_scope", "orders:write"))]
+            if not turn.supports_operations:
+                # No operation can reach this agent: say so, never "here is the exchange".
+                return [
+                    Reply(
+                        text="The insulated Ridge Jacket is in stock. Your agent cannot "
+                        "confirm exchanges with us: exchange it on manzanita.example."
+                    )
+                ]
             return [
                 Reply(
                     text="The insulated Ridge Jacket is in stock. Here is the exchange.",

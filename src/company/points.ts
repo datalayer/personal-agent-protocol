@@ -77,6 +77,11 @@ export interface Turn {
   readonly scopes: readonly string[];
   readonly clientId: string;
   readonly isDirect: boolean;
+  /**
+   * Whether the personal agent negotiated Operations: without it, a proposed operation is
+   * never sent, so the agent's words must not promise one.
+   */
+  readonly supportsOperations: boolean;
 }
 
 /**

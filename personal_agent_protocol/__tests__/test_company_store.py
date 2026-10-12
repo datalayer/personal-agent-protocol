@@ -141,7 +141,7 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
         wait=0,
         **world.who,
     )
-    proposal = page.events[-1].message.operation  # type: ignore[union-attr]
+    proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert proposal is not None and proposal.state == "proposed"
     cursor = page.cursor
 

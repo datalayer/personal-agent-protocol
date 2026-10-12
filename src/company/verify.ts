@@ -15,13 +15,24 @@ import { SecretValue } from "../secret.js";
 import type { ReplayCache } from "./points.js";
 
 const ALGORITHMS = new Set(["ES256", "RS256"]);
-const MAX_LIFETIME_SECONDS = 5 * 60;
+/**
+ * An assertion lives at most this long (`exp - iat`): long enough for any clock, short
+ * enough that a captured one is soon useless. The SDKs' own assertions live 60 seconds.
+ */
+const MAX_LIFETIME_SECONDS = 120;
+/** A `jti` this short is guessable: its replay key could collide with another's. */
+const MIN_JTI = 16;
 const SKEW_SECONDS = 30;
 
 export interface VerifyAssertionOptions {
   readonly keys: JsonWebKeySet;
   readonly issuer: string;
-  readonly audience: string;
+  /**
+   * The one value `aud` must be, or the values it may be: a client assertion names the
+   * authorization server's issuer, its token endpoint, or the endpoint it is sent to
+   * (RFC 7523 §3).
+   */
+  readonly audience: string | readonly string[];
   readonly replayCache: ReplayCache;
   readonly now: Date;
   /** A client assertion's `sub` is its `client_id`; omitted, `sub` is returned unchecked. */
@@ -63,7 +74,10 @@ export async function verifyAssertion(
   const iat = Number(claims.iat);
   const exp = Number(claims.exp);
   if (!Number.isFinite(iat) || !Number.isFinite(exp)) throw refuse("Assertion is invalid");
-  if (exp - iat > MAX_LIFETIME_SECONDS) throw refuse("Assertion lives too long");
+  if (exp - iat > MAX_LIFETIME_SECONDS || exp <= iat) throw refuse("Assertion lifetime is invalid");
+  if (typeof claims.jti !== "string" || claims.jti.length < MIN_JTI || claims.jti.length > 256) {
+    throw refuse("Assertion jti is invalid");
+  }
   if (options.subject !== undefined && claims.sub !== options.subject) {
     throw refuse("Assertion subject is invalid");
   }
@@ -85,7 +99,7 @@ async function decode(
   compact: string,
   keys: JsonWebKeySet,
   issuer: string,
-  audience: string,
+  audience: string | readonly string[],
   now: Date,
 ): Promise<JWTPayload | undefined> {
   const header = decodeProtectedHeader(compact);
@@ -104,7 +118,7 @@ async function decode(
       const { payload } = await jwtVerify(compact, publicKey, {
         algorithms: [algorithm],
         issuer,
-        audience,
+        audience: typeof audience === "string" ? audience : [...audience],
         requiredClaims: ["iss", "sub", "aud", "iat", "exp", "jti"],
         // The company's own clock, with the same skew the caller allows.
         currentDate: now,

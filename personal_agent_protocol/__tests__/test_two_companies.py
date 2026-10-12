@@ -87,7 +87,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
 
     # 1. Ledgerly is not yet connected to Northwind: Ada approves it on Northwind's page.
     page = await conversations.start(endpoint, say("Pay INV-0042"), token=token, wait=0, **who)
-    connect = page.events[-1].message.data["connect"]  # type: ignore[union-attr,index]
+    connect = [e for e in page.events if e.type != "state"][-1].message.data["connect"]  # type: ignore[union-attr,index]
     assert connect["verification_uri"] == "https://northwind.example/device"
     await bank.approve_device(connect["user_code"], account_id=ACCOUNT)
     clock.advance(5)
@@ -102,7 +102,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         wait=0,
         **who,
     )
-    relayed = page.events[-1].message.operation  # type: ignore[union-attr]
+    relayed = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert relayed is not None and relayed.user_approval_required
     assert relayed.summary.startswith(
         "At Northwind Bank: Pay EUR 1250.00 to Acme GmbH for INV-0042"
@@ -129,7 +129,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         wait=0,
         **who,
     )
-    grant = page.events[-1].message.operation  # type: ignore[union-attr]
+    grant = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     granted = await operations.confirm(ops, grant, approval=approve(grant), token=token, **who)  # type: ignore[arg-type]
     assert granted.operation.state == "succeeded"  # type: ignore[union-attr]
 
@@ -143,7 +143,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         wait=0,
         **who,
     )
-    told = page.events[-1].message  # type: ignore[union-attr]
+    told = [e for e in page.events if e.type != "state"][-1].message  # type: ignore[union-attr]
     assert told.operation is None  # type: ignore[union-attr]
     assert "Sent EUR 980.00 to Acme GmbH for INV-0043" in told.text  # type: ignore[union-attr,operator]
     second = (await bank.operation_record(bank_plugin.executor.performed[1])).operation
@@ -159,6 +159,6 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         wait=0,
         **who,
     )
-    over = page.events[-1].message.operation  # type: ignore[union-attr]
+    over = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert over is not None and "EUR 3400.00" in over.summary
     assert len(bank_plugin.executor.performed) == 2

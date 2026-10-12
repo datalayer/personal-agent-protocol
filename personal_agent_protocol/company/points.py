@@ -117,6 +117,9 @@ class Turn:
     scopes: tuple[str, ...]
     client_id: str
     is_direct: bool
+    #: Whether the personal agent negotiated Operations: without it, a proposed
+    #: operation is never sent, so the agent's words must not promise one.
+    supports_operations: bool
 
 
 @dataclass(frozen=True)

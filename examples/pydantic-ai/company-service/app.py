@@ -191,7 +191,7 @@ async def run_company_service() -> dict[str, Any]:
     page = await conversations.start(
         endpoint, say("When is my book due?"), token=session, wait=0, **who
     )
-    asked = page.events[-1]
+    asked = [e for e in page.events if e.type != "state"][-1]
     steps.append(f"the library asked to sign in ({asked.type}: {asked.error})")
 
     device = DeviceSignInClient(reactor=reactor, http_client=http)
@@ -221,7 +221,7 @@ async def run_company_service() -> dict[str, Any]:
         wait=0,
         **who,
     )
-    proposal = page.events[-1].message.operation  # type: ignore[union-attr]
+    proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     ops = operations_endpoint(company.document, ClientMetadata.model_validate(atlas.metadata))
     if proposal is None or ops is None:
         raise RuntimeError("the example world is incomplete")

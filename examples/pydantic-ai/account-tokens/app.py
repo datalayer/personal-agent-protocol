@@ -164,7 +164,7 @@ async def explain_account_tokens() -> dict[str, Any]:
         "revoked_token_deleted_locally": revoked.deleted_locally,
         "session_after_revocation": [event.type for event in page.events][-1]
         + ": "
-        + str(page.events[-1].error),
+        + str([e for e in page.events if e.type != "state"][-1].error),
         "refresh_after_revocation": after_revocation.status,
         "account_token_withheld": True,
         "session_tokens_and_proofs_withheld": True,

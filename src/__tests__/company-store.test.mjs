@@ -150,7 +150,7 @@ test("a company restarted over its store continues every flow", async () => {
   page = await conversations.send(endpoint, page.conversation_id, message("Exchange it for something warmer"), {
     ...who, token: refreshed.token, cursor: page.cursor, wait: 0,
   });
-  const proposal = page.events.at(-1).message.operation;
+  const proposal = page.events.filter((e) => e.type !== "state").at(-1).message.operation;
   assert.equal(proposal.state, "proposed");
   const cursor = page.cursor;
 

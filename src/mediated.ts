@@ -132,7 +132,11 @@ export class MediatedSignInClient {
   }
 
   async #signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
-    const endpoint = endpointOnCompanyDomain(options.mediated.endpoint, options.organization.domain);
+    const endpoint = endpointOnCompanyDomain(
+      options.mediated.endpoint,
+      options.organization.domain,
+      options.issuer,
+    );
     const requested = [...new Set(options.scopes)];
     const credentials = await this.#collect(
       {
@@ -365,7 +369,11 @@ export class MediatedSignInClient {
   }
 }
 
-function endpointOnCompanyDomain(endpoint: string, domain: string): string {
+/**
+ * Credentials go only to the company: an endpoint on its domain (or a subdomain), or on
+ * its `auth.issuer`'s host, which its OAuth metadata ties to it (`poppy_domains`).
+ */
+function endpointOnCompanyDomain(endpoint: string, domain: string, issuer: string): string {
   let url: URL;
   try {
     url = new URL(endpoint);
@@ -374,7 +382,14 @@ function endpointOnCompanyDomain(endpoint: string, domain: string): string {
   }
   const host = url.hostname.toLowerCase();
   const company = domain.toLowerCase();
-  if (url.protocol !== "https:" || (host !== company && !host.endsWith(`.${company}`))) {
+  let issuerHost: string | undefined;
+  try {
+    issuerHost = new URL(issuer).protocol === "https:" ? new URL(issuer).hostname.toLowerCase() : undefined;
+  } catch {
+    issuerHost = undefined;
+  }
+  const ours = host === company || host.endsWith(`.${company}`) || host === issuerHost;
+  if (url.protocol !== "https:" || !ours) {
     throw new AuthorizationError(
       "unsafe_mediated_endpoint",
       "Credentials are sent only to an endpoint on the company's own domain",

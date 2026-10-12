@@ -352,7 +352,9 @@ _CHALLENGED = frozenset(
 
 def _json_error(status: int, error: str, **extra: object) -> CompanyResponse:
     headers = {"Cache-Control": "no-store"}
-    if error in _CHALLENGED and status in {401, 403}:
+    # A DPoP refusal carries its challenge whatever its status, the token endpoint's
+    # 400 included (§4.3, RFC 9449 §7.1).
+    if error in _CHALLENGED and (status in {401, 403} or error == "invalid_dpop_proof"):
         # Token errors are also in WWW-Authenticate (§6, RFC 9449).
         scope = extra.get("scope")
         challenge = f'DPoP error="{error}"'
@@ -444,6 +446,15 @@ class CompanyService:
     async def handle(self, request: CompanyRequest) -> CompanyResponse:  # noqa: C901 - the route table
         path = urlsplit(request.url).path
         method = request.method.upper()
+        if any(
+            name == "access_token"
+            for name, _ in parse_qsl(urlsplit(request.url).query, keep_blank_values=True)
+        ):
+            # A token in a URL is logged, cached, and leaked in Referer: never accepted,
+            # even beside a header that would be (§4.3, RFC 6750 §2.3).
+            if path == "/mcp" and self._mcp() is not None:
+                return self._bearer_refusal(400, "invalid_request")
+            return _json_error(400, "invalid_request")
         try:
             if method == "GET" and path == "/.well-known/poppy.json":
                 return CompanyResponse(200, self.discovery_document())
@@ -587,7 +598,8 @@ class CompanyService:
             form.get("client_assertion", ""),
             keys=keys,
             issuer=client_id,
-            audience=audience,
+            # The issuer, the token endpoint, or the endpoint called (RFC 7523 §3).
+            audience=tuple(dict.fromkeys((self.config.base, self.config.token_endpoint, audience))),
             subject=client_id,
             replay_cache=self._replay(),
             now=self._now(),
@@ -1844,10 +1856,18 @@ class CompanyService:
 
         def accept(current: StoredConversation) -> StoredConversation:
             self._open(current)
+            if current.responder == "human":
+                return replace(
+                    current,
+                    account_id=session.account_id or current.account_id,
+                    events=(*current.events, received),
+                )
+            # The agent works on it: every change of status adds a state event (§7).
             return replace(
                 current,
+                status="working",
                 account_id=session.account_id or current.account_id,
-                events=(*current.events, received),
+                events=(*current.events, received, self._state("working", current.responder)),
             )
 
         try:
@@ -1877,6 +1897,7 @@ class CompanyService:
                 scopes=session.scopes,
                 client_id=session.client_id,
                 is_direct=conversation.parent_id is not None,
+                supports_operations=await self._supports_operations(session.client_id),
             )
         )
         events: list[StoredEvent] = []
@@ -1886,8 +1907,10 @@ class CompanyService:
                 events.append(event)
 
         def answered(current: StoredConversation) -> StoredConversation:
-            status: Literal["idle", "closed"] = "closed" if current.status == "closed" else "idle"
-            return replace(current, status=status, events=(*current.events, *events))
+            if current.status == "closed":
+                return replace(current, events=(*current.events, *events))
+            idle = self._state("idle", current.responder)
+            return replace(current, status="idle", events=(*current.events, *events, idle))
 
         changed = await self._change(
             CONVERSATION, conversation_id, StoredConversation.from_json, answered

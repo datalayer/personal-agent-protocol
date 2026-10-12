@@ -20,7 +20,7 @@ sequenceDiagram
   participant H as PAP host
   participant R as Reactor state store
   participant P as Signer + DPoP provider
-  U->>B: Approve orders:read; decline orders:return
+  U->>B: Approve orders:read · decline orders:return
   C-->>B: Redirect with code, state, issuer
   B->>H: Registered HTTPS callback
   H->>R: Atomically take pending request by hashed state
@@ -31,9 +31,9 @@ sequenceDiagram
   C-->>H: use_dpop_nonce + company nonce
   H->>P: Fresh assertion and fresh proof with nonce
   H->>C: Retry exchange once
-  C-->>H: Signed-in DPoP token for same Session; orders:read
-  H->>H: Reject scope escalation; compute missing scopes
-  H-->>U: Signed in; return scope unavailable
+  C-->>H: Signed-in DPoP token for same Session · orders:read
+  H->>H: Reject scope escalation · compute missing scopes
+  H-->>U: Signed in · return scope unavailable
   Note over H,R: A replayed callback finds no state and is rejected
 ```
 

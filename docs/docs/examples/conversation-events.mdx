@@ -22,10 +22,10 @@ sequenceDiagram
   C-->>H: 410 cursor_expired
   H-->>A: Notify that retained history has a gap
   H->>C: GET /events?wait=30 + DPoP
-  C-->>H: evt_1, evt_2; cursor=evt_2; has_more=true
+  C-->>H: evt_1, evt_2 · cursor=evt_2 · has_more=true
   H-->>A: Deliver unseen events in order
   H->>C: GET /events?cursor=evt_2&wait=0 + DPoP
-  C-->>H: repeated evt_2, evt_3; has_more=false
+  C-->>H: repeated evt_2, evt_3 · has_more=false
   H->>H: Drop repeated evt_2
   H-->>A: Deliver evt_3
 ```

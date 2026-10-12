@@ -36,7 +36,7 @@ sequenceDiagram
       A->>R: Restore state with longer interval
     else success
       C-->>A: Account Token + signed-in Session Token
-      A->>R: Store Account Token; expose opaque reference
+      A->>R: Store Account Token · expose opaque reference
       A-->>U: Continue the same conversation with granted scopes
     end
   end

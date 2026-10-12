@@ -17,6 +17,7 @@ import {
 } from "@datalayer/reactor";
 
 import { AgentIdentityClient } from "../identity.js";
+import { createResolvingFetch } from "../node-network.js";
 import type { ClientMetadata, JsonWebKeySet } from "../models.js";
 import {
   Clocks,
@@ -141,7 +142,11 @@ export function buildCompany(
 ): CompanyService {
   const resolver = new IdentityClientResolver();
   const clock = new ReactorClock();
-  const { plugins = [], ...core } = options;
+  const { plugins = [], ...given } = options;
+  // On Node the company fetches agents' metadata over its resolving transport: every
+  // address vetted, the vetted one dialled (SSRF, DNS rebinding). A given `fetch` is the
+  // caller's own (a test network, an egress proxy) and replaces it.
+  const core: PapCoreOptions = given.fetch === undefined ? { ...given, fetch: createResolvingFetch() } : given;
   let built: ReactorPlatformView | undefined;
   const store = (): CompanyStore => {
     if (built === undefined) throw new Error("the company's Reactor is not built yet");

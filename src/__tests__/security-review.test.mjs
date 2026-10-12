@@ -394,3 +394,117 @@ test("finding 4: the memory store forgets expired records; the store replay cach
     return new StoreReplayCache(() => one);
   });
 });
+
+test("finding 9: the demo agent reads no order without orders:read", async () => {
+  const { ManzanitaAgent } = await import("../../lib/demo/manzanita.js");
+  const turn = (scopes) => ({ conversationId: "cnv_1", text: "Where is my order?", sender: "human", accountId: "acct_ada", scopes, clientId: "https://atlas.example/agent.json", isDirect: false });
+  assert.deepEqual(await new ManzanitaAgent().respond(turn(["orders:write"])), [{ authorization: ["insufficient_scope", "orders:read"] }]);
+  assert.ok((await new ManzanitaAgent().respond(turn(["orders:read"])))[0].data);
+});
+
+const UNSAFE = [
+  "https://localhost./x",
+  "https://0.0.0.0/x",
+  "https://0/x",
+  "https://[::]/x",
+  "https://[::ffff:127.0.0.1]/x",
+  "https://[::ffff:169.254.169.254]/x",
+  "https://[fd00:ec2::254]/x",
+  "https://[fe80::1]/x",
+  "https://100.100.100.200/x",
+  "https://2130706433/x",
+  "https://[0:0:0:0:0:0:0:1]/x",
+  "https://metadata.google.internal/x",
+  "https://169.254.169.254/x",
+  "https://[64:ff9b::7f00:1]/x",
+];
+
+test("finding 12: the portable URL check refuses every non-global literal and local name", async () => {
+  const { UrlSafetyPolicies, buildPapReactor: build } = await import("../../lib/index.js");
+  const reactor = build({ fetch: async () => assert.fail("never fetched") });
+  const policy = firstContribution(reactor, UrlSafetyPolicies, "policy");
+  for (const url of UNSAFE) {
+    await assert.rejects(Promise.resolve().then(() => policy.assertSafe(new URL(url))), (error) => error.code === "unsafe_address", url);
+  }
+  await policy.assertSafe(new URL("https://agent.example/agent.json"));
+  await policy.assertSafe(new URL("https://[2606:4700::1111]/agent.json"));
+});
+
+test("finding 12: the resolving fetch refuses a name with any non-global address, before dialling", async () => {
+  const { createResolvingFetch } = await import("../../lib/server.js");
+  for (const answer of [["93.184.216.34", "10.0.0.1"], ["::ffff:127.0.0.1"], ["100.100.100.200"], ["fd00:ec2::254"]]) {
+    const fetch = createResolvingFetch({ resolver: async () => answer });
+    await assert.rejects(fetch("https://agent.example/agent.json"), (error) => error.code === "unsafe_address", String(answer));
+  }
+});
+
+test("finding 12: the resolving fetch dials only the vetted address, with the URL's name for TLS", async () => {
+  const { createServer: createTlsServer } = await import("node:https");
+  const { certificates } = await import("./support/world.mjs");
+  const { createResolvingFetch } = await import("../../lib/server.js");
+  const tls = certificates(["agent.example"]);
+  const seen = [];
+  const server = createTlsServer({ key: tls.key, cert: tls.cert }, (request, response) => {
+    seen.push({ host: request.headers.host, servername: request.socket.servername });
+    response.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    let resolutions = 0;
+    // The first answer is vetted; a rebinding second answer would never be asked for.
+    const fetch = createResolvingFetch({
+      ca: tls.ca,
+      allowPrivateNetworks: true,
+      resolver: async () => (resolutions++ === 0 ? ["127.0.0.1"] : ["10.9.9.9"]),
+    });
+    const response = await fetch(`https://agent.example:${server.address().port}/agent.json`, { redirect: "manual" });
+    assert.deepEqual(await response.json(), { ok: true });
+    assert.equal(resolutions, 1);
+    assert.deepEqual(seen, [{ host: `agent.example:${server.address().port}`, servername: "agent.example" }]);
+  } finally {
+    server.close();
+  }
+});
+
+test("finding 12: the Node company fetches over the resolving transport by default", async () => {
+  const { hostname } = await import("node:os");
+  const { DiscoveryTransports } = await import("../../lib/index.js");
+  const { buildCompany } = await import("../../lib/server.js");
+  const service = buildCompany(new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["a:read"], operations: false }));
+  const transport = firstContribution(service.reactor, DiscoveryTransports, "transport");
+  // This machine's own name resolves (through /etc/hosts) to a loopback or private address.
+  await assert.rejects(transport.fetch(new URL(`https://${hostname()}/agent.json`), {}), (error) => ["unsafe_address", "dns_failed"].includes(error.code));
+  await assert.rejects(transport.fetch(new URL("https://127.0.0.1/agent.json"), {}), (error) => error.code === "unsafe_address");
+});
+
+test("finding 14: a metadata deadline aborts the request itself, and a redirect's body is cancelled", async () => {
+  const { discoverCompany: discover } = await import("../../lib/index.js");
+  const signals = [];
+  const hanging = (_input, init) =>
+    new Promise((_, reject) => {
+      signals.push(init.signal);
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+    });
+  await assert.rejects(discover("slow.example", { fetch: hanging, timeoutMs: 30 }), (error) => error.code === "metadata_timeout");
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0].aborted, true);
+
+  // The caller's own signal aborts the request too.
+  const caller = new AbortController();
+  const pending = discover("slow.example", { fetch: hanging, timeoutMs: 60_000, signal: caller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  caller.abort(new Error("stop"));
+  await assert.rejects(pending);
+  assert.equal(signals[1].aborted, true);
+
+  let cancelled = 0;
+  const redirecting = async (input) => {
+    if (new URL(String(input)).pathname === "/.well-known/poppy.json" && cancelled === 0) {
+      const body = new ReadableStream({ cancel: () => void (cancelled += 1) });
+      return new Response(body, { status: 302, headers: { location: "https://slow.example/moved.json" } });
+    }
+    return new Response("{}", { status: 404, headers: { "content-type": "application/json" } });
+  };
+  await assert.rejects(discover("slow.example", { fetch: redirecting }));
+  assert.equal(cancelled, 1);
+});

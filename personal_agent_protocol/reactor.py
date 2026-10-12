@@ -491,6 +491,40 @@ TELEMETRY_SINKS = define_contribution_point("pap.telemetry")
 APPROVAL_SURFACES = define_contribution_point("pap.approvalSurface")
 
 
+#: Prefixes that carry an IPv4 address in their last 32 bits: NAT64 (RFC 6052),
+#: IPv4-mapped, and the deprecated IPv4-compatible form.
+_EMBEDDING_V4 = (
+    ipaddress.IPv6Network("64:ff9b::/96"),
+    ipaddress.IPv6Network("::ffff:0:0/96"),
+    ipaddress.IPv6Network("::/96"),
+)
+#: Local-use NAT64 (RFC 8215): it translates to whatever its operator chose, never global.
+_LOCAL_NAT64 = ipaddress.IPv6Network("64:ff9b:1::/48")
+#: 6to4 (RFC 3056) carries an IPv4 address in bits 16..48.
+_SIX_TO_FOUR = ipaddress.IPv6Network("2002::/16")
+
+
+def is_global_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Whether an address is globally reachable, an IPv4 address inside IPv6 included.
+
+    `ipaddress`'s `is_global` judges `64:ff9b::7f00:1` (NAT64 for 127.0.0.1) and
+    `::a9fe:a9fe` (IPv4-compatible 169.254.169.254) global: the IPv4 address
+    they carry is unwrapped and judged instead, so a resolver answering one of
+    them never reaches loopback, link-local metadata, or a private network.
+    """
+
+    if isinstance(address, ipaddress.IPv6Address):
+        if address in _LOCAL_NAT64:
+            return False
+        if any(address in prefix for prefix in _EMBEDDING_V4):
+            embedded = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+            return embedded.is_global and not embedded.is_multicast
+        if address in _SIX_TO_FOUR:
+            embedded = ipaddress.IPv4Address((int(address) >> 80) & 0xFFFFFFFF)
+            return embedded.is_global and not embedded.is_multicast
+    return address.is_global and not address.is_multicast
+
+
 async def resolve_addresses(host: str) -> list[str]:
     """Resolve a host off the event loop."""
 
@@ -681,7 +715,9 @@ class PublicUrlSafetyPolicy:
             parsed_addresses = [ipaddress.ip_address(address) for address in addresses]
         except ValueError as exc:
             raise DiscoveryError("dns_failed", "Discovery host resolved to no address") from exc
-        if not self._allow_private and any(not address.is_global for address in parsed_addresses):
+        if not self._allow_private and any(
+            not is_global_address(address) for address in parsed_addresses
+        ):
             raise DiscoveryError(
                 "unsafe_address", "Discovery host resolves to a non-public address"
             )

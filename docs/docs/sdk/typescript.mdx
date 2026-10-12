@@ -195,11 +195,13 @@ import { buildPapReactor } from "@datalayer/personal-agent-protocol";
 import {
   JoseSigner,
   NodeUrlSafetyPolicy,
+  createResolvingFetch,
   verifyDpopProof,
 } from "@datalayer/personal-agent-protocol/server";
 
 const urlPolicy = new NodeUrlSafetyPolicy();
 const reactor = buildPapReactor({
+  fetch: createResolvingFetch(),
   assertSafeUrl: (url) => urlPolicy.assertSafe(url),
 });
 ```
@@ -210,11 +212,11 @@ multicast, or reserved. Literal IP addresses use the same classification
 without DNS. Private-network access is disabled by default and must be enabled
 explicitly for a controlled deployment.
 
-This is a DNS preflight, not connection pinning. A production server must also
-ensure its HTTP transport connects to an approved resolved address, or send
-metadata traffic through an egress proxy that enforces the same policy. That
-closes the interval in which DNS could return a different address after the
-check.
+`NodeUrlSafetyPolicy` alone is a DNS preflight, not connection pinning:
+`createResolvingFetch` resolves and vets again for each request and dials only
+the vetted address, keeping the URL's name for SNI, certificate checks, and
+`Host`, so a name that rebinds after the check reaches no private address. The
+Node company (`buildCompany`) uses it unless given its own `fetch`.
 
 ## OpenAPI and MCP
 

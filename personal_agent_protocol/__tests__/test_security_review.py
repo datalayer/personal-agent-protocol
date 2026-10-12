@@ -512,3 +512,74 @@ async def test_finding_4_the_memory_store_forgets_expired_records() -> None:
         return StoreReplayCache(lambda: one)
 
     await check_replay_cache(fresh)
+
+
+@pytest.mark.asyncio
+async def test_finding_9_the_demo_agents_read_nothing_without_the_read_scope() -> None:
+    from personal_agent_protocol.company import Turn
+    from personal_agent_protocol.demo.manzanita import ManzanitaAgent
+    from personal_agent_protocol.demo.northwind import NorthwindAgent
+
+    def turn(text: str, scopes: tuple[str, ...]) -> Turn:
+        return Turn(
+            conversation_id="cnv_1",
+            text=text,
+            data=None,
+            sender="human",
+            account_id="acct_ada",
+            scopes=scopes,
+            client_id="https://atlas.example/agent.json",
+            is_direct=False,
+        )
+
+    manzanita = await ManzanitaAgent().respond(turn("Where is my order?", ("orders:write",)))
+    assert [(r.text, r.data, r.authorization) for r in manzanita] == [
+        (None, None, ("insufficient_scope", "orders:read"))
+    ]
+    northwind = await NorthwindAgent().respond(turn("What is my balance?", ("payments:write",)))
+    assert [(r.text, r.data, r.authorization) for r in northwind] == [
+        (None, None, ("insufficient_scope", "accounts:read"))
+    ]
+    read = await ManzanitaAgent().respond(turn("Where is my order?", ("orders:read",)))
+    assert read[0].data is not None
+
+
+@pytest.mark.parametrize(
+    ("address", "is_global"),
+    [
+        ("64:ff9b::7f00:1", False),
+        ("64:ff9b::a9fe:a9fe", False),
+        ("::7f00:1", False),
+        ("::a9fe:a9fe", False),
+        ("::ffff:127.0.0.1", False),
+        ("2002:7f00:1::", False),
+        ("64:ff9b:1::808:808", False),
+        ("fd00:ec2::254", False),
+        ("100.100.100.200", False),
+        ("::", False),
+        ("64:ff9b::808:808", True),
+        ("2606:4700::1111", True),
+        ("8.8.8.8", True),
+    ],
+)
+def test_finding_13_an_ipv4_address_inside_ipv6_is_judged_as_ipv4(
+    address: str, is_global: bool
+) -> None:
+    import ipaddress
+
+    from personal_agent_protocol.reactor import is_global_address
+
+    assert is_global_address(ipaddress.ip_address(address)) is is_global
+
+
+@pytest.mark.asyncio
+async def test_finding_13_a_host_resolving_to_nat64_loopback_is_refused() -> None:
+    from personal_agent_protocol.errors import DiscoveryError
+    from personal_agent_protocol.reactor import PublicUrlSafetyPolicy
+
+    async def nat64(host: str) -> list[str]:
+        return ["64:ff9b::a9fe:a9fe"]
+
+    with pytest.raises(DiscoveryError) as refused:
+        await PublicUrlSafetyPolicy(nat64).assert_safe("https://metadata.example/agent.json")
+    assert refused.value.code == "unsafe_address"

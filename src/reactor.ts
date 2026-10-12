@@ -9,6 +9,7 @@ import {
   type PlatformInput,
 } from "@datalayer/reactor";
 
+import { isGlobalAddress, literalAddress } from "./addresses.js";
 import { DiscoveryError } from "./errors.js";
 import {
   InMemoryProtocolCache,
@@ -203,21 +204,24 @@ const systemRandom: RandomSource = {
   },
 };
 
+/** Names that never leave the host or its network (RFC 6761, RFC 6762, RFC 8375, `.internal`). */
+const LOCAL_NAMES = ["localhost", "local", "internal", "home.arpa", "localdomain"];
+
+/**
+ * The portable, textual URL check every runtime applies: HTTPS without user information,
+ * and a host that is neither a local name nor an IP literal outside global unicast. It
+ * cannot see where a name resolves: on Node, the company's default transport resolves
+ * and pins (`createResolvingFetch`, `./server`); elsewhere, contribute a policy that can.
+ */
 function assertObviouslyPublic(url: URL): void {
   if (url.protocol !== "https:" || url.username || url.password) {
     throw new DiscoveryError("unsafe_url", "Discovery and metadata URLs must use HTTPS");
   }
-  const host = url.hostname.toLowerCase().replace(/[\[\]]/g, "");
-  if (
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    host === "::1" ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)
-  ) {
+  // `localhost.` is `localhost`: a trailing dot names the same host.
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  const literal = literalAddress(host);
+  const local = LOCAL_NAMES.some((name) => host === name || host.endsWith(`.${name}`));
+  if (literal !== undefined ? !isGlobalAddress(literal) : !host || local) {
     throw new DiscoveryError("unsafe_address", "Discovery URL names a private address");
   }
 }

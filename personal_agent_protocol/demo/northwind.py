@@ -73,6 +73,8 @@ class NorthwindAgent:
             return [Reply(authorization=("sign_in_required", "accounts:read payments:write"))]
         match = _PAY.match((turn.text or "").strip())
         if match is None:
+            if "accounts:read" not in turn.scopes:
+                return [Reply(authorization=("insufficient_scope", "accounts:read"))]
             return [
                 Reply(
                     text="Balance on the current account: EUR 12,400.00.",

@@ -107,10 +107,13 @@ test("rejects a cross-domain JWKS redirect", async () => {
 test("passes AbortSignal to every identity request", async () => {
   const metadata = await fixture("client-metadata-valid.json");
   const controller = new AbortController();
-  let receivedSignal;
+  let followed;
   const client = new AgentIdentityClient({
     fetch: async (_input, init) => {
-      receivedSignal = init.signal;
+      // The request's own signal (its deadline) follows the caller's.
+      assert.equal(init.signal.aborted, false);
+      controller.abort();
+      followed = init.signal.aborted;
       return new Response(JSON.stringify(metadata), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -120,5 +123,5 @@ test("passes AbortSignal to every identity request", async () => {
 
   await client.fetchMetadata(clientId, { signal: controller.signal });
 
-  assert.equal(receivedSignal, controller.signal);
+  assert.equal(followed, true);
 });

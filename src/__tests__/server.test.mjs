@@ -3,11 +3,11 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { DiscoveryError } from "../../lib/index.js";
-import { NodeUrlSafetyPolicy, isPublicIpAddress } from "../../lib/server.js";
+import { NodeUrlSafetyPolicy, isGlobalAddress } from "../../lib/server.js";
 
 test("classifies public and non-public IP address ranges", () => {
-  assert.equal(isPublicIpAddress("93.184.216.34"), true);
-  assert.equal(isPublicIpAddress("2606:2800:220:1:248:1893:25c8:1946"), true);
+  assert.equal(isGlobalAddress("93.184.216.34"), true);
+  assert.equal(isGlobalAddress("2606:2800:220:1:248:1893:25c8:1946"), true);
   for (const address of [
     "127.0.0.1",
     "10.0.0.1",
@@ -18,8 +18,17 @@ test("classifies public and non-public IP address ranges", () => {
     "fc00::1",
     "fe80::1",
     "2001:db8::1",
+    "0.0.0.0",
+    "100.100.100.200",
+    "::",
+    "::ffff:127.0.0.1",
+    "::ffff:7f00:1",
+    "64:ff9b::a9fe:a9fe",
+    "2002:7f00:1::",
+    "fd00:ec2::254",
+    "224.0.0.1",
   ]) {
-    assert.equal(isPublicIpAddress(address), false, address);
+    assert.equal(isGlobalAddress(address), false, address);
   }
 });
 

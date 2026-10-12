@@ -85,13 +85,14 @@ async function fetchJson(
     let response: Response;
     try {
       response = await withinDeadline(
-        transport.fetch(current, {
-          headers: { Accept: "application/json" },
-          redirect: "manual",
-          credentials: "omit",
-          ...(signal === undefined ? {} : { signal }),
-        }),
-        { timeoutMs, startedAt },
+        (aborted) =>
+          transport.fetch(current, {
+            headers: { Accept: "application/json" },
+            redirect: "manual",
+            credentials: "omit",
+            signal: aborted,
+          }),
+        { timeoutMs, startedAt, ...(signal === undefined ? {} : { signal }) },
       );
     } catch (cause) {
       if (cause instanceof DiscoveryError) throw cause;
@@ -99,6 +100,8 @@ async function fetchJson(
     }
 
     if (response.status >= 300 && response.status < 400) {
+      // A redirect's body is never read: cancelled, so its connection is released.
+      await response.body?.cancel().catch(() => undefined);
       if (redirects === maxRedirects) {
         throw new DiscoveryError("too_many_redirects", "Discovery exceeded redirect limit");
       }
@@ -110,6 +113,7 @@ async function fetchJson(
       continue;
     }
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new DiscoveryError(
         "http_error",
         "Discovery endpoint returned an unsuccessful status",

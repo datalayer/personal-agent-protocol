@@ -194,19 +194,22 @@ export class AgentIdentityClient {
       let response: Response;
       try {
         response = await withinDeadline(
-          transport.fetch(current, {
-            headers: { Accept: "application/json" },
-            redirect: "manual",
-            credentials: "omit",
-            ...(signal === undefined ? {} : { signal }),
-          }),
-          { timeoutMs: this.#timeoutMs, startedAt },
+          (aborted) =>
+            transport.fetch(current, {
+              headers: { Accept: "application/json" },
+              redirect: "manual",
+              credentials: "omit",
+              signal: aborted,
+            }),
+          { timeoutMs: this.#timeoutMs, startedAt, ...(signal === undefined ? {} : { signal }) },
         );
       } catch (cause) {
         if (cause instanceof DiscoveryError) throw cause;
         throw new IdentityError("request_failed", "Agent identity request failed", { cause });
       }
       if (response.status >= 300 && response.status < 400) {
+        // A redirect's body is never read: cancelled, so its connection is released.
+        await response.body?.cancel().catch(() => undefined);
         if (redirects === maxRedirects) {
           const code = maxRedirects === 0 ? "metadata_redirect" : "too_many_redirects";
           throw new IdentityError(code, "Agent identity endpoint exceeded redirect policy");
@@ -222,6 +225,7 @@ export class AgentIdentityClient {
         continue;
       }
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new IdentityError(
           "http_error",
           "Agent identity endpoint returned an unsuccessful status",

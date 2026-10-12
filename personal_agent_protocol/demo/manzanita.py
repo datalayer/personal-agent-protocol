@@ -113,6 +113,9 @@ class ManzanitaAgent:
                     operation=EXCHANGE,
                 )
             ]
+        if "orders:read" not in turn.scopes:
+            # Signed in, but not allowed to read orders: ask for the scope, say nothing.
+            return [Reply(authorization=("insufficient_scope", "orders:read"))]
         return [Reply(text="Your order ord_7Hk2: Ridge Jacket, size M, delivered.", data=ORDER)]
 
 

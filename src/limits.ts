@@ -309,24 +309,35 @@ export async function readBoundedBody(
   return new TextDecoder("utf-8", { fatal: false }).decode(body);
 }
 
-/** Race `promise` against the time left of a `timeoutMs` budget started at `startedAt`. */
+/**
+ * Start a fetch with its own `AbortSignal` and abort it once the `timeoutMs` budget
+ * started at `startedAt` runs out, or as soon as the caller's `signal` aborts: the
+ * request itself is torn down, not merely no longer awaited.
+ */
 export async function withinDeadline<T>(
-  promise: Promise<T>,
-  options: { readonly timeoutMs: number; readonly startedAt: number },
+  start: (signal: AbortSignal) => Promise<T>,
+  options: { readonly timeoutMs: number; readonly startedAt: number; readonly signal?: AbortSignal },
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
+  const timedOut = new DiscoveryError("metadata_timeout", "Metadata fetch exceeded its time limit");
   const remaining = Math.max(0, options.timeoutMs - (Date.now() - options.startedAt));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const caller = options.signal;
+  const forward = () => controller.abort(caller?.reason);
+  if (caller?.aborted) forward();
+  else caller?.addEventListener("abort", forward, { once: true });
   try {
     return await Promise.race([
-      promise,
+      start(controller.signal),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new DiscoveryError("metadata_timeout", "Metadata fetch exceeded its time limit")),
-          remaining,
-        );
+        timer = setTimeout(() => {
+          controller.abort(timedOut);
+          reject(timedOut);
+        }, remaining);
       }),
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    caller?.removeEventListener("abort", forward);
   }
 }

@@ -172,6 +172,10 @@ export class ManzanitaAgent implements CompanyAgent {
         },
       ];
     }
+    if (!turn.scopes.includes("orders:read")) {
+      // Signed in, but not allowed to read orders: ask for the scope, say nothing.
+      return [{ authorization: ["insufficient_scope", "orders:read"] }];
+    }
     return [{ text: "Your order ord_7Hk2: Ridge Jacket, size M, delivered.", data: { ...ORDER } }];
   }
 }

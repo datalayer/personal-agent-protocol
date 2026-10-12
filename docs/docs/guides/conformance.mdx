@@ -40,6 +40,13 @@ do. Each of the four pairings runs every positive, negative and recovery case:
 | TypeScript | Python | `test_cross_language.py` (the Python company with `served_over_tls`) |
 | TypeScript | TypeScript | `conformance-pairing.test.mjs` |
 
+Every pairing passes every case, with no skips: both personal agents fetch
+Bearer tokens for MCP (`bearer_for_mcp`, `bearerForMcp`) and call tools with
+`McpClient`, and both join a browser of their own (Python `browser_http`,
+TypeScript `browserFetch`, each with its own cookie jar) to the Session to
+open and confirm operation pages on both reference companies. A runner given no
+browser skips the website cases, saying so.
+
 With `PAP_CONFORMANCE_REPORTS=<dir>`, each writes its JSON report (schema 1),
 and `scripts/conformance_report.py <dir>` turns them into the
 [compatibility and conformance report](/protocol/conformance-report/). CI runs

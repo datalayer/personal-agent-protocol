@@ -151,6 +151,33 @@ export interface SessionGrantOptions {
   readonly clientId: string;
   readonly clientAssertion: string;
   readonly sessionId?: string;
+  /** An RFC 8707 resource indicator: an MCP server's `url`, for a Bearer token. */
+  readonly resource?: string;
+}
+
+/** An MCP server's `url` as a `resource` indicator: HTTPS, no fragment (RFC 8707). */
+export function mcpResource(value: string): string {
+  let parsed: URL | undefined;
+  try {
+    parsed = new URL(value);
+  } catch {
+    parsed = undefined;
+  }
+  if (
+    parsed === undefined ||
+    parsed.protocol !== "https:" ||
+    !parsed.hostname ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash ||
+    value.includes("#")
+  ) {
+    throw new ProtocolValidationError(
+      "invalid_url",
+      "an MCP resource must be an HTTPS URL without a fragment",
+    );
+  }
+  return value;
 }
 
 export class SessionGrant {
@@ -158,6 +185,7 @@ export class SessionGrant {
   readonly clientId: string;
   readonly clientAssertion: SecretValue;
   readonly sessionId: string | undefined;
+  readonly resource: string | undefined;
 
   constructor(options: SessionGrantOptions) {
     this.assertion = new SecretValue(options.assertion);
@@ -167,6 +195,7 @@ export class SessionGrant {
       throw new ProtocolValidationError("invalid_session_id", "Invalid PAP session ID");
     }
     this.sessionId = options.sessionId;
+    this.resource = options.resource;
   }
 
   toForm(): URLSearchParams {
@@ -180,6 +209,9 @@ export class SessionGrant {
     if (this.sessionId !== undefined) {
       form.set("session_id", this.sessionId);
     }
+    if (this.resource !== undefined) {
+      form.set("resource", this.resource);
+    }
     return form;
   }
 
@@ -191,6 +223,7 @@ export class SessionGrant {
       client_assertion_type: JWT_CLIENT_ASSERTION,
       client_assertion: this.clientAssertion,
       ...(this.sessionId === undefined ? {} : { session_id: this.sessionId }),
+      ...(this.resource === undefined ? {} : { resource: this.resource }),
     };
   }
 }
@@ -260,6 +293,11 @@ export interface SessionRenewOptions extends SessionRequestOptions {
   readonly sessionId: string;
 }
 
+export interface McpBearerOptions extends SessionRenewOptions {
+  /** The MCP server's `url` from poppy.json: the only place the token works. */
+  readonly resource: string;
+}
+
 export interface SessionClientOptions {
   readonly reactor: ReactorPlatformView;
   readonly fetch?: typeof globalThis.fetch;
@@ -292,9 +330,21 @@ export class SessionClient {
     return this.#request(options, options.sessionId);
   }
 
+  /**
+   * A signed-out Bearer Session Token for one MCP server (§4.3).
+   *
+   * The renewal request of the Session, without a DPoP proof, with `resource` set to
+   * the MCP server's `url` from poppy.json. The token works only there: hand it to
+   * `McpClient` (or `McpBearerAuth`), never to an API.
+   */
+  async bearerForMcp(options: McpBearerOptions): Promise<SessionToken> {
+    return this.#request(options, options.sessionId, mcpResource(options.resource));
+  }
+
   async #request(
     options: SessionRequestOptions,
     sessionId?: string,
+    bearerResource?: string,
   ): Promise<SessionToken> {
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     const random = firstContribution(this.#reactor, RandomSources, "random source");
@@ -333,26 +383,31 @@ export class SessionClient {
       const clientAssertion = await signer.sign(clientClaims, {
         purpose: "client_assertion",
       });
-      const proof = await dpop.create({
-        method: "POST",
-        url: tokenEndpoint,
-        tenantId: options.tenantId,
-        subject: options.pairwiseUserId,
-        issuer,
-        ...(nonce === undefined ? {} : { nonce }),
-      });
+      const headers: Record<string, string> = { Accept: "application/json" };
+      if (bearerResource === undefined) {
+        const proof = await dpop.create({
+          method: "POST",
+          url: tokenEndpoint,
+          tenantId: options.tenantId,
+          subject: options.pairwiseUserId,
+          issuer,
+          ...(nonce === undefined ? {} : { nonce }),
+        });
+        headers.DPoP = proof.reveal();
+      }
       const grant = new SessionGrant({
         assertion: assertion.reveal(),
         clientId,
         clientAssertion: clientAssertion.reveal(),
         ...(sessionId === undefined ? {} : { sessionId }),
+        ...(bearerResource === undefined ? {} : { resource: bearerResource }),
       });
 
       let response: Response;
       try {
         response = await this.#fetch(tokenEndpoint, {
           method: "POST",
-          headers: { Accept: "application/json", DPoP: proof.reveal() },
+          headers,
           body: grant.toForm(),
           credentials: "omit",
           redirect: "error",
@@ -399,10 +454,14 @@ export class SessionClient {
             { statusCode: response.status, cause },
           );
         }
-        if (token.tokenType !== "DPoP") {
+        const expected = bearerResource === undefined ? "DPoP" : "Bearer";
+        if (
+          token.tokenType !== expected ||
+          (bearerResource !== undefined && token.sessionId !== sessionId)
+        ) {
           throw new SessionError(
             "unexpected_token_type",
-            "A proof-bound session request must return a DPoP token",
+            `The Session request must return a ${expected} token for this Session`,
             { statusCode: response.status },
           );
         }

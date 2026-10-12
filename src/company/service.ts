@@ -38,12 +38,18 @@
  *   issued for its url (requested without DPoP, `resource` = that url), its
  *   protected resource metadata (RFC 9728), and tools that propose operations
  *   in `structuredContent` (Operations §4.2). Bearer tokens work nowhere else.
+ * - Web browsing (§5), with `web: true`: the browser-session endpoint sets the
+ *   company's own cookie for a Session from a verified browser assertion, and each
+ *   operation's `url` shows it in that Session, where the user can confirm or cancel
+ *   it: the same operation, performed at most once whichever channel confirms it.
  */
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
+import { decodeJwt, decodeProtectedHeader, importJWK, type JWK } from "jose";
 
+import { verifyBrowserAssertion, type VerifiedBrowserAssertion } from "../browser-server.js";
 import { verifyDpopProof } from "../crypto.js";
 import { ProofError, SessionError } from "../errors.js";
 import { parseJsonStrict } from "../json.js";
@@ -142,6 +148,8 @@ export interface CompanyConfigOptions {
   readonly devicePage?: string;
   /** A hosted consent page with `{request_id}`: `GET /oauth/authorize` answers 303 to it. */
   readonly consentPage?: string;
+  /** Web browsing (§5): a browser-session endpoint and a page for each operation. */
+  readonly web?: boolean;
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -177,6 +185,7 @@ export class CompanyConfig {
   readonly customScopes: Readonly<Record<string, string>>;
   readonly devicePage: string | undefined;
   readonly consentPage: string | undefined;
+  readonly web: boolean;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -196,6 +205,7 @@ export class CompanyConfig {
     this.customScopes = { ...(options.customScopes ?? {}) };
     this.devicePage = hostedPage("devicePage", options.devicePage);
     this.consentPage = hostedPage("consentPage", options.consentPage);
+    this.web = options.web ?? false;
     if (this.consentPage !== undefined && !this.consentPage.includes("{request_id}")) {
       throw new RangeError("consentPage must contain {request_id}");
     }
@@ -233,6 +243,9 @@ export class CompanyConfig {
   }
   get mcpResourceMetadata(): string {
     return `${this.base}/.well-known/oauth-protected-resource/mcp`;
+  }
+  get browserSessionEndpoint(): string {
+    return `${this.base}/poppy/browser-session`;
   }
 }
 
@@ -307,6 +320,8 @@ function base64Url(bytes: Uint8Array): string {
 
 /** The consent page's cookie: `__Host-`, so no other host or path can set it. */
 export const CONSENT_COOKIE = "__Host-poppy_consent";
+/** The website's cookie, standing for the agent's Session in its own browser (§5). */
+export const WEB_COOKIE = "poppy_session";
 
 /** What the user decided on the company's own consent page, checked by `consentDecision`. */
 export interface ConsentDecision {
@@ -519,6 +534,12 @@ export class CompanyService {
         return { status: 200, body: this.protectedResourceMetadata(), headers: {} };
       }
       if (path === "/mcp" && mcp !== undefined) return await this.#mcpRoute(request, mcp);
+      if (method === "POST" && path === "/poppy/browser-session" && this.config.web) {
+        return await this.#browserSession(request);
+      }
+      if (path.startsWith("/operations/") && this.config.web && this.config.operations) {
+        return await this.#operationPage(request, method, path.split("/")[2] ?? "");
+      }
       if (method === "POST" && path === "/oauth/token") return await this.#token(request);
       if (method === "GET" && path === "/oauth/authorize" && this.config.direct) {
         return await this.#authorize(request);
@@ -591,6 +612,7 @@ export class CompanyService {
       apis.push({ type: "mcp", url: config.mcpUrl, description: mcp.description });
     }
     if (apis.length) document.apis = apis;
+    if (config.web) document.web = { browser_session_endpoint: config.browserSessionEndpoint };
     if (config.operations) {
       document.extensions = {
         operations: { version: OPERATIONS_VERSION, endpoint: config.operationsEndpoint },
@@ -2312,6 +2334,39 @@ export class CompanyService {
     if (!(await this.#supportsOperations(session.clientId))) {
       throw new Refused(403, "extension_required", { extension: "operations" });
     }
+    const current = await this.#usable(operationId, session);
+    if (method === "GET" && !action) return operationResponse(current);
+    if (method === "POST" && action === "cancel") return this.#cancelOperation(operationId);
+    if (method === "POST" && action === "confirm") {
+      return this.#confirm(request, session, current);
+    }
+    throw new Refused(404, "not_found");
+  }
+
+  async #cancelOperation(operationId: string): Promise<CompanyResponse> {
+    const changed = await this.#change<StoredOperation>(
+      RecordKinds.operation,
+      operationId,
+      (latest) => {
+        const now = this.#expired(latest);
+        // In progress, it stays so until the company knows whether it stopped (§7).
+        if (now.operation.state !== "proposed") return now;
+        return {
+          ...now,
+          operation: {
+            ...now.operation,
+            state: "cancelled",
+            result: { summary: "Nothing was changed.", data: null },
+          } as unknown as Operation,
+        };
+      },
+    );
+    if (changed === undefined) throw new Refused(404, "operation_not_found");
+    return operationResponse(changed[1]);
+  }
+
+  /** The operation, if this Session may use it (Operations §3.2). */
+  async #usable(operationId: string, session: IssuedSession): Promise<StoredOperation> {
     const stored = await this.#read<StoredOperation>(RecordKinds.operation, operationId);
     if (
       stored === undefined ||
@@ -2322,32 +2377,7 @@ export class CompanyService {
     }
     const current = await this.#currentOperation(operationId);
     if (current === undefined) throw new Refused(404, "operation_not_found");
-    if (method === "GET" && !action) return operationResponse(current);
-    if (method === "POST" && action === "cancel") {
-      const changed = await this.#change<StoredOperation>(
-        RecordKinds.operation,
-        operationId,
-        (latest) => {
-          const now = this.#expired(latest);
-          // In progress, it stays so until the company knows whether it stopped (§7).
-          if (now.operation.state !== "proposed") return now;
-          return {
-            ...now,
-            operation: {
-              ...now.operation,
-              state: "cancelled",
-              result: { summary: "Nothing was changed.", data: null },
-            } as unknown as Operation,
-          };
-        },
-      );
-      if (changed === undefined) throw new Refused(404, "operation_not_found");
-      return operationResponse(changed[1]);
-    }
-    if (method === "POST" && action === "confirm") {
-      return this.#confirm(request, session, current);
-    }
-    throw new Refused(404, "not_found");
+    return current;
   }
 
   /** The operation now: a proposal past its expiry is recorded as expired. */
@@ -2387,6 +2417,16 @@ export class CompanyService {
     const body = parseJsonStrict(text(request.body));
     const revision = isObject(body) ? body.revision : undefined;
     const approvedBy = isObject(body) ? body.approved_by : undefined;
+    return this.#confirmOperation(session, stored, revision, approvedBy);
+  }
+
+  /** Confirm, whichever channel it comes through: at most once (Operations §4.4, §6). */
+  async #confirmOperation(
+    session: IssuedSession,
+    stored: StoredOperation,
+    revision: unknown,
+    approvedBy: unknown,
+  ): Promise<CompanyResponse> {
     const operation = stored.operation;
     if (this.config.writeScopes.some((scope) => !session.scopes.includes(scope))) {
       throw new Refused(403, "insufficient_scope", { scope: this.config.writeScopes.join(" ") });
@@ -2490,6 +2530,168 @@ export class CompanyService {
             },
     );
     return operationResponse(changed === undefined ? confirmed : changed[1]);
+  }
+
+  // Web browsing (§5, Operations §4.4) -------------------------------------------------
+
+  /** The Session as it is now: its latest unexpired DPoP token's record. */
+  async #liveSession(sessionId: string): Promise<IssuedSession | undefined> {
+    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
+    let live: IssuedSession | undefined;
+    for (const token of Object.values(stored?.tokens ?? {})) {
+      if ((token.tokenType ?? "DPoP") !== "DPoP" || this.#passed(token.expiresAt)) continue;
+      if (live === undefined || new Date(token.expiresAt) > new Date(live.expiresAt)) live = token;
+    }
+    return live;
+  }
+
+  /** Verify a browser assertion with one of the agent's published keys, else `undefined`. */
+  async #browserAssertion(assertion: string): Promise<VerifiedBrowserAssertion | undefined> {
+    let claims: Record<string, unknown>;
+    let algorithm: string;
+    let kid: unknown;
+    try {
+      claims = decodeJwt(assertion);
+      const header = decodeProtectedHeader(assertion);
+      algorithm = String(header.alg ?? "");
+      kid = header.kid;
+    } catch {
+      return undefined;
+    }
+    if (typeof claims.iss !== "string") return undefined;
+    const clientId = claims.iss;
+    const resolver = firstContribution(this.reactor, ClientResolvers, "client");
+    let keys: JsonWebKeySet;
+    try {
+      [, keys] = await resolver.resolve(clientId, keyId(assertion));
+    } catch {
+      return undefined;
+    }
+    for (const key of keys.keys) {
+      if (kid !== undefined && key.kid !== kid) continue;
+      if (key.alg !== undefined && key.alg !== algorithm) continue;
+      try {
+        return await verifyBrowserAssertion(assertion, {
+          publicKey: await importJWK({ ...key } as JWK, algorithm),
+          expectedEndpoint: this.config.browserSessionEndpoint,
+          companyDomain: this.config.domain,
+          expectedClientId: clientId,
+          expectedPairwiseUserId: String(claims.sub ?? ""),
+          expectedSessionId: String(claims.session_id ?? ""),
+          replayCache: this.#replay(),
+          now: this.#now(),
+        });
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Join the agent's own browser to its Session: a verified, one-time browser assertion,
+   * form-posted (never in a URL), answers `303` to its `return_to` with the company's
+   * own cookie, which lives no longer than the Session (§5).
+   */
+  async #browserSession(request: CompanyRequest): Promise<CompanyResponse> {
+    const refused = page(400, "This browser could not join the session.");
+    const verified = await this.#browserAssertion(pairs(text(request.body)).assertion ?? "");
+    if (verified === undefined) return refused;
+    const session = await this.#liveSession(verified.sessionId);
+    if (
+      session === undefined ||
+      !sameOwner([session.clientId, session.pairwiseUserId], [verified.clientId, verified.pairwiseUserId])
+    ) {
+      return refused;
+    }
+    const webCookie = this.#id("web");
+    const pointer: SessionPointer = { sessionId: session.sessionId };
+    await this.store.put(
+      RecordKinds.browserCookie,
+      digest(webCookie),
+      json(pointer),
+      expiry(new Date(new Date(session.expiresAt).getTime() + this.config.accountTokenLifetimeSeconds * 1000)),
+    );
+    return {
+      status: 303,
+      headers: {
+        Location: verified.returnTo,
+        // The company's own cookie: no Max-Age, and only as alive as its Session.
+        "Set-Cookie": `${WEB_COOKIE}=${webCookie}; Path=/; Secure; HttpOnly; SameSite=Lax`,
+        ...NO_STORE,
+      },
+    };
+  }
+
+  /** The Session a browser's cookie stands for, as it is now (§5). */
+  async #webSession(webCookie: string | undefined): Promise<IssuedSession | undefined> {
+    if (webCookie === undefined) return undefined;
+    const pointer = await this.#read<SessionPointer>(RecordKinds.browserCookie, digest(webCookie));
+    if (pointer === undefined) return undefined;
+    const session = await this.#liveSession(pointer.sessionId);
+    // The cookie does not outlive the Session.
+    if (session === undefined) await this.store.delete(RecordKinds.browserCookie, digest(webCookie));
+    return session;
+  }
+
+  /** An operation's page in the browser's Session, where the user confirms or cancels it. */
+  async #operationPage(
+    request: CompanyRequest,
+    method: string,
+    operationId: string,
+  ): Promise<CompanyResponse> {
+    const webCookie = cookie(request, WEB_COOKIE);
+    const session = await this.#webSession(webCookie);
+    if (webCookie === undefined || session === undefined) {
+      return page(401, "Your agent's session has ended. Ask it to open this again.");
+    }
+    let stored: StoredOperation;
+    try {
+      stored = await this.#usable(operationId, session);
+    } catch (error) {
+      if (error instanceof Refused) return page(404, "There is nothing to show here.");
+      throw error;
+    }
+    const pageUrl = `${this.config.base}/operations/${operationId}`;
+    const csrf = bound(webCookie, `operation:${operationId}`);
+    if (method === "POST") {
+      const form = pairs(text(request.body));
+      // This site's page, in the browser this cookie is in: never another site's page,
+      // nor a form copied from another Session's page (Guides, consent pages).
+      if (!fromThisSite(request, this.config.base) || !sameText(form.csrf ?? "", csrf)) {
+        return page(403, "This request did not come from this site.");
+      }
+      try {
+        if (form.action === "cancel") {
+          await this.#cancelOperation(operationId);
+        } else {
+          const revision = /^\d+$/u.test(form.revision ?? "") ? Number(form.revision) : undefined;
+          await this.#confirmOperation(session, stored, revision, form.approved_by ?? "user");
+        }
+      } catch (error) {
+        if (error instanceof Refused) return page(error.status, `Not done: ${escapeHtml(error.error)}.`);
+        throw error;
+      }
+      return { status: 303, headers: { Location: pageUrl, ...NO_STORE } };
+    }
+    if (method !== "GET") return page(405, "Not allowed.");
+    const operation = stored.operation;
+    let body =
+      `<h1>${escapeHtml(this.config.name)}</h1>` +
+      `<section data-operation-id="${escapeHtml(operation.operation_id)}" ` +
+      `data-revision="${operation.revision}" data-state="${operation.state}">` +
+      `<p>${escapeHtml(operation.summary)}</p><p>Status: ${operation.state}</p>`;
+    if (operation.result) body += `<p>${escapeHtml(operation.result.summary)}</p>`;
+    if (operation.state === "proposed") {
+      body +=
+        `<form method="post" action="${pageUrl}">` +
+        `<input type="hidden" name="revision" value="${operation.revision}">` +
+        '<input type="hidden" name="approved_by" value="user">' +
+        `<input type="hidden" name="csrf" value="${csrf}">` +
+        '<button name="action" value="confirm">Confirm</button>' +
+        '<button name="action" value="cancel">Cancel</button></form>';
+    }
+    return page(200, `${body}</section>`);
   }
 }
 

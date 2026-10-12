@@ -103,7 +103,11 @@ implements, of draft 0.1 and Operations v1:
   conversation that is not yours is `conversation_not_found`;
 - Operations proposed by the company agent, read, confirmed at most once
   (latest revision, approval rules, write scopes, extension negotiation),
-  revised (`revise()`), and cancelled.
+  revised (`revise()`), and cancelled;
+- with `web` (`web=True`, `web: true` in TypeScript), the website (§5): the
+  browser-session endpoint joins the agent's own browser to its Session with
+  the company's `poppy_session` cookie, and each operation's page confirms or
+  cancels it, the same operation at most once whichever channel confirms it.
 
 ### Reactor points
 
@@ -227,12 +231,14 @@ TypeScript) when:
 A hosted consent page (`consent_page`) gets no binding: it protects its own
 form, and `consent_decision` refuses every POST for its requests.
 
-The operation page (`/operations/{operation_id}`, Python) does the same with
-the browser's `poppy_session` cookie: its form carries a token derived from
-that cookie and the operation, and a POST that is cross-site, from another
-origin, without the token, or with a token from another browser's page is
+The operation page (`/operations/{operation_id}`, both reference companies)
+does the same with the browser's `poppy_session` cookie: its form carries a
+token derived from that cookie and the operation, and a POST that is
+cross-site, from another origin, without the token, or with a token from
+another browser's page is
 refused with `403`. `test_guide_security.py` and `guide-security.test.mjs`
-test each case.
+test each case, and `test_mcp_and_web.py` and `mcp.test.mjs` the operation
+page.
 
 ### Hosted sign-in pages
 

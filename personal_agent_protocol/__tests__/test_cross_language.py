@@ -223,6 +223,9 @@ def _scenario_json() -> dict[str, Any]:
         "operation_prompt": scenario.operation_prompt,
         "account_prompt": scenario.account_prompt,
         "greeting": scenario.greeting,
+        "mcp_read_tool": scenario.mcp_read_tool,
+        "mcp_propose_tool": scenario.mcp_propose_tool,
+        "web_confirm_form": scenario.web_confirm_form,
     }
 
 

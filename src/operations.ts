@@ -42,6 +42,60 @@ export function operationsEndpoint(document: DiscoveryDocument, metadata: Client
   return typeof endpoint === "string" && endpoint.startsWith("https://") ? endpoint : undefined;
 }
 
+/**
+ * The one operation object, from whichever channel carried it (Operations §4).
+ *
+ * Accepts an API's `202` body (`{operation: …}`), an MCP tool result
+ * (`{structuredContent: {operation: …}}`), a conversation message (`{operation: …}`),
+ * or the operation itself. A payload that carries none, or a malformed one, is
+ * `invalid_operation`.
+ */
+export function operationFrom(payload: unknown): Operation {
+  let candidate: unknown = payload;
+  if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
+    const source = payload as Record<string, unknown>;
+    const structured = source.structuredContent;
+    if (typeof structured === "object" && structured !== null && !Array.isArray(structured) && "operation" in structured) {
+      candidate = (structured as Record<string, unknown>).operation;
+    } else if ("operation" in source) {
+      candidate = source.operation;
+    }
+  }
+  if (candidate === undefined || candidate === null) {
+    throw new OperationError("invalid_operation", "the payload carries no operation");
+  }
+  try {
+    return parseOperation(candidate);
+  } catch (cause) {
+    throw new OperationError("invalid_operation", "the operation is malformed", { cause });
+  }
+}
+
+/**
+ * The operation's `url`, once checked to be the company's own HTTPS page (§4.4, §5).
+ *
+ * The personal agent opens it in its own browser joined to the Session
+ * (`BrowserSessionClient.join({ returnTo })`), never in the user's. What is confirmed
+ * there is the same operation, read back by its ID.
+ */
+export function operationPage(operation: Operation, companyDomain: string): string {
+  if (!operation.url) {
+    throw new OperationError("no_operation_page", "The company gave no page for this operation");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(operation.url);
+  } catch (cause) {
+    throw new OperationError("foreign_operation_page", "An operation's page must be on the company's own domain", { cause });
+  }
+  const host = parsed.hostname.toLowerCase();
+  const domain = companyDomain.toLowerCase().replace(/^www\./u, "");
+  if (parsed.protocol !== "https:" || !(host === domain || host.endsWith(`.${domain}`))) {
+    throw new OperationError("foreign_operation_page", "An operation's page must be on the company's own domain");
+  }
+  return operation.url;
+}
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value !== null && typeof value === "object") {

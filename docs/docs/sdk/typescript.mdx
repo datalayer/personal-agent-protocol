@@ -215,3 +215,94 @@ ensure its HTTP transport connects to an approved resolved address, or send
 metadata traffic through an egress proxy that enforces the same policy. That
 closes the interval in which DNS could return a different address after the
 check.
+
+## OpenAPI and MCP
+
+`ApiClient` calls a company's OpenAPI API through `DpopFetchClient`, as Python's
+`ApiClient` does. A read answers its JSON `body`; a consequential call answers
+`202` with an `operation`, proposed and not performed until it is confirmed with
+`OperationsClient`. A refusal is an `ApiError` carrying the company's code only:
+`sign_in_required` and `insufficient_scope` say in `details.scope` which scope
+signing in would give, and a `429` says in `details.retry_after` how long to
+wait (it is never retried for a write).
+
+```typescript
+import { ApiClient, DpopFetchClient } from "@datalayer/personal-agent-protocol";
+
+const api = new ApiClient({ transport: new DpopFetchClient({ reactor }) });
+const orders = await api.call("GET", "https://shop.example/api/orders", {
+  token: session,
+  tenantId,
+  pairwiseUserId,
+  issuer,
+});
+const proposed = await api.call(
+  "POST",
+  "https://shop.example/api/orders/ord_7Hk2/exchanges",
+  { token: session, tenantId, pairwiseUserId, issuer, body: {} },
+);
+console.log(proposed.status, proposed.operation?.summary);
+```
+
+MCP authorization uses Bearer tokens, so for MCP the personal agent asks for a
+Session Token without a DPoP proof, with `resource` set to the MCP server's
+`url` from discovery (§4.3): `AccountTokenClient.bearerForMcp` signed in (the
+Account Token rotates as on any refresh), or `SessionClient.bearerForMcp`
+signed out. The resource must be an HTTPS URL without a fragment, and the
+token the company returns must be a Bearer token for the same Session. A
+Bearer token works for anyone who holds it, so `McpBearerAuth.fetch` sends it
+only to that exact URL (scheme, host, port and path) and refuses every other
+request before it is made (`bearer_not_for_this_url`); `DpopFetchClient`
+refuses it too. `McpClient` is a minimal Streamable HTTP client (initialize,
+`listTools`, `callTool`) over it; a tool that proposes an operation returns it
+as `result.operation`, the same `Operation` as an API's `202`:
+
+```typescript
+import { AccountTokenClient, McpClient, mcpApi } from "@datalayer/personal-agent-protocol";
+
+const mcpUrl = mcpApi(company.document)!.url;
+const accounts = new AccountTokenClient({ reactor });
+const bearer = await accounts.bearerForMcp(accountTokenReference, {
+  context: { tokenEndpoint, issuer, clientId, tenantId, pairwiseUserId },
+  sessionId: session.sessionId,
+  resource: mcpUrl,
+});
+const mcp = new McpClient({ token: bearer.token!, url: mcpUrl });
+const tools = await mcp.listTools();
+const result = await mcp.callTool("exchange_jacket");
+console.log(tools.length, result.operation?.operation_id);
+```
+
+To use another MCP client, hand it `new McpBearerAuth(token, mcpUrl).fetch`.
+An MCP refusal is an `McpError`: the token error from the Bearer challenge
+(`sign_in_required` with `details.scope`, `invalid_token`), or
+`extension_required` with `details.extension` when the agent did not
+negotiate Operations. `operationFrom` reads the one operation from an API body,
+an MCP result or a message, and `operationPage` checks an operation's `url` is
+on the company's domain before the agent opens it in its own browser.
+
+## Browser sessions at the company
+
+The TypeScript reference company serves the website as the Python one does
+when its configuration sets `web: true`: discovery lists
+`web.browser_session_endpoint`, a verified browser assertion (first use only,
+from a live Session of the same agent and user) answers `303` to its
+`return_to` with the company's own `poppy_session` cookie (`Secure`,
+`HttpOnly`, `SameSite=Lax`, no lifetime of its own, valid only while the
+Session is), and each operation's `url` shows it in that Session with a form
+to confirm or cancel it: the same operation, performed at most once whichever
+channel confirms it. A POST from another site, or without the page's CSRF
+token, decides nothing.
+
+```typescript
+import { CompanyConfig } from "@datalayer/personal-agent-protocol/server";
+
+const config = new CompanyConfig({
+  name: "Example Shop",
+  domain: "shop.example",
+  scopes: ["orders:read", "orders:write"],
+  writeScopes: ["orders:write"],
+  web: true,
+});
+console.log(config.browserSessionEndpoint); // https://shop.example/poppy/browser-session
+```

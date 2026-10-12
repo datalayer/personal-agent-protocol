@@ -18,6 +18,7 @@ import test from "node:test";
 import * as portable from "../../lib/index.js";
 import * as server from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
+import { ControlledBrowser } from "./support/controlled-browser.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
 const ROOT = new URL("../../", import.meta.url);
@@ -353,6 +354,83 @@ example("docs/docs/guides/operations.mdx#0", async (w) => {
     },
   ];
 });
+
+// OpenAPI, MCP and the website ----------------------------------------------------------
+
+example("docs/docs/sdk/typescript.mdx#5", async (w) => {
+  const who = await w.who("shop.example");
+  const { token } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
+  return [
+    { reactor: w.reactor, session: token, ...who },
+    async (values, out) => {
+      assert.equal(values.orders.status, 200);
+      assert.equal(values.orders.body.orders[0].order_id, "ord_7Hk2");
+      assert.equal(values.proposed.status, 202);
+      assert.equal(values.proposed.operation.state, "proposed");
+      assert.ok(out[0].startsWith("202 "));
+    },
+  ];
+});
+
+example("docs/docs/sdk/typescript.mdx#6", async (w) => {
+  const company = await w.discovered("shop.example");
+  const metadata = company.oauthMetadata;
+  const who = await w.who("shop.example");
+  const { token, reference } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
+  return [
+    {
+      reactor: w.reactor,
+      company,
+      accountTokenReference: reference,
+      tokenEndpoint: metadata.token_endpoint,
+      clientId: w.identity.clientId,
+      session: token,
+      ...who,
+    },
+    async (values) => {
+      assert.equal(values.mcpUrl, "https://shop.example/mcp");
+      assert.equal(values.bearer.status, "signed_in");
+      assert.equal(values.bearer.token.tokenType, "Bearer");
+      assert.deepEqual(values.tools.map((tool) => tool.name), ["list_orders", "exchange_jacket"]);
+      assert.equal(values.result.operation.state, "proposed");
+    },
+  ];
+});
+
+example("docs/docs/examples/browser-session.mdx#0", async (w) => {
+  const company = await w.discovered("shop.example");
+  const who = await w.who("shop.example");
+  const { token } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
+  const proposed = await w.transport.request("POST", "https://shop.example/api/orders/ord_7Hk2/exchanges", {
+    ...who,
+    token,
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const operation = portable.parseOperation((await proposed.json()).operation);
+  const browser = new ControlledBrowser(w.fetch);
+  await w.reactor.install({
+    name: "docs-controlled-browser",
+    contributes: [{ point: portable.BrowserFormPosts, value: browser, options: { id: "controlled-browser" } }],
+  });
+  return [
+    { reactor: w.reactor, company, operation, session: token, clientId: w.identity.clientId, pairwiseUserId: who.pairwiseUserId },
+    async (values, out) => {
+      assert.equal(values.page, operation.url);
+      assert.deepEqual(out, [operation.url]);
+      assert.equal(browser.page.status, 200);
+      assert.ok(browser.page.text.includes('data-state="proposed"'));
+    },
+  ];
+});
+
+example("docs/docs/sdk/typescript.mdx#7", async () => [
+  {},
+  async (values, out) => {
+    assert.equal(values.config.web, true);
+    assert.deepEqual(out, ["https://shop.example/poppy/browser-session"]);
+  },
+]);
 
 // Companies and extensions --------------------------------------------------------------
 

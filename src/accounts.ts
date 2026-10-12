@@ -11,7 +11,7 @@ import {
   TokenStores,
   firstContribution,
 } from "./reactor.js";
-import { JWT_CLIENT_ASSERTION, parseSessionToken, type SessionToken } from "./sessions.js";
+import { JWT_CLIENT_ASSERTION, mcpResource, parseSessionToken, type SessionToken } from "./sessions.js";
 
 /**
  * PAP Account Tokens: refresh, rotation, narrowing, and revocation (§4.8, §4.9).
@@ -61,8 +61,18 @@ export interface AccountRefreshOptions {
   readonly sessionId: string;
   /** Narrower scopes; omitted, the company grants what the token holds. */
   readonly scopes?: readonly string[];
-  /** An RFC 8707 resource indicator. */
+  /** An RFC 8707 resource indicator narrowing the DPoP token (for MCP, `bearerForMcp`). */
   readonly resource?: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface AccountMcpBearerOptions {
+  readonly context: AccountTokenContext;
+  readonly sessionId: string;
+  /** The MCP server's `url` from poppy.json: the only place the token works. */
+  readonly resource: string;
+  /** Narrower scopes; omitted, the company grants what the token holds. */
+  readonly scopes?: readonly string[];
   readonly signal?: AbortSignal;
 }
 
@@ -101,7 +111,42 @@ export class AccountTokenClient {
     this.#maxResponseBytes = limit;
   }
 
+  /**
+   * Sign `sessionId` in again with the Account Token behind `reference`.
+   *
+   * `scopes` narrows the request; omitted, the company grants what the token holds.
+   * A `resource` is an RFC 8707 indicator narrowing the DPoP token to one service (for
+   * an MCP server, use `bearerForMcp`).
+   */
   async refresh(reference: string, options: AccountRefreshOptions): Promise<AccountRefreshResult> {
+    const resource = options.resource === undefined ? undefined : httpsUrl(options.resource, "resource");
+    return this.#refresh(reference, options, resource, false);
+  }
+
+  /**
+   * A signed-in Bearer Session Token for one MCP server (§4.3).
+   *
+   * The Account Token request of the Session, without a DPoP proof, with `resource`
+   * set to the MCP server's `url` from poppy.json. The Bearer token works only at that
+   * server (`McpBearerAuth` refuses any other URL); a rotated Account Token is stored
+   * as with `refresh`.
+   */
+  async bearerForMcp(reference: string, options: AccountMcpBearerOptions): Promise<AccountRefreshResult> {
+    let resource: string;
+    try {
+      resource = mcpResource(options.resource);
+    } catch (cause) {
+      throw new AuthorizationError("invalid_url", "an MCP resource must be an HTTPS URL without a fragment", { cause });
+    }
+    return this.#refresh(reference, options, resource, true);
+  }
+
+  async #refresh(
+    reference: string,
+    options: Omit<AccountRefreshOptions, "resource">,
+    resource: string | undefined,
+    bearer: boolean,
+  ): Promise<AccountRefreshResult> {
     if (!opaque.test(options.sessionId)) {
       throw new AuthorizationError("invalid_context", "sessionId must be an opaque identifier");
     }
@@ -109,7 +154,6 @@ export class AccountTokenClient {
     if (requested && (requested.length === 0 || requested.some((scope) => !scopeToken.test(scope)))) {
       throw new AuthorizationError("invalid_scope", "At least one valid OAuth scope is required");
     }
-    const resource = options.resource === undefined ? undefined : httpsUrl(options.resource, "resource");
     const tokenEndpoint = httpsUrl(options.context.tokenEndpoint, "tokenEndpoint");
     const lock = firstContribution(this.#reactor, AccountTokenLocks, "Account Token lock");
     const store = firstContribution(this.#reactor, TokenStores, "token store");
@@ -134,7 +178,7 @@ export class AccountTokenClient {
           if (resource) form.set("resource", resource);
           return form;
         },
-        true,
+        !bearer,
         options.signal,
       );
       if (!response.ok) {
@@ -159,10 +203,14 @@ export class AccountTokenClient {
           cause,
         });
       }
-      if (token.tokenType !== "DPoP" || !token.signedIn || token.sessionId !== options.sessionId) {
+      if (
+        token.tokenType !== (bearer ? "Bearer" : "DPoP") ||
+        !token.signedIn ||
+        token.sessionId !== options.sessionId
+      ) {
         throw new AuthorizationError(
           "invalid_token_response",
-          "A refresh must sign in the same proof-bound Session",
+          "A refresh must sign in the same Session with the token type asked for",
           { statusCode: response.status },
         );
       }

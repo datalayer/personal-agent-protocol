@@ -9,6 +9,7 @@ title: TypeScript API reference
 This inventory is generated from the package's public export surface.
 Unknown or internal symbols are deliberately excluded.
 
+- [`AccountMcpBearerOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Interface; entry `.`. Public TypeScript interface `AccountMcpBearerOptions`.
 - [`AccountRefreshOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Interface; entry `.`. Public TypeScript interface `AccountRefreshOptions`.
 - [`AccountRefreshResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Interface; entry `.`. Public TypeScript interface `AccountRefreshResult`.
 - [`AccountRevocationResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Interface; entry `.`. Public TypeScript interface `AccountRevocationResult`.
@@ -21,7 +22,12 @@ Unknown or internal symbols are deliberately excluded.
 - [`AgentIdentityClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/identity.ts) — Class; entry `.`. Safely retrieve and bind a personal agent's public identity documents.
 - [`AgentIdentityClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/identity.ts) — Interface; entry `.`. Public TypeScript interface `AgentIdentityClientOptions`.
 - [`AgentProtocol`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `AgentProtocol`.
+- [`ApiCallOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Interface; entry `.`. Public TypeScript interface `ApiCallOptions`.
+- [`ApiClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Class; entry `.`. Read and change through a company's API, the credentials host-owned.
+- [`ApiClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Interface; entry `.`. Public TypeScript interface `ApiClientOptions`.
 - [`ApiDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `ApiDescriptor`.
+- [`ApiError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Class; entry `.`. The company refused an API call; `code` is its error, never its body.
+- [`ApiResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Interface; entry `.`. A successful API answer: the body, or the operation it proposes (`202`).
 - [`approve`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Value; entry `.`. Public TypeScript value `approve`.
 - [`AuthCapabilities`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `AuthCapabilities`.
 - [`AuthorizationCodeGrant`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/auth.ts) — Class; entry `.`. Public TypeScript class `AuthorizationCodeGrant`.
@@ -121,6 +127,14 @@ Unknown or internal symbols are deliberately excluded.
 - [`JWT_CLIENT_ASSERTION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Const; entry `.`. Public TypeScript const `JWT_CLIENT_ASSERTION`.
 - [`KNOWN_API_TYPES`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Const; entry `.`. The API types this SDK speaks.
 - [`knownApis`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Function; entry `.`. The advertised APIs of a type this SDK speaks, in the company's order.
+- [`MCP_PROTOCOL_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Const; entry `.`. Public TypeScript const `MCP_PROTOCOL_VERSION`.
+- [`mcpApi`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Function; entry `.`. The company's MCP server, when it lists one.
+- [`McpBearerAuth`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Class; entry `.`. Send a Bearer Session Token to one MCP server's URL, and nowhere else.
+- [`McpBearerOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Interface; entry `.`. Public TypeScript interface `McpBearerOptions`.
+- [`McpClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Class; entry `.`. Initialize, list, and call tools on one MCP server with a resource-bound Bearer token.
+- [`McpClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Interface; entry `.`. Public TypeScript interface `McpClientOptions`.
+- [`McpError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Class; entry `.`. The MCP server refused a request; `code` is its token or JSON-RPC error.
+- [`McpToolResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Interface; entry `.`. A tool's answer; `operation` is set when it proposed one (Operations §4.2).
 - [`MediatedCodeOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mediated.ts) — Interface; entry `.`. Public TypeScript interface `MediatedCodeOptions`.
 - [`MediatedField`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mediated.ts) — Interface; entry `.`. PAP Mediated Sign-In: the user's credentials, relayed to one endpoint (§4.7).
 - [`MediatedSignInClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mediated.ts) — Class; entry `.`. Relay a user's credentials to the company's mediated endpoint, once.
@@ -136,6 +150,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `Operation`.
 - [`OperationConfirmation`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `OperationConfirmation`.
 - [`OperationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Class; entry `.`. Public TypeScript class `OperationError`.
+- [`operationFrom`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The one operation object, from whichever channel carried it (Operations §4).
+- [`operationPage`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The operation's `url`, once checked to be the company's own HTTPS page (§4.4, §5).
 - [`OperationRequestOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Interface; entry `.`. Public TypeScript interface `OperationRequestOptions`.
 - [`OperationResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `OperationResult`.
 - [`OPERATIONS_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Const; entry `.`. PAP Operations extension v1 on the personal agent's side, as in Python:

@@ -60,6 +60,8 @@ try {
     identity: await identity(config.agent),
     otherIdentity: await identity(config.other),
     fetch: tlsFetch({ port: config.port, ca: readFileSync(config.ca) }),
+    // The agent's own browser: its own connections and cookie jar.
+    browserFetch: tlsFetch({ port: config.port, ca: readFileSync(config.ca) }),
     driver,
     scenario: config.scenario,
     clock,

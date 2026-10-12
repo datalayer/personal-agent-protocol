@@ -129,6 +129,7 @@ export {
   type SessionAssertionClaims,
   type SessionAssertionOptions,
   type SessionClientOptions,
+  type McpBearerOptions,
   type SessionGrantOptions,
   type SessionRenewOptions,
   type SessionRequestOptions,
@@ -155,7 +156,26 @@ export {
   extensionRequired,
   negotiateExtensions,
 } from "./extensions.js";
-export { KNOWN_API_TYPES, conversationEndpoint, knownApis, openapiUrl } from "./apis.js";
+export {
+  ApiClient,
+  ApiError,
+  KNOWN_API_TYPES,
+  conversationEndpoint,
+  knownApis,
+  openapiUrl,
+  type ApiCallOptions,
+  type ApiClientOptions,
+  type ApiResponse,
+} from "./apis.js";
+export {
+  MCP_PROTOCOL_VERSION,
+  McpBearerAuth,
+  McpClient,
+  McpError,
+  mcpApi,
+  type McpClientOptions,
+  type McpToolResult,
+} from "./mcp.js";
 export {
   parseClientMetadata,
   parseConversationEvent,
@@ -191,6 +211,7 @@ export {
 export {
   AccountTokenClient,
   REFRESH_TOKEN_GRANT,
+  type AccountMcpBearerOptions,
   type AccountRefreshOptions,
   type AccountRefreshResult,
   type AccountRevocationResult,
@@ -216,6 +237,8 @@ export {
   StandingPermissionStores,
   approve,
   covers,
+  operationFrom,
+  operationPage,
   operationsEndpoint,
   termsDigest,
   type ConfirmOptions,

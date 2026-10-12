@@ -11,6 +11,7 @@ import { exportJWK, generateKeyPair, importJWK } from "jose";
 
 import {
   AuthorizationStateStores,
+  BrowserFormPosts,
   BrowserHandoffs,
   Clocks,
   DpopProofProviders,
@@ -228,8 +229,11 @@ export class ScriptedInput {
   }
 }
 
-/** A personal agent's Reactor host: its signer, DPoP keys, clock, stores, browser, input. */
-export async function agentHost({ identity, fetch, clock, answers = [] }) {
+/**
+ * A personal agent's Reactor host: its signer, DPoP keys, clock, stores, browser, input,
+ * and, when given, its own controlled browser (`pap.browserFormPost`).
+ */
+export async function agentHost({ identity, fetch, clock, answers = [], controlledBrowser }) {
   const state = new Map();
   const tokens = new Map();
   const keys = new Map();
@@ -282,6 +286,9 @@ export async function agentHost({ identity, fetch, clock, answers = [] }) {
         },
         { point: BrowserHandoffs, value: browser, options: { id: "browser" } },
         { point: ProtectedInputs, value: input, options: { id: "trusted-input" } },
+        ...(controlledBrowser === undefined
+          ? []
+          : [{ point: BrowserFormPosts, value: controlledBrowser, options: { id: "controlled-browser" } }]),
       ],
     },
   ]);

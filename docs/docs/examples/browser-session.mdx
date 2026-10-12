@@ -48,6 +48,26 @@ sequenceDiagram
 form POST through Reactor. It returns only the endpoint, safe return location,
 and expiry; the compact assertion never leaves the host boundary.
 
+In TypeScript, the agent opens an operation's page in its own browser (the
+host's `BrowserFormPosts` contribution, with its own cookie jar), after
+`operationPage` has checked the page is on the company's domain:
+
+```typescript
+import { BrowserSessionClient, operationPage } from "@datalayer/personal-agent-protocol";
+
+const domain = company.document.organization.domain;
+const page = operationPage(operation, domain);
+const joined = await new BrowserSessionClient({ reactor }).join({
+  clientId,
+  pairwiseUserId,
+  browserSessionEndpoint: company.document.web!.browser_session_endpoint!,
+  sessionId: session.sessionId,
+  returnTo: page,
+  companyDomain: domain,
+});
+console.log(joined.returnTo);
+```
+
 ## Company responsibilities
 
 `verify_browser_assertion` in Python and `verifyBrowserAssertion` from the
@@ -65,6 +85,16 @@ After verification, the company creates its own cookie. That cookie must be
 sign-out, and scope changes, and never outlive the PAP Session. Cookie creation
 is intentionally a company web-framework responsibility rather than an SDK
 side effect.
+
+Both reference companies (Python and TypeScript, with `web` set in their
+configuration) do this at `/poppy/browser-session`: the `poppy_session` cookie
+is `Secure`, `HttpOnly` and `SameSite=Lax`, has no lifetime of its own, and
+stands for the Session only while it is live, so signing out reaches the
+website on its next request. Each operation's page (`/operations/{id}`) shows
+it in that Session and confirms or cancels it through a same-site form with a
+CSRF token bound to the cookie; the conformance cases
+`lifecycle.browser-joins-session`, `lifecycle.browser-assertion-refused`, and
+`operations.web-confirm-at-most-once` pass in all four language pairings.
 
 ## What the examples prove
 

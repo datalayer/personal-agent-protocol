@@ -42,6 +42,8 @@ test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", 
       identity: atlas,
       otherIdentity: plain,
       fetch: tlsFetch({ port: company.port, ca: tls.ca, domains: company.domains }),
+      // The agent's own browser: its own connections and cookie jar.
+      browserFetch: tlsFetch({ port: company.port, ca: tls.ca, domains: company.domains }),
       scenario,
       clock,
       driver: {
@@ -80,7 +82,7 @@ test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", 
     }
     const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
     assert.deepEqual(Object.keys(failed), Object.keys(GAPS), JSON.stringify(failed));
-    assert.ok(report.summary.passed >= 80, JSON.stringify(report.summary));
+    assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
   } finally {
     await company.close();
   }

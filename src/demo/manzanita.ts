@@ -4,7 +4,8 @@
  * The port of the Python `personal_agent_protocol.demo.manzanita`, for tests
  * and the language pairings: a user wants to return a jacket that is not
  * warm enough. Manzanita offers Direct, Device and Mediated Sign-In, a company
- * agent, an OpenAPI API, and the Operations extension. Its parts are
+ * agent, an OpenAPI API, an MCP server, web pages for its operations joined to the
+ * agent's Session (§5), and the Operations extension. Its parts are
  * contributions:
  *
  * - `ManzanitaAccounts` (`pap.company.accounts`): one account, Ada's, with a
@@ -78,6 +79,7 @@ export const CONFIG_OPTIONS: CompanyConfigOptions = {
     ["password", "Password", true],
   ],
   customScopes: { "orders:read": "See your orders", "orders:write": "Exchange and return items" },
+  web: true,
 };
 export const CONFIG = new CompanyConfig(CONFIG_OPTIONS);
 

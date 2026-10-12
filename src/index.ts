@@ -272,3 +272,19 @@ export {
   type TermLimit,
   type UserApproval,
 } from "./operations.js";
+export {
+  PAP_ACTION_CLASSES,
+  PAP_CONFIRM_TYPE,
+  PAP_CONFIRM_VERSION,
+  isPapConfirm,
+  isPapConfirmData,
+  isPapSessionShown,
+  papConfirmDisplay,
+  papConfirmText,
+  type DisplayLike,
+  type PapActionClass,
+  type PapConfirmData,
+  type PapConfirmDisplay,
+  type PapSessionShown,
+  type PapTermsWas,
+} from "./ui.js";

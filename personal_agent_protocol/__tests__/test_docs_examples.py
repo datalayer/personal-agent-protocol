@@ -565,6 +565,22 @@ async def _confirm(docs: Docs) -> tuple[dict[str, Any], Check]:
     }, check
 
 
+@case("docs/docs/guides/operations.mdx#3")
+async def _confirm_display(docs: Docs) -> tuple[dict[str, Any], Check]:
+    proposed = await _proposed(docs, "shop.example")
+    operation = proposed["operation"]
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        from personal_agent_protocol.ui import PAP_CONFIRM_TYPE
+
+        shown = namespace["meta"]["reactor.ui/display"]
+        assert shown["type"] == PAP_CONFIRM_TYPE and shown["data"]["summary"] == operation.summary
+        assert namespace["said"].startswith(f"shop.example asks you to confirm: {operation.summary}")
+        assert "ses_docs" not in json.dumps(namespace["display"].model_view())
+
+    return {"operation": operation, "session_id": "ses_docs"}, check
+
+
 @case("docs/docs/guides/operations.mdx#2")
 async def _standing(docs: Docs) -> tuple[dict[str, Any], Check]:
     domain = northwind_demo.DOMAIN

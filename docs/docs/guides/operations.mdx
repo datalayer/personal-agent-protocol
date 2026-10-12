@@ -90,6 +90,56 @@ standing permission is itself an operation the user approves.
 `cancel()` turns a proposal into `cancelled`; an operation in progress stops
 if the company can stop it. Closing a conversation does not cancel anything.
 
+## Show what is asked: `PapConfirm`
+
+A host that asks the person in a page, not only in its own interface, sends
+the operation as a [Reactor](https://github.com/datalayer/reactor) display:
+`PapConfirm` (`personal_agent_protocol.ui`, the `ui` extra), of type
+`application/vnd.datalayer.pap.confirm+json`, version 1. An MCP tool puts it
+in its result's `_meta["reactor.ui/display"]`; any page with a renderer for
+the type draws the card, and a page without one shows its text.
+
+```python
+from personal_agent_protocol.ui import PapConfirm, PapSessionShown
+
+display = PapConfirm(
+    company="shop.example",
+    summary=operation.summary,                  # the company's words, verbatim
+    terms=operation.terms or {},
+    operation_ref=operation.operation_id,
+    revision=operation.revision,
+    does="buy",                                 # what it does, as the application's Rules class it
+    session=PapSessionShown.of(session_id, signed_in=True),
+    expires_at=operation.expires_at,
+    only_the_person=operation.user_approval_required,
+)
+meta = display.tool_meta()   # an MCP result's `_meta`: the page draws the card
+said = display.text()        # what a page without a renderer, a transcript and a model read
+```
+
+- `text()` is *shop.example asks you to confirm: … (version 1)*, and
+  *Changed since version 1.* after it when `was` names the revision a newer
+  one replaced.
+- The Session is a one-way reference (`PapSessionShown.of`: 12 hex digits of
+  the SHA-256 of its ID), never its ID or token, and only the page sees even
+  that: `model_view()` tells a model the company's words, the terms, what it
+  does, the revision and whether the person is signed in there.
+- The buttons are the host's own. Approving still goes through `approve()`
+  in the host, never because a model saw the display.
+
+On the page, the TypeScript SDK types the same display and checks it:
+
+```typescript
+import { isPapConfirm } from "@datalayer/personal-agent-protocol";
+
+const display = result._meta["reactor.ui/display"];
+const asked = isPapConfirm(display) ? display.data : null; // PapConfirmData, or nothing to draw
+```
+
+`isPapConfirm` refuses another type or version, a missing or unknown field,
+and a Session given by anything but its reference. Both SDKs are checked
+against one committed example, `protocol/fixtures/pap-confirm-display.json`.
+
 ## Security boundary
 
 - Conversation text never confirms an operation, whoever wrote it.

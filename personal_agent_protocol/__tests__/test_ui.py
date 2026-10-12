@@ -2,15 +2,24 @@
 #
 # BSD 3-Clause License
 
-"""A sign-in waiting for the person, as a reactor.ui display."""
+"""A sign-in waiting for the person, and an operation to confirm, as reactor.ui displays."""
 
+import hashlib
 import json
+from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from personal_agent_protocol import build_pap_reactor
-from personal_agent_protocol.ui import PAP_SIGN_IN_TYPE, PapSignIn
+from personal_agent_protocol.ui import (
+    PAP_CONFIRM_TYPE,
+    PAP_SIGN_IN_TYPE,
+    PapConfirm,
+    PapSessionShown,
+    PapSignIn,
+)
 
 DEVICE = {
     "status": "waiting_for_the_person",
@@ -93,6 +102,102 @@ async def test_the_core_plugin_declares_the_type() -> None:
     platform, http = build_pap_reactor()
     try:
         assert platform.display_types().get(PAP_SIGN_IN_TYPE, 1) is PapSignIn
+    finally:
+        if http is not None:
+            await http.aclose()
+
+
+# An operation waiting for the person to confirm it (PapConfirm).
+
+FIXTURE = Path(__file__).parents[2] / "protocol" / "fixtures" / "pap-confirm-display.json"
+SESSION_ID = "ses_8c1f0e6a2b4d4f0e9a7c3d5b1e2f4a6c"
+
+
+def _confirm(**overrides: Any) -> PapConfirm:
+    fields: dict[str, Any] = {
+        "id": "confirm-op_7Hq2",
+        "company": "manzanita.example",
+        "summary": "Exchange the Ridge Jacket (M) for the Alpine Parka (M). You pay USD 70.00 more.",
+        "terms": {
+            "price_difference": {"amount": "70.00", "currency": "USD"},
+            "ships_in_days": 5,
+        },
+        "operation_ref": "op_7Hq2",
+        "revision": 2,
+        "does": "buy",
+        "session": PapSessionShown.of(SESSION_ID, signed_in=True),
+        "expires_at": "2026-10-12T18:00:00+00:00",
+        "was": {"revision": 1, "terms": {"price_difference": {"amount": "70.00", "currency": "USD"}, "ships_in_days": 2}},
+        "only_the_person": True,
+    }
+    fields.update(overrides)
+    return PapConfirm.model_validate(fields)
+
+
+def test_an_operation_to_confirm_is_the_committed_display_both_sdks_read() -> None:
+    # The TypeScript SDK reads the same file (src/__tests__/ui.test.mjs): one shape on both tiers.
+    wire = _confirm().wire().model_dump(mode="json")
+    assert wire == json.loads(FIXTURE.read_text())
+    assert wire["type"] == PAP_CONFIRM_TYPE and wire["version"] == 1
+    assert wire["data"]["session"] == {
+        "ref": hashlib.sha256(SESSION_ID.encode()).hexdigest()[:12],
+        "signed_in": True,
+    }
+    assert wire["text"] == (
+        "manzanita.example asks you to confirm: Exchange the Ridge Jacket (M) for the Alpine Parka (M). "
+        "You pay USD 70.00 more. (version 2) Changed since version 1."
+    )
+
+
+def test_a_model_is_told_what_is_asked_never_the_session() -> None:
+    display = _confirm()
+    view = display.model_view()
+    # The company's words, the terms, what it does and which revision: what a model needs to confirm it.
+    assert view["data"]["summary"] == display.summary and view["data"]["does"] == "buy"
+    assert (view["data"]["operation_ref"], view["data"]["revision"]) == ("op_7Hq2", 2)
+    # Whether the person is signed in there, never which Session: not its ID, not even the reference.
+    assert view["data"]["session"] == {"signed_in": True}
+    seen = json.dumps(view)
+    assert SESSION_ID not in seen and display.session is not None and display.session.ref not in seen
+
+
+def test_the_session_is_shown_by_a_one_way_reference_only() -> None:
+    with pytest.raises(ValidationError):
+        PapSessionShown(ref=SESSION_ID, signed_in=True)
+    with pytest.raises(ValueError):
+        PapSessionShown.of("", signed_in=False)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"company": "  "},
+        {"summary": ""},
+        {"operation_ref": ""},
+        {"revision": 0},
+        {"does": "spend"},
+        {"was": {"revision": 2, "terms": {}}},
+        {"token": "secret"},
+    ],
+)
+def test_an_operation_to_confirm_is_refused_when_it_says_less_or_other(overrides: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        _confirm(**overrides)
+
+
+def test_the_confirm_tool_meta_carries_the_wire_display() -> None:
+    display = _confirm(session=None, was=None, does=None, only_the_person=False)
+    meta = display.tool_meta()["reactor.ui/display"]
+    assert meta["type"] == PAP_CONFIRM_TYPE and meta["text"] == display.text()
+    assert meta["data"]["session"] is None and meta["data"]["was"] is None
+
+
+async def test_the_core_plugin_declares_the_confirm_type() -> None:
+    platform, http = build_pap_reactor()
+    try:
+        registry = platform.display_types()
+        assert registry.get(PAP_CONFIRM_TYPE, 1) is PapConfirm
+        assert registry.parse(json.loads(FIXTURE.read_text())) == _confirm()
     finally:
         if http is not None:
             await http.aclose()

@@ -6,6 +6,18 @@
 
 # Changelog
 
+## Unreleased
+
+- **`PapConfirm`, an operation to confirm as a Reactor display**
+  ([docs](docs/docs/guides/operations.mdx)): `personal_agent_protocol.ui`
+  declares `application/vnd.datalayer.pap.confirm+json` v1 — the company's
+  words and terms, the revision, what it does (a Rules class), the revision it
+  replaced, whether only the person may confirm it, and the Session by a
+  one-way reference (`PapSessionShown.of`) the model never sees. The core
+  plugin registers it beside `PapSignIn`. TypeScript: `PapConfirmData`,
+  `isPapConfirm`, `papConfirmText`, `papConfirmDisplay`, checked against the
+  example the Python tests write (`protocol/fixtures/pap-confirm-display.json`).
+
 ## 0.11.0 (2026-10-12)
 
 The SDKs of 0.10.0, released as the first complete Python and TypeScript

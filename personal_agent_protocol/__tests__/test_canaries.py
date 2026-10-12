@@ -36,7 +36,8 @@ may appear in:
   below);
 - what a model reads: every response body but the token and device
   endpoints' (conversation replies, API and MCP results, operation
-  summaries, mediated sign-in answers), each `PapSignIn.model_view()`, and the
+  summaries, mediated sign-in answers), each `PapSignIn.model_view()`, each
+  `PapConfirm.model_view()` naming a Session by its reference, and the
   examples' tool results.
 """
 
@@ -492,7 +493,7 @@ async def test_no_credential_reaches_logs_errors_urls_or_model_text(harvest: Har
 
 
 def _sign_in_views(harvest: Harvest) -> list[tuple[str, str]]:
-    from personal_agent_protocol.ui import PapSignIn
+    from personal_agent_protocol.ui import PapConfirm, PapSessionShown, PapSignIn
 
     user_codes = sorted(harvest.secrets["user code"])
     views = []
@@ -516,6 +517,22 @@ def _sign_in_views(harvest: Harvest) -> list[tuple[str, str]]:
     )
     views.append(("PapSignIn(mediated).model_view()", json.dumps(mediated.model_view())))
     assert user_codes and len(views) > len(user_codes) + 1
+    # An operation to confirm names its Session by a one-way reference: even one a host
+    # derived from a Session Token tells a model neither the token nor the reference.
+    session_tokens = sorted(harvest.secrets["DPoP access token"])
+    for token in session_tokens:
+        display = PapConfirm(
+            company="manzanita.example",
+            summary="Exchange the Ridge Jacket (M) for the Alpine Parka (M).",
+            operation_ref="op_canary",
+            revision=1,
+            does="buy",
+            session=PapSessionShown.of(token, signed_in=True),
+        )
+        assert display.session is not None
+        assert display.session.ref not in json.dumps(display.model_view())
+        views.append(("PapConfirm(session).model_view()", json.dumps(display.model_view())))
+    assert session_tokens
     return views
 
 

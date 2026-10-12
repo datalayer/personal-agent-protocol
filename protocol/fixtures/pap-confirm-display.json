@@ -1,0 +1,37 @@
+{
+  "type": "application/vnd.datalayer.pap.confirm+json",
+  "version": 1,
+  "id": "confirm-op_7Hq2",
+  "text": "manzanita.example asks you to confirm: Exchange the Ridge Jacket (M) for the Alpine Parka (M). You pay USD 70.00 more. (version 2) Changed since version 1.",
+  "data": {
+    "company": "manzanita.example",
+    "summary": "Exchange the Ridge Jacket (M) for the Alpine Parka (M). You pay USD 70.00 more.",
+    "terms": {
+      "price_difference": {
+        "amount": "70.00",
+        "currency": "USD"
+      },
+      "ships_in_days": 5
+    },
+    "operation_ref": "op_7Hq2",
+    "revision": 2,
+    "does": "buy",
+    "session": {
+      "ref": "2efc4a6dcd6f",
+      "signed_in": true
+    },
+    "expires_at": "2026-10-12T18:00:00Z",
+    "was": {
+      "revision": 1,
+      "terms": {
+        "price_difference": {
+          "amount": "70.00",
+          "currency": "USD"
+        },
+        "ships_in_days": 2
+      }
+    },
+    "only_the_person": true
+  },
+  "actions": []
+}

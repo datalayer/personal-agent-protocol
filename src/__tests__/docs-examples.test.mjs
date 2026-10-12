@@ -361,6 +361,16 @@ example("docs/docs/guides/operations.mdx#0", async (w) => {
   ];
 });
 
+example("docs/docs/guides/operations.mdx#1", async () => {
+  const shown = JSON.parse(readFileSync(new URL("protocol/fixtures/pap-confirm-display.json", ROOT), "utf8"));
+  return [
+    { result: { _meta: { "reactor.ui/display": shown } } },
+    async (values) => {
+      assert.deepEqual(values.asked, shown.data);
+    },
+  ];
+});
+
 // OpenAPI, MCP and the website ----------------------------------------------------------
 
 example("docs/docs/sdk/typescript.mdx#5", async (w) => {

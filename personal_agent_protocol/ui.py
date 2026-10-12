@@ -4,6 +4,10 @@
 
 """PAP's displays for ``reactor.ui``: what a page draws for a PAP answer.
 
+Two displays: :class:`PapSignIn`, a sign-in waiting for the person, and
+:class:`PapConfirm`, an operation a company proposed, waiting for the person to
+confirm it.
+
 A tool that starts a sign-in answers with a :class:`PapSignIn` beside its
 result — in an MCP result's ``_meta["reactor.ui/display"]`` — and any page with
 a renderer for ``application/vnd.datalayer.pap.sign-in+json`` draws *Sign in
@@ -17,16 +21,19 @@ of the SDK keeps working on an older reactor.
 What the person types never travels in a display, and the page to open and
 the code to enter are for the page only: a device's verification URL may
 carry the code, so :meth:`~reactor.ui.Display.model_view` leaves both out and
-the text names only the company's domain.
+the text names only the company's domain. Nor does a Session's ID or token:
+a :class:`PapConfirm` names the Session by a one-way reference, and only the
+page sees even that.
 """
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from reactor.ui import (  # type: ignore[import-untyped]
     DISPLAY_META_KEY,
     Display,
@@ -36,6 +43,12 @@ from reactor.ui import (  # type: ignore[import-untyped]
 
 #: The display type of a sign-in waiting for the person.
 PAP_SIGN_IN_TYPE = "application/vnd.datalayer.pap.sign-in+json"
+
+#: The display type of an operation waiting for the person to confirm it.
+PAP_CONFIRM_TYPE = "application/vnd.datalayer.pap.confirm+json"
+
+#: What confirming an operation does, as an application's Rules class it.
+PapActionClass = Literal["read", "write", "send", "buy", "delete", "publish"]
 
 #: The status a sign-in tool answers while the person has something to do.
 WAITING_FOR_THE_PERSON = "waiting_for_the_person"
@@ -113,4 +126,108 @@ class PapSignIn(Display):
         return {DISPLAY_META_KEY: self.wire().model_dump(mode="json")}
 
 
-__all__ = ["PAP_SIGN_IN_TYPE", "WAITING_FOR_THE_PERSON", "PapSignIn"]
+class PapSessionShown(BaseModel):
+    """The Session an operation is confirmed in, as the person's card names it.
+
+    ``ref`` is one-way — the first 12 hex digits of the SHA-256 of the
+    Session's ID: enough to tell two Sessions apart, never the ID, and never
+    the Session Token. Make one with :meth:`of`. Only the page sees the
+    reference; a model is told whether the person is signed in there.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ref: Annotated[str, audience("page"), Field(pattern=r"^[0-9a-f]{12}$")]
+    signed_in: bool
+
+    @classmethod
+    def of(cls, session_id: str, *, signed_in: bool) -> PapSessionShown:
+        """The reference of a Session's ID, and whether the person is signed in there."""
+        if not session_id:
+            raise ValueError("a Session is shown by the reference of its ID, and this one has none")
+        return cls(ref=hashlib.sha256(session_id.encode()).hexdigest()[:12], signed_in=signed_in)
+
+
+class PapTermsWas(BaseModel):
+    """The revision a revised operation replaced, and its terms."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    revision: int = Field(ge=1)
+    terms: dict[str, Any] = Field(default_factory=dict)
+
+
+@display_type(PAP_CONFIRM_TYPE, version=1)
+class PapConfirm(Display):
+    """An operation a company proposed, waiting for the person to confirm it (Operations).
+
+    What the person approves is exactly this revision: the company's own
+    ``summary``, verbatim, and its ``terms``. ``does`` is what confirming it
+    does, as an application's Rules class it (``buy`` when a term moves money);
+    ``session`` the Session it is confirmed in, by a one-way reference;
+    ``was`` the revision it replaced, when the company changed its terms;
+    ``only_the_person`` that the company (or the application's Rule) wants the
+    person's own decision, so no approval given in advance covers it.
+
+    The buttons are the host's own: a display says what is asked, and the
+    person answers where the host asks them.
+    """
+
+    #: The company, as the person knows it (its domain or its name).
+    company: str = Field(min_length=1)
+    #: The company's own words, shown verbatim, never rephrased.
+    summary: str = Field(min_length=1)
+    terms: dict[str, Any] = Field(default_factory=dict)
+    #: The operation's reference at the company; with ``revision``, what is confirmed.
+    operation_ref: str = Field(min_length=1)
+    revision: int = Field(ge=1)
+    does: PapActionClass | None = None
+    session: PapSessionShown | None = None
+    #: Until when the company holds these terms.
+    expires_at: datetime | None = None
+    was: PapTermsWas | None = None
+    only_the_person: bool = False
+
+    @field_validator("company")
+    @classmethod
+    def _company(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("an operation to confirm names its company")
+        return value.strip()
+
+    @field_validator("summary")
+    @classmethod
+    def _summary(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("an operation to confirm says what it is, in the company's words")
+        return value
+
+    @model_validator(mode="after")
+    def _was_earlier(self) -> PapConfirm:
+        if self.was is not None and self.was.revision >= self.revision:
+            raise ValueError("the revision an operation replaced comes before it")
+        return self
+
+    def text(self) -> str:
+        # Neither the Session's reference nor anything of the page's alone:
+        # the text is also what a model and a transcript read.
+        said = f"{self.company} asks you to confirm: {self.summary} (version {self.revision})"
+        if self.was is not None:
+            said += f" Changed since version {self.was.revision}."
+        return said
+
+    def tool_meta(self) -> dict[str, Any]:
+        """The ``_meta`` an MCP tool result carries this display in."""
+        return {DISPLAY_META_KEY: self.wire().model_dump(mode="json")}
+
+
+__all__ = [
+    "PAP_CONFIRM_TYPE",
+    "PAP_SIGN_IN_TYPE",
+    "WAITING_FOR_THE_PERSON",
+    "PapActionClass",
+    "PapConfirm",
+    "PapSessionShown",
+    "PapSignIn",
+    "PapTermsWas",
+]

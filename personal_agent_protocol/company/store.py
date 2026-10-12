@@ -405,7 +405,13 @@ class AccountAgent:
 
 @dataclass(frozen=True)
 class KnownClient:
-    """What a verified personal agent declared: the extensions it supports."""
+    """What a verified personal agent declared: the extensions it supports.
+
+    One record per `client_id` that authenticated, kept without expiry. Only
+    an agent with valid metadata and keys at its own domain adds one, but an
+    operator of many domains can add many: a company bounds that with its
+    `pap.company.clientPolicy` (or a store that ages records out).
+    """
 
     extensions: tuple[str, ...] = ()
 

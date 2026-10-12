@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import shlex
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -567,8 +568,20 @@ def _takes(names: list[str]) -> str:
     return ", ".join(names) if names else "no arguments"
 
 
+#: What an approval's summary may quote: an opaque Session or operation ID, nothing else.
+_QUOTABLE = re.compile(r"[A-Za-z0-9_-]{1,256}")
+
+
 async def _approved(runtime: CliRuntime, action: SessionAction, values: Mapping[str, str]) -> None:
-    """Ask the host's approval surface; anything but `True` means nothing is done."""
+    """Ask the host's approval surface; anything but `True` means nothing is done.
+
+    The summary the user approves quotes only validated identifiers: an argument
+    carrying other text (a line break, words that read like another action) is
+    refused before anything is shown, so the user approves what is done.
+    """
+
+    if any(_QUOTABLE.fullmatch(value) is None for value in values.values()):
+        raise ActionUsageError("invalid_arguments", "Arguments are opaque identifiers")
 
     try:
         surface = optional_contribution(runtime.reactor, APPROVAL_SURFACES, "approval surface")

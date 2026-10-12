@@ -566,3 +566,19 @@ for (const status of [301, 302, 307, 308]) {
     assert.deepEqual(seen, ["/poppy/sign-in"]);
   });
 }
+
+test("finding 11 and O7: an unfetchable client_id is fetched once, and the refetch table is bounded", async () => {
+  const { AgentIdentityClient } = await import("../../lib/index.js");
+  const fetched = [];
+  const client = new AgentIdentityClient({
+    fetch: async (input) => {
+      fetched.push(String(input));
+      return new Response('{"error":"not_found"}', { status: 404, headers: { "content-type": "application/json" } });
+    },
+  });
+  for (let i = 0; i < 5; i += 1) await assert.rejects(client.fetchMetadata("https://gone.example/agent.json"));
+  assert.equal(fetched.length, 1);
+  // Thousands of distinct unfetchable IDs: each is remembered, the table stays bounded (no throw, no growth).
+  for (let i = 0; i < 3000; i += 1) await assert.rejects(client.fetchMetadata(`https://gone-${i}.example/agent.json`));
+  assert.equal(fetched.length, 3001);
+});

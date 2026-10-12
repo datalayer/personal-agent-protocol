@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives import serialization
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 from typer.testing import CliRunner
 
+from personal_agent_protocol import cli_commands
 from personal_agent_protocol.cli import create_app
 from personal_agent_protocol.cli_commands import EXIT_CODES, ExitCode
 from personal_agent_protocol.cli_host import local_host
@@ -172,7 +173,7 @@ def test_no_protected_value_is_ever_a_command_line_option(tmp_path: Path) -> Non
                 assert "code" not in names.replace("exit-codes", ""), (leaf.name, names)
 
 
-def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path) -> None:
+def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch: Any) -> None:
     pap = Pap(tmp_path)
     pap.set_up()
     key = pap("agent", "key", "show", "--json")["key"]
@@ -206,6 +207,31 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path) -> None:
     # Approval names the exact ID and revision; confirming needs that approval.
     pap("operations", "confirm", session, operation, "--revision", "1", code=6)
     pap("operations", "approve", session, operation, "--revision", "2", code=6)
+    # Piped input is never the user's approval: only their terminal (or the host's surface).
+    pap(
+        "operations",
+        "approve",
+        session,
+        operation,
+        "--revision",
+        "1",
+        input=f"{operation}\n",
+        code=4,
+    )
+    # An approval written into state.json by anything but `approve` (no MAC under the key in
+    # the token store) is not the user's: confirm refuses it.
+    from personal_agent_protocol.models import Operation
+    from personal_agent_protocol.operations import approve
+
+    state = json.loads((pap.state / "state.json").read_text())
+    current = pap("operations", "show", session, operation, "--json")["operation"]
+    # The right digest of the right revision: only the binding to the token store is missing.
+    real = approve(Operation.model_validate(current)).model_dump(mode="json")
+    forged = {**real, "session_id": session, "mac": "forged"}
+    state["approvals"] = {operation: forged}
+    (pap.state / "state.json").write_text(json.dumps(state))
+    pap("operations", "confirm", session, operation, "--revision", "1", code=6)
+    monkeypatch.setattr(cli_commands, "user_terminal", lambda: True)
     pap("operations", "approve", session, operation, "--revision", "1", input="no\n", code=6)
     pap("operations", "approve", session, operation, "--revision", "1", "--no-input", code=4)
     approved = pap(

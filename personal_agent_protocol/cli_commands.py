@@ -32,6 +32,7 @@ Exit codes (`pap exit-codes`):
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import sys
 from collections.abc import Awaitable, Callable
@@ -72,6 +73,8 @@ from .cli_host import (
     InputSource,
     NotConfiguredError,
     SessionRecord,
+    approval_key,
+    approval_mac,
 )
 from .conversations import generate_message_id
 from .device import DeviceSignInClient
@@ -82,7 +85,15 @@ from .mediated import MediatedSignInClient
 from .models import DiscoveredCompany, Message, Operation
 from .operations import UserApproval, approve
 from .pairwise import resolve_pairwise_user_id
-from .reactor import SIGNERS
+from .reactor import (
+    APPROVAL_SURFACES,
+    SIGNERS,
+    TOKEN_STORES,
+    ApprovalRequest,
+    ApprovalSurface,
+    first_contribution,
+    optional_contribution,
+)
 from .sessions import SessionClient, SessionToken
 from .transport import DpopHttpClient
 
@@ -134,6 +145,12 @@ _EXIT_FOR = (
     (ApprovalRequiredError, ExitCode.NOT_APPROVED),
     (ActionUsageError, ExitCode.USAGE),
 )
+
+
+def user_terminal() -> bool:
+    """Whether the user is at a terminal: standard input and error both a TTY."""
+
+    return sys.stdin.isatty() and sys.stderr.isatty()
 
 
 def exit_code_for(error: PersonalAgentProtocolError) -> ExitCode:
@@ -916,17 +933,40 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 )
             if no_input:
                 raise InputRequiredError("input_required", "The user approves at the prompt")
-            typer.echo(f"{company_name} asks to:", err=True)
-            typer.echo(f"  {operation.summary}", err=True)
-            typer.echo(f"  (operation {operation_id}, revision {revision})", err=True)
-            answer = typer.prompt("Type the operation ID to approve", err=True)
-            if answer.strip() != operation_id:
-                raise NotApprovedError("not_approved", "The user did not approve")
+            surface = optional_contribution(runtime.reactor, APPROVAL_SURFACES, "approval surface")
+            if surface is not None:
+                # The host's own approval surface asks the user.
+                answer = await cast(ApprovalSurface, surface).approve(
+                    ApprovalRequest(
+                        action_id="operations.approve",
+                        action_name="Approve an operation",
+                        summary=f"{company_name} asks to: {operation.summary}",
+                        arguments={"operation_id": operation_id, "revision": str(revision)},
+                        tenant_id=runtime.tenant_id,
+                    )
+                )
+                if answer is not True:
+                    raise NotApprovedError("not_approved", "The user did not approve")
+            else:
+                if not user_terminal():
+                    # Approval is the user's, typed at their terminal: never piped input,
+                    # which a script or a model's tool could write (Operations §5.1).
+                    raise InputRequiredError(
+                        "input_required", "The user approves at a terminal, not from piped input"
+                    )
+                typer.echo(f"{company_name} asks to:", err=True)
+                typer.echo(f"  {operation.summary}", err=True)
+                typer.echo(f"  (operation {operation_id}, revision {revision})", err=True)
+                typed = typer.prompt("Type the operation ID to approve", err=True)
+                if typed.strip() != operation_id:
+                    raise NotApprovedError("not_approved", "The user did not approve")
             approval = approve(operation)
-            runtime.state.approvals[operation_id] = {
-                **approval.model_dump(mode="json"),
-                "session_id": session_id,
-            }
+            stored = {**approval.model_dump(mode="json"), "session_id": session_id}
+            store = first_contribution(runtime.reactor, TOKEN_STORES, "token store")
+            # Bound to a key in the protected token store: an approval written into
+            # state.json by anything else does not verify at confirm.
+            stored["mac"] = approval_mac(await approval_key(store), stored)
+            runtime.state.approvals[operation_id] = stored
             runtime.state.save()
             return {"approved": {"operation_id": operation_id, "revision": revision}}
 
@@ -951,6 +991,16 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             if approved is None or approved.get("revision") != revision:
                 raise NotApprovedError(
                     "not_approved", "No approval for this operation ID and revision"
+                )
+            store = first_contribution(runtime.reactor, TOKEN_STORES, "token store")
+            mac = approval_mac(await approval_key(store), approved)
+            if (
+                approved.get("session_id") != session_id
+                or not isinstance(approved.get("mac"), str)
+                or not hmac.compare_digest(approved["mac"], mac)
+            ):
+                raise NotApprovedError(
+                    "not_approved", "This approval was not made here: approve at the prompt"
                 )
             client, endpoint, _ = await operations_client(runtime, record)
             token = await session_token(runtime, record)

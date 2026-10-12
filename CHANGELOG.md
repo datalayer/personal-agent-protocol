@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.13.0 (2026-10-12)
 
 - **`PapOutcome`, what a confirmed operation came to, as a Reactor display**
   ([docs](docs/docs/guides/operations.mdx)): `personal_agent_protocol.ui`

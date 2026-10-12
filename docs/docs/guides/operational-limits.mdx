@@ -46,7 +46,9 @@ request refused unless it is HTTPS and every address is public
 (`DiscoveryError`: `unsafe_url`, `unsafe_address`, `dns_failed`); nothing is
 sent and nothing is tried elsewhere. The connection then dials only the
 approved addresses (`ResolvingTransport`), TLS still naming the host. It
-follows no redirect itself and uses no proxy from the environment. Keep the
+follows no redirect itself and uses no proxy from the environment;
+`max_response_bytes` stops reading any body past it (`response_too_large`)
+for code that reads whole bodies on its own. Keep the
 host's own calls (its identity provider, its stores) on another client.
 
 ## Caching by `Cache-Control`, within bounds

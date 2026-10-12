@@ -13,7 +13,8 @@
   (`ResolvingTransport`) resolves the host before each request — Sessions,
   sign-ins, conversations, API calls, Operations, MCP — refuses it unless it is
   HTTPS and every address is public (`unsafe_url`, `unsafe_address`), and dials
-  only the approved addresses; no redirect followed, no environment proxy.
+  only the approved addresses; no redirect followed, no environment proxy;
+  `max_response_bytes` bounds every body for callers that read whole bodies.
   Python's counterpart of `createResolvingFetch`.
 
 ## 0.13.0 (2026-10-12)

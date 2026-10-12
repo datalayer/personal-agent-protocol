@@ -692,6 +692,10 @@ class ResolvingTransport(httpx.AsyncBaseTransport):
     `dns_failed`); nothing is sent, and nothing is tried elsewhere. The
     connection then dials only the approved addresses, TLS still naming the
     host, so a name that rebinds after the check reaches no private address.
+
+    With `max_response_bytes`, no response body is read past it
+    (`TransportError`: `response_too_large`), for callers that read whole
+    bodies themselves; the SDK's own clients bound theirs already.
     """
 
     def __init__(
@@ -700,18 +704,59 @@ class ResolvingTransport(httpx.AsyncBaseTransport):
         *,
         resolver: AddressResolver = resolve_addresses,
         allow_private_networks: bool = False,
+        max_response_bytes: int | None = None,
     ) -> None:
+        if max_response_bytes is not None and max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be positive")
         self._inner = inner if inner is not None else httpx.AsyncHTTPTransport()
         _pin_transport(self._inner)
         self._policy = PublicUrlSafetyPolicy(resolver, allow_private_networks=allow_private_networks)
+        self._max = max_response_bytes
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         approved = await self._policy.assert_safe(str(request.url))
         async with pinned(approved):
-            return await self._inner.handle_async_request(request)
+            response = await self._inner.handle_async_request(request)
+        if self._max is None:
+            return response
+        declared = response.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > self._max:
+            await response.aclose()
+            raise TransportError("response_too_large", "The company's response exceeds the size limit")
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            stream=_BoundedStream(response.stream, self._max),
+            extensions=response.extensions,
+            request=request,
+        )
 
     async def aclose(self) -> None:
         await self._inner.aclose()
+
+
+class _BoundedStream(httpx.AsyncByteStream):
+    """A response body that stops being read past `limit` bytes."""
+
+    def __init__(self, inner: httpx.SyncByteStream | httpx.AsyncByteStream, limit: int) -> None:
+        self._inner = inner
+        self._limit = limit
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        if not isinstance(self._inner, httpx.AsyncByteStream):
+            raise TransportError("request_failed", "A company's response is read asynchronously")
+        read = 0
+        async for chunk in self._inner:
+            read += len(chunk)
+            if read > self._limit:
+                raise TransportError(
+                    "response_too_large", "The company's response exceeds the size limit"
+                )
+            yield chunk
+
+    async def aclose(self) -> None:
+        if isinstance(self._inner, httpx.AsyncByteStream):
+            await self._inner.aclose()
 
 
 def create_resolving_client(
@@ -720,6 +765,7 @@ def create_resolving_client(
     allow_private_networks: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
     timeout: float = 10.0,
+    max_response_bytes: int | None = None,
 ) -> httpx.AsyncClient:
     """An `httpx` client whose every request goes through a `ResolvingTransport`.
 
@@ -731,7 +777,10 @@ def create_resolving_client(
 
     return httpx.AsyncClient(
         transport=ResolvingTransport(
-            transport, resolver=resolver, allow_private_networks=allow_private_networks
+            transport,
+            resolver=resolver,
+            allow_private_networks=allow_private_networks,
+            max_response_bytes=max_response_bytes,
         ),
         timeout=timeout,
         follow_redirects=False,

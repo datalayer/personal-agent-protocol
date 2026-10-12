@@ -127,3 +127,39 @@ def test_the_client_follows_no_redirect_and_no_proxy_and_its_sockets_are_pinned(
     assert isinstance(transport, ResolvingTransport)
     backend = transport._inner._pool._network_backend  # type: ignore[attr-defined]
     assert isinstance(backend, PinnedNetworkBackend)
+
+
+@pytest.mark.asyncio
+async def test_a_bounded_client_reads_no_body_past_its_limit() -> None:
+    from personal_agent_protocol.errors import TransportError
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/declared":
+            return httpx.Response(200, content=b"a" * 2048)
+        # Sent in chunks with no length declared: refused while reading.
+        return httpx.Response(200, stream=_Chunks(b"a" * 512, 4))
+
+    async with create_resolving_client(
+        resolver=_resolving_to("93.184.216.34"),
+        transport=httpx.MockTransport(answer),
+        max_response_bytes=1024,
+    ) as http:
+        for path in ("/declared", "/chunked"):
+            with pytest.raises(TransportError) as raised:
+                await http.get(f"https://company.example{path}")
+            assert raised.value.code == "response_too_large"
+    async with create_resolving_client(
+        resolver=_resolving_to("93.184.216.34"),
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, content=b"a" * 1024)),
+        max_response_bytes=1024,
+    ) as http:
+        assert len((await http.get("https://company.example/at-the-limit")).content) == 1024
+
+
+class _Chunks(httpx.AsyncByteStream):
+    def __init__(self, chunk: bytes, count: int) -> None:
+        self.chunk, self.count = chunk, count
+
+    async def __aiter__(self):  # type: ignore[no-untyped-def]
+        for _ in range(self.count):
+            yield self.chunk

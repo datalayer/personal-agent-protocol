@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.16.0 (2026-10-12)
 
 - **A company reports what it did and refused**
   ([docs](docs/docs/guides/telemetry.mdx#what-a-company-reports)): the

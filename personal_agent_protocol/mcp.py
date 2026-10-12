@@ -35,6 +35,7 @@ from .errors import PersonalAgentProtocolError, ProtocolValidationError, Transpo
 from .json import loads_strict
 from .models import ApiDescriptor, DiscoveryDocument, Operation, ProtocolModel
 from .operations import operation_from
+from .reactor import send_bounded
 from .sessions import SessionToken
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -192,12 +193,16 @@ class McpClient:
         if self._session_id is not None:
             headers["Mcp-Session-Id"] = self._session_id
         try:
-            response = await self.http.post(
-                self.url,
-                content=json.dumps(message, separators=(",", ":")).encode(),
-                headers=headers,
+            response = await send_bounded(
+                self.http,
+                self.http.build_request(
+                    "POST",
+                    self.url,
+                    content=json.dumps(message, separators=(",", ":")).encode(),
+                    headers=headers,
+                ),
+                max_bytes=self.max_response_bytes,
                 auth=self.auth,
-                follow_redirects=False,
             )
         except httpx.HTTPError as exc:
             raise TransportError("request_failed", "MCP request failed") from exc

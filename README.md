@@ -9,8 +9,13 @@
 # 🤖 🌸 Personal Agent Protocol
 
 Python and TypeScript SDKs for the
-[Personal Agent Protocol](https://personalagentprotocol.org), currently
-targeting [draft 0.1](https://personalagentprotocol.org/docs/spec).
+[Personal Agent Protocol](https://personalagentprotocol.org): both implement
+[draft 0.1](https://personalagentprotocol.org/docs/spec) (2026-10-09) and its
+Operations extension v1. See
+[Compatibility](https://personal-agent-protocol.datalayer.tech/releases/compatibility/),
+[Migration](https://personal-agent-protocol.datalayer.tech/releases/migration/),
+the [conformance report](https://personal-agent-protocol.datalayer.tech/protocol/conformance-report/),
+and [Support](https://personal-agent-protocol.datalayer.tech/releases/support/).
 
 ![Personal Agent Protocol demo](https://images.datalayer.io/products/personal-agent-protocol/pap-demo.gif)
 
@@ -180,8 +185,9 @@ surface:
 
 Python additionally provides a SQLite pairwise-identity reference provider.
 The portable TypeScript entry rejects obvious local and private literal
-addresses. Its explicit server entry adds `NodeUrlSafetyPolicy`, `JoseSigner`,
-and DPoP verification with A/AAAA resolution checks:
+addresses. Its explicit server entry adds `NodeUrlSafetyPolicy` and
+`createResolvingFetch` (A/AAAA resolution, every address global, the vetted one
+dialled), `JoseSigner`, and DPoP verification:
 
 ```typescript
 import {

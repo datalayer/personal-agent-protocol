@@ -52,6 +52,7 @@ from .reactor import (
     first_contribution,
 )
 from .sessions import SessionToken, _opaque_id
+from .telemetry import sign_in_result, signed_in_as, traced
 from .transport import DpopHttpClient
 
 _SIGN_IN_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
@@ -111,9 +112,15 @@ class MediatedSignInClient:
             raise ValueError("max_response_bytes must be positive")
         self.reactor = reactor
         # Credentials go to one URL: a redirect is refused, never followed.
-        self.transport = DpopHttpClient(reactor=reactor, http_client=http_client, max_redirects=0)
+        self.transport = DpopHttpClient(
+            reactor=reactor,
+            http_client=http_client,
+            max_redirects=0,
+            max_response_bytes=max_response_bytes,
+        )
         self.max_response_bytes = max_response_bytes
 
+    @traced("pap.sign_in.mediated.sign_in", before=signed_in_as("mediated"), after=sign_in_result)
     async def sign_in(
         self,
         *,
@@ -127,7 +134,7 @@ class MediatedSignInClient:
     ) -> MediatedSignInResult:
         """Collect the declared fields from the user and sign the Session in."""
 
-        endpoint = self._endpoint_on_company_domain(mediated.endpoint, organization.domain)
+        endpoint = self._endpoint_on_company_domain(mediated.endpoint, organization.domain, issuer)
         requested = _scopes(scopes)
         credentials = await self._collect(
             ProtectedInputRequest(
@@ -167,6 +174,9 @@ class MediatedSignInClient:
             ),
         )
 
+    @traced(
+        "pap.sign_in.mediated.submit_code", before=signed_in_as("mediated"), after=sign_in_result
+    )
     async def submit_code(
         self,
         reference: str,
@@ -390,10 +400,19 @@ class MediatedSignInClient:
         )
 
     @staticmethod
-    def _endpoint_on_company_domain(endpoint: str, domain: str) -> str:
-        host = (urlsplit(endpoint).hostname or "").lower()
+    def _endpoint_on_company_domain(endpoint: str, domain: str, issuer: str) -> str:
+        """Credentials go only to the company: its domain (or a subdomain), or the host of
+        its `auth.issuer`, which its OAuth metadata ties to it (`poppy_domains`)."""
+
+        parsed = urlsplit(endpoint)
+        host = (parsed.hostname or "").lower()
         domain = domain.lower()
-        if host != domain and not host.endswith(f".{domain}"):
+        issued = urlsplit(issuer)
+        issuer_host = (issued.hostname or "").lower() if issued.scheme == "https" else ""
+        ours = (
+            host == domain or host.endswith(f".{domain}") or (issuer_host and host == issuer_host)
+        )
+        if parsed.scheme != "https" or not ours:
             raise AuthorizationError(
                 "unsafe_mediated_endpoint",
                 "Credentials are sent only to an endpoint on the company's own domain",

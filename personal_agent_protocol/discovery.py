@@ -28,6 +28,7 @@ from .reactor import (
     first_contribution,
     resolve_addresses,
 )
+from .telemetry import by_domain, company_result, traced
 
 
 def _metadata_url(issuer: str) -> str:
@@ -79,6 +80,7 @@ class DiscoveryClient:
         if self._owned_http is not None:
             await self._owned_http.aclose()
 
+    @traced("pap.discovery.discover", before=by_domain, after=company_result)
     async def discover(self, domain: str) -> DiscoveredCompany:
         requested_domain = self._normalize_domain(domain)
         discovery_url = f"https://{requested_domain}/.well-known/poppy.json"

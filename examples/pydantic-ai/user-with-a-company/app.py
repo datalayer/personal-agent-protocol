@@ -90,7 +90,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
     page = await conversations.start(
         endpoint, say("Where is my jacket order?"), token=session, wait=0, **who
     )
-    asked = page.events[-1]
+    asked = [e for e in page.events if e.type != "state"][-1]
     conversation_id = page.conversation_id
     steps.append(f"company asked to sign in: {asked.error} ({asked.scope})")
 
@@ -125,7 +125,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
         wait=0,
         **who,
     )
-    proposal = page.events[-1].message.operation  # type: ignore[union-attr]
+    proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     if not (proposal is not None):
         raise RuntimeError("the example world is incomplete")
     steps.append(f"company proposed revision {proposal.revision}: {proposal.summary}")

@@ -30,6 +30,16 @@ capability owns sensitive work, and what may safely cross into model context.
 | [A user with a company](./user-with-a-company) | The whole journey with Manzanita, both sides from the SDK | A user's request |
 | [Two companies](./two-companies) | Ledgerly acts for Ada at Northwind, by composition | Two PAP relationships |
 
+Some features are shown by a runnable Pydantic AI example alone, with the
+guide that explains them:
+
+| Example | What it teaches | Guide |
+| --- | --- | --- |
+| [Company APIs](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis) | Read and propose through a company's OpenAPI API (DPoP) and its MCP server (a Bearer for its URL alone) | [APIs coverage](/protocol/coverage/apis/) |
+| [Company service](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-service) | Build a company with `personal_agent_protocol.company` and use it end to end | [Integrate a company](/guides/company/) |
+| [Sign-in display](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/sign-in-display) | What a page gets of a `PapSignIn` display, and what a model is told | [Device Sign-In](/guides/device-sign-in/) |
+| [Telemetry](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/telemetry) | One allowlisted event per protocol stage | [Telemetry](/guides/telemetry/) |
+
 The examples use deterministic or local transports where needed, so they can
 teach the boundary without real credentials. The newer flows run against the
 reference company in `personal_agent_protocol.demo`: real keys and real HTTP

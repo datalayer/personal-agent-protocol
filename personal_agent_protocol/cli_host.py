@@ -29,13 +29,18 @@ What is not secret — Sessions, conversations' Sessions, approvals — is kept 
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import fcntl
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import sys
 import tempfile
 import webbrowser
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -113,25 +118,65 @@ def _read(path: Path) -> dict[str, Any]:
     return value
 
 
+@contextlib.contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    """Hold an exclusive lock on `path`'s lock file: one read-modify-write at a time.
+
+    Two `pap` processes changing the same file (a refresh rotating an Account
+    Token while another command stores one) would otherwise each write back
+    what they read, and one change would be lost.
+    """
+
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(path.with_name(f".{path.name}.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+#: The token-store reference of the key that binds the user's approvals in `state.json`.
+APPROVAL_KEY_REFERENCE = "pap:approval-key"
+
+
 class FileSecretStore:
-    """`pap.tokenStore`: secrets behind opaque references, in one owner-only file."""
+    """`pap.tokenStore`: secrets behind opaque references, in one owner-only file.
+
+    Each change reads, changes, and writes the file under an exclusive lock.
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = path
 
     async def put(self, reference: str, token: SecretStr) -> None:
-        values = _read(self.path)
-        values[reference] = token.get_secret_value()
-        _write_private(self.path, values)
+        with _locked(self.path):
+            values = _read(self.path)
+            values[reference] = token.get_secret_value()
+            _write_private(self.path, values)
 
     async def get(self, reference: str) -> SecretStr | None:
         value = _read(self.path).get(reference)
         return SecretStr(value) if isinstance(value, str) else None
 
     async def delete(self, reference: str) -> None:
-        values = _read(self.path)
-        if values.pop(reference, None) is not None:
-            _write_private(self.path, values)
+        with _locked(self.path):
+            values = _read(self.path)
+            if values.pop(reference, None) is not None:
+                _write_private(self.path, values)
+
+    async def get_or_create(self, reference: str, make: Callable[[], str]) -> SecretStr:
+        """The secret at `reference`, created once (under the lock) when absent."""
+
+        with _locked(self.path):
+            values = _read(self.path)
+            value = values.get(reference)
+            if not isinstance(value, str):
+                value = make()
+                values[reference] = value
+                _write_private(self.path, values)
+        return SecretStr(value)
 
     def references(self) -> list[str]:
         return sorted(_read(self.path))
@@ -170,9 +215,10 @@ class FileKeyStore:
             algorithm = "RS256"
         else:
             raise ValueError("the signing key must be P-256 (ES256) or RSA of 2048 bits or more")
-        document = _read(self.path)
-        document["signing"] = {"kid": kid, "alg": algorithm, "pem": pem.get_secret_value()}
-        _write_private(self.path, document)
+        with _locked(self.path):
+            document = _read(self.path)
+            document["signing"] = {"kid": kid, "alg": algorithm, "pem": pem.get_secret_value()}
+            _write_private(self.path, document)
         return self.signing_identity() or {}
 
     def signing_identity(self) -> dict[str, str] | None:
@@ -201,16 +247,17 @@ class FileKeyStore:
         """One P-256 key per tenant, user, and company, created on first use."""
 
         name = f"{request.tenant_id}|{request.subject}|{request.issuer}"
-        document = _read(self.path)
-        keys = document.setdefault("dpop", {})
-        if name not in keys:
-            private = ec.generate_private_key(ec.SECP256R1())
-            keys[name] = private.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.PKCS8,
-                serialization.NoEncryption(),
-            ).decode()
-            _write_private(self.path, document)
+        with _locked(self.path):
+            document = _read(self.path)
+            keys = document.setdefault("dpop", {})
+            if name not in keys:
+                private = ec.generate_private_key(ec.SECP256R1())
+                keys[name] = private.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.PKCS8,
+                    serialization.NoEncryption(),
+                ).decode()
+                _write_private(self.path, document)
         private = cast(ec.EllipticCurvePrivateKey, self._private(keys[name]))
         public = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(private.public_key()))
         return DpopKeyMaterial(private_key=private, public_jwk=public)
@@ -325,6 +372,35 @@ class SessionRecord:
         return value
 
 
+def approval_mac(key: SecretStr, approval: dict[str, Any]) -> str:
+    """The MAC binding a stored approval to the user's approval key.
+
+    It covers the operation ID, revision, digest, and Session: an approval
+    written into `state.json` by anything that cannot read the protected token
+    store (another program, a tool a model runs) does not verify.
+    """
+
+    covered = json.dumps(
+        [approval.get(name) for name in ("operation_id", "revision", "digest", "session_id")],
+        separators=(",", ":"),
+    )
+    mac = hmac.new(key.get_secret_value().encode(), covered.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(mac).rstrip(b"=").decode()
+
+
+async def approval_key(store: FileSecretStore | Any) -> SecretStr:
+    """The approval key, kept in the protected token store, created on first use."""
+
+    if isinstance(store, FileSecretStore):
+        return await store.get_or_create(APPROVAL_KEY_REFERENCE, lambda: secrets.token_urlsafe(32))
+    existing = await store.get(APPROVAL_KEY_REFERENCE)
+    if existing is not None:
+        return cast(SecretStr, existing)
+    created = SecretStr(secrets.token_urlsafe(32))
+    await store.put(APPROVAL_KEY_REFERENCE, created)
+    return created
+
+
 @dataclass
 class CliState:
     """The non-secret local state: Sessions, conversations' Sessions, user approvals."""
@@ -342,14 +418,15 @@ class CliState:
         return cls(path=path, sessions=sessions, approvals=document.get("approvals", {}))
 
     def save(self) -> None:
-        _write_private(
-            self.path,
-            {
-                "schema_version": 1,
-                "sessions": {key: asdict(value) for key, value in self.sessions.items()},
-                "approvals": self.approvals,
-            },
-        )
+        with _locked(self.path):
+            _write_private(
+                self.path,
+                {
+                    "schema_version": 1,
+                    "sessions": {key: asdict(value) for key, value in self.sessions.items()},
+                    "approvals": self.approvals,
+                },
+            )
 
     def session(self, session_id: str) -> SessionRecord:
         record = self.sessions.get(session_id)

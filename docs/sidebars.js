@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2025-2026 Datalayer, Inc.
- * Distributed under the terms of the Modified BSD License.
+ *
+ * BSD 3-Clause License
  */
 
 /**
@@ -28,6 +29,7 @@ const sidebars = {
       items: [
         "concepts/protocol-tour",
         "concepts/architecture",
+        "concepts/contribution-points",
         "concepts/glossary",
         "protocol/coverage",
         {
@@ -44,7 +46,7 @@ const sidebars = {
             "protocol/coverage/operational-guidance",
           ],
         },
-        "protocol/conformance-report",
+        "protocol/load-tests",
       ],
     },
     {
@@ -77,6 +79,7 @@ const sidebars = {
         "guides/extensions",
         "guides/operational-limits",
         "guides/cli",
+        "guides/telemetry",
         "guides/conformance",
       ],
     },
@@ -112,8 +115,20 @@ const sidebars = {
       label: "Contributing",
       items: ["contributing/sdk-design"],
     },
+    {
+      type: "category",
+      label: "Releases",
+      items: [
+        "releases/compatibility",
+        "releases/migration",
+        "protocol/conformance-report",
+        "releases/support",
+      ],
+    },
     "studio/integration",
     "security/index",
+    "security/demonstrations",
+    "security/review",
     "protocol/status",
   ],
 };

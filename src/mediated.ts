@@ -12,7 +12,9 @@ import {
 } from "./reactor.js";
 import type { SecretValue } from "./secret.js";
 import { parseSessionToken, type SessionToken } from "./sessions.js";
+import { byIssuer, signInResult, traced } from "./telemetry.js";
 import { DpopFetchClient } from "./transport.js";
+import { readLimitedText } from "./limits.js";
 
 /**
  * PAP Mediated Sign-In: the user's credentials, relayed to one endpoint (§4.7).
@@ -119,8 +121,22 @@ export class MediatedSignInClient {
     this.#maxResponseBytes = limit;
   }
 
-  async signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
-    const endpoint = endpointOnCompanyDomain(options.mediated.endpoint, options.organization.domain);
+  signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.mediated.sign_in",
+      byIssuer(options.issuer, "mediated"),
+      () => this.#signIn(options),
+      signInResult,
+    );
+  }
+
+  async #signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
+    const endpoint = endpointOnCompanyDomain(
+      options.mediated.endpoint,
+      options.organization.domain,
+      options.issuer,
+    );
     const requested = [...new Set(options.scopes)];
     const credentials = await this.#collect(
       {
@@ -155,7 +171,17 @@ export class MediatedSignInClient {
     });
   }
 
-  async submitCode(reference: string, options: MediatedCodeOptions): Promise<MediatedSignInResult> {
+  submitCode(reference: string, options: MediatedCodeOptions): Promise<MediatedSignInResult> {
+    return traced(
+      this.#reactor,
+      "pap.sign_in.mediated.submit_code",
+      byIssuer(options.issuer, "mediated"),
+      () => this.#submitCode(reference, options),
+      signInResult,
+    );
+  }
+
+  async #submitCode(reference: string, options: MediatedCodeOptions): Promise<MediatedSignInResult> {
     const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
     const pending = await store.take(reference);
     if (!isPending(pending)) {
@@ -321,7 +347,7 @@ export class MediatedSignInClient {
   }
 
   async #decode(response: Response): Promise<unknown> {
-    const body = await response.text();
+    const body = await readLimitedText(response, this.#maxResponseBytes);
     if (new TextEncoder().encode(body).byteLength > this.#maxResponseBytes) {
       throw new AuthorizationError("response_too_large", "Mediated Sign-In response exceeds size limit", {
         statusCode: response.status,
@@ -343,7 +369,11 @@ export class MediatedSignInClient {
   }
 }
 
-function endpointOnCompanyDomain(endpoint: string, domain: string): string {
+/**
+ * Credentials go only to the company: an endpoint on its domain (or a subdomain), or on
+ * its `auth.issuer`'s host, which its OAuth metadata ties to it (`poppy_domains`).
+ */
+function endpointOnCompanyDomain(endpoint: string, domain: string, issuer: string): string {
   let url: URL;
   try {
     url = new URL(endpoint);
@@ -352,7 +382,14 @@ function endpointOnCompanyDomain(endpoint: string, domain: string): string {
   }
   const host = url.hostname.toLowerCase();
   const company = domain.toLowerCase();
-  if (url.protocol !== "https:" || (host !== company && !host.endsWith(`.${company}`))) {
+  let issuerHost: string | undefined;
+  try {
+    issuerHost = new URL(issuer).protocol === "https:" ? new URL(issuer).hostname.toLowerCase() : undefined;
+  } catch {
+    issuerHost = undefined;
+  }
+  const ours = host === company || host.endsWith(`.${company}`) || host === issuerHost;
+  if (url.protocol !== "https:" || !ours) {
     throw new AuthorizationError(
       "unsafe_mediated_endpoint",
       "Credentials are sent only to an endpoint on the company's own domain",

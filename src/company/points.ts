@@ -14,10 +14,16 @@
  * - `pap.company.clientPolicy` allows or blocks personal agents by `client_id`.
  * - `pap.company.clientResolver` fetches a personal agent's client metadata
  *   and JWKS (over HTTPS through `AgentIdentityClient` by default).
- * - `pap.company.replayCache` remembers assertion and proof IDs once.
+ * - `pap.company.replayCache` remembers assertion and proof IDs once: by default in
+ *   the contributed store (`StoreReplayCache`), so every replica sharing a durable
+ *   store shares the cache.
  * - `pap.company.api` answers the company's OpenAPI API (`/api/…`), its
  *   consequential calls proposing operations (`202`, Operations §4.1).
+ * - `pap.company.mcp` answers the company's MCP server (`/mcp`), its tools
+ *   proposing operations in `structuredContent` (§6, Operations §4.2).
  */
+
+import { createHash } from "node:crypto";
 
 import { defineContributionPoint } from "@datalayer/reactor";
 
@@ -28,7 +34,7 @@ import type {
   OperationResult,
 } from "../models.js";
 import type { SecretValue } from "../secret.js";
-import type { CompanyStore } from "./store.js";
+import { RecordKinds, type CompanyStore } from "./store.js";
 
 export * from "./store.js";
 
@@ -39,9 +45,25 @@ export interface Authenticated {
   readonly sentTo?: string;
 }
 
-/** The company's own accounts: credentials and second factors. */
+/** Who a Mediated Sign-In attempt comes from: the agent and its Session. */
+export interface SignInContext {
+  readonly clientId: string;
+  readonly sessionId: string;
+}
+
+/**
+ * The company's own accounts: credentials and second factors.
+ *
+ * The service limits Mediated Sign-In attempts itself (by account identifier, by agent
+ * and user, by Session, and wrong codes by account), but a directory MUST also throttle
+ * its own checks: it is the one place that sees every path to an account, and `context`
+ * says which agent and Session each attempt comes from (§4.7, a company MUST rate-limit).
+ */
 export interface AccountDirectory {
-  authenticate(credentials: Readonly<Record<string, SecretValue>>): Promise<Authenticated | undefined>;
+  authenticate(
+    credentials: Readonly<Record<string, SecretValue>>,
+    context: SignInContext,
+  ): Promise<Authenticated | undefined>;
   checkCode(codeReference: string, code: SecretValue): Promise<boolean>;
 }
 
@@ -55,14 +77,24 @@ export interface Turn {
   readonly scopes: readonly string[];
   readonly clientId: string;
   readonly isDirect: boolean;
+  /**
+   * Whether the personal agent negotiated Operations: without it, a proposed operation is
+   * never sent, so the agent's words must not promise one.
+   */
+  readonly supportsOperations: boolean;
 }
 
-/** An operation the agent proposes; the service gives it an ID and expiry. */
+/**
+ * An operation the agent proposes; the service gives it an ID and expiry. `scopes` are
+ * what a Session must hold to confirm it, recorded with it; none named, the company's
+ * `writeScopes`.
+ */
 export interface ProposedOperation {
   readonly action: string;
   readonly summary: string;
   readonly terms: Readonly<Record<string, unknown>>;
   readonly userApprovalRequired?: boolean;
+  readonly scopes?: readonly string[];
 }
 
 /**
@@ -145,21 +177,72 @@ export interface ReplayCache {
   markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean>;
 }
 
+const FIRST_SWEEP = 1024;
+/** A mark is kept a second past its expiry, so an identifier is refused until then, inclusive. */
+const INCLUSIVE_MS = 1000;
+
 /**
- * The default replay cache: one process, every ID kept.
+ * The default replay cache: one atomic `create` in the company's store per identifier.
  *
- * It keeps each expiry but never prunes on the wall clock: a company's clock
- * is a contribution, and an ID dropped early could be replayed.
+ * The identifier is kept (as its SHA-256) until a second after its `expiresAt`, so it is
+ * refused until its expiry, inclusive. The store is looked up at each call, the
+ * contributed `pap.company.store`: a durable store shared by every replica implies a
+ * replay cache shared by every replica, so a proof captured at one replica is refused at
+ * another, and after a restart. With the memory store it is one process, as that store is.
  */
-export class MemoryReplayCache implements ReplayCache {
-  readonly #seen = new Map<string, Date>();
+export class StoreReplayCache implements ReplayCache {
+  readonly #store: () => CompanyStore;
+
+  constructor(store: () => CompanyStore) {
+    this.#store = store;
+  }
 
   async markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean> {
-    if (this.#seen.has(key)) return false;
-    this.#seen.set(key, options.expiresAt);
+    const digest = createHash("sha256").update(key).digest("hex");
+    return this.#store().create(RecordKinds.replay, digest, {}, {
+      expiresAt: new Date(options.expiresAt.getTime() + INCLUSIVE_MS),
+    });
+  }
+}
+
+/**
+ * A replay cache in one process, entries dropped after expiry (not the default): for a
+ * verifier used on its own (`verifyAssertion`, `verifyDpopProof`); a company's default
+ * is `StoreReplayCache` over its store.
+ *
+ * An identifier is refused until its `expiresAt` by `clock` (the assertion or proof it
+ * names is refused as expired after that). Expired entries are swept whenever the cache
+ * has doubled since the last sweep, so it holds about twice the identifiers still alive,
+ * never every one ever seen.
+ */
+export class MemoryReplayCache implements ReplayCache {
+  #seen = new Map<string, number>();
+  #sweepAt = FIRST_SWEEP;
+  clock: { now(): Date };
+
+  constructor(options: { readonly clock?: { now(): Date } } = {}) {
+    this.clock = options.clock ?? { now: () => new Date() };
+  }
+
+  get size(): number {
+    return this.#seen.size;
+  }
+
+  async markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean> {
+    const now = this.clock.now().getTime();
+    const seen = this.#seen.get(key);
+    // Seen until its expiry, inclusive: a proof accepted at its last instant
+    // is not accepted again at that same instant.
+    if (seen !== undefined && now <= seen) return false;
+    this.#seen.set(key, options.expiresAt.getTime());
+    if (this.#seen.size >= this.#sweepAt) {
+      this.#seen = new Map([...this.#seen].filter(([, until]) => now < until));
+      this.#sweepAt = Math.max(FIRST_SWEEP, 2 * this.#seen.size);
+    }
     return true;
   }
 }
+
 
 /** One verified call to the company's API: who, with what authority. */
 export interface ApiCall {
@@ -198,6 +281,36 @@ export interface CompanyApi {
   handle(call: ApiCall): Promise<ApiResult>;
 }
 
+/**
+ * An MCP tool's answer: text and structured content, or an operation to propose.
+ *
+ * `refusal` is `[status, error, scope]` for a token error the server returns
+ * over HTTP with a Bearer challenge (`sign_in_required`, `insufficient_scope`).
+ */
+export interface ToolResult {
+  readonly text?: string;
+  readonly structured?: Readonly<Record<string, unknown>>;
+  readonly operation?: ProposedOperation;
+  readonly isError?: boolean;
+  readonly refusal?: readonly [status: number, error: string, scope: string | undefined];
+}
+
+export const ToolResults = {
+  signInRequired(scope: string): ToolResult {
+    return { refusal: [403, "sign_in_required", scope] };
+  },
+  insufficientScope(scope: string): ToolResult {
+    return { refusal: [403, "insufficient_scope", scope] };
+  },
+} as const;
+
+/** The company's MCP server: its tools, and each call (with the caller's authority). */
+export interface CompanyMcp {
+  readonly description: string;
+  tools(): readonly Readonly<Record<string, unknown>>[];
+  call(name: string, args: Readonly<Record<string, unknown>>, call: ApiCall): Promise<ToolResult>;
+}
+
 export const CompanyStores = defineContributionPoint<CompanyStore>("pap.company.store");
 export const CompanyAccounts = defineContributionPoint<AccountDirectory>("pap.company.accounts");
 export const CompanyAgents = defineContributionPoint<CompanyAgent>("pap.company.agent");
@@ -210,3 +323,4 @@ export const ClientResolvers = defineContributionPoint<ClientResolver>(
 );
 export const ReplayCaches = defineContributionPoint<ReplayCache>("pap.company.replayCache");
 export const CompanyApis = defineContributionPoint<CompanyApi>("pap.company.api");
+export const CompanyMcps = defineContributionPoint<CompanyMcp>("pap.company.mcp");

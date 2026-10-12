@@ -41,6 +41,7 @@ from .reactor import (
     Signer,
     TokenStore,
     first_contribution,
+    send_bounded,
 )
 from .sessions import (
     JWT_CLIENT_ASSERTION,
@@ -48,6 +49,7 @@ from .sessions import (
     SessionToken,
     _opaque_id,
 )
+from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
 RandomBytes = Callable[[int], bytes]
 _SCOPE_TOKEN = re.compile(r"^[\x21\x23-\x5b\x5d-\x7e]+$")
@@ -295,6 +297,7 @@ class DirectSignInClient:
         self.http = http_client
         self.max_response_bytes = max_response_bytes
 
+    @traced("pap.sign_in.direct.begin", before=signed_in_as("direct"), after=sign_in_result)
     async def begin(
         self,
         *,
@@ -365,6 +368,7 @@ class DirectSignInClient:
             requested_scopes=request.scopes,
         )
 
+    @traced("pap.sign_in.direct.complete", before=sign_in_method("direct"), after=sign_in_result)
     async def complete(self, callback_url: str) -> DirectSignInResult:
         """Consume callback state and exchange its code with fresh proof material."""
 
@@ -443,11 +447,15 @@ class DirectSignInClient:
                 client_assertion=assertion,
             )
             try:
-                response = await self.http.post(
-                    pending.token_endpoint,
-                    data=grant.as_form(),
-                    headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
-                    follow_redirects=False,
+                response = await send_bounded(
+                    self.http,
+                    self.http.build_request(
+                        "POST",
+                        pending.token_endpoint,
+                        data=grant.as_form(),
+                        headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
+                    ),
+                    max_bytes=self.max_response_bytes,
                 )
             except httpx.HTTPError as exc:
                 raise AuthorizationError(

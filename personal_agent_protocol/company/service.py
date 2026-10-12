@@ -48,6 +48,7 @@ import hashlib
 import hmac
 import html
 import json
+import math
 from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -56,15 +57,29 @@ from typing import Any, Literal, Protocol, TypeVar, cast
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import jwt
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from ..browser import verify_browser_assertion
 from ..crypto import verify_dpop_proof
-from ..errors import PersonalAgentProtocolError, ProofError, SessionError
+from ..errors import (
+    PersonalAgentProtocolError,
+    ProofError,
+    ProtocolValidationError,
+    SessionError,
+)
 from ..json import loads_strict
 from ..models import Message, Operation, OperationConfirmation, OperationResult
-from ..reactor import CLOCKS, RANDOM_SOURCES, Clock, RandomSource, first_contribution
+from ..operations import OPERATIONS_VERSION
+from ..profile import PROTOCOL_PROFILE
+from ..reactor import (
+    CLOCKS,
+    RANDOM_SOURCES,
+    Clock,
+    RandomSource,
+    first_contribution,
+    optional_contribution,
+)
 from ..sessions import JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION, _opaque_id
 from .points import (
     CLIENT_POLICIES,
@@ -89,6 +104,7 @@ from .points import (
     OperationOutcomeUnknown,
     ReplayCache,
     Reply,
+    SignInContext,
     Turn,
 )
 from .store import (
@@ -101,12 +117,14 @@ from .store import (
     CODE,
     CONVERSATION,
     DEVICE,
+    DPOP,
     MEDIATED,
     MESSAGE_ID,
     OPERATION,
     PROPOSAL,
     SESSION,
     SESSION_TOKEN,
+    SIGN_IN_ATTEMPTS,
     USER_CODE,
     AccountAgent,
     AccountFamily,
@@ -122,6 +140,7 @@ from .store import (
     PendingDevice,
     PendingMediated,
     SessionPointer,
+    SignInAttempts,
     StoredConversation,
     StoredEvent,
     StoredOperation,
@@ -157,6 +176,51 @@ def _key_id(compact: str) -> str | None:
     return kid if isinstance(kid, str) else None
 
 
+#: The consent page's cookie: `__Host-`, so no other host or path can set it.
+CONSENT_COOKIE = "__Host-poppy_consent"
+#: The website's cookie, standing for the agent's Session in its own browser (§5): `__Host-`
+#: (Secure, Path=/, no Domain), so no other host or path can set or shadow it.
+WEB_COOKIE = "__Host-poppy_session"
+
+
+def _bound(secret: str, purpose: str) -> str:
+    """A form's CSRF token: only a page whose browser holds `secret` (a cookie) can know it."""
+
+    mac = hmac.new(secret.encode(), purpose.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(mac).rstrip(b"=").decode()
+
+
+def _cookie(request: CompanyRequest, name: str) -> str | None:
+    cookies = SimpleCookie()
+    try:
+        cookies.load(request.headers.get("cookie", ""))
+    except CookieError:
+        return None
+    morsel = cookies.get(name)
+    return morsel.value if morsel is not None and morsel.value else None
+
+
+def _from_this_site(request: CompanyRequest, base: str) -> bool:
+    """A POST a page of this site sent: never one another site's page made the browser send.
+
+    `Sec-Fetch-Site`, when the browser sends it, must be `same-origin`, and
+    `Origin`, when sent, the company's own; the form's CSRF token is checked
+    besides (Guides, consent pages).
+    """
+
+    site = request.headers.get("sec-fetch-site")
+    origin = request.headers.get("origin")
+    return (site is None or site == "same-origin") and (origin is None or origin == base)
+
+
+@dataclass(frozen=True)
+class ConsentDecision:
+    """What the user decided on the company's own consent page, checked by `consent_decision`."""
+
+    request_id: str
+    allow: bool
+
+
 @dataclass(frozen=True)
 class CompanyConfig:
     """What the company publishes and allows."""
@@ -175,6 +239,12 @@ class CompanyConfig:
     operation_lifetime: timedelta = timedelta(minutes=15)
     device_interval: int = 5
     max_code_attempts: int = 3
+    #: Failed Mediated Sign-In attempts (credentials or codes) a key may make before it
+    #: is locked out: an account identifier, an agent's user, a Session, an account's codes.
+    max_sign_in_failures: int = 5
+    #: How long the first lockout lasts; each failure past the limit doubles it (at most a
+    #: day), and the count is forgotten once a key has failed nothing for this long.
+    sign_in_lockout: timedelta = timedelta(minutes=15)
     custom_scopes: Mapping[str, str] = field(default_factory=dict)
     web: bool = False
     #: A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it.
@@ -191,6 +261,14 @@ class CompanyConfig:
                 raise ValueError(f"{name} must be an HTTPS URL without a fragment")
         if self.consent_page is not None and "{request_id}" not in self.consent_page:
             raise ValueError("consent_page must contain {request_id}")
+        if any(scope not in self.scopes for scope in self.write_scopes):
+            raise ValueError("write_scopes must be among scopes")
+        if self.max_sign_in_failures < 1 or self.sign_in_lockout <= timedelta(0):
+            raise ValueError("sign-in attempts need a positive limit and lockout")
+        if self.operations and not self.write_scopes:
+            # Confirming an operation needs a write scope: without one, any signed-in
+            # Session, whatever it was granted, could confirm (Operations §3.3).
+            raise ValueError("operations need write_scopes: the scopes confirming one requires")
 
     @property
     def base(self) -> str:
@@ -274,7 +352,9 @@ _CHALLENGED = frozenset(
 
 def _json_error(status: int, error: str, **extra: object) -> CompanyResponse:
     headers = {"Cache-Control": "no-store"}
-    if error in _CHALLENGED and status in {401, 403}:
+    # A DPoP refusal carries its challenge whatever its status, the token endpoint's
+    # 400 included (§4.3, RFC 9449 §7.1).
+    if error in _CHALLENGED and (status in {401, 403} or error == "invalid_dpop_proof"):
         # Token errors are also in WWW-Authenticate (§6, RFC 9449).
         scope = extra.get("scope")
         challenge = f'DPoP error="{error}"'
@@ -282,6 +362,15 @@ def _json_error(status: int, error: str, **extra: object) -> CompanyResponse:
             challenge += f', scope="{scope}"'
         headers["WWW-Authenticate"] = challenge
     return CompanyResponse(status, {"error": error, **extra}, headers)
+
+
+def _json_object(body: bytes) -> dict[str, Any]:
+    """A request body that must be one JSON object: anything else is `invalid_request`."""
+
+    value = loads_strict(body)
+    if not isinstance(value, dict):
+        raise _RefusedError(400, "invalid_request")
+    return value
 
 
 def _digest(token: str) -> str:
@@ -357,6 +446,15 @@ class CompanyService:
     async def handle(self, request: CompanyRequest) -> CompanyResponse:  # noqa: C901 - the route table
         path = urlsplit(request.url).path
         method = request.method.upper()
+        if any(
+            name == "access_token"
+            for name, _ in parse_qsl(urlsplit(request.url).query, keep_blank_values=True)
+        ):
+            # A token in a URL is logged, cached, and leaked in Referer: never accepted,
+            # even beside a header that would be (§4.3, RFC 6750 §2.3).
+            if path == "/mcp" and self._mcp() is not None:
+                return self._bearer_refusal(400, "invalid_request")
+            return _json_error(400, "invalid_request")
         try:
             if method == "GET" and path == "/.well-known/poppy.json":
                 return CompanyResponse(200, self.discovery_document())
@@ -397,6 +495,10 @@ class CompanyService:
         except (SessionError, ProofError) as error:
             status = error.status_code or (401 if error.code == "invalid_client" else 400)
             return _json_error(status, error.code)
+        except (ProtocolValidationError, ValidationError):
+            # A body that is not JSON, or not the shape the protocol defines: the
+            # caller's mistake, never the company's (no 500).
+            return _json_error(400, "invalid_request")
         return _json_error(404, "not_found")
 
     # Discovery ---------------------------------------------------------------------
@@ -420,7 +522,7 @@ class CompanyService:
         if config.custom_scopes:
             auth["custom_scopes"] = dict(config.custom_scopes)
         document: dict[str, Any] = {
-            "protocol_version": "0.1",
+            "protocol_version": PROTOCOL_PROFILE,
             "organization": {"name": config.name, "domain": config.domain},
             "auth": auth,
             "agent": {"protocols": [{"type": "poppy", "endpoint": config.conversations_endpoint}]},
@@ -440,7 +542,10 @@ class CompanyService:
             document["web"] = {"browser_session_endpoint": config.browser_session_endpoint}
         if config.operations:
             document["extensions"] = {
-                "operations": {"version": "1", "endpoint": config.operations_endpoint}
+                "operations": {
+                    "version": OPERATIONS_VERSION,
+                    "endpoint": config.operations_endpoint,
+                }
             }
         return document
 
@@ -478,8 +583,7 @@ class CompanyService:
         client_id = form.get("client_id", "")
         if form.get("client_assertion_type") != JWT_CLIENT_ASSERTION or not client_id:
             raise _RefusedError(401, "invalid_client")
-        policy = cast(ClientPolicy, first_contribution(self.reactor, CLIENT_POLICIES, "policy"))
-        if not await policy.allows(client_id):
+        if not await self._allowed(client_id):
             raise _RefusedError(401, "invalid_client")
         resolver = cast(
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client resolver")
@@ -494,7 +598,8 @@ class CompanyService:
             form.get("client_assertion", ""),
             keys=keys,
             issuer=client_id,
-            audience=audience,
+            # The issuer, the token endpoint, or the endpoint called (RFC 7523 §3).
+            audience=tuple(dict.fromkeys((self.config.base, self.config.token_endpoint, audience))),
             subject=client_id,
             replay_cache=self._replay(),
             now=self._now(),
@@ -504,6 +609,16 @@ class CompanyService:
         if known is None or known.extensions != extensions:
             await self.store.put(CLIENT, client_id, KnownClient(extensions).to_json())
         return client_id
+
+    async def _allowed(self, client_id: str) -> bool:
+        """The company's policy on this agent, asked before anything is fetched for it.
+
+        A blocked `client_id` is never resolved (no metadata or keys fetched from
+        its domain), and a blocked agent's tokens stop working at once.
+        """
+
+        policy = cast(ClientPolicy, first_contribution(self.reactor, CLIENT_POLICIES, "policy"))
+        return bool(await policy.allows(client_id))
 
     async def _supports_operations(self, client_id: str) -> bool:
         """Whether the agent declared the Operations extension when it last authenticated."""
@@ -898,8 +1013,10 @@ class CompanyService:
         session: IssuedSession,
         account_id: str,
         scopes: tuple[str, ...],
-        thumbprint: str | None = None,
+        thumbprint: str,
     ) -> CompanyResponse:
+        """Sign the Session in: `session` is its DPoP record, `thumbprint` the proven key."""
+
         if session.account_id is not None and session.account_id != account_id:
             raise _RefusedError(400, "account_mismatch")
         account_token = self._id("acct")
@@ -930,14 +1047,22 @@ class CompanyService:
             expires_at=expires_at,
         )
         await self._remember_family(session.client_id, account_id, family)
-        signed_in = replace(
-            session,
+        # The signed-in token is the Session's own: DPoP, bound to the key that proved
+        # possession, for no single resource. It replaces only the DPoP token; a Bearer
+        # token for the MCP server is renewed with the Account Token (§4.3, §4.8).
+        signed_in = IssuedSession(
+            session_id=session.session_id,
+            client_id=session.client_id,
+            pairwise_user_id=session.pairwise_user_id,
+            key_thumbprint=thumbprint,
+            expires_at=session.expires_at,
             account_id=account_id,
             scopes=scopes,
             account_token=family,
-            key_thumbprint=thumbprint or session.key_thumbprint,
+            token_type=DPOP,
+            resource=None,
         )
-        return await self._issue(signed_in, refresh_token=account_token)
+        return await self._issue(signed_in, refresh_token=account_token, replacing={DPOP})
 
     async def _remember_family(self, client_id: str, account_id: str, family: str) -> None:
         key = _composite(client_id, account_id)
@@ -1031,8 +1156,20 @@ class CompanyService:
         return latest + self.config.account_token_lifetime
 
     async def _session_by_id(self, session_id: str) -> IssuedSession | None:
+        """The Session by its ID: its latest DPoP token's record, never a Bearer one.
+
+        A Bearer token stands for the Session only at the MCP server it was issued
+        for (§4.3): a grant naming the Session builds on its DPoP record.
+        """
+
         stored = await self._read(SESSION, session_id, StoredSession.from_json)
-        return None if stored is None else stored.current
+        if stored is None:
+            return None
+        latest = stored.tokens.get(stored.latest)
+        if latest is not None and latest.token_type == DPOP:
+            return latest
+        dpop = [token for token in stored.tokens.values() if token.token_type == DPOP]
+        return max(dpop, key=lambda token: token.expires_at) if dpop else None
 
     async def _token_session(self, token: str) -> IssuedSession | None:
         """The state of the Session token `token`, while the Session still holds it."""
@@ -1052,7 +1189,8 @@ class CompanyService:
         query = dict(parse_qsl(urlsplit(request.url).query))
         client_id = query.get("client_id", "")
         redirect_uri = query.get("redirect_uri", "")
-        policy = cast(ClientPolicy, first_contribution(self.reactor, CLIENT_POLICIES, "policy"))
+        if not client_id or not await self._allowed(client_id):
+            return self._page(400, "This sign-in request is not valid.")
         resolver = cast(
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
         )
@@ -1061,7 +1199,7 @@ class CompanyService:
         except (PersonalAgentProtocolError, ValueError):
             return self._page(400, "This agent could not be verified.")
         # An unknown client or redirect is never redirected to: that would be an open redirector.
-        if not await policy.allows(client_id) or redirect_uri not in metadata.redirect_uris:
+        if redirect_uri not in metadata.redirect_uris:
             return self._page(400, "This sign-in request is not valid.")
         state = query.get("state", "")
         scopes = tuple(scope for scope in query.get("scope", "").split(" ") if scope)
@@ -1073,6 +1211,10 @@ class CompanyService:
             return self._redirect(redirect_uri, error="invalid_scope", state=state)
         request_id = self._id("authz")
         expires_at = self._now() + timedelta(minutes=10)
+        # The company's own page binds the request to this browser: its consent cookie
+        # (kept if it has one) and a form token only that cookie yields.
+        hosted = self.config.consent_page
+        browser = _cookie(request, CONSENT_COOKIE) or self._id("consent")
         await self.store.put(
             AUTHORIZATION,
             request_id,
@@ -1084,18 +1226,17 @@ class CompanyService:
                 code_challenge=query["code_challenge"],
                 expires_at=expires_at,
                 client_name=metadata.client_name,
+                browser_binding=None if hosted is not None else _digest(browser),
             ).to_json(),
             expires_at=expires_at,
         )
-        if self.config.consent_page is not None:
+        if hosted is not None:
             # A hosted consent page reads the request back (`authorization_request`).
             return CompanyResponse(
                 303,
                 None,
                 {
-                    "Location": self.config.consent_page.replace(
-                        "{request_id}", quote(request_id, safe="")
-                    ),
+                    "Location": hosted.replace("{request_id}", quote(request_id, safe="")),
                     "Cache-Control": "no-store",
                 },
             )
@@ -1109,11 +1250,46 @@ class CompanyService:
             200,
             f"<h1>{html.escape(self.config.name)}</h1>"
             f"<p><strong>{agent}</strong> ({agent_domain}) asks to:</p><ul>{described}</ul>"
-            f'<form method="post" data-request-id="{request_id}">'
+            f'<form method="post" action="{self.config.authorization_endpoint}" '
+            f'data-request-id="{request_id}">'
             f'<input type="hidden" name="request_id" value="{request_id}">'
+            f'<input type="hidden" name="csrf" value="{_bound(browser, f"consent:{request_id}")}">'
             '<button name="decision" value="allow">Allow</button>'
             '<button name="decision" value="deny">Deny</button></form>',
+            cookie=f"{CONSENT_COOKIE}={browser}; Path=/; Secure; HttpOnly; SameSite=Strict",
         )
+
+    async def consent_decision(self, request: CompanyRequest) -> ConsentDecision:
+        """The decision the company's own consent form posted, once it is shown to be the user's.
+
+        The company's web layer, which knows who is signed in, calls this on the
+        form's POST and then `approve_authorization` or `deny_authorization`.
+        Refused (`PermissionError`) unless the POST comes from this site
+        (`Sec-Fetch-Site`, `Origin`), carries the consent cookie the request was
+        bound to when its page was shown, and the form token only that cookie
+        yields: another site's page cannot make the browser decide, and a form
+        replayed from another browser does not match (Guides, consent pages).
+        """
+
+        refused = PermissionError("this decision did not come from the page that asked")
+        if request.method.upper() != "POST" or not _from_this_site(request, self.config.base):
+            raise refused
+        form = dict(parse_qsl(request.body.decode()))
+        request_id = form.get("request_id", "")
+        browser = _cookie(request, CONSENT_COOKIE)
+        pending = await self._read(AUTHORIZATION, request_id, PendingAuthorization.from_json)
+        if (
+            browser is None
+            or pending is None
+            or pending.browser_binding is None
+            or not hmac.compare_digest(_digest(browser), pending.browser_binding)
+            or not hmac.compare_digest(
+                form.get("csrf", ""), _bound(browser, f"consent:{request_id}")
+            )
+            or form.get("decision") not in {"allow", "deny"}
+        ):
+            raise refused
+        return ConsentDecision(request_id=request_id, allow=form["decision"] == "allow")
 
     async def authorization_request(self, request_id: str) -> dict[str, Any]:
         """A pending Direct Sign-In request, for a consent page to show; not consumed.
@@ -1218,25 +1394,25 @@ class CompanyService:
         )
 
     @staticmethod
-    def _page(status: int, body: str) -> CompanyResponse:
+    def _page(status: int, body: str, *, cookie: str | None = None) -> CompanyResponse:
         """A consent page: never framed, never cached (upstream guides, consent pages)."""
 
+        headers = {
+            "Content-Type": "text/html; charset=utf-8",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'",
+            "Cache-Control": "no-store",
+        }
+        if cookie is not None:
+            headers["Set-Cookie"] = cookie
         return CompanyResponse(
-            status,
-            f"<!doctype html><meta charset=utf-8><title>Sign in</title>{body}",
-            {
-                "Content-Type": "text/html; charset=utf-8",
-                "X-Frame-Options": "DENY",
-                "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'",
-                "Cache-Control": "no-store",
-            },
+            status, f"<!doctype html><meta charset=utf-8><title>Sign in</title>{body}", headers
         )
 
     # OpenAPI API (§6, Operations §4.1) -----------------------------------------------------
 
     def _api(self) -> CompanyApi | None:
-        contributions = self.reactor.get_contributions(COMPANY_APIS)
-        return cast(CompanyApi, contributions[0].value) if contributions else None
+        return cast(CompanyApi | None, optional_contribution(self.reactor, COMPANY_APIS, "API"))
 
     async def _api_call(self, request: CompanyRequest, method: str, path: str) -> CompanyResponse:
         _, session = await self._caller(request)
@@ -1274,10 +1450,96 @@ class CompanyService:
         if session is None or self._now() >= session.expires_at or bearer:
             # A Bearer token works only at the MCP server it was issued for (§4.3).
             raise _RefusedError(401, "invalid_token")
+        if not await self._allowed(session.client_id):
+            raise _RefusedError(401, "invalid_token")
         thumbprint = await self._dpop(request, access_token=token)
         if thumbprint != session.key_thumbprint:
             raise _RefusedError(401, "invalid_dpop_proof")
         return key, session
+
+    # Mediated Sign-In attempt limits (§4.7: a company MUST rate-limit attempts) ---------
+
+    def _attempt_keys(
+        self, session: IssuedSession, credentials: Mapping[str, object]
+    ) -> tuple[str, ...]:
+        """What a credential attempt counts against: the account, the agent's user, the Session.
+
+        The account is named by the declared fields that are not secret (an
+        email, a username), normalized; its password is never part of a key.
+        """
+
+        keys = [
+            _composite("user", session.client_id, session.pairwise_user_id),
+            _composite("session", session.session_id),
+        ]
+        named = [
+            str(credentials.get(name, "")).strip().casefold()
+            for name, _, secret in self.config.mediated_fields
+            if not secret
+        ]
+        if any(named):
+            keys.insert(0, _composite("account", *named))
+        return tuple(keys)
+
+    @staticmethod
+    def _code_key(account_id: str) -> str:
+        return _composite("code", account_id)
+
+    async def _locked_for(self, keys: Sequence[str]) -> int | None:
+        """Seconds until every key may try again, or `None` when none is locked out."""
+
+        now = self._now()
+        waits = []
+        for key in keys:
+            attempts = await self._read(SIGN_IN_ATTEMPTS, key, SignInAttempts.from_json)
+            if attempts is not None and attempts.locked_until is not None:
+                if now < attempts.locked_until:
+                    waits.append((attempts.locked_until - now).total_seconds())
+        return max(1, math.ceil(max(waits))) if waits else None
+
+    async def _attempt_failed(self, keys: Sequence[str]) -> None:
+        """Count one failure against each key; at the limit, lock it out, doubling each time."""
+
+        config = self.config
+        for key in keys:
+            for _ in range(_CAS_ATTEMPTS):
+                now = self._now()
+                entry = await self.store.get(SIGN_IN_ATTEMPTS, key)
+                before = (
+                    SignInAttempts() if entry is None else SignInAttempts.from_json(entry.value)
+                )
+                failures = before.failures + 1
+                locked_until = before.locked_until
+                if failures >= config.max_sign_in_failures:
+                    over = min(failures - config.max_sign_in_failures, 7)
+                    locked_until = now + min(config.sign_in_lockout * 2**over, timedelta(days=1))
+                after = SignInAttempts(failures=failures, locked_until=locked_until)
+                # Forgotten once the key has failed nothing for a lockout's length.
+                expires_at = max(now, locked_until or now) + config.sign_in_lockout
+                if entry is None:
+                    written = await self.store.create(
+                        SIGN_IN_ATTEMPTS, key, after.to_json(), expires_at=expires_at
+                    )
+                else:
+                    written = await self.store.replace(
+                        SIGN_IN_ATTEMPTS, key, entry.version, after.to_json(), expires_at=expires_at
+                    )
+                if written:
+                    break
+            else:
+                raise _RefusedError(503, "temporarily_unavailable")
+
+    async def _attempts_cleared(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            await self.store.delete(SIGN_IN_ATTEMPTS, key)
+
+    @staticmethod
+    def _rate_limited(retry_after: int) -> CompanyResponse:
+        return CompanyResponse(
+            429,
+            {"error": "rate_limited"},
+            {"Retry-After": str(retry_after), "Cache-Control": "no-store"},
+        )
 
     async def _mediated(self, request: CompanyRequest) -> CompanyResponse:
         _, session = await self._caller(request)
@@ -1285,19 +1547,37 @@ class CompanyService:
         credentials = body.get("credentials") if isinstance(body, dict) else None
         if not isinstance(credentials, dict):
             raise _RefusedError(400, "invalid_request")
-        requested = tuple(s for s in str(body.get("scope", "")).split(" ") if s)
-        granted = tuple(scope for scope in requested if scope in self.config.scopes)
+        scope = body.get("scope")
+        granted = tuple(s for s in scope.split(" ") if s) if isinstance(scope, str) else ()
+        if not granted or any(s not in self.config.scopes for s in granted):
+            # Missing, unknown, or unavailable scopes are refused, never narrowed (§4.4).
+            raise _RefusedError(400, "invalid_scope")
+        keys = self._attempt_keys(session, credentials)
+        locked = await self._locked_for(keys)
+        if locked is not None:
+            # Locked out: the credentials are not even checked (§4.2, `rate_limited`).
+            credentials.clear()
+            return self._rate_limited(locked)
         accounts = cast(
             AccountDirectory, first_contribution(self.reactor, COMPANY_ACCOUNTS, "accounts")
         )
         secrets = {name: SecretStr(str(value)) for name, value in credentials.items()}
         credentials.clear()
-        authenticated = await accounts.authenticate(secrets)
+        authenticated = await accounts.authenticate(
+            secrets, SignInContext(client_id=session.client_id, session_id=session.session_id)
+        )
         secrets.clear()
         if authenticated is None:
+            await self._attempt_failed(keys)
             return CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+        code_key = self._code_key(authenticated.account_id)
         if authenticated.code_reference is None:
+            await self._attempts_cleared(keys)
             return await self._signed_in_body(session, authenticated.account_id, granted)
+        locked = await self._locked_for((code_key,))
+        if locked is not None:
+            # Too many wrong codes for this account: no new code until the lockout ends.
+            return self._rate_limited(locked)
         sign_in_id = self._id("si")
         expires_at = self._now() + timedelta(minutes=5)
         await self.store.put(
@@ -1309,6 +1589,7 @@ class CompanyService:
                 scopes=granted,
                 code_reference=authenticated.code_reference,
                 expires_at=expires_at,
+                attempt_keys=keys,
             ).to_json(),
             expires_at=expires_at + _KEPT_EXPIRED,
         )
@@ -1332,6 +1613,12 @@ class CompanyService:
         if self._now() >= pending.expires_at:
             await self.store.delete(MEDIATED, sign_in_id)
             return CompanyResponse(200, {"status": "expired"}, {"Cache-Control": "no-store"})
+        failed = CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+        code_key = self._code_key(pending.account_id)
+        if await self._locked_for((code_key,)) is not None:
+            # The account's code budget is spent, whichever sign-in spent it.
+            await self.store.delete(MEDIATED, sign_in_id)
+            return failed
         body = loads_strict(request.body) if request.body else {}
         code = body.get("code") if isinstance(body, dict) else None
         accounts = cast(
@@ -1340,16 +1627,22 @@ class CompanyService:
         if not isinstance(code, str) or not await accounts.check_code(
             pending.code_reference, SecretStr(code)
         ):
-            # Every wrong code counts, however many replicas check them at once.
+            # Every wrong code counts, however many replicas check them at once: against
+            # this sign-in, and against the account across every sign-in started for it.
+            await self._attempt_failed((code_key,))
             counted = await self._change(
                 MEDIATED,
                 sign_in_id,
                 PendingMediated.from_json,
                 lambda current: replace(current, attempts=current.attempts + 1),
             )
-            if counted is None or counted[1].attempts >= self.config.max_code_attempts:
+            if (
+                counted is None
+                or counted[1].attempts >= self.config.max_code_attempts
+                or await self._locked_for((code_key,)) is not None
+            ):
                 await self.store.delete(MEDIATED, sign_in_id)
-                return CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+                return failed
             return CompanyResponse(
                 200,
                 {
@@ -1363,14 +1656,15 @@ class CompanyService:
         # One use: of two right codes sent at once, only the one that takes it signs in.
         taken = await self.store.take(MEDIATED, sign_in_id)
         if taken is None:
-            return CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+            return failed
         completed = PendingMediated.from_json(taken)
+        await self._attempts_cleared((*completed.attempt_keys, code_key))
         return await self._signed_in_body(session, completed.account_id, completed.scopes)
 
     async def _signed_in_body(
         self, session: IssuedSession, account_id: str, scopes: tuple[str, ...]
     ) -> CompanyResponse:
-        response = await self._sign_in(session, account_id, scopes)
+        response = await self._sign_in(session, account_id, scopes, session.key_thumbprint)
         return replace(response, body={"status": "complete", **cast(dict, response.body)})
 
     # Conversations -------------------------------------------------------------------
@@ -1416,12 +1710,13 @@ class CompanyService:
 
     async def _start_conversation(self, request: CompanyRequest) -> CompanyResponse:
         _, session = await self._caller(request)
-        body = loads_strict(request.body)
+        body = _json_object(request.body)
         message = Message.model_validate(body.get("message"))
         owner = (session.client_id, session.pairwise_user_id)
         replay = await self._replayed(owner, message)
         if replay is not None:
-            return self._answer(request, await self._conversation(replay), 201)
+            # A retried start answers only a caller that may read the conversation now.
+            return self._answer(request, await self._owned(replay, session), 201)
         parent_id = body.get("parent_conversation_id")
         parent = None if parent_id is None else await self._direct_parent(str(parent_id), session)
         conversation = StoredConversation(
@@ -1432,7 +1727,7 @@ class CompanyService:
         conversation_id = conversation.conversation_id
         replay = await self._claim(owner, message, conversation_id)
         if replay is not None:
-            return self._answer(request, await self._conversation(replay), 201)
+            return self._answer(request, await self._owned(replay, session), 201)
         await self.store.put(CONVERSATION, conversation_id, conversation.to_json())
         if parent is not None:
             await self._open_direct(parent.conversation_id, conversation_id, owner, message)
@@ -1513,7 +1808,7 @@ class CompanyService:
                 raise _RefusedError(404, "conversation_not_found")
             return self._receipt(changed[1], 202)
         if action == "messages":
-            message = Message.model_validate(loads_strict(request.body).get("message"))
+            message = Message.model_validate(_json_object(request.body).get("message"))
             owner = (session.client_id, session.pairwise_user_id)
             replay = await self._replayed(owner, message)
             if replay is None and await self._claim(owner, message, conversation_id) is None:
@@ -1561,10 +1856,18 @@ class CompanyService:
 
         def accept(current: StoredConversation) -> StoredConversation:
             self._open(current)
+            if current.responder == "human":
+                return replace(
+                    current,
+                    account_id=session.account_id or current.account_id,
+                    events=(*current.events, received),
+                )
+            # The agent works on it: every change of status adds a state event (§7).
             return replace(
                 current,
+                status="working",
                 account_id=session.account_id or current.account_id,
-                events=(*current.events, received),
+                events=(*current.events, received, self._state("working", current.responder)),
             )
 
         try:
@@ -1594,6 +1897,7 @@ class CompanyService:
                 scopes=session.scopes,
                 client_id=session.client_id,
                 is_direct=conversation.parent_id is not None,
+                supports_operations=await self._supports_operations(session.client_id),
             )
         )
         events: list[StoredEvent] = []
@@ -1603,8 +1907,10 @@ class CompanyService:
                 events.append(event)
 
         def answered(current: StoredConversation) -> StoredConversation:
-            status: Literal["idle", "closed"] = "closed" if current.status == "closed" else "idle"
-            return replace(current, status=status, events=(*current.events, *events))
+            if current.status == "closed":
+                return replace(current, events=(*current.events, *events))
+            idle = self._state("idle", current.responder)
+            return replace(current, status="idle", events=(*current.events, *events, idle))
 
         changed = await self._change(
             CONVERSATION, conversation_id, StoredConversation.from_json, answered
@@ -1792,7 +2098,11 @@ class CompanyService:
             result=None,
         )
         stored = StoredOperation(
-            operation=operation, action=proposal.action, owner=owner, account_id=account_id
+            operation=operation,
+            action=proposal.action,
+            owner=owner,
+            account_id=account_id,
+            scopes=self._operation_scopes(proposal),
         )
         await self.store.put(OPERATION, operation_id, stored.to_json())
         await self.store.put(
@@ -1802,6 +2112,14 @@ class CompanyService:
             expires_at=operation.expires_at,
         )
         return operation
+
+    def _operation_scopes(self, proposal: Any) -> tuple[str, ...]:
+        """The scopes confirming this operation requires: its own, else the write scopes."""
+
+        scopes = tuple(proposal.scopes) or self.config.write_scopes
+        if any(scope not in self.config.scopes for scope in scopes):
+            raise ValueError("an operation's scopes must be among the company's scopes")
+        return scopes
 
     async def operation_record(self, operation_id: str) -> StoredOperation:
         """An operation as the company keeps it: its record, action, owner, and account."""
@@ -1958,8 +2276,10 @@ class CompanyService:
         """Confirm, whichever channel it comes through: at most once (Operations §4.4, §6)."""
 
         operation = stored.operation
-        if any(scope not in session.scopes for scope in self.config.write_scopes):
-            raise _RefusedError(403, "insufficient_scope", scope=" ".join(self.config.write_scopes))
+        # The scopes recorded with the operation when it was proposed, whichever
+        # channel (API, MCP, conversation) proposed it and whichever confirms it.
+        if any(scope not in session.scopes for scope in stored.scopes):
+            raise _RefusedError(403, "insufficient_scope", scope=" ".join(stored.scopes))
         if operation.state != "proposed":
             # At most once: a retried or late confirmation returns the record unchanged.
             return CompanyResponse(200, operation.model_dump(mode="json"))
@@ -2013,18 +2333,22 @@ class CompanyService:
         )
 
     async def _perform(self, confirmed: StoredOperation) -> CompanyResponse:
-        """Perform a just-confirmed operation with its one executor."""
+        """Perform a just-confirmed operation with its action's executor.
+
+        The action's lowest-order executor performs it; two at that order are ambiguous.
+        """
 
         executors = [
-            cast(OperationExecutor, c.value)
-            for c in self.reactor.get_contributions(OPERATION_EXECUTORS)
-            if getattr(c.value, "action", None) == confirmed.action
+            contribution
+            for contribution in self.reactor.get_contributions(OPERATION_EXECUTORS)
+            if getattr(contribution.value, "action", None) == confirmed.action
         ]
-        if len(executors) != 1:
+        if not executors or (len(executors) > 1 and executors[0].order == executors[1].order):
             # Nobody can perform it: it stays in progress rather than claim a failure.
             return self._operation_response(confirmed)
+        executor = cast(OperationExecutor, executors[0].value)
         try:
-            result = await executors[0].perform(confirmed.operation, confirmed.account_id)
+            result = await executor.perform(confirmed.operation, confirmed.account_id)
         except OperationFailed as failed:
             # Failed partway: the result says every change that was made (Operations §6).
             return await self._finish(confirmed, "failed", failed.result)
@@ -2061,8 +2385,9 @@ class CompanyService:
     # MCP (§4.3, §6, Operations §4.2) -------------------------------------------------------
 
     def _mcp(self) -> CompanyMcp | None:
-        contributions = self.reactor.get_contributions(COMPANY_MCP)
-        return cast(CompanyMcp, contributions[0].value) if contributions else None
+        return cast(
+            CompanyMcp | None, optional_contribution(self.reactor, COMPANY_MCP, "MCP server")
+        )
 
     def _bearer_refusal(self, status: int, error: str, scope: str | None = None) -> CompanyResponse:
         challenge = (
@@ -2089,6 +2414,7 @@ class CompanyService:
             or self._now() >= session.expires_at
             or session.token_type != "Bearer"  # noqa: S105 - OAuth token type
             or session.resource != self.config.mcp_url
+            or not await self._allowed(session.client_id)
         ):
             return None
         return session
@@ -2201,6 +2527,8 @@ class CompanyService:
             claims = jwt.decode(assertion, options={"verify_signature": False})
             header = jwt.get_unverified_header(assertion)
             client_id = str(claims["iss"])
+            if not await self._allowed(client_id):
+                return refused
             resolver = cast(
                 ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
             )
@@ -2255,47 +2583,46 @@ class CompanyService:
             {
                 "Location": verified.return_to,
                 # The company's own cookie: no Max-Age, and only as alive as its Session.
-                "Set-Cookie": f"poppy_session={cookie}; Path=/; Secure; HttpOnly; SameSite=Lax",
+                "Set-Cookie": f"{WEB_COOKIE}={cookie}; Path=/; Secure; HttpOnly; SameSite=Lax",
                 "Cache-Control": "no-store",
             },
         )
 
-    async def _web_session(self, request: CompanyRequest) -> IssuedSession | None:
+    async def _web_session(self, cookie: str | None) -> IssuedSession | None:
         """The Session a browser's cookie stands for, as it is now (§5)."""
 
-        cookies = SimpleCookie()
-        try:
-            cookies.load(request.headers.get("cookie", ""))
-        except CookieError:
+        if cookie is None:
             return None
-        morsel = cookies.get("poppy_session")
-        if morsel is None:
-            return None
-        pointer = await self._read(BROWSER_COOKIE, _digest(morsel.value), SessionPointer.from_json)
+        pointer = await self._read(BROWSER_COOKIE, _digest(cookie), SessionPointer.from_json)
         if pointer is None:
             return None
         session = await self._live_session(pointer.session_id)
         if session is None:
             # The cookie does not outlive the Session.
-            await self.store.delete(BROWSER_COOKIE, _digest(morsel.value))
+            await self.store.delete(BROWSER_COOKIE, _digest(cookie))
         return session
 
     async def _operation_page(
         self, request: CompanyRequest, method: str, operation_id: str
     ) -> CompanyResponse:
-        session = await self._web_session(request)
-        if session is None:
+        cookie = _cookie(request, WEB_COOKIE)
+        session = await self._web_session(cookie)
+        if cookie is None or session is None:
             return self._page(401, "Your agent's session has ended. Ask it to open this again.")
         try:
             stored = await self._usable(operation_id, session)
         except _RefusedError:
             return self._page(404, "There is nothing to show here.")
         page_url = f"{self.config.base}/operations/{operation_id}"
+        csrf = _bound(cookie, f"operation:{operation_id}")
         if method == "POST":
-            origin = request.headers.get("origin")
-            if origin is not None and origin != self.config.base:
-                return self._page(403, "This request did not come from this site.")
             form = dict(parse_qsl(request.body.decode()))
+            # This site's page, in the browser this cookie is in: never another site's
+            # page, nor a form copied from another Session's page (Guides, consent pages).
+            if not _from_this_site(request, self.config.base) or not hmac.compare_digest(
+                form.get("csrf", ""), csrf
+            ):
+                return self._page(403, "This request did not come from this site.")
             try:
                 if form.get("action") == "cancel":
                     await self._cancel_operation(operation_id)
@@ -2323,6 +2650,7 @@ class CompanyService:
                 f'<form method="post" action="{page_url}">'
                 f'<input type="hidden" name="revision" value="{operation.revision}">'
                 '<input type="hidden" name="approved_by" value="user">'
+                f'<input type="hidden" name="csrf" value="{csrf}">'
                 '<button name="action" value="confirm">Confirm</button>'
                 '<button name="action" value="cancel">Cancel</button></form>'
             )

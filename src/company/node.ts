@@ -21,6 +21,10 @@ export interface CompanyRequestListenerOptions {
 }
 
 class TooLarge extends Error {}
+class RepeatedHeader extends Error {}
+
+/** Headers a request carries at most once: a second is refused (`400`). */
+const SINGLE_HEADERS = ["authorization", "dpop"] as const;
 
 async function readBody(request: IncomingMessage, limit: number): Promise<Uint8Array> {
   const chunks: Buffer[] = [];
@@ -35,6 +39,12 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Uint8A
 }
 
 function lowerCaseHeaders(request: IncomingMessage): Record<string, string> {
+  // One credential and one proof per request: a repeated one is never merged or picked
+  // from (RFC 9449 §4.3, RFC 6750 §2). `headers` keeps one `authorization` and joins
+  // `dpop`; `headersDistinct` keeps every value.
+  for (const name of SINGLE_HEADERS) {
+    if ((request.headersDistinct[name]?.length ?? 0) > 1) throw new RepeatedHeader();
+  }
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(request.headers)) {
     if (value === undefined) continue;
@@ -99,6 +109,10 @@ export function companyRequestListener(
       } catch (error) {
         if (error instanceof TooLarge) {
           sendJson(response, 413, { error: "request_too_large" });
+          return;
+        }
+        if (error instanceof RepeatedHeader) {
+          sendJson(response, 400, { error: "invalid_request" });
           return;
         }
         options.onError?.(error);

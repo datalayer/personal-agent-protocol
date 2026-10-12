@@ -1,0 +1,88 @@
+---
+title: Contribution points
+---
+
+# Reactor contribution points
+
+Every service the SDK lets a host replace is a [Datalayer
+Reactor](https://reactor.datalayer.tech) contribution point. Python and
+TypeScript define the same points, with the same ids and contracts (members
+spelled `snake_case` in Python, `camelCase` in TypeScript), listed in
+[`protocol/reactor-points.json`](https://github.com/datalayer/personal-agent-protocol/blob/main/protocol/reactor-points.json).
+Each SDK's tests hold it to that file, so a point added to one SDK and not the
+other fails CI. One point is for Python hosts only, and the file says so
+(`typescript: null`): `pap.approvalSurface` gates the [live-session
+actions](/guides/cli/#live-session-actions), which only the Python SDK
+registers.
+
+## Resolution
+
+- A lower `order` wins. The SDK's own defaults contribute at `order` 100, so
+  any host contribution with a lower order replaces them.
+- Two contributions at the winning order are ambiguous and fail closed: the
+  SDK refuses rather than pick one by load order.
+- A point with no default and no contribution fails closed when the SDK needs
+  it (`no active … contribution`). `pap.company.api` and `pap.company.mcp` are
+  optional: with none, the company publishes no API or MCP server. So are
+  `pap.telemetry` (with none, nothing is emitted) and `pap.approvalSurface`
+  (with none, destructive live-session actions are refused).
+- `pap.company.operationExecutor` resolves per action: the lowest-order
+  executor whose `action` names the operation's performs it; two at that order
+  leave the operation `in_progress` instead of performing it twice.
+- Contributions follow their plugin: disabling or unregistering a plugin
+  removes what it contributed, and the SDK reads each point when it needs it,
+  never caching a provider.
+
+## Personal agent
+
+| Point | Python | TypeScript | Responsibility | SDK default | Tenant-scoped |
+| --- | --- | --- | --- | --- | --- |
+| `pap.discoveryTransport` | `DISCOVERY_TRANSPORTS` | `DiscoveryTransports` | Credential-free, bounded public metadata transport | `httpx` / `fetch` |  |
+| `pap.urlSafetyPolicy` | `URL_SAFETY_POLICIES` | `UrlSafetyPolicies` | HTTPS, DNS, IP, and redirect policy for metadata URLs | `public` |  |
+| `pap.clock` | `CLOCKS` | `Clocks` | Time for every expiring protocol state | `system` |  |
+| `pap.randomSource` | `RANDOM_SOURCES` | `RandomSources` | Cryptographically secure randomness | `system` |  |
+| `pap.signer` | `SIGNERS` | `Signers` | The agent's client and Session assertions (keys stay in custody) | — (host contributes) |  |
+| `pap.tokenStore` | `TOKEN_STORES` | `TokenStores` | Account Tokens behind opaque references | — (host contributes) |  |
+| `pap.pairwiseUserIdStore` | `PAIRWISE_USER_ID_STORES` | `PairwiseUserIdStores` | Stable pairwise user IDs by tenant, local user, and issuer | — (host contributes) | yes |
+| `pap.authorizationStateStore` | `AUTHORIZATION_STATE_STORES` | `AuthorizationStateStores` | Expiring one-use sign-in state (put, take) | — (host contributes) |  |
+| `pap.cache` | `CACHES` | `Caches` | Bounded cache of public metadata | `memory` |  |
+| `pap.browserHandoff` | `BROWSER_HANDOFFS` | `BrowserHandoffs` | Opens a sign-in page on a trusted surface | — (host contributes) |  |
+| `pap.browserFormPost` | `BROWSER_FORM_POSTS` | `BrowserFormPosts` | Posts a browser-session assertion from the user's browser | — (host contributes) |  |
+| `pap.dpopProofProvider` | `DPOP_PROOF_PROVIDERS` | `DpopProofProviders` | Fresh DPoP proofs, private keys kept in custody | — (host contributes) | yes |
+| `pap.accountTokenLock` | `ACCOUNT_TOKEN_LOCKS` | `AccountTokenLocks` | Serializes Account Token rotation | `in-process` |  |
+| `pap.protectedInput` | `PROTECTED_INPUTS` | `ProtectedInputs` | Collects credentials and codes outside the model | — (host contributes) |  |
+| `pap.retryPolicy` | `RETRY_POLICIES` | `RetryPolicies` | When a refused request is retried | `default` |  |
+| `pap.rateLimitBudget` | `RATE_LIMIT_BUDGETS` | `RateLimitBudgets` | Per-company request budget shared across tasks | `in-process` |  |
+| `pap.standingPermissionStore` | `STANDING_PERMISSION_STORES` | `StandingPermissionStores` | Reserves, commits, and releases standing permissions | — (host contributes) |  |
+| `pap.telemetry` | `TELEMETRY_SINKS` | `TelemetrySinks` | Receives each finished protocol stage, [redacted by construction](/guides/telemetry/) | — (feature off) |  |
+| `pap.approvalSurface` | `APPROVAL_SURFACES` | — (Python hosts) | The user's approval of a destructive live-session action | — (refused without) |  |
+
+The discovery transport follows each language's HTTP idiom: Python's gets one
+approved URL within its `MetadataFetch` bounds and connects only to the
+addresses the URL safety policy approved; TypeScript's is a `fetch`, each URL
+approved by the policy first.
+
+## Company
+
+| Point | Python | TypeScript | Responsibility | SDK default | Tenant-scoped |
+| --- | --- | --- | --- | --- | --- |
+| `pap.company.store` | `COMPANY_STORES` | `CompanyStores` | Every record a company keeps (versioned JSON) | `memory` |  |
+| `pap.company.accounts` | `COMPANY_ACCOUNTS` | `CompanyAccounts` | Credentials and second factors for Mediated Sign-In | — (host contributes) |  |
+| `pap.company.agent` | `COMPANY_AGENTS` | `CompanyAgents` | The company agent answering conversations | — (host contributes) |  |
+| `pap.company.operationExecutor` | `OPERATION_EXECUTORS` | `OperationExecutors` | Performs a confirmed operation, by action | — (host contributes) |  |
+| `pap.company.clientPolicy` | `CLIENT_POLICIES` | `ClientPolicies` | Allows or blocks personal agents by client_id | `allow` |  |
+| `pap.company.clientResolver` | `CLIENT_RESOLVERS` | `ClientResolvers` | Fetches an agent's metadata and JWKS | `https` |  |
+| `pap.company.replayCache` | `REPLAY_CACHES` | `ReplayCaches` | Remembers assertion and proof IDs once | `store` |  |
+| `pap.company.api` | `COMPANY_APIS` | `CompanyApis` | The company's OpenAPI API | — (feature off) |  |
+| `pap.company.mcp` | `COMPANY_MCP` | `CompanyMcps` | The company's MCP server | — (feature off) |  |
+
+## Tenants
+
+Two contracts are tenant-scoped: `pap.pairwiseUserIdStore` receives the
+`tenant_id` (`tenantId`) with each request, and `pap.dpopProofProvider`
+receives it in each `DpopProofRequest`. The SDK always passes the tenant of
+the call it is making, so a host keeps one tenant's pairwise IDs and proof
+keys apart from another's; the tests check that one tenant's ID is never
+returned for another and that each proof is asked for the request's own
+tenant. A company is one tenant of its own points: a host serving several
+companies builds one company (and one Reactor) for each.

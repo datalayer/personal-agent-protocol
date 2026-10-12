@@ -30,6 +30,27 @@ export interface AgentIdentityClientOptions extends PapCoreOptions {
   readonly cacheBounds?: CacheBounds;
   /** At most one JWKS refetch per `jwks_uri` this often, for unknown `kid`s (default 60). */
   readonly jwksRefetchIntervalSeconds?: number;
+  /** A `client_id` whose metadata could not be fetched is not fetched again this long (default 30). */
+  readonly unfetchableSeconds?: number;
+}
+
+/** The most entries a per-URL table keeps (refetch times, unfetchable client IDs). */
+const REMEMBERED = 1024;
+
+/**
+ * Set `table[key]` to a time, keeping the table bounded: entries at or before `stale`
+ * go first, then the oldest, so endless URLs cannot grow it past `REMEMBERED`.
+ */
+function remember<T extends { readonly at: number }>(table: Map<string, T>, key: string, value: T, stale: number): void {
+  table.delete(key);
+  if (table.size >= REMEMBERED) {
+    for (const [name, entry] of table) if (entry.at <= stale) table.delete(name);
+    for (const name of table.keys()) {
+      if (table.size < REMEMBERED) break;
+      table.delete(name);
+    }
+  }
+  table.set(key, value);
 }
 
 export interface IdentityRequestOptions {
@@ -49,7 +70,9 @@ export class AgentIdentityClient {
   readonly #timeoutMs: number;
   readonly #cache: MetadataCache;
   readonly #refetchIntervalMs: number;
-  readonly #refetched = new Map<string, number>();
+  readonly #refetched = new Map<string, { readonly at: number }>();
+  readonly #unfetchable = new Map<string, { readonly at: number; readonly error: Error }>();
+  readonly #unfetchableMs: number;
 
   constructor(options: AgentIdentityClientOptions = {}) {
     const maxRedirects = options.maxJwksRedirects ?? 3;
@@ -67,6 +90,7 @@ export class AgentIdentityClient {
     if (!(this.#timeoutMs > 0)) throw new RangeError("timeoutMs must be positive");
     this.#cache = new MetadataCache(this.#reactor, options.cacheBounds);
     this.#refetchIntervalMs = (options.jwksRefetchIntervalSeconds ?? 60) * 1000;
+    this.#unfetchableMs = (options.unfetchableSeconds ?? 30) * 1000;
   }
 
   async fetchMetadata(
@@ -74,13 +98,25 @@ export class AgentIdentityClient {
     options: IdentityRequestOptions = {},
   ): Promise<ClientMetadata> {
     const requested = this.#clientIdUrl(clientId);
-    const value = await this.#cachedJson(
-      `pap.client-metadata:${requested.toString()}`,
-      requested,
-      0,
-      undefined,
-      options.signal,
-    );
+    const now = this.#cache.now().getTime();
+    const remembered = this.#unfetchable.get(requested.toString());
+    if (remembered !== undefined && now < remembered.at) throw remembered.error;
+    let value: unknown;
+    try {
+      value = await this.#cachedJson(
+        `pap.client-metadata:${requested.toString()}`,
+        requested,
+        0,
+        undefined,
+        options.signal,
+      );
+    } catch (error) {
+      // Unfetchable for a while: a stream of assertions naming it does not fetch it each time.
+      if (error instanceof IdentityError || error instanceof DiscoveryError) {
+        remember(this.#unfetchable, requested.toString(), { at: now + this.#unfetchableMs, error }, now);
+      }
+      throw error;
+    }
     let metadata: ClientMetadata;
     try {
       metadata = parseClientMetadata(value);
@@ -119,9 +155,9 @@ export class AgentIdentityClient {
       return keys;
     }
     const now = this.#cache.now().getTime();
-    const last = this.#refetched.get(metadata.jwks_uri);
+    const last = this.#refetched.get(metadata.jwks_uri)?.at;
     if (last !== undefined && now - last < this.#refetchIntervalMs) return keys;
-    this.#refetched.set(metadata.jwks_uri, now);
+    remember(this.#refetched, metadata.jwks_uri, { at: now }, now - this.#refetchIntervalMs);
     await this.#cache.delete(key);
     return parseKeys(await this.#jwks(metadata, key, options.signal));
   }
@@ -194,19 +230,22 @@ export class AgentIdentityClient {
       let response: Response;
       try {
         response = await withinDeadline(
-          transport.fetch(current, {
-            headers: { Accept: "application/json" },
-            redirect: "manual",
-            credentials: "omit",
-            ...(signal === undefined ? {} : { signal }),
-          }),
-          { timeoutMs: this.#timeoutMs, startedAt },
+          (aborted) =>
+            transport.fetch(current, {
+              headers: { Accept: "application/json" },
+              redirect: "manual",
+              credentials: "omit",
+              signal: aborted,
+            }),
+          { timeoutMs: this.#timeoutMs, startedAt, ...(signal === undefined ? {} : { signal }) },
         );
       } catch (cause) {
         if (cause instanceof DiscoveryError) throw cause;
         throw new IdentityError("request_failed", "Agent identity request failed", { cause });
       }
       if (response.status >= 300 && response.status < 400) {
+        // A redirect's body is never read: cancelled, so its connection is released.
+        await response.body?.cancel().catch(() => undefined);
         if (redirects === maxRedirects) {
           const code = maxRedirects === 0 ? "metadata_redirect" : "too_many_redirects";
           throw new IdentityError(code, "Agent identity endpoint exceeded redirect policy");
@@ -222,6 +261,7 @@ export class AgentIdentityClient {
         continue;
       }
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         throw new IdentityError(
           "http_error",
           "Agent identity endpoint returned an unsuccessful status",

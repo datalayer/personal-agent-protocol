@@ -40,3 +40,19 @@ jobs:
       install-extras: test
       run-tests: true
       test-command: pytest personal_agent_protocol/__tests__/ --cov=personal_agent_protocol --cov-report term-missing
+
+  # The load tests at size, and the canary suite with the examples' tools (PAP plan §5).
+  load-and-canaries:
+    runs-on: ubuntu-latest
+    env:
+      PAP_LOAD_SIZE: '512'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+          python-version: '3.12'
+          activate-environment: true
+      - run: uv pip install ".[test,examples]"
+      - run: pytest -q -s -m load personal_agent_protocol/__tests__/test_load.py
+      - run: pytest -q -s personal_agent_protocol/__tests__/test_canaries.py

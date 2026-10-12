@@ -41,3 +41,25 @@ tag.
 Registry configuration must match the repository, workflow filename, and
 environment exactly. Renaming any of them requires updating the trusted
 publisher configuration.
+
+## Signatures
+
+PyPI distributions are published with PEP 740 attestations
+(`attestations: true`) and the npm package with a provenance statement
+(`--provenance`); both need the job's `id-token: write`. After a release,
+check them:
+
+- PyPI: the release's files list a provenance attestation
+  (`https://pypi.org/integrity/personal-agent-protocol/<version>/<file>/provenance`).
+- npm: `npm view @datalayer/personal-agent-protocol@<version> dist.attestations`
+  names the provenance predicate, and `npm audit signatures` verifies it.
+
+## Before tagging
+
+Bump `personal_agent_protocol/__version__.py`, `package.json`, the plugin
+manifests' versions (`personal_agent_protocol/reactor.py`,
+`personal_agent_protocol/company/__init__.py`, `src/reactor.ts`,
+`src/company/index.ts`), the [compatibility](docs/docs/releases/compatibility.mdx)
+and [support](docs/docs/releases/support.mdx) pages, a migration section for a
+breaking release, and the changelog; regenerate the conformance report. The
+tests fail when any of them is stale.

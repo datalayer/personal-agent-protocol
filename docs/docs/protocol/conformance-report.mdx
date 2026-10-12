@@ -6,16 +6,16 @@ title: Compatibility and conformance report
 
 # Compatibility and conformance report
 
-SDK version **0.6.0**, PAP profile **0.1** (draft updated 2026-10-09), Operations extension **v1**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
+SDK version **0.10.0**, PAP profile **0.1** (draft updated 2026-10-09), Operations extension **v1**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
 
 ## Pairings
 
 | Personal agent | Company | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: |
 | Python | Python | 91 | 0 | 0 |
-| Python | TypeScript | 83 | 0 | 8 |
-| TypeScript | Python | 83 | 0 | 8 |
-| TypeScript | TypeScript | 83 | 0 | 8 |
+| Python | TypeScript | 91 | 0 | 0 |
+| TypeScript | Python | 91 | 0 | 0 |
+| TypeScript | TypeScript | 91 | 0 | 0 |
 
 ## Protocol
 
@@ -80,12 +80,12 @@ SDK version **0.6.0**, PAP profile **0.1** (draft updated 2026-10-09), Operation
 | `lifecycle.sign-out-session-continues` | positive | PAP-4.9-01 | pass | pass | pass | pass |
 | `lifecycle.sign-out-every-session` | positive | PAP-4.9-01, PAP-4.8-05 | pass | pass | pass | pass |
 | `lifecycle.disconnect-from-account-settings` | positive | GUIDE-co-account-01 | pass | pass | pass | pass |
-| `lifecycle.mcp-protected-resource-metadata` | positive | PAP-6-06, PAP-6-03 | pass | skip | skip | skip |
-| `lifecycle.mcp-bearer-for-its-url` | positive | PAP-4.3-09, PAP-6-04, GUIDE-pa-tokens-01 | pass | skip | skip | skip |
-| `lifecycle.mcp-bearer-only-at-mcp` | negative | PAP-4.3-10, PAP-6-05 | pass | skip | skip | skip |
-| `lifecycle.mcp-sign-out-takes-effect` | positive | PAP-4.9-01, PAP-6-04 | pass | skip | skip | skip |
-| `lifecycle.browser-joins-session` | positive | PAP-5-01, PAP-5-03, PAP-5-12, PAP-5-10, PAP-5-11 | pass | skip | skip | skip |
-| `lifecycle.browser-assertion-refused` | negative | PAP-5-05, PAP-5-06, PAP-5-07, PAP-5-08, PAP-5-09 | pass | skip | skip | skip |
+| `lifecycle.mcp-protected-resource-metadata` | positive | PAP-6-06, PAP-6-03 | pass | pass | pass | pass |
+| `lifecycle.mcp-bearer-for-its-url` | positive | PAP-4.3-09, PAP-6-04, GUIDE-pa-tokens-01 | pass | pass | pass | pass |
+| `lifecycle.mcp-bearer-only-at-mcp` | negative | PAP-4.3-10, PAP-6-05 | pass | pass | pass | pass |
+| `lifecycle.mcp-sign-out-takes-effect` | positive | PAP-4.9-01, PAP-6-04 | pass | pass | pass | pass |
+| `lifecycle.browser-joins-session` | positive | PAP-5-01, PAP-5-03, PAP-5-12, PAP-5-10, PAP-5-11 | pass | pass | pass | pass |
+| `lifecycle.browser-assertion-refused` | negative | PAP-5-05, PAP-5-06, PAP-5-07, PAP-5-08, PAP-5-09 | pass | pass | pass | pass |
 
 ## Conversations
 
@@ -123,8 +123,8 @@ SDK version **0.6.0**, PAP profile **0.1** (draft updated 2026-10-09), Operation
 | `operations.standing-permission-out-of-bounds` | negative | OPS-5.1-05 | pass | pass | pass | pass |
 | `operations.standing-permission-concurrent-use` | negative | GUIDE-ops-pa-03 | pass | pass | pass | pass |
 | `operations.cross-channel-identity` | positive | OPS-4-01 | pass | pass | pass | pass |
-| `operations.cross-channel-mcp` | positive | OPS-4-01 | pass | skip | skip | skip |
-| `operations.web-confirm-at-most-once` | positive | OPS-6-02, OPS-3-02 | pass | skip | skip | skip |
+| `operations.cross-channel-mcp` | positive | OPS-4-01 | pass | pass | pass | pass |
+| `operations.web-confirm-at-most-once` | positive | OPS-6-02, OPS-3-02 | pass | pass | pass | pass |
 | `operations.message-is-not-approval` | negative | OPS-5.1-04 | pass | pass | pass | pass |
 | `operations.confirm-timeout-recovery` | recovery | OPS-6-04, GUIDE-ops-pa-04 | pass | pass | pass | pass |
 | `operations.cancel-proposed` | positive | OPS-6-02 | pass | pass | pass | pass |
@@ -132,15 +132,6 @@ SDK version **0.6.0**, PAP profile **0.1** (draft updated 2026-10-09), Operation
 | `operations.failed-partial-result` | positive | OPS-6-05 | pass | pass | pass | pass |
 | `operations.expired` | negative | OPS-3.2-01 | pass | pass | pass | pass |
 | `operations.not-found-indistinguishable` | negative | OPS-3.2-01 | pass | pass | pass | pass |
-
-## Skips and failures
-
-| Outcome and reason | Pairings |
-| --- | --- |
-| skipped: the TypeScript SDK has no MCP client yet | TypeScript → Python, TypeScript → TypeScript |
-| skipped: the TypeScript runner has no controlled browser yet | TypeScript → Python, TypeScript → TypeScript |
-| skipped: the company lists no MCP server | Python → TypeScript |
-| skipped: the company offers no browser sessions | Python → TypeScript |
 
 ## Decided by each SDK alone
 

@@ -1,0 +1,69 @@
+---
+title: Compatibility
+---
+
+# Compatibility
+
+This page is versioned with the SDK: it describes **SDK 0.10.0**.
+
+## The PAP draft implemented
+
+| | Python (`personal_agent_protocol`) | TypeScript (`@datalayer/personal-agent-protocol`) |
+| --- | --- | --- |
+| PAP profile | `PROTOCOL_PROFILE` = `0.1` | `PROTOCOL_PROFILE` = `"0.1"` |
+| Specification revision | `PROTOCOL_REVISION` = `2026-10-09` | `PROTOCOL_REVISION` = `"2026-10-09"` |
+| Operations extension | `OPERATIONS_VERSION` = `1` | `OPERATIONS_VERSION` = `"1"` |
+
+Both SDKs implement [PAP draft 0.1](https://personalagentprotocol.org/docs/spec)
+as its specification page stood on **2026-10-09**, and the **Operations
+extension version 1**. A test holds the two SDKs, this page, the package
+descriptions, `protocol/UPSTREAM.md`, and the requirement ledger
+(`protocol/requirements.yaml`) to the same three values. Upstream is a draft:
+a change to it is reviewed and released as a new profile, never picked up
+from an unattended fetch.
+
+## SDK versions
+
+| SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
+| --- | --- | --- | --- | --- |
+| `0.10.0` | `0.1` | 2026-10-09 | v1 | [0.9 → 0.10](/releases/migration/#09--010) |
+| `0.9.0` | `0.1` | 2026-10-09 | v1 | [0.8 → 0.9](/releases/migration/#08--09) |
+| `0.8.0` | `0.1` | 2026-10-09 | v1 | [0.7 → 0.8](/releases/migration/#07--08) |
+| `0.7.0` | `0.1` | 2026-10-09 | v1 | none |
+| `0.6.0` | `0.1` | 2026-10-09 | v1 | [0.5 → 0.6](/releases/migration/#05--06) |
+| `0.5.0` | `0.1` | 2026-10-09 | v1 | [0.4 → 0.5](/releases/migration/#04--05) |
+| `0.4.0` | `0.1` | 2026-10-09 | v1 | first release of both sides |
+
+The Python package `personal-agent-protocol` and the npm package
+`@datalayer/personal-agent-protocol` are released together, from one tag, at
+the same version. The SDKs stay `0.x` while PAP is a draft; any minor release
+may break the API, and the [migration guide](/releases/migration/) says how.
+Python 3.10 to 3.13 and Node.js 22 are tested.
+
+## The four pairings
+
+A personal agent and a company built with this SDK interoperate in all four
+language pairings:
+
+| Personal agent | Company |
+| --- | --- |
+| Python | Python |
+| Python | TypeScript |
+| TypeScript | Python |
+| TypeScript | TypeScript |
+
+Each pairing runs the whole conformance suite over real TCP and TLS before a
+release, and the [conformance report](/protocol/conformance-report/) lists
+every case's outcome; a case a side cannot run is skipped, never passed, with
+its reason. Use the same SDK version on both sides when you control both;
+across organizations, the wire is the protocol: any two implementations of
+draft 0.1 and Operations v1 are meant to interoperate, and the conformance
+runner (`pap conformance run`) checks a company against it.
+
+## Agent Runtimes
+
+[Agent Runtimes](https://github.com/datalayer/agent-runtimes) 1.3.111 and
+later carry the PAP capability (connections, the company role, and the sign-in
+display) on `personal-agent-protocol[ui]` 0.7 or later, below 1. The PAP
+repository builds every Agent Runtimes PAP example application with the
+latest Agent Runtimes release in CI.

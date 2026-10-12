@@ -216,6 +216,8 @@ export async function verifyDpopProof(
       algorithms: [alg],
       typ: "dpop+jwt",
       requiredClaims: ["jti", "htm", "htu", "iat"],
+      // A proof's optional exp/nbf are read on the verifier's clock, not the wall's.
+      currentDate: now,
     }));
   } catch (cause) {
     if (cause instanceof ProofError) throw cause;
@@ -223,7 +225,13 @@ export async function verifyDpopProof(
       cause,
     });
   }
-  if (typeof payload.jti !== "string" || !payload.jti || typeof payload.iat !== "number") {
+  // At least 16 characters (96+ bits): a short `jti` is guessable, so a replay key collides.
+  if (
+    typeof payload.jti !== "string" ||
+    payload.jti.length < 16 ||
+    payload.jti.length > 256 ||
+    typeof payload.iat !== "number"
+  ) {
     throw new ProofError("invalid_dpop_proof", "DPoP proof identity is invalid");
   }
   const issuedAt = new Date(payload.iat * 1000);
@@ -238,7 +246,10 @@ export async function verifyDpopProof(
     throw new ProofError("use_dpop_nonce", "DPoP proof nonce is missing or invalid");
   }
   if (options.accessToken !== undefined) {
-    if (payload.ath !== (await accessTokenHash(options.accessToken))) {
+    if (
+      typeof payload.ath !== "string" ||
+      !constantTimeEqual(payload.ath, await accessTokenHash(options.accessToken))
+    ) {
       throw new ProofError("invalid_dpop_proof", "DPoP access-token hash is invalid");
     }
   } else if (payload.ath !== undefined) {
@@ -250,10 +261,21 @@ export async function verifyDpopProof(
   const keyThumbprint = await calculateJwkThumbprint(jwk);
   if (
     !(await options.replayCache.markOnce(`${keyThumbprint}:${payload.jti}`, {
-      expiresAt: new Date(now.getTime() + windowSeconds * 1000),
+      // Remembered for as long as the proof would be accepted: until `iat` leaves the window.
+      expiresAt: new Date(issuedAt.getTime() + windowSeconds * 1000),
     }))
   ) {
     throw new ProofError("invalid_dpop_proof", "DPoP proof has already been used");
   }
   return { jti: payload.jti, issuedAt, publicJwk: jwk, keyThumbprint };
+}
+
+/** Whether two strings are equal, in time that does not depend on where they differ. */
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
 }

@@ -6,7 +6,7 @@ import { isIP } from "node:net";
 import test from "node:test";
 
 import { parseJsonStrict } from "../../lib/index.js";
-import { NodeUrlSafetyPolicy, isPublicIpAddress } from "../../lib/server.js";
+import { NodeUrlSafetyPolicy, isGlobalAddress } from "../../lib/server.js";
 
 const SEED = Number(process.env.PAP_FUZZ_SEED ?? 20261011);
 const ITERATIONS = Number(process.env.PAP_FUZZ_ITERATIONS ?? 300);
@@ -147,6 +147,6 @@ test("URL safety approves only HTTPS URLs whose every address is public", async 
     assert.equal(parsed.username + parsed.password, "", text);
     const host = parsed.hostname.replace(/^\[|\]$/g, "");
     const checked = isIP(host) ? [host] : answer;
-    assert.ok(checked.every(isPublicIpAddress), `${text} ${checked}`);
+    assert.ok(checked.every(isGlobalAddress), `${text} ${checked}`);
   }
 });

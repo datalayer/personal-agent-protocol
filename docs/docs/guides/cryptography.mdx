@@ -51,6 +51,16 @@ proof `jti`, plus an expiry. It must return true exactly once across every
 process that can accept proofs for that company. An ordinary per-process map is
 appropriate only for tests.
 
+The expiry is the last moment the verifier would still accept the identifier: a
+DPoP proof's `iat` plus the acceptance window, a client or Session assertion's
+`exp` plus the 30-second clock skew, a browser assertion's `exp`. A cache must
+refuse the identifier until then and may forget it after: the default
+`MemoryReplayCache` sweeps expired identifiers whenever it has doubled, so it
+holds about twice those still alive. `check_replay_cache` /
+`checkReplayCache` (`personal_agent_protocol.company.testing`, the `./server`
+entry) checks a cache: of many callers marking one identifier at once, exactly
+one wins. See [Load tests](/protocol/load-tests/).
+
 The verifier checks replay state last, after signature and binding validation,
 so invalid traffic cannot fill the replay cache with attacker-chosen IDs.
 

@@ -2,24 +2,37 @@
 #
 # BSD 3-Clause License
 
-"""Reactor extension contributing PAP command-line and session commands."""
+"""Reactor extension contributing PAP command-line and live-session commands.
+
+`provide_cli` adds the `pap` groups; `provide_slash_commands` registers the
+live-session actions (`actions.ACTIONS`) in the registry a host passes it:
+Reactor's command registry (Studio's palette, `pap commands run`), or a REPL's
+`SlashCommandRegistry`. Every surface runs the same `invoke`.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import re
+from collections.abc import Callable
 from typing import Any
 
 import typer
 from reactor import PluginManifest  # type: ignore[import-untyped]
+from reactor.slash import (  # type: ignore[import-untyped]
+    CommandArgSpec,
+    SlashCommandRegistry,
+    SlashCommandSpec,
+)
 
 from .__version__ import __version__
+from .actions import ACTIONS, CATEGORY, SessionAction, discover_company, invoke_action
 from .cli_commands import add_protocol_groups
 from .cli_host import HostFactory, local_host
 from .config import CONFIG_KEYS, ConfigStore
-from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError
 from .identity import AgentIdentityClient
 
@@ -48,34 +61,6 @@ def _list_value(payload: dict[str, object], key: str) -> list[Any]:
     if not isinstance(value, list):
         raise ValueError(f"identity summary has invalid {key}")
     return value
-
-
-async def discover_company(domain: str) -> dict[str, object]:
-    """Return a stable, non-secret discovery summary."""
-
-    async with DiscoveryClient() as client:
-        company = await client.discover(domain)
-    document = company.document
-    metadata = company.oauth_metadata
-    return {
-        "schema_version": 1,
-        "verified": metadata is not None,
-        "domain": document.organization.domain,
-        "organization": document.organization.name,
-        "protocol_version": document.protocol_version,
-        "issuer": metadata.issuer if metadata else None,
-        "sign_in": [
-            name
-            for name in ("direct", "device", "mediated")
-            if document.auth is not None and getattr(document.auth, name) is not None
-        ],
-        "apis": [item.type for item in document.apis],
-        "conversation_protocols": (
-            [item.type for item in document.agent.protocols] if document.agent else []
-        ),
-        "web": document.web is not None,
-        "extensions": {name: item.version for name, item in sorted(document.extensions.items())},
-    }
 
 
 async def inspect_agent_metadata(client_id: str) -> dict[str, object]:
@@ -120,14 +105,23 @@ def _run_identity(client_id: str, *, jwks: bool = False) -> dict[str, object]:
 
 
 _TENANT = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+logger = logging.getLogger(__name__)
 
 
 class PapCliPlugin:
     """Add PAP-owned groups to a CLI and safe actions to live sessions."""
 
-    def __init__(self, config: ConfigStore | None = None, host: HostFactory | None = None) -> None:
+    def __init__(
+        self,
+        config: ConfigStore | None = None,
+        host: HostFactory | None = None,
+        *,
+        printer: Callable[[str], None] = typer.echo,
+    ) -> None:
         self.config = config or ConfigStore()
         self._host = host
+        #: Where a REPL's slash command shows its answer, or why it was refused.
+        self.printer = printer
         self.agent_group = typer.Typer(name="agent", help="Inspect PAP personal-agent identity.")
 
     def tenant(self) -> str:
@@ -163,14 +157,56 @@ class PapCliPlugin:
         cli.add_typer(self._extensions_app())
         add_protocol_groups(cli, self)
 
+    async def invoke(self, action_id: str, argument: object = None) -> dict[str, Any]:
+        """Run one live-session action for this plugin's tenant: what every surface calls."""
+
+        return await invoke_action(action_id, argument, host=self.host, tenant=self.tenant())
+
     def provide_slash_commands(self, commands: Any) -> None:
-        commands.add(
-            "pap.company.discover",
-            "Discover PAP company",
-            discover_company,
-            description="Discover and verify one PAP company domain.",
-            emoji="🔎",
-            category="Personal Agent Protocol",
+        """Register every live-session action in the host's registry, whichever it is."""
+
+        for action in ACTIONS.values():
+            try:
+                if isinstance(commands, SlashCommandRegistry):
+                    commands.register(self._slash_spec(action))
+                else:
+                    commands.add(
+                        action.id,
+                        action.name,
+                        self._command(action.id),
+                        description=action.description,
+                        emoji=action.emoji,
+                        category=CATEGORY,
+                    )
+            except ValueError as error:  # another plugin holds the ID: it keeps it
+                logger.warning("PAP action not registered: %s", error)
+
+    def _command(self, action_id: str) -> Callable[[object], Any]:
+        async def execute(argument: object = None) -> dict[str, Any]:
+            return await self.invoke(action_id, argument)
+
+        return execute
+
+    def _slash_spec(self, action: SessionAction) -> SlashCommandSpec:
+        async def handler(text: str) -> None:
+            try:
+                result = await self.invoke(action.id, text or None)
+            except PersonalAgentProtocolError as error:
+                self.printer(str(error))
+                return None
+            self.printer(json.dumps(result, indent=2, sort_keys=True, default=str))
+            return None
+
+        return SlashCommandSpec(
+            name=action.id,
+            description=action.description,
+            group=CATEGORY,
+            args=tuple(
+                CommandArgSpec(item.name, item.description, item.required)
+                for item in action.arguments
+            ),
+            handler=handler,
+            source=MANIFEST.name,
         )
 
     def _config_app(self) -> typer.Typer:  # noqa: C901 - Typer handlers stay with their group

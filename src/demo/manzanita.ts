@@ -4,7 +4,8 @@
  * The port of the Python `personal_agent_protocol.demo.manzanita`, for tests
  * and the language pairings: a user wants to return a jacket that is not
  * warm enough. Manzanita offers Direct, Device and Mediated Sign-In, a company
- * agent, an OpenAPI API, and the Operations extension. Its parts are
+ * agent, an OpenAPI API, an MCP server, web pages for its operations joined to the
+ * agent's Session (§5), and the Operations extension. Its parts are
  * contributions:
  *
  * - `ManzanitaAccounts` (`pap.company.accounts`): one account, Ada's, with a
@@ -13,6 +14,8 @@
  *   (`authorization` until then) and proposes the exchange as an operation.
  * - `ManzanitaApi` (`pap.company.api`): orders, and consequential calls that
  *   propose operations (`202`).
+ * - `ManzanitaMcp` (`pap.company.mcp`): the same orders and exchange, as MCP
+ *   tools (§6, Operations §4.2).
  * - `ExchangeExecutor` (`pap.company.operationExecutor`): performs the
  *   exchange, once. Gift wrap, a return that fails partway, and a repair whose
  *   carrier never answers show the other ends of an operation.
@@ -30,10 +33,12 @@ import {
   CompanyAgents,
   CompanyApis,
   CompanyConfig,
+  CompanyMcps,
   CompanyStores,
   OperationExecutors,
   OperationFailed,
   OperationOutcomeUnknown,
+  ToolResults,
   buildCompany,
   type AccountDirectory,
   type CompanyConfigOptions,
@@ -42,11 +47,14 @@ import {
   type Authenticated,
   type CompanyAgent,
   type CompanyApi,
+  type CompanyMcp,
   type CompanyService,
   type CompanyStore,
   type OperationExecutor,
   type ProposedOperation,
   type Reply,
+  type SignInContext,
+  type ToolResult,
   type Turn,
 } from "../company/index.js";
 import type { Operation, OperationResult } from "../models.js";
@@ -72,6 +80,7 @@ export const CONFIG_OPTIONS: CompanyConfigOptions = {
     ["password", "Password", true],
   ],
   customScopes: { "orders:read": "See your orders", "orders:write": "Exchange and return items" },
+  web: true,
 };
 export const CONFIG = new CompanyConfig(CONFIG_OPTIONS);
 
@@ -85,6 +94,7 @@ function same(value: string, expected: string): boolean {
 export class ManzanitaAccounts implements AccountDirectory {
   async authenticate(
     credentials: Readonly<Record<string, SecretValue>>,
+    _context: SignInContext,
   ): Promise<Authenticated | undefined> {
     const email = credentials.email;
     const password = credentials.password;
@@ -155,12 +165,26 @@ export class ManzanitaAgent implements CompanyAgent {
       if (!turn.scopes.includes("orders:write")) {
         return [{ authorization: ["insufficient_scope", "orders:write"] }];
       }
+      if (!turn.supportsOperations) {
+        // No operation can reach this agent: say so, never "here is the exchange".
+        return [
+          {
+            text:
+              "The insulated Ridge Jacket is in stock. Your agent cannot confirm exchanges " +
+              "with us: exchange it on manzanita.example.",
+          },
+        ];
+      }
       return [
         {
           text: "The insulated Ridge Jacket is in stock. Here is the exchange.",
           operation: EXCHANGE,
         },
       ];
+    }
+    if (!turn.scopes.includes("orders:read")) {
+      // Signed in, but not allowed to read orders: ask for the scope, say nothing.
+      return [{ authorization: ["insufficient_scope", "orders:read"] }];
     }
     return [{ text: "Your order ord_7Hk2: Ridge Jacket, size M, delivered.", data: { ...ORDER } }];
   }
@@ -209,6 +233,43 @@ export class ManzanitaApi implements CompanyApi {
       return { operation: proposal };
     }
     return ApiResults.notFound();
+  }
+}
+
+/** Manzanita's MCP server: the same orders and exchange, as tools (§6, Operations §4.2). */
+export class ManzanitaMcp implements CompanyMcp {
+  readonly description = "Orders and exchanges, as MCP tools";
+
+  tools(): Record<string, unknown>[] {
+    return [
+      {
+        name: "list_orders",
+        description: "Your orders (orders:read).",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "exchange_jacket",
+        description: "Propose the insulated jacket in exchange (orders:write).",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ];
+  }
+
+  async call(name: string, _args: Readonly<Record<string, unknown>>, call: ApiCall): Promise<ToolResult> {
+    if (name === "list_orders") {
+      if (call.accountId === undefined) return ToolResults.signInRequired("orders:read");
+      if (!call.scopes.includes("orders:read")) return ToolResults.insufficientScope("orders:read");
+      return {
+        text: "Order ord_7Hk2: Ridge Jacket, size M, delivered.",
+        structured: { orders: [{ ...ORDER }] },
+      };
+    }
+    if (name === "exchange_jacket") {
+      if (call.accountId === undefined) return ToolResults.signInRequired("orders:write");
+      if (!call.scopes.includes("orders:write")) return ToolResults.insufficientScope("orders:write");
+      return { operation: EXCHANGE };
+    }
+    return { text: `Unknown tool ${name}.`, isError: true };
   }
 }
 
@@ -272,6 +333,7 @@ export class RepairExecutor implements OperationExecutor {
 
 /** Manzanita's contributions, and the executors a test inspects. */
 export class ManzanitaPlugin {
+  readonly accounts = new ManzanitaAccounts();
   readonly executor = new ExchangeExecutor();
   readonly giftWrap = new GiftWrapExecutor();
   readonly returns = new ReturnExecutor();
@@ -282,13 +344,14 @@ export class ManzanitaPlugin {
       name: "manzanita",
       version: "1",
       contributes: [
-        { point: CompanyAccounts, value: new ManzanitaAccounts(), options: { id: "accounts" } },
+        { point: CompanyAccounts, value: this.accounts, options: { id: "accounts" } },
         { point: CompanyAgents, value: new ManzanitaAgent(), options: { id: "agent" } },
         { point: OperationExecutors, value: this.executor, options: { id: "exchange" } },
         { point: OperationExecutors, value: this.giftWrap, options: { id: "gift-wrap" } },
         { point: OperationExecutors, value: this.returns, options: { id: "returns" } },
         { point: OperationExecutors, value: this.repairs, options: { id: "repairs" } },
         { point: CompanyApis, value: new ManzanitaApi(), options: { id: "api" } },
+        { point: CompanyMcps, value: new ManzanitaMcp(), options: { id: "mcp" } },
       ],
     } as PlatformInput;
   }
@@ -304,15 +367,17 @@ export interface ManzanitaOptions extends PapCoreOptions {
    * Manzanita restarted (or another replica of it).
    */
   readonly store?: CompanyStore;
+  /** More plugins, after Manzanita's own: a test's replacement policy or store. */
+  readonly plugins?: readonly PlatformInput[];
 }
 
 /** Build Manzanita; serve it with `companyRequestListener` at `manzanita.example`. */
 export function manzanita(
   options: ManzanitaOptions = {},
 ): { readonly service: CompanyService; readonly plugin: ManzanitaPlugin } {
-  const { clock, config, store, ...core } = options;
+  const { clock, config, store, plugins: extra = [], ...core } = options;
   const plugin = new ManzanitaPlugin();
-  const plugins: PlatformInput[] = [plugin.plugin()];
+  const plugins: PlatformInput[] = [plugin.plugin(), ...extra];
   if (store !== undefined) {
     plugins.push({
       name: "manzanita-store",

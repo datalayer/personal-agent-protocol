@@ -16,7 +16,17 @@ store breaks: absent and present records, expiry, `take` once under
 concurrency, `create` only if absent, compare-and-set conflicts, kinds kept
 apart, values copied rather than shared, and a JSON round trip of every
 record kind the company keeps. `make_store` returns a fresh, empty store
-(or an awaitable of one); `now` is the clock the store judges expiry by.
+(or an awaitable of one); `now` is the clock the store judges expiry by;
+`concurrency` is how many callers race for one record.
+
+`check_replay_cache` does the same for `pap.company.replayCache`: of
+`concurrency` callers marking one identifier at once, exactly one wins, and
+the identifier stays refused; distinct identifiers are all accepted.
+
+```python
+async def test_my_replay_cache_conforms() -> None:
+    await check_replay_cache(lambda: RedisReplayCache(url), concurrency=200)
+```
 """
 
 from __future__ import annotations
@@ -28,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..models import Operation, OperationConfirmation, OperationResult
+from .points import ReplayCache
 from .store import (
     ACCOUNT_AGENT,
     ACCOUNT_FAMILY,
@@ -44,8 +55,10 @@ from .store import (
     PROPOSAL,
     RECORD_KINDS,
     RECORD_TYPES,
+    REPLAY,
     SESSION,
     SESSION_TOKEN,
+    SIGN_IN_ATTEMPTS,
     USER_CODE,
     AccountAgent,
     AccountFamily,
@@ -59,7 +72,9 @@ from .store import (
     PendingAuthorization,
     PendingDevice,
     PendingMediated,
+    ReplayMark,
     SessionPointer,
+    SignInAttempts,
     StoredConversation,
     StoredEvent,
     StoredOperation,
@@ -123,10 +138,10 @@ def record_samples(now: datetime) -> dict[str, Any]:
         DEVICE: PendingDevice("c", ("a",), "ABCD-EFGH", later, 10, now, "acct_1", ("a",), True),
         USER_CODE: UserCode("dev_digest"),
         AUTHORIZATION: PendingAuthorization(
-            "c", "https://atlas.example/cb", ("a",), "st", "chal", later, "Atlas"
+            "c", "https://atlas.example/cb", ("a",), "st", "chal", later, "Atlas", "bind"
         ),
         CODE: IssuedCode("c", "https://atlas.example/cb", "chal", "acct_1", ("a",), later),
-        MEDIATED: PendingMediated("ses_1", "acct_1", ("a",), "ref", later, 2),
+        MEDIATED: PendingMediated("ses_1", "acct_1", ("a",), "ref", later, ("k1", "k2"), 2),
         CONVERSATION: StoredConversation(
             conversation_id="cnv_1",
             owner=("c", "u"),
@@ -139,9 +154,13 @@ def record_samples(now: datetime) -> dict[str, Any]:
             forgotten=frozenset({"evt_0"}),
         ),
         MESSAGE_ID: MessageReceipt("cnv_1", "digest"),
-        OPERATION: StoredOperation(operation, "exchange", ("c", "u"), "acct_1", True),
+        OPERATION: StoredOperation(
+            operation, "exchange", ("c", "u"), "acct_1", ("orders:write",), True
+        ),
         PROPOSAL: OperationProposal("op_1"),
         BROWSER_COOKIE: SessionPointer("ses_1"),
+        REPLAY: ReplayMark(),
+        SIGN_IN_ATTEMPTS: SignInAttempts(3, later),
     }
 
 
@@ -149,8 +168,11 @@ async def check_store(
     make_store: Callable[[], CompanyStore | Awaitable[CompanyStore]],
     *,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    concurrency: int = _CONCURRENCY,
 ) -> None:
     """Check that the stores `make_store` returns keep the company store contract."""
+
+    _check(concurrency >= 2, "concurrency must be at least 2")
 
     async def fresh() -> CompanyStore:
         made = make_store()
@@ -159,10 +181,36 @@ async def check_store(
     await _absent(await fresh())
     await _present(await fresh())
     await _expiry(await fresh(), now())
-    await _take_once(await fresh())
-    await _create_once(await fresh())
-    await _compare_and_set(await fresh())
+    await _take_once(await fresh(), concurrency)
+    await _create_once(await fresh(), concurrency)
+    await _compare_and_set(await fresh(), concurrency)
     await _round_trips(await fresh(), now())
+
+
+async def check_replay_cache(
+    make_cache: Callable[[], ReplayCache | Awaitable[ReplayCache]],
+    *,
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    concurrency: int = _CONCURRENCY,
+) -> None:
+    """Check that the caches `make_cache` returns accept each identifier exactly once."""
+
+    _check(concurrency >= 2, "concurrency must be at least 2")
+    made = make_cache()
+    cache = await made if inspect.isawaitable(made) else made
+    until = now() + timedelta(minutes=5)
+    marked = await asyncio.gather(
+        *(cache.mark_once("proof:one", expires_at=until) for _ in range(concurrency))
+    )
+    _check(sum(marked) == 1, f"one identifier was accepted {sum(marked)} times, not once")
+    _check(
+        not await cache.mark_once("proof:one", expires_at=until),
+        "an accepted identifier stays refused until it expires",
+    )
+    distinct = await asyncio.gather(
+        *(cache.mark_once(f"proof:{n}:distinct", expires_at=until) for n in range(concurrency))
+    )
+    _check(all(distinct), "distinct identifiers are each accepted")
 
 
 async def _absent(store: CompanyStore) -> None:
@@ -229,20 +277,18 @@ async def _expiry(store: CompanyStore, now: datetime) -> None:
         _check(await store.get("code", "old") is None, "replace to a past expiry expires it")
 
 
-async def _take_once(store: CompanyStore) -> None:
+async def _take_once(store: CompanyStore, concurrency: int) -> None:
     await store.put("authorization", "once", {"a": 1})
-    taken = await asyncio.gather(
-        *(store.take("authorization", "once") for _ in range(_CONCURRENCY))
-    )
+    taken = await asyncio.gather(*(store.take("authorization", "once") for _ in range(concurrency)))
     winners = [value for value in taken if value is not None]
     _check(len(winners) == 1, f"take returned the record {len(winners)} times, not once")
     _check(winners[0] == {"a": 1}, "take returns the value")
     _check(await store.get("authorization", "once") is None, "a taken record is gone")
 
 
-async def _create_once(store: CompanyStore) -> None:
+async def _create_once(store: CompanyStore, concurrency: int) -> None:
     created = await asyncio.gather(
-        *(store.create("message_id", "m", {"n": n}) for n in range(_CONCURRENCY))
+        *(store.create("message_id", "m", {"n": n}) for n in range(concurrency))
     )
     _check(sum(created) == 1, f"create succeeded {sum(created)} times, not once")
     entry = await store.get("message_id", "m")
@@ -253,7 +299,7 @@ async def _create_once(store: CompanyStore) -> None:
     _check(not await store.create("message_id", "m", {"n": -1}), "create of a present record")
 
 
-async def _compare_and_set(store: CompanyStore) -> None:
+async def _compare_and_set(store: CompanyStore, concurrency: int) -> None:
     await store.put("operation", "op", {"state": "proposed"})
     entry = await store.get("operation", "op")
     _check(entry is not None, "the record is present")
@@ -262,7 +308,7 @@ async def _compare_and_set(store: CompanyStore) -> None:
     replaced = await asyncio.gather(
         *(
             store.replace("operation", "op", entry.version, {"state": "in_progress", "n": n})
-            for n in range(_CONCURRENCY)
+            for n in range(concurrency)
         )
     )
     _check(sum(replaced) == 1, f"replace on one version succeeded {sum(replaced)} times")

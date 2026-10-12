@@ -1,0 +1,48 @@
+---
+title: Support
+---
+
+# Support
+
+## Supported versions
+
+| Version | Supported |
+| --- | --- |
+| `0.10.x` | Yes: fixes and security fixes |
+| `0.9.x` and earlier | No: upgrade with the [migration guide](/releases/migration/) |
+
+The SDKs are previews while PAP is a draft: only the latest minor release is
+supported, in both languages at once. A security fix is released as a new
+patch or minor version of both packages from one tag.
+
+## Report a problem
+
+- **A bug, a question, or an interoperability problem:** open an issue on
+  [GitHub](https://github.com/datalayer/personal-agent-protocol/issues) with
+  the SDK version, the language, and, for interoperability, the
+  `pap conformance run` report of the other side. Never paste a token, a
+  proof, a key, a password, or a one-time code: the SDK's own errors and logs
+  carry none, so share those.
+- **A difference from the specification:** name the section and the
+  requirement ID from [`protocol/requirements.yaml`](https://github.com/datalayer/personal-agent-protocol/blob/main/protocol/requirements.yaml)
+  (for example `PAP-4.3-09`).
+
+## Security
+
+**Do not open a public issue for a vulnerability.** Email
+**security@datalayer.io** with a description, the affected versions, and how
+to reproduce it. We answer promptly, fix the latest release, and credit the
+reporter unless asked not to. The [security model](/security/) describes what
+the SDK protects and what a host must provide.
+
+## Verifying a release
+
+Every release is published from the repository's `Release` workflow with
+trusted publishing: the PyPI distributions carry
+[attestations](https://docs.pypi.org/attestations/) and the npm package
+carries [provenance](https://docs.npmjs.com/generating-provenance-statements),
+both naming the workflow run and the tag they were built from.
+
+```bash
+npm audit signatures @datalayer/personal-agent-protocol
+```

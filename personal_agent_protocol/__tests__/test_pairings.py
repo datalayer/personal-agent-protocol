@@ -204,8 +204,8 @@ class _Journey:
             endpoint, self.message(step["text"]), token=self.session, wait=0, **self.who
         )
         assert [event.type for event in self.page.events] == expect["events"]
-        assert self.page.events[-1].error == expect["error"]
-        self.seen["authorization"] = self.page.events[-1].error
+        assert [e for e in self.page.events if e.type != "state"][-1].error == expect["error"]
+        self.seen["authorization"] = [e for e in self.page.events if e.type != "state"][-1].error
 
     async def sign_in(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
         assert step["method"] == "direct"
@@ -257,7 +257,7 @@ class _Journey:
             wait=0,
             **self.who,
         )
-        self.proposal = self.page.events[-1].message.operation
+        self.proposal = [e for e in self.page.events if e.type != "state"][-1].message.operation
         assert self.proposal.state == expect["operation_state"]
         assert self.proposal.user_approval_required is expect["user_approval_required"]
 

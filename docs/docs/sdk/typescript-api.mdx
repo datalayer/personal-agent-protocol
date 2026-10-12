@@ -9,6 +9,7 @@ title: TypeScript API reference
 This inventory is generated from the package's public export surface.
 Unknown or internal symbols are deliberately excluded.
 
+- [`AccountMcpBearerOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Interface; entry `.`. Public TypeScript interface `AccountMcpBearerOptions`.
 - [`AccountRefreshOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Interface; entry `.`. Public TypeScript interface `AccountRefreshOptions`.
 - [`AccountRefreshResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Interface; entry `.`. Public TypeScript interface `AccountRefreshResult`.
 - [`AccountRevocationResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Interface; entry `.`. Public TypeScript interface `AccountRevocationResult`.
@@ -21,7 +22,12 @@ Unknown or internal symbols are deliberately excluded.
 - [`AgentIdentityClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/identity.ts) — Class; entry `.`. Safely retrieve and bind a personal agent's public identity documents.
 - [`AgentIdentityClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/identity.ts) — Interface; entry `.`. Public TypeScript interface `AgentIdentityClientOptions`.
 - [`AgentProtocol`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `AgentProtocol`.
+- [`ApiCallOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Interface; entry `.`. Public TypeScript interface `ApiCallOptions`.
+- [`ApiClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Class; entry `.`. Read and change through a company's API, the credentials host-owned.
+- [`ApiClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Interface; entry `.`. Public TypeScript interface `ApiClientOptions`.
 - [`ApiDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `ApiDescriptor`.
+- [`ApiError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Class; entry `.`. The company refused an API call; `code` is its error, never its body.
+- [`ApiResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Interface; entry `.`. A successful API answer: the body, or the operation it proposes (`202`).
 - [`approve`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Value; entry `.`. Public TypeScript value `approve`.
 - [`AuthCapabilities`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `AuthCapabilities`.
 - [`AuthorizationCodeGrant`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/auth.ts) — Class; entry `.`. Public TypeScript class `AuthorizationCodeGrant`.
@@ -84,7 +90,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`DirectSignInRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/auth.ts) — Interface; entry `.`. Public TypeScript interface `DirectSignInRequest`.
 - [`DirectSignInResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/auth.ts) — Interface; entry `.`. The signed-in Session, its scopes, and a reference to its stored Account Token.
 - [`DirectSignInStart`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/auth.ts) — Interface; entry `.`. Public TypeScript interface `DirectSignInStart`.
-- [`discoverCompany`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/discovery.ts) — Value; entry `.`. Public TypeScript value `discoverCompany`.
+- [`discoverCompany`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/discovery.ts) — Function; entry `.`. Public TypeScript function `discoverCompany`.
 - [`DiscoveredCompany`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `DiscoveredCompany`.
 - [`DiscoveryDocument`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `DiscoveryDocument`.
 - [`DiscoveryError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/errors.ts) — Class; entry `.`. Public TypeScript class `DiscoveryError`.
@@ -101,8 +107,6 @@ Unknown or internal symbols are deliberately excluded.
 - [`DpopProofRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `DpopProofRequest`.
 - [`ExtensionDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `ExtensionDescriptor`.
 - [`extensionDomain`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/extensions.ts) — Function; entry `.`. The domain a third-party extension name is under, else `undefined`.
-- [`ExtensionHandler`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `ExtensionHandler`.
-- [`ExtensionHandlers`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `ExtensionHandlers`.
 - [`extensionNameKind`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/extensions.ts) — Function; entry `.`. `plain` for a protocol-defined name, `third-party` for `domain/name`, else `invalid`.
 - [`extensionRequired`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/extensions.ts) — Function; entry `.`. The extension a `403 extension_required` names, else `undefined`.
 - [`firstContribution`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Function; entry `.`. Public TypeScript function `firstContribution`.
@@ -121,11 +125,16 @@ Unknown or internal symbols are deliberately excluded.
 - [`JwksRequestOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/identity.ts) — Interface; entry `.`. Public TypeScript interface `JwksRequestOptions`.
 - [`JWT_BEARER_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Const; entry `.`. Public TypeScript const `JWT_BEARER_GRANT`.
 - [`JWT_CLIENT_ASSERTION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Const; entry `.`. Public TypeScript const `JWT_CLIENT_ASSERTION`.
-- [`KeyReference`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `KeyReference`.
-- [`KeyStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `KeyStore`.
-- [`KeyStores`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `KeyStores`.
 - [`KNOWN_API_TYPES`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Const; entry `.`. The API types this SDK speaks.
 - [`knownApis`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Function; entry `.`. The advertised APIs of a type this SDK speaks, in the company's order.
+- [`MCP_PROTOCOL_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Const; entry `.`. Public TypeScript const `MCP_PROTOCOL_VERSION`.
+- [`mcpApi`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Function; entry `.`. The company's MCP server, when it lists one.
+- [`McpBearerAuth`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Class; entry `.`. Send a Bearer Session Token to one MCP server's URL, and nowhere else.
+- [`McpBearerOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Interface; entry `.`. Public TypeScript interface `McpBearerOptions`.
+- [`McpClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Class; entry `.`. Initialize, list, and call tools on one MCP server with a resource-bound Bearer token.
+- [`McpClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Interface; entry `.`. Public TypeScript interface `McpClientOptions`.
+- [`McpError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Class; entry `.`. The MCP server refused a request; `code` is its token or JSON-RPC error.
+- [`McpToolResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Interface; entry `.`. A tool's answer; `operation` is set when it proposed one (Operations §4.2).
 - [`MediatedCodeOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mediated.ts) — Interface; entry `.`. Public TypeScript interface `MediatedCodeOptions`.
 - [`MediatedField`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mediated.ts) — Interface; entry `.`. PAP Mediated Sign-In: the user's credentials, relayed to one endpoint (§4.7).
 - [`MediatedSignInClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mediated.ts) — Class; entry `.`. Relay a user's credentials to the company's mediated endpoint, once.
@@ -138,9 +147,13 @@ Unknown or internal symbols are deliberately excluded.
 - [`negotiateExtensions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/extensions.ts) — Function; entry `.`. The extensions both sides list, at the same major version, that this host supports.
 - [`OAuthServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `OAuthServerMetadata`.
 - [`openapiUrl`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Function; entry `.`. The company's OpenAPI description, when it advertises one.
+- [`openTelemetrySink`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Function; entry `.`. `pap.telemetry` as OpenTelemetry spans: one per event, from `tracer` (for example
+- [`OpenTelemetryTracer`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Interface; entry `.`. The part of an OpenTelemetry API `Tracer` the adapter uses.
 - [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `Operation`.
 - [`OperationConfirmation`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `OperationConfirmation`.
 - [`OperationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Class; entry `.`. Public TypeScript class `OperationError`.
+- [`operationFrom`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The one operation object, from whichever channel carried it (Operations §4).
+- [`operationPage`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The operation's `url`, once checked to be the company's own HTTPS page (§4.4, §5).
 - [`OperationRequestOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Interface; entry `.`. Public TypeScript interface `OperationRequestOptions`.
 - [`OperationResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `OperationResult`.
 - [`OPERATIONS_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Const; entry `.`. PAP Operations extension v1 on the personal agent's side, as in Python:
@@ -149,6 +162,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`OperationsClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Interface; entry `.`. Public TypeScript interface `OperationsClientOptions`.
 - [`operationsEndpoint`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The company's operations endpoint when both sides list version 1.
 - [`OperationState`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Type; entry `.`. Public TypeScript type `OperationState`.
+- [`optionalContribution`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Function; entry `.`. The highest-priority provider for an optional PAP point, `undefined` when there is none.
 - [`Organization`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `Organization`.
 - [`PairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `PairwiseUserIdStore`.
 - [`PairwiseUserIdStores`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `PairwiseUserIdStores`.
@@ -170,19 +184,21 @@ Unknown or internal symbols are deliberately excluded.
 - [`ProtectedInputField`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `ProtectedInputField`.
 - [`ProtectedInputRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. What the host must ask the user for, outside any model (PAP §4.7).
 - [`ProtectedInputs`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `ProtectedInputs`.
+- [`PROTOCOL_PROFILE`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/profile.ts) — Const; entry `.`. The Personal Agent Protocol draft implemented.
+- [`PROTOCOL_REVISION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/profile.ts) — Const; entry `.`. The upstream specification revision (its page date) the draft was implemented from.
 - [`ProtocolCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `ProtocolCache`.
-- [`ProtocolProfile`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `ProtocolProfile`.
-- [`ProtocolProfiles`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `ProtocolProfiles`.
 - [`ProtocolValidationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/errors.ts) — Class; entry `.`. Public TypeScript class `ProtocolValidationError`.
 - [`RandomBytes`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Type; entry `.`. Public TypeScript type `RandomBytes`.
 - [`RandomSource`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `RandomSource`.
 - [`RandomSources`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `RandomSources`.
 - [`RateLimitBudget`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/limits.ts) — Interface; entry `.`. A company's request budget, shared by every task and user of the host.
 - [`RateLimitBudgets`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `RateLimitBudgets`.
+- [`RecordingTelemetrySink`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Class; entry `.`. `pap.telemetry` in memory: every event, in order.
 - [`REFRESH_TOKEN_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Const; entry `.`. PAP Account Tokens: refresh, rotation, narrowing, and revocation (§4.8, §4.9).
 - [`resolvePairwiseUserId`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Value; entry `.`. Public TypeScript value `resolvePairwiseUserId`.
 - [`RetryPolicies`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `RetryPolicies`.
 - [`RetryPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/limits.ts) — Class; entry `.`. When to retry a refused request (Guides, retries).
+- [`safeAttributes`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Function; entry `.`. The allowlisted attributes of `values`; `undefined` and failing values are dropped.
 - [`SecretValue`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/secret.ts) — Class; entry `.`. Redacted wrapper for credentials and other protocol secrets.
 - [`SessionAssertionClaims`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Interface; entry `.`. Public TypeScript interface `SessionAssertionClaims`.
 - [`SessionAssertionOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Interface; entry `.`. Public TypeScript interface `SessionAssertionOptions`.
@@ -194,17 +210,26 @@ Unknown or internal symbols are deliberately excluded.
 - [`SessionRenewOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Interface; entry `.`. Public TypeScript interface `SessionRenewOptions`.
 - [`SessionRequestOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Interface; entry `.`. Public TypeScript interface `SessionRequestOptions`.
 - [`SessionToken`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Interface; entry `.`. Public TypeScript interface `SessionToken`.
-- [`SharedRateLimitBudget`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/limits.ts) — Class; entry `.`. Default `pap.rateLimitBudget`: per-company token buckets in one process.
+- [`SharedRateLimitBudget`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/limits.ts) — Class; entry `.`. Default `pap.rateLimitBudget`: per-company budgets in one process.
 - [`Signer`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `Signer`.
 - [`Signers`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `Signers`.
 - [`StandingPermission`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Interface; entry `.`. Public TypeScript interface `StandingPermission`.
 - [`StandingPermissionRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Interface; entry `.`. Public TypeScript interface `StandingPermissionRequest`.
 - [`StandingPermissionStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Interface; entry `.`. Reserve, commit, and release uses of the user's standing permissions.
-- [`StandingPermissionStores`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Const; entry `.`. Public TypeScript const `StandingPermissionStores`.
+- [`StandingPermissionStores`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Value; entry `.`. Public TypeScript value `StandingPermissionStores`.
 - [`StartConversationOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Interface; entry `.`. Public TypeScript interface `StartConversationOptions`.
 - [`StreamItem`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Type; entry `.`. Public TypeScript type `StreamItem`.
 - [`StreamReconnected`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Interface; entry `.`. The stream was reopened from `Last-Event-ID`; drop the partial messages named.
 - [`SUPPORTED_EXTENSIONS`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/extensions.ts) — Const; entry `.`. Extensions this SDK implements, by name and major version.
+- [`TELEMETRY_ATTRIBUTES`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Const; entry `.`. The only attribute names an event may carry, each with the rule its value must pass.
+- [`TELEMETRY_EVENTS`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Const; entry `.`. Every event the SDK emits, and its stage.
+- [`TELEMETRY_STAGES`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Const; entry `.`. Public TypeScript const `TELEMETRY_STAGES`.
+- [`TelemetryAttributes`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Type; entry `.`. Public TypeScript type `TelemetryAttributes`.
+- [`TelemetryEvent`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Class; entry `.`. One finished protocol stage: a span for traces, an event for analytics.
+- [`TelemetrySink`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Receive each finished protocol stage (`TelemetryEvent` of telemetry.ts), redacted already.
+- [`TelemetrySinks`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. `TelemetrySink`: where traces and analytics events go; none, and nothing is emitted.
+- [`TelemetryStage`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Type; entry `.`. Public TypeScript type `TelemetryStage`.
+- [`TelemetryValue`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/telemetry.ts) — Type; entry `.`. Public TypeScript type `TelemetryValue`.
 - [`TermLimit`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Interface; entry `.`. Public TypeScript interface `TermLimit`.
 - [`termsDigest`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Value; entry `.`. Public TypeScript value `termsDigest`.
 - [`TextDelta`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Interface; entry `.`. A piece of a message still being written (SSE `text-delta`, §7.6): for
@@ -217,16 +242,20 @@ Unknown or internal symbols are deliberately excluded.
 - [`validateDirectSignInCallback`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/auth.ts) — Function; entry `.`. Public TypeScript function `validateDirectSignInCallback`.
 - [`WebDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `WebDescriptor`.
 - [`BrowserAssertionReplayCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/browser-server.ts) — Interface; entry `./server`. Public TypeScript interface `BrowserAssertionReplayCache`.
+- [`createResolvingFetch`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Function; entry `./server`. A `fetch` that resolves, vets, and pins: `dns.lookup` every address of the host, refuse
 - [`DpopReplayCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `DpopReplayCache`.
-- [`isPublicIpAddress`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Function; entry `./server`. Public TypeScript function `isPublicIpAddress`.
+- [`isGlobalAddress`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/addresses.ts) — Function; entry `./server`. Whether a textual IP address is global unicast: never loopback, private, link-local,
 - [`JoseSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Class; entry `./server`. Sign PAP assertions with an injected asymmetric private key or handle.
 - [`JoseSignerOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `JoseSignerOptions`.
-- [`NodeAddressResolver`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Type; entry `./server`. Public TypeScript type `NodeAddressResolver`.
-- [`NodeUrlSafetyPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Class; entry `./server`. DNS-aware server policy for untrusted PAP discovery and metadata URLs.
+- [`NodeAddressResolver`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Type; entry `./server`. Every address a host name resolves to (A and AAAA).
+- [`NodeUrlSafetyPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Class; entry `./server`. DNS-aware server policy for untrusted PAP discovery and metadata URLs: every address
 - [`NodeUrlSafetyPolicyOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/server.ts) — Interface; entry `./server`. Public TypeScript interface `NodeUrlSafetyPolicyOptions`.
+- [`resolveAddresses`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Value; entry `./server`. Public TypeScript value `resolveAddresses`.
+- [`ResolvingFetchOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Interface; entry `./server`. Public TypeScript interface `ResolvingFetchOptions`.
 - [`VerifiedBrowserAssertion`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/browser-server.ts) — Interface; entry `./server`. Public TypeScript interface `VerifiedBrowserAssertion`.
 - [`VerifiedDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `VerifiedDpopProof`.
 - [`verifyBrowserAssertion`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/browser-server.ts) — Value; entry `./server`. Public TypeScript value `verifyBrowserAssertion`.
 - [`VerifyBrowserAssertionOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/browser-server.ts) — Interface; entry `./server`. Public TypeScript interface `VerifyBrowserAssertionOptions`.
 - [`verifyDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Value; entry `./server`. Public TypeScript value `verifyDpopProof`.
 - [`VerifyDpopProofOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `./server`. Public TypeScript interface `VerifyDpopProofOptions`.
+- [`vetHost`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/node-network.ts) — Value; entry `./server`. Public TypeScript value `vetHost`.

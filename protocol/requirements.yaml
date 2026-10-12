@@ -1848,6 +1848,8 @@ guide:
   - personal_agent_protocol.company:IdentityClientResolver.resolve
   tests:
   - personal_agent_protocol/__tests__/test_guidance.py::test_unknown_kid_refetches_the_overlapping_jwks_rate_limited
+  - personal_agent_protocol/__tests__/test_guide_security.py::test_overlapping_jwks_verify_either_key_then_refuse_the_retired_one
+  - personal_agent_protocol/__tests__/test_guide_security.py::test_unknown_kids_refetch_the_set_at_most_once_a_minute
 - id: GUIDE-fetch-01
   source: guide
   section: Fetching metadata safely
@@ -2065,12 +2067,15 @@ guide:
   role: company
   text: 'Protect the page against cross-site request forgery, and against framing by other sites with
     Content-Security-Policy: frame-ancestors.'
-  status: partial
+  status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._page
+  - personal_agent_protocol.company.service:CompanyService.consent_decision
+  - personal_agent_protocol.company.service:CompanyService._operation_page
   tests:
   - personal_agent_protocol/__tests__/test_direct_and_api.py::test_the_consent_page_is_never_framed_and_bad_redirects_are_not_followed
-  reason: Framing is refused; the consent form has no CSRF token (the decision is played through approve_authorization).
+  - personal_agent_protocol/__tests__/test_guide_security.py::test_the_consent_form_is_bound_to_the_browser_that_was_shown_it
+  - personal_agent_protocol/__tests__/test_guide_security.py::test_the_operation_page_refuses_cross_site_and_another_browsers_form
 - id: GUIDE-co-consent-02
   source: guide
   section: Consent pages

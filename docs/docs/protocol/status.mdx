@@ -6,7 +6,8 @@ title: Protocol status
 # Protocol implementation status
 
 Target: [PAP draft 0.1, updated October 9,
-2026](https://personalagentprotocol.org/docs/spec).
+2026](https://personalagentprotocol.org/docs/spec), and the Operations
+extension version 1 (see [Compatibility](/releases/compatibility/)).
 
 | Area                                                                                    | Status                                                                                                                                                     |
 | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -19,7 +20,7 @@ Target: [PAP draft 0.1, updated October 9,
 | Pairwise user IDs and session wire primitives                                           | Implemented in Python and TypeScript                                                                                                                       |
 | Signed-out session start and renewal over HTTP                                          | Implemented in Python and TypeScript; host signer and DPoP provider required                                                                               |
 | Direct Sign-In state, S256 PKCE, callback validation, and exchange grant                | Implemented in Python and TypeScript                                                                                                                       |
-| Reactor clock, randomness, signer, DPoP proof, key, token, cache, browser, Account Token lock, protected input, and standing permission contracts | Implemented and lifecycle-tested in Python and TypeScript                                                                                                  |
+| Reactor clock, randomness, signer, DPoP proof, token, cache, browser, Account Token lock, protected input, standing permission, and company contracts ([Contribution points](/concepts/contribution-points/)) | Implemented and lifecycle-tested in Python and TypeScript                                                                                                  |
 | ES256/RS256 assertion signing                                                           | Implemented in Python and TypeScript                                                                                                                       |
 | DPoP proof creation and verification                                                    | Implemented in Python and TypeScript; host key resolver and replay cache required                                                                          |
 | DPoP-aware API/conversation HTTP transport                                              | Implemented in Python and TypeScript with nonce retry and same-origin redirect proof rebinding                                                             |
@@ -29,23 +30,19 @@ Target: [PAP draft 0.1, updated October 9,
 | Device Sign-In | Implemented in Python and TypeScript; host state store, signer, and DPoP provider required |
 | Mediated Sign-In | Implemented in Python and TypeScript; credentials only through the host's `pap.protectedInput`, one endpoint on the company's domain, no redirects, one-time code from the same Session |
 | Account Token refresh, rotation, narrowing, and revocation | Implemented in Python and TypeScript; rotation serialized by `pap.accountTokenLock`, `invalid_grant` signs out, wider scopes are `re_consent_required` |
-| OpenAPI and MCP helpers | Planned |
+| OpenAPI and MCP clients | Implemented in Python and TypeScript: `ApiClient` (DPoP, `202` operations, scope-carrying refusals) and `McpClient`/`McpBearerAuth` with a resource-bound Bearer token from `bearer_for_mcp`/`bearerForMcp`, sent only to its MCP server's exact URL |
 | Conversation SSE streaming, handoff, Direct Conversations, sign-in mid-conversation, and active close | Implemented in Python and TypeScript: `Last-Event-ID` reconnects, display-only text deltas, discarded partial messages, `direct_conversation_open` details |
-| Operations v1 | Client implemented in Python and TypeScript: negotiation, exact approval (revision + digest), `terms_changed`, recovery after a lost confirm, cancel, `extension_required`, and standing permissions through `pap.standingPermissionStore`; company handlers in the Python reference company |
+| Operations v1 | Client implemented in Python and TypeScript: negotiation, exact approval (revision + digest), `terms_changed`, recovery after a lost confirm, cancel, `extension_required`, and standing permissions through `pap.standingPermissionStore`; company handlers in both reference companies |
 | Extensible `pap` CLI                                                                    | Reactor host/plugin, non-secret profiles, company discovery, agent identity/JWKS inspection, extension diagnostics, and live discovery command implemented |
 | Generated API references                                                                | Python and TypeScript public exports inventoried; documentation CI rejects stale pages                                                                     |
-| Company/server SDK | Python reference company (`personal_agent_protocol.company`) over plain ASGI, every replaceable part a Reactor point; TypeScript has no company side yet |
-| Demo worlds and end-to-end journeys | Python only (`personal_agent_protocol.demo`): a user with a company (Manzanita) and two companies composed (Ledgerly at Northwind), real keys over in-process HTTP |
+| Company/server SDK | Reference companies in Python (`personal_agent_protocol.company`, over ASGI) and TypeScript (`@datalayer/personal-agent-protocol/server`, over `node:http(s)`), every replaceable part a Reactor point; both serve MCP and, with `web`, browser sessions and operation pages |
+| Demo worlds and end-to-end journeys | Python (`personal_agent_protocol.demo`): a user with a company (Manzanita) and two companies composed (Ledgerly at Northwind); TypeScript: Manzanita; real keys over in-process HTTP or TLS |
 
 ## Supported package line
 
-| Package                              | Version | PAP profile | Maturity |
-| ------------------------------------ | ------- | ----------- | -------- |
-| `personal-agent-protocol`            | `0.3.x` | `0.1`       | Preview  |
-| `@datalayer/personal-agent-protocol` | `0.3.x` | `0.1`       | Preview  |
-
-The package version and protocol version are independent. A future SDK release
-can support more than one protocol profile.
+The supported SDK versions, the draft and Operations version each implements,
+and the four language pairings are on the [Compatibility](/releases/compatibility/)
+page; the [Support](/releases/support/) page says which versions get fixes.
 
 ## Known gaps
 
@@ -65,8 +62,8 @@ can support more than one protocol profile.
   request. Local JOSE implementations are available, but applications still
   own key selection and custody.
 - Security contribution contracts exist, but the SDK deliberately ships no
-  default protected key store, durable replay cache, token store, general
-  cache, browser handoff, or browser form-post surface.
+  default signer, DPoP key custody, durable replay cache, token store, browser
+  handoff, or browser form-post surface.
 - Browser Session clients sign the distinct `poppy-browser+jwt` assertion and
   submit it through `pap.browserFormPost`; company verification enforces the
   endpoint, Session owner, 60-second lifetime, company-domain return target,
@@ -74,12 +71,12 @@ can support more than one protocol profile.
   cookie state and lifetime to the underlying PAP Session.
 - DPoP resource clients own authorization headers, create a fresh proof for
   every attempt, retry one nonce challenge, and refuse cross-origin credential
-  forwarding. The Account Token lifecycle is implemented; resource-bound MCP
-  Bearer acquisition on top of it remains pending.
+  forwarding. The Account Token lifecycle and resource-bound MCP Bearer
+  acquisition on top of it are implemented in both SDKs.
 - Conversation clients (messages, JSON events, SSE, handoff, Direct
   Conversations, closing), Account Tokens, Mediated Sign-In, and the
-  Operations client are aligned in Python and TypeScript. The company side
-  (the reference company) and the demo worlds are Python only.
+  Operations client are aligned in Python and TypeScript, and so are the two
+  reference companies; all four language pairings pass every conformance case.
 - The reference company keeps state in one process by default. Production
   companies contribute a durable `pap.company.store` (an async keyed store
   with `create`, `take`, and compare-and-set, checked by `check_store`) over

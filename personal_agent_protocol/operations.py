@@ -41,13 +41,14 @@ from typing import Any, Literal, Protocol, cast, runtime_checkable
 from urllib.parse import urlsplit
 
 import httpx
-from reactor import PluginPlatform, define_contribution_point  # type: ignore[import-untyped]
+from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import PersonalAgentProtocolError, ProtocolValidationError, TransportError
 from .json import loads_strict
 from .models import ClientMetadata, DiscoveryDocument, Message, Operation, ProtocolModel
-from .reactor import CLOCKS, Clock, first_contribution
+from .reactor import CLOCKS, STANDING_PERMISSION_STORES, Clock, first_contribution
 from .sessions import SessionToken
+from .telemetry import by_endpoint, operation_result, traced
 from .transport import DpopHttpClient
 
 OPERATIONS_EXTENSION = "operations"
@@ -201,9 +202,6 @@ class StandingPermissionStore(Protocol):
     async def release(self, reservation: str) -> None: ...
 
 
-STANDING_PERMISSION_STORES = define_contribution_point("pap.standingPermissionStore")
-
-
 def _term(terms: dict[str, Any], path: str) -> Any:
     value: Any = terms
     for part in path.split("."):
@@ -306,6 +304,7 @@ class OperationsClient:
         self.reactor: PluginPlatform = transport.reactor
         self.max_response_bytes = max_response_bytes
 
+    @traced("pap.operation.read", before=by_endpoint, after=operation_result)
     async def read(
         self,
         endpoint: str,
@@ -324,6 +323,7 @@ class OperationsClient:
             raise self._error(response, payload)
         return self._operation(payload, operation_id)
 
+    @traced("pap.operation.confirm", before=by_endpoint, after=operation_result)
     async def confirm(
         self,
         endpoint: str,
@@ -452,6 +452,7 @@ class OperationsClient:
             )
         return "standing_permission", _Held(store, reservation)
 
+    @traced("pap.operation.cancel", before=by_endpoint, after=operation_result)
     async def cancel(
         self,
         endpoint: str,

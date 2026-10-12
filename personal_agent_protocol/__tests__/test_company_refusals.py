@@ -185,7 +185,7 @@ async def test_a_revised_operation_is_terms_changed_and_never_performed_twice() 
         wait=0,
         **world.who,
     )
-    proposal = page.events[-1].message.operation  # type: ignore[union-attr]
+    proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     await world.shop.revise(
         proposal.operation_id,
         summary="Exchange for USD 85.00 more.",  # type: ignore[union-attr]

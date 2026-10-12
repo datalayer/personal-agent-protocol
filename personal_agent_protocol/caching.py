@@ -31,6 +31,7 @@ from .reactor import (
     InMemoryProtocolCache,
     ProtocolCache,
     SystemClock,
+    optional_contribution,
 )
 
 
@@ -90,13 +91,11 @@ class MetadataCache:
         self.bounds = bounds or CacheBounds()
 
     def _cache(self) -> ProtocolCache | None:
-        contributions = self.reactor.get_contributions(CACHES)
-        return cast(ProtocolCache, contributions[0].value) if contributions else None
+        return cast(ProtocolCache | None, optional_contribution(self.reactor, CACHES, "cache"))
 
     def now(self) -> datetime:
-        contributions = self.reactor.get_contributions(CLOCKS)
-        clock = cast(Clock, contributions[0].value) if contributions else SystemClock()
-        return clock.now()
+        clock = cast(Clock | None, optional_contribution(self.reactor, CLOCKS, "clock"))
+        return (clock or SystemClock()).now()
 
     async def get(self, key: str) -> CachedMetadata | None:
         cache = self._cache()

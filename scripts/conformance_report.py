@@ -51,10 +51,21 @@ def _fixtures() -> list[dict[str, Any]]:
     return cases
 
 
+def _constant(module: str, name: str) -> str:
+    text = (ROOT / "personal_agent_protocol" / module).read_text(encoding="utf-8")
+    match = re.search(rf"^{name}\s*=\s*[\"']([^\"']+)", text, re.MULTILINE)
+    if match is None:
+        raise SystemExit(f"{module} defines no {name}")
+    return match[1]
+
+
 def _version() -> str:
-    text = (ROOT / "personal_agent_protocol" / "__version__.py").read_text(encoding="utf-8")
-    match = re.search(r"__version__\s*=\s*[\"']([^\"']+)", text)
-    return match[1] if match else "unknown"
+    return _constant("__version__.py", "__version__")
+
+
+_PROFILE = _constant("profile.py", "PROTOCOL_PROFILE")
+_REVISION = _constant("profile.py", "PROTOCOL_REVISION")
+_OPERATIONS = _constant("operations.py", "OPERATIONS_VERSION")
 
 
 def _load(directory: Path) -> dict[str, dict[str, Any]]:
@@ -115,11 +126,12 @@ def render(reports: dict[str, dict[str, Any]]) -> str:
         "",
         "# Compatibility and conformance report",
         "",
-        f"SDK version **{_version()}**, PAP profile **0.1** (draft updated 2026-10-09), "
-        "Operations extension **v1**. Each pairing runs every positive, negative and "
-        "recovery fixture case over real TCP and TLS, the personal agent in one language "
-        "and the reference company (Manzanita) in the other. A case is skipped, never "
-        "passed, when a side lacks what it needs; the reason is listed below.",
+        f"SDK version **{_version()}**, PAP profile **{_PROFILE}** (draft updated "
+        f"{_REVISION}), Operations extension **v{_OPERATIONS}**. Each pairing runs every "
+        "positive, negative and recovery fixture case over real TCP and TLS, the personal "
+        "agent in one language and the reference company (Manzanita) in the other. A case "
+        "is skipped, never passed, when a side lacks what it needs; the reason is listed "
+        "below.",
         "",
         "## Pairings",
         "",

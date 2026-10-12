@@ -31,7 +31,9 @@ from .reactor import (
     RandomSource,
     Signer,
     first_contribution,
+    send_bounded,
 )
+from .telemetry import by_issuer, session_result, traced
 
 JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 JWT_CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
@@ -229,6 +231,7 @@ class SessionClient:
         self.http = http_client
         self.max_response_bytes = max_response_bytes
 
+    @traced("pap.session.start", before=by_issuer, after=session_result)
     async def start(
         self,
         *,
@@ -249,6 +252,7 @@ class SessionClient:
             session_id=None,
         )
 
+    @traced("pap.session.renew", before=by_issuer, after=session_result)
     async def renew(
         self,
         *,
@@ -367,11 +371,12 @@ class SessionClient:
                 resource=bearer_resource,
             )
             try:
-                response = await self.http.post(
-                    token_endpoint,
-                    data=grant.as_form(),
-                    headers=headers,
-                    follow_redirects=False,
+                response = await send_bounded(
+                    self.http,
+                    self.http.build_request(
+                        "POST", token_endpoint, data=grant.as_form(), headers=headers
+                    ),
+                    max_bytes=self.max_response_bytes,
                 )
             except httpx.HTTPError as exc:
                 raise SessionError("request_failed", "Session token request failed") from exc

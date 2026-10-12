@@ -53,5 +53,12 @@
   ],
   "operation_prompt": "The jacket is not warm enough: can we exchange it for a warmer one?",
   "account_prompt": "Where is my jacket order?",
-  "greeting": "Hello."
+  "greeting": "Hello.",
+  "mcp_read_tool": "list_orders",
+  "mcp_propose_tool": "exchange_jacket",
+  "web_confirm_form": {
+    "action": "confirm",
+    "revision": "{revision}",
+    "approved_by": "user"
+  }
 }

@@ -73,13 +73,6 @@ class MetadataFetch:
     timeout: float
 
 
-@dataclass(frozen=True)
-class ProtocolProfile:
-    """Version-specific PAP behavior selected through Reactor."""
-
-    version: str
-
-
 @runtime_checkable
 class Clock(Protocol):
     """Supply timezone-aware wall-clock time to expiring protocol state."""
@@ -99,23 +92,6 @@ class Signer(Protocol):
     """Sign a compact assertion without exposing private key material."""
 
     async def sign(self, claims: dict[str, object], *, purpose: str) -> SecretStr: ...
-
-
-@dataclass(frozen=True)
-class KeyReference:
-    """Opaque reference to a protected signing or proof-of-possession key."""
-
-    id: str
-    algorithm: str
-
-
-@runtime_checkable
-class KeyStore(Protocol):
-    """Resolve protected keys by tenant and protocol purpose."""
-
-    async def get_or_create(
-        self, *, tenant_id: str, subject: str, purpose: str
-    ) -> KeyReference: ...
 
 
 @runtime_checkable
@@ -253,6 +229,39 @@ class ProtectedInput(Protocol):
     async def collect(self, request: ProtectedInputRequest) -> dict[str, SecretStr]: ...
 
 
+@dataclass(frozen=True)
+class ApprovalRequest:
+    """A live-session action that changes or ends what the user holds, to approve first.
+
+    `summary` says what it does in plain words; `arguments` are the action's own
+    (Session and operation IDs, never a credential). Nothing has been done yet.
+    """
+
+    action_id: str
+    action_name: str
+    summary: str
+    arguments: Mapping[str, str]
+    tenant_id: str
+
+
+@runtime_checkable
+class ApprovalSurface(Protocol):
+    """The host's own approval surface: the user, not a model, answers.
+
+    Only `True` approves. Without a contribution, a destructive live-session
+    action is refused (`approval_required`); it stays available from `pap`.
+    """
+
+    async def approve(self, request: ApprovalRequest) -> bool: ...
+
+
+@runtime_checkable
+class TelemetrySink(Protocol):
+    """Receive each finished protocol stage (`telemetry.TelemetryEvent`), redacted already."""
+
+    def record(self, event: Any) -> None: ...
+
+
 class InMemoryProtocolCache:
     """Default `pap.cache`: a bounded, least-recently-used map in one process."""
 
@@ -353,17 +362,21 @@ class RateLimitBudget(Protocol):
 
 @dataclass
 class _Bucket:
-    tokens: float
-    updated: float
+    #: When the next request may go if the burst is spent (GCRA's theoretical arrival time).
+    due: float
     blocked_until: float = 0.0
 
 
 class SharedRateLimitBudget:
-    """Default `pap.rateLimitBudget`: per-company token buckets in one process.
+    """Default `pap.rateLimitBudget`: per-company budgets in one process.
 
     `rate` requests per second with bursts of `burst` (no rate limit when
-    `rate` is `None`: only the companies' own pauses are shared). A wait longer
-    than `max_wait` seconds is refused with `rate_limited` and `retry_after`.
+    `rate` is `None`: only the companies' own pauses are shared). Each caller
+    reserves its turn when it asks — the turn counts every caller ahead of it
+    and the company's pause (`defer`) — and sleeps until then, so concurrent
+    callers never exceed the rate, and a turn further than `max_wait` seconds
+    away is refused at once with `rate_limited` and `retry_after`, however
+    many callers are queued (the generic cell rate algorithm).
     """
 
     def __init__(
@@ -385,35 +398,32 @@ class SharedRateLimitBudget:
         self._sleep = sleep
         self._monotonic = monotonic
         self._buckets: dict[str, _Bucket] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
 
     def _bucket(self, key: str, now: float) -> _Bucket:
-        bucket = self._buckets.setdefault(key, _Bucket(tokens=float(self.burst), updated=now))
-        if self.rate is not None:
-            bucket.tokens = min(
-                float(self.burst), bucket.tokens + (now - bucket.updated) * self.rate
-            )
-        bucket.updated = now
-        return bucket
+        return self._buckets.setdefault(key, _Bucket(due=now))
 
     async def acquire(self, key: str) -> None:
-        async with self._locks.setdefault(key, asyncio.Lock()):
-            now = self._monotonic()
-            bucket = self._bucket(key, now)
-            wait = max(0.0, bucket.blocked_until - now)
-            if self.rate is not None and bucket.tokens < 1:
-                wait = max(wait, (1 - bucket.tokens) / self.rate)
-            if wait > self.max_wait:
-                raise TransportError(
-                    "rate_limited",
-                    "The company's shared request budget is exhausted",
-                    details={"retry_after": str(math.ceil(wait))},
-                )
-            if wait > 0:
-                await self._sleep(wait)
-                bucket = self._bucket(key, self._monotonic())
-            if self.rate is not None:
-                bucket.tokens -= 1
+        # Reserved without awaiting anything: callers take their turns in arrival order.
+        now = self._monotonic()
+        bucket = self._bucket(key, now)
+        turn = max(now, bucket.blocked_until)
+        due = max(bucket.due, turn)
+        interval = 0.0 if self.rate is None else 1.0 / self.rate
+        if self.rate is not None:
+            turn = max(turn, due - (self.burst - 1) * interval)
+        wait = turn - now
+        if wait > self.max_wait:
+            raise TransportError(
+                "rate_limited",
+                "The company's shared request budget is exhausted",
+                details={"retry_after": str(math.ceil(wait))},
+            )
+        if self.rate is not None:
+            bucket.due = due + interval
+        left = wait
+        while left > 0:  # a timer may fire a little early: sleep the rest
+            await self._sleep(left)
+            left = turn - self._monotonic()
 
     async def defer(self, key: str, seconds: float) -> None:
         now = self._monotonic()
@@ -459,12 +469,9 @@ class UrlSafetyPolicy(Protocol):
 
 DISCOVERY_TRANSPORTS = define_contribution_point("pap.discoveryTransport")
 URL_SAFETY_POLICIES = define_contribution_point("pap.urlSafetyPolicy")
-PROTOCOL_PROFILES = define_contribution_point("pap.protocolProfile")
-EXTENSION_HANDLERS = define_contribution_point("pap.extensionHandler")
 CLOCKS = define_contribution_point("pap.clock")
 RANDOM_SOURCES = define_contribution_point("pap.randomSource")
 SIGNERS = define_contribution_point("pap.signer")
-KEY_STORES = define_contribution_point("pap.keyStore")
 TOKEN_STORES = define_contribution_point("pap.tokenStore")
 PAIRWISE_USER_ID_STORES = define_contribution_point("pap.pairwiseUserIdStore")
 AUTHORIZATION_STATE_STORES = define_contribution_point("pap.authorizationStateStore")
@@ -476,6 +483,87 @@ ACCOUNT_TOKEN_LOCKS = define_contribution_point("pap.accountTokenLock")
 PROTECTED_INPUTS = define_contribution_point("pap.protectedInput")
 RETRY_POLICIES = define_contribution_point("pap.retryPolicy")
 RATE_LIMIT_BUDGETS = define_contribution_point("pap.rateLimitBudget")
+#: `operations.StandingPermissionStore`: the user's standing permissions (Operations).
+STANDING_PERMISSION_STORES = define_contribution_point("pap.standingPermissionStore")
+#: `TelemetrySink`: where traces and analytics events go; none, and nothing is emitted.
+TELEMETRY_SINKS = define_contribution_point("pap.telemetry")
+#: `ApprovalSurface`: a host's approval for destructive live-session actions (Python hosts).
+APPROVAL_SURFACES = define_contribution_point("pap.approvalSurface")
+
+
+#: Prefixes that carry an IPv4 address in their last 32 bits: NAT64 (RFC 6052),
+#: IPv4-mapped, and the deprecated IPv4-compatible form.
+_EMBEDDING_V4 = (
+    ipaddress.IPv6Network("64:ff9b::/96"),
+    ipaddress.IPv6Network("::ffff:0:0/96"),
+    ipaddress.IPv6Network("::/96"),
+)
+#: Local-use NAT64 (RFC 8215): it translates to whatever its operator chose, never global.
+_LOCAL_NAT64 = ipaddress.IPv6Network("64:ff9b:1::/48")
+#: 6to4 (RFC 3056) carries an IPv4 address in bits 16..48.
+_SIX_TO_FOUR = ipaddress.IPv6Network("2002::/16")
+
+
+def is_global_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Whether an address is globally reachable, an IPv4 address inside IPv6 included.
+
+    `ipaddress`'s `is_global` judges `64:ff9b::7f00:1` (NAT64 for 127.0.0.1) and
+    `::a9fe:a9fe` (IPv4-compatible 169.254.169.254) global: the IPv4 address
+    they carry is unwrapped and judged instead, so a resolver answering one of
+    them never reaches loopback, link-local metadata, or a private network.
+    """
+
+    if isinstance(address, ipaddress.IPv6Address):
+        if address in _LOCAL_NAT64:
+            return False
+        if any(address in prefix for prefix in _EMBEDDING_V4):
+            embedded = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+            return embedded.is_global and not embedded.is_multicast
+        if address in _SIX_TO_FOUR:
+            embedded = ipaddress.IPv4Address((int(address) >> 80) & 0xFFFFFFFF)
+            return embedded.is_global and not embedded.is_multicast
+    return address.is_global and not address.is_multicast
+
+
+#: Headers that described the body as the server sent it, not as it is read back.
+_FRAMING = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+async def send_bounded(
+    http: httpx.AsyncClient,
+    request: httpx.Request,
+    *,
+    max_bytes: int,
+    auth: httpx.Auth | None = None,
+) -> httpx.Response:
+    """Send `request` (no redirect followed) and read at most `max_bytes + 1` of the body.
+
+    The response is read back with that much: a caller's `len(content) >
+    max_bytes` check refuses a larger body without the rest ever being read
+    into memory, however much the server sends.
+    """
+
+    response = await http.send(
+        request,
+        stream=True,
+        follow_redirects=False,
+        **({} if auth is None else {"auth": auth}),
+    )
+    body = bytearray()
+    try:
+        async for chunk in response.aiter_bytes():
+            body.extend(chunk)
+            if len(body) > max_bytes:
+                break
+    finally:
+        await response.aclose()
+    headers = [(k, v) for k, v in response.headers.multi_items() if k.lower() not in _FRAMING]
+    return httpx.Response(
+        response.status_code,
+        headers=headers,
+        content=bytes(body[: max_bytes + 1]),
+        request=request,
+    )
 
 
 async def resolve_addresses(host: str) -> list[str]:
@@ -668,7 +756,9 @@ class PublicUrlSafetyPolicy:
             parsed_addresses = [ipaddress.ip_address(address) for address in addresses]
         except ValueError as exc:
             raise DiscoveryError("dns_failed", "Discovery host resolved to no address") from exc
-        if not self._allow_private and any(not address.is_global for address in parsed_addresses):
+        if not self._allow_private and any(
+            not is_global_address(address) for address in parsed_addresses
+        ):
             raise DiscoveryError(
                 "unsafe_address", "Discovery host resolves to a non-public address"
             )
@@ -692,12 +782,6 @@ class PapCorePlugin:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         contribute(DISCOVERY_TRANSPORTS, self._transport, contribution_id="httpx", order=100)
         contribute(URL_SAFETY_POLICIES, self._url_policy, contribution_id="public", order=100)
-        contribute(
-            PROTOCOL_PROFILES,
-            ProtocolProfile(version="0.1"),
-            contribution_id="0.1",
-            order=100,
-        )
         contribute(CLOCKS, SystemClock(), contribution_id="system", order=100)
         contribute(
             RANDOM_SOURCES,
@@ -716,6 +800,14 @@ class PapCorePlugin:
         contribute(
             RATE_LIMIT_BUDGETS, SharedRateLimitBudget(), contribution_id="in-process", order=100
         )
+
+    @hookimpl
+    def provide_display_types(self, registry: object) -> None:
+        # Asked only by a reactor with `reactor.ui` (1.1), so the import waits
+        # until then: the SDK itself runs on an older one.
+        from .ui import PapSignIn
+
+        registry.register(PapSignIn)  # type: ignore[attr-defined]
 
 
 def build_pap_reactor(
@@ -739,16 +831,13 @@ def build_pap_reactor(
     platform.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.core",
-            version="0.6.0",
+            version="0.10.0",
             contribution_points=[
                 DISCOVERY_TRANSPORTS.id,
                 URL_SAFETY_POLICIES.id,
-                PROTOCOL_PROFILES.id,
-                EXTENSION_HANDLERS.id,
                 CLOCKS.id,
                 RANDOM_SOURCES.id,
                 SIGNERS.id,
-                KEY_STORES.id,
                 TOKEN_STORES.id,
                 PAIRWISE_USER_ID_STORES.id,
                 AUTHORIZATION_STATE_STORES.id,
@@ -760,6 +849,9 @@ def build_pap_reactor(
                 PROTECTED_INPUTS.id,
                 RETRY_POLICIES.id,
                 RATE_LIMIT_BUDGETS.id,
+                STANDING_PERMISSION_STORES.id,
+                TELEMETRY_SINKS.id,
+                APPROVAL_SURFACES.id,
             ],
         ),
         PapCorePlugin(
@@ -784,3 +876,15 @@ def first_contribution(platform: PluginPlatform, point: object, label: str) -> o
     if len(contributions) > 1 and contributions[0].order == contributions[1].order:
         raise RuntimeError(f"PAP Reactor has ambiguous {label} contributions")
     return contributions[0].value
+
+
+def optional_contribution(platform: PluginPlatform, point: object, label: str) -> object | None:
+    """The highest-priority provider for an optional PAP point, `None` when there is none.
+
+    An optional point may have no provider (the feature is off), but never two at the
+    same winning priority: that fails closed exactly as `first_contribution` does.
+    """
+
+    if not platform.get_contributions(point):
+        return None
+    return first_contribution(platform, point, label)

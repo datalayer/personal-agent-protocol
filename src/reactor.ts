@@ -9,6 +9,7 @@ import {
   type PlatformInput,
 } from "@datalayer/reactor";
 
+import { isGlobalAddress, literalAddress } from "./addresses.js";
 import { DiscoveryError } from "./errors.js";
 import {
   InMemoryProtocolCache,
@@ -16,7 +17,9 @@ import {
   SharedRateLimitBudget,
   type RateLimitBudget,
 } from "./limits.js";
+import type { StandingPermissionStore } from "./operations.js";
 import type { SecretValue } from "./secret.js";
+import type { TelemetryEvent } from "./telemetry.js";
 
 export interface DiscoveryTransport {
   fetch(input: URL, init: RequestInit): Promise<Response>;
@@ -24,15 +27,6 @@ export interface DiscoveryTransport {
 
 export interface UrlSafetyPolicy {
   assertSafe(url: URL): void | Promise<void>;
-}
-
-export interface ProtocolProfile {
-  readonly version: string;
-}
-
-export interface ExtensionHandler {
-  readonly name: string;
-  readonly majorVersion: number;
 }
 
 export interface Clock {
@@ -50,18 +44,6 @@ export interface Signer {
   ): Promise<SecretValue>;
 }
 
-export interface KeyReference {
-  readonly id: string;
-  readonly algorithm: string;
-}
-
-export interface KeyStore {
-  getOrCreate(options: {
-    readonly tenantId: string;
-    readonly subject: string;
-    readonly purpose: string;
-  }): Promise<KeyReference>;
-}
 
 export interface TokenStore {
   put(reference: string, token: SecretValue): Promise<void>;
@@ -135,6 +117,14 @@ export interface ProtectedInput {
   collect(request: ProtectedInputRequest): Promise<Record<string, SecretValue>>;
 }
 
+/**
+ * Receive each finished protocol stage (`TelemetryEvent` of telemetry.ts), redacted already.
+ * No contribution, no telemetry.
+ */
+export interface TelemetrySink {
+  record(event: TelemetryEvent): void;
+}
+
 /** One in-process lock per reference: the default Account Token lock. */
 export class InProcessAccountTokenLock implements AccountTokenLock {
   readonly #tails = new Map<string, Promise<unknown>>();
@@ -158,16 +148,9 @@ export const DiscoveryTransports = defineContributionPoint<DiscoveryTransport>(
 export const UrlSafetyPolicies = defineContributionPoint<UrlSafetyPolicy>(
   "pap.urlSafetyPolicy",
 );
-export const ProtocolProfiles = defineContributionPoint<ProtocolProfile>(
-  "pap.protocolProfile",
-);
-export const ExtensionHandlers = defineContributionPoint<ExtensionHandler>(
-  "pap.extensionHandler",
-);
 export const Clocks = defineContributionPoint<Clock>("pap.clock");
 export const RandomSources = defineContributionPoint<RandomSource>("pap.randomSource");
 export const Signers = defineContributionPoint<Signer>("pap.signer");
-export const KeyStores = defineContributionPoint<KeyStore>("pap.keyStore");
 export const TokenStores = defineContributionPoint<TokenStore>("pap.tokenStore");
 export const PairwiseUserIdStores = defineContributionPoint<PairwiseUserIdStore>(
   "pap.pairwiseUserIdStore",
@@ -196,6 +179,12 @@ export const RetryPolicies = defineContributionPoint<RetryPolicy>("pap.retryPoli
 export const RateLimitBudgets = defineContributionPoint<RateLimitBudget>(
   "pap.rateLimitBudget",
 );
+/** `StandingPermissionStore` (operations.ts): the user's standing permissions (Operations). */
+export const StandingPermissionStores = defineContributionPoint<StandingPermissionStore>(
+  "pap.standingPermissionStore",
+);
+/** `TelemetrySink`: where traces and analytics events go; none, and nothing is emitted. */
+export const TelemetrySinks = defineContributionPoint<TelemetrySink>("pap.telemetry");
 
 export interface PapCoreOptions {
   readonly fetch?: typeof globalThis.fetch;
@@ -215,21 +204,24 @@ const systemRandom: RandomSource = {
   },
 };
 
+/** Names that never leave the host or its network (RFC 6761, RFC 6762, RFC 8375, `.internal`). */
+const LOCAL_NAMES = ["localhost", "local", "internal", "home.arpa", "localdomain"];
+
+/**
+ * The portable, textual URL check every runtime applies: HTTPS without user information,
+ * and a host that is neither a local name nor an IP literal outside global unicast. It
+ * cannot see where a name resolves: on Node, the company's default transport resolves
+ * and pins (`createResolvingFetch`, `./server`); elsewhere, contribute a policy that can.
+ */
 function assertObviouslyPublic(url: URL): void {
   if (url.protocol !== "https:" || url.username || url.password) {
     throw new DiscoveryError("unsafe_url", "Discovery and metadata URLs must use HTTPS");
   }
-  const host = url.hostname.toLowerCase().replace(/[\[\]]/g, "");
-  if (
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    host === "::1" ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)
-  ) {
+  // `localhost.` is `localhost`: a trailing dot names the same host.
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  const literal = literalAddress(host);
+  const local = LOCAL_NAMES.some((name) => host === name || host.endsWith(`.${name}`));
+  if (literal !== undefined ? !isGlobalAddress(literal) : !host || local) {
     throw new DiscoveryError("unsafe_address", "Discovery URL names a private address");
   }
 }
@@ -241,16 +233,13 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
   }
   return definePlugin({
     name: "@datalayer/personal-agent-protocol-core",
-    version: "0.6.0",
+    version: "0.10.0",
     contributionPoints: [
       DiscoveryTransports,
       UrlSafetyPolicies,
-      ProtocolProfiles,
-      ExtensionHandlers,
       Clocks,
       RandomSources,
       Signers,
-      KeyStores,
       TokenStores,
       PairwiseUserIdStores,
       AuthorizationStateStores,
@@ -262,6 +251,8 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       ProtectedInputs,
       RetryPolicies,
       RateLimitBudgets,
+      StandingPermissionStores,
+      TelemetrySinks,
     ],
     contributes: [
       contribution(
@@ -279,7 +270,6 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
         },
         { id: "public", order: 100 },
       ),
-      contribution(ProtocolProfiles, { version: "0.1" }, { id: "0.1", order: 100 }),
       contribution(Clocks, systemClock, { id: "system", order: 100 }),
       contribution(RandomSources, systemRandom, { id: "system", order: 100 }),
       contribution(AccountTokenLocks, new InProcessAccountTokenLock(), {
@@ -319,4 +309,19 @@ export function firstContribution<T>(
     throw new Error(`PAP Reactor has ambiguous ${label} contributions`);
   }
   return selected.value;
+}
+
+/**
+ * The highest-priority provider for an optional PAP point, `undefined` when there is none.
+ *
+ * An optional point may have no provider (the feature is off), but never two at the same
+ * winning priority: that fails closed exactly as `firstContribution` does.
+ */
+export function optionalContribution<T>(
+  reactor: ReactorPlatformView,
+  point: ContributionPoint<T>,
+  label: string,
+): T | undefined {
+  if (!reactor.getContributions(point).length) return undefined;
+  return firstContribution(reactor, point, label);
 }

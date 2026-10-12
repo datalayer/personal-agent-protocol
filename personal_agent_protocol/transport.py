@@ -30,7 +30,9 @@ from .reactor import (
     RetryPolicy,
     SystemClock,
     first_contribution,
+    optional_contribution,
     parse_retry_after,
+    send_bounded,
 )
 from .sessions import SessionToken
 
@@ -60,11 +62,6 @@ def budget_key(url: str) -> str:
     return f"{scheme}://{host}:{port}"
 
 
-def _optional(platform: PluginPlatform, point: object) -> object | None:
-    contributions = platform.get_contributions(point)
-    return contributions[0].value if contributions else None
-
-
 class DpopHttpClient:
     """Send replay-safe DPoP requests without forwarding credentials across origins."""
 
@@ -74,12 +71,17 @@ class DpopHttpClient:
         reactor: PluginPlatform,
         http_client: httpx.AsyncClient,
         max_redirects: int = 3,
+        max_response_bytes: int = 1024 * 1024,
     ) -> None:
         if max_redirects < 0:
             raise ValueError("max_redirects must not be negative")
+        if max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be positive")
         self.reactor = reactor
         self.http = http_client
         self.max_redirects = max_redirects
+        #: No more than this (and one byte) of a response is read; the client checks the rest.
+        self.max_response_bytes = max_response_bytes
 
     async def request(
         self,
@@ -104,8 +106,8 @@ class DpopHttpClient:
         to the caller.
         """
 
-        policy = _optional(self.reactor, RETRY_POLICIES)
-        budget = _optional(self.reactor, RATE_LIMIT_BUDGETS)
+        policy = optional_contribution(self.reactor, RETRY_POLICIES, "retry policy")
+        budget = optional_contribution(self.reactor, RATE_LIMIT_BUDGETS, "rate-limit budget")
         retry = policy if isinstance(policy, RetryPolicy) else RetryPolicy(max_attempts=1)
         key = budget_key(url)
         attempts = 0
@@ -140,11 +142,11 @@ class DpopHttpClient:
                 await asyncio.sleep(delay)
 
     def _now(self) -> datetime:
-        clock = _optional(self.reactor, CLOCKS)
+        clock = optional_contribution(self.reactor, CLOCKS, "clock")
         return (clock if isinstance(clock, Clock) else SystemClock()).now()
 
     def _jitter(self) -> float:
-        source = _optional(self.reactor, RANDOM_SOURCES)
+        source = optional_contribution(self.reactor, RANDOM_SOURCES, "random source")
         if not isinstance(source, RandomSource):
             return 0.5
         return int.from_bytes(source.bytes(4), "big") / 2**32
@@ -195,16 +197,19 @@ class DpopHttpClient:
                 )
             )
             try:
-                response = await self.http.request(
-                    current_method,
-                    current_url,
-                    content=current_content,
-                    headers={
-                        **supplied,
-                        "Authorization": f"DPoP {token.access_token.get_secret_value()}",
-                        "DPoP": proof.get_secret_value(),
-                    },
-                    follow_redirects=False,
+                response = await send_bounded(
+                    self.http,
+                    self.http.build_request(
+                        current_method,
+                        current_url,
+                        content=current_content,
+                        headers={
+                            **supplied,
+                            "Authorization": f"DPoP {token.access_token.get_secret_value()}",
+                            "DPoP": proof.get_secret_value(),
+                        },
+                    ),
+                    max_bytes=self.max_response_bytes,
                 )
             except httpx.HTTPError as exc:
                 raise TransportError("request_failed", "PAP resource request failed") from exc
@@ -222,6 +227,12 @@ class DpopHttpClient:
 
             if response.status_code not in _REDIRECTS:
                 return response
+            if current_content is not None and response.status_code != 303:
+                # A body (credentials, a code, a confirmation) is sent once, to the URL it
+                # was meant for: never again to wherever a redirect points.
+                raise TransportError(
+                    "redirect_refused", "A request with a body is never sent to a redirect"
+                )
             if redirects >= self.max_redirects:
                 raise TransportError(
                     "too_many_redirects", "PAP resource request exceeded redirect limit"

@@ -15,6 +15,7 @@ import {
   type DiscoveryTransport,
   type UrlSafetyPolicy,
 } from "./reactor.js";
+import { traced } from "./telemetry.js";
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
 export interface DiscoveryOptions {
@@ -84,13 +85,14 @@ async function fetchJson(
     let response: Response;
     try {
       response = await withinDeadline(
-        transport.fetch(current, {
-          headers: { Accept: "application/json" },
-          redirect: "manual",
-          credentials: "omit",
-          ...(signal === undefined ? {} : { signal }),
-        }),
-        { timeoutMs, startedAt },
+        (aborted) =>
+          transport.fetch(current, {
+            headers: { Accept: "application/json" },
+            redirect: "manual",
+            credentials: "omit",
+            signal: aborted,
+          }),
+        { timeoutMs, startedAt, ...(signal === undefined ? {} : { signal }) },
       );
     } catch (cause) {
       if (cause instanceof DiscoveryError) throw cause;
@@ -98,6 +100,8 @@ async function fetchJson(
     }
 
     if (response.status >= 300 && response.status < 400) {
+      // A redirect's body is never read: cancelled, so its connection is released.
+      await response.body?.cancel().catch(() => undefined);
       if (redirects === maxRedirects) {
         throw new DiscoveryError("too_many_redirects", "Discovery exceeded redirect limit");
       }
@@ -109,6 +113,7 @@ async function fetchJson(
       continue;
     }
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new DiscoveryError(
         "http_error",
         "Discovery endpoint returned an unsuccessful status",
@@ -138,10 +143,20 @@ async function fetchJson(
   throw new DiscoveryError("too_many_redirects", "Discovery exceeded redirect limit");
 }
 
-export async function discoverCompany(
+export function discoverCompany(
   domain: string,
   options: DiscoveryOptions = {},
 ): Promise<DiscoveredCompany> {
+  return traced(
+    options.reactor,
+    "pap.discovery.discover",
+    { "pap.company.domain": domain.replace(/\.$/, "").toLowerCase() },
+    () => discover(domain, options),
+    (company) => ({ "pap.company.issuer": company.oauthMetadata?.issuer }),
+  );
+}
+
+async function discover(domain: string, options: DiscoveryOptions): Promise<DiscoveredCompany> {
   const requestedDomain = normalizeDomain(domain);
   const reactor = options.reactor ?? buildPapReactor(options);
   const transport = firstContribution<DiscoveryTransport>(

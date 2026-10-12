@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -14,7 +15,12 @@ from pydantic import ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .caching import CacheBounds, MetadataCache
-from .errors import IdentityError, ProtocolValidationError
+from .errors import (
+    DiscoveryError,
+    IdentityError,
+    PersonalAgentProtocolError,
+    ProtocolValidationError,
+)
 from .json import loads_strict
 from .models import ClientMetadata, JsonWebKeySet
 from .reactor import (
@@ -29,6 +35,30 @@ from .reactor import (
     first_contribution,
     resolve_addresses,
 )
+
+#: The most entries a per-URL table keeps (refetch times, unfetchable client IDs).
+_REMEMBERED = 1024
+
+
+def _remember(table: dict[str, Any], key: str, value: Any, stale: datetime) -> None:
+    """Set `table[key]`, keeping the table bounded: stale entries go first, then the oldest.
+
+    An entry is stale once it no longer matters (a refetch older than the
+    interval, a failure past its expiry): an attacker naming endless URLs
+    cannot grow the table past `_REMEMBERED`.
+    """
+
+    table.pop(key, None)
+    if len(table) >= _REMEMBERED:
+        for name in [name for name, entry in table.items() if _when(entry) <= stale]:
+            del table[name]
+        while len(table) >= _REMEMBERED:
+            del table[next(iter(table))]
+    table[key] = value
+
+
+def _when(entry: Any) -> datetime:
+    return entry[0] if isinstance(entry, tuple) else entry
 
 
 class AgentIdentityClient:
@@ -46,6 +76,7 @@ class AgentIdentityClient:
         timeout: float = 5.0,
         cache_bounds: CacheBounds | None = None,
         jwks_refetch_interval: float = 60.0,
+        unfetchable_for: float = 30.0,
     ) -> None:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
@@ -65,6 +96,10 @@ class AgentIdentityClient:
         self._cache = MetadataCache(reactor, cache_bounds)
         self._refetch_interval = timedelta(seconds=jwks_refetch_interval)
         self._refetched: dict[str, datetime] = {}
+        #: A `client_id` whose metadata could not be fetched, and its error, for a while:
+        #: a stream of assertions naming it does not fetch it each time.
+        self._unfetchable_for = timedelta(seconds=unfetchable_for)
+        self._unfetchable: dict[str, tuple[datetime, PersonalAgentProtocolError]] = {}
 
     async def __aenter__(self) -> AgentIdentityClient:
         return self
@@ -80,9 +115,17 @@ class AgentIdentityClient:
         """Fetch client metadata without redirects and bind it to ``client_id``."""
 
         requested = self._fetchable_url(client_id)
-        data = await self._cached_json(
-            f"pap.client-metadata:{requested}", requested, max_redirects=0, required_host=None
-        )
+        now = self._cache.now()
+        remembered = self._unfetchable.get(requested)
+        if remembered is not None and now < remembered[0]:
+            raise type(remembered[1])(remembered[1].code, "Client metadata could not be fetched")
+        try:
+            data = await self._cached_json(
+                f"pap.client-metadata:{requested}", requested, max_redirects=0, required_host=None
+            )
+        except (DiscoveryError, IdentityError) as error:
+            _remember(self._unfetchable, requested, (now + self._unfetchable_for, error), now)
+            raise
         try:
             metadata = ClientMetadata.model_validate(data)
         except ValidationError as exc:
@@ -115,7 +158,7 @@ class AgentIdentityClient:
         last = self._refetched.get(metadata.jwks_uri)
         if last is not None and now - last < self._refetch_interval:
             return keys
-        self._refetched[metadata.jwks_uri] = now
+        _remember(self._refetched, metadata.jwks_uri, now, now - self._refetch_interval)
         await self._cache.delete(key)
         return self._key_set(await self._jwks(metadata, key))
 

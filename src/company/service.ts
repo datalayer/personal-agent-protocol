@@ -33,14 +33,25 @@
  * - Operations v1: proposals from the company agent or the API, read, confirm
  *   (latest revision, approval rules, scope, extension negotiation), at most
  *   once, and cancel.
+ * - MCP (§4.3, §6), when a `pap.company.mcp` contribution is present: a
+ *   Streamable HTTP endpoint at `/mcp` accepting only Bearer Session Tokens
+ *   issued for its url (requested without DPoP, `resource` = that url), its
+ *   protected resource metadata (RFC 9728), and tools that propose operations
+ *   in `structuredContent` (Operations §4.2). Bearer tokens work nowhere else.
+ * - Web browsing (§5), with `web: true`: the browser-session endpoint sets the
+ *   company's own cookie for a Session from a verified browser assertion, and each
+ *   operation's `url` shows it in that Session, where the user can confirm or cancel
+ *   it: the same operation, performed at most once whichever channel confirms it.
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
+import { decodeJwt, decodeProtectedHeader, importJWK, type JWK } from "jose";
 
+import { verifyBrowserAssertion, type VerifiedBrowserAssertion } from "../browser-server.js";
 import { verifyDpopProof } from "../crypto.js";
-import { ProofError, SessionError } from "../errors.js";
+import { ProofError, ProtocolValidationError, SessionError } from "../errors.js";
 import { parseJsonStrict } from "../json.js";
 import {
   parseMessage,
@@ -51,7 +62,9 @@ import {
   type Operation,
   type OperationResult,
 } from "../models.js";
-import { Clocks, RandomSources, firstContribution } from "../reactor.js";
+import { OPERATIONS_VERSION } from "../operations.js";
+import { PROTOCOL_PROFILE } from "../profile.js";
+import { Clocks, RandomSources, firstContribution, optionalContribution } from "../reactor.js";
 import { SecretValue } from "../secret.js";
 import { JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION } from "../sessions.js";
 import {
@@ -60,12 +73,14 @@ import {
   CompanyAccounts,
   CompanyAgents,
   CompanyApis,
+  CompanyMcps,
   CompanyStores,
   OperationExecutors,
   OperationFailed,
   OperationOutcomeUnknown,
   ReplayCaches,
   type CompanyApi,
+  type CompanyMcp,
   type Reply,
   type ReplayCache,
 } from "./points.js";
@@ -85,6 +100,7 @@ import {
   type PendingDevice,
   type PendingMediated,
   type SessionPointer,
+  type SignInAttempts,
   type StoreWriteOptions,
   type StoredConversation,
   type StoredEvent,
@@ -128,11 +144,23 @@ export interface CompanyConfigOptions {
   readonly operationLifetimeSeconds?: number;
   readonly deviceInterval?: number;
   readonly maxCodeAttempts?: number;
+  /**
+   * Failed Mediated Sign-In attempts (credentials or codes) a key may make before it is
+   * locked out: an account identifier, an agent's user, a Session, an account's codes.
+   */
+  readonly maxSignInFailures?: number;
+  /**
+   * How long the first lockout lasts; each failure past the limit doubles it (at most a
+   * day), and the count is forgotten once a key has failed nothing for this long.
+   */
+  readonly signInLockoutSeconds?: number;
   readonly customScopes?: Readonly<Record<string, string>>;
   /** A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it. */
   readonly devicePage?: string;
   /** A hosted consent page with `{request_id}`: `GET /oauth/authorize` answers 303 to it. */
   readonly consentPage?: string;
+  /** Web browsing (§5): a browser-session endpoint and a page for each operation. */
+  readonly web?: boolean;
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -165,9 +193,12 @@ export class CompanyConfig {
   readonly operationLifetimeSeconds: number;
   readonly deviceInterval: number;
   readonly maxCodeAttempts: number;
+  readonly maxSignInFailures: number;
+  readonly signInLockoutSeconds: number;
   readonly customScopes: Readonly<Record<string, string>>;
   readonly devicePage: string | undefined;
   readonly consentPage: string | undefined;
+  readonly web: boolean;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -184,11 +215,25 @@ export class CompanyConfig {
     this.operationLifetimeSeconds = options.operationLifetimeSeconds ?? 15 * 60;
     this.deviceInterval = options.deviceInterval ?? 5;
     this.maxCodeAttempts = options.maxCodeAttempts ?? 3;
+    this.maxSignInFailures = options.maxSignInFailures ?? 5;
+    this.signInLockoutSeconds = options.signInLockoutSeconds ?? 15 * 60;
     this.customScopes = { ...(options.customScopes ?? {}) };
     this.devicePage = hostedPage("devicePage", options.devicePage);
     this.consentPage = hostedPage("consentPage", options.consentPage);
+    this.web = options.web ?? false;
     if (this.consentPage !== undefined && !this.consentPage.includes("{request_id}")) {
       throw new RangeError("consentPage must contain {request_id}");
+    }
+    if (this.writeScopes.some((scope) => !this.scopes.includes(scope))) {
+      throw new RangeError("writeScopes must be among scopes");
+    }
+    if (!(Number.isInteger(this.maxSignInFailures) && this.maxSignInFailures >= 1 && this.signInLockoutSeconds > 0)) {
+      throw new RangeError("sign-in attempts need a positive limit and lockout");
+    }
+    if (this.operations && !this.writeScopes.length) {
+      // Confirming an operation needs a write scope: without one, any signed-in Session,
+      // whatever it was granted, could confirm (Operations §3.3).
+      throw new RangeError("operations need writeScopes: the scopes confirming one requires");
     }
   }
 
@@ -218,6 +263,15 @@ export class CompanyConfig {
   }
   get operationsEndpoint(): string {
     return `${this.base}/poppy/operations`;
+  }
+  get mcpUrl(): string {
+    return `${this.base}/mcp`;
+  }
+  get mcpResourceMetadata(): string {
+    return `${this.base}/.well-known/oauth-protected-resource/mcp`;
+  }
+  get browserSessionEndpoint(): string {
+    return `${this.base}/poppy/browser-session`;
   }
 }
 
@@ -265,7 +319,9 @@ function jsonError(
   extra: Readonly<Record<string, unknown>> = {},
 ): CompanyResponse {
   const headers: Record<string, string> = { ...NO_STORE };
-  if (CHALLENGED.has(error) && (status === 401 || status === 403)) {
+  // A DPoP refusal carries its challenge whatever its status, the token endpoint's 400
+  // included (§4.3, RFC 9449 §7.1).
+  if (CHALLENGED.has(error) && (status === 401 || status === 403 || error === "invalid_dpop_proof")) {
     // Token errors are also in WWW-Authenticate (§6, RFC 9449).
     const scope = extra.scope;
     headers["WWW-Authenticate"] =
@@ -274,12 +330,64 @@ function jsonError(
   return { status, body: { error, ...extra }, headers };
 }
 
+function rpcError(requestId: unknown, code: number, message: string): CompanyResponse {
+  return {
+    status: 200,
+    body: { jsonrpc: "2.0", id: requestId ?? null, error: { code, message } },
+    headers: {},
+  };
+}
+
 function digest(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
 function base64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
+}
+
+/** The consent page's cookie: `__Host-`, so no other host or path can set it. */
+export const CONSENT_COOKIE = "__Host-poppy_consent";
+/** The website's cookie for the agent's Session (§5): `__Host-`, so no other host or path can set it. */
+export const WEB_COOKIE = "__Host-poppy_session";
+
+/** What the user decided on the company's own consent page, checked by `consentDecision`. */
+export interface ConsentDecision {
+  readonly requestId: string;
+  readonly allow: boolean;
+}
+
+/** A form's CSRF token: only a page whose browser holds `secret` (a cookie) can know it. */
+function bound(secret: string, purpose: string): string {
+  return createHmac("sha256", secret).update(purpose).digest("base64url");
+}
+
+function cookie(request: CompanyRequest, name: string): string | undefined {
+  for (const part of (request.headers.cookie ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at).trim() === name) {
+      const value = part.slice(at + 1).trim();
+      return value || undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A POST a page of this site sent, never one another site's page made the browser send:
+ * `Sec-Fetch-Site`, when sent, is `same-origin`, and `Origin`, when sent, the company's
+ * own; the form's CSRF token is checked besides (Guides, consent pages).
+ */
+function fromThisSite(request: CompanyRequest, base: string): boolean {
+  const site = request.headers["sec-fetch-site"];
+  const origin = request.headers.origin;
+  return (site === undefined || site === "same-origin") && (origin === undefined || origin === base);
+}
+
+function sameText(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 /** Python's `parse_qsl` into a dict: blank values dropped, the last value wins. */
@@ -320,6 +428,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** A request body that must be one JSON object: anything else is `invalid_request`. */
+function jsonObject(body: Uint8Array | string | undefined): Record<string, unknown> {
+  const value = parseJsonStrict(text(body));
+  if (!isObject(value)) throw new Refused(400, "invalid_request");
+  return value;
+}
+
 function sameOwner(a: readonly [string, string], b: readonly [string, string]): boolean {
   return a[0] === b[0] && a[1] === b[1];
 }
@@ -331,6 +446,9 @@ function plain(message: Message): Record<string, unknown> {
 
 /** How often a compare-and-set is retried against concurrent writers before giving up. */
 const CAS_ATTEMPTS = 32;
+
+type TokenType = "DPoP" | "Bearer";
+const EVERY_TOKEN_TYPE: readonly TokenType[] = ["DPoP", "Bearer"];
 /** How long an expired device or Mediated sign-in is kept, to answer that it expired. */
 const KEPT_EXPIRED_MS = 10 * 60 * 1000;
 
@@ -437,14 +555,32 @@ export class CompanyService {
   // Routing -------------------------------------------------------------------------
 
   async handle(request: CompanyRequest): Promise<CompanyResponse> {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
     const method = request.method.toUpperCase();
+    if (url.searchParams.has("access_token")) {
+      // A token in a URL is logged, cached, and leaked in Referer: never accepted, even
+      // beside a header that would be (§4.3, RFC 6750 §2.3).
+      if (path === "/mcp" && this.#mcp() !== undefined) return this.#bearerRefusal(400, "invalid_request");
+      return jsonError(400, "invalid_request");
+    }
     try {
       if (method === "GET" && path === "/.well-known/poppy.json") {
         return { status: 200, body: this.discoveryDocument(), headers: {} };
       }
       if (method === "GET" && path === "/.well-known/oauth-authorization-server") {
         return { status: 200, body: this.oauthMetadata(), headers: {} };
+      }
+      const mcp = this.#mcp();
+      if (path === "/.well-known/oauth-protected-resource/mcp" && mcp !== undefined) {
+        return { status: 200, body: this.protectedResourceMetadata(), headers: {} };
+      }
+      if (path === "/mcp" && mcp !== undefined) return await this.#mcpRoute(request, mcp);
+      if (method === "POST" && path === "/poppy/browser-session" && this.config.web) {
+        return await this.#browserSession(request);
+      }
+      if (path.startsWith("/operations/") && this.config.web && this.config.operations) {
+        return await this.#operationPage(request, method, path.split("/")[2] ?? "");
       }
       if (method === "POST" && path === "/oauth/token") return await this.#token(request);
       if (method === "GET" && path === "/oauth/authorize" && this.config.direct) {
@@ -482,6 +618,9 @@ export class CompanyService {
         const status = error.statusCode ?? (error.code === "invalid_client" ? 401 : 400);
         return jsonError(status, error.code);
       }
+      // A body that is not JSON, or not the shape the protocol defines: the caller's
+      // mistake, never the company's (no 500).
+      if (error instanceof ProtocolValidationError) return jsonError(400, "invalid_request");
       throw error;
     }
     return jsonError(404, "not_found");
@@ -503,23 +642,38 @@ export class CompanyService {
     }
     if (Object.keys(config.customScopes).length) auth.custom_scopes = { ...config.customScopes };
     const document: Record<string, unknown> = {
-      protocol_version: "0.1",
+      protocol_version: PROTOCOL_PROFILE,
       organization: { name: config.name, domain: config.domain },
       auth,
       agent: { protocols: [{ type: "poppy", endpoint: config.conversationsEndpoint }] },
     };
+    const apis: Record<string, string>[] = [];
     const api = this.#api();
     if (api !== undefined) {
-      document.apis = [
-        { type: "openapi", url: config.apiDescription, description: api.description },
-      ];
+      apis.push({ type: "openapi", url: config.apiDescription, description: api.description });
     }
+    const mcp = this.#mcp();
+    if (mcp !== undefined) {
+      apis.push({ type: "mcp", url: config.mcpUrl, description: mcp.description });
+    }
+    if (apis.length) document.apis = apis;
+    if (config.web) document.web = { browser_session_endpoint: config.browserSessionEndpoint };
     if (config.operations) {
       document.extensions = {
-        operations: { version: "1", endpoint: config.operationsEndpoint },
+        operations: { version: OPERATIONS_VERSION, endpoint: config.operationsEndpoint },
       };
     }
     return document;
+  }
+
+  /** RFC 9728 metadata for the MCP server: its issuer is the company's (§6). */
+  protectedResourceMetadata(): Record<string, unknown> {
+    return {
+      resource: this.config.mcpUrl,
+      authorization_servers: [this.config.base],
+      scopes_supported: [...this.config.scopes],
+      bearer_methods_supported: ["header"],
+    };
   }
 
   oauthMetadata(): Record<string, unknown> {
@@ -547,8 +701,7 @@ export class CompanyService {
     if (form.client_assertion_type !== JWT_CLIENT_ASSERTION || !clientId) {
       throw new Refused(401, "invalid_client");
     }
-    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
-    if (!(await policy.allows(clientId))) throw new Refused(401, "invalid_client");
+    if (!(await this.#allowed(clientId))) throw new Refused(401, "invalid_client");
     const resolver = firstContribution(this.reactor, ClientResolvers, "client resolver");
     let resolved: readonly [ClientMetadata, JsonWebKeySet];
     try {
@@ -560,7 +713,8 @@ export class CompanyService {
     await verifyAssertion(form.client_assertion ?? "", {
       keys,
       issuer: clientId,
-      audience,
+      // The issuer, the token endpoint, or the endpoint called (RFC 7523 §3).
+      audience: [...new Set([this.config.base, this.config.tokenEndpoint, audience])],
       subject: clientId,
       replayCache: this.#replay(),
       now: this.#now(),
@@ -571,6 +725,15 @@ export class CompanyService {
       await this.store.put(RecordKinds.client, clientId, json({ extensions } satisfies KnownClient));
     }
     return clientId;
+  }
+
+  /**
+   * The company's policy on this agent, asked before anything is fetched for it: a
+   * blocked `client_id` is never resolved (no metadata or keys fetched from its domain),
+   * and a blocked agent's tokens stop working at once.
+   */
+  async #allowed(clientId: string): Promise<boolean> {
+    return firstContribution(this.reactor, ClientPolicies, "policy").allows(clientId);
   }
 
   /** Whether the agent declared the Operations extension when it last authenticated. */
@@ -602,9 +765,20 @@ export class CompanyService {
     const form = pairs(text(request.body));
     const grant = form.grant_type;
     const clientId = await this.#client(form, this.config.tokenEndpoint);
+    if (request.headers.dpop === undefined && this.#mcp() !== undefined) {
+      // A Bearer token, only for the MCP server's url and an existing Session (§4.3).
+      if (form.resource !== this.config.mcpUrl) throw new Refused(400, "invalid_dpop_proof");
+      if ((grant !== JWT_BEARER_GRANT && grant !== REFRESH_TOKEN_GRANT) || !form.session_id) {
+        throw new Refused(400, "invalid_request");
+      }
+      if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, "", "Bearer");
+      return this.#refreshGrant(form, clientId, "", "Bearer");
+    }
     const thumbprint = await this.#dpop(request);
-    if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, thumbprint);
-    if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, thumbprint);
+    if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, thumbprint, "DPoP");
+    if (grant === REFRESH_TOKEN_GRANT) {
+      return this.#refreshGrant(form, clientId, thumbprint, "DPoP");
+    }
     if (grant === "authorization_code" && this.config.direct) {
       return this.#codeGrant(form, clientId, thumbprint);
     }
@@ -618,6 +792,7 @@ export class CompanyService {
     form: Readonly<Record<string, string>>,
     clientId: string,
     thumbprint: string,
+    tokenType: TokenType,
   ): Promise<CompanyResponse> {
     const resolver = firstContribution(this.reactor, ClientResolvers, "client");
     const [, keys] = await resolver.resolve(clientId, keyId(form.assertion ?? ""));
@@ -646,11 +821,24 @@ export class CompanyService {
       if (known === undefined || known.clientId !== clientId || known.pairwiseUserId !== pairwise) {
         throw new Refused(400, "invalid_session");
       }
+      // Renewal with the assertion gives a signed-out token; a signed-in Session is
+      // renewed with its Account Token instead (§4.2, §4.8).
+      const {
+        accountId: _account,
+        accountToken: _token,
+        resource: _resource,
+        tokenType: _type,
+        ...signedOut
+      } = known;
       session = {
-        ...known,
+        ...signedOut,
         keyThumbprint: thumbprint,
         expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
+        scopes: [],
+        ...(form.resource === undefined ? {} : { resource: form.resource }),
+        ...(tokenType === "Bearer" ? { tokenType } : {}),
       };
+      return this.#issue(session, undefined, [tokenType]);
     }
     return this.#issue(session);
   }
@@ -659,6 +847,7 @@ export class CompanyService {
     form: Readonly<Record<string, string>>,
     clientId: string,
     thumbprint: string,
+    tokenType: TokenType,
   ): Promise<CompanyResponse> {
     const presented = digest(form.refresh_token ?? "");
     const entry = await this.store.get(RecordKinds.accountToken, presented);
@@ -720,10 +909,12 @@ export class CompanyService {
       expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
     };
     // The resource is what this refresh asked for, never one an earlier refresh named.
-    const { resource: _earlier, ...unbound } = signedIn;
+    const { resource: _earlier, tokenType: _type, ...unbound } = signedIn;
+    const typed: IssuedSession = tokenType === "Bearer" ? { ...unbound, tokenType } : unbound;
     const response = await this.#issue(
-      resource === undefined ? unbound : { ...unbound, resource },
+      resource === undefined ? typed : { ...typed, resource },
       rotated,
+      [tokenType],
     );
     const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, grant.family);
     if (family === undefined || family.revoked) {
@@ -984,11 +1175,12 @@ export class CompanyService {
     return changed !== undefined && !changed[1].revoked;
   }
 
+  /** Sign the Session in: `session` is its DPoP record, `thumbprint` the proven key. */
   async #signIn(
     session: IssuedSession,
     accountId: string,
     scopes: readonly string[],
-    thumbprint?: string,
+    thumbprint: string,
   ): Promise<CompanyResponse> {
     if (session.accountId !== undefined && session.accountId !== accountId) {
       throw new Refused(400, "account_mismatch");
@@ -1015,16 +1207,20 @@ export class CompanyService {
     };
     await this.store.put(RecordKinds.accountFamily, family, json(signIn), expiry(expiresAt));
     await this.#rememberFamily(session.clientId, accountId, family);
-    return this.#issue(
-      {
-        ...session,
-        accountId,
-        scopes,
-        accountToken: family,
-        keyThumbprint: thumbprint || session.keyThumbprint,
-      },
-      accountToken,
-    );
+    // The signed-in token is the Session's own: DPoP, bound to the key that proved
+    // possession, for no single resource. It replaces only the DPoP token; a Bearer token
+    // for the MCP server is renewed with the Account Token (§4.3, §4.8).
+    const signedIn: IssuedSession = {
+      sessionId: session.sessionId,
+      clientId: session.clientId,
+      pairwiseUserId: session.pairwiseUserId,
+      keyThumbprint: thumbprint,
+      expiresAt: session.expiresAt,
+      accountId,
+      scopes,
+      accountToken: family,
+    };
+    return this.#issue(signedIn, accountToken, ["DPoP"]);
   }
 
   async #rememberFamily(clientId: string, accountId: string, family: string): Promise<void> {
@@ -1040,16 +1236,20 @@ export class CompanyService {
     throw new Refused(503, "temporarily_unavailable");
   }
 
-  /** Issue a token for the Session; it replaces the Session's earlier tokens. */
-  async #issue(session: IssuedSession, refreshToken?: string): Promise<CompanyResponse> {
+  /** Issue a token for the Session; it replaces the Session's tokens of `replacing` types. */
+  async #issue(
+    session: IssuedSession,
+    refreshToken?: string,
+    replacing: readonly TokenType[] = EVERY_TOKEN_TYPE,
+  ): Promise<CompanyResponse> {
     const accessToken = this.#id("sat");
     const key = digest(accessToken);
-    await this.#recordToken(session, key);
+    await this.#recordToken(session, key, replacing);
     const pointer: SessionPointer = { sessionId: session.sessionId };
     await this.store.put(RecordKinds.sessionToken, key, json(pointer), expiry(session.expiresAt));
     const body: Record<string, unknown> = {
       access_token: accessToken,
-      token_type: "DPoP",
+      token_type: session.tokenType ?? "DPoP",
       expires_in: Math.trunc((new Date(session.expiresAt).getTime() - this.#now().getTime()) / 1000),
       scope: session.scopes.join(" "),
       session_id: session.sessionId,
@@ -1059,23 +1259,32 @@ export class CompanyService {
     return { status: 200, body, headers: { ...NO_STORE } };
   }
 
-  /** One write: the new token is the Session's, the ones it replaces leave it. */
-  async #recordToken(session: IssuedSession, key: string): Promise<void> {
-    const stored: StoredSession = {
-      sessionId: session.sessionId,
-      clientId: session.clientId,
-      pairwiseUserId: session.pairwiseUserId,
-      tokens: { [key]: session },
-      latest: key,
-    };
-    // A Session is forgotten once no Account Token could renew it any more.
-    const kept = expiry(
-      new Date(
-        new Date(session.expiresAt).getTime() + this.config.accountTokenLifetimeSeconds * 1000,
-      ),
-    );
+  /** One write: the new token joins the Session, the ones it replaces leave it. */
+  async #recordToken(
+    session: IssuedSession,
+    key: string,
+    replacing: readonly TokenType[],
+  ): Promise<void> {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
       const entry = await this.store.get(RecordKinds.session, session.sessionId);
+      const tokens: Record<string, IssuedSession> = {};
+      if (entry !== undefined) {
+        const current = entry.value as unknown as StoredSession;
+        for (const [held, token] of Object.entries(current.tokens)) {
+          if (!replacing.includes(token.tokenType ?? "DPoP")) tokens[held] = token;
+        }
+      }
+      tokens[key] = session;
+      const stored: StoredSession = {
+        sessionId: session.sessionId,
+        clientId: session.clientId,
+        pairwiseUserId: session.pairwiseUserId,
+        tokens,
+        latest: key,
+      };
+      // A Session is forgotten once no Account Token could renew it any more.
+      const latest = Math.max(...Object.values(tokens).map((token) => Date.parse(token.expiresAt)));
+      const kept = expiry(new Date(latest + this.config.accountTokenLifetimeSeconds * 1000));
       if (entry === undefined) {
         if (await this.store.create(RecordKinds.session, session.sessionId, json(stored), kept)) {
           return;
@@ -1091,10 +1300,22 @@ export class CompanyService {
     throw new Refused(503, "temporarily_unavailable");
   }
 
+  /**
+   * The Session by its ID: its latest DPoP token's record, never a Bearer one. A Bearer
+   * token stands for the Session only at the MCP server it was issued for (§4.3): a grant
+   * naming the Session builds on its DPoP record.
+   */
   async #sessionById(sessionId: string): Promise<IssuedSession | undefined> {
     const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
     if (stored === undefined) return undefined;
-    return stored.tokens[stored.latest];
+    const latest = stored.tokens[stored.latest];
+    if (latest !== undefined && latest.tokenType === undefined) return latest;
+    let dpop: IssuedSession | undefined;
+    for (const token of Object.values(stored.tokens)) {
+      if (token.tokenType !== undefined) continue;
+      if (dpop === undefined || Date.parse(token.expiresAt) > Date.parse(dpop.expiresAt)) dpop = token;
+    }
+    return dpop;
   }
 
   /** The state of the Session token `token`, while the Session still holds it. */
@@ -1113,7 +1334,9 @@ export class CompanyService {
     const query = pairs(new URL(request.url).search);
     const clientId = query.client_id ?? "";
     const redirectUri = query.redirect_uri ?? "";
-    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
+    if (!clientId || !(await this.#allowed(clientId))) {
+      return page(400, "This sign-in request is not valid.");
+    }
     const resolver = firstContribution(this.reactor, ClientResolvers, "client");
     let metadata: ClientMetadata;
     try {
@@ -1122,7 +1345,7 @@ export class CompanyService {
       return page(400, "This agent could not be verified.");
     }
     // An unknown client or redirect is never redirected to: that would be an open redirector.
-    if (!(await policy.allows(clientId)) || !metadata.redirect_uris.includes(redirectUri)) {
+    if (!metadata.redirect_uris.includes(redirectUri)) {
       return page(400, "This sign-in request is not valid.");
     }
     const state = query.state ?? "";
@@ -1138,6 +1361,10 @@ export class CompanyService {
     }
     const requestId = this.#id("authz");
     const expiresAt = this.#later(10 * 60);
+    // The company's own page binds the request to this browser: its consent cookie
+    // (kept if it has one) and a form token only that cookie yields.
+    const hosted = this.config.consentPage;
+    const browser = cookie(request, CONSENT_COOKIE) ?? this.#id("consent");
     const pending: PendingAuthorization = {
       clientId,
       redirectUri,
@@ -1146,14 +1373,15 @@ export class CompanyService {
       codeChallenge: query.code_challenge,
       expiresAt: expiresAt.toISOString(),
       clientName: metadata.client_name,
+      ...(hosted === undefined ? { browserBinding: digest(browser) } : {}),
     };
     await this.store.put(RecordKinds.authorization, requestId, json(pending), expiry(expiresAt));
-    if (this.config.consentPage !== undefined) {
+    if (hosted !== undefined) {
       // A hosted consent page reads the request back (`authorizationRequest`).
       return {
         status: 303,
         headers: {
-          Location: this.config.consentPage.replaceAll("{request_id}", encodeURIComponent(requestId)),
+          Location: hosted.replaceAll("{request_id}", encodeURIComponent(requestId)),
           ...NO_STORE,
         },
       };
@@ -1167,11 +1395,44 @@ export class CompanyService {
       200,
       `<h1>${escapeHtml(this.config.name)}</h1>` +
         `<p><strong>${agent}</strong> (${agentDomain}) asks to:</p><ul>${described}</ul>` +
-        `<form method="post" data-request-id="${requestId}">` +
+        `<form method="post" action="${this.config.authorizationEndpoint}" data-request-id="${requestId}">` +
         `<input type="hidden" name="request_id" value="${requestId}">` +
+        `<input type="hidden" name="csrf" value="${bound(browser, `consent:${requestId}`)}">` +
         '<button name="decision" value="allow">Allow</button>' +
         '<button name="decision" value="deny">Deny</button></form>',
+      `${CONSENT_COOKIE}=${browser}; Path=/; Secure; HttpOnly; SameSite=Strict`,
     );
+  }
+
+  /**
+   * The decision the company's own consent form posted, once it is shown to be the user's.
+   *
+   * The company's web layer, which knows who is signed in, calls this on the form's POST
+   * and then `approveAuthorization` or `denyAuthorization`. Rejects unless the POST comes
+   * from this site (`Sec-Fetch-Site`, `Origin`), carries the consent cookie the request
+   * was bound to when its page was shown, and the form token only that cookie yields:
+   * another site's page cannot make the browser decide, and a form replayed from another
+   * browser does not match (Guides, consent pages).
+   */
+  async consentDecision(request: CompanyRequest): Promise<ConsentDecision> {
+    const refused = new Error("this decision did not come from the page that asked");
+    if (request.method.toUpperCase() !== "POST" || !fromThisSite(request, this.config.base)) throw refused;
+    const form = pairs(text(request.body));
+    const requestId = form.request_id ?? "";
+    const browser = cookie(request, CONSENT_COOKIE);
+    const pending = requestId
+      ? await this.#read<PendingAuthorization>(RecordKinds.authorization, requestId)
+      : undefined;
+    if (
+      browser === undefined ||
+      pending?.browserBinding === undefined ||
+      !sameText(digest(browser), pending.browserBinding) ||
+      !sameText(form.csrf ?? "", bound(browser, `consent:${requestId}`)) ||
+      (form.decision !== "allow" && form.decision !== "deny")
+    ) {
+      throw refused;
+    }
+    return { requestId, allow: form.decision === "allow" };
   }
 
   /**
@@ -1299,7 +1560,7 @@ export class CompanyService {
   // OpenAPI API (§6, Operations §4.1) -----------------------------------------------------
 
   #api(): CompanyApi | undefined {
-    return this.reactor.getContributions(CompanyApis)[0]?.value;
+    return optionalContribution(this.reactor, CompanyApis, "API");
   }
 
   async #apiCall(
@@ -1331,6 +1592,132 @@ export class CompanyService {
     return { status: 202, body: { operation }, headers: {} };
   }
 
+  // MCP (§4.3, §6, Operations §4.2) -------------------------------------------------------
+
+  #mcp(): CompanyMcp | undefined {
+    return optionalContribution(this.reactor, CompanyMcps, "MCP server");
+  }
+
+  #bearerRefusal(status: number, error: string, scope?: string): CompanyResponse {
+    let challenge = `Bearer error="${error}", resource_metadata="${this.config.mcpResourceMetadata}"`;
+    if (scope !== undefined) challenge += `, scope="${scope}"`;
+    return {
+      status,
+      body: scope === undefined ? { error } : { error, scope },
+      headers: { "WWW-Authenticate": challenge, ...NO_STORE },
+    };
+  }
+
+  /** The Session of a Bearer token issued for this MCP server, else `undefined`. */
+  async #bearerCaller(request: CompanyRequest): Promise<IssuedSession | undefined> {
+    const authorization = request.headers.authorization ?? "";
+    const space = authorization.indexOf(" ");
+    const scheme = space < 0 ? authorization : authorization.slice(0, space);
+    const token = space < 0 ? "" : authorization.slice(space + 1);
+    if (scheme !== "Bearer" || !token) return undefined;
+    const session = await this.#tokenSession(token);
+    if (
+      session === undefined ||
+      this.#passed(session.expiresAt) ||
+      session.tokenType !== "Bearer" ||
+      session.resource !== this.config.mcpUrl ||
+      !(await this.#allowed(session.clientId))
+    ) {
+      return undefined;
+    }
+    return session;
+  }
+
+  async #mcpRoute(request: CompanyRequest, mcp: CompanyMcp): Promise<CompanyResponse> {
+    const session = await this.#bearerCaller(request);
+    // A missing, expired, DPoP, or other-resource token: none is accepted here.
+    if (session === undefined) return this.#bearerRefusal(401, "invalid_token");
+    if (request.method.toUpperCase() !== "POST") {
+      return { status: 405, body: { error: "method_not_allowed" }, headers: { Allow: "POST" } };
+    }
+    let message: unknown;
+    try {
+      message = parseJsonStrict(text(request.body));
+    } catch {
+      return rpcError(null, -32700, "Parse error");
+    }
+    if (!isObject(message) || message.jsonrpc !== "2.0") {
+      return rpcError(null, -32600, "Invalid Request");
+    }
+    const requestId = message.id;
+    if (requestId === undefined || requestId === null) {
+      return { status: 202, headers: {} }; // a notification, such as notifications/initialized
+    }
+    const params = isObject(message.params) ? message.params : {};
+    let result: unknown;
+    if (message.method === "initialize") {
+      result = {
+        protocolVersion: "2025-06-18",
+        capabilities: { tools: {} },
+        serverInfo: { name: this.config.name, version: "1" },
+      };
+    } else if (message.method === "ping") {
+      result = {};
+    } else if (message.method === "tools/list") {
+      result = { tools: mcp.tools() };
+    } else if (message.method === "tools/call") {
+      const outcome = await this.#mcpTool(session, mcp, params);
+      if ("refused" in outcome) return outcome.refused;
+      result = outcome.result;
+    } else {
+      return rpcError(requestId, -32601, "Method not found");
+    }
+    return { status: 200, body: { jsonrpc: "2.0", id: requestId, result }, headers: {} };
+  }
+
+  async #mcpTool(
+    session: IssuedSession,
+    mcp: CompanyMcp,
+    params: Readonly<Record<string, unknown>>,
+  ): Promise<{ readonly result: Record<string, unknown> } | { readonly refused: CompanyResponse }> {
+    const name = params.name;
+    const args = params.arguments ?? {};
+    if (typeof name !== "string" || !isObject(args)) {
+      return { refused: rpcError(null, -32602, "Invalid params") };
+    }
+    const answer = await mcp.call(name, args, {
+      method: "TOOL",
+      path: name,
+      query: {},
+      body: args,
+      ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
+      scopes: session.scopes,
+      clientId: session.clientId,
+    });
+    if (answer.refusal !== undefined) {
+      const [status, error, scope] = answer.refusal;
+      return { refused: this.#bearerRefusal(status, error, scope) };
+    }
+    if (answer.operation !== undefined) {
+      if (session.accountId === undefined) {
+        return { refused: this.#bearerRefusal(403, "sign_in_required") };
+      }
+      if (!(await this.#supportsOperations(session.clientId))) {
+        return { refused: jsonError(403, "extension_required", { extension: "operations" }) };
+      }
+      const operation = await this.#propose(session, { operation: answer.operation });
+      return {
+        result: {
+          content: [
+            { type: "text", text: `Proposed: ${operation.summary} Not done until confirmed.` },
+          ],
+          structuredContent: { operation },
+        },
+      };
+    }
+    const result: Record<string, unknown> = {
+      content: [{ type: "text", text: answer.text ?? JSON.stringify(answer.structured ?? {}) }],
+    };
+    if (answer.structured !== undefined) result.structuredContent = answer.structured;
+    if (answer.isError) result.isError = true;
+    return { result };
+  }
+
   // Resource requests ---------------------------------------------------------------
 
   async #caller(request: CompanyRequest): Promise<[string, IssuedSession]> {
@@ -1341,12 +1728,85 @@ export class CompanyService {
     if (scheme !== "DPoP" || !token) throw new Refused(401, "invalid_token");
     const key = digest(token);
     const session = await this.#tokenSession(token);
-    if (session === undefined || this.#passed(session.expiresAt)) {
+    if (session === undefined || this.#passed(session.expiresAt) || session.tokenType === "Bearer") {
+      // A Bearer token works only at the MCP server it was issued for (§4.3).
       throw new Refused(401, "invalid_token");
     }
+    if (!(await this.#allowed(session.clientId))) throw new Refused(401, "invalid_token");
     const thumbprint = await this.#dpop(request, token);
     if (thumbprint !== session.keyThumbprint) throw new Refused(401, "invalid_dpop_proof");
     return [key, session];
+  }
+
+  // Mediated Sign-In attempt limits (§4.7: a company MUST rate-limit attempts) -----------
+
+  /**
+   * What a credential attempt counts against: the account, the agent's user, the Session.
+   * The account is named by the declared fields that are not secret (an email, a
+   * username), normalized; its password is never part of a key.
+   */
+  #attemptKeys(session: IssuedSession, credentials: Readonly<Record<string, unknown>>): string[] {
+    const keys = [
+      composite("user", session.clientId, session.pairwiseUserId),
+      composite("session", session.sessionId),
+    ];
+    const named = this.config.mediatedFields
+      .filter(([, , secret]) => !secret)
+      .map(([name]) => String(credentials[name] ?? "").trim().toLowerCase());
+    if (named.some(Boolean)) keys.unshift(composite("account", ...named));
+    return keys;
+  }
+
+  #codeKey(accountId: string): string {
+    return composite("code", accountId);
+  }
+
+  /** Seconds until every key may try again, or `undefined` when none is locked out. */
+  async #lockedFor(keys: readonly string[]): Promise<number | undefined> {
+    const now = this.#now().getTime();
+    let wait: number | undefined;
+    for (const key of keys) {
+      const attempts = await this.#read<SignInAttempts>(RecordKinds.signInAttempts, key);
+      if (attempts?.lockedUntil === undefined) continue;
+      const left = Date.parse(attempts.lockedUntil) - now;
+      if (left > 0) wait = Math.max(wait ?? 0, left);
+    }
+    return wait === undefined ? undefined : Math.max(1, Math.ceil(wait / 1000));
+  }
+
+  /** Count one failure against each key; at the limit, lock it out, doubling each time. */
+  async #attemptFailed(keys: readonly string[]): Promise<void> {
+    const config = this.config;
+    for (const key of keys) {
+      let written = false;
+      for (let attempt = 0; attempt < CAS_ATTEMPTS && !written; attempt += 1) {
+        const now = this.#now().getTime();
+        const entry = await this.store.get(RecordKinds.signInAttempts, key);
+        const before: SignInAttempts = (entry?.value as unknown as SignInAttempts | undefined) ?? {
+          failures: 0,
+        };
+        const failures = before.failures + 1;
+        let lockedUntil = before.lockedUntil;
+        if (failures >= config.maxSignInFailures) {
+          const over = Math.min(failures - config.maxSignInFailures, 7);
+          const seconds = Math.min(config.signInLockoutSeconds * 2 ** over, 24 * 60 * 60);
+          lockedUntil = new Date(now + seconds * 1000).toISOString();
+        }
+        const after: SignInAttempts = lockedUntil === undefined ? { failures } : { failures, lockedUntil };
+        // Forgotten once the key has failed nothing for a lockout's length.
+        const until = Math.max(now, lockedUntil === undefined ? now : Date.parse(lockedUntil));
+        const kept = { expiresAt: new Date(until + config.signInLockoutSeconds * 1000) };
+        written =
+          entry === undefined
+            ? await this.store.create(RecordKinds.signInAttempts, key, json(after), kept)
+            : await this.store.replace(RecordKinds.signInAttempts, key, entry.version, json(after), kept);
+      }
+      if (!written) throw new Refused(503, "temporarily_unavailable");
+    }
+  }
+
+  async #attemptsCleared(keys: readonly string[]): Promise<void> {
+    for (const key of keys) await this.store.delete(RecordKinds.signInAttempts, key);
   }
 
   async #mediated(request: CompanyRequest): Promise<CompanyResponse> {
@@ -1355,8 +1815,19 @@ export class CompanyService {
     const body = source ? parseJsonStrict(source) : {};
     const credentials = isObject(body) ? body.credentials : undefined;
     if (!isObject(credentials)) throw new Refused(400, "invalid_request");
-    const requested = words(isObject(body) ? body.scope : "");
-    const granted = requested.filter((scope) => this.config.scopes.includes(scope));
+    const scope = isObject(body) ? body.scope : undefined;
+    const granted = typeof scope === "string" ? words(scope) : [];
+    if (!granted.length || granted.some((item) => !this.config.scopes.includes(item))) {
+      // Missing, unknown, or unavailable scopes are refused, never narrowed (§4.4).
+      throw new Refused(400, "invalid_scope");
+    }
+    const keys = this.#attemptKeys(session, credentials);
+    const locked = await this.#lockedFor(keys);
+    if (locked !== undefined) {
+      // Locked out: the credentials are not even checked (§4.2, `rate_limited`).
+      for (const name of Object.keys(credentials)) delete credentials[name];
+      return rateLimited(locked);
+    }
     const accounts = firstContribution(this.reactor, CompanyAccounts, "accounts");
     const secrets: Record<string, SecretValue> = {};
     for (const [name, value] of Object.entries(credentials)) {
@@ -1366,14 +1837,22 @@ export class CompanyService {
       }
       delete credentials[name];
     }
-    const authenticated = await accounts.authenticate(secrets);
+    const authenticated = await accounts.authenticate(secrets, {
+      clientId: session.clientId,
+      sessionId: session.sessionId,
+    });
     for (const name of Object.keys(secrets)) delete secrets[name];
     if (authenticated === undefined) {
+      await this.#attemptFailed(keys);
       return { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
     }
     if (authenticated.codeReference === undefined) {
+      await this.#attemptsCleared(keys);
       return this.#signedInBody(session, authenticated.accountId, granted);
     }
+    const codeLocked = await this.#lockedFor([this.#codeKey(authenticated.accountId)]);
+    // Too many wrong codes for this account: no new code until the lockout ends.
+    if (codeLocked !== undefined) return rateLimited(codeLocked);
     const signInId = this.#id("si");
     const expiresAt = this.#later(5 * 60);
     const pending: PendingMediated = {
@@ -1382,6 +1861,7 @@ export class CompanyService {
       scopes: granted,
       codeReference: authenticated.codeReference,
       expiresAt: expiresAt.toISOString(),
+      attemptKeys: keys,
       attempts: 0,
     };
     await this.store.put(
@@ -1413,23 +1893,35 @@ export class CompanyService {
       await this.store.delete(RecordKinds.mediated, signInId);
       return { status: 200, body: { status: "expired" }, headers: { ...NO_STORE } };
     }
+    const failed = { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
+    const codeKey = this.#codeKey(pending.accountId);
+    if ((await this.#lockedFor([codeKey])) !== undefined) {
+      // The account's code budget is spent, whichever sign-in spent it.
+      await this.store.delete(RecordKinds.mediated, signInId);
+      return failed;
+    }
     const source = text(request.body);
     const body = source ? parseJsonStrict(source) : {};
     const code = isObject(body) ? body.code : undefined;
     const accounts = firstContribution(this.reactor, CompanyAccounts, "accounts");
-    const failed = { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
     if (
       typeof code !== "string" ||
       !code ||
       !(await accounts.checkCode(pending.codeReference, new SecretValue(code)))
     ) {
-      // Every wrong code counts, however many replicas check them at once.
+      // Every wrong code counts, however many replicas check them at once: against this
+      // sign-in, and against the account across every sign-in started for it.
+      await this.#attemptFailed([codeKey]);
       const counted = await this.#change<PendingMediated>(
         RecordKinds.mediated,
         signInId,
         (current) => ({ ...current, attempts: current.attempts + 1 }),
       );
-      if (counted === undefined || counted[1].attempts >= this.config.maxCodeAttempts) {
+      if (
+        counted === undefined ||
+        counted[1].attempts >= this.config.maxCodeAttempts ||
+        (await this.#lockedFor([codeKey])) !== undefined
+      ) {
         await this.store.delete(RecordKinds.mediated, signInId);
         return failed;
       }
@@ -1449,6 +1941,7 @@ export class CompanyService {
       | PendingMediated
       | undefined;
     if (completed === undefined) return failed;
+    await this.#attemptsCleared([...completed.attemptKeys, codeKey]);
     return this.#signedInBody(session, completed.accountId, completed.scopes);
   }
 
@@ -1457,7 +1950,7 @@ export class CompanyService {
     accountId: string,
     scopes: readonly string[],
   ): Promise<CompanyResponse> {
-    const response = await this.#signIn(session, accountId, scopes);
+    const response = await this.#signIn(session, accountId, scopes, session.keyThumbprint);
     return {
       ...response,
       body: { status: "complete", ...(response.body as Record<string, unknown>) },
@@ -1515,14 +2008,15 @@ export class CompanyService {
 
   async #startConversation(request: CompanyRequest): Promise<CompanyResponse> {
     const [, session] = await this.#caller(request);
-    const body = parseJsonStrict(text(request.body));
-    const message = parseMessage(isObject(body) ? body.message : undefined);
+    const body = jsonObject(request.body);
+    const message = parseMessage(body.message);
     const owner = [session.clientId, session.pairwiseUserId] as const;
     const replay = await this.#replayed(owner, message);
     if (replay !== undefined) {
-      return this.#answer(request, await this.#conversation(replay), 201);
+      // A retried start answers only a caller that may read the conversation now.
+      return this.#answer(request, await this.#owned(replay, session), 201);
     }
-    const parentId = isObject(body) ? body.parent_conversation_id : undefined;
+    const parentId = body.parent_conversation_id;
     let parent: StoredConversation | undefined;
     if (parentId !== undefined && parentId !== null) {
       parent = await this.#owned(String(parentId), session);
@@ -1542,7 +2036,7 @@ export class CompanyService {
     };
     const claimed = await this.#claim(owner, message, conversationId);
     if (claimed !== undefined) {
-      return this.#answer(request, await this.#conversation(claimed), 201);
+      return this.#answer(request, await this.#owned(claimed, session), 201);
     }
     await this.store.put(RecordKinds.conversation, conversationId, json(conversation));
     if (parent !== undefined) {
@@ -1621,8 +2115,7 @@ export class CompanyService {
       return this.#receipt(changed[1], 202);
     }
     if (action === "messages") {
-      const body = parseJsonStrict(text(request.body));
-      const message = parseMessage(isObject(body) ? body.message : undefined);
+      const message = parseMessage(jsonObject(request.body).message);
       const owner = [session.clientId, session.pairwiseUserId] as const;
       const replay = await this.#replayed(owner, message);
       if (replay === undefined && (await this.#claim(owner, message, conversationId)) === undefined) {
@@ -1684,10 +2177,16 @@ export class CompanyService {
         (current) => {
           this.#open(current);
           const accountId = session.accountId ?? current.accountId;
+          const account = accountId === undefined ? {} : { accountId };
+          if (current.responder === "human") {
+            return { ...current, ...account, events: [...current.events, received] };
+          }
+          // The agent works on it: every change of status adds a state event (§7).
           return {
             ...current,
-            ...(accountId === undefined ? {} : { accountId }),
-            events: [...current.events, received],
+            ...account,
+            status: "working",
+            events: [...current.events, received, this.#state("working", current.responder)],
           };
         },
       );
@@ -1711,6 +2210,7 @@ export class CompanyService {
       scopes: session.scopes,
       clientId: session.clientId,
       isDirect: conversation.parentId !== undefined,
+      supportsOperations: await this.#supportsOperations(session.clientId),
     });
     const events: StoredEvent[] = [];
     for (const reply of replies) {
@@ -1720,11 +2220,14 @@ export class CompanyService {
     const answered = await this.#change<StoredConversation>(
       RecordKinds.conversation,
       conversationId,
-      (current) => ({
-        ...current,
-        status: current.status === "closed" ? "closed" : "idle",
-        events: [...current.events, ...events],
-      }),
+      (current) =>
+        current.status === "closed"
+          ? { ...current, events: [...current.events, ...events] }
+          : {
+              ...current,
+              status: "idle",
+              events: [...current.events, ...events, this.#state("idle", current.responder)],
+            },
     );
     return answered === undefined ? conversation : answered[1];
   }
@@ -1936,12 +2439,22 @@ export class CompanyService {
       action: proposal.action,
       owner,
       accountId,
+      scopes: this.#operationScopes(proposal.scopes),
       performed: false,
     };
     await this.store.put(RecordKinds.operation, operationId, json(stored));
     const pointer: OperationProposal = { operationId };
     await this.store.put(RecordKinds.proposal, key, json(pointer), expiry(expiresAt));
     return operation;
+  }
+
+  /** The scopes confirming an operation requires: its own, else the write scopes. */
+  #operationScopes(scopes: readonly string[] | undefined): readonly string[] {
+    const required = scopes?.length ? [...scopes] : [...this.config.writeScopes];
+    if (required.some((scope) => !this.config.scopes.includes(scope))) {
+      throw new RangeError("an operation's scopes must be among the company's scopes");
+    }
+    return required;
   }
 
   /** An operation as the company keeps it: its record, action, owner, and account. */
@@ -2019,6 +2532,39 @@ export class CompanyService {
     if (!(await this.#supportsOperations(session.clientId))) {
       throw new Refused(403, "extension_required", { extension: "operations" });
     }
+    const current = await this.#usable(operationId, session);
+    if (method === "GET" && !action) return operationResponse(current);
+    if (method === "POST" && action === "cancel") return this.#cancelOperation(operationId);
+    if (method === "POST" && action === "confirm") {
+      return this.#confirm(request, session, current);
+    }
+    throw new Refused(404, "not_found");
+  }
+
+  async #cancelOperation(operationId: string): Promise<CompanyResponse> {
+    const changed = await this.#change<StoredOperation>(
+      RecordKinds.operation,
+      operationId,
+      (latest) => {
+        const now = this.#expired(latest);
+        // In progress, it stays so until the company knows whether it stopped (§7).
+        if (now.operation.state !== "proposed") return now;
+        return {
+          ...now,
+          operation: {
+            ...now.operation,
+            state: "cancelled",
+            result: { summary: "Nothing was changed.", data: null },
+          } as unknown as Operation,
+        };
+      },
+    );
+    if (changed === undefined) throw new Refused(404, "operation_not_found");
+    return operationResponse(changed[1]);
+  }
+
+  /** The operation, if this Session may use it (Operations §3.2). */
+  async #usable(operationId: string, session: IssuedSession): Promise<StoredOperation> {
     const stored = await this.#read<StoredOperation>(RecordKinds.operation, operationId);
     if (
       stored === undefined ||
@@ -2029,32 +2575,7 @@ export class CompanyService {
     }
     const current = await this.#currentOperation(operationId);
     if (current === undefined) throw new Refused(404, "operation_not_found");
-    if (method === "GET" && !action) return operationResponse(current);
-    if (method === "POST" && action === "cancel") {
-      const changed = await this.#change<StoredOperation>(
-        RecordKinds.operation,
-        operationId,
-        (latest) => {
-          const now = this.#expired(latest);
-          // In progress, it stays so until the company knows whether it stopped (§7).
-          if (now.operation.state !== "proposed") return now;
-          return {
-            ...now,
-            operation: {
-              ...now.operation,
-              state: "cancelled",
-              result: { summary: "Nothing was changed.", data: null },
-            } as unknown as Operation,
-          };
-        },
-      );
-      if (changed === undefined) throw new Refused(404, "operation_not_found");
-      return operationResponse(changed[1]);
-    }
-    if (method === "POST" && action === "confirm") {
-      return this.#confirm(request, session, current);
-    }
-    throw new Refused(404, "not_found");
+    return current;
   }
 
   /** The operation now: a proposal past its expiry is recorded as expired. */
@@ -2094,9 +2615,21 @@ export class CompanyService {
     const body = parseJsonStrict(text(request.body));
     const revision = isObject(body) ? body.revision : undefined;
     const approvedBy = isObject(body) ? body.approved_by : undefined;
+    return this.#confirmOperation(session, stored, revision, approvedBy);
+  }
+
+  /** Confirm, whichever channel it comes through: at most once (Operations §4.4, §6). */
+  async #confirmOperation(
+    session: IssuedSession,
+    stored: StoredOperation,
+    revision: unknown,
+    approvedBy: unknown,
+  ): Promise<CompanyResponse> {
     const operation = stored.operation;
-    if (this.config.writeScopes.some((scope) => !session.scopes.includes(scope))) {
-      throw new Refused(403, "insufficient_scope", { scope: this.config.writeScopes.join(" ") });
+    // The scopes recorded with the operation when it was proposed, whichever channel
+    // (API, MCP, conversation) proposed it and whichever confirms it.
+    if (stored.scopes.some((scope) => !session.scopes.includes(scope))) {
+      throw new Refused(403, "insufficient_scope", { scope: stored.scopes.join(" ") });
     }
     if (operation.state !== "proposed") {
       // At most once: a retried or late confirmation returns the record unchanged.
@@ -2126,14 +2659,12 @@ export class CompanyService {
         if (now.operation.revision !== revision) {
           throw new Refused(409, "terms_changed", { operation: now.operation });
         }
+        // `expires_at` is the proposal's (Operations §3: required while proposed): once
+        // confirmed it is absent, never `null`, which no member of an operation may be.
+        const { expires_at: _proposalExpiry, ...rest } = now.operation;
         return {
           ...now,
-          operation: {
-            ...now.operation,
-            state: "in_progress",
-            confirmation,
-            expires_at: null,
-          } as unknown as Operation,
+          operation: { ...rest, state: "in_progress", confirmation } as unknown as Operation,
         };
       },
     );
@@ -2145,14 +2676,16 @@ export class CompanyService {
     return this.#perform(confirmed);
   }
 
-  /** Perform a just-confirmed operation with its one executor. */
+  /**
+   * Perform a just-confirmed operation with its action's executor: the action's
+   * lowest-order executor performs it; two at that order are ambiguous.
+   */
   async #perform(confirmed: StoredOperation): Promise<CompanyResponse> {
     const executors = this.reactor
       .getContributions(OperationExecutors)
-      .map((contribution) => contribution.value)
-      .filter((executor) => executor.action === confirmed.action);
-    const executor = executors[0];
-    if (executors.length !== 1 || executor === undefined) {
+      .filter((contribution) => contribution.value.action === confirmed.action);
+    const executor = executors[0]?.value;
+    if (executor === undefined || executors[1]?.order === executors[0]?.order) {
       // Nobody can perform it: it stays in progress rather than claim a failure.
       return operationResponse(confirmed);
     }
@@ -2196,6 +2729,178 @@ export class CompanyService {
     );
     return operationResponse(changed === undefined ? confirmed : changed[1]);
   }
+
+  // Web browsing (§5, Operations §4.4) -------------------------------------------------
+
+  /** The Session as it is now: its latest unexpired DPoP token's record. */
+  async #liveSession(sessionId: string): Promise<IssuedSession | undefined> {
+    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
+    let live: IssuedSession | undefined;
+    for (const token of Object.values(stored?.tokens ?? {})) {
+      if ((token.tokenType ?? "DPoP") !== "DPoP" || this.#passed(token.expiresAt)) continue;
+      if (live === undefined || new Date(token.expiresAt) > new Date(live.expiresAt)) live = token;
+    }
+    return live;
+  }
+
+  /** Verify a browser assertion with one of the agent's published keys, else `undefined`. */
+  async #browserAssertion(assertion: string): Promise<VerifiedBrowserAssertion | undefined> {
+    let claims: Record<string, unknown>;
+    let algorithm: string;
+    let kid: unknown;
+    try {
+      claims = decodeJwt(assertion);
+      const header = decodeProtectedHeader(assertion);
+      algorithm = String(header.alg ?? "");
+      kid = header.kid;
+    } catch {
+      return undefined;
+    }
+    if (typeof claims.iss !== "string") return undefined;
+    const clientId = claims.iss;
+    if (!(await this.#allowed(clientId))) return undefined;
+    const resolver = firstContribution(this.reactor, ClientResolvers, "client");
+    let keys: JsonWebKeySet;
+    try {
+      [, keys] = await resolver.resolve(clientId, keyId(assertion));
+    } catch {
+      return undefined;
+    }
+    for (const key of keys.keys) {
+      if (kid !== undefined && key.kid !== kid) continue;
+      if (key.alg !== undefined && key.alg !== algorithm) continue;
+      try {
+        return await verifyBrowserAssertion(assertion, {
+          publicKey: await importJWK({ ...key } as JWK, algorithm),
+          expectedEndpoint: this.config.browserSessionEndpoint,
+          companyDomain: this.config.domain,
+          expectedClientId: clientId,
+          expectedPairwiseUserId: String(claims.sub ?? ""),
+          expectedSessionId: String(claims.session_id ?? ""),
+          replayCache: this.#replay(),
+          now: this.#now(),
+        });
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Join the agent's own browser to its Session: a verified, one-time browser assertion,
+   * form-posted (never in a URL), answers `303` to its `return_to` with the company's
+   * own cookie, which lives no longer than the Session (§5).
+   */
+  async #browserSession(request: CompanyRequest): Promise<CompanyResponse> {
+    const refused = page(400, "This browser could not join the session.");
+    const verified = await this.#browserAssertion(pairs(text(request.body)).assertion ?? "");
+    if (verified === undefined) return refused;
+    const session = await this.#liveSession(verified.sessionId);
+    if (
+      session === undefined ||
+      !sameOwner([session.clientId, session.pairwiseUserId], [verified.clientId, verified.pairwiseUserId])
+    ) {
+      return refused;
+    }
+    const webCookie = this.#id("web");
+    const pointer: SessionPointer = { sessionId: session.sessionId };
+    await this.store.put(
+      RecordKinds.browserCookie,
+      digest(webCookie),
+      json(pointer),
+      expiry(new Date(new Date(session.expiresAt).getTime() + this.config.accountTokenLifetimeSeconds * 1000)),
+    );
+    return {
+      status: 303,
+      headers: {
+        Location: verified.returnTo,
+        // The company's own cookie: no Max-Age, and only as alive as its Session.
+        "Set-Cookie": `${WEB_COOKIE}=${webCookie}; Path=/; Secure; HttpOnly; SameSite=Lax`,
+        ...NO_STORE,
+      },
+    };
+  }
+
+  /** The Session a browser's cookie stands for, as it is now (§5). */
+  async #webSession(webCookie: string | undefined): Promise<IssuedSession | undefined> {
+    if (webCookie === undefined) return undefined;
+    const pointer = await this.#read<SessionPointer>(RecordKinds.browserCookie, digest(webCookie));
+    if (pointer === undefined) return undefined;
+    const session = await this.#liveSession(pointer.sessionId);
+    // The cookie does not outlive the Session.
+    if (session === undefined) await this.store.delete(RecordKinds.browserCookie, digest(webCookie));
+    return session;
+  }
+
+  /** An operation's page in the browser's Session, where the user confirms or cancels it. */
+  async #operationPage(
+    request: CompanyRequest,
+    method: string,
+    operationId: string,
+  ): Promise<CompanyResponse> {
+    const webCookie = cookie(request, WEB_COOKIE);
+    const session = await this.#webSession(webCookie);
+    if (webCookie === undefined || session === undefined) {
+      return page(401, "Your agent's session has ended. Ask it to open this again.");
+    }
+    let stored: StoredOperation;
+    try {
+      stored = await this.#usable(operationId, session);
+    } catch (error) {
+      if (error instanceof Refused) return page(404, "There is nothing to show here.");
+      throw error;
+    }
+    const pageUrl = `${this.config.base}/operations/${operationId}`;
+    const csrf = bound(webCookie, `operation:${operationId}`);
+    if (method === "POST") {
+      const form = pairs(text(request.body));
+      // This site's page, in the browser this cookie is in: never another site's page,
+      // nor a form copied from another Session's page (Guides, consent pages).
+      if (!fromThisSite(request, this.config.base) || !sameText(form.csrf ?? "", csrf)) {
+        return page(403, "This request did not come from this site.");
+      }
+      try {
+        if (form.action === "cancel") {
+          await this.#cancelOperation(operationId);
+        } else {
+          const revision = /^\d+$/u.test(form.revision ?? "") ? Number(form.revision) : undefined;
+          await this.#confirmOperation(session, stored, revision, form.approved_by ?? "user");
+        }
+      } catch (error) {
+        if (error instanceof Refused) return page(error.status, `Not done: ${escapeHtml(error.error)}.`);
+        throw error;
+      }
+      return { status: 303, headers: { Location: pageUrl, ...NO_STORE } };
+    }
+    if (method !== "GET") return page(405, "Not allowed.");
+    const operation = stored.operation;
+    let body =
+      `<h1>${escapeHtml(this.config.name)}</h1>` +
+      `<section data-operation-id="${escapeHtml(operation.operation_id)}" ` +
+      `data-revision="${operation.revision}" data-state="${operation.state}">` +
+      `<p>${escapeHtml(operation.summary)}</p><p>Status: ${operation.state}</p>`;
+    if (operation.result) body += `<p>${escapeHtml(operation.result.summary)}</p>`;
+    if (operation.state === "proposed") {
+      body +=
+        `<form method="post" action="${pageUrl}">` +
+        `<input type="hidden" name="revision" value="${operation.revision}">` +
+        '<input type="hidden" name="approved_by" value="user">' +
+        `<input type="hidden" name="csrf" value="${csrf}">` +
+        '<button name="action" value="confirm">Confirm</button>' +
+        '<button name="action" value="cancel">Cancel</button></form>';
+    }
+    return page(200, `${body}</section>`);
+  }
+}
+
+/** Too many failed sign-in attempts: `429` with how long to wait (§4.2, `rate_limited`). */
+function rateLimited(retryAfter: number): CompanyResponse {
+  return {
+    status: 429,
+    body: { error: "rate_limited" },
+    headers: { "Retry-After": String(retryAfter), ...NO_STORE },
+  };
 }
 
 /** An operation's answer: `Retry-After` while it is in progress. */
@@ -2227,7 +2932,7 @@ function startCursor(conversation: StoredConversation): string {
 }
 
 /** A consent page: never framed, never cached (upstream guides, consent pages). */
-function page(status: number, body: string): CompanyResponse {
+function page(status: number, body: string, setCookie?: string): CompanyResponse {
   return {
     status,
     body: `<!doctype html><meta charset=utf-8><title>Sign in</title>${body}`,
@@ -2236,6 +2941,7 @@ function page(status: number, body: string): CompanyResponse {
       "X-Frame-Options": "DENY",
       "Content-Security-Policy": "frame-ancestors 'none'; default-src 'self'",
       ...NO_STORE,
+      ...(setCookie === undefined ? {} : { "Set-Cookie": setCookie }),
     },
   };
 }

@@ -343,7 +343,7 @@ test("conversations: SSE with text deltas, closing, and a stranger cannot read",
   const w = await world();
   const session = await w.start();
   const page = await w.conversations.start(w.endpoint, w.message("Hello"), { ...w.who, token: session, wait: 0 });
-  assert.equal(page.events.at(-1).message.text, "Hello from Manzanita Outfitters. Ask me about an order.");
+  assert.equal(page.events.filter((e) => e.type !== "state").at(-1).message.text, "Hello from Manzanita Outfitters. Ask me about an order.");
   await w.conversations.close(w.endpoint, page.conversation_id, { ...w.who, token: session });
   const items = [];
   for await (const item of w.conversations.stream(w.endpoint, page.conversation_id, { ...w.who, token: session })) items.push(item);
@@ -400,13 +400,13 @@ test("an authorization event, then the signed-in Session continues the conversat
   const w = await world();
   const session = await w.start();
   const page = await w.conversations.start(w.endpoint, w.message("Where is my jacket order?"), { ...w.who, token: session, wait: 0 });
-  assert.deepEqual(page.events.map((event) => event.type), ["message", "message", "authorization"]);
+  assert.deepEqual(page.events.map((event) => event.type), ["message", "state", "message", "authorization", "state"]);
   const { result } = await directSignIn(w, session, ["orders:read"]);
   const narrow = await w.conversations.send(w.endpoint, page.conversation_id, w.message("Exchange it"), { ...w.who, token: result.token, cursor: page.cursor, wait: 0 });
-  assert.equal(narrow.events.at(-1).type, "authorization");
-  assert.equal(narrow.events.at(-1).error, "insufficient_scope");
+  assert.equal(narrow.events.filter((e) => e.type !== "state").at(-1).type, "authorization");
+  assert.equal(narrow.events.filter((e) => e.type !== "state").at(-1).error, "insufficient_scope");
   const read = await w.conversations.send(w.endpoint, page.conversation_id, w.message("And my order?"), { ...w.who, token: result.token, cursor: narrow.cursor, wait: 0 });
-  assert.equal(read.events.at(-1).message.data.order_id, "ord_7Hk2");
+  assert.equal(read.events.filter((e) => e.type !== "state").at(-1).message.data.order_id, "ord_7Hk2");
 });
 
 test("refusals: no DPoP proof, a replayed proof, a Bearer token, a bad client assertion", async () => {
@@ -439,7 +439,7 @@ test("a conversation that used the account stays with it; disconnecting signs Se
   const session = await w.start();
   const { result } = await directSignIn(w, session);
   const page = await w.conversations.start(w.endpoint, w.message("Where is my order?"), { ...w.who, token: result.token, wait: 0 });
-  assert.equal(page.events.at(-1).message.data.order_id, "ord_7Hk2");
+  assert.equal(page.events.filter((e) => e.type !== "state").at(-1).message.data.order_id, "ord_7Hk2");
   assert.equal(await w.shop.disconnect(w.identity.clientId, "acct_ada"), 1);
   const out = await w.transport.request("GET", `${w.endpoint}/${page.conversation_id}/events`, { ...w.who, token: result.token });
   assert.equal(out.status, 403);
@@ -454,7 +454,7 @@ const CONSENT_PAGE = "https://datalayer.ai/pap/consent?slug=orders-helper&reques
 
 test("hosted page templates are checked", async () => {
   const { CompanyConfig } = await import("../../lib/server.js");
-  const base = { name: "Shop", domain: "shop.example", scopes: ["orders:read"] };
+  const base = { name: "Shop", domain: "shop.example", scopes: ["orders:read"], operations: false };
   assert.throws(() => new CompanyConfig({ ...base, consentPage: "https://datalayer.ai/pap/consent" }), /consentPage/);
   assert.throws(() => new CompanyConfig({ ...base, devicePage: "http://datalayer.ai/pap/device" }), /HTTPS/);
 });

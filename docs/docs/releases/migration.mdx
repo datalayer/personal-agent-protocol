@@ -1,0 +1,122 @@
+---
+title: Migration
+---
+
+# Migration
+
+What to change when you upgrade across a release that breaks the API. The SDKs
+keep no compatibility shims: an old shape is refused, not translated. Each
+section names the release that introduced the change; the
+[changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
+has the full list.
+
+## 0.9 → 0.10
+
+The [security review](/security/review/) changed these contracts:
+
+- **`AccountDirectory.authenticate(credentials, context)`** takes a
+  `SignInContext` (`client_id`, `session_id`; `clientId`, `sessionId` in
+  TypeScript). The company limits Mediated Sign-In attempts itself; a
+  directory must also throttle its own checks.
+- **`CompanyConfig` with `operations` needs `write_scopes`** (among `scopes`):
+  without one it raises. Set `operations=False` for a company without
+  Operations. An operation records the scopes confirming it requires
+  (`ProposedOperation.scopes`, else `write_scopes`).
+- **`Turn.supports_operations`** (`supportsOperations`) says whether the
+  agent negotiated Operations; a company agent must not promise an operation
+  to one that did not.
+- **The default `pap.company.replayCache` is `StoreReplayCache`** (id
+  `store`), in the company store. A contributed store must accept the
+  `replay` and `sign_in_attempts` kinds (`check_store` / `checkStore` checks
+  them). `createCompanyDefaultsPlugin` and `CompanyDefaultsPlugin` take the
+  store to use.
+- **Stored records changed:** operations keep `scopes`, Mediated sign-ins
+  `attempt_keys`. Records written by 0.9 are refused, not translated: drain
+  pending sign-ins and proposals before upgrading.
+- **The web cookie is `__Host-poppy_session`.** Browsers holding the old
+  `poppy_session` open the page again from the agent.
+- **TypeScript `./server`:** `isPublicIpAddress` is `isGlobalAddress`;
+  `createResolvingFetch` is the Node company's default `fetch`.
+- **Assertions** live at most 120 seconds and carry a `jti` of at least 16
+  characters (DPoP proofs too); their `aud` may be the issuer, the token
+  endpoint, or the endpoint called.
+- **Conversations** frame each agent reply with `working` and `idle` state
+  events: read the last message or `authorization` event, not the last event.
+- **An operation past `proposed`** has no `expires_at` member (never `null`).
+- **`pap operations approve`** takes the user's answer at a terminal or from
+  the host's `pap.approvalSurface`, never piped input; approvals stored by 0.9
+  are refused at `confirm`: approve again.
+
+## 0.8 → 0.9
+
+- **Removed contribution points that nothing used.** `pap.protocolProfile`
+  (`PROTOCOL_PROFILES`, `ProtocolProfile` / `ProtocolProfiles`),
+  `pap.extensionHandler` (`EXTENSION_HANDLERS` / `ExtensionHandlers`,
+  `ExtensionHandler`), and `pap.keyStore` (`KEY_STORES` / `KeyStores`,
+  `KeyStore`, `KeyReference`) are gone: no SDK code ever read them. Read the
+  draft the SDK implements from `PROTOCOL_PROFILE`, `PROTOCOL_REVISION` and
+  `OPERATIONS_VERSION`; negotiate extensions with `negotiate_extensions` /
+  `negotiateExtensions`; keep keys behind your `pap.signer` and
+  `pap.dpopProofProvider`. A host that contributed to a removed point
+  contributes nothing in its place.
+- **Optional points fail closed on ambiguity.** The cache, clock, random
+  source, retry policy and rate-limit budget where the SDK can do without
+  them, and the company's `pap.company.api` and `pap.company.mcp`, now refuse
+  two contributions at the same winning order (`ambiguous … contributions`),
+  as every other point does. Give your replacement a lower `order` than the
+  default (100). `optional_contribution` / `optionalContribution` resolve such
+  a point.
+- **Operation executors replace by order.** For one action, the
+  lowest-order `pap.company.operationExecutor` performs it; two at that order
+  leave the operation `in_progress`. Before, any second executor for an action
+  did.
+- **TypeScript company: Bearer tokens and MCP.** The TypeScript reference
+  company now serves `pap.company.mcp` (`CompanyMcps`, `CompanyMcp`,
+  `ToolResult`, `ToolResults`) at `/mcp` with Bearer Session Tokens, as the
+  Python one does. `IssuedSession` records carry `tokenType` (`Bearer`, absent
+  for DPoP), and a Session keeps its DPoP and Bearer tokens side by side.
+- **TypeScript company: renewal with the assertion is signed out.** A Session
+  renewed with the Session assertion gets a signed-out token, as in Python and
+  §4.2; a signed-in Session is renewed with its Account Token.
+
+## 0.7 → 0.8
+
+- `MemoryReplayCache` takes the company's clock and forgets expired
+  identifiers; the verifiers now remember a DPoP proof until its `iat` leaves
+  the acceptance window and an assertion until `exp` plus the 30-second skew.
+  A replay cache of your own must keep identifiers at least as long as the
+  `expires_at` it is given. `check_replay_cache` / `checkReplayCache` check it.
+- `SharedRateLimitBudget` refuses a turn beyond `max_wait` at once with
+  `rate_limited` instead of queueing past it.
+- The built-in consent page binds the browser: read the user's decision with
+  `CompanyService.consent_decision(request)` (`consentDecision`), which
+  accepts only a same-origin POST carrying the page's cookie and token.
+
+## 0.6 → 0.7
+
+Nothing breaks. `personal_agent_protocol.ui.PapSignIn` needs
+`datalayer_reactor` 1.1, through the new `ui` extra.
+
+## 0.5 → 0.6
+
+- **The company store is an async keyed store.** `pap.company.store` holds
+  versioned JSON records: `get`, `put`, `create` (only if absent), `replace`
+  (compare-and-set on a version), `take` (read and delete at once), and
+  `delete`, each by kind and key with an optional expiry. The dict-of-records
+  `CompanyStore` (Maps in TypeScript) is gone: port a database store to these
+  six operations and run `check_store` / `checkStore` against it.
+- **Company methods are async.** `approve_device`, `deny_device`,
+  `approve_authorization`, `deny_authorization`, `authorization_request`,
+  `revise`, `settle`, `forget_events`, and `disconnect` (and their TypeScript
+  names) return coroutines or promises: await them. Read an operation as the
+  company keeps it with `operation_record` (`operationRecord`); the in-memory
+  `CompanyService.extensions` map is gone.
+
+## 0.4 → 0.5
+
+- **Direct Sign-In keeps the Account Token in `pap.tokenStore`.** The
+  result's token no longer carries `refresh_token`; read
+  `account_token_reference` (`accountTokenReference`) and use it with
+  `AccountTokenClient`, as for Device and Mediated Sign-In.
+- TypeScript Session, conversation and operation errors carry a 429's
+  `Retry-After` as `details.retry_after` (Sessions used `retryAfter`).

@@ -33,8 +33,10 @@ from .reactor import (
     Signer,
     TokenStore,
     first_contribution,
+    send_bounded,
 )
 from .sessions import JWT_CLIENT_ASSERTION, ClientAssertionClaims, SessionToken, _opaque_id
+from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
@@ -109,6 +111,7 @@ class DeviceSignInClient:
         self.http = http_client
         self.max_response_bytes = max_response_bytes
 
+    @traced("pap.sign_in.device.begin", before=signed_in_as("device"), after=sign_in_result)
     async def begin(
         self,
         *,
@@ -136,16 +139,20 @@ class DeviceSignInClient:
             purpose="client_assertion",
         )
         try:
-            response = await self.http.post(
-                endpoint,
-                data={
-                    "scope": " ".join(requested_scopes),
-                    "client_id": client_url,
-                    "client_assertion_type": JWT_CLIENT_ASSERTION,
-                    "client_assertion": assertion.get_secret_value(),
-                },
-                headers={"Accept": "application/json"},
-                follow_redirects=False,
+            response = await send_bounded(
+                self.http,
+                self.http.build_request(
+                    "POST",
+                    endpoint,
+                    data={
+                        "scope": " ".join(requested_scopes),
+                        "client_id": client_url,
+                        "client_assertion_type": JWT_CLIENT_ASSERTION,
+                        "client_assertion": assertion.get_secret_value(),
+                    },
+                    headers={"Accept": "application/json"},
+                ),
+                max_bytes=self.max_response_bytes,
             )
         except httpx.HTTPError as exc:
             raise AuthorizationError(
@@ -189,6 +196,7 @@ class DeviceSignInClient:
             requested_scopes=requested_scopes,
         )
 
+    @traced("pap.sign_in.device.poll", before=sign_in_method("device"), after=sign_in_result)
     async def poll(self, reference: str) -> DeviceSignInPoll:
         """Perform at most one protocol poll and enforce RFC 8628 pacing."""
 
@@ -257,18 +265,22 @@ class DeviceSignInClient:
             )
         )
         try:
-            response = await self.http.post(
-                pending.token_endpoint,
-                data={
-                    "grant_type": DEVICE_CODE_GRANT,
-                    "device_code": pending.device_code.get_secret_value(),
-                    "session_id": pending.session_id,
-                    "client_id": pending.client_id,
-                    "client_assertion_type": JWT_CLIENT_ASSERTION,
-                    "client_assertion": assertion.get_secret_value(),
-                },
-                headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
-                follow_redirects=False,
+            response = await send_bounded(
+                self.http,
+                self.http.build_request(
+                    "POST",
+                    pending.token_endpoint,
+                    data={
+                        "grant_type": DEVICE_CODE_GRANT,
+                        "device_code": pending.device_code.get_secret_value(),
+                        "session_id": pending.session_id,
+                        "client_id": pending.client_id,
+                        "client_assertion_type": JWT_CLIENT_ASSERTION,
+                        "client_assertion": assertion.get_secret_value(),
+                    },
+                    headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
+                ),
+                max_bytes=self.max_response_bytes,
             )
         except httpx.HTTPError as exc:
             raise AuthorizationError("request_failed", "Device token request failed") from exc

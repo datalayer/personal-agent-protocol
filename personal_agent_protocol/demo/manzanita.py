@@ -42,6 +42,7 @@ from ..company import (
     OperationOutcomeUnknown,
     ProposedOperation,
     Reply,
+    SignInContext,
     ToolResult,
     Turn,
     build_company,
@@ -69,7 +70,9 @@ CONFIG = CompanyConfig(
 class ManzanitaAccounts:
     """Ada's account: her password, then a code sent to her email."""
 
-    async def authenticate(self, credentials: dict[str, SecretStr]) -> Authenticated | None:
+    async def authenticate(
+        self, credentials: dict[str, SecretStr], context: SignInContext
+    ) -> Authenticated | None:
         email = credentials.get("email")
         password = credentials.get("password")
         if (
@@ -104,12 +107,23 @@ class ManzanitaAgent:
         if "exchange" in text or "warmer" in text:
             if "orders:write" not in turn.scopes:
                 return [Reply(authorization=("insufficient_scope", "orders:write"))]
+            if not turn.supports_operations:
+                # No operation can reach this agent: say so, never "here is the exchange".
+                return [
+                    Reply(
+                        text="The insulated Ridge Jacket is in stock. Your agent cannot "
+                        "confirm exchanges with us: exchange it on manzanita.example."
+                    )
+                ]
             return [
                 Reply(
                     text="The insulated Ridge Jacket is in stock. Here is the exchange.",
                     operation=EXCHANGE,
                 )
             ]
+        if "orders:read" not in turn.scopes:
+            # Signed in, but not allowed to read orders: ask for the scope, say nothing.
+            return [Reply(authorization=("insufficient_scope", "orders:read"))]
         return [Reply(text="Your order ord_7Hk2: Ridge Jacket, size M, delivered.", data=ORDER)]
 
 
@@ -304,6 +318,7 @@ class ManzanitaMcp:
 
 class ManzanitaPlugin:
     def __init__(self) -> None:
+        self.accounts = ManzanitaAccounts()
         self.executor = ExchangeExecutor()
         self.gift_wrap = GiftWrapExecutor()
         self.returns = ReturnExecutor()
@@ -311,7 +326,7 @@ class ManzanitaPlugin:
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
-        contribute(COMPANY_ACCOUNTS, ManzanitaAccounts(), contribution_id="accounts")
+        contribute(COMPANY_ACCOUNTS, self.accounts, contribution_id="accounts")
         contribute(COMPANY_AGENTS, ManzanitaAgent(), contribution_id="agent")
         contribute(OPERATION_EXECUTORS, self.executor, contribution_id="exchange")
         contribute(OPERATION_EXECUTORS, self.gift_wrap, contribution_id="gift-wrap")

@@ -60,8 +60,8 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
     } else if (step.step === "ask") {
       page = await conversations.start(endpoint(), message(step.text), { ...who, token: session, wait: 0 });
       assert.deepEqual(page.events.map((event) => event.type), expect.events);
-      assert.equal(page.events.at(-1).error, expect.error);
-      seen.authorization = page.events.at(-1).error;
+      assert.equal(page.events.filter((e) => e.type !== "state").at(-1).error, expect.error);
+      seen.authorization = page.events.filter((e) => e.type !== "state").at(-1).error;
     } else if (step.step === "sign_in") {
       assert.equal(step.method, "direct");
       const metadata = discovered.oauthMetadata;
@@ -101,7 +101,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
         cursor: page.cursor,
         wait: 0,
       });
-      proposal = page.events.at(-1).message.operation;
+      proposal = page.events.filter((e) => e.type !== "state").at(-1).message.operation;
       assert.equal(proposal.state, expect.operation_state);
       assert.equal(proposal.user_approval_required, expect.user_approval_required);
     } else if (step.step === "confirm") {

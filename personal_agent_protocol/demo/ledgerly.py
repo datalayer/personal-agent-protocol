@@ -49,6 +49,7 @@ from ..company import (
     CompanyService,
     ProposedOperation,
     Reply,
+    SignInContext,
     Turn,
     build_company,
     company_app,
@@ -239,9 +240,12 @@ class LedgerlyAgent:
         if link.account_token_reference is None:
             return [
                 Reply(
+                    # The code is for the person's page alone (`data`), as in a PapSignIn
+                    # display: the text, which a model reads, names only the page.
                     text=(
                         "To pay from your Northwind account, let Ledgerly connect to it: open "
-                        f"https://{NORTHWIND}/device and enter {link.user_code}. Tell me when done."
+                        f"https://{NORTHWIND}/device and enter the code shown with this "
+                        "message. Tell me when done."
                     ),
                     data={
                         "connect": {
@@ -374,7 +378,9 @@ class StandingPermissionExecutor:
 
 
 class LedgerlyAccounts:
-    async def authenticate(self, credentials: dict[str, SecretStr]) -> Authenticated | None:
+    async def authenticate(
+        self, credentials: dict[str, SecretStr], context: SignInContext
+    ) -> Authenticated | None:
         return None
 
     async def check_code(self, code_reference: str, code: SecretStr) -> bool:

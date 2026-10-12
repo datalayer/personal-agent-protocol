@@ -5,8 +5,8 @@
 // uses the TypeScript SDK where the Python runner uses the Python one. What the agent
 // cannot do itself, the driver does (the user approving Device Sign-In; a demo
 // company's operator revising an operation, forgetting events, moving the clock).
-// A case the TypeScript SDK cannot run yet is skipped, never passed. The report has the
-// Python runner's JSON shape (schema 1).
+// A case a side cannot run is skipped, never passed. The report has the Python runner's
+// JSON shape (schema 1).
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -15,6 +15,8 @@ import { SignJWT, exportJWK, generateKeyPair, importJWK } from "jose";
 import {
   AccountTokenClient,
   AuthorizationStateStores,
+  BrowserFormPosts,
+  BrowserSessionClient,
   Clocks,
   ConversationClient,
   DeviceSignInClient,
@@ -22,7 +24,9 @@ import {
   DpopProofProviders,
   InMemoryStandingPermissionStore,
   JoseDpopProofProvider,
+  McpClient,
   OperationsClient,
+  PROTOCOL_PROFILE,
   PersonalAgentProtocolError,
   SecretValue,
   SessionClient,
@@ -32,11 +36,14 @@ import {
   approve,
   buildPapReactor,
   discoverCompany,
+  mcpApi,
+  operationPage,
   operationsEndpoint,
   parseClientMetadata,
   parseOperation,
 } from "../../../lib/index.js";
 import { JoseSigner } from "../../../lib/server.js";
+import { ControlledBrowser } from "./controlled-browser.mjs";
 
 const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations"];
 const JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer";
@@ -121,11 +128,15 @@ export async function identityFrom({ domain, name, privateJwk, extensions = ["op
   };
 }
 
-/** A personal agent: its identity, Reactor host, and SDK clients. */
+/**
+ * A personal agent: its identity, Reactor host, and SDK clients, and, when given a
+ * `browserFetch`, its own controlled browser (`pap.browserFormPost`, its own cookie jar).
+ */
 export class Agent {
-  constructor(identity, { fetch, clock }) {
+  constructor(identity, { fetch, clock, browserFetch }) {
     this.identity = identity;
     this.fetch = fetch;
+    this.browser = browserFetch === undefined ? undefined : new ControlledBrowser(browserFetch);
     this.tokens = new Map();
     this.state = new Map();
     this.keys = new Map();
@@ -181,6 +192,9 @@ export class Agent {
             options: { id: "state" },
           },
           { point: StandingPermissionStores, value: this.standing, options: { id: "standing" } },
+          ...(this.browser === undefined
+            ? []
+            : [{ point: BrowserFormPosts, value: this.browser, options: { id: "controlled-browser" } }]),
         ],
       },
     ]);
@@ -195,7 +209,7 @@ export class Agent {
 
 /** The target company and the personal agent the suite plays. */
 export class Context {
-  constructor({ baseUrl, identity, otherIdentity, fetch, driver, scenario, clock, tenantId = "pap-conformance" }) {
+  constructor({ baseUrl, identity, otherIdentity, fetch, browserFetch, driver, scenario, clock, tenantId = "pap-conformance" }) {
     const url = new URL(baseUrl);
     this.baseUrl = url.origin;
     this.domain = url.hostname;
@@ -204,14 +218,19 @@ export class Context {
     this.scenario = scenario;
     this.clock = clock;
     this.tenantId = tenantId;
-    this.agent = new Agent(identity, { fetch, clock });
+    this.agent = new Agent(identity, { fetch, clock, browserFetch });
     this.otherIdentity = otherIdentity;
     this.other = undefined;
     this.discovered = undefined;
   }
 
   async company() {
-    this.discovered ??= await discoverCompany(this.domain, { reactor: this.agent.reactor });
+    if (this.discovered === undefined) {
+      this.discovered = await discoverCompany(this.domain, { reactor: this.agent.reactor });
+      // API paths resolve at the company's OpenAPI API (its url's origin), not discovery's.
+      const api = (this.discovered.document.apis ?? []).find((item) => item.type === "openapi");
+      if (api !== undefined) this.apiBase = new URL(api.url).origin;
+    }
     return this.discovered;
   }
 
@@ -234,7 +253,7 @@ export class Context {
   }
 
   url(path) {
-    return `${this.baseUrl}${path}`;
+    return `${this.apiBase ?? this.baseUrl}${path}`;
   }
 
   require(...capabilities) {
@@ -598,7 +617,9 @@ caseFor("security.token-in-url-refused")(async (ctx) => {
   const response = await ctx.send("GET", `${url}?${new URLSearchParams({ access_token: session.accessToken.reveal() })}`, {
     headers: { DPoP: proof },
   });
-  await expectRefusal(response, 401, "invalid_token", "a token in the URL");
+  // Any refusal will do (§4.3 says only MUST NOT accept): 400 or 401 are both seen.
+  check(response.status >= 400 && response.status < 500, `a token in the URL: expected a refusal, got ${response.status}`);
+  check(!(await response.text()).includes(session.accessToken.reveal()), "a refusal never echoes the Session Token");
 });
 
 caseFor("security.authorization-header-without-cookies")(async (ctx) => {
@@ -699,7 +720,7 @@ caseFor("lifecycle.renew-signed-out")(async (ctx) => {
   const renewed = await ctx.renew(user, old.sessionId);
   check(renewed.sessionId === old.sessionId, "renewal keeps the Session");
   check((await probe(ctx, user, renewed)) === 403, "the new token is served (signed out)");
-  check((await probe(ctx, user, old)) === 401, "the replaced token stops working");
+  // Whether the replaced token stops at once is the company's choice (no MUST in §4.2).
 });
 
 caseFor("lifecycle.renew-for-another-user")(async (ctx) => {
@@ -1438,17 +1459,231 @@ caseFor("operations.not-found-indistinguishable")(async (ctx) => {
   check(answers[0] === "operation_not_found 404", `got ${answers[0]}`);
 });
 
-// Not ported: the TypeScript SDK has no MCP client yet, and the runner no browser of its own.
-const NOT_PORTED = {
-  "lifecycle.mcp-protected-resource-metadata": "the TypeScript SDK has no MCP client yet",
-  "lifecycle.mcp-bearer-for-its-url": "the TypeScript SDK has no MCP client yet",
-  "lifecycle.mcp-bearer-only-at-mcp": "the TypeScript SDK has no MCP client yet",
-  "lifecycle.mcp-sign-out-takes-effect": "the TypeScript SDK has no MCP client yet",
-  "operations.cross-channel-mcp": "the TypeScript SDK has no MCP client yet",
-  "lifecycle.browser-joins-session": "the TypeScript runner has no controlled browser yet",
-  "lifecycle.browser-assertion-refused": "the TypeScript runner has no controlled browser yet",
-  "operations.web-confirm-at-most-once": "the TypeScript runner has no controlled browser yet",
-};
+// MCP (§4.3, §6) ----------------------------------------------------------------------------
+
+async function mcpUrl(ctx) {
+  const api = mcpApi((await ctx.company()).document);
+  if (api === undefined) throw new SkipCase("the company lists no MCP server");
+  return api.url;
+}
+
+function tool(name) {
+  if (!name) throw new SkipCase("the scenario names no MCP tool for this");
+  return name;
+}
+
+async function signedInBearer(ctx) {
+  const url = await mcpUrl(ctx);
+  const { user, signed } = await signedInUser(ctx);
+  const result = await ctx.agent.accounts.bearerForMcp(signed.reference, {
+    context: await ctx.accountContext(user),
+    sessionId: signed.token.sessionId,
+    resource: url,
+  });
+  check(result.status === "signed_in" && result.token !== undefined, "a signed-in Bearer");
+  return { user, signed, bearer: result.token, url };
+}
+
+function mcpClient(ctx, token, url) {
+  return new McpClient({ token, url, fetch: ctx.fetch });
+}
+
+caseFor("lifecycle.mcp-protected-resource-metadata")(async (ctx) => {
+  const url = await mcpUrl(ctx);
+  const metadata = await ctx.metadata();
+  const parts = new URL(url);
+  const location = `https://${parts.host}/.well-known/oauth-protected-resource${parts.pathname}`;
+  const document = await (await ctx.send("GET", location)).json();
+  check(document.resource === url, "the metadata names the MCP server as its resource");
+  check((document.authorization_servers ?? []).includes(metadata.issuer), "authorization_servers includes auth.issuer");
+  const bare = await ctx.send("POST", url, {
+    headers: { "Content-Type": "application/json" },
+    body: '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+  });
+  check(bare.status === 401, "an unauthenticated MCP call is 401");
+  const challenge = bare.headers.get("www-authenticate") ?? "";
+  check(challenge.startsWith("Bearer") && challenge.includes("resource_metadata"), "Bearer challenge");
+});
+
+caseFor("lifecycle.mcp-bearer-for-its-url")(async (ctx) => {
+  const readTool = tool(ctx.scenario.mcp_read_tool);
+  const { signed, bearer, url } = await signedInBearer(ctx);
+  check(bearer.tokenType === "Bearer", "a Bearer token");
+  check(bearer.sessionId === signed.token.sessionId, "for the same Session");
+  const answer = await mcpClient(ctx, bearer, url).callTool(readTool);
+  check(!answer.isError, "the MCP server accepts it");
+  const metadata = await ctx.metadata();
+  const other = ctx.newUser();
+  const session = await ctx.session(other);
+  const signedOut = await ctx.agent.sessions.bearerForMcp({
+    clientId: ctx.agent.identity.clientId,
+    pairwiseUserId: other,
+    issuer: metadata.issuer,
+    tokenEndpoint: metadata.token_endpoint,
+    tenantId: ctx.tenantId,
+    sessionId: session.sessionId,
+    resource: url,
+  });
+  check(!signedOut.signedIn, "a signed-out Session gets a signed-out Bearer");
+  const error = await refused(mcpClient(ctx, signedOut, url).callTool(readTool), "a signed-out Bearer");
+  check(
+    error.code === "sign_in_required" || error.code === "insufficient_scope",
+    `the MCP server enforces scopes, got ${error.code}`,
+  );
+});
+
+caseFor("lifecycle.mcp-bearer-only-at-mcp")(async (ctx) => {
+  const { user, signed, bearer, url } = await signedInBearer(ctx);
+  const secret = bearer.accessToken.reveal();
+  const targets = [["GET", ctx.url(ctx.scenario.read_path)]];
+  try {
+    targets.push(["POST", await ctx.conversationsEndpoint()]);
+  } catch (error) {
+    if (!(error instanceof SkipCase)) throw error;
+  }
+  try {
+    targets.push(["GET", `${await ctx.operationsEndpoint()}/op_conformance_any`]);
+  } catch (error) {
+    if (!(error instanceof SkipCase)) throw error;
+  }
+  for (const [method, target] of targets) {
+    for (const scheme of ["Bearer", "DPoP"]) {
+      const headers = { Authorization: `${scheme} ${secret}`, "Content-Type": "application/json" };
+      if (scheme === "DPoP") headers.DPoP = await ctx.proof(user, method, target, { token: bearer });
+      const response = await ctx.send(method, target, { headers, ...(method === "GET" ? {} : { body: "{}" }) });
+      check(response.status === 401, `a Bearer token is refused at ${method} ${target}`);
+      check(!(await response.text()).includes(secret), "and never echoed");
+    }
+  }
+  const dpopAtMcp = await ctx.send("POST", url, {
+    headers: { Authorization: `Bearer ${signed.token.accessToken.reveal()}`, "Content-Type": "application/json" },
+    body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+  });
+  check(dpopAtMcp.status === 401, "the MCP server refuses a DPoP Session Token");
+  const form = {
+    grant_type: "refresh_token",
+    refresh_token: ctx.accountToken(signed.reference),
+    session_id: signed.token.sessionId,
+    resource: ctx.url(ctx.scenario.read_path),
+    ...(await ctx.clientForm()),
+  };
+  const elsewhere = await ctx.tokenRequest(user, form, { dpop: null });
+  check(elsewhere.status === 400, "no Bearer token is issued for another resource");
+});
+
+caseFor("lifecycle.mcp-sign-out-takes-effect")(async (ctx) => {
+  const readTool = tool(ctx.scenario.mcp_read_tool);
+  const { user, signed, bearer, url } = await signedInBearer(ctx);
+  const client = mcpClient(ctx, bearer, url);
+  check(!(await client.callTool(readTool)).isError, "signed in, the tool answers");
+  await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
+  const error = await refused(client.callTool(readTool), "a revoked sign-in");
+  check(error.code === "sign_in_required", `got ${error.code}`);
+});
+
+caseFor("operations.cross-channel-mcp")(async (ctx) => {
+  await ctx.operationsEndpoint();
+  const proposeTool = tool(ctx.scenario.mcp_propose_tool);
+  const { user, signed, bearer, url } = await signedInBearer(ctx);
+  const throughApi = await propose(ctx, user, signed, "user");
+  const answer = await mcpClient(ctx, bearer, url).callTool(proposeTool);
+  check(answer.operation !== undefined, "the tool returns structuredContent.operation");
+  check(JSON.stringify(answer.operation) === JSON.stringify(throughApi), "the same operation as through the API");
+});
+
+// The website (§5, Operations §4.4) --------------------------------------------------------
+
+async function browserOf(ctx) {
+  const web = (await ctx.company()).document.web;
+  if (!web?.browser_session_endpoint) throw new SkipCase("the company offers no browser sessions");
+  if (ctx.agent.browser === undefined) throw new SkipCase("the runner was given no browser of its own");
+  return { browser: ctx.agent.browser, endpoint: web.browser_session_endpoint };
+}
+
+async function join(ctx, user, sessionId, returnTo) {
+  const { endpoint } = await browserOf(ctx);
+  await new BrowserSessionClient({ reactor: ctx.agent.reactor }).join({
+    clientId: ctx.agent.identity.clientId,
+    pairwiseUserId: user,
+    browserSessionEndpoint: endpoint,
+    sessionId,
+    returnTo,
+    companyDomain: (await ctx.company()).document.organization.domain,
+  });
+}
+
+caseFor("lifecycle.browser-joins-session")(async (ctx) => {
+  const { browser } = await browserOf(ctx);
+  const { user, signed } = await signedInUser(ctx);
+  const operation = await propose(ctx, user, signed, "standing");
+  const page = operationPage(operation, (await ctx.company()).document.organization.domain);
+  await join(ctx, user, signed.token.sessionId, page);
+  const landed = browser.page;
+  check(landed.history.length && landed.history[0].status === 303, "joined with 303 See Other");
+  const cookie = landed.history[0].headers.get("set-cookie") ?? "";
+  for (const flag of ["Secure", "HttpOnly"]) check(cookie.includes(flag), `the cookie is ${flag}`);
+  check(!cookie.toLowerCase().includes("samesite=strict"), "the cookie is not SameSite=Strict");
+  check(!cookie.toLowerCase().includes("max-age"), "the cookie has no lifetime of its own");
+  check(landed.status === 200, "the operation's page shows in the Session");
+  await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
+  const after = await browser.get(page);
+  check([401, 403, 404].includes(after.status), "signed out, the website shows it no more");
+});
+
+caseFor("lifecycle.browser-assertion-refused")(async (ctx) => {
+  const { endpoint } = await browserOf(ctx);
+  const domain = (await ctx.company()).document.organization.domain;
+  const user = ctx.newUser();
+  const session = await ctx.session(user);
+  const claims = ({ lifetime = 60, ...changes } = {}) => ({
+    ...ctx.claims({ subject: user, audience: endpoint, lifetime }),
+    session_id: session.sessionId,
+    return_to: `https://${domain}/`,
+    ...changes,
+  });
+  const browserTyp = { headers: { typ: "poppy-browser+jwt" } };
+  const cases = {
+    "a foreign return_to": await ctx.assertion(claims({ return_to: "https://evil.example/" }), browserTyp),
+    "a Session assertion": await ctx.assertion(claims()),
+    "another user's Session": await ctx.assertion(claims({ sub: ctx.newUser() }), browserTyp),
+    "a long-lived assertion": await ctx.assertion(claims({ lifetime: 600 }), browserTyp),
+    "another audience": await ctx.assertion(claims({ aud: ctx.url("/elsewhere") }), browserTyp),
+  };
+  const replayed = await ctx.assertion(claims(), browserTyp);
+  const post = (assertion) =>
+    ctx.send("POST", endpoint, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ assertion }).toString(),
+    });
+  check((await post(replayed)).status === 303, "a valid browser assertion joins");
+  cases["a replayed assertion"] = replayed;
+  for (const [what, assertion] of Object.entries(cases)) {
+    const response = await post(assertion);
+    check(response.status === 400, `${what} is refused`);
+    check(response.headers.get("set-cookie") === null, `${what} sets no cookie`);
+  }
+});
+
+caseFor("operations.web-confirm-at-most-once")(async (ctx) => {
+  const endpoint = await ctx.operationsEndpoint();
+  const { browser } = await browserOf(ctx);
+  const form = ctx.scenario.web_confirm_form;
+  if (!form) throw new SkipCase("the scenario does not know the website's confirm form");
+  const { user, signed, who } = await signedInUser(ctx);
+  const operation = await propose(ctx, user, signed, "user");
+  const page = operationPage(operation, (await ctx.company()).document.organization.domain);
+  await join(ctx, user, signed.token.sessionId, page);
+  const fields = Object.fromEntries(
+    Object.entries(form).map(([name, value]) => [name, value.replaceAll("{revision}", String(operation.revision))]),
+  );
+  await browser.submit(page, fields);
+  const read = await ctx.agent.operations.read(endpoint, operation.operation_id, who);
+  check(read.state !== "proposed", "confirmed on the website");
+  check(read.confirmation !== null, "with its confirmation");
+  const again = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval: await approve(operation) });
+  check(JSON.stringify(again.operation) === JSON.stringify(read), "confirming at the endpoint too changes nothing");
+  if (ctx.driver.capabilities.has("performed")) check((await ctx.driver.performed(operation.operation_id)) === 1, "performed once");
+});
 
 /** Run each case; a failure never stops the others. The report is the runner's schema 1. */
 export async function runConformance(ctx, { cases = companyCases(), timeoutMs = 30_000 } = {}) {
@@ -1460,7 +1695,7 @@ export async function runConformance(ctx, { cases = companyCases(), timeoutMs = 
     let message = null;
     const run = CASES[fixture.id];
     try {
-      if (run === undefined) throw new SkipCase(NOT_PORTED[fixture.id] ?? "not ported to TypeScript");
+      if (run === undefined) throw new SkipCase("not ported to TypeScript");
       let timer;
       await Promise.race([
         run(ctx, fixture),
@@ -1489,7 +1724,7 @@ export async function runConformance(ctx, { cases = companyCases(), timeoutMs = 
   return {
     schema_version: 1,
     protocol: "personal-agent-protocol",
-    profile: "0.1",
+    profile: PROTOCOL_PROFILE,
     extensions: { operations: "1" },
     role: "personal-agent",
     target: ctx.baseUrl,

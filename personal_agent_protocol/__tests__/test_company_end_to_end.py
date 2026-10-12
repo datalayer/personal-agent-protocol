@@ -97,8 +97,8 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
         endpoint, world.message("Where is my jacket order?"), token=session, wait=0, **world.who
     )
     kinds = [event.type for event in page.events]
-    assert kinds == ["message", "message", "authorization"]
-    assert page.events[-1].error == "sign_in_required"
+    assert kinds == ["message", "state", "message", "authorization", "state"]
+    assert [e for e in page.events if e.type != "state"][-1].error == "sign_in_required"
 
     # Device Sign-In: the user approves on Manzanita's own page.
     device = DeviceSignInClient(reactor=world.reactor, http_client=world.http)
@@ -132,7 +132,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
         wait=0,
         **world.who,
     )
-    proposal = page.events[-1].message.operation  # type: ignore[union-attr]
+    proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert proposal is not None and proposal.state == "proposed"
 
     # The user approves exactly this revision; it is confirmed once.

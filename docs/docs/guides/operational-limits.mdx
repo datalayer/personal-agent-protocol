@@ -25,8 +25,9 @@ client metadata, and JWKS are public, and each fetch is bounded:
   addresses; in Python the default transport then dials only those
   (`PinnedNetworkBackend`), never resolving the host again, so DNS cannot
   rebind it between the check and the connection. TLS still verifies the host
-  name. In TypeScript, pair `NodeUrlSafetyPolicy` with an enforcing egress
-  proxy.
+  name. In TypeScript on Node, `createResolvingFetch` (`./server`, the Node
+  company's default) does the same: it vets every resolved address and dials
+  the vetted one.
 - **Size and time.** At most 100 KB (`max_response_bytes` / `maxResponseBytes`)
   and 5 seconds in all (`timeout` / `timeoutMs`), however slowly the server
   sends: a body trickled a few bytes at a time is abandoned with
@@ -53,7 +54,9 @@ clock sees them expire. A failed fetch is never cached.
 from personal_agent_protocol import DiscoveryClient
 from personal_agent_protocol.caching import CacheBounds
 
-client = DiscoveryClient(reactor=reactor, cache_bounds=CacheBounds(min_seconds=300))
+# Keep every document at least five minutes (the default lifetime must lie within).
+bounds = CacheBounds(min_seconds=300, default_seconds=300)
+client = DiscoveryClient(reactor=reactor, cache_bounds=bounds)
 company = await client.discover("shop.example")  # fetched
 company = await client.discover("shop.example")  # from pap.cache
 ```
@@ -76,6 +79,16 @@ for each `jwks_uri` (`jwks_refetch_interval` / `jwksRefetchIntervalSeconds`),
 so a stream of assertions naming made-up keys cannot make the company fetch
 on every request. The `kid` is used only to look a key up; the signature is
 still verified against the published key.
+
+During the overlap, assertions signed with either key verify. Once the agent
+retires the old key (publishes the set without it), the company keeps
+accepting it only until its cached set expires — the set's `Cache-Control`,
+within the bounds above — and refuses it after that with `invalid_client`.
+An agent therefore keeps the old key published, and stops signing with it,
+for at least its JWKS `max-age` before removing it. A real rotation that
+arrives within a minute of a refetch caused by a made-up `kid` waits for the
+next refetch. `test_guide_security.py` and `guide-security.test.mjs` play
+the rotation against each reference company.
 
 ## Retries: `Retry-After`, backoff, and jitter
 
@@ -102,14 +115,18 @@ recorded there with `defer`: every other task for that company then waits it
 out too, instead of being refused in turn. A wait longer than `max_wait` is
 refused locally with `rate_limited`.
 
-`SharedRateLimitBudget(rate=..., burst=...)` also paces requests with a token
-bucket per company. A multi-process host contributes a budget backed by shared
-storage:
+`SharedRateLimitBudget(rate=..., burst=...)` also paces requests per company
+(the generic cell rate algorithm): each caller reserves its turn when it asks,
+counting every caller ahead of it and the company's pause, so concurrent
+callers never exceed the rate, and a caller whose turn is more than `max_wait`
+away is refused at once, however long the queue. [Load tests](/protocol/load-tests/)
+check it under concurrent callers. A multi-process host contributes a budget
+backed by shared storage:
 
 ```python
 from reactor import PluginManifest
 
-from personal_agent_protocol import RATE_LIMIT_BUDGETS
+from personal_agent_protocol import RATE_LIMIT_BUDGETS, build_pap_reactor
 
 
 class RedisBudget:

@@ -1,0 +1,403 @@
+---
+title: Security review
+---
+
+# Security review of the 0.10.0 SDKs
+
+An independent review of both SDKs before the 0.10.0 release, its findings,
+and their fixes; then an external interoperability exercise against other
+implementations of PAP.
+
+## Scope
+
+- **What:** the Python package `personal_agent_protocol` (with
+  `personal_agent_protocol.company`, the CLI host, and the demos) and the
+  TypeScript package `@datalayer/personal-agent-protocol` (`src/`, with
+  `src/company/` and the `./server` entry), version 0.10.0, at commit
+  `fc1dec7` (after the 0.10.0 changes of `12a44f8` and `6bee973`). Both
+  languages, both roles: the personal agent and the company.
+- **Against:** the [specification](https://personalagentprotocol.org/docs/spec)
+  and the [guides](https://personalagentprotocol.org/docs/guides), draft 0.1
+  (2026-10-09), and the Operations extension v1.
+- **When:** 2026-10-12.
+- **Who:** an independent review agent with fresh context, no part in writing
+  the code, working read-only. Every finding below was confirmed by a probe: a
+  small script driving the SDK (the reference company, Manzanita, and its
+  personal agent, Atlas, in one process, or the TypeScript `lib/` directly)
+  that shows the behaviour. The fixes were then made by the maintainers; each
+  probe became a regression test.
+
+## Method
+
+1. Read every trust boundary in both SDKs against the specification's MUSTs:
+   discovery and metadata fetching, client identity and assertions, Sessions
+   and DPoP, the four sign-in modes, Account Tokens, conversations, Operations,
+   MCP and OpenAPI resources, browser sessions, the CLI's local state, and
+   telemetry.
+2. For each suspected weakness, write a probe that reproduces it end to end,
+   and keep only what a probe confirms.
+3. Check each Python finding in TypeScript and each TypeScript finding in
+   Python: a fix lands in both SDKs wherever the behaviour exists.
+4. Fail fast: no compatibility shims. A fix that changes a contract changes it
+   (and this page and the [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md) say so).
+
+The regression tests are `personal_agent_protocol/__tests__/test_security_review.py`
+and `src/__tests__/security-review.test.mjs`, one test (or more) per finding,
+named after it.
+
+## Findings
+
+Severity is the reviewer's: **high** lets an attacker gain access or act;
+**medium** weakens a defence that the specification requires; **low** is
+robustness or defence in depth; **info** is hygiene.
+
+### First fixes (`f2aee9a`)
+
+Fixed during the review, before the rest:
+
+| Severity | Where | Finding | Fix |
+| --- | --- | --- | --- |
+| medium | TS `json.ts` | A JSON member named `__proto__` set the parsed object's prototype. | It is an own member. |
+| low | TS `crypto.ts` | DPoP `ath` was compared with `===`, and not required to be a string. | Constant-time comparison of a string. |
+| low | TS `crypto.ts` | A proof's `exp`/`nbf` were read on the wall clock, not the verifier's. | The verifier's `currentDate`. |
+| low | TS `telemetry.ts` | Telemetry names were looked up through the prototype chain. | Own keys only. |
+| low | both | The replay caches forgot a key at its expiry instant. | Remembered until expiry, inclusive. |
+| medium | Python `company/asgi.py` | The ASGI adapter read any request body. | 1 MiB cap, `413`. |
+| low | Python `company/verify.py` | A non-numeric or out-of-range `iat`/`exp` raised a `500`. | `invalid_client`. |
+
+### 1. A sign-in after an MCP token downgraded the Session to Bearer (high)
+
+- **Where:** Python `company/service.py` `_sign_in`, the device and code
+  grants; TypeScript `src/company/service.ts` `#signIn`.
+- **Impact:** after `bearer_for_mcp`, the Session's latest record was the
+  MCP Bearer token. A Device, Direct, or Mediated sign-in copied it: the
+  signed-in token came back as `token_type: Bearer`, for `/mcp`, and the
+  Session's DPoP token was deleted. A signed-in token usable with no proof of
+  possession, at the MCP server, with the account's scopes.
+- **Confirmed by:** `probe_bearer_downgrade.py` — the poll's raw response was
+  `Bearer`, `signed_in: true`, and `/mcp` accepted it without DPoP (`200`).
+- **Fix (`73c2669`):** the signed-in record is built explicitly: DPoP, no
+  `resource`, the thumbprint of the proof that completed the grant; it
+  replaces only DPoP tokens; a grant naming a Session reads its latest DPoP
+  record, never the latest of any type. Both SDKs.
+- **Tests:** `test_finding_1_device_sign_in_after_an_mcp_bearer_token_stays_dpop`,
+  `test_finding_1_mediated_sign_in_after_an_mcp_bearer_token_stays_dpop`;
+  `finding 1: …` (TypeScript).
+
+### 2. Mediated Sign-In attempts were not limited (high)
+
+- **Where:** both companies' `/poppy/sign-in` and `/poppy/sign-in/{id}`.
+- **Impact:** unlimited password guesses; the three-code limit reset with
+  each new `sign_in_id`, so codes could be guessed without end. §4.7: a
+  company MUST rate-limit attempts.
+- **Confirmed by:** `probe_mediated.py` — 50 wrong passwords all answered
+  `failed`, and a right code was accepted after 15 wrong ones across five
+  sign-ins.
+- **Fix (`3651dc4`):** attempt budgets in the company store
+  (`sign_in_attempts`): failures by account identifier (the declared
+  non-secret fields), by agent and user, and by Session, and wrong codes by
+  account across sign-ins. At `max_sign_in_failures` (5) a key is locked out
+  for `sign_in_lockout` (15 minutes), doubling with each further failure (at
+  most a day): `429 rate_limited` with `Retry-After`, and the directory is not
+  even asked. Success clears the keys. `AccountDirectory.authenticate` now
+  takes a `SignInContext` (`client_id`, `session_id`) — a contract change — and
+  must throttle its own checks too. Both SDKs.
+- **Tests:** `test_finding_2_wrong_passwords_lock_the_account_out_with_backoff`,
+  `test_finding_2_wrong_codes_count_per_account_across_sign_ins`; `finding 2: …`.
+
+### 3. A retried conversation start skipped the ownership check (medium)
+
+- **Where:** both companies' `POST /poppy/conversations`, the replay of a
+  known message ID.
+- **Impact:** a signed-out Session (or another account's) resending a message
+  ID read back a conversation that belonged to an account, events included.
+- **Confirmed by:** `probe_conv_replay.py` — `read_events` refused
+  (`sign_in_required`) while the retried start answered `201` with the order.
+- **Fix (`73c2669`):** the replay answers through the same ownership check as
+  every read (`sign_in_required` / `conversation_not_found`). Both SDKs.
+- **Tests:** `test_finding_3_a_retried_start_answers_only_who_may_read_the_conversation`.
+
+### 4. The default replay cache was per process (high)
+
+- **Where:** both companies' default `pap.company.replayCache`
+  (`MemoryReplayCache`).
+- **Impact:** with a durable store shared by several replicas (or across a
+  restart), each replica had its own replay cache: a DPoP proof captured at
+  one replica was accepted at another within its validity window.
+- **Confirmed by:** `probe_replay.py` — the same captured request was refused
+  at one replica and answered `200` with events at another.
+- **Fix (`3651dc4`):** the default is `StoreReplayCache`, one atomic `create`
+  in the contributed `pap.company.store` per identifier (its SHA-256), kept a
+  second past its expiry: a shared store is a shared cache. The default's id
+  is now `store` (`protocol/reactor-points.json`). `MemoryReplayCache` stays
+  for verifiers used on their own. The memory store sweeps expired records as
+  it doubles, so replay marks never accumulate. Both SDKs.
+- **Tests:** `test_finding_4_a_proof_replayed_at_another_replica_is_refused`,
+  `test_finding_4_the_memory_store_forgets_expired_records`.
+
+### 5. Confirming an operation needed no write scope when none was configured (medium)
+
+- **Where:** both companies' confirm (API, MCP-proposed, web page).
+- **Impact:** with `write_scopes` empty (operations on by default), any
+  signed-in Session could confirm, whatever it had been granted.
+- **Fix (`73c2669`):** each operation records the scopes confirming it
+  requires (`ProposedOperation.scopes`, else the company's `write_scopes`),
+  checked at every confirm, whichever channel; `operations` without
+  `write_scopes` (or with write scopes outside `scopes`) is a configuration
+  error. Both SDKs.
+- **Tests:** `test_finding_5_operations_without_a_write_scope_is_a_configuration_error`,
+  `test_finding_5_an_operation_records_and_requires_its_scopes`.
+
+### 6. CLI approvals could be forged (medium)
+
+- **Where:** Python `pap operations approve` / `confirm`, `state.json`.
+- **Impact:** `approve` accepted the typed operation ID from piped stdin, which
+  a script or a model's tool can write; `confirm` trusted any approval found in
+  `state.json`, a plain file.
+- **Fix (`9707266`):** `approve` takes the answer only at a terminal (stdin
+  and stderr TTYs) or from the host's `pap.approvalSurface`; each stored
+  approval carries a MAC under a key kept in the protected token store
+  (`pap:approval-key`), checked with its Session at `confirm`.
+- **Tests:** `test_cli_protocol.py::test_a_user_with_manzanita_from_the_command_line`
+  (piped approval refused, forged approval refused).
+
+### 7. A redirected request re-sent its body (medium)
+
+- **Where:** both DPoP transports (`DpopHttpClient`, `DpopFetchClient`).
+- **Impact:** a same-origin `307`/`308` (or `301`/`302` on POST) re-posted the
+  body — credentials, a code, a confirmation — to wherever it pointed. The
+  Mediated client already allowed no redirect; any other caller did.
+- **Confirmed by:** `probe_redirect.py` — the password was posted to
+  `/collect-credentials`.
+- **Fix (`2971fb8`):** a request with a body is never sent to a redirect other
+  than `303` (`redirect_refused`). Both SDKs.
+- **Tests:** `test_finding_7_a_body_is_never_sent_to_a_redirect`,
+  `test_finding_7_the_mediated_client_sends_credentials_once_and_follows_no_redirect`.
+
+### 8. Mediated Sign-In narrowed unknown scopes and accepted none (low)
+
+- **Where:** both companies' `/poppy/sign-in`.
+- **Impact:** `orders:read bogus:scope` was granted `orders:read`; no scope
+  signed in with none. §4.4: missing or unknown scopes are `invalid_scope`.
+- **Confirmed by:** `probe_mediated2.py`.
+- **Fix (`73c2669`):** `400 invalid_scope`, as `/oauth/device` does. Both SDKs.
+- **Tests:** `test_finding_8_mediated_sign_in_refuses_unknown_or_missing_scopes`.
+
+### 9. The demo agents read data without the read scope (low)
+
+- **Where:** Manzanita (both SDKs) and Northwind (Python).
+- **Impact:** a Session granted only `orders:write` (or `payments:write`) was
+  told the order (or the balance).
+- **Fix (`7a236d4`):** `insufficient_scope` for the read scope first.
+- **Tests:** `test_finding_9_the_demo_agents_read_nothing_without_the_read_scope`.
+
+### 10. Malformed bodies were 500s, and repeated credentials were merged (low)
+
+- **Where:** both companies' `handle`, the ASGI and Node adapters.
+- **Impact:** a non-object JSON body, or a message failing validation, raised
+  a `500`; a request with two `Authorization` or two `DPoP` headers had one
+  picked (Node keeps one `authorization`, joins `dpop`).
+- **Fix (`73c2669`):** `400 invalid_request`; a repeated `Authorization` or
+  `DPoP` header is refused by both adapters (`headersDistinct` in Node).
+- **Tests:** `test_finding_10_a_malformed_conversation_body_is_a_400`,
+  `test_finding_10_a_repeated_credential_header_is_refused`.
+
+### 11. A blocked agent was resolved before the policy was asked (medium)
+
+- **Where:** both companies' `/oauth/authorize` and `/poppy/browser-session`,
+  and every token use.
+- **Impact:** a blocked `client_id`'s metadata was fetched from its domain
+  before refusing (an unauthenticated fetch on demand), the browser-session
+  endpoint did not ask the policy at all, and a blocked agent's live tokens
+  kept working.
+- **Fix (`73c2669`):** the policy is asked first on every route taking a
+  `client_id`, and on every DPoP and Bearer token use. The identity client's
+  per-URL tables stay bounded (`9707266`). Both SDKs.
+- **Tests:** `test_finding_11_a_blocked_agent_is_never_resolved_and_its_tokens_stop`,
+  `test_finding_11_the_refetch_table_stays_bounded`.
+
+### 12. TypeScript's default URL safety was textual (high)
+
+- **Where:** `src/reactor.ts` `assertObviouslyPublic`, the Node company.
+- **Impact:** names resolving to private addresses, DNS rebinding, and the
+  literals `[::ffff:127.0.0.1]`, `[fd00:ec2::254]`, `100.100.100.200`,
+  `localhost.`, `0.0.0.0`, `[::]`, `[fe80::1]`, and the name
+  `metadata.google.internal` all passed. Reachable unauthenticated: a
+  `client_id` on `/oauth/token`, `/oauth/authorize`, or
+  `/poppy/browser-session` makes the company fetch it.
+- **Confirmed by:** `ts/probe2.mjs` (a verbatim copy of the check).
+- **Fix (`7a236d4`):** a portable `isGlobalAddress` (IPv4 and IPv6: mapped,
+  compatible, NAT64, 6to4, ULA, link-local, CGNAT, metadata, documentation,
+  multicast, reserved); the portable check refuses local names (a trailing dot
+  normalized) and every non-global literal; `./server` adds
+  `createResolvingFetch` — `dns.lookup` every address, refuse any that is not
+  global, dial only the vetted one over `node:https` with the URL's name for
+  SNI, certificates, and `Host`, each redirect vetted again — which the Node
+  company (`buildCompany`) uses by default. `isPublicIpAddress` is replaced by
+  `isGlobalAddress`.
+- **Tests:** `finding 12: …` (TypeScript), with a real TLS server for the
+  pinned connection.
+
+### 13. Python judged NAT64 and IPv4-compatible addresses global (medium)
+
+- **Where:** `personal_agent_protocol/reactor.py`, `is_global`.
+- **Impact:** `64:ff9b::7f00:1` (NAT64 for 127.0.0.1) and `::a9fe:a9fe`
+  (169.254.169.254) are global to `ipaddress`.
+- **Fix (`7a236d4`):** `is_global_address` judges the IPv4 address carried by
+  NAT64, IPv4-mapped, IPv4-compatible, and 6to4 addresses, and refuses
+  local-use NAT64.
+- **Tests:** `test_finding_13_an_ipv4_address_inside_ipv6_is_judged_as_ipv4`,
+  `test_finding_13_a_host_resolving_to_nat64_loopback_is_refused`.
+
+### 14. TypeScript metadata deadlines never aborted the request (low)
+
+- **Where:** `src/limits.ts` `withinDeadline`, discovery and identity.
+- **Impact:** a timed-out fetch was no longer awaited but kept running, its
+  socket open; redirect bodies were never cancelled.
+- **Fix (`7a236d4`):** an `AbortController` per fetch, following the caller's
+  signal, aborted at the deadline; redirect and error bodies are cancelled.
+- **Tests:** `finding 14: …`.
+
+### 15. Client responses were read whole before the size check (medium)
+
+- **Where:** Python sessions, Direct Sign-In, Account Tokens, device, MCP, and
+  the DPoP transport; TypeScript the same, and the API, conversation, and
+  operation clients (`mcp.ts` had no limit on its error path).
+- **Impact:** a company (or anything in its place) could make the agent read
+  an unbounded body into memory.
+- **Fix (`2971fb8`):** at most the limit plus one byte is read, the rest never
+  (`send_bounded`, `readLimited`). Both SDKs.
+- **Tests:** `test_finding_15_a_token_response_is_read_only_up_to_its_limit`,
+  `test_finding_15_a_dpop_resource_response_is_read_only_up_to_its_limit`.
+
+### 16. The CLI's secret file was changed without a lock (low)
+
+- **Where:** Python `cli_host.py` `FileSecretStore` (and the key store).
+- **Impact:** two `pap` processes each wrote back what they had read: one
+  token lost (a rotated Account Token, and the sign-in with it).
+- **Fix (`9707266`):** every read-modify-write holds an exclusive `flock`.
+- **Tests:** `test_finding_16_concurrent_writers_lose_no_secret`.
+
+### 17. Hygiene (info)
+
+- The web cookie is `__Host-poppy_session` (`Secure`, `Path=/`, no `Domain`),
+  so no other host or path can set or shadow it (`73c2669`, both).
+- A live-session action's approval summary quotes only validated identifiers
+  (`9707266`): `test_finding_17_an_approval_summary_quotes_only_identifiers`.
+- `KnownClient` records grow by one per `client_id` that authenticates; only
+  an agent with valid metadata and keys adds one. Documented; a company bounds
+  it with its client policy or a store that ages records out.
+- An order-dependent test failure (an unclosed event loop that
+  pytest-asyncio created, collected in a later test under
+  `filterwarnings = error`) is closed by a session fixture (`73c2669`).
+
+## What was checked and found sound
+
+- **DPoP:** proofs per request and retry, `htm`/`htu`/`iat`/`ath`, nonce
+  retry, replay keys by key thumbprint, Bearer refused outside MCP.
+- **Assertions:** algorithm allow-list, no `none`/HMAC/embedded keys, issuer,
+  subject, one-string audience, lifetime, one-time `jti`.
+- **Token handling:** Account Tokens behind opaque references, rotation on
+  every refresh, revocation signing every Session out, no token in logs,
+  errors, URLs, or model text (the canary suite).
+- **Code grant:** PKCE S256 in constant time, one-use codes bound to the
+  client and redirect, state and `iss` on the callback.
+- **Consent page:** `__Host-` consent cookie, CSRF token bound to it,
+  `Sec-Fetch-Site` and `Origin`, never framed or cached, no open redirect.
+- **Operations:** latest revision only, at most once under concurrency,
+  `user_approval_required`, extension negotiation, outcomes never claimed
+  failed while unknown.
+- **Conversations:** idempotent message IDs, ordered cursors, retention,
+  Direct Conversations, account binding.
+- **Store compare-and-set:** every transition that must not race uses
+  `create`, `take`, or `replace`; `check_store` holds backends to it.
+- **Browser sessions:** one-use browser assertions, a cookie that does not
+  outlive the Session, CSRF-bound operation pages.
+- **SSRF (Python):** resolve, refuse non-global, pin the connection, bounded
+  redirects, bytes, and time.
+- **Discovery:** exact domain and issuer relationship, strict JSON (duplicate
+  members refused), bounded caching.
+- **Agent side:** protected input outside any model, credentials sent once,
+  scope escalation refused, Sessions per tenant.
+- **Telemetry:** redacted by construction, names from allow-lists.
+- **Live-session actions:** read-only by default, the rest only through the
+  host's approval surface.
+
+## External interoperability exercise
+
+After the review, both SDKs were run against independent implementations of
+PAP, each side in turn the personal agent and the company.
+
+### Implementations and versions
+
+| Implementation | Version | Role exercised |
+| --- | --- | --- |
+| pi-poppy | 0.1.0 at `11ea106` | personal agent, and company |
+| poppy-agent | PR #244, head `290c849` | personal agent |
+| poppy-demo | `02a9b30`, under Miniflare | company (receiver) |
+| poppyseed | 0.1.0 at `f479fb6` | conformance suite |
+| adonis company | PR #245 | not run: no runnable example |
+
+### Method
+
+Every party ran on `127.0.0.1` behind small network shims that kept the real
+names for TLS (SNI and certificate checks against a throwaway CA) and for
+`Host`, so each implementation spoke HTTPS to the names it expected. Request
+logs were kept with every token, assertion, proof, and code redacted. The
+first `invalid_client` seen was the harness's, not the protocol's: the test CA
+lacked `keyUsage`, which Python 3.13's strict X.509 verification refuses.
+
+### Results
+
+| Pairing | Result | Cause of each failure |
+| --- | --- | --- |
+| pi-poppy agent → Manzanita (Python) | 18 of 19 | O1 |
+| poppy-agent → Manzanita | all but Device Sign-In and revocation | O2; operations correctly refused as `extension_required` (the agent declares no Operations extension) |
+| poppyseed suite → Manzanita | 34 passed, 16 failed, 49 skipped | O3, O4, O7, O8 |
+| our agent → pi-poppy company | 13 of 14 | O5 (11b passed once the issuer host was allowed) |
+| our suite → pi-poppy company | 45 passed, 28 failed, 18 skipped | pi-poppy's P1–P4, and the spec ambiguities below |
+| our agent → poppy-demo receiver | 11 of 11 | — |
+| our suite → poppy-demo | 43 passed, 2 failed, 46 skipped | the spec ambiguities below |
+
+### Root causes, and what was fixed here (`6828d6a`)
+
+- **O1 (high):** an operation past `proposed` answered `"expires_at": null`.
+  Operations §3 requires `expires_at` while proposed; only `confirmation` and
+  `result` are "null until". pi-poppy rejected a purchase that had succeeded.
+  An absent optional member is now omitted (both SDKs).
+- **O2 (high):** a client assertion had to name the endpoint called; RFC 7523
+  §3 allows the issuer or the token endpoint too. poppy-agent got
+  `invalid_client` at `/oauth/device` and `/oauth/revoke`. Any of the three is
+  accepted (both).
+- **O3 (medium):** a DPoP refusal at the token endpoint (`400`) carried no
+  `WWW-Authenticate: DPoP` (§4.3). It does (both).
+- **O4 (medium):** `/mcp` accepted a request that also carried
+  `?access_token=` (§4.3 MUST NOT). A token in the query is refused on every
+  route (both).
+- **O5 (medium, agent side):** the Mediated client refused an endpoint on the
+  `auth.issuer` host, which `poppy_domains` ties to the company. Allowed (both).
+- **O6 (our suite):** `token-in-url-refused` accepts any `4xx`;
+  `renew-signed-out` no longer requires the replaced token to stop at once (no
+  company MUST); API paths resolve at the OpenAPI API's origin; a Direct
+  Sign-In driver hook (`approve_authorization`) lets the suite sign in at a
+  company with no Device Sign-In (Python runner). The report still marks a
+  `400` with a DPoP challenge as a failure where the fixture expects `401`; an
+  RFC-level outcome is left for a later report format.
+- **O7 (low):** assertions may live at most 120 seconds (was 300, inclusive),
+  `jti` must have at least 16 characters (assertions and DPoP proofs), and an
+  unfetchable `client_id` is remembered for 30 seconds (both).
+- **O8 (spec ambiguity):** §7 "every change to either one adds a state
+  event": an agent reply is now framed by `working` and `idle` state events,
+  as poppy-demo does (both; the shared scenario and tests updated).
+- **O9 (demo):** Manzanita said "Here is the exchange." to an agent without
+  the Operations extension, with no operation; it now says so plainly
+  (`Turn.supports_operations`).
+
+### Reported upstream
+
+- **pi-poppy:** P1, operations deduplicated across users; P2, a browser assertion accepted at
+  `/oauth/token`; P3, no `WWW-Authenticate` on a replayed `jti`; P4, no
+  `resource_metadata` in the MCP `401` challenge.
+- **Spec ambiguities:** whether state events frame every reply (O8); whether a
+  renewed-away Session Token must stop at once; whether a DPoP refusal at a
+  resource is `400` or `401`.

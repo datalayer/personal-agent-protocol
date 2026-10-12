@@ -11,6 +11,7 @@ import { exportJWK, generateKeyPair, importJWK } from "jose";
 
 import {
   AuthorizationStateStores,
+  BrowserFormPosts,
   BrowserHandoffs,
   Clocks,
   DpopProofProviders,
@@ -37,7 +38,7 @@ export class MutableClock {
 }
 
 /** A personal agent's identity: its `client_id`, ES256 key, and published documents. */
-export async function agentIdentity({ domain, name, extensions = ["operations"], privateJwk } = {}) {
+export async function agentIdentity({ domain, name, extensions = ["operations"], privateJwk, kid = "key-1" } = {}) {
   let privateKey;
   let publicJwk;
   if (privateJwk) {
@@ -59,7 +60,7 @@ export async function agentIdentity({ domain, name, extensions = ["operations"],
     extensions: Object.fromEntries(extensions.map((extension) => [extension, { version: "1" }])),
   };
   const jwks = {
-    keys: [{ kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y, kid: "key-1", use: "sig", alg: "ES256" }],
+    keys: [{ kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y, kid, use: "sig", alg: "ES256" }],
   };
   return {
     domain,
@@ -68,7 +69,7 @@ export async function agentIdentity({ domain, name, extensions = ["operations"],
     metadata,
     jwks,
     documents: { "/agent.json": metadata, "/jwks.json": jwks },
-    signer: new JoseSigner({ privateKey, algorithm: "ES256", keyId: "key-1" }),
+    signer: new JoseSigner({ privateKey, algorithm: "ES256", keyId: kid }),
   };
 }
 
@@ -202,9 +203,11 @@ export class ScriptedBrowser {
   constructor(fetch) {
     this.fetch = fetch;
     this.pages = [];
+    this.urls = [];
     this.requestId = undefined;
   }
   async open(authorizationUrl) {
+    this.urls.push(authorizationUrl.reveal());
     const response = await this.fetch(authorizationUrl.reveal(), { method: "GET" });
     const page = await response.text();
     this.pages.push(page);
@@ -226,8 +229,11 @@ export class ScriptedInput {
   }
 }
 
-/** A personal agent's Reactor host: its signer, DPoP keys, clock, stores, browser, input. */
-export async function agentHost({ identity, fetch, clock, answers = [] }) {
+/**
+ * A personal agent's Reactor host: its signer, DPoP keys, clock, stores, browser, input,
+ * and, when given, its own controlled browser (`pap.browserFormPost`).
+ */
+export async function agentHost({ identity, fetch, clock, answers = [], controlledBrowser }) {
   const state = new Map();
   const tokens = new Map();
   const keys = new Map();
@@ -280,6 +286,9 @@ export async function agentHost({ identity, fetch, clock, answers = [] }) {
         },
         { point: BrowserHandoffs, value: browser, options: { id: "browser" } },
         { point: ProtectedInputs, value: input, options: { id: "trusted-input" } },
+        ...(controlledBrowser === undefined
+          ? []
+          : [{ point: BrowserFormPosts, value: controlledBrowser, options: { id: "controlled-browser" } }]),
       ],
     },
   ]);

@@ -17,6 +17,7 @@ import {
 } from "@datalayer/reactor";
 
 import { AgentIdentityClient } from "../identity.js";
+import { createResolvingFetch } from "../node-network.js";
 import type { ClientMetadata, JsonWebKeySet } from "../models.js";
 import {
   Clocks,
@@ -32,12 +33,14 @@ import {
   CompanyAccounts,
   CompanyAgents,
   CompanyApis,
+  CompanyMcps,
   CompanyStores,
   MemoryCompanyStore,
-  MemoryReplayCache,
   OperationExecutors,
   ReplayCaches,
+  StoreReplayCache,
   type ClientResolver,
+  type CompanyStore,
 } from "./points.js";
 import { CompanyService, type CompanyConfig } from "./service.js";
 
@@ -83,16 +86,25 @@ export class ReactorClock implements Clock {
   }
 }
 
-/** The company side's defaults: memory store and replay cache, open policy, HTTPS identity. */
-export function createCompanyDefaultsPlugin(resolver: ClientResolver, clock?: Clock) {
+/**
+ * The company side's defaults: memory store, a replay cache in the store, open policy,
+ * HTTPS identity. `store` reads the company's contributed store at each call: the default
+ * replay cache keeps its identifiers wherever the company keeps its records.
+ */
+export function createCompanyDefaultsPlugin(
+  resolver: ClientResolver,
+  clock: Clock | undefined,
+  store: () => CompanyStore,
+) {
   return definePlugin({
     name: "personal-agent-protocol.company",
-    version: "0.6.0",
+    version: "0.10.0",
     contributionPoints: [
       CompanyStores,
       CompanyAccounts,
       CompanyAgents,
       CompanyApis,
+      CompanyMcps,
       OperationExecutors,
       ClientPolicies,
       ClientResolvers,
@@ -104,7 +116,8 @@ export function createCompanyDefaultsPlugin(resolver: ClientResolver, clock?: Cl
         new MemoryCompanyStore(clock === undefined ? {} : { clock }),
         { id: "memory", order: 100 },
       ),
-      contribution(ReplayCaches, new MemoryReplayCache(), { id: "memory", order: 100 }),
+      // The replay cache is the contributed store's: a shared store, a shared cache.
+      contribution(ReplayCaches, new StoreReplayCache(store), { id: "store", order: 100 }),
       contribution(ClientPolicies, new AllowEveryAgent(), { id: "allow", order: 100 }),
       contribution(ClientResolvers, resolver, { id: "https", order: 100 }),
     ],
@@ -129,8 +142,18 @@ export function buildCompany(
 ): CompanyService {
   const resolver = new IdentityClientResolver();
   const clock = new ReactorClock();
-  const { plugins = [], ...core } = options;
-  const reactor = buildPapReactor(core, [createCompanyDefaultsPlugin(resolver, clock), ...plugins]);
+  const { plugins = [], ...given } = options;
+  // On Node the company fetches agents' metadata over its resolving transport: every
+  // address vetted, the vetted one dialled (SSRF, DNS rebinding). A given `fetch` is the
+  // caller's own (a test network, an egress proxy) and replaces it.
+  const core: PapCoreOptions = given.fetch === undefined ? { ...given, fetch: createResolvingFetch() } : given;
+  let built: ReactorPlatformView | undefined;
+  const store = (): CompanyStore => {
+    if (built === undefined) throw new Error("the company's Reactor is not built yet");
+    return firstContribution(built, CompanyStores, "company store");
+  };
+  const reactor = buildPapReactor(core, [createCompanyDefaultsPlugin(resolver, clock, store), ...plugins]);
+  built = reactor;
   resolver.bind(new AgentIdentityClient({ reactor }));
   clock.bind(reactor);
   return new CompanyService({ config, reactor });
@@ -139,7 +162,7 @@ export function buildCompany(
 export * from "./points.js";
 export * from "./service.js";
 export { verifyAssertion, type VerifyAssertionOptions } from "./verify.js";
-export { checkStore, recordSamples, StoreConformanceError } from "./testing.js";
+export { checkReplayCache, checkStore, recordSamples, StoreConformanceError } from "./testing.js";
 export {
   byHost,
   companyRequestListener,

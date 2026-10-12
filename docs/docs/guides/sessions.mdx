@@ -46,7 +46,7 @@ async with httpx.AsyncClient() as http:
         pairwise_user_id=pairwise_user_id,
         issuer="https://auth.company.example",
         token_endpoint="https://auth.company.example/oauth/token",
-        tenant_id="local-user-42",
+        tenant_id="application-42",
     )
 
     renewed = await sessions.renew(
@@ -54,7 +54,7 @@ async with httpx.AsyncClient() as http:
         pairwise_user_id=pairwise_user_id,
         issuer="https://auth.company.example",
         token_endpoint="https://auth.company.example/oauth/token",
-        tenant_id="local-user-42",
+        tenant_id="application-42",
         session_id=token.session_id,
     )
 ```
@@ -83,7 +83,7 @@ const token = await sessions.start({
   pairwiseUserId,
   issuer: 'https://auth.company.example',
   tokenEndpoint: 'https://auth.company.example/oauth/token',
-  tenantId: 'local-user-42',
+  tenantId: 'application-42',
   signal: abortController.signal,
 });
 
@@ -92,7 +92,7 @@ const renewed = await sessions.renew({
   pairwiseUserId,
   issuer: 'https://auth.company.example',
   tokenEndpoint: 'https://auth.company.example/oauth/token',
-  tenantId: 'local-user-42',
+  tenantId: 'application-42',
   sessionId: token.sessionId,
 });
 ```

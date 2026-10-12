@@ -171,14 +171,20 @@ export interface RateLimitBudget {
 }
 
 interface Bucket {
-  tokens: number;
-  updated: number;
+  /** When the next request may go if the burst is spent (GCRA's theoretical arrival time). */
+  due: number;
   blockedUntil: number;
 }
 
 /**
- * Default `pap.rateLimitBudget`: per-company token buckets in one process.
+ * Default `pap.rateLimitBudget`: per-company budgets in one process.
  * No rate limit unless `rate` is set: only the companies' own pauses are shared.
+ *
+ * Each caller reserves its turn when it asks — the turn counts every caller ahead of it
+ * and the company's pause (`defer`) — and sleeps until then, so concurrent callers never
+ * exceed the rate, and a turn further than `maxWait` seconds away is refused at once with
+ * `rate_limited` and `retry_after`, however many callers are queued (the generic cell
+ * rate algorithm).
  */
 export class SharedRateLimitBudget implements RateLimitBudget {
   readonly rate: number | undefined;
@@ -187,7 +193,6 @@ export class SharedRateLimitBudget implements RateLimitBudget {
   readonly #sleep: (seconds: number) => Promise<void>;
   readonly #monotonic: () => number;
   readonly #buckets = new Map<string, Bucket>();
-  readonly #queues = new Map<string, Promise<void>>();
 
   constructor(
     options: {
@@ -205,48 +210,37 @@ export class SharedRateLimitBudget implements RateLimitBudget {
     this.burst = options.burst ?? 1;
     if (!Number.isInteger(this.burst) || this.burst < 1) throw new RangeError("burst must be at least 1");
     this.maxWait = options.maxWait ?? 10;
-    this.#sleep = options.sleep ?? ((seconds) => new Promise((resolve) => setTimeout(resolve, seconds * 1000)));
+    // Rounded up to whole milliseconds (timers truncate): never sooner than the turn.
+    this.#sleep = options.sleep ?? ((seconds) => new Promise((resolve) => setTimeout(resolve, Math.ceil(seconds * 1000))));
     this.#monotonic = options.monotonic ?? (() => performance.now() / 1000);
   }
 
   #bucket(key: string, now: number): Bucket {
     let bucket = this.#buckets.get(key);
     if (bucket === undefined) {
-      bucket = { tokens: this.burst, updated: now, blockedUntil: 0 };
+      bucket = { due: now, blockedUntil: 0 };
       this.#buckets.set(key, bucket);
     }
-    if (this.rate !== undefined) {
-      bucket.tokens = Math.min(this.burst, bucket.tokens + (now - bucket.updated) * this.rate);
-    }
-    bucket.updated = now;
     return bucket;
   }
 
-  acquire(key: string): Promise<void> {
-    // One waiter at a time per company, in arrival order.
-    const previous = this.#queues.get(key) ?? Promise.resolve();
-    const next = previous.then(() => this.#acquire(key));
-    this.#queues.set(key, next.catch(() => undefined));
-    return next;
-  }
-
-  async #acquire(key: string): Promise<void> {
+  async acquire(key: string): Promise<void> {
+    // Reserved without awaiting anything: callers take their turns in arrival order.
     const now = this.#monotonic();
-    let bucket = this.#bucket(key, now);
-    let wait = Math.max(0, bucket.blockedUntil - now);
-    if (this.rate !== undefined && bucket.tokens < 1) {
-      wait = Math.max(wait, (1 - bucket.tokens) / this.rate);
-    }
+    const bucket = this.#bucket(key, now);
+    let turn = Math.max(now, bucket.blockedUntil);
+    const due = Math.max(bucket.due, turn);
+    const interval = this.rate === undefined ? 0 : 1 / this.rate;
+    if (this.rate !== undefined) turn = Math.max(turn, due - (this.burst - 1) * interval);
+    const wait = turn - now;
     if (wait > this.maxWait) {
       throw new TransportError("rate_limited", "The company's shared request budget is exhausted", {
         details: { retry_after: String(Math.ceil(wait)) },
       });
     }
-    if (wait > 0) {
-      await this.#sleep(wait);
-      bucket = this.#bucket(key, this.#monotonic());
-    }
-    if (this.rate !== undefined) bucket.tokens -= 1;
+    if (this.rate !== undefined) bucket.due = due + interval;
+    // A timer may fire early (Node's loop clock lags a busy iteration): sleep the rest.
+    for (let left = wait; left > 0; left = turn - this.#monotonic()) await this.#sleep(left);
   }
 
   async defer(key: string, seconds: number): Promise<void> {
@@ -261,6 +255,43 @@ export function budgetKey(url: URL | string): string {
   const parsed = new URL(url);
   const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
   return `${parsed.protocol}//${parsed.hostname.toLowerCase()}:${port}`;
+}
+
+/**
+ * At most `maxBytes + 1` bytes of a body: the rest is never read (the stream is
+ * cancelled), so a caller's size check refuses a larger body without it filling memory.
+ */
+export async function readLimited(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total <= maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    if (total > maxBytes) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  const kept = Math.min(total, maxBytes + 1);
+  const body = new Uint8Array(kept);
+  let offset = 0;
+  for (const chunk of chunks) {
+    if (offset >= kept) break;
+    const part = chunk.subarray(0, kept - offset);
+    body.set(part, offset);
+    offset += part.byteLength;
+  }
+  return body;
+}
+
+/** `readLimited`, as text. */
+export async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
+  return new TextDecoder().decode(await readLimited(response, maxBytes));
 }
 
 /**
@@ -315,24 +346,35 @@ export async function readBoundedBody(
   return new TextDecoder("utf-8", { fatal: false }).decode(body);
 }
 
-/** Race `promise` against the time left of a `timeoutMs` budget started at `startedAt`. */
+/**
+ * Start a fetch with its own `AbortSignal` and abort it once the `timeoutMs` budget
+ * started at `startedAt` runs out, or as soon as the caller's `signal` aborts: the
+ * request itself is torn down, not merely no longer awaited.
+ */
 export async function withinDeadline<T>(
-  promise: Promise<T>,
-  options: { readonly timeoutMs: number; readonly startedAt: number },
+  start: (signal: AbortSignal) => Promise<T>,
+  options: { readonly timeoutMs: number; readonly startedAt: number; readonly signal?: AbortSignal },
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
+  const timedOut = new DiscoveryError("metadata_timeout", "Metadata fetch exceeded its time limit");
   const remaining = Math.max(0, options.timeoutMs - (Date.now() - options.startedAt));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const caller = options.signal;
+  const forward = () => controller.abort(caller?.reason);
+  if (caller?.aborted) forward();
+  else caller?.addEventListener("abort", forward, { once: true });
   try {
     return await Promise.race([
-      promise,
+      start(controller.signal),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new DiscoveryError("metadata_timeout", "Metadata fetch exceeded its time limit")),
-          remaining,
-        );
+        timer = setTimeout(() => {
+          controller.abort(timedOut);
+          reject(timedOut);
+        }, remaining);
       }),
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    caller?.removeEventListener("abort", forward);
   }
 }

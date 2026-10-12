@@ -31,6 +31,7 @@ The command groups are:
 | `pap operations`     | `show`, `approve`, `confirm`, `cancel` (Operations v1).                                 |
 | `pap requirements`   | `list` and `show` the normative requirement ledger.                                     |
 | `pap conformance`    | `run` the conformance suite (`--demo`, `--tls`) and `report` JSON or JUnit.             |
+| `pap commands`       | `list` and `run` the [live-session actions](#live-session-actions) by ID, as Studio and a REPL do. |
 | `pap exit-codes`     | List every exit code.                                                                   |
 
 Every protocol command is a thin adapter over the public SDK and prints either
@@ -86,7 +87,7 @@ revision or terms changed.
 | 3    | Not configured: no signing key, no `client_id` or `domain`, or an unknown Session.       |
 | 4    | Input required, but `--no-input` was given or no terminal is attached.                   |
 | 5    | Still pending: the user has not finished signing in before `--timeout`.                  |
-| 6    | Not approved: no approval for this exact operation ID and revision, or the terms changed. |
+| 6    | Not approved: no approval for this exact operation ID and revision, or the terms changed; or a live-session action the host's approval surface did not approve. |
 | 130  | Interrupted.                                                                             |
 
 ## Conformance
@@ -214,12 +215,111 @@ def plugin() -> tuple[PluginManifest, AcmePapCli]:
 ```
 
 Use `provide_cli` for command groups resolved when a command-line process
-starts. Use `provide_slash_commands` for safe actions that run inside a live
-Studio or REPL session. The PAP plugin currently registers
-`pap.company.discover` in that live registry. Reactor owns its enable, disable,
+starts. Use `provide_slash_commands` for actions that run inside a live Studio
+or REPL session: the PAP plugin registers its [live-session
+actions](#live-session-actions) there. Reactor owns their enable, disable,
 collision, and unregister lifecycle, so a command disappears when its plugin
 does.
 
 Keep extension command IDs globally namespaced, and call public SDK services
 from command handlers. Do not couple an extension to
 `personal_agent_protocol.cli_plugin` implementation details.
+
+## Live-session actions
+
+The PAP plugin registers a set of actions, by namespaced ID, in whichever
+registry a host passes to `provide_slash_commands`: Reactor's command registry
+(Studio's palette, and `pap commands run`), or a REPL's
+`SlashCommandRegistry`. Every surface calls one implementation — the same
+coroutine as the `pap` command of the same name — and gets the same versioned
+JSON as that command's `--json`.
+
+| Action | `pap` command | Arguments | Runs |
+| --- | --- | --- | --- |
+| `pap.company.discover` | `company discover` | `domain` | at once |
+| `pap.sessions.show` | `sessions show` | `[session_id]` | at once |
+| `pap.conversations.events` | `conversations events` | `session_id conversation_id [cursor]` | at once |
+| `pap.conversations.follow` | `conversations follow` | `session_id conversation_id [last_event_id] [max_events]` | at once (at most 500 events) |
+| `pap.operations.show` | `operations show` | `session_id operation_id` | at once |
+| `pap.requirements.list` | `requirements list` | `[role] [level] [status] [source]` | at once |
+| `pap.requirements.show` | `requirements show` | `requirement_id` | at once |
+| `pap.operations.cancel` | `operations cancel` | `session_id operation_id` | after the host's approval surface says yes |
+| `pap.sessions.end` | `sessions end` | `session_id` | after the host's approval surface says yes |
+| `pap.auth.disconnect` | `auth disconnect` | `session_id` | after the host's approval surface says yes |
+
+```bash
+pap commands list
+pap commands run pap.sessions.show
+pap commands run pap.operations.show ses_… exc_5Rt2           # by position
+pap commands run pap.requirements.list level='MUST NOT' role=company
+pap commands run pap.sessions.end ses_…                      # exit code 6: approval_required
+```
+
+Arguments are text: by position, as `name=value`, as a JSON object (a REPL
+line or Studio), or as a mapping (Studio). An unknown name, a missing required
+argument, or an unknown action is a usage error (exit code 2). An action runs
+in the CLI's personal agent for the configured tenant, sees only that tenant's
+Sessions, and never asks for input.
+
+What is not an action stays CLI-only: configuration (`pap config`), raw
+credential entry (`pap agent key import`, `pap auth direct|device|mediated`),
+starting and renewing Sessions, sending messages, calling APIs, and approving
+or confirming operations, which keep their own exact-ID-and-revision prompt.
+
+### The approval surface
+
+The three actions that change or end what the user holds run only where the
+host contributes an approval surface to the personal agent's Reactor
+(`pap.approvalSurface`, for Python hosts). It receives an `ApprovalRequest` —
+the action's ID and name, a plain-words `summary`, its arguments (IDs, never a
+credential), and the tenant — before anything is done, and only `True`
+approves:
+
+| Refusal | When | Exit code |
+| --- | --- | --- |
+| `approval_required` | No approval surface is contributed: use the `pap` command itself. | 6 |
+| `not_approved` | The surface answered anything but `True`. | 6 |
+| `approval_failed` | The surface raised; its error is not repeated. | 6 |
+| `approval_surface_ambiguous` | Two surfaces at the winning order. | 6 |
+
+A surface must ask the user on the host's own trusted UI: never a model, never
+a message in a conversation. Studio, for example, contributes its confirmation
+dialog and runs actions from its palette:
+
+```python
+import asyncio
+
+from reactor import PluginManifest, PluginPlatform
+from reactor.slash import SlashCommandRegistry
+
+from personal_agent_protocol import APPROVAL_SURFACES, ApprovalRequest
+from personal_agent_protocol.cli_host import local_host
+from personal_agent_protocol.cli_plugin import MANIFEST, PapCliPlugin
+
+
+class StudioApproval:
+    """Studio's own confirmation dialog: the user, not a model, answers."""
+
+    async def approve(self, request: ApprovalRequest) -> bool:
+        return await studio.confirm(title=request.action_name, text=request.summary)
+
+    def provide_contributions(self, contributions) -> None:
+        contributions.contribute(APPROVAL_SURFACES, self, contribution_id="studio", order=50)
+
+
+host = local_host(plugins=[(PluginManifest(name="studio-approval", version="1"), StudioApproval())])
+pap = PapCliPlugin(host=host)
+platform = PluginPlatform()
+platform.register_plugin(MANIFEST, pap)  # the palette: Reactor's command registry
+
+repl = SlashCommandRegistry()
+pap.provide_slash_commands(repl)  # a REPL: /pap.sessions.show, /pap.sessions.end …
+
+
+async def main() -> None:
+    shown = await platform.execute_command("pap.sessions.show")
+    print(shown["sessions"])
+
+
+asyncio.run(main())
+```

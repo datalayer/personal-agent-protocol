@@ -13,6 +13,7 @@ import typer
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 from typer.testing import CliRunner
 
+from personal_agent_protocol.actions import ACTIONS
 from personal_agent_protocol.cli import create_app
 from personal_agent_protocol.cli_plugin import MANIFEST, PapCliPlugin
 from personal_agent_protocol.config import ConfigStore
@@ -197,14 +198,15 @@ def test_network_commands_redact_discovery_error_details(
     assert "account-token-secret" not in result.output
 
 
-def test_namespaced_session_command_follows_plugin_lifecycle(tmp_path: Path) -> None:
+def test_namespaced_session_commands_follow_plugin_lifecycle(tmp_path: Path) -> None:
     _, _, _, platform = cli(tmp_path)
 
-    assert [command.id for command in platform.list_commands()] == ["pap.company.discover"]
+    assert [command.id for command in platform.list_commands()] == list(ACTIONS)
+    assert all(command.id.startswith("pap.") for command in platform.list_commands())
     platform.disable_plugin(MANIFEST.name)
     assert platform.list_commands() == []
     platform.enable_plugin(MANIFEST.name)
-    assert [command.id for command in platform.list_commands()] == ["pap.company.discover"]
+    assert [command.id for command in platform.list_commands()] == list(ACTIONS)
     platform.unregister_plugin(MANIFEST.name)
     assert platform.list_commands() == []
 
@@ -232,7 +234,6 @@ def test_command_collision_keeps_original_owner(tmp_path: Path) -> None:
         ClashingPlugin(),
     )
 
-    described = platform.describe_commands()
-    assert len(described) == 1
-    assert described[0]["id"] == "pap.company.discover"
-    assert described[0]["plugin"] == MANIFEST.name
+    described = {entry["id"]: entry["plugin"] for entry in platform.describe_commands()}
+    assert set(described) == set(ACTIONS)
+    assert described["pap.company.discover"] == MANIFEST.name

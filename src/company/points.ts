@@ -14,12 +14,16 @@
  * - `pap.company.clientPolicy` allows or blocks personal agents by `client_id`.
  * - `pap.company.clientResolver` fetches a personal agent's client metadata
  *   and JWKS (over HTTPS through `AgentIdentityClient` by default).
- * - `pap.company.replayCache` remembers assertion and proof IDs once.
+ * - `pap.company.replayCache` remembers assertion and proof IDs once: by default in
+ *   the contributed store (`StoreReplayCache`), so every replica sharing a durable
+ *   store shares the cache.
  * - `pap.company.api` answers the company's OpenAPI API (`/api/…`), its
  *   consequential calls proposing operations (`202`, Operations §4.1).
  * - `pap.company.mcp` answers the company's MCP server (`/mcp`), its tools
  *   proposing operations in `structuredContent` (§6, Operations §4.2).
  */
+
+import { createHash } from "node:crypto";
 
 import { defineContributionPoint } from "@datalayer/reactor";
 
@@ -30,7 +34,7 @@ import type {
   OperationResult,
 } from "../models.js";
 import type { SecretValue } from "../secret.js";
-import type { CompanyStore } from "./store.js";
+import { RecordKinds, type CompanyStore } from "./store.js";
 
 export * from "./store.js";
 
@@ -41,9 +45,25 @@ export interface Authenticated {
   readonly sentTo?: string;
 }
 
-/** The company's own accounts: credentials and second factors. */
+/** Who a Mediated Sign-In attempt comes from: the agent and its Session. */
+export interface SignInContext {
+  readonly clientId: string;
+  readonly sessionId: string;
+}
+
+/**
+ * The company's own accounts: credentials and second factors.
+ *
+ * The service limits Mediated Sign-In attempts itself (by account identifier, by agent
+ * and user, by Session, and wrong codes by account), but a directory MUST also throttle
+ * its own checks: it is the one place that sees every path to an account, and `context`
+ * says which agent and Session each attempt comes from (§4.7, a company MUST rate-limit).
+ */
 export interface AccountDirectory {
-  authenticate(credentials: Readonly<Record<string, SecretValue>>): Promise<Authenticated | undefined>;
+  authenticate(
+    credentials: Readonly<Record<string, SecretValue>>,
+    context: SignInContext,
+  ): Promise<Authenticated | undefined>;
   checkCode(codeReference: string, code: SecretValue): Promise<boolean>;
 }
 
@@ -152,16 +172,38 @@ export interface ReplayCache {
   markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean>;
 }
 
-/**
- * The default replay cache: one process, every ID kept.
- *
- * It keeps each expiry but never prunes on the wall clock: a company's clock
- * is a contribution, and an ID dropped early could be replayed.
- */
 const FIRST_SWEEP = 1024;
+/** A mark is kept a second past its expiry, so an identifier is refused until then, inclusive. */
+const INCLUSIVE_MS = 1000;
 
 /**
- * The default replay cache: one process, entries dropped after expiry.
+ * The default replay cache: one atomic `create` in the company's store per identifier.
+ *
+ * The identifier is kept (as its SHA-256) until a second after its `expiresAt`, so it is
+ * refused until its expiry, inclusive. The store is looked up at each call, the
+ * contributed `pap.company.store`: a durable store shared by every replica implies a
+ * replay cache shared by every replica, so a proof captured at one replica is refused at
+ * another, and after a restart. With the memory store it is one process, as that store is.
+ */
+export class StoreReplayCache implements ReplayCache {
+  readonly #store: () => CompanyStore;
+
+  constructor(store: () => CompanyStore) {
+    this.#store = store;
+  }
+
+  async markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean> {
+    const digest = createHash("sha256").update(key).digest("hex");
+    return this.#store().create(RecordKinds.replay, digest, {}, {
+      expiresAt: new Date(options.expiresAt.getTime() + INCLUSIVE_MS),
+    });
+  }
+}
+
+/**
+ * A replay cache in one process, entries dropped after expiry (not the default): for a
+ * verifier used on its own (`verifyAssertion`, `verifyDpopProof`); a company's default
+ * is `StoreReplayCache` over its store.
  *
  * An identifier is refused until its `expiresAt` by `clock` (the assertion or proof it
  * names is refused as expired after that). Expired entries are swept whenever the cache

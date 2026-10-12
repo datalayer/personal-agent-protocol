@@ -65,15 +65,27 @@ interface Entry {
   readonly expiresAt: Date | undefined;
 }
 
+/** The memory store sweeps expired records once it holds this many, then whenever it doubles. */
+const FIRST_SWEEP = 1024;
+
 /**
  * The default store: one process, nothing persisted, versions and expiry real.
  *
- * `clock` judges expiry; `buildCompany` binds the company's own clock.
+ * `clock` judges expiry; `buildCompany` binds the company's own clock. Expired records
+ * are swept whenever the store has doubled since the last sweep, so it holds about twice
+ * the records still alive, never every one ever written (replay IDs, sign-in attempts,
+ * pointers).
  */
 export class MemoryCompanyStore implements CompanyStore {
   readonly #entries = new Map<string, Entry>();
   #version = 0;
+  #sweepAt = FIRST_SWEEP;
   clock: Clock;
+
+  /** How many records it holds, expired ones not yet swept included. */
+  get size(): number {
+    return this.#entries.size;
+  }
 
   constructor(options: { readonly clock?: Clock } = {}) {
     this.clock = options.clock ?? { now: () => new Date() };
@@ -102,6 +114,13 @@ export class MemoryCompanyStore implements CompanyStore {
       version: String(this.#version),
       expiresAt: options.expiresAt === undefined ? undefined : new Date(options.expiresAt.getTime()),
     });
+    if (this.#entries.size >= this.#sweepAt) {
+      const now = this.clock.now().getTime();
+      for (const [slot, entry] of this.#entries) {
+        if (entry.expiresAt !== undefined && now >= entry.expiresAt.getTime()) this.#entries.delete(slot);
+      }
+      this.#sweepAt = Math.max(FIRST_SWEEP, 2 * this.#entries.size);
+    }
   }
 
   async get(kind: string, key: string): Promise<StoredRecord | undefined> {
@@ -181,6 +200,10 @@ export const RecordKinds = {
   operation: "operation",
   proposal: "proposal",
   browserCookie: "browser_cookie",
+  /** An assertion, proof, or browser-assertion ID seen once (the default replay cache). */
+  replay: "replay",
+  /** Failed sign-in attempts by one key, and until when it is locked out (§4.7). */
+  signInAttempts: "sign_in_attempts",
 } as const;
 
 export type RecordKind = (typeof RecordKinds)[keyof typeof RecordKinds];
@@ -294,7 +317,22 @@ export interface PendingMediated {
   readonly scopes: readonly string[];
   readonly codeReference: string;
   readonly expiresAt: string;
+  /** The `signInAttempts` keys the credentials counted against, cleared on success. */
+  readonly attemptKeys: readonly string[];
   readonly attempts: number;
+}
+
+/** An identifier seen once: the record is its presence, until its expiry. */
+export type ReplayMark = Record<string, never>;
+
+/**
+ * Failed sign-in attempts by one key (an account, a user, a Session, a code).
+ * `lockedUntil` is set once `failures` reach the company's limit: until then every
+ * attempt by the key is refused (`429`, `Retry-After`).
+ */
+export interface SignInAttempts {
+  readonly failures: number;
+  readonly lockedUntil?: string;
 }
 
 export interface StoredEvent {

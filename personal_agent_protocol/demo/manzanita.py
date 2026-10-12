@@ -42,6 +42,7 @@ from ..company import (
     OperationOutcomeUnknown,
     ProposedOperation,
     Reply,
+    SignInContext,
     ToolResult,
     Turn,
     build_company,
@@ -69,7 +70,9 @@ CONFIG = CompanyConfig(
 class ManzanitaAccounts:
     """Ada's account: her password, then a code sent to her email."""
 
-    async def authenticate(self, credentials: dict[str, SecretStr]) -> Authenticated | None:
+    async def authenticate(
+        self, credentials: dict[str, SecretStr], context: SignInContext
+    ) -> Authenticated | None:
         email = credentials.get("email")
         password = credentials.get("password")
         if (
@@ -304,6 +307,7 @@ class ManzanitaMcp:
 
 class ManzanitaPlugin:
     def __init__(self) -> None:
+        self.accounts = ManzanitaAccounts()
         self.executor = ExchangeExecutor()
         self.gift_wrap = GiftWrapExecutor()
         self.returns = ReturnExecutor()
@@ -311,7 +315,7 @@ class ManzanitaPlugin:
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
-        contribute(COMPANY_ACCOUNTS, ManzanitaAccounts(), contribution_id="accounts")
+        contribute(COMPANY_ACCOUNTS, self.accounts, contribution_id="accounts")
         contribute(COMPANY_AGENTS, ManzanitaAgent(), contribution_id="agent")
         contribute(OPERATION_EXECUTORS, self.executor, contribution_id="exchange")
         contribute(OPERATION_EXECUTORS, self.gift_wrap, contribution_id="gift-wrap")

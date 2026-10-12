@@ -51,6 +51,10 @@ MESSAGE_ID = "message_id"
 OPERATION = "operation"
 PROPOSAL = "proposal"
 BROWSER_COOKIE = "browser_cookie"
+#: An assertion, proof, or browser-assertion ID seen once (the default replay cache).
+REPLAY = "replay"
+#: Failed sign-in attempts by one key, and until when it is locked out (§4.7).
+SIGN_IN_ATTEMPTS = "sign_in_attempts"
 
 RECORD_KINDS = (
     SESSION,
@@ -69,6 +73,8 @@ RECORD_KINDS = (
     OPERATION,
     PROPOSAL,
     BROWSER_COOKIE,
+    REPLAY,
+    SIGN_IN_ATTEMPTS,
 )
 
 
@@ -120,16 +126,27 @@ class CompanyStore(Protocol):
     async def delete(self, kind: str, key: str) -> None: ...
 
 
+#: The memory store sweeps expired records once it holds this many, then whenever it doubles.
+_FIRST_SWEEP = 1024
+
+
 class MemoryCompanyStore:
     """The default store: one process, nothing persisted, versions and expiry real.
 
     `clock` judges expiry; `build_company` binds the company's own clock.
+    Expired records are swept whenever the store has doubled since the last
+    sweep, so it holds about twice the records still alive, never every one
+    ever written (replay IDs, sign-in attempts, pointers).
     """
 
     def __init__(self, clock: Clock | None = None) -> None:
         self.clock: Clock = clock or SystemClock()
         self._entries: dict[tuple[str, str], tuple[str, str, datetime | None]] = {}
         self._versions = itertools.count(1)
+        self._sweep_at = _FIRST_SWEEP
+
+    def __len__(self) -> int:
+        return len(self._entries)
 
     def _live(self, kind: str, key: str) -> tuple[str, str, datetime | None] | None:
         entry = self._entries.get((kind, key))
@@ -141,6 +158,14 @@ class MemoryCompanyStore:
     def _write(self, kind: str, key: str, value: JsonObject, expires_at: datetime | None) -> None:
         text = json.dumps(value, allow_nan=False, separators=(",", ":"))
         self._entries[(kind, key)] = (text, str(next(self._versions)), expires_at)
+        if len(self._entries) >= self._sweep_at:
+            now = self.clock.now()
+            self._entries = {
+                at: entry
+                for at, entry in self._entries.items()
+                if entry[2] is None or now < entry[2]
+            }
+            self._sweep_at = max(_FIRST_SWEEP, 2 * len(self._entries))
 
     async def get(self, kind: str, key: str) -> StoredRecord | None:
         entry = self._live(kind, key)
@@ -527,6 +552,8 @@ class PendingMediated:
     scopes: tuple[str, ...]
     code_reference: str
     expires_at: datetime
+    #: The `SIGN_IN_ATTEMPTS` keys the credentials counted against, cleared on success.
+    attempt_keys: tuple[str, ...] = ()
     attempts: int = 0
 
     def to_json(self) -> JsonObject:
@@ -536,6 +563,7 @@ class PendingMediated:
             "scopes": list(self.scopes),
             "code_reference": self.code_reference,
             "expires_at": _time(self.expires_at),
+            "attempt_keys": list(self.attempt_keys),
             "attempts": self.attempts,
         }
 
@@ -547,6 +575,7 @@ class PendingMediated:
             scopes=tuple(value["scopes"]),
             code_reference=value["code_reference"],
             expires_at=_parse(value["expires_at"]),
+            attempt_keys=tuple(value["attempt_keys"]),
             attempts=value["attempts"],
         )
 
@@ -683,6 +712,39 @@ class SessionPointer:
         return cls(session_id=value["session_id"])
 
 
+@dataclass(frozen=True)
+class ReplayMark:
+    """An identifier seen once: the record is its presence, until its expiry."""
+
+    def to_json(self) -> JsonObject:
+        return {}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> ReplayMark:
+        if value:
+            raise ValueError("a replay mark has no members")
+        return cls()
+
+
+@dataclass(frozen=True)
+class SignInAttempts:
+    """Failed sign-in attempts by one key (an account, a user, a Session, a code).
+
+    `locked_until` is set once `failures` reach the company's limit: until
+    then every attempt by the key is refused (`429`, `Retry-After`).
+    """
+
+    failures: int = 0
+    locked_until: datetime | None = None
+
+    def to_json(self) -> JsonObject:
+        return {"failures": self.failures, "locked_until": _maybe_time(self.locked_until)}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> SignInAttempts:
+        return cls(failures=value["failures"], locked_until=_maybe_parse(value["locked_until"]))
+
+
 #: Each kind's record type: `to_json()` writes it, `from_json()` reads it back.
 RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     SESSION: StoredSession.from_json,
@@ -701,4 +763,6 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     OPERATION: StoredOperation.from_json,
     PROPOSAL: OperationProposal.from_json,
     BROWSER_COOKIE: SessionPointer.from_json,
+    REPLAY: ReplayMark.from_json,
+    SIGN_IN_ATTEMPTS: SignInAttempts.from_json,
 }

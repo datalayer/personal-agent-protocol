@@ -36,7 +36,9 @@ import {
   type PendingAuthorization,
   type PendingDevice,
   type PendingMediated,
+  type ReplayMark,
   type SessionPointer,
+  type SignInAttempts,
   type StoredConversation,
   type StoredOperation,
   type StoredSession,
@@ -160,6 +162,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       scopes: ["a"],
       codeReference: "ref",
       expiresAt: later,
+      attemptKeys: ["k1", "k2"],
       attempts: 2,
     } satisfies PendingMediated,
     [RecordKinds.conversation]: {
@@ -184,6 +187,8 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
     } satisfies StoredOperation,
     [RecordKinds.proposal]: { operationId: "op_1" } satisfies OperationProposal,
     [RecordKinds.browserCookie]: { sessionId: "ses_1" } satisfies SessionPointer,
+    [RecordKinds.replay]: {} satisfies ReplayMark,
+    [RecordKinds.signInAttempts]: { failures: 3, lockedUntil: later } satisfies SignInAttempts,
   };
   return records as Readonly<Record<string, JsonObject>>;
 }

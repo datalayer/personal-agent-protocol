@@ -287,7 +287,7 @@
       "typescript": "ReplayCaches",
       "contract": "ReplayCache",
       "members": ["mark_once"],
-      "default": {"python": "memory", "typescript": "memory"},
+      "default": {"python": "store", "typescript": "store"},
       "resolution": "single",
       "tenant": null
     },

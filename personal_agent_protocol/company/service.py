@@ -48,6 +48,7 @@ import hashlib
 import hmac
 import html
 import json
+import math
 from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -103,6 +104,7 @@ from .points import (
     OperationOutcomeUnknown,
     ReplayCache,
     Reply,
+    SignInContext,
     Turn,
 )
 from .store import (
@@ -122,6 +124,7 @@ from .store import (
     PROPOSAL,
     SESSION,
     SESSION_TOKEN,
+    SIGN_IN_ATTEMPTS,
     USER_CODE,
     AccountAgent,
     AccountFamily,
@@ -137,6 +140,7 @@ from .store import (
     PendingDevice,
     PendingMediated,
     SessionPointer,
+    SignInAttempts,
     StoredConversation,
     StoredEvent,
     StoredOperation,
@@ -235,6 +239,12 @@ class CompanyConfig:
     operation_lifetime: timedelta = timedelta(minutes=15)
     device_interval: int = 5
     max_code_attempts: int = 3
+    #: Failed Mediated Sign-In attempts (credentials or codes) a key may make before it
+    #: is locked out: an account identifier, an agent's user, a Session, an account's codes.
+    max_sign_in_failures: int = 5
+    #: How long the first lockout lasts; each failure past the limit doubles it (at most a
+    #: day), and the count is forgotten once a key has failed nothing for this long.
+    sign_in_lockout: timedelta = timedelta(minutes=15)
     custom_scopes: Mapping[str, str] = field(default_factory=dict)
     web: bool = False
     #: A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it.
@@ -253,6 +263,8 @@ class CompanyConfig:
             raise ValueError("consent_page must contain {request_id}")
         if any(scope not in self.scopes for scope in self.write_scopes):
             raise ValueError("write_scopes must be among scopes")
+        if self.max_sign_in_failures < 1 or self.sign_in_lockout <= timedelta(0):
+            raise ValueError("sign-in attempts need a positive limit and lockout")
         if self.operations and not self.write_scopes:
             # Confirming an operation needs a write scope: without one, any signed-in
             # Session, whatever it was granted, could confirm (Operations §3.3).
@@ -1433,6 +1445,90 @@ class CompanyService:
             raise _RefusedError(401, "invalid_dpop_proof")
         return key, session
 
+    # Mediated Sign-In attempt limits (§4.7: a company MUST rate-limit attempts) ---------
+
+    def _attempt_keys(
+        self, session: IssuedSession, credentials: Mapping[str, object]
+    ) -> tuple[str, ...]:
+        """What a credential attempt counts against: the account, the agent's user, the Session.
+
+        The account is named by the declared fields that are not secret (an
+        email, a username), normalized; its password is never part of a key.
+        """
+
+        keys = [
+            _composite("user", session.client_id, session.pairwise_user_id),
+            _composite("session", session.session_id),
+        ]
+        named = [
+            str(credentials.get(name, "")).strip().casefold()
+            for name, _, secret in self.config.mediated_fields
+            if not secret
+        ]
+        if any(named):
+            keys.insert(0, _composite("account", *named))
+        return tuple(keys)
+
+    @staticmethod
+    def _code_key(account_id: str) -> str:
+        return _composite("code", account_id)
+
+    async def _locked_for(self, keys: Sequence[str]) -> int | None:
+        """Seconds until every key may try again, or `None` when none is locked out."""
+
+        now = self._now()
+        waits = []
+        for key in keys:
+            attempts = await self._read(SIGN_IN_ATTEMPTS, key, SignInAttempts.from_json)
+            if attempts is not None and attempts.locked_until is not None:
+                if now < attempts.locked_until:
+                    waits.append((attempts.locked_until - now).total_seconds())
+        return max(1, math.ceil(max(waits))) if waits else None
+
+    async def _attempt_failed(self, keys: Sequence[str]) -> None:
+        """Count one failure against each key; at the limit, lock it out, doubling each time."""
+
+        config = self.config
+        for key in keys:
+            for _ in range(_CAS_ATTEMPTS):
+                now = self._now()
+                entry = await self.store.get(SIGN_IN_ATTEMPTS, key)
+                before = (
+                    SignInAttempts() if entry is None else SignInAttempts.from_json(entry.value)
+                )
+                failures = before.failures + 1
+                locked_until = before.locked_until
+                if failures >= config.max_sign_in_failures:
+                    over = min(failures - config.max_sign_in_failures, 7)
+                    locked_until = now + min(config.sign_in_lockout * 2**over, timedelta(days=1))
+                after = SignInAttempts(failures=failures, locked_until=locked_until)
+                # Forgotten once the key has failed nothing for a lockout's length.
+                expires_at = max(now, locked_until or now) + config.sign_in_lockout
+                if entry is None:
+                    written = await self.store.create(
+                        SIGN_IN_ATTEMPTS, key, after.to_json(), expires_at=expires_at
+                    )
+                else:
+                    written = await self.store.replace(
+                        SIGN_IN_ATTEMPTS, key, entry.version, after.to_json(), expires_at=expires_at
+                    )
+                if written:
+                    break
+            else:
+                raise _RefusedError(503, "temporarily_unavailable")
+
+    async def _attempts_cleared(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            await self.store.delete(SIGN_IN_ATTEMPTS, key)
+
+    @staticmethod
+    def _rate_limited(retry_after: int) -> CompanyResponse:
+        return CompanyResponse(
+            429,
+            {"error": "rate_limited"},
+            {"Retry-After": str(retry_after), "Cache-Control": "no-store"},
+        )
+
     async def _mediated(self, request: CompanyRequest) -> CompanyResponse:
         _, session = await self._caller(request)
         body = loads_strict(request.body) if request.body else {}
@@ -1444,17 +1540,32 @@ class CompanyService:
         if not granted or any(s not in self.config.scopes for s in granted):
             # Missing, unknown, or unavailable scopes are refused, never narrowed (§4.4).
             raise _RefusedError(400, "invalid_scope")
+        keys = self._attempt_keys(session, credentials)
+        locked = await self._locked_for(keys)
+        if locked is not None:
+            # Locked out: the credentials are not even checked (§4.2, `rate_limited`).
+            credentials.clear()
+            return self._rate_limited(locked)
         accounts = cast(
             AccountDirectory, first_contribution(self.reactor, COMPANY_ACCOUNTS, "accounts")
         )
         secrets = {name: SecretStr(str(value)) for name, value in credentials.items()}
         credentials.clear()
-        authenticated = await accounts.authenticate(secrets)
+        authenticated = await accounts.authenticate(
+            secrets, SignInContext(client_id=session.client_id, session_id=session.session_id)
+        )
         secrets.clear()
         if authenticated is None:
+            await self._attempt_failed(keys)
             return CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+        code_key = self._code_key(authenticated.account_id)
         if authenticated.code_reference is None:
+            await self._attempts_cleared(keys)
             return await self._signed_in_body(session, authenticated.account_id, granted)
+        locked = await self._locked_for((code_key,))
+        if locked is not None:
+            # Too many wrong codes for this account: no new code until the lockout ends.
+            return self._rate_limited(locked)
         sign_in_id = self._id("si")
         expires_at = self._now() + timedelta(minutes=5)
         await self.store.put(
@@ -1466,6 +1577,7 @@ class CompanyService:
                 scopes=granted,
                 code_reference=authenticated.code_reference,
                 expires_at=expires_at,
+                attempt_keys=keys,
             ).to_json(),
             expires_at=expires_at + _KEPT_EXPIRED,
         )
@@ -1489,6 +1601,12 @@ class CompanyService:
         if self._now() >= pending.expires_at:
             await self.store.delete(MEDIATED, sign_in_id)
             return CompanyResponse(200, {"status": "expired"}, {"Cache-Control": "no-store"})
+        failed = CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+        code_key = self._code_key(pending.account_id)
+        if await self._locked_for((code_key,)) is not None:
+            # The account's code budget is spent, whichever sign-in spent it.
+            await self.store.delete(MEDIATED, sign_in_id)
+            return failed
         body = loads_strict(request.body) if request.body else {}
         code = body.get("code") if isinstance(body, dict) else None
         accounts = cast(
@@ -1497,16 +1615,22 @@ class CompanyService:
         if not isinstance(code, str) or not await accounts.check_code(
             pending.code_reference, SecretStr(code)
         ):
-            # Every wrong code counts, however many replicas check them at once.
+            # Every wrong code counts, however many replicas check them at once: against
+            # this sign-in, and against the account across every sign-in started for it.
+            await self._attempt_failed((code_key,))
             counted = await self._change(
                 MEDIATED,
                 sign_in_id,
                 PendingMediated.from_json,
                 lambda current: replace(current, attempts=current.attempts + 1),
             )
-            if counted is None or counted[1].attempts >= self.config.max_code_attempts:
+            if (
+                counted is None
+                or counted[1].attempts >= self.config.max_code_attempts
+                or await self._locked_for((code_key,)) is not None
+            ):
                 await self.store.delete(MEDIATED, sign_in_id)
-                return CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+                return failed
             return CompanyResponse(
                 200,
                 {
@@ -1520,8 +1644,9 @@ class CompanyService:
         # One use: of two right codes sent at once, only the one that takes it signs in.
         taken = await self.store.take(MEDIATED, sign_in_id)
         if taken is None:
-            return CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+            return failed
         completed = PendingMediated.from_json(taken)
+        await self._attempts_cleared((*completed.attempt_keys, code_key))
         return await self._signed_in_body(session, completed.account_id, completed.scopes)
 
     async def _signed_in_body(

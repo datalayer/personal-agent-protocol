@@ -35,10 +35,11 @@ import {
   CompanyMcps,
   CompanyStores,
   MemoryCompanyStore,
-  MemoryReplayCache,
   OperationExecutors,
   ReplayCaches,
+  StoreReplayCache,
   type ClientResolver,
+  type CompanyStore,
 } from "./points.js";
 import { CompanyService, type CompanyConfig } from "./service.js";
 
@@ -84,8 +85,16 @@ export class ReactorClock implements Clock {
   }
 }
 
-/** The company side's defaults: memory store and replay cache, open policy, HTTPS identity. */
-export function createCompanyDefaultsPlugin(resolver: ClientResolver, clock?: Clock) {
+/**
+ * The company side's defaults: memory store, a replay cache in the store, open policy,
+ * HTTPS identity. `store` reads the company's contributed store at each call: the default
+ * replay cache keeps its identifiers wherever the company keeps its records.
+ */
+export function createCompanyDefaultsPlugin(
+  resolver: ClientResolver,
+  clock: Clock | undefined,
+  store: () => CompanyStore,
+) {
   return definePlugin({
     name: "personal-agent-protocol.company",
     version: "0.10.0",
@@ -106,10 +115,8 @@ export function createCompanyDefaultsPlugin(resolver: ClientResolver, clock?: Cl
         new MemoryCompanyStore(clock === undefined ? {} : { clock }),
         { id: "memory", order: 100 },
       ),
-      contribution(ReplayCaches, new MemoryReplayCache(clock === undefined ? {} : { clock }), {
-        id: "memory",
-        order: 100,
-      }),
+      // The replay cache is the contributed store's: a shared store, a shared cache.
+      contribution(ReplayCaches, new StoreReplayCache(store), { id: "store", order: 100 }),
       contribution(ClientPolicies, new AllowEveryAgent(), { id: "allow", order: 100 }),
       contribution(ClientResolvers, resolver, { id: "https", order: 100 }),
     ],
@@ -135,7 +142,13 @@ export function buildCompany(
   const resolver = new IdentityClientResolver();
   const clock = new ReactorClock();
   const { plugins = [], ...core } = options;
-  const reactor = buildPapReactor(core, [createCompanyDefaultsPlugin(resolver, clock), ...plugins]);
+  let built: ReactorPlatformView | undefined;
+  const store = (): CompanyStore => {
+    if (built === undefined) throw new Error("the company's Reactor is not built yet");
+    return firstContribution(built, CompanyStores, "company store");
+  };
+  const reactor = buildPapReactor(core, [createCompanyDefaultsPlugin(resolver, clock, store), ...plugins]);
+  built = reactor;
   resolver.bind(new AgentIdentityClient({ reactor }));
   clock.bind(reactor);
   return new CompanyService({ config, reactor });

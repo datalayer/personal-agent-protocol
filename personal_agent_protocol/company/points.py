@@ -18,7 +18,9 @@ without touching the service:
 - `pap.company.clientPolicy` allows or blocks personal agents by `client_id`.
 - `pap.company.clientResolver` fetches a personal agent's client metadata
   and JWKS (over HTTPS through `AgentIdentityClient` by default).
-- `pap.company.replayCache` remembers assertion and proof IDs once.
+- `pap.company.replayCache` remembers assertion and proof IDs once: by
+  default in the contributed store (`StoreReplayCache`), so every replica
+  sharing a durable store shares the cache.
 - `pap.company.api` answers the company's OpenAPI API (`/api/…`), its
   consequential calls proposing operations (`202`, Operations §4.1).
 - `pap.company.mcp` answers the company's MCP server (`/mcp`): its tools,
@@ -29,9 +31,10 @@ without touching the service:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import hashlib
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import SecretStr
@@ -41,6 +44,7 @@ from ..models import ClientMetadata, JsonWebKeySet, Operation, OperationResult
 from ..reactor import Clock, SystemClock
 from .store import (
     DPOP,
+    REPLAY,
     AccountGrant,
     CompanyStore,
     IssuedCode,
@@ -75,11 +79,28 @@ class Authenticated:
     sent_to: str | None = None
 
 
+@dataclass(frozen=True)
+class SignInContext:
+    """Who a Mediated Sign-In attempt comes from: the agent and its Session."""
+
+    client_id: str
+    session_id: str
+
+
 @runtime_checkable
 class AccountDirectory(Protocol):
-    """The company's own accounts: credentials and second factors."""
+    """The company's own accounts: credentials and second factors.
 
-    async def authenticate(self, credentials: dict[str, SecretStr]) -> Authenticated | None: ...
+    The service limits Mediated Sign-In attempts itself (by account
+    identifier, by agent and user, by Session, and wrong codes by account),
+    but a directory MUST also throttle its own checks: it is the one place
+    that sees every path to an account, and `context` says which agent and
+    Session each attempt comes from (§4.7, a company MUST rate-limit).
+    """
+
+    async def authenticate(
+        self, credentials: dict[str, SecretStr], context: SignInContext
+    ) -> Authenticated | None: ...
 
     async def check_code(self, code_reference: str, code: SecretStr) -> bool: ...
 
@@ -198,7 +219,10 @@ _FIRST_SWEEP = 1024
 
 
 class MemoryReplayCache:
-    """The default replay cache: one process, entries dropped after expiry.
+    """A replay cache in one process, entries dropped after expiry (not the default).
+
+    For a verifier used on its own (`verify_assertion`, `verify_dpop_proof`);
+    a company's default is `StoreReplayCache` over its store.
 
     An identifier is refused until its `expires_at` by `clock` (the
     assertion or proof it names is refused as expired after that). Expired
@@ -226,6 +250,29 @@ class MemoryReplayCache:
             self._seen = {k: until for k, until in self._seen.items() if now < until}
             self._sweep_at = max(_FIRST_SWEEP, 2 * len(self._seen))
         return True
+
+
+#: A mark is kept a second past its expiry, so an identifier is refused until then, inclusive.
+_INCLUSIVE = timedelta(seconds=1)
+
+
+class StoreReplayCache:
+    """The default replay cache: one atomic `create` in the company's store per identifier.
+
+    The identifier is kept (as its SHA-256) until a second after its
+    `expires_at`, so it is refused until its expiry, inclusive. The store is
+    looked up at each call, the contributed `pap.company.store`: a durable
+    store shared by every replica implies a replay cache shared by every
+    replica, so a proof captured at one replica is refused at another, and
+    after a restart. With the memory store it is one process, as that store is.
+    """
+
+    def __init__(self, store: Callable[[], CompanyStore]) -> None:
+        self._store = store
+
+    async def mark_once(self, key: str, *, expires_at: datetime) -> bool:
+        digest = hashlib.sha256(key.encode()).hexdigest()
+        return await self._store().create(REPLAY, digest, {}, expires_at=expires_at + _INCLUSIVE)
 
 
 @dataclass(frozen=True)
@@ -343,6 +390,8 @@ __all__ = [
     "ProposedOperation",
     "ReplayCache",
     "Reply",
+    "SignInContext",
+    "StoreReplayCache",
     "StoredConversation",
     "StoredEvent",
     "StoredOperation",

@@ -56,8 +56,16 @@ model to enforce scopes.
 
 ## Required operational controls
 
-- One distributed replay cache for assertion and DPoP identifiers.
+- One distributed replay cache for assertion and DPoP identifiers: the
+  default keeps them in the company store, so a store shared by every replica
+  is enough.
 - Rate limits by personal-agent client, user, session, and account as relevant.
+  The reference company limits Mediated Sign-In attempts (`max_sign_in_failures`
+  failures per account identifier, agent's user, and Session, and wrong codes
+  per account across sign-ins, then `429 rate_limited` with `Retry-After`, the
+  lockout doubling from `sign_in_lockout`); the account directory must also
+  throttle its own checks, and is told which agent and Session each attempt
+  comes from (`SignInContext`).
 - `Cache-Control: no-store` on responses carrying credentials or codes.
 - Immediate sign-out propagation, or very short token lifetimes when that is
   not possible.
@@ -117,12 +125,12 @@ plugins contribute with a lower `order` to replace a default.
 | Point | Contract | Default |
 | --- | --- | --- |
 | `pap.company.store` | `CompanyStore`: versioned JSON records by kind and key (below) | `MemoryCompanyStore` (one process) |
-| `pap.company.accounts` | `AccountDirectory`: check credentials and second factors for Mediated Sign-In | None: the company contributes it |
+| `pap.company.accounts` | `AccountDirectory`: `authenticate(credentials, context)` and `check_code` for Mediated Sign-In; `context` (`SignInContext`) names the agent and Session, and the directory must throttle its own checks too | None: the company contributes it |
 | `pap.company.agent` | `CompanyAgent.respond(turn)`: replies, `authorization` requests, proposed operations | None: the company contributes it |
 | `pap.company.operationExecutor` | `OperationExecutor.perform(operation, account_id)`, one per `action`; `operation_id` is the idempotency key | None: an unperformable operation stays `in_progress` |
 | `pap.company.clientPolicy` | `ClientPolicy.allows(client_id)` | `AllowEveryAgent` |
 | `pap.company.clientResolver` | Verified client metadata and JWKS for a `client_id` | `IdentityClientResolver` over HTTPS |
-| `pap.company.replayCache` | `mark_once(key)` for assertion and proof IDs | `MemoryReplayCache` (one process) |
+| `pap.company.replayCache` | `mark_once(key)` for assertion and proof IDs | `StoreReplayCache`: an atomic `create` in `pap.company.store`, so a shared store is a shared cache |
 
 The PAP core points (`pap.clock`, `pap.randomSource`, and the rest) apply on
 the company side too.

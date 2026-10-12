@@ -100,6 +100,7 @@ import {
   type PendingDevice,
   type PendingMediated,
   type SessionPointer,
+  type SignInAttempts,
   type StoreWriteOptions,
   type StoredConversation,
   type StoredEvent,
@@ -143,6 +144,16 @@ export interface CompanyConfigOptions {
   readonly operationLifetimeSeconds?: number;
   readonly deviceInterval?: number;
   readonly maxCodeAttempts?: number;
+  /**
+   * Failed Mediated Sign-In attempts (credentials or codes) a key may make before it is
+   * locked out: an account identifier, an agent's user, a Session, an account's codes.
+   */
+  readonly maxSignInFailures?: number;
+  /**
+   * How long the first lockout lasts; each failure past the limit doubles it (at most a
+   * day), and the count is forgotten once a key has failed nothing for this long.
+   */
+  readonly signInLockoutSeconds?: number;
   readonly customScopes?: Readonly<Record<string, string>>;
   /** A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it. */
   readonly devicePage?: string;
@@ -182,6 +193,8 @@ export class CompanyConfig {
   readonly operationLifetimeSeconds: number;
   readonly deviceInterval: number;
   readonly maxCodeAttempts: number;
+  readonly maxSignInFailures: number;
+  readonly signInLockoutSeconds: number;
   readonly customScopes: Readonly<Record<string, string>>;
   readonly devicePage: string | undefined;
   readonly consentPage: string | undefined;
@@ -202,6 +215,8 @@ export class CompanyConfig {
     this.operationLifetimeSeconds = options.operationLifetimeSeconds ?? 15 * 60;
     this.deviceInterval = options.deviceInterval ?? 5;
     this.maxCodeAttempts = options.maxCodeAttempts ?? 3;
+    this.maxSignInFailures = options.maxSignInFailures ?? 5;
+    this.signInLockoutSeconds = options.signInLockoutSeconds ?? 15 * 60;
     this.customScopes = { ...(options.customScopes ?? {}) };
     this.devicePage = hostedPage("devicePage", options.devicePage);
     this.consentPage = hostedPage("consentPage", options.consentPage);
@@ -211,6 +226,9 @@ export class CompanyConfig {
     }
     if (this.writeScopes.some((scope) => !this.scopes.includes(scope))) {
       throw new RangeError("writeScopes must be among scopes");
+    }
+    if (!(Number.isInteger(this.maxSignInFailures) && this.maxSignInFailures >= 1 && this.signInLockoutSeconds > 0)) {
+      throw new RangeError("sign-in attempts need a positive limit and lockout");
     }
     if (this.operations && !this.writeScopes.length) {
       // Confirming an operation needs a write scope: without one, any signed-in Session,
@@ -1710,6 +1728,77 @@ export class CompanyService {
     return [key, session];
   }
 
+  // Mediated Sign-In attempt limits (§4.7: a company MUST rate-limit attempts) -----------
+
+  /**
+   * What a credential attempt counts against: the account, the agent's user, the Session.
+   * The account is named by the declared fields that are not secret (an email, a
+   * username), normalized; its password is never part of a key.
+   */
+  #attemptKeys(session: IssuedSession, credentials: Readonly<Record<string, unknown>>): string[] {
+    const keys = [
+      composite("user", session.clientId, session.pairwiseUserId),
+      composite("session", session.sessionId),
+    ];
+    const named = this.config.mediatedFields
+      .filter(([, , secret]) => !secret)
+      .map(([name]) => String(credentials[name] ?? "").trim().toLowerCase());
+    if (named.some(Boolean)) keys.unshift(composite("account", ...named));
+    return keys;
+  }
+
+  #codeKey(accountId: string): string {
+    return composite("code", accountId);
+  }
+
+  /** Seconds until every key may try again, or `undefined` when none is locked out. */
+  async #lockedFor(keys: readonly string[]): Promise<number | undefined> {
+    const now = this.#now().getTime();
+    let wait: number | undefined;
+    for (const key of keys) {
+      const attempts = await this.#read<SignInAttempts>(RecordKinds.signInAttempts, key);
+      if (attempts?.lockedUntil === undefined) continue;
+      const left = Date.parse(attempts.lockedUntil) - now;
+      if (left > 0) wait = Math.max(wait ?? 0, left);
+    }
+    return wait === undefined ? undefined : Math.max(1, Math.ceil(wait / 1000));
+  }
+
+  /** Count one failure against each key; at the limit, lock it out, doubling each time. */
+  async #attemptFailed(keys: readonly string[]): Promise<void> {
+    const config = this.config;
+    for (const key of keys) {
+      let written = false;
+      for (let attempt = 0; attempt < CAS_ATTEMPTS && !written; attempt += 1) {
+        const now = this.#now().getTime();
+        const entry = await this.store.get(RecordKinds.signInAttempts, key);
+        const before: SignInAttempts = (entry?.value as unknown as SignInAttempts | undefined) ?? {
+          failures: 0,
+        };
+        const failures = before.failures + 1;
+        let lockedUntil = before.lockedUntil;
+        if (failures >= config.maxSignInFailures) {
+          const over = Math.min(failures - config.maxSignInFailures, 7);
+          const seconds = Math.min(config.signInLockoutSeconds * 2 ** over, 24 * 60 * 60);
+          lockedUntil = new Date(now + seconds * 1000).toISOString();
+        }
+        const after: SignInAttempts = lockedUntil === undefined ? { failures } : { failures, lockedUntil };
+        // Forgotten once the key has failed nothing for a lockout's length.
+        const until = Math.max(now, lockedUntil === undefined ? now : Date.parse(lockedUntil));
+        const kept = { expiresAt: new Date(until + config.signInLockoutSeconds * 1000) };
+        written =
+          entry === undefined
+            ? await this.store.create(RecordKinds.signInAttempts, key, json(after), kept)
+            : await this.store.replace(RecordKinds.signInAttempts, key, entry.version, json(after), kept);
+      }
+      if (!written) throw new Refused(503, "temporarily_unavailable");
+    }
+  }
+
+  async #attemptsCleared(keys: readonly string[]): Promise<void> {
+    for (const key of keys) await this.store.delete(RecordKinds.signInAttempts, key);
+  }
+
   async #mediated(request: CompanyRequest): Promise<CompanyResponse> {
     const [, session] = await this.#caller(request);
     const source = text(request.body);
@@ -1722,6 +1811,13 @@ export class CompanyService {
       // Missing, unknown, or unavailable scopes are refused, never narrowed (§4.4).
       throw new Refused(400, "invalid_scope");
     }
+    const keys = this.#attemptKeys(session, credentials);
+    const locked = await this.#lockedFor(keys);
+    if (locked !== undefined) {
+      // Locked out: the credentials are not even checked (§4.2, `rate_limited`).
+      for (const name of Object.keys(credentials)) delete credentials[name];
+      return rateLimited(locked);
+    }
     const accounts = firstContribution(this.reactor, CompanyAccounts, "accounts");
     const secrets: Record<string, SecretValue> = {};
     for (const [name, value] of Object.entries(credentials)) {
@@ -1731,14 +1827,22 @@ export class CompanyService {
       }
       delete credentials[name];
     }
-    const authenticated = await accounts.authenticate(secrets);
+    const authenticated = await accounts.authenticate(secrets, {
+      clientId: session.clientId,
+      sessionId: session.sessionId,
+    });
     for (const name of Object.keys(secrets)) delete secrets[name];
     if (authenticated === undefined) {
+      await this.#attemptFailed(keys);
       return { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
     }
     if (authenticated.codeReference === undefined) {
+      await this.#attemptsCleared(keys);
       return this.#signedInBody(session, authenticated.accountId, granted);
     }
+    const codeLocked = await this.#lockedFor([this.#codeKey(authenticated.accountId)]);
+    // Too many wrong codes for this account: no new code until the lockout ends.
+    if (codeLocked !== undefined) return rateLimited(codeLocked);
     const signInId = this.#id("si");
     const expiresAt = this.#later(5 * 60);
     const pending: PendingMediated = {
@@ -1747,6 +1851,7 @@ export class CompanyService {
       scopes: granted,
       codeReference: authenticated.codeReference,
       expiresAt: expiresAt.toISOString(),
+      attemptKeys: keys,
       attempts: 0,
     };
     await this.store.put(
@@ -1778,23 +1883,35 @@ export class CompanyService {
       await this.store.delete(RecordKinds.mediated, signInId);
       return { status: 200, body: { status: "expired" }, headers: { ...NO_STORE } };
     }
+    const failed = { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
+    const codeKey = this.#codeKey(pending.accountId);
+    if ((await this.#lockedFor([codeKey])) !== undefined) {
+      // The account's code budget is spent, whichever sign-in spent it.
+      await this.store.delete(RecordKinds.mediated, signInId);
+      return failed;
+    }
     const source = text(request.body);
     const body = source ? parseJsonStrict(source) : {};
     const code = isObject(body) ? body.code : undefined;
     const accounts = firstContribution(this.reactor, CompanyAccounts, "accounts");
-    const failed = { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
     if (
       typeof code !== "string" ||
       !code ||
       !(await accounts.checkCode(pending.codeReference, new SecretValue(code)))
     ) {
-      // Every wrong code counts, however many replicas check them at once.
+      // Every wrong code counts, however many replicas check them at once: against this
+      // sign-in, and against the account across every sign-in started for it.
+      await this.#attemptFailed([codeKey]);
       const counted = await this.#change<PendingMediated>(
         RecordKinds.mediated,
         signInId,
         (current) => ({ ...current, attempts: current.attempts + 1 }),
       );
-      if (counted === undefined || counted[1].attempts >= this.config.maxCodeAttempts) {
+      if (
+        counted === undefined ||
+        counted[1].attempts >= this.config.maxCodeAttempts ||
+        (await this.#lockedFor([codeKey])) !== undefined
+      ) {
         await this.store.delete(RecordKinds.mediated, signInId);
         return failed;
       }
@@ -1814,6 +1931,7 @@ export class CompanyService {
       | PendingMediated
       | undefined;
     if (completed === undefined) return failed;
+    await this.#attemptsCleared([...completed.attemptKeys, codeKey]);
     return this.#signedInBody(session, completed.accountId, completed.scopes);
   }
 
@@ -2756,6 +2874,15 @@ export class CompanyService {
     }
     return page(200, `${body}</section>`);
   }
+}
+
+/** Too many failed sign-in attempts: `429` with how long to wait (§4.2, `rate_limited`). */
+function rateLimited(retryAfter: number): CompanyResponse {
+  return {
+    status: 429,
+    body: { error: "rate_limited" },
+    headers: { "Retry-After": String(retryAfter), ...NO_STORE },
+  };
 }
 
 /** An operation's answer: `Retry-After` while it is in progress. */

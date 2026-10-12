@@ -26,6 +26,7 @@ from ..company import (
     CompanyService,
     ProposedOperation,
     Reply,
+    SignInContext,
     Turn,
     build_company,
     company_app,
@@ -55,7 +56,9 @@ _PAY = re.compile(
 class NorthwindAccounts:
     """Northwind signs its users in on its own page (Device Sign-In): nothing mediated."""
 
-    async def authenticate(self, credentials: dict[str, SecretStr]) -> Authenticated | None:
+    async def authenticate(
+        self, credentials: dict[str, SecretStr], context: SignInContext
+    ) -> Authenticated | None:
         return None
 
     async def check_code(self, code_reference: str, code: SecretStr) -> bool:

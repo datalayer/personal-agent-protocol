@@ -12,7 +12,7 @@ app = company_app(service)  # any ASGI server or httpx.ASGITransport
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import cast
 
@@ -58,6 +58,8 @@ from .points import (
     OperationOutcomeUnknown,
     ProposedOperation,
     Reply,
+    SignInContext,
+    StoreReplayCache,
     ToolResult,
     Turn,
 )
@@ -99,19 +101,31 @@ class ReactorClock:
 
 
 class CompanyDefaultsPlugin:
-    """The company side's defaults: memory store and replay cache, open policy."""
+    """The company side's defaults: memory store, a replay cache in the store, open policy.
 
-    def __init__(self, resolver: ClientResolver, clock: Clock | None = None) -> None:
+    `store` reads the company's contributed store at each call: the default
+    replay cache keeps its identifiers wherever the company keeps its records.
+    """
+
+    def __init__(
+        self,
+        resolver: ClientResolver,
+        clock: Clock | None = None,
+        *,
+        store: Callable[[], CompanyStore],
+    ) -> None:
         self.resolver = resolver
         self.clock = clock
+        self.store = store
 
     @hookimpl
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         store = MemoryCompanyStore(self.clock)
         contribute(COMPANY_STORES, store, contribution_id="memory", order=100)
-        replay = MemoryReplayCache(self.clock)
-        contribute(REPLAY_CACHES, replay, contribution_id="memory", order=100)
+        # The replay cache is the contributed store's: a shared store, a shared cache.
+        replay = StoreReplayCache(self.store)
+        contribute(REPLAY_CACHES, replay, contribution_id="store", order=100)
         contribute(CLIENT_POLICIES, AllowEveryAgent(), contribution_id="allow", order=100)
         contribute(CLIENT_RESOLVERS, self.resolver, contribution_id="https", order=100)
 
@@ -148,7 +162,13 @@ def build_company(
                 REPLAY_CACHES.id,
             ],
         ),
-        CompanyDefaultsPlugin(IdentityClientResolver(identity), ReactorClock(reactor)),
+        CompanyDefaultsPlugin(
+            IdentityClientResolver(identity),
+            ReactorClock(reactor),
+            store=lambda: cast(
+                CompanyStore, first_contribution(reactor, COMPANY_STORES, "company store")
+            ),
+        ),
     )
     for manifest, implementation in plugins:
         reactor.register_plugin(manifest, implementation)
@@ -192,6 +212,8 @@ __all__ = [
     "ProposedOperation",
     "ReactorClock",
     "Reply",
+    "SignInContext",
+    "StoreReplayCache",
     "StoredRecord",
     "ToolResult",
     "Turn",

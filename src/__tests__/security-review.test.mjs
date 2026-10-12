@@ -11,6 +11,7 @@ import {
   DeviceSignInClient,
   DpopFetchClient,
   OperationsClient,
+  RateLimitBudgets,
   SessionClient,
   approve,
   discoverCompany,
@@ -20,7 +21,10 @@ import {
   ClientPolicies,
   ClientResolvers,
   CompanyConfig,
+  MemoryCompanyStore,
+  StoreReplayCache,
   WEB_COOKIE,
+  checkReplayCache,
   companyRequestListener,
 } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
@@ -278,4 +282,115 @@ test("finding 11: a blocked agent is never resolved, and its tokens stop at once
 
 test("finding 17: the web cookie is a __Host- cookie", () => {
   assert.equal(WEB_COOKIE, "__Host-poppy_session");
+});
+
+/** A transport that asks the company even while it said to wait: these tests count refusals. */
+function eagerPost(w) {
+  const view = { getContributions: (point) => (point === RateLimitBudgets ? [] : w.host.reactor.getContributions(point)) };
+  const eager = new DpopFetchClient({ reactor: view, fetch: w.fetch });
+  return (token, url, body) =>
+    eager.request("POST", url, { token, ...w.who, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+}
+
+test("finding 2: wrong passwords lock the account out, with backoff", async () => {
+  const w = await world();
+  const session = await w.start();
+  const post = eagerPost(w);
+  const seen = [];
+  const authenticate = w.plugin.accounts.authenticate.bind(w.plugin.accounts);
+  w.plugin.accounts.authenticate = async (credentials, context) => {
+    seen.push(context);
+    return authenticate(credentials, context);
+  };
+  const wrong = { email: ADA.email, password: "wrong" };
+  const answers = [];
+  for (let i = 0; i < 8; i += 1) answers.push(await post(session, MEDIATED, { credentials: wrong, scope: "orders:read" }));
+  assert.deepEqual(answers.map((a) => a.status), [200, 200, 200, 200, 200, 429, 429, 429]);
+  assert.deepEqual(await answers[5].json(), { error: "rate_limited" });
+  assert.equal(answers[5].headers.get("retry-after"), String(15 * 60));
+  assert.equal(seen.length, 5);
+  // Locked out: the directory is not asked, even with the right password.
+  const right = await post(session, MEDIATED, { credentials: ADA, scope: "orders:read" });
+  assert.equal(right.status, 429);
+  assert.equal(seen.length, 5);
+  assert.deepEqual(seen[0], { clientId: w.identity.clientId, sessionId: session.sessionId });
+  // Once the lockout ends, the next failure locks the account out twice as long.
+  w.clock.advance(15 * 60);
+  assert.equal((await post(session, MEDIATED, { credentials: wrong, scope: "orders:read" })).status, 200);
+  const doubled = await post(session, MEDIATED, { credentials: wrong, scope: "orders:read" });
+  assert.equal(doubled.status, 429);
+  assert.equal(doubled.headers.get("retry-after"), String(30 * 60));
+});
+
+test("finding 2: wrong codes count per account across sign-ins", async () => {
+  const w = await world();
+  const session = await w.start();
+  const post = eagerPost(w);
+  let last;
+  for (let round = 0; round < 5 && last === undefined; round += 1) {
+    const started = await post(session, MEDIATED, { credentials: ADA, scope: "orders:read orders:write" });
+    if (started.status === 429) {
+      last = started;
+      break;
+    }
+    const { sign_in_id: signInId } = await started.json();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const answer = await (await post(session, `${MEDIATED}/${signInId}`, { code: `00000${attempt}` })).json();
+      if (answer.status === "failed") break;
+    }
+  }
+  assert.ok(last !== undefined);
+  assert.deepEqual(await last.json(), { error: "rate_limited" });
+  w.clock.advance(15 * 60);
+  const started = await (await post(session, MEDIATED, { credentials: ADA, scope: "orders:read" })).json();
+  const done = await (await post(session, `${MEDIATED}/${started.sign_in_id}`, { code: ADA_CODE })).json();
+  assert.equal(done.status, "complete");
+});
+
+test("finding 4: a proof replayed at another replica over the same store is refused", async () => {
+  const clock = new MutableClock();
+  const store = new MemoryCompanyStore({ clock });
+  const sites = {};
+  const fetch = inProcessFetch(sites);
+  const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
+  sites["atlas.example"] = identity.documents;
+  sites["manzanita.example"] = manzanita({ fetch, clock, store }).service;
+  const host = await agentHost({ identity, fetch, clock });
+  const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
+  const metadata = company.oauthMetadata;
+  const session = await new SessionClient({ reactor: host.reactor, fetch }).start({
+    clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT,
+  });
+  const captured = [];
+  const spying = async (input, init = {}) => {
+    captured.push({ url: String(input), init });
+    return fetch(input, init);
+  };
+  const transport = new DpopFetchClient({ reactor: host.reactor, fetch: spying });
+  const conversations = new ConversationClient({ reactor: host.reactor, transport });
+  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const endpoint = company.document.agent.protocols[0].endpoint;
+  const page = await conversations.start(endpoint, { id: conversations.generateMessageId(), sender: "human", text: "hello" }, { token: session, wait: 0, ...who });
+  await conversations.readEvents(endpoint, page.conversation_id, { token: session, ...who });
+  const read = captured.find((request) => (request.init.method ?? "GET") === "GET");
+  // Another replica over the same store, with the default replay cache.
+  sites["manzanita.example"] = manzanita({ fetch, clock, store }).service;
+  const replayed = await fetch(read.url, read.init);
+  assert.equal(replayed.status, 401);
+  assert.equal((await replayed.json()).error, "invalid_dpop_proof");
+});
+
+test("finding 4: the memory store forgets expired records; the store replay cache conforms", async () => {
+  const clock = new MutableClock();
+  const store = new MemoryCompanyStore({ clock });
+  const cache = new StoreReplayCache(() => store);
+  for (let index = 0; index < 5000; index += 1) {
+    assert.equal(await cache.markOnce(`jti-${index}`, { expiresAt: new Date(clock.now().getTime() + 60_000) }), true);
+    if (index % 100 === 99) clock.advance(61);
+  }
+  assert.ok(store.size < 2100, `the store holds ${store.size} records`);
+  await checkReplayCache(() => {
+    const one = new MemoryCompanyStore();
+    return new StoreReplayCache(() => one);
+  });
 });

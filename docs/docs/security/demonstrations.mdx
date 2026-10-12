@@ -23,20 +23,21 @@ node --test src/__tests__/security-demonstrations.test.mjs   # after npm run bui
 | Cross-tenant access | Presents Ada's signed-in token from another tenant of the same agent, and reads her conversation as another user. | `401`: proofs are made with each tenant's own DPoP key, which the token is not bound to; another user's Session sees `conversation_not_found`. Ada's tenant is unaffected. | `test_cross_tenant_access_is_refused` | `cross-tenant access is refused` |
 | Stale approval | Approves revision 1 of an exchange; Manzanita revises it to revision 2 (a price difference); confirms with the old approval. | `terms_changed` with the changed terms; the old approval does not fit revision 2 (`approval_mismatch`, refused locally); nothing is performed until the user approves revision 2; the stale approval presented again performs nothing. | `test_stale_approval_is_refused` | `stale approval is refused` |
 | Retries | Sends one message ID twice; loses the answer to a confirmation that Manzanita received and performed; retries the confirmation. | One conversation, one message; the lost answer is read back by the same operation ID, never assumed failed; the operation is performed once. | `test_retries_are_safe` | `retries are safe` |
-| Restart | Restarts Manzanita, twice, over its store and a shared replay cache, between a sign-in, a proposal, and its confirmation. | A DPoP proof seen before the restart is still refused after it; the Session and the proposal carry over; the operation confirmed after one restart is not performed again after the next. | `test_restart_is_safe` | `restart is safe` |
+| Restart | Restarts Manzanita, twice, over its store (which holds the default replay cache), between a sign-in, a proposal, and its confirmation. | A DPoP proof seen before the restart is still refused after it; the Session and the proposal carry over; the operation confirmed after one restart is not performed again after the next. | `test_restart_is_safe` | `restart is safe` |
 | Rollback | Rolls Manzanita back to its previous release (no website) over the same store, after an Account Token rotation and a confirmed operation. | The rotated-away Account Token stays refused and the current one works; the earlier release does not perform the confirmed operation again; Sessions and the API continue. | `test_rollback_is_safe` | `rollback is safe` |
 | Revocation | Signs in two Sessions from one sign-in, then revokes the Account Token. | Both signed-in tokens read as signed out at once (`403`), not at expiry; the Account Token is gone locally and refused at the company; the Session continues signed out. | `test_revocation_is_safe` | `revocation is safe` |
 | Rotation | Refreshes the Account Token twice at once; then rotates the agent's signing key with an overlap and retires the old one. | Refreshes are serialized, each rotating; the rotated-away token is refused, the live one works. Both signing keys verify during the overlap; once the company's cached key set expires, the retired key is refused (`invalid_client`) and the new one verifies. | `test_rotation_is_safe` | `rotation is safe` |
 
 ## What a deployment must provide
 
-The restart and rollback demonstrations share one replay cache across every
-start of the company, as a deployment must ([company
-guide](/guides/company/)): the default `MemoryReplayCache` lives in one
-process. A company restarted with a fresh in-memory replay cache would accept,
-within a proof's short validity window, a DPoP proof captured just before the
-restart. Contribute a replay cache that outlives a replica — shared by every
-replica, as the store is — to `pap.company.replayCache`.
+The restart and rollback demonstrations restart the company over one store,
+as a deployment's replicas share one ([company guide](/guides/company/)). The
+default replay cache keeps its identifiers in that store (`StoreReplayCache`,
+an atomic `create` with the identifier's expiry), so a DPoP proof captured
+just before a restart, or at another replica, is refused after it: a durable,
+shared store implies a shared replay cache. With the in-memory store, the
+cache is one process, as the store is. A company that contributes its own
+`pap.company.replayCache` must share it across replicas the same way.
 
 The same properties are also tested piecemeal, closer to the code: the
 conformance cases (`security.*-replay`, `lifecycle.rotated-token`,

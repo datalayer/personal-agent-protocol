@@ -55,8 +55,10 @@ from .store import (
     PROPOSAL,
     RECORD_KINDS,
     RECORD_TYPES,
+    REPLAY,
     SESSION,
     SESSION_TOKEN,
+    SIGN_IN_ATTEMPTS,
     USER_CODE,
     AccountAgent,
     AccountFamily,
@@ -70,7 +72,9 @@ from .store import (
     PendingAuthorization,
     PendingDevice,
     PendingMediated,
+    ReplayMark,
     SessionPointer,
+    SignInAttempts,
     StoredConversation,
     StoredEvent,
     StoredOperation,
@@ -137,7 +141,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
             "c", "https://atlas.example/cb", ("a",), "st", "chal", later, "Atlas", "bind"
         ),
         CODE: IssuedCode("c", "https://atlas.example/cb", "chal", "acct_1", ("a",), later),
-        MEDIATED: PendingMediated("ses_1", "acct_1", ("a",), "ref", later, 2),
+        MEDIATED: PendingMediated("ses_1", "acct_1", ("a",), "ref", later, ("k1", "k2"), 2),
         CONVERSATION: StoredConversation(
             conversation_id="cnv_1",
             owner=("c", "u"),
@@ -155,6 +159,8 @@ def record_samples(now: datetime) -> dict[str, Any]:
         ),
         PROPOSAL: OperationProposal("op_1"),
         BROWSER_COOKIE: SessionPointer("ses_1"),
+        REPLAY: ReplayMark(),
+        SIGN_IN_ATTEMPTS: SignInAttempts(3, later),
     }
 
 

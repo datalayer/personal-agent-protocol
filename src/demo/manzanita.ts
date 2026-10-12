@@ -53,6 +53,7 @@ import {
   type OperationExecutor,
   type ProposedOperation,
   type Reply,
+  type SignInContext,
   type ToolResult,
   type Turn,
 } from "../company/index.js";
@@ -93,6 +94,7 @@ function same(value: string, expected: string): boolean {
 export class ManzanitaAccounts implements AccountDirectory {
   async authenticate(
     credentials: Readonly<Record<string, SecretValue>>,
+    _context: SignInContext,
   ): Promise<Authenticated | undefined> {
     const email = credentials.email;
     const password = credentials.password;
@@ -317,6 +319,7 @@ export class RepairExecutor implements OperationExecutor {
 
 /** Manzanita's contributions, and the executors a test inspects. */
 export class ManzanitaPlugin {
+  readonly accounts = new ManzanitaAccounts();
   readonly executor = new ExchangeExecutor();
   readonly giftWrap = new GiftWrapExecutor();
   readonly returns = new ReturnExecutor();
@@ -327,7 +330,7 @@ export class ManzanitaPlugin {
       name: "manzanita",
       version: "1",
       contributes: [
-        { point: CompanyAccounts, value: new ManzanitaAccounts(), options: { id: "accounts" } },
+        { point: CompanyAccounts, value: this.accounts, options: { id: "accounts" } },
         { point: CompanyAgents, value: new ManzanitaAgent(), options: { id: "agent" } },
         { point: OperationExecutors, value: this.executor, options: { id: "exchange" } },
         { point: OperationExecutors, value: this.giftWrap, options: { id: "gift-wrap" } },

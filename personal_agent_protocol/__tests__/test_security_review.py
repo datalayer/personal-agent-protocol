@@ -363,3 +363,152 @@ def _unsigned(claims: dict[str, object]) -> str:
 
 def test_finding_17_the_web_cookie_is_a_host_cookie() -> None:
     assert WEB_COOKIE == "__Host-poppy_session"
+
+
+def _ignore_retry_after(world: World) -> None:
+    """The host would wait out each `Retry-After` itself: these tests ask the company anyway."""
+
+    from personal_agent_protocol.reactor import RATE_LIMIT_BUDGETS
+
+    class Unlimited:
+        async def acquire(self, key: str) -> None:
+            return None
+
+        async def defer(self, key: str, seconds: float) -> None:
+            return None
+
+    class Plugin:
+        def provide_contributions(self, contributions: object) -> None:
+            contributions.contribute(
+                RATE_LIMIT_BUDGETS, Unlimited(), contribution_id="unlimited", order=10
+            )  # type: ignore[attr-defined]
+
+    world.reactor.register_plugin(PluginManifest(name="unlimited", version="1"), Plugin())
+
+
+@pytest.mark.asyncio
+async def test_finding_2_wrong_passwords_lock_the_account_out_with_backoff() -> None:
+    world = World()
+    _ignore_retry_after(world)
+    session = await world.signed_out_session()
+    directory = world.plugin.accounts  # type: ignore[attr-defined]
+    seen: list[object] = []
+    authenticate = directory.authenticate
+
+    async def spy(credentials, context):  # type: ignore[no-untyped-def]
+        seen.append(context)
+        return await authenticate(credentials, context)
+
+    directory.authenticate = spy
+    wrong = {"email": ADA["email"], "password": "wrong"}
+    answers = [
+        await _post_json(world, session, MEDIATED, {"credentials": wrong, "scope": "orders:read"})
+        for _ in range(8)
+    ]
+    assert [a.status_code for a in answers] == [200] * 5 + [429] * 3
+    assert {a.json().get("status") for a in answers[:5]} == {"failed"}
+    assert answers[5].json() == {"error": "rate_limited"}
+    assert int(answers[5].headers["retry-after"]) == 15 * 60
+    # Locked out: the directory is not asked, even with the right password.
+    assert len(seen) == 5
+    right = await _post_json(
+        world, session, MEDIATED, {"credentials": dict(ADA), "scope": "orders:read"}
+    )
+    assert right.status_code == 429 and len(seen) == 5
+    # The directory hears which agent and Session each attempt came from.
+    assert seen[0].client_id == world.atlas.client_id  # type: ignore[attr-defined]
+    assert seen[0].session_id == session.session_id  # type: ignore[attr-defined]
+    # Once the lockout ends, the next failure locks the account out twice as long.
+    world.clock.advance(15 * 60)
+    again = await _post_json(
+        world, session, MEDIATED, {"credentials": wrong, "scope": "orders:read"}
+    )
+    assert again.status_code == 200
+    doubled = await _post_json(
+        world, session, MEDIATED, {"credentials": wrong, "scope": "orders:read"}
+    )
+    assert doubled.status_code == 429 and int(doubled.headers["retry-after"]) == 30 * 60
+
+
+@pytest.mark.asyncio
+async def test_finding_2_wrong_codes_count_per_account_across_sign_ins() -> None:
+    world = World()
+    _ignore_retry_after(world)
+    session = await world.signed_out_session()
+    last = None
+    for _ in range(5):
+        started = await _post_json(
+            world,
+            session,
+            MEDIATED,
+            {"credentials": dict(ADA), "scope": "orders:read orders:write"},
+        )
+        if started.status_code == 429:
+            last = started
+            break
+        sign_in_id = started.json()["sign_in_id"]
+        for attempt in range(3):
+            answer = await _post_json(
+                world, session, f"{MEDIATED}/{sign_in_id}", {"code": f"00000{attempt}"}
+            )
+            if answer.json().get("status") == "failed":
+                break
+    assert last is not None and last.json() == {"error": "rate_limited"}
+    # A right code after the account's code budget is spent does not sign in either.
+    world.clock.advance(15 * 60)
+    started = await _post_json(
+        world, session, MEDIATED, {"credentials": dict(ADA), "scope": "orders:read"}
+    )
+    done = await _post_json(
+        world, session, f"{MEDIATED}/{started.json()['sign_in_id']}", {"code": ADA_CODE}
+    )
+    assert done.json()["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_finding_4_a_proof_replayed_at_another_replica_is_refused() -> None:
+    world = World(durable=True)
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    page = await world.conversations.start(
+        endpoint, world.message("hello"), token=session, wait=0, **world.who
+    )
+    captured: list[httpx.Request] = []
+    original = world.http._transport.handle_async_request  # type: ignore[attr-defined]
+
+    async def spy(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return await original(request)
+
+    world.http._transport.handle_async_request = spy  # type: ignore[attr-defined,method-assign]
+    await world.conversations.read_events(
+        endpoint, page.conversation_id, token=session, **world.who
+    )
+    request = next(r for r in captured if r.method == "GET")
+    world.restart()  # another replica over the same store, with the default replay cache
+    other = await world.http.get(str(request.url), headers=dict(request.headers))
+    assert other.status_code == 401 and other.json()["error"] == "invalid_dpop_proof"
+
+
+@pytest.mark.asyncio
+async def test_finding_4_the_memory_store_forgets_expired_records() -> None:
+    from datetime import timedelta
+
+    from personal_agent_protocol.company import MemoryCompanyStore, StoreReplayCache
+    from personal_agent_protocol.company.testing import check_replay_cache
+    from personal_agent_protocol.demo.kit import MutableClock
+
+    clock = MutableClock()
+    store = MemoryCompanyStore(clock)
+    cache = StoreReplayCache(lambda: store)
+    for index in range(5000):
+        assert await cache.mark_once(f"jti-{index}", expires_at=clock.now() + timedelta(seconds=60))
+        if index % 100 == 99:
+            clock.advance(61)
+    assert len(store) < 2100
+
+    def fresh() -> StoreReplayCache:
+        one = MemoryCompanyStore()
+        return StoreReplayCache(lambda: one)
+
+    await check_replay_cache(fresh)

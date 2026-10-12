@@ -30,7 +30,7 @@ import {
   discoverCompany,
   firstContribution,
 } from "../../lib/index.js";
-import { MemoryCompanyStore, MemoryReplayCache, ReplayCaches } from "../../lib/server.js";
+import { MemoryCompanyStore } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
@@ -56,17 +56,10 @@ async function world({ durable = false } = {}) {
     return response;
   };
   const store = durable ? new MemoryCompanyStore({ clock }) : undefined;
-  const replay = new MemoryReplayCache({ clock });
   const w = { clock, sites, network, fetch, wire, lose, store };
-  /** Manzanita (re)started over the same store and one shared replay cache. */
+  /** Manzanita (re)started over the same store: the default replay cache is in it. */
   w.deploy = async (config) => {
     const { service, plugin } = manzanita({ fetch, clock, ...(store ? { store } : {}), ...(config ? { config } : {}) });
-    if (durable) {
-      await service.reactor.install({
-        name: "shared-replay-cache",
-        contributes: [{ point: ReplayCaches, value: replay, options: { id: "shared", order: 0 } }],
-      });
-    }
     sites["manzanita.example"] = service;
     w.shop = service;
     w.plugin = plugin;
@@ -287,7 +280,7 @@ test("rollback is safe", async () => {
   const done = await w.operations.confirm(w.ops, operation, { approval: await approve(operation), token: refreshed.token, ...w.who });
   assert.equal(done.operation.state, "succeeded");
 
-  // The previous release (no website yet), over the same store and replay cache.
+  // The previous release (no website yet), over the same store (and so its replay cache).
   await w.deploy({ web: false });
   await w.tokens.put(reference, before);
   assert.equal((await w.accounts.refresh(reference, { context: w.context, sessionId: session.sessionId })).status, "signed_out");

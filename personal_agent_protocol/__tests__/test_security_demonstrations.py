@@ -36,8 +36,6 @@ from personal_agent_protocol import (
 from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
 from personal_agent_protocol.apis import ApiClient, ApiError
 from personal_agent_protocol.company import (
-    REPLAY_CACHES,
-    MemoryReplayCache,
     build_company,
     company_app,
 )
@@ -85,21 +83,6 @@ class Wire:
             request.method, request.url, headers=request.headers, content=request.content
         )
         return await world.http.send(copy)
-
-
-class SharedReplay:
-    """One replay cache for every replica and restart, as a deployment shares it."""
-
-    def __init__(self, world: World) -> None:
-        self.cache = MemoryReplayCache(world.clock)
-
-    def attach(self, world: World) -> None:
-        world.shop.reactor.register_plugin(
-            PluginManifest(name="shared-replay-cache", version="1"), self
-        )
-
-    def provide_contributions(self, contributions: Any) -> None:
-        contributions.contribute(REPLAY_CACHES, self.cache, contribution_id="shared", order=0)
 
 
 async def probe(world: World, token: SessionToken, **who: str) -> int:
@@ -350,11 +333,9 @@ async def test_retries_are_safe() -> None:
 
 @pytest.mark.asyncio
 async def test_restart_is_safe() -> None:
-    """Restarted over its store and replay cache, Manzanita continues and replays stay refused."""
+    """Restarted over its store, which holds the replay cache: it goes on, replays stay refused."""
 
     world = World(durable=True)
-    replay = SharedReplay(world)
-    replay.attach(world)
     wire = Wire(world)
     session = await world.signed_out_session()
     token, _ = await device_sign_in(world, session)
@@ -363,7 +344,6 @@ async def test_restart_is_safe() -> None:
     captured = wire.last("GET", "/api/orders")
 
     world.restart()
-    replay.attach(world)
 
     # A proof seen before the restart is still refused after it.
     assert (await wire.resend(world, captured)).status_code == 401
@@ -378,7 +358,6 @@ async def test_restart_is_safe() -> None:
     performed = list(world.plugin.executor.performed)
 
     world.restart()
-    replay.attach(world)
     again = await operations.confirm(
         ops, operation, approval=approve(operation), token=token, **world.who
     )
@@ -391,8 +370,6 @@ async def test_rollback_is_safe() -> None:
     """Rolled back to an earlier release over the same store: nothing done is undone or redone."""
 
     world = World(durable=True)
-    replay = SharedReplay(world)
-    replay.attach(world)
     session = await world.signed_out_session()
     token, reference = await device_sign_in(world, session)
     accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
@@ -413,7 +390,7 @@ async def test_rollback_is_safe() -> None:
     assert done.operation.state == "succeeded"  # type: ignore[union-attr]
     assert world.store is not None and world.store.keys(DEVICE) == []  # the code was taken
 
-    # Roll back: the previous release (no website yet), over the same store and replay cache.
+    # Roll back: the previous release (no website yet), over the same store.
     previous = replace(manzanita_demo.CONFIG, web=False)
     plugin = manzanita_demo.ManzanitaPlugin()
     world.shop = build_company(
@@ -428,7 +405,6 @@ async def test_rollback_is_safe() -> None:
     )
     world.plugin = plugin
     world.network.add(manzanita_demo.DOMAIN, company_app(world.shop))
-    replay.attach(world)
 
     # The rotated-away Account Token stays refused; the current one works.
     assert before is not None and rotated is not None

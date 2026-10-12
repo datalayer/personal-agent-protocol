@@ -26,7 +26,7 @@ import {
   operationsEndpoint,
   parseClientMetadata,
 } from "../../lib/index.js";
-import { CompanyAccounts } from "../../lib/company/index.js";
+import { CompanyAccounts } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
 import { runJourney } from "./support/journey.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";

@@ -1,0 +1,16 @@
+{
+  "type": "application/vnd.datalayer.pap.outcome+json",
+  "version": 1,
+  "id": "op_7Hq2-2-outcome",
+  "text": "Failed at manzanita.example: The Alpine Parka (M) is reserved for you, but the refund of the Ridge Jacket failed: USD 70.00 was charged and nothing was refunded yet. (version 2)",
+  "data": {
+    "company": "manzanita.example",
+    "summary": "Exchange the Ridge Jacket (M) for the Alpine Parka (M). You pay USD 70.00 more.",
+    "operation_ref": "op_7Hq2",
+    "revision": 2,
+    "state": "failed",
+    "result": "The Alpine Parka (M) is reserved for you, but the refund of the Ridge Jacket failed: USD 70.00 was charged and nothing was refunded yet.",
+    "approved_by": "user"
+  },
+  "actions": []
+}

@@ -6,6 +6,18 @@
 
 # Changelog
 
+## Unreleased
+
+- **`PapOutcome`, what a confirmed operation came to, as a Reactor display**
+  ([docs](docs/docs/guides/operations.mdx)): `personal_agent_protocol.ui`
+  declares `application/vnd.datalayer.pap.outcome+json` v1 — the company, what
+  was confirmed, the revision, the state, the company's final `result.summary`
+  verbatim (partial effects included; required once final, none while in
+  progress) and who confirmed it; `PapOutcome.of(company, operation)`. The core
+  plugin registers it. TypeScript: `PapOutcomeData`, `isPapOutcome`,
+  `papOutcomeText`, `papOutcomeDisplay`, checked against
+  `protocol/fixtures/pap-outcome-display.json`.
+
 ## 0.12.0 (2026-10-12)
 
 - **`PapConfirm`, an operation to confirm as a Reactor display**

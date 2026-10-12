@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""A sign-in waiting for the person, and an operation to confirm, as reactor.ui displays."""
+"""A sign-in, an operation to confirm and what it came to, as reactor.ui displays."""
 
 import hashlib
 import json
@@ -13,10 +13,13 @@ import pytest
 from pydantic import ValidationError
 
 from personal_agent_protocol import build_pap_reactor
+from personal_agent_protocol.models import Operation
 from personal_agent_protocol.ui import (
     PAP_CONFIRM_TYPE,
+    PAP_OUTCOME_TYPE,
     PAP_SIGN_IN_TYPE,
     PapConfirm,
+    PapOutcome,
     PapSessionShown,
     PapSignIn,
 )
@@ -127,7 +130,13 @@ def _confirm(**overrides: Any) -> PapConfirm:
         "does": "buy",
         "session": PapSessionShown.of(SESSION_ID, signed_in=True),
         "expires_at": "2026-10-12T18:00:00+00:00",
-        "was": {"revision": 1, "terms": {"price_difference": {"amount": "70.00", "currency": "USD"}, "ships_in_days": 2}},
+        "was": {
+            "revision": 1,
+            "terms": {
+                "price_difference": {"amount": "70.00", "currency": "USD"},
+                "ships_in_days": 2,
+            },
+        },
         "only_the_person": True,
     }
     fields.update(overrides)
@@ -158,7 +167,9 @@ def test_a_model_is_told_what_is_asked_never_the_session() -> None:
     # Whether the person is signed in there, never which Session: not its ID, not even the reference.
     assert view["data"]["session"] == {"signed_in": True}
     seen = json.dumps(view)
-    assert SESSION_ID not in seen and display.session is not None and display.session.ref not in seen
+    assert (
+        SESSION_ID not in seen and display.session is not None and display.session.ref not in seen
+    )
 
 
 def test_the_session_is_shown_by_a_one_way_reference_only() -> None:
@@ -180,7 +191,9 @@ def test_the_session_is_shown_by_a_one_way_reference_only() -> None:
         {"token": "secret"},
     ],
 )
-def test_an_operation_to_confirm_is_refused_when_it_says_less_or_other(overrides: dict[str, Any]) -> None:
+def test_an_operation_to_confirm_is_refused_when_it_says_less_or_other(
+    overrides: dict[str, Any],
+) -> None:
     with pytest.raises(ValidationError):
         _confirm(**overrides)
 
@@ -198,6 +211,100 @@ async def test_the_core_plugin_declares_the_confirm_type() -> None:
         registry = platform.display_types()
         assert registry.get(PAP_CONFIRM_TYPE, 1) is PapConfirm
         assert registry.parse(json.loads(FIXTURE.read_text())) == _confirm()
+    finally:
+        if http is not None:
+            await http.aclose()
+
+
+# What a confirmed operation came to (PapOutcome).
+
+OUTCOME_FIXTURE = Path(__file__).parents[2] / "protocol" / "fixtures" / "pap-outcome-display.json"
+EXCHANGE = "Exchange the Ridge Jacket (M) for the Alpine Parka (M). You pay USD 70.00 more."
+PARTIAL = (
+    "The Alpine Parka (M) is reserved for you, but the refund of the Ridge Jacket failed: "
+    "USD 70.00 was charged and nothing was refunded yet."
+)
+
+
+def _operation(state: str, result: str | None) -> Operation:
+    return Operation.model_validate(
+        {
+            "operation_id": "op_7Hq2",
+            "revision": 2,
+            "state": state,
+            "summary": EXCHANGE,
+            "confirmation": None
+            if state == "proposed"
+            else {
+                "revision": 2,
+                "approved_by": "user",
+                "confirmed_at": "2026-10-12T17:00:00+00:00",
+            },
+            "result": None if result is None else {"summary": result},
+            **({"expires_at": "2026-10-12T18:00:00+00:00"} if state == "proposed" else {}),
+        }
+    )
+
+
+def test_a_failed_operation_is_the_committed_display_its_partial_effects_verbatim() -> None:
+    # The TypeScript SDK reads the same file (src/__tests__/ui.test.mjs).
+    display = PapOutcome.of("manzanita.example", _operation("failed", PARTIAL), approved_by="user")
+    wire = display.wire().model_dump(mode="json")
+    assert wire == json.loads(OUTCOME_FIXTURE.read_text())
+    assert wire["type"] == PAP_OUTCOME_TYPE and wire["version"] == 1
+    assert wire["id"] == "op_7Hq2-2-outcome"
+    assert wire["data"]["result"] == PARTIAL
+    assert wire["text"] == f"Failed at manzanita.example: {PARTIAL} (version 2)"
+
+
+def test_each_outcome_says_the_companys_words() -> None:
+    done = PapOutcome.of(
+        "manzanita.example", _operation("succeeded", "Exchange placed: order 1043.")
+    )
+    assert done.text() == "Done at manzanita.example: Exchange placed: order 1043. (version 2)"
+    # Sent, its answer lost: read back as proposed, said as in progress until the outcome is known.
+    sent = PapOutcome.of("manzanita.example", _operation("proposed", None))
+    assert sent.state == "in_progress" and sent.result is None
+    assert sent.text() == (
+        f"Still in progress at manzanita.example: {EXCHANGE} (version 2) The outcome is not known yet."
+    )
+    cancelled = PapOutcome.of(
+        "manzanita.example", _operation("cancelled", "Cancelled at your request.")
+    )
+    assert (
+        cancelled.text() == "Cancelled at manzanita.example: Cancelled at your request. (version 2)"
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"company": " "},
+        {"summary": ""},
+        {"operation_ref": ""},
+        {"revision": 0},
+        {"state": "proposed"},
+        {"result": " "},
+        {"state": "in_progress", "result": "done"},
+        {"state": "failed", "result": None},
+        {"approved_by": "rule"},
+        {"token": "secret"},
+    ],
+)
+def test_an_outcome_is_refused_when_it_says_less_or_other(overrides: dict[str, Any]) -> None:
+    fields = PapOutcome.of("manzanita.example", _operation("succeeded", "Done.")).model_dump()
+    fields.update(overrides)
+    with pytest.raises(ValidationError):
+        PapOutcome.model_validate(fields)
+
+
+async def test_the_core_plugin_declares_the_outcome_type() -> None:
+    platform, http = build_pap_reactor()
+    try:
+        registry = platform.display_types()
+        assert registry.get(PAP_OUTCOME_TYPE, 1) is PapOutcome
+        shown = registry.parse(json.loads(OUTCOME_FIXTURE.read_text()))
+        assert shown.tool_meta()["reactor.ui/display"]["data"]["result"] == PARTIAL
     finally:
         if http is not None:
             await http.aclose()

@@ -4,9 +4,10 @@
 
 """PAP's displays for ``reactor.ui``: what a page draws for a PAP answer.
 
-Two displays: :class:`PapSignIn`, a sign-in waiting for the person, and
+Three displays: :class:`PapSignIn`, a sign-in waiting for the person;
 :class:`PapConfirm`, an operation a company proposed, waiting for the person to
-confirm it.
+confirm it; and :class:`PapOutcome`, what a confirmed operation came to, in the
+company's own words.
 
 A tool that starts a sign-in answers with a :class:`PapSignIn` beside its
 result — in an MCP result's ``_meta["reactor.ui/display"]`` — and any page with
@@ -46,6 +47,9 @@ PAP_SIGN_IN_TYPE = "application/vnd.datalayer.pap.sign-in+json"
 
 #: The display type of an operation waiting for the person to confirm it.
 PAP_CONFIRM_TYPE = "application/vnd.datalayer.pap.confirm+json"
+
+#: The display type of what a confirmed operation came to.
+PAP_OUTCOME_TYPE = "application/vnd.datalayer.pap.outcome+json"
 
 #: What confirming an operation does, as an application's Rules class it.
 PapActionClass = Literal["read", "write", "send", "buy", "delete", "publish"]
@@ -221,12 +225,115 @@ class PapConfirm(Display):
         return {DISPLAY_META_KEY: self.wire().model_dump(mode="json")}
 
 
+#: What a confirmed operation came to: every state but ``proposed``.
+PapOutcomeState = Literal["in_progress", "succeeded", "failed", "cancelled", "expired"]
+
+_OUTCOME_LEADS: dict[str, str] = {
+    "succeeded": "Done at",
+    "failed": "Failed at",
+    "in_progress": "Still in progress at",
+    "cancelled": "Cancelled at",
+    "expired": "Expired at",
+}
+
+
+@display_type(PAP_OUTCOME_TYPE, version=1)
+class PapOutcome(Display):
+    """What a confirmed operation came to, in the company's own words (Operations).
+
+    ``result`` is the company's final ``result.summary``, verbatim — partial
+    effects of a failed operation included — never a model's paraphrase;
+    ``summary`` is what was confirmed (the company's words for the operation).
+    ``in_progress`` is said until the outcome is known: a confirmation sent
+    whose answer was lost is read back, never sent again. A proposal not yet
+    confirmed has no outcome. Make one from the company's operation with
+    :meth:`of`.
+    """
+
+    #: The company, as the person knows it (its domain or its name).
+    company: str = Field(min_length=1)
+    #: What was confirmed, in the company's words.
+    summary: str = Field(min_length=1)
+    operation_ref: str = Field(min_length=1)
+    revision: int = Field(ge=1)
+    state: PapOutcomeState
+    #: The company's ``result.summary``, verbatim: required once final, ``None`` while in progress.
+    result: str | None = None
+    #: Who confirmed it: the person, or a standing permission they gave; ``None`` when read back.
+    approved_by: Literal["user", "standing_permission"] | None = None
+
+    @field_validator("company")
+    @classmethod
+    def _company(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("an outcome names its company")
+        return value.strip()
+
+    @field_validator("result")
+    @classmethod
+    def _result(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("a result says what was done, in the company's words, or is absent")
+        return value
+
+    @model_validator(mode="after")
+    def _known_once_done(self) -> PapOutcome:
+        if self.state == "in_progress" and self.result is not None:
+            raise ValueError("an operation still in progress has no result yet")
+        if self.state != "in_progress" and self.result is None:
+            raise ValueError("a final operation says what it came to: the company's result")
+        return self
+
+    @classmethod
+    def of(
+        cls,
+        company: str,
+        operation: Any,
+        *,
+        approved_by: Literal["user", "standing_permission"] | None = None,
+    ) -> PapOutcome:
+        """The outcome of a company's :class:`~personal_agent_protocol.models.Operation`.
+
+        A ``proposed`` operation whose confirmation was sent is ``in_progress``:
+        its outcome is not known yet.
+        """
+        state = "in_progress" if operation.state == "proposed" else operation.state
+        result = (
+            operation.result.summary
+            if operation.result is not None and state != "in_progress"
+            else None
+        )
+        return cls(
+            id=f"{operation.operation_id}-{operation.revision}-outcome",
+            company=company,
+            summary=operation.summary,
+            operation_ref=operation.operation_id,
+            revision=operation.revision,
+            state=state,
+            result=result,
+            approved_by=approved_by,
+        )
+
+    def text(self) -> str:
+        lead = f"{_OUTCOME_LEADS[self.state]} {self.company}"
+        if self.result is None:
+            return f"{lead}: {self.summary} (version {self.revision}) The outcome is not known yet."
+        return f"{lead}: {self.result} (version {self.revision})"
+
+    def tool_meta(self) -> dict[str, Any]:
+        """The ``_meta`` an MCP tool result carries this display in."""
+        return {DISPLAY_META_KEY: self.wire().model_dump(mode="json")}
+
+
 __all__ = [
     "PAP_CONFIRM_TYPE",
+    "PAP_OUTCOME_TYPE",
     "PAP_SIGN_IN_TYPE",
     "WAITING_FOR_THE_PERSON",
     "PapActionClass",
     "PapConfirm",
+    "PapOutcome",
+    "PapOutcomeState",
     "PapSessionShown",
     "PapSignIn",
     "PapTermsWas",

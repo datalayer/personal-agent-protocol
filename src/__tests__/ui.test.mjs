@@ -4,8 +4,9 @@
  * BSD 3-Clause License
  */
 
-// An operation to confirm as a reactor.ui display: the example the Python
-// tests write (test_ui.py), read and checked by the TypeScript SDK.
+// An operation to confirm and what it came to as reactor.ui displays: the
+// examples the Python tests write (test_ui.py), read and checked by the
+// TypeScript SDK.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -13,10 +14,14 @@ import test from "node:test";
 
 import {
   PAP_CONFIRM_TYPE,
+  PAP_OUTCOME_TYPE,
   isPapConfirm,
   isPapConfirmData,
+  isPapOutcome,
   papConfirmDisplay,
   papConfirmText,
+  papOutcomeDisplay,
+  papOutcomeText,
 } from "../../lib/index.js";
 
 const example = JSON.parse(
@@ -70,4 +75,46 @@ test("a display is made only of an operation to confirm", () => {
   assert.equal(display.text, `${data.company} asks you to confirm: ${data.summary} (version 2)`);
   assert.throws(() => papConfirmDisplay("c1", { ...data, revision: 0 }), TypeError);
   assert.throws(() => papConfirmDisplay("", data), TypeError);
+});
+
+const outcome = JSON.parse(
+  readFileSync(new URL("../../protocol/fixtures/pap-outcome-display.json", import.meta.url), "utf8"),
+);
+
+test("the Python SDK's outcome is one, the company's result word for word", () => {
+  assert.equal(outcome.type, PAP_OUTCOME_TYPE);
+  assert.ok(isPapOutcome(outcome));
+  assert.equal(papOutcomeText(outcome.data), outcome.text);
+  assert.ok(outcome.text.includes(outcome.data.result));
+  assert.deepEqual(papOutcomeDisplay(outcome.id, outcome.data), outcome);
+});
+
+test("an outcome that says less or other is not one", () => {
+  const changed = (data) => ({ ...outcome, data: { ...outcome.data, ...data } });
+  assert.equal(isPapOutcome({ ...outcome, type: PAP_CONFIRM_TYPE }), false);
+  assert.equal(isPapOutcome({ ...outcome, version: 2 }), false);
+  for (const data of [
+    { company: " " },
+    { summary: "" },
+    { operation_ref: "" },
+    { revision: 0 },
+    { state: "proposed" },
+    { result: null },
+    { result: " " },
+    { state: "in_progress" },
+    { approved_by: "rule" },
+    { token: "secret" },
+  ]) {
+    assert.equal(isPapOutcome(changed(data)), false, JSON.stringify(data));
+  }
+});
+
+test("in progress, the company's words for the operation and that the outcome is not known yet", () => {
+  const data = { ...outcome.data, state: "in_progress", result: null, approved_by: null };
+  const display = papOutcomeDisplay("o1", data);
+  assert.equal(
+    display.text,
+    `Still in progress at ${data.company}: ${data.summary} (version 2) The outcome is not known yet.`,
+  );
+  assert.throws(() => papOutcomeDisplay("o1", { ...data, result: "done" }), TypeError);
 });

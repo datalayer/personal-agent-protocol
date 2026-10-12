@@ -8,10 +8,10 @@
  * PAP's displays for Reactor's ui channel (`@datalayer/reactor/ui`), as a
  * page receives them: the TypeScript side of `personal_agent_protocol.ui`.
  *
- * A display is declared once, in Python (`PapConfirm`, a pydantic model with
- * `@display_type`); this module types its wire form and checks it with a
- * guard, against the same committed example the Python tests write
- * (`protocol/fixtures/pap-confirm-display.json`). It needs no runtime from
+ * A display is declared once, in Python (`PapConfirm`, `PapOutcome`: pydantic
+ * models with `@display_type`); this module types its wire form and checks it
+ * with a guard, against the same committed examples the Python tests write
+ * (`protocol/fixtures/pap-confirm-display.json`, `pap-outcome-display.json`). It needs no runtime from
  * Reactor: the guard takes any display-shaped value, so Reactor's `Display`
  * narrows to a `PapConfirmDisplay`.
  */
@@ -163,4 +163,100 @@ export function papConfirmDisplay(id: string, data: PapConfirmData): PapConfirmD
     throw new TypeError("Not an operation to confirm: PapConfirm's fields, each of its type, and no other");
   }
   return { type: PAP_CONFIRM_TYPE, version: PAP_CONFIRM_VERSION, id, text: papConfirmText(data), data, actions: [] };
+}
+
+/** The display type of what a confirmed operation came to. */
+export const PAP_OUTCOME_TYPE = "application/vnd.datalayer.pap.outcome+json";
+
+/** The version of `PAP_OUTCOME_TYPE` this module reads. */
+export const PAP_OUTCOME_VERSION = 1;
+
+/** What a confirmed operation came to: every operation state but `proposed`. */
+export type PapOutcomeState = "in_progress" | "succeeded" | "failed" | "cancelled" | "expired";
+
+/** Every `PapOutcomeState`. */
+export const PAP_OUTCOME_STATES: readonly PapOutcomeState[] = [
+  "in_progress",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "expired",
+];
+
+/** What a confirmed operation came to, as a display's `data` (`PapOutcome`'s fields). */
+export type PapOutcomeData = {
+  /** The company, as the person knows it (its domain or its name). */
+  company: string;
+  /** What was confirmed, in the company's words. */
+  summary: string;
+  operation_ref: string;
+  revision: number;
+  state: PapOutcomeState;
+  /**
+   * The company's final `result.summary`, verbatim — a failed operation's
+   * partial effects included; null while in progress, never null once final.
+   */
+  result: string | null;
+  /** Who confirmed it: the person, or a standing permission they gave; null when read back. */
+  approved_by: "user" | "standing_permission" | null;
+};
+
+/** A display of what a confirmed operation came to, as the page receives it. */
+export type PapOutcomeDisplay = {
+  type: typeof PAP_OUTCOME_TYPE;
+  version: typeof PAP_OUTCOME_VERSION;
+  id: string;
+  text: string;
+  data: PapOutcomeData;
+  actions?: unknown[];
+};
+
+const OUTCOME_KEYS = ["company", "summary", "operation_ref", "revision", "state", "result", "approved_by"] as const;
+
+const OUTCOME_LEADS: Record<PapOutcomeState, string> = {
+  succeeded: "Done at",
+  failed: "Failed at",
+  in_progress: "Still in progress at",
+  cancelled: "Cancelled at",
+  expired: "Expired at",
+};
+
+/**
+ * Whether a value is an outcome's `data`, as `PapOutcome` sends it: every
+ * field, of its type, and no other; a result once final and none before.
+ */
+export function isPapOutcomeData(value: unknown): value is PapOutcomeData {
+  if (!isObject(value) || !hasExactly(value, OUTCOME_KEYS)) return false;
+  const { company, summary, operation_ref, revision, state, result, approved_by } = value;
+  if (!isFilled(company) || !isFilled(summary) || !isFilled(operation_ref) || !isRevision(revision)) return false;
+  if (!PAP_OUTCOME_STATES.includes(state as PapOutcomeState)) return false;
+  if (state === "in_progress" ? result !== null : !isFilled(result)) return false;
+  return approved_by === null || approved_by === "user" || approved_by === "standing_permission";
+}
+
+/** Whether a display is what a confirmed operation came to, of the version this SDK reads. */
+export function isPapOutcome<D extends DisplayLike>(display: D): display is D & PapOutcomeDisplay {
+  return (
+    display.type === PAP_OUTCOME_TYPE &&
+    display.version === PAP_OUTCOME_VERSION &&
+    typeof display.id === "string" &&
+    typeof display.text === "string" &&
+    isPapOutcomeData(display.data)
+  );
+}
+
+/** What an outcome reads as without a renderer: `PapOutcome.text()`, word for word. */
+export function papOutcomeText(data: PapOutcomeData): string {
+  const lead = `${OUTCOME_LEADS[data.state]} ${data.company}`;
+  return data.result === null
+    ? `${lead}: ${data.summary} (version ${data.revision}) The outcome is not known yet.`
+    : `${lead}: ${data.result} (version ${data.revision})`;
+}
+
+/** An outcome as its display, `text` included; throws when `data` is not one. */
+export function papOutcomeDisplay(id: string, data: PapOutcomeData): PapOutcomeDisplay {
+  if (!id || !isPapOutcomeData(data)) {
+    throw new TypeError("Not an operation's outcome: PapOutcome's fields, each of its type, and no other");
+  }
+  return { type: PAP_OUTCOME_TYPE, version: PAP_OUTCOME_VERSION, id, text: papOutcomeText(data), data, actions: [] };
 }

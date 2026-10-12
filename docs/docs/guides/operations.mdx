@@ -140,6 +140,27 @@ const asked = isPapConfirm(display) ? display.data : null; // PapConfirmData, or
 and a Session given by anything but its reference. Both SDKs are checked
 against one committed example, `protocol/fixtures/pap-confirm-display.json`.
 
+## Show what it came to: `PapOutcome`
+
+Once an operation is confirmed, the host shows what the company says it came
+to, in the company's words: `PapOutcome` (`personal_agent_protocol.ui`), of
+type `application/vnd.datalayer.pap.outcome+json`, version 1, made with
+`PapOutcome.of(company, operation, approved_by=...)` from the operation the
+company answered.
+
+- `result` is the company's final `result.summary`, verbatim — a failed
+  operation's partial effects included — never a model's paraphrase. A final
+  state (`succeeded`, `failed`, `cancelled`, `expired`) requires it.
+- A confirmation sent whose answer was lost reads back as `proposed`: the
+  display says `in_progress` with no result, *The outcome is not known yet*,
+  until reading the operation again tells it. It is never sent twice.
+- `text()` is *Done at shop.example: … (version 2)*, *Failed at …*,
+  *Cancelled at …*, *Expired at …* or *Still in progress at …*.
+
+The TypeScript SDK types it (`PapOutcomeData`) and checks it with
+`isPapOutcome`, against the committed example
+`protocol/fixtures/pap-outcome-display.json`.
+
 ## Security boundary
 
 - Conversation text never confirms an operation, whoever wrote it.

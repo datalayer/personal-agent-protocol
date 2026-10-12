@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 import { MetadataCache } from "./caching.js";
 import { DiscoveryError, ProtocolValidationError } from "./errors.js";
 import { readBoundedBody, withinDeadline, type CacheBounds } from "./limits.js";

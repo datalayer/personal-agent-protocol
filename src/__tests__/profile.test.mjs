@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Both SDKs name the same PAP draft and Operations version (as Python's test_profile.py
 // checks the repository's other statements of it): Python's constants are read from its
 // source here, so either side changing alone fails.

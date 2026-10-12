@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 /**
  * A company's MCP server with a resource-bound Bearer Session Token (§4.3, §6), as in
  * Python's `personal_agent_protocol.mcp`.

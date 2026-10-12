@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Serve the TypeScript Manzanita over TLS for a Python personal agent.
 //
 //   node serve-company.mjs config.json

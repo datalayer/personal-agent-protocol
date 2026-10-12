@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 /**
  * The company side of PAP, assembled from Reactor contributions.
  *

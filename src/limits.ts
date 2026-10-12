@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Guide-level limits shared by both roles: bounded metadata caching, retries,
 // and shared rate-limit budgets (PAP Guides). Portable: no Node APIs.
 

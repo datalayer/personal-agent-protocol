@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Bounded load checks, the TypeScript side of personal_agent_protocol/__tests__/test_load.py:
 // concurrent replays of one DPoP proof, the replay-cache and store kits at concurrency, the
 // memory replay cache bounded by live identifiers, and shared budgets under concurrent

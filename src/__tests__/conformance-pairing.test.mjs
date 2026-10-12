@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The conformance cases as the TypeScript personal agent against the TypeScript company,
 // over real TCP and TLS (TypeScript agent ↔ TypeScript company). The other pairings run
 // from personal_agent_protocol/__tests__/test_cross_language.py.

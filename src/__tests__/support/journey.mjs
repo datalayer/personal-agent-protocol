@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The user-with-a-company journey, run by the TypeScript agent against any company:
 // the steps and expectations come from protocol/scenarios/user-with-a-company.json,
 // which the Python agent's journey reads too.

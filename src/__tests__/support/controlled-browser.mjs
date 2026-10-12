@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The personal agent's own browser (`pap.browserFormPost`), never the user's (§5): the
 // port of Python's personal_agent_protocol.demo.kit.ControlledBrowser. It has its own
 // cookie jar, posts the browser assertion as a form, follows the company's redirects,

@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // What a discovery document advertises, and calls to a company's OpenAPI API, as in
 // Python's personal_agent_protocol.apis: the API types this SDK speaks, the `poppy`
 // conversation endpoint, the OpenAPI description, and `ApiClient`, which calls the API

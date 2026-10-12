@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 /**
  * A `fetch` for untrusted PAP URLs on Node: it resolves the host, refuses any address that
  * is not global unicast, and dials only the address it vetted (SSRF, DNS rebinding).

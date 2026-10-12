@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025-2026 Datalayer, Inc.
+#
+# BSD 3-Clause License
+
 """Generate Docusaurus API inventories from the packages' public exports."""
 
 from __future__ import annotations

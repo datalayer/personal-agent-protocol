@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 /**
  * What a company remembers: an async keyed store of JSON records, and the records.
  *

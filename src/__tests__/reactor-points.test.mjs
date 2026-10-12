@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Every Reactor contribution point, held to protocol/reactor-points.json (as Python's
 // test_reactor_points.py holds the Python SDK): the same ids and contracts, each
 // default, each point's lifecycle (contributed, replaced by a lower order, gone when its

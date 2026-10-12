@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The exact PAP draft this SDK implements, as in Python's personal_agent_protocol.profile.
 // PROTOCOL_PROFILE is the draft, PROTOCOL_REVISION the date of the upstream
 // specification page it was implemented from; the Operations extension version is

@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The company's OpenAPI API through `ApiClient`: the port of the API parts of
 // personal_agent_protocol/__tests__/test_direct_and_api.py, against the TypeScript company
 // in one process, and its refusals from a scripted server.

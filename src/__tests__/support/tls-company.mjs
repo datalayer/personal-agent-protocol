@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The TypeScript Manzanita on node:https, answering for itself and for the personal
 // agents' identity documents by Host, with a throwaway CA.
 import { createServer } from "node:https";

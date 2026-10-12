@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // JSON lines between a node process and the Python test that spawned it.
 import { createInterface } from "node:readline";
 

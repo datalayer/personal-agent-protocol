@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The conformance cases as the TypeScript personal agent: the port of
 // personal_agent_protocol/conformance.py, run against any company over real HTTPS.
 //

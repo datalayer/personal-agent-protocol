@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // A personal agent's host, an in-process network, and real TLS, for the company specs and
 // the language pairings. Nothing here is part of the SDK: it plays the parts a host owns.
 import { execFileSync } from "node:child_process";

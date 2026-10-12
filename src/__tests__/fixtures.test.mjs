@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The shared protocol/fixtures, and the same error cases as the Python models
 // (personal_agent_protocol/__tests__/test_models.py), case for case.
 import assert from "node:assert/strict";

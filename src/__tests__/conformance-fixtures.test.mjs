@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The shared conformance fixtures the SDK decides alone (a `check`, no company), in
 // TypeScript: the same cases as personal_agent_protocol/__tests__/test_fixtures.py.
 import assert from "node:assert/strict";

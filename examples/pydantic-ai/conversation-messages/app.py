@@ -1,3 +1,7 @@
+# Copyright (c) 2025-2026 Datalayer, Inc.
+#
+# BSD 3-Clause License
+
 """A Pydantic AI tool that starts and continues a PAP conversation safely."""
 
 from __future__ import annotations

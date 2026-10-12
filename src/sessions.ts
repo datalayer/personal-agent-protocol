@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { ProtocolValidationError, SessionError } from "./errors.js";

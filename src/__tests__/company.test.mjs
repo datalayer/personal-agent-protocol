@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // The TypeScript reference company (`./server`), driven by the TypeScript clients in one
 // process: the same cases as the Python company's suites.
 import assert from "node:assert/strict";

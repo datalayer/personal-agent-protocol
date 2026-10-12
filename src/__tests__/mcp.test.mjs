@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // One operation through MCP and the website; a Bearer token only at its MCP server. The
 // TypeScript clients against the TypeScript company in one process: the port of
 // personal_agent_protocol/__tests__/test_mcp_and_web.py.

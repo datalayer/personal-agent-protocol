@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 /**
  * A conformance kit for `pap.company.store` backends (the port of the Python
  * `personal_agent_protocol.company.testing`).

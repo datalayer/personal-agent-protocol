@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Credentials never reach logs, errors, model context, URLs, traces, analytics, or the
 // browser bundle: the TypeScript twin of personal_agent_protocol/__tests__/test_canaries.py.
 //

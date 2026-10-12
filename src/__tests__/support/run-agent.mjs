@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Datalayer, Inc.
+ *
+ * BSD 3-Clause License
+ */
+
 // Run the shared journey as the TypeScript personal agent against a company served by
 // Python over TLS.
 //

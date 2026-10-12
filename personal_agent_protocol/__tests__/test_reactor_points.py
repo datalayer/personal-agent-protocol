@@ -83,7 +83,9 @@ class _Executor:
 
 def _reactor(entry: dict[str, Any]) -> PluginPlatform:
     if entry["role"] == "company":
-        config = CompanyConfig(name="Points", domain="points.example", scopes=("a:read",))
+        config = CompanyConfig(
+            name="Points", domain="points.example", scopes=("a:read",), operations=False
+        )
         return build_company(config, http_client=httpx.AsyncClient()).reactor
     platform, _ = build_pap_reactor(http_client=httpx.AsyncClient())
     return platform

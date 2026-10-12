@@ -350,15 +350,17 @@ export interface ManzanitaOptions extends PapCoreOptions {
    * Manzanita restarted (or another replica of it).
    */
   readonly store?: CompanyStore;
+  /** More plugins, after Manzanita's own: a test's replacement policy or store. */
+  readonly plugins?: readonly PlatformInput[];
 }
 
 /** Build Manzanita; serve it with `companyRequestListener` at `manzanita.example`. */
 export function manzanita(
   options: ManzanitaOptions = {},
 ): { readonly service: CompanyService; readonly plugin: ManzanitaPlugin } {
-  const { clock, config, store, ...core } = options;
+  const { clock, config, store, plugins: extra = [], ...core } = options;
   const plugin = new ManzanitaPlugin();
-  const plugins: PlatformInput[] = [plugin.plugin()];
+  const plugins: PlatformInput[] = [plugin.plugin(), ...extra];
   if (store !== undefined) {
     plugins.push({
       name: "manzanita-store",

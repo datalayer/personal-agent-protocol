@@ -403,7 +403,7 @@ def _assert_nothing_leaked(harvest: Harvest) -> None:
         "user code",
         "mediated password",
         "one-time code",
-        "cookie poppy_session",
+        "cookie __Host-poppy_session",
         "cookie __Host-poppy_consent",
     ):
         assert kind in kinds, f"no {kind} was exchanged: the canary run is incomplete"

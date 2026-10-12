@@ -287,7 +287,7 @@ The TypeScript reference company serves the website as the Python one does
 when its configuration sets `web: true`: discovery lists
 `web.browser_session_endpoint`, a verified browser assertion (first use only,
 from a live Session of the same agent and user) answers `303` to its
-`return_to` with the company's own `poppy_session` cookie (`Secure`,
+`return_to` with the company's own `__Host-poppy_session` cookie (`Secure`,
 `HttpOnly`, `SameSite=Lax`, no lifetime of its own, valid only while the
 Session is), and each operation's `url` shows it in that Session with a form
 to confirm or cancel it: the same operation, performed at most once whichever

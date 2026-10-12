@@ -100,12 +100,17 @@ class Turn:
 
 @dataclass(frozen=True)
 class ProposedOperation:
-    """An operation the agent proposes; the service gives it an ID and expiry."""
+    """An operation the agent proposes; the service gives it an ID and expiry.
+
+    `scopes` are what a Session must hold to confirm it, recorded with it;
+    none named, the company's `write_scopes`.
+    """
 
     action: str
     summary: str
     terms: dict[str, Any]
     user_approval_required: bool = False
+    scopes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

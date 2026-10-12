@@ -454,7 +454,7 @@ const CONSENT_PAGE = "https://datalayer.ai/pap/consent?slug=orders-helper&reques
 
 test("hosted page templates are checked", async () => {
   const { CompanyConfig } = await import("../../lib/server.js");
-  const base = { name: "Shop", domain: "shop.example", scopes: ["orders:read"] };
+  const base = { name: "Shop", domain: "shop.example", scopes: ["orders:read"], operations: false };
   assert.throws(() => new CompanyConfig({ ...base, consentPage: "https://datalayer.ai/pap/consent" }), /consentPage/);
   assert.throws(() => new CompanyConfig({ ...base, devicePage: "http://datalayer.ai/pap/device" }), /HTTPS/);
 });

@@ -87,7 +87,7 @@ is intentionally a company web-framework responsibility rather than an SDK
 side effect.
 
 Both reference companies (Python and TypeScript, with `web` set in their
-configuration) do this at `/poppy/browser-session`: the `poppy_session` cookie
+configuration) do this at `/poppy/browser-session`: the `__Host-poppy_session` cookie
 is `Secure`, `HttpOnly` and `SameSite=Lax`, has no lifetime of its own, and
 stands for the Session only while it is live, so signing out reaches the
 website on its next request. Each operation's page (`/operations/{id}`) shows

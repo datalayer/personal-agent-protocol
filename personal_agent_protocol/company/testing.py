@@ -150,7 +150,9 @@ def record_samples(now: datetime) -> dict[str, Any]:
             forgotten=frozenset({"evt_0"}),
         ),
         MESSAGE_ID: MessageReceipt("cnv_1", "digest"),
-        OPERATION: StoredOperation(operation, "exchange", ("c", "u"), "acct_1", True),
+        OPERATION: StoredOperation(
+            operation, "exchange", ("c", "u"), "acct_1", ("orders:write",), True
+        ),
         PROPOSAL: OperationProposal("op_1"),
         BROWSER_COOKIE: SessionPointer("ses_1"),
     }

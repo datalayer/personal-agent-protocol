@@ -628,6 +628,8 @@ class StoredOperation:
     action: str
     owner: tuple[str, str]
     account_id: str
+    #: The scopes a Session must hold to confirm it, recorded when it was proposed.
+    scopes: tuple[str, ...]
     performed: bool = False
 
     def to_json(self) -> JsonObject:
@@ -636,6 +638,7 @@ class StoredOperation:
             "action": self.action,
             "owner": list(self.owner),
             "account_id": self.account_id,
+            "scopes": list(self.scopes),
             "performed": self.performed,
         }
 
@@ -647,6 +650,7 @@ class StoredOperation:
             action=value["action"],
             owner=(client_id, pairwise_user_id),
             account_id=value["account_id"],
+            scopes=tuple(value["scopes"]),
             performed=value["performed"],
         )
 

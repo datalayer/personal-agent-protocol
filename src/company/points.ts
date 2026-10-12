@@ -59,12 +59,17 @@ export interface Turn {
   readonly isDirect: boolean;
 }
 
-/** An operation the agent proposes; the service gives it an ID and expiry. */
+/**
+ * An operation the agent proposes; the service gives it an ID and expiry. `scopes` are
+ * what a Session must hold to confirm it, recorded with it; none named, the company's
+ * `writeScopes`.
+ */
 export interface ProposedOperation {
   readonly action: string;
   readonly summary: string;
   readonly terms: Readonly<Record<string, unknown>>;
   readonly userApprovalRequired?: boolean;
+  readonly scopes?: readonly string[];
 }
 
 /**

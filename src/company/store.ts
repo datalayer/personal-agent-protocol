@@ -331,6 +331,8 @@ export interface StoredOperation {
   readonly action: string;
   readonly owner: readonly [string, string];
   readonly accountId: string;
+  /** The scopes a Session must hold to confirm it, recorded when it was proposed. */
+  readonly scopes: readonly string[];
   readonly performed: boolean;
 }
 

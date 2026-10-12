@@ -48,7 +48,12 @@ def hosted_world(**pages: str) -> tuple[World, HandoffBrowser]:
 
 
 def test_hosted_page_templates_are_checked() -> None:
-    base = {"name": "Shop", "domain": "shop.example", "scopes": ("orders:read",)}
+    base = {
+        "name": "Shop",
+        "domain": "shop.example",
+        "scopes": ("orders:read",),
+        "operations": False,
+    }
     with pytest.raises(ValueError, match="consent_page"):
         CompanyConfig(**base, consent_page="https://datalayer.ai/pap/consent")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="HTTPS"):

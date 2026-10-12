@@ -16,9 +16,23 @@ from .service import CompanyRequest, CompanyService
 #: TypeScript company's Node adapter.
 MAX_BODY_BYTES = 1 << 20
 
+#: Headers a request carries at most once: a second is refused (`400`).
+_SINGLE_HEADERS = ("authorization", "dpop")
+
 Scope = MutableMapping[str, Any]
 Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
+
+
+async def _send_json(send: Send, status: int, payload: bytes) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [(b"content-type", b"application/json"), (b"cache-control", b"no-store")],
+        }
+    )
+    await send({"type": "http.response.body", "body": payload})
 
 
 def company_app(service: CompanyService) -> Callable[[Scope, Receive, Send], Awaitable[None]]:
@@ -37,19 +51,18 @@ def company_app(service: CompanyService) -> Callable[[Scope, Receive, Send], Awa
             message = await receive()
             body += message.get("body", b"")
             if len(body) > MAX_BODY_BYTES:
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 413,
-                        "headers": [(b"content-type", b"application/json")],
-                    }
-                )
-                await send({"type": "http.response.body", "body": b'{"error":"request_too_large"}'})
+                await _send_json(send, 413, b'{"error":"request_too_large"}')
                 return
             if not message.get("more_body"):
                 break
         query = scope.get("query_string", b"").decode()
         url = f"{service.config.base}{scope['path']}" + (f"?{query}" if query else "")
+        names = [name.decode().lower() for name, _ in scope["headers"]]
+        if any(names.count(name) > 1 for name in _SINGLE_HEADERS):
+            # One credential and one proof per request: a repeated one is never
+            # merged or picked from (RFC 9449 §4.3, RFC 6750 §2).
+            await _send_json(send, 400, b'{"error":"invalid_request"}')
+            return
         headers = {name.decode().lower(): value.decode() for name, value in scope["headers"]}
         response = await service.handle(
             CompanyRequest(method=scope["method"], url=url, headers=headers, body=body)

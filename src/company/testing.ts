@@ -179,6 +179,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       action: "exchange",
       owner: ["c", "u"],
       accountId: "acct_1",
+      scopes: ["orders:write"],
       performed: true,
     } satisfies StoredOperation,
     [RecordKinds.proposal]: { operationId: "op_1" } satisfies OperationProposal,

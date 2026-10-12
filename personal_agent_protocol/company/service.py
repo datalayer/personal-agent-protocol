@@ -56,12 +56,17 @@ from typing import Any, Literal, Protocol, TypeVar, cast
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import jwt
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from ..browser import verify_browser_assertion
 from ..crypto import verify_dpop_proof
-from ..errors import PersonalAgentProtocolError, ProofError, SessionError
+from ..errors import (
+    PersonalAgentProtocolError,
+    ProofError,
+    ProtocolValidationError,
+    SessionError,
+)
 from ..json import loads_strict
 from ..models import Message, Operation, OperationConfirmation, OperationResult
 from ..operations import OPERATIONS_VERSION
@@ -110,6 +115,7 @@ from .store import (
     CODE,
     CONVERSATION,
     DEVICE,
+    DPOP,
     MEDIATED,
     MESSAGE_ID,
     OPERATION,
@@ -168,8 +174,9 @@ def _key_id(compact: str) -> str | None:
 
 #: The consent page's cookie: `__Host-`, so no other host or path can set it.
 CONSENT_COOKIE = "__Host-poppy_consent"
-#: The website's cookie, standing for the agent's Session in its own browser (§5).
-WEB_COOKIE = "poppy_session"
+#: The website's cookie, standing for the agent's Session in its own browser (§5): `__Host-`
+#: (Secure, Path=/, no Domain), so no other host or path can set or shadow it.
+WEB_COOKIE = "__Host-poppy_session"
 
 
 def _bound(secret: str, purpose: str) -> str:
@@ -244,6 +251,12 @@ class CompanyConfig:
                 raise ValueError(f"{name} must be an HTTPS URL without a fragment")
         if self.consent_page is not None and "{request_id}" not in self.consent_page:
             raise ValueError("consent_page must contain {request_id}")
+        if any(scope not in self.scopes for scope in self.write_scopes):
+            raise ValueError("write_scopes must be among scopes")
+        if self.operations and not self.write_scopes:
+            # Confirming an operation needs a write scope: without one, any signed-in
+            # Session, whatever it was granted, could confirm (Operations §3.3).
+            raise ValueError("operations need write_scopes: the scopes confirming one requires")
 
     @property
     def base(self) -> str:
@@ -335,6 +348,15 @@ def _json_error(status: int, error: str, **extra: object) -> CompanyResponse:
             challenge += f', scope="{scope}"'
         headers["WWW-Authenticate"] = challenge
     return CompanyResponse(status, {"error": error, **extra}, headers)
+
+
+def _json_object(body: bytes) -> dict[str, Any]:
+    """A request body that must be one JSON object: anything else is `invalid_request`."""
+
+    value = loads_strict(body)
+    if not isinstance(value, dict):
+        raise _RefusedError(400, "invalid_request")
+    return value
 
 
 def _digest(token: str) -> str:
@@ -450,6 +472,10 @@ class CompanyService:
         except (SessionError, ProofError) as error:
             status = error.status_code or (401 if error.code == "invalid_client" else 400)
             return _json_error(status, error.code)
+        except (ProtocolValidationError, ValidationError):
+            # A body that is not JSON, or not the shape the protocol defines: the
+            # caller's mistake, never the company's (no 500).
+            return _json_error(400, "invalid_request")
         return _json_error(404, "not_found")
 
     # Discovery ---------------------------------------------------------------------
@@ -534,8 +560,7 @@ class CompanyService:
         client_id = form.get("client_id", "")
         if form.get("client_assertion_type") != JWT_CLIENT_ASSERTION or not client_id:
             raise _RefusedError(401, "invalid_client")
-        policy = cast(ClientPolicy, first_contribution(self.reactor, CLIENT_POLICIES, "policy"))
-        if not await policy.allows(client_id):
+        if not await self._allowed(client_id):
             raise _RefusedError(401, "invalid_client")
         resolver = cast(
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client resolver")
@@ -560,6 +585,16 @@ class CompanyService:
         if known is None or known.extensions != extensions:
             await self.store.put(CLIENT, client_id, KnownClient(extensions).to_json())
         return client_id
+
+    async def _allowed(self, client_id: str) -> bool:
+        """The company's policy on this agent, asked before anything is fetched for it.
+
+        A blocked `client_id` is never resolved (no metadata or keys fetched from
+        its domain), and a blocked agent's tokens stop working at once.
+        """
+
+        policy = cast(ClientPolicy, first_contribution(self.reactor, CLIENT_POLICIES, "policy"))
+        return bool(await policy.allows(client_id))
 
     async def _supports_operations(self, client_id: str) -> bool:
         """Whether the agent declared the Operations extension when it last authenticated."""
@@ -954,8 +989,10 @@ class CompanyService:
         session: IssuedSession,
         account_id: str,
         scopes: tuple[str, ...],
-        thumbprint: str | None = None,
+        thumbprint: str,
     ) -> CompanyResponse:
+        """Sign the Session in: `session` is its DPoP record, `thumbprint` the proven key."""
+
         if session.account_id is not None and session.account_id != account_id:
             raise _RefusedError(400, "account_mismatch")
         account_token = self._id("acct")
@@ -986,14 +1023,22 @@ class CompanyService:
             expires_at=expires_at,
         )
         await self._remember_family(session.client_id, account_id, family)
-        signed_in = replace(
-            session,
+        # The signed-in token is the Session's own: DPoP, bound to the key that proved
+        # possession, for no single resource. It replaces only the DPoP token; a Bearer
+        # token for the MCP server is renewed with the Account Token (§4.3, §4.8).
+        signed_in = IssuedSession(
+            session_id=session.session_id,
+            client_id=session.client_id,
+            pairwise_user_id=session.pairwise_user_id,
+            key_thumbprint=thumbprint,
+            expires_at=session.expires_at,
             account_id=account_id,
             scopes=scopes,
             account_token=family,
-            key_thumbprint=thumbprint or session.key_thumbprint,
+            token_type=DPOP,
+            resource=None,
         )
-        return await self._issue(signed_in, refresh_token=account_token)
+        return await self._issue(signed_in, refresh_token=account_token, replacing={DPOP})
 
     async def _remember_family(self, client_id: str, account_id: str, family: str) -> None:
         key = _composite(client_id, account_id)
@@ -1087,8 +1132,20 @@ class CompanyService:
         return latest + self.config.account_token_lifetime
 
     async def _session_by_id(self, session_id: str) -> IssuedSession | None:
+        """The Session by its ID: its latest DPoP token's record, never a Bearer one.
+
+        A Bearer token stands for the Session only at the MCP server it was issued
+        for (§4.3): a grant naming the Session builds on its DPoP record.
+        """
+
         stored = await self._read(SESSION, session_id, StoredSession.from_json)
-        return None if stored is None else stored.current
+        if stored is None:
+            return None
+        latest = stored.tokens.get(stored.latest)
+        if latest is not None and latest.token_type == DPOP:
+            return latest
+        dpop = [token for token in stored.tokens.values() if token.token_type == DPOP]
+        return max(dpop, key=lambda token: token.expires_at) if dpop else None
 
     async def _token_session(self, token: str) -> IssuedSession | None:
         """The state of the Session token `token`, while the Session still holds it."""
@@ -1108,7 +1165,8 @@ class CompanyService:
         query = dict(parse_qsl(urlsplit(request.url).query))
         client_id = query.get("client_id", "")
         redirect_uri = query.get("redirect_uri", "")
-        policy = cast(ClientPolicy, first_contribution(self.reactor, CLIENT_POLICIES, "policy"))
+        if not client_id or not await self._allowed(client_id):
+            return self._page(400, "This sign-in request is not valid.")
         resolver = cast(
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
         )
@@ -1117,7 +1175,7 @@ class CompanyService:
         except (PersonalAgentProtocolError, ValueError):
             return self._page(400, "This agent could not be verified.")
         # An unknown client or redirect is never redirected to: that would be an open redirector.
-        if not await policy.allows(client_id) or redirect_uri not in metadata.redirect_uris:
+        if redirect_uri not in metadata.redirect_uris:
             return self._page(400, "This sign-in request is not valid.")
         state = query.get("state", "")
         scopes = tuple(scope for scope in query.get("scope", "").split(" ") if scope)
@@ -1368,6 +1426,8 @@ class CompanyService:
         if session is None or self._now() >= session.expires_at or bearer:
             # A Bearer token works only at the MCP server it was issued for (§4.3).
             raise _RefusedError(401, "invalid_token")
+        if not await self._allowed(session.client_id):
+            raise _RefusedError(401, "invalid_token")
         thumbprint = await self._dpop(request, access_token=token)
         if thumbprint != session.key_thumbprint:
             raise _RefusedError(401, "invalid_dpop_proof")
@@ -1379,8 +1439,11 @@ class CompanyService:
         credentials = body.get("credentials") if isinstance(body, dict) else None
         if not isinstance(credentials, dict):
             raise _RefusedError(400, "invalid_request")
-        requested = tuple(s for s in str(body.get("scope", "")).split(" ") if s)
-        granted = tuple(scope for scope in requested if scope in self.config.scopes)
+        scope = body.get("scope")
+        granted = tuple(s for s in scope.split(" ") if s) if isinstance(scope, str) else ()
+        if not granted or any(s not in self.config.scopes for s in granted):
+            # Missing, unknown, or unavailable scopes are refused, never narrowed (§4.4).
+            raise _RefusedError(400, "invalid_scope")
         accounts = cast(
             AccountDirectory, first_contribution(self.reactor, COMPANY_ACCOUNTS, "accounts")
         )
@@ -1464,7 +1527,7 @@ class CompanyService:
     async def _signed_in_body(
         self, session: IssuedSession, account_id: str, scopes: tuple[str, ...]
     ) -> CompanyResponse:
-        response = await self._sign_in(session, account_id, scopes)
+        response = await self._sign_in(session, account_id, scopes, session.key_thumbprint)
         return replace(response, body={"status": "complete", **cast(dict, response.body)})
 
     # Conversations -------------------------------------------------------------------
@@ -1510,12 +1573,13 @@ class CompanyService:
 
     async def _start_conversation(self, request: CompanyRequest) -> CompanyResponse:
         _, session = await self._caller(request)
-        body = loads_strict(request.body)
+        body = _json_object(request.body)
         message = Message.model_validate(body.get("message"))
         owner = (session.client_id, session.pairwise_user_id)
         replay = await self._replayed(owner, message)
         if replay is not None:
-            return self._answer(request, await self._conversation(replay), 201)
+            # A retried start answers only a caller that may read the conversation now.
+            return self._answer(request, await self._owned(replay, session), 201)
         parent_id = body.get("parent_conversation_id")
         parent = None if parent_id is None else await self._direct_parent(str(parent_id), session)
         conversation = StoredConversation(
@@ -1526,7 +1590,7 @@ class CompanyService:
         conversation_id = conversation.conversation_id
         replay = await self._claim(owner, message, conversation_id)
         if replay is not None:
-            return self._answer(request, await self._conversation(replay), 201)
+            return self._answer(request, await self._owned(replay, session), 201)
         await self.store.put(CONVERSATION, conversation_id, conversation.to_json())
         if parent is not None:
             await self._open_direct(parent.conversation_id, conversation_id, owner, message)
@@ -1607,7 +1671,7 @@ class CompanyService:
                 raise _RefusedError(404, "conversation_not_found")
             return self._receipt(changed[1], 202)
         if action == "messages":
-            message = Message.model_validate(loads_strict(request.body).get("message"))
+            message = Message.model_validate(_json_object(request.body).get("message"))
             owner = (session.client_id, session.pairwise_user_id)
             replay = await self._replayed(owner, message)
             if replay is None and await self._claim(owner, message, conversation_id) is None:
@@ -1886,7 +1950,11 @@ class CompanyService:
             result=None,
         )
         stored = StoredOperation(
-            operation=operation, action=proposal.action, owner=owner, account_id=account_id
+            operation=operation,
+            action=proposal.action,
+            owner=owner,
+            account_id=account_id,
+            scopes=self._operation_scopes(proposal),
         )
         await self.store.put(OPERATION, operation_id, stored.to_json())
         await self.store.put(
@@ -1896,6 +1964,14 @@ class CompanyService:
             expires_at=operation.expires_at,
         )
         return operation
+
+    def _operation_scopes(self, proposal: Any) -> tuple[str, ...]:
+        """The scopes confirming this operation requires: its own, else the write scopes."""
+
+        scopes = tuple(proposal.scopes) or self.config.write_scopes
+        if any(scope not in self.config.scopes for scope in scopes):
+            raise ValueError("an operation's scopes must be among the company's scopes")
+        return scopes
 
     async def operation_record(self, operation_id: str) -> StoredOperation:
         """An operation as the company keeps it: its record, action, owner, and account."""
@@ -2052,8 +2128,10 @@ class CompanyService:
         """Confirm, whichever channel it comes through: at most once (Operations §4.4, §6)."""
 
         operation = stored.operation
-        if any(scope not in session.scopes for scope in self.config.write_scopes):
-            raise _RefusedError(403, "insufficient_scope", scope=" ".join(self.config.write_scopes))
+        # The scopes recorded with the operation when it was proposed, whichever
+        # channel (API, MCP, conversation) proposed it and whichever confirms it.
+        if any(scope not in session.scopes for scope in stored.scopes):
+            raise _RefusedError(403, "insufficient_scope", scope=" ".join(stored.scopes))
         if operation.state != "proposed":
             # At most once: a retried or late confirmation returns the record unchanged.
             return CompanyResponse(200, operation.model_dump(mode="json"))
@@ -2188,6 +2266,7 @@ class CompanyService:
             or self._now() >= session.expires_at
             or session.token_type != "Bearer"  # noqa: S105 - OAuth token type
             or session.resource != self.config.mcp_url
+            or not await self._allowed(session.client_id)
         ):
             return None
         return session
@@ -2300,6 +2379,8 @@ class CompanyService:
             claims = jwt.decode(assertion, options={"verify_signature": False})
             header = jwt.get_unverified_header(assertion)
             client_id = str(claims["iss"])
+            if not await self._allowed(client_id):
+                return refused
             resolver = cast(
                 ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
             )

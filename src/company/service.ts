@@ -51,7 +51,7 @@ import { decodeJwt, decodeProtectedHeader, importJWK, type JWK } from "jose";
 
 import { verifyBrowserAssertion, type VerifiedBrowserAssertion } from "../browser-server.js";
 import { verifyDpopProof } from "../crypto.js";
-import { ProofError, SessionError } from "../errors.js";
+import { ProofError, ProtocolValidationError, SessionError } from "../errors.js";
 import { parseJsonStrict } from "../json.js";
 import {
   parseMessage,
@@ -209,6 +209,14 @@ export class CompanyConfig {
     if (this.consentPage !== undefined && !this.consentPage.includes("{request_id}")) {
       throw new RangeError("consentPage must contain {request_id}");
     }
+    if (this.writeScopes.some((scope) => !this.scopes.includes(scope))) {
+      throw new RangeError("writeScopes must be among scopes");
+    }
+    if (this.operations && !this.writeScopes.length) {
+      // Confirming an operation needs a write scope: without one, any signed-in Session,
+      // whatever it was granted, could confirm (Operations §3.3).
+      throw new RangeError("operations need writeScopes: the scopes confirming one requires");
+    }
   }
 
   get base(): string {
@@ -320,8 +328,8 @@ function base64Url(bytes: Uint8Array): string {
 
 /** The consent page's cookie: `__Host-`, so no other host or path can set it. */
 export const CONSENT_COOKIE = "__Host-poppy_consent";
-/** The website's cookie, standing for the agent's Session in its own browser (§5). */
-export const WEB_COOKIE = "poppy_session";
+/** The website's cookie for the agent's Session (§5): `__Host-`, so no other host or path can set it. */
+export const WEB_COOKIE = "__Host-poppy_session";
 
 /** What the user decided on the company's own consent page, checked by `consentDecision`. */
 export interface ConsentDecision {
@@ -398,6 +406,13 @@ function escapeHtml(value: string): string {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A request body that must be one JSON object: anything else is `invalid_request`. */
+function jsonObject(body: Uint8Array | string | undefined): Record<string, unknown> {
+  const value = parseJsonStrict(text(body));
+  if (!isObject(value)) throw new Refused(400, "invalid_request");
+  return value;
 }
 
 function sameOwner(a: readonly [string, string], b: readonly [string, string]): boolean {
@@ -576,6 +591,9 @@ export class CompanyService {
         const status = error.statusCode ?? (error.code === "invalid_client" ? 401 : 400);
         return jsonError(status, error.code);
       }
+      // A body that is not JSON, or not the shape the protocol defines: the caller's
+      // mistake, never the company's (no 500).
+      if (error instanceof ProtocolValidationError) return jsonError(400, "invalid_request");
       throw error;
     }
     return jsonError(404, "not_found");
@@ -656,8 +674,7 @@ export class CompanyService {
     if (form.client_assertion_type !== JWT_CLIENT_ASSERTION || !clientId) {
       throw new Refused(401, "invalid_client");
     }
-    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
-    if (!(await policy.allows(clientId))) throw new Refused(401, "invalid_client");
+    if (!(await this.#allowed(clientId))) throw new Refused(401, "invalid_client");
     const resolver = firstContribution(this.reactor, ClientResolvers, "client resolver");
     let resolved: readonly [ClientMetadata, JsonWebKeySet];
     try {
@@ -680,6 +697,15 @@ export class CompanyService {
       await this.store.put(RecordKinds.client, clientId, json({ extensions } satisfies KnownClient));
     }
     return clientId;
+  }
+
+  /**
+   * The company's policy on this agent, asked before anything is fetched for it: a
+   * blocked `client_id` is never resolved (no metadata or keys fetched from its domain),
+   * and a blocked agent's tokens stop working at once.
+   */
+  async #allowed(clientId: string): Promise<boolean> {
+    return firstContribution(this.reactor, ClientPolicies, "policy").allows(clientId);
   }
 
   /** Whether the agent declared the Operations extension when it last authenticated. */
@@ -1121,11 +1147,12 @@ export class CompanyService {
     return changed !== undefined && !changed[1].revoked;
   }
 
+  /** Sign the Session in: `session` is its DPoP record, `thumbprint` the proven key. */
   async #signIn(
     session: IssuedSession,
     accountId: string,
     scopes: readonly string[],
-    thumbprint?: string,
+    thumbprint: string,
   ): Promise<CompanyResponse> {
     if (session.accountId !== undefined && session.accountId !== accountId) {
       throw new Refused(400, "account_mismatch");
@@ -1152,16 +1179,20 @@ export class CompanyService {
     };
     await this.store.put(RecordKinds.accountFamily, family, json(signIn), expiry(expiresAt));
     await this.#rememberFamily(session.clientId, accountId, family);
-    return this.#issue(
-      {
-        ...session,
-        accountId,
-        scopes,
-        accountToken: family,
-        keyThumbprint: thumbprint || session.keyThumbprint,
-      },
-      accountToken,
-    );
+    // The signed-in token is the Session's own: DPoP, bound to the key that proved
+    // possession, for no single resource. It replaces only the DPoP token; a Bearer token
+    // for the MCP server is renewed with the Account Token (§4.3, §4.8).
+    const signedIn: IssuedSession = {
+      sessionId: session.sessionId,
+      clientId: session.clientId,
+      pairwiseUserId: session.pairwiseUserId,
+      keyThumbprint: thumbprint,
+      expiresAt: session.expiresAt,
+      accountId,
+      scopes,
+      accountToken: family,
+    };
+    return this.#issue(signedIn, accountToken, ["DPoP"]);
   }
 
   async #rememberFamily(clientId: string, accountId: string, family: string): Promise<void> {
@@ -1177,7 +1208,6 @@ export class CompanyService {
     throw new Refused(503, "temporarily_unavailable");
   }
 
-  /** Issue a token for the Session; it replaces the Session's earlier tokens. */
   /** Issue a token for the Session; it replaces the Session's tokens of `replacing` types. */
   async #issue(
     session: IssuedSession,
@@ -1242,10 +1272,22 @@ export class CompanyService {
     throw new Refused(503, "temporarily_unavailable");
   }
 
+  /**
+   * The Session by its ID: its latest DPoP token's record, never a Bearer one. A Bearer
+   * token stands for the Session only at the MCP server it was issued for (§4.3): a grant
+   * naming the Session builds on its DPoP record.
+   */
   async #sessionById(sessionId: string): Promise<IssuedSession | undefined> {
     const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
     if (stored === undefined) return undefined;
-    return stored.tokens[stored.latest];
+    const latest = stored.tokens[stored.latest];
+    if (latest !== undefined && latest.tokenType === undefined) return latest;
+    let dpop: IssuedSession | undefined;
+    for (const token of Object.values(stored.tokens)) {
+      if (token.tokenType !== undefined) continue;
+      if (dpop === undefined || Date.parse(token.expiresAt) > Date.parse(dpop.expiresAt)) dpop = token;
+    }
+    return dpop;
   }
 
   /** The state of the Session token `token`, while the Session still holds it. */
@@ -1264,7 +1306,9 @@ export class CompanyService {
     const query = pairs(new URL(request.url).search);
     const clientId = query.client_id ?? "";
     const redirectUri = query.redirect_uri ?? "";
-    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
+    if (!clientId || !(await this.#allowed(clientId))) {
+      return page(400, "This sign-in request is not valid.");
+    }
     const resolver = firstContribution(this.reactor, ClientResolvers, "client");
     let metadata: ClientMetadata;
     try {
@@ -1273,7 +1317,7 @@ export class CompanyService {
       return page(400, "This agent could not be verified.");
     }
     // An unknown client or redirect is never redirected to: that would be an open redirector.
-    if (!(await policy.allows(clientId)) || !metadata.redirect_uris.includes(redirectUri)) {
+    if (!metadata.redirect_uris.includes(redirectUri)) {
       return page(400, "This sign-in request is not valid.");
     }
     const state = query.state ?? "";
@@ -1548,7 +1592,8 @@ export class CompanyService {
       session === undefined ||
       this.#passed(session.expiresAt) ||
       session.tokenType !== "Bearer" ||
-      session.resource !== this.config.mcpUrl
+      session.resource !== this.config.mcpUrl ||
+      !(await this.#allowed(session.clientId))
     ) {
       return undefined;
     }
@@ -1659,6 +1704,7 @@ export class CompanyService {
       // A Bearer token works only at the MCP server it was issued for (§4.3).
       throw new Refused(401, "invalid_token");
     }
+    if (!(await this.#allowed(session.clientId))) throw new Refused(401, "invalid_token");
     const thumbprint = await this.#dpop(request, token);
     if (thumbprint !== session.keyThumbprint) throw new Refused(401, "invalid_dpop_proof");
     return [key, session];
@@ -1670,8 +1716,12 @@ export class CompanyService {
     const body = source ? parseJsonStrict(source) : {};
     const credentials = isObject(body) ? body.credentials : undefined;
     if (!isObject(credentials)) throw new Refused(400, "invalid_request");
-    const requested = words(isObject(body) ? body.scope : "");
-    const granted = requested.filter((scope) => this.config.scopes.includes(scope));
+    const scope = isObject(body) ? body.scope : undefined;
+    const granted = typeof scope === "string" ? words(scope) : [];
+    if (!granted.length || granted.some((item) => !this.config.scopes.includes(item))) {
+      // Missing, unknown, or unavailable scopes are refused, never narrowed (§4.4).
+      throw new Refused(400, "invalid_scope");
+    }
     const accounts = firstContribution(this.reactor, CompanyAccounts, "accounts");
     const secrets: Record<string, SecretValue> = {};
     for (const [name, value] of Object.entries(credentials)) {
@@ -1772,7 +1822,7 @@ export class CompanyService {
     accountId: string,
     scopes: readonly string[],
   ): Promise<CompanyResponse> {
-    const response = await this.#signIn(session, accountId, scopes);
+    const response = await this.#signIn(session, accountId, scopes, session.keyThumbprint);
     return {
       ...response,
       body: { status: "complete", ...(response.body as Record<string, unknown>) },
@@ -1830,14 +1880,15 @@ export class CompanyService {
 
   async #startConversation(request: CompanyRequest): Promise<CompanyResponse> {
     const [, session] = await this.#caller(request);
-    const body = parseJsonStrict(text(request.body));
-    const message = parseMessage(isObject(body) ? body.message : undefined);
+    const body = jsonObject(request.body);
+    const message = parseMessage(body.message);
     const owner = [session.clientId, session.pairwiseUserId] as const;
     const replay = await this.#replayed(owner, message);
     if (replay !== undefined) {
-      return this.#answer(request, await this.#conversation(replay), 201);
+      // A retried start answers only a caller that may read the conversation now.
+      return this.#answer(request, await this.#owned(replay, session), 201);
     }
-    const parentId = isObject(body) ? body.parent_conversation_id : undefined;
+    const parentId = body.parent_conversation_id;
     let parent: StoredConversation | undefined;
     if (parentId !== undefined && parentId !== null) {
       parent = await this.#owned(String(parentId), session);
@@ -1857,7 +1908,7 @@ export class CompanyService {
     };
     const claimed = await this.#claim(owner, message, conversationId);
     if (claimed !== undefined) {
-      return this.#answer(request, await this.#conversation(claimed), 201);
+      return this.#answer(request, await this.#owned(claimed, session), 201);
     }
     await this.store.put(RecordKinds.conversation, conversationId, json(conversation));
     if (parent !== undefined) {
@@ -1936,8 +1987,7 @@ export class CompanyService {
       return this.#receipt(changed[1], 202);
     }
     if (action === "messages") {
-      const body = parseJsonStrict(text(request.body));
-      const message = parseMessage(isObject(body) ? body.message : undefined);
+      const message = parseMessage(jsonObject(request.body).message);
       const owner = [session.clientId, session.pairwiseUserId] as const;
       const replay = await this.#replayed(owner, message);
       if (replay === undefined && (await this.#claim(owner, message, conversationId)) === undefined) {
@@ -2251,12 +2301,22 @@ export class CompanyService {
       action: proposal.action,
       owner,
       accountId,
+      scopes: this.#operationScopes(proposal.scopes),
       performed: false,
     };
     await this.store.put(RecordKinds.operation, operationId, json(stored));
     const pointer: OperationProposal = { operationId };
     await this.store.put(RecordKinds.proposal, key, json(pointer), expiry(expiresAt));
     return operation;
+  }
+
+  /** The scopes confirming an operation requires: its own, else the write scopes. */
+  #operationScopes(scopes: readonly string[] | undefined): readonly string[] {
+    const required = scopes?.length ? [...scopes] : [...this.config.writeScopes];
+    if (required.some((scope) => !this.config.scopes.includes(scope))) {
+      throw new RangeError("an operation's scopes must be among the company's scopes");
+    }
+    return required;
   }
 
   /** An operation as the company keeps it: its record, action, owner, and account. */
@@ -2428,8 +2488,10 @@ export class CompanyService {
     approvedBy: unknown,
   ): Promise<CompanyResponse> {
     const operation = stored.operation;
-    if (this.config.writeScopes.some((scope) => !session.scopes.includes(scope))) {
-      throw new Refused(403, "insufficient_scope", { scope: this.config.writeScopes.join(" ") });
+    // The scopes recorded with the operation when it was proposed, whichever channel
+    // (API, MCP, conversation) proposed it and whichever confirms it.
+    if (stored.scopes.some((scope) => !session.scopes.includes(scope))) {
+      throw new Refused(403, "insufficient_scope", { scope: stored.scopes.join(" ") });
     }
     if (operation.state !== "proposed") {
       // At most once: a retried or late confirmation returns the record unchanged.
@@ -2560,6 +2622,7 @@ export class CompanyService {
     }
     if (typeof claims.iss !== "string") return undefined;
     const clientId = claims.iss;
+    if (!(await this.#allowed(clientId))) return undefined;
     const resolver = firstContribution(this.reactor, ClientResolvers, "client");
     let keys: JsonWebKeySet;
     try {

@@ -106,7 +106,7 @@ implements, of draft 0.1 and Operations v1:
   revised (`revise()`), and cancelled;
 - with `web` (`web=True`, `web: true` in TypeScript), the website (§5): the
   browser-session endpoint joins the agent's own browser to its Session with
-  the company's `poppy_session` cookie, and each operation's page confirms or
+  the company's `__Host-poppy_session` cookie, and each operation's page confirms or
   cancels it, the same operation at most once whichever channel confirms it.
 
 ### Reactor points
@@ -232,7 +232,7 @@ A hosted consent page (`consent_page`) gets no binding: it protects its own
 form, and `consent_decision` refuses every POST for its requests.
 
 The operation page (`/operations/{operation_id}`, both reference companies)
-does the same with the browser's `poppy_session` cookie: its form carries a
+does the same with the browser's `__Host-poppy_session` cookie: its form carries a
 token derived from that cookie and the operation, and a POST that is
 cross-site, from another origin, without the token, or with a token from
 another browser's page is
@@ -250,6 +250,7 @@ config = CompanyConfig(
     name="Orders helper",
     domain="orders.example",
     scopes=("orders:read",),
+    operations=False,
     device_page="https://datalayer.ai/pap/device?slug=orders-helper",
     consent_page="https://datalayer.ai/pap/consent?slug=orders-helper&request={request_id}",
 )

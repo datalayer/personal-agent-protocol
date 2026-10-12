@@ -288,6 +288,13 @@ points, on an in-process network with real keys: Manzanita Outfitters (one
 user with a company), and Northwind Bank with Ledgerly (two companies,
 composed). See [A user with a company](/examples/user-with-a-company/) and
 [Two companies](/examples/two-companies/).
+The
+[`company-service`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-service)
+Pydantic AI example builds a company of its own from a `CompanyConfig`, a store
+checked with `check_store`, a company agent, and one executor, serves it with
+`company_app`, and runs a personal agent's journey against it; the
+[`company-apis`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis)
+example reads and proposes through Manzanita's OpenAPI API and MCP server.
 
 Use the upstream [company implementation guidance](https://personalagentprotocol.org/docs/guides)
 alongside the normative specification.

@@ -8,7 +8,9 @@ description: Use PAP directly from Pydantic AI while keeping protocol secrets ou
 The PAP repository's
 [`examples/pydantic-ai`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai)
 directory contains deliberately small agents. Each exposes one PAP
-feature as a Pydantic AI tool:
+feature as a Pydantic AI tool; the
+[README](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai#readme)
+lists every one. Among them:
 
 | Example                                                         | PAP feature                                                  | Tool result                              |
 | --------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------- |
@@ -21,6 +23,9 @@ feature as a Pydantic AI tool:
 | [DPoP transport](/examples/dpop-transport/)                     | Nonce retry, redirect rebinding, origin isolation            | Transport policy; secrets withheld       |
 | [Session lifecycle](/examples/session-lifecycle/)               | Start, DPoP nonce retry, and renewal over HTTP               | Lifecycle evidence; secrets withheld     |
 | [Browser Session](/examples/browser-session/)                   | Signed assertion, form POST, verification, replay rejection  | Browser policy; secrets withheld         |
+| [Company APIs](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis) | OpenAPI with DPoP, MCP with a Bearer for its URL alone | Orders, statuses, and summaries |
+| [Company service](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-service) | A company built with the SDK, used end to end | Steps and how often it performed |
+| [Sign-in display](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/sign-in-display) | `PapSignIn`: the page's whole display vs `model_view()` | Model view; the page's shape only |
 
 Install the example dependency and run one agent:
 

@@ -50,7 +50,8 @@ test = [
 server = ["uvicorn>=0.30"]
 lint = ["mdformat>0.7", "mdformat-gfm>=0.3.5", "ruff"]
 typing = ["mypy>=0.990"]
-examples = ["pydantic-ai-slim[openai]>=2.35.0,<3"]
+# The Pydantic AI examples; `sign-in-display` draws a `ui` display.
+examples = ["pydantic-ai-slim[openai]>=2.35.0,<3", "datalayer_reactor>=1.1.0,<2"]
 # `personal_agent_protocol.ui`: PAP's displays for reactor.ui.
 ui = ["datalayer_reactor>=1.1.0,<2"]
 # `telemetry.OpenTelemetrySink`: the SDK's protocol stages as OpenTelemetry spans.

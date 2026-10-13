@@ -6,6 +6,15 @@
 
 # Changelog
 
+## Unreleased
+
+- **The replies name their conversation** ([docs](docs/docs/guides/conversations.mdx#who-wrote-each-reply-papreplies)):
+  `PapReplies` is version 2 of `application/vnd.datalayer.pap.replies+json`,
+  with `conversation`, the company's id of the conversation the replies are
+  in, in both languages (`PapRepliesData.conversation`), so the page that
+  draws them can open a Direct Conversation under it for the person's own
+  words (PAP_DATALAYER P-08). Version 1 is refused: it named none.
+
 ## 0.18.0 (2026-10-13)
 
 - **Taking a company down** ([docs](docs/docs/guides/company.mdx#the-store)):

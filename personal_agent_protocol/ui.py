@@ -352,7 +352,7 @@ class PapReply(BaseModel):
         return value
 
 
-@display_type(PAP_REPLIES_TYPE, version=1)
+@display_type(PAP_REPLIES_TYPE, version=2)
 class PapReplies(Display):
     """What a company answered in a conversation, each reply with who wrote it (§7.8).
 
@@ -362,11 +362,16 @@ class PapReplies(Display):
     person is found, ``closed``); the page tells them apart, as PAP-7.8-01
     asks of the personal agent's own words. Each reply is the company's text,
     verbatim; a message carrying only data is the model's to read, not the
-    page's to draw. Make one from the company's messages with :meth:`of`.
+    page's to draw. It names the conversation (``conversation``, version 2):
+    where the person's own words open a Direct Conversation under it (§7.10),
+    typed on the page, never through the model. Make one from the company's
+    messages with :meth:`of`.
     """
 
     #: The company, as the person knows it (its domain or its name).
     company: str = Field(min_length=1)
+    #: The conversation the replies are in, by the company's id for it.
+    conversation: str = Field(pattern=r"^[A-Za-z0-9_-]{1,256}$")
     replies: list[PapReply] = Field(min_length=1)
     status: PapConversationStatus | None = None
     responder: Literal["agent", "human"] | None = None
@@ -403,6 +408,7 @@ class PapReplies(Display):
         return cls(
             id=f"{conversation_id}-{written[0].id}-replies",
             company=company,
+            conversation=conversation_id,
             replies=[PapReply(sender=message.sender, text=message.text) for message in written],
             status=status,
             responder=responder,

@@ -78,9 +78,14 @@ A company's message is written by its agent or by one of its people
 (`sender`), apart from where the conversation stands (`status`) and who
 answers it now (`responder`). A host shows them apart with `PapReplies`
 (`personal_agent_protocol.ui`), of type
-`application/vnd.datalayer.pap.replies+json`, version 1, made with
+`application/vnd.datalayer.pap.replies+json`, version 2, made with
 `PapReplies.of(company, conversation_id, messages, status=..., responder=...)`
 from the messages a page of events carried.
+
+- It names the conversation the replies are in (`conversation`): where the
+  person's own words open a Direct Conversation under it, typed on the page
+  and sent as theirs (`sender: human`), never through the model. Version 1
+  named none, and a reader of version 2 refuses it.
 
 - Only the company's own messages with text are replies, each verbatim; a
   message carrying only data is the model's to read. With none, `of` returns

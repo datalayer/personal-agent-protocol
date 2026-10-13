@@ -141,9 +141,14 @@ test("the Python SDK's replies are one, each with who wrote it, word for word", 
 test("replies that say less or other are not one", () => {
   const changed = (data) => ({ ...replies, data: { ...replies.data, ...data } });
   assert.equal(isPapReplies({ ...replies, type: PAP_OUTCOME_TYPE }), false);
-  assert.equal(isPapReplies({ ...replies, version: 2 }), false);
+  // Version 1 named no conversation: refused, not read as 2.
+  assert.equal(isPapReplies({ ...replies, version: 1 }), false);
+  assert.equal(replies.data.conversation, "conv_4Kp9");
   for (const data of [
     { company: " " },
+    { conversation: "" },
+    { conversation: "has space" },
+    { conversation: undefined },
     { replies: [] },
     { replies: [{ sender: "model", text: "Hello" }] },
     { replies: [{ sender: "agent", text: " " }] },

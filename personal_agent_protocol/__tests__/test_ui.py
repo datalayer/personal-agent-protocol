@@ -341,8 +341,10 @@ def test_replies_are_the_committed_display_each_with_who_wrote_it() -> None:
     # The TypeScript SDK reads the same file (src/__tests__/ui.test.mjs).
     wire = _replies().wire().model_dump(mode="json")
     assert wire == json.loads(REPLIES_FIXTURE.read_text())
-    assert wire["type"] == PAP_REPLIES_TYPE and wire["version"] == 1
+    assert wire["type"] == PAP_REPLIES_TYPE and wire["version"] == 2
     assert wire["id"] == "conv_4Kp9-msg_1-replies"
+    # The conversation the replies are in: where the person's own words open a Direct Conversation.
+    assert wire["data"]["conversation"] == "conv_4Kp9"
     assert [reply["sender"] for reply in wire["data"]["replies"]] == ["agent", "human"]
     assert wire["text"] == (
         "manzanita.example, its agent: Your Ridge Jacket shipped on Tuesday.\n"
@@ -370,6 +372,8 @@ def test_only_the_companys_own_words_are_replies() -> None:
     "overrides",
     [
         {"company": " "},
+        {"conversation": ""},
+        {"conversation": "has space"},
         {"replies": []},
         {"replies": [{"sender": "model", "text": "Hello"}]},
         {"replies": [{"sender": "agent", "text": " "}]},
@@ -390,7 +394,7 @@ async def test_the_core_plugin_declares_the_replies_type() -> None:
     platform, http = build_pap_reactor()
     try:
         registry = platform.display_types()
-        assert registry.get(PAP_REPLIES_TYPE, 1) is PapReplies
+        assert registry.get(PAP_REPLIES_TYPE, 2) is PapReplies
         shown = registry.parse(json.loads(REPLIES_FIXTURE.read_text()))
         assert shown.tool_meta()["reactor.ui/display"]["data"]["responder"] == "human"
     finally:

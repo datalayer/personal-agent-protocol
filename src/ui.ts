@@ -264,8 +264,8 @@ export function papOutcomeDisplay(id: string, data: PapOutcomeData): PapOutcomeD
 /** The display type of what a company answered in a conversation. */
 export const PAP_REPLIES_TYPE = "application/vnd.datalayer.pap.replies+json";
 
-/** The version of `PAP_REPLIES_TYPE` this module reads. */
-export const PAP_REPLIES_VERSION = 1;
+/** The version of `PAP_REPLIES_TYPE` this module reads: 2 names the conversation. */
+export const PAP_REPLIES_VERSION = 2;
 
 /** Where a conversation stands (§7.8), apart from who answers in it. */
 export type PapConversationStatus = "working" | "idle" | "queued" | "closed";
@@ -280,6 +280,12 @@ export type PapReply = { sender: "agent" | "human"; text: string };
 export type PapRepliesData = {
   /** The company, as the person knows it (its domain or its name). */
   company: string;
+  /**
+   * The conversation the replies are in, by the company's id for it: where the
+   * person's own words open a Direct Conversation under it (§7.10), typed on
+   * the page, never through the model.
+   */
+  conversation: string;
   /** Its replies, each in its words, verbatim, with who wrote it. */
   replies: PapReply[];
   status: PapConversationStatus | null;
@@ -297,7 +303,10 @@ export type PapRepliesDisplay = {
   actions?: unknown[];
 };
 
-const REPLIES_KEYS = ["company", "replies", "status", "responder"] as const;
+const REPLIES_KEYS = ["company", "conversation", "replies", "status", "responder"] as const;
+
+const isConversationId = (value: unknown): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(value);
 
 const isSender = (value: unknown): value is "agent" | "human" => value === "agent" || value === "human";
 
@@ -310,8 +319,9 @@ const isReply = (value: unknown): value is PapReply =>
  */
 export function isPapRepliesData(value: unknown): value is PapRepliesData {
   if (!isObject(value) || !hasExactly(value, REPLIES_KEYS)) return false;
-  const { company, replies, status, responder } = value;
-  if (!isFilled(company) || !Array.isArray(replies) || replies.length === 0 || !replies.every(isReply)) return false;
+  const { company, conversation, replies, status, responder } = value;
+  if (!isFilled(company) || !isConversationId(conversation)) return false;
+  if (!Array.isArray(replies) || replies.length === 0 || !replies.every(isReply)) return false;
   if (status !== null && !PAP_CONVERSATION_STATUSES.includes(status as PapConversationStatus)) return false;
   return responder === null || isSender(responder);
 }

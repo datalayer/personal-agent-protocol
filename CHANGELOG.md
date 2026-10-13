@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.22.0 (2026-10-13)
 
 - **Other domains of the same company** ([docs](docs/docs/guides/company.mdx)):
   `CompanyConfig.aliases` (`aliases` in TypeScript), each alias publishing the

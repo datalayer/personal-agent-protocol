@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.20.0 (2026-10-13)
 
 - **A company's rate limit** ([docs](docs/docs/concepts/contribution-points.mdx)):
   `pap.company.rateLimit` (`COMPANY_RATE_LIMITS`, `CompanyRateLimits`, a

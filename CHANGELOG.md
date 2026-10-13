@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.21.0 (2026-10-13)
 
 - **A bound Direct Sign-In names its company**: `PapSignIn` gains `company`
   (a domain, optional) and `at` (the company, or the page's own domain): a host

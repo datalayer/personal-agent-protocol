@@ -106,6 +106,28 @@ def test_a_bound_direct_sign_in_names_the_company_not_the_hosts_link() -> None:
         PapSignIn(mode="direct", open="https://iam.example/pap/start", company="not a domain")
 
 
+def test_a_sign_in_names_what_the_company_said_it_needs() -> None:
+    """Signed out first (PAP_DATALAYER P-02): the sign-in is asked for once the company's
+    `authorization` event says what it needs, and the person and the model are told that scope."""
+    asked = PapSignIn.from_answer(
+        {
+            "status": "waiting_for_the_person",
+            "mode": "direct",
+            "open": "https://iam.example/pap/start?ticket=t",
+            "company": "manzanita.example",
+            "needs": ["orders:read", "orders:write"],
+        }
+    )
+    assert asked is not None and asked.needs == ["orders:read", "orders:write"]
+    assert asked.text().endswith(" It needs: orders:read, orders:write.")
+    assert asked.model_view()["data"]["needs"] == ["orders:read", "orders:write"]
+    assert PapSignIn(mode="direct", open="https://a.example/authorize").needs == []
+    with pytest.raises(ValidationError):
+        PapSignIn(
+            mode="direct", open="https://a.example/authorize", needs=["orders:read orders:write"]
+        )
+
+
 def test_another_status_is_no_display() -> None:
     assert PapSignIn.from_answer({"status": "unavailable", "reason": "no"}) is None
 

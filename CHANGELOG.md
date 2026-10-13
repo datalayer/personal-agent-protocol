@@ -19,6 +19,10 @@
   conversation as the company keeps it. A closed conversation, one not handed
   to people, or one with a Direct Conversation open takes none
   (PAP_DATALAYER P-08).
+- **A sign-in names what the company said it needs**: `PapSignIn` gains
+  `needs` (scope tokens, optional), the scope the company's `authorization`
+  event named; the card and the model's text say it (*It needs: …*), so a
+  person signing in sees what they are asked to allow (PAP_DATALAYER P-02).
 
 ## 0.22.0 (2026-10-13)
 

@@ -88,11 +88,21 @@ class PapSignIn(Display):
     #: to it and takes them back only from it (a bound Direct Sign-In); otherwise the page's host
     #: is the company's.
     company: str | None = None
+    #: What the company said it needs before it answers: the scope its ``authorization``
+    #: event named (§7.11), when one did. The person sees what they are asked to allow.
+    needs: list[str] = Field(default_factory=list)
 
     @field_validator("company")
     @classmethod
     def _company(cls, value: str | None) -> str | None:
         return _domain(value) if value is not None else None
+
+    @field_validator("needs")
+    @classmethod
+    def _needs(cls, value: list[str]) -> list[str]:
+        if any(not scope or any(ch.isspace() for ch in scope) for scope in value):
+            raise ValueError("each scope a company needs is one token")
+        return value
 
     @field_validator("open")
     @classmethod
@@ -121,6 +131,10 @@ class PapSignIn(Display):
     def text(self) -> str:
         # Neither the page nor the code: the text is also what a model and a
         # transcript read, and a verification URL may carry the code.
+        needs = f" It needs: {', '.join(self.needs)}." if self.needs else ""
+        return self._how() + needs
+
+    def _how(self) -> str:
         if self.mode == "direct":
             through = f" (through {self.host}, which brings you back)" if self.company else ""
             return (
@@ -143,7 +157,7 @@ class PapSignIn(Display):
         """The display for a ``pap_sign_in`` answer, or ``None`` for any other status."""
         if answer.get("status") != WAITING_FOR_THE_PERSON:
             return None
-        fields = ("mode", "open", "code", "expires_at", "sent_to", "company")
+        fields = ("mode", "open", "code", "expires_at", "sent_to", "company", "needs")
         return cls.model_validate({key: answer[key] for key in fields if answer.get(key)})
 
     def tool_meta(self) -> dict[str, Any]:

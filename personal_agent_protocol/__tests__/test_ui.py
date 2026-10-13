@@ -78,6 +78,34 @@ def test_direct_and_mediated_answers() -> None:
         assert display.open not in json.dumps(display.model_view())
 
 
+def test_a_bound_direct_sign_in_names_the_company_not_the_hosts_link() -> None:
+    """A host that binds Direct Sign-In (Datalayer's one-use start link, PAP_DATALAYER P-04) opens
+    its own page, which sends the person on to the company: the display names the company where
+    they sign in, and the page they open is the host's — said so, never the link itself."""
+    bound = PapSignIn.from_answer(
+        {
+            "status": "waiting_for_the_person",
+            "mode": "direct",
+            "open": "https://iam.example/pap/start?ticket=t",
+            "company": "Manzanita.Example",
+        }
+    )
+    assert bound is not None and (bound.company, bound.at, bound.host) == (
+        "manzanita.example",
+        "manzanita.example",
+        "iam.example",
+    )
+    assert bound.text().startswith(
+        "Sign in at manzanita.example: open its sign-in page, shown here (through iam.example"
+    )
+    assert "ticket" not in json.dumps(bound.model_view())
+    # Unbound, the page's own domain is the company's.
+    plain = PapSignIn(mode="direct", open="https://a.example/authorize")
+    assert (plain.company, plain.at) == (None, "a.example")
+    with pytest.raises(ValidationError):
+        PapSignIn(mode="direct", open="https://iam.example/pap/start", company="not a domain")
+
+
 def test_another_status_is_no_display() -> None:
     assert PapSignIn.from_answer({"status": "unavailable", "reason": "no"}) is None
 

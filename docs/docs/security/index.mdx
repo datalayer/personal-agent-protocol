@@ -118,6 +118,13 @@ in its text. The one conformance probe that puts a Session Token in a URL on
 purpose, to see the company refuse it (`security.token-in-url-refused`), is
 left out of the run.
 
+A host may bind each Direct Sign-In before the person opens it: it hands them
+its own one-use link, which ties their browser to the sign-in and sends them on
+to the company, and it takes the company's redirect only from that browser and
+that company (the `iss` the redirect names). `PapSignIn` then names the company
+(`company`) beside the page opened, so the person reads where they sign in
+while the link they open is the host's.
+
 The TypeScript suite also reads the npm package as built (`lib/`, with its
 source maps): it carries no PEM or JWK private key material, compact JWT,
 literal Bearer or DPoP token, or canary, and the browser entry

@@ -8,6 +8,11 @@
 
 ## Unreleased
 
+- **A bound Direct Sign-In names its company**: `PapSignIn` gains `company`
+  (a domain, optional) and `at` (the company, or the page's own domain): a host
+  that hands the person its own one-use link to the company's page — binding
+  their browser, and taking the redirect back only from it — names where they
+  sign in; the text says the page is the host's (PAP_DATALAYER P-04).
 - **The release gates pass again for 0.20.0's code**: the Python code style
   (lines over 100 characters, `ruff format`), the TypeScript API reference
   regenerated (`PAP_REPLIES_VERSION`'s summary), and the examples workflow

@@ -43,6 +43,8 @@ from reactor.ui import (  # type: ignore[import-untyped]
     display_type,
 )
 
+from .models import _domain
+
 #: The display type of a sign-in waiting for the person.
 PAP_SIGN_IN_TYPE = "application/vnd.datalayer.pap.sign-in+json"
 
@@ -82,6 +84,15 @@ class PapSignIn(Display):
     expires_at: datetime | None = None
     #: Where the company sent a code, for ``mediated``.
     sent_to: str | None = None
+    #: The company's domain, when the page opened is the host's own link that sends the person on
+    #: to it and takes them back only from it (a bound Direct Sign-In); otherwise the page's host
+    #: is the company's.
+    company: str | None = None
+
+    @field_validator("company")
+    @classmethod
+    def _company(cls, value: str | None) -> str | None:
+        return _domain(value) if value is not None else None
 
     @field_validator("open")
     @classmethod
@@ -102,12 +113,18 @@ class PapSignIn(Display):
         """The page's domain: what the person can check before signing in."""
         return urlsplit(self.open).hostname or ""
 
+    @property
+    def at(self) -> str:
+        """Where the person signs in: the company named, or the page's own domain."""
+        return self.company or self.host
+
     def text(self) -> str:
         # Neither the page nor the code: the text is also what a model and a
         # transcript read, and a verification URL may carry the code.
         if self.mode == "direct":
+            through = f" (through {self.host}, which brings you back)" if self.company else ""
             return (
-                f"Sign in at {self.host}: open its sign-in page, shown here, "
+                f"Sign in at {self.at}: open its sign-in page, shown here{through}, "
                 "sign in there, and come back."
             )
         if self.mode == "device":
@@ -126,7 +143,7 @@ class PapSignIn(Display):
         """The display for a ``pap_sign_in`` answer, or ``None`` for any other status."""
         if answer.get("status") != WAITING_FOR_THE_PERSON:
             return None
-        fields = ("mode", "open", "code", "expires_at", "sent_to")
+        fields = ("mode", "open", "code", "expires_at", "sent_to", "company")
         return cls.model_validate({key: answer[key] for key in fields if answer.get(key)})
 
     def tool_meta(self) -> dict[str, Any]:

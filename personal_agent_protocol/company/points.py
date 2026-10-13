@@ -27,6 +27,9 @@ without touching the service:
   called with resource-bound Bearer Session Tokens (§4.3, §6), a
   consequential tool proposing an operation in `structuredContent`
   (Operations §4.2).
+- `pap.company.rateLimit` says how often the company answers one personal
+  agent and one signed-in account: once a request's Session is verified, a
+  refusal is `429 rate_limited` with `Retry-After`. None by default.
 """
 
 from __future__ import annotations
@@ -68,6 +71,7 @@ CLIENT_RESOLVERS = define_contribution_point("pap.company.clientResolver")
 REPLAY_CACHES = define_contribution_point("pap.company.replayCache")
 COMPANY_APIS = define_contribution_point("pap.company.api")
 COMPANY_MCP = define_contribution_point("pap.company.mcp")
+COMPANY_RATE_LIMITS = define_contribution_point("pap.company.rateLimit")
 
 
 @dataclass(frozen=True)
@@ -215,6 +219,19 @@ class AllowEveryAgent:
 
 
 @runtime_checkable
+class RateLimit(Protocol):
+    """How often the company answers one personal agent, and one signed-in account.
+
+    Asked once a request's Session is verified, before anything is done for
+    it: `None` lets it through; a number of seconds refuses it as
+    `rate_limited` (`429`), with `Retry-After` saying when to ask again. The
+    host keeps the counts — shared by every replica answering for the company.
+    None contributed: no limit beyond the protocol's own.
+    """
+
+    async def admit(self, client_id: str, account_id: str | None) -> int | None: ...
+
+
 class ClientResolver(Protocol):
     """Resolve a `client_id` to its verified metadata and keys.
 

@@ -6,6 +6,16 @@
 
 # Changelog
 
+## Unreleased
+
+- **A company's rate limit** ([docs](docs/docs/concepts/contribution-points.mdx)):
+  `pap.company.rateLimit` (`COMPANY_RATE_LIMITS`, `CompanyRateLimits`, a
+  `RateLimit` with `admit(client_id, account_id)`), in both languages: asked
+  once a request's Session is verified — conversations, the API, operations
+  and the MCP server — with its personal agent and its signed-in account; a
+  number of seconds refuses it as `429 rate_limited` with `Retry-After`,
+  nothing done for it. None by default (PAP_DATALAYER B-06).
+
 ## 0.19.0 (2026-10-13)
 
 - **The replies name their conversation** ([docs](docs/docs/guides/conversations.mdx#who-wrote-each-reply-papreplies)):

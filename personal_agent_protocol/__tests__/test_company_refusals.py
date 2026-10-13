@@ -409,3 +409,37 @@ async def test_a_password_reset_ends_the_sign_ins_from_before_it() -> None:
     again = await signed_in(world)
     assert again is not None
     await world.conversations.start(endpoint, world.message("hi"), token=again, wait=0, **world.who)
+
+
+@pytest.mark.asyncio
+async def test_the_hosts_rate_limit_refuses_with_when_to_ask_again() -> None:
+    """`pap.company.rateLimit` (PAP_DATALAYER B-06): asked once a request's Session is verified,
+    with its agent and its signed-in account; a refusal is `429 rate_limited` with `Retry-After`,
+    and nothing is done for the request. A forged token is refused before it is ever counted."""
+
+    from personal_agent_protocol.company import COMPANY_RATE_LIMITS
+
+    admitted: list[tuple[str, str | None]] = []
+
+    class OncePerAgent:
+        async def admit(self, client_id: str, account_id: str | None) -> int | None:
+            admitted.append((client_id, account_id))
+            return None if len(admitted) == 1 else 42
+
+    class Limit:
+        def provide_contributions(self, contributions: object) -> None:
+            contributions.contribute(COMPANY_RATE_LIMITS, OncePerAgent(), contribution_id="limit")  # type: ignore[attr-defined]
+
+    world = World()
+    world.shop.reactor.register_plugin(PluginManifest(name="limit", version="1"), Limit())
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    started = await world.conversations.start(endpoint, world.message("hi"), token=session, **world.who)
+    assert started.conversation_id
+    with pytest.raises(ConversationError) as raised:
+        await world.conversations.start(endpoint, world.message("hi again"), token=session, **world.who)
+    assert raised.value.status_code == 429 and raised.value.code == "rate_limited"
+    assert raised.value.details["retry_after"] == "42"
+    assert admitted == [(world.atlas.client_id, None)] * 2
+    forged = await world.http.post(endpoint, json={}, headers={"Authorization": "DPoP forged"})
+    assert forged.status_code == 401 and len(admitted) == 2

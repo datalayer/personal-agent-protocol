@@ -94,6 +94,7 @@ from .points import (
     COMPANY_AGENTS,
     COMPANY_APIS,
     COMPANY_MCP,
+    COMPANY_RATE_LIMITS,
     COMPANY_STORES,
     OPERATION_EXECUTORS,
     REPLAY_CACHES,
@@ -109,6 +110,7 @@ from .points import (
     OperationExecutor,
     OperationFailed,
     OperationOutcomeUnknown,
+    RateLimit,
     ReplayCache,
     Reply,
     SignInContext,
@@ -372,6 +374,14 @@ class _RefusedError(Exception):
         self.status = status
         self.error = error
         self.extra = extra
+
+
+class _RateLimitedError(_RefusedError):
+    """The host's rate limit refused the request: `429` and when to ask again."""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__(429, "rate_limited")
+        self.retry_after = retry_after
 
 
 _CHALLENGED = frozenset(
@@ -656,6 +666,8 @@ class CompanyService:
                 return await self._conversation_route(request, method, path)
             if path.startswith("/poppy/operations/") and self.config.operations:
                 return await self._operation_route(request, method, path)
+        except _RateLimitedError as limited:
+            return self._rate_limited(limited.retry_after)
         except _RefusedError as refused:
             return _json_error(refused.status, refused.error, **refused.extra)
         except (SessionError, ProofError) as error:
@@ -1678,7 +1690,19 @@ class CompanyService:
         thumbprint = await self._dpop(request, access_token=token)
         if thumbprint != session.key_thumbprint:
             raise _RefusedError(401, "invalid_dpop_proof")
+        wait = await self._admitted(session)
+        if wait is not None:
+            raise _RateLimitedError(wait)
         return key, session
+
+    async def _admitted(self, session: IssuedSession) -> int | None:
+        """The host's rate limit on this agent and its signed-in account: seconds to wait, or None."""
+
+        limit = optional_contribution(self.reactor, COMPANY_RATE_LIMITS, "rate limit")
+        if limit is None:
+            return None
+        wait = await cast(RateLimit, limit).admit(session.client_id, session.account_id)
+        return None if wait is None else max(1, int(wait))
 
     # Mediated Sign-In attempt limits (§4.7: a company MUST rate-limit attempts) ---------
 
@@ -2735,6 +2759,9 @@ class CompanyService:
         if session is None:
             # A missing, expired, DPoP, or other-resource token: none is accepted here.
             return self._bearer_refusal(401, "invalid_token")
+        wait = await self._admitted(session)
+        if wait is not None:
+            return self._rate_limited(wait)
         if request.method.upper() != "POST":
             return CompanyResponse(405, {"error": "method_not_allowed"}, {"Allow": "POST"})
         try:

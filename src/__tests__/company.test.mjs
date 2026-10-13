@@ -26,7 +26,7 @@ import {
   operationsEndpoint,
   parseClientMetadata,
 } from "../../lib/index.js";
-import { CompanyAccounts } from "../../lib/server.js";
+import { CompanyAccounts, CompanyRateLimits } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
 import { runJourney } from "./support/journey.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -700,4 +700,25 @@ test("an unverified redirect is never sent to the hosted consent page", async ()
   assert.equal(back.status, 303);
   assert.ok(back.headers.get("location").startsWith("https://atlas.example/oauth/callback?"));
   assert.deepEqual(w.shop.store.keys("authorization"), []);
+});
+
+test("the host's rate limit refuses with when to ask again (pap.company.rateLimit, PAP_DATALAYER B-06)", async () => {
+  const admitted = [];
+  const limit = {
+    async admit(clientId, accountId) {
+      admitted.push([clientId, accountId]);
+      return admitted.length === 1 ? undefined : 42;
+    },
+  };
+  const w = await world({
+    plugins: [{ name: "limit", version: "1", contributes: [{ point: CompanyRateLimits, value: limit, options: { id: "limit" } }] }],
+  });
+  const session = await w.start();
+  const started = await w.conversations.start(w.endpoint, w.message("hi"), { token: session, ...w.who, wait: 0 });
+  assert.ok(started.conversation_id);
+  await assert.rejects(
+    w.conversations.start(w.endpoint, w.message("hi again"), { token: session, ...w.who, wait: 0 }),
+    (error) => error instanceof ConversationError && error.statusCode === 429 && error.code === "rate_limited" && error.details.retry_after === "42",
+  );
+  assert.deepEqual(admitted, [[w.identity.clientId, undefined], [w.identity.clientId, undefined]]);
 });

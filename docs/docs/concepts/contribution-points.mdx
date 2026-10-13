@@ -23,7 +23,8 @@ registers.
   SDK refuses rather than pick one by load order.
 - A point with no default and no contribution fails closed when the SDK needs
   it (`no active … contribution`). `pap.company.api` and `pap.company.mcp` are
-  optional: with none, the company publishes no API or MCP server. So are
+  optional: with none, the company publishes no API or MCP server. So is
+  `pap.company.rateLimit` (with none, no limit beyond the protocol's own), and so are
   `pap.telemetry` (with none, nothing is emitted) and `pap.approvalSurface`
   (with none, destructive live-session actions are refused).
 - `pap.company.operationExecutor` resolves per action: the lowest-order
@@ -75,6 +76,7 @@ approved by the policy first.
 | `pap.company.replayCache` | `REPLAY_CACHES` | `ReplayCaches` | Remembers assertion and proof IDs once | `store` |  |
 | `pap.company.api` | `COMPANY_APIS` | `CompanyApis` | The company's OpenAPI API | — (feature off) |  |
 | `pap.company.mcp` | `COMPANY_MCP` | `CompanyMcps` | The company's MCP server | — (feature off) |  |
+| `pap.company.rateLimit` | `COMPANY_RATE_LIMITS` | `CompanyRateLimits` | How often one personal agent and one signed-in account are answered: `429 rate_limited` with `Retry-After` | — (no limit) |  |
 
 ## Tenants
 

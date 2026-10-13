@@ -27,6 +27,9 @@
  *   consequential calls proposing operations (`202`, Operations §4.1).
  * - `pap.company.mcp` answers the company's MCP server (`/mcp`), its tools
  *   proposing operations in `structuredContent` (§6, Operations §4.2).
+ * - `pap.company.rateLimit` says how often the company answers one personal
+ *   agent and one signed-in account: once a request's Session is verified, a
+ *   refusal is `429 rate_limited` with `Retry-After`. None by default.
  */
 
 import { createHash } from "node:crypto";
@@ -339,3 +342,17 @@ export const ClientResolvers = defineContributionPoint<ClientResolver>(
 export const ReplayCaches = defineContributionPoint<ReplayCache>("pap.company.replayCache");
 export const CompanyApis = defineContributionPoint<CompanyApi>("pap.company.api");
 export const CompanyMcps = defineContributionPoint<CompanyMcp>("pap.company.mcp");
+
+/**
+ * How often the company answers one personal agent, and one signed-in account.
+ * Asked once a request's Session is verified, before anything is done for it:
+ * `undefined` lets it through; a number of seconds refuses it as `rate_limited`
+ * (`429`), with `Retry-After` saying when to ask again. The host keeps the
+ * counts, shared by every replica answering for the company. None contributed:
+ * no limit beyond the protocol's own.
+ */
+export interface RateLimit {
+  admit(clientId: string, accountId: string | undefined): Promise<number | undefined>;
+}
+
+export const CompanyRateLimits = defineContributionPoint<RateLimit>("pap.company.rateLimit");

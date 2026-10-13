@@ -312,6 +312,17 @@
       "default": null,
       "resolution": "optional",
       "tenant": null
+    },
+    {
+      "id": "pap.company.rateLimit",
+      "role": "company",
+      "python": "COMPANY_RATE_LIMITS",
+      "typescript": "CompanyRateLimits",
+      "contract": "RateLimit",
+      "members": ["admit"],
+      "default": null,
+      "resolution": "optional",
+      "tenant": null
     }
   ]
 }

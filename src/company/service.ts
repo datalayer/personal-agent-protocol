@@ -85,6 +85,7 @@ import {
   CompanyAgents,
   CompanyApis,
   CompanyMcps,
+  CompanyRateLimits,
   CompanyStores,
   OperationExecutors,
   OperationFailed,
@@ -312,6 +313,13 @@ class Refused extends Error {
     readonly extra: Readonly<Record<string, unknown>> = {},
   ) {
     super(error);
+  }
+}
+
+/** The host's rate limit refused the request: `429` and when to ask again. */
+class RateLimitedRefusal extends Refused {
+  constructor(readonly retryAfter: number) {
+    super(429, "rate_limited");
   }
 }
 
@@ -770,6 +778,7 @@ export class CompanyService {
         return await this.#operationRoute(request, method, path);
       }
     } catch (error) {
+      if (error instanceof RateLimitedRefusal) return rateLimited(error.retryAfter);
       if (error instanceof Refused) return jsonError(error.status, error.error, error.extra);
       if (error instanceof SessionError || error instanceof ProofError) {
         const status = error.statusCode ?? (error.code === "invalid_client" ? 401 : 400);
@@ -1854,6 +1863,8 @@ export class CompanyService {
     const session = await this.#bearerCaller(request);
     // A missing, expired, DPoP, or other-resource token: none is accepted here.
     if (session === undefined) return this.#bearerRefusal(401, "invalid_token");
+    const wait = await this.#admitted(session);
+    if (wait !== undefined) return rateLimited(wait);
     if (request.method.toUpperCase() !== "POST") {
       return { status: 405, body: { error: "method_not_allowed" }, headers: { Allow: "POST" } };
     }
@@ -1962,7 +1973,17 @@ export class CompanyService {
     if (!(await this.#allowed(session.clientId))) throw new Refused(401, "invalid_token");
     const thumbprint = await this.#dpop(request, token);
     if (thumbprint !== session.keyThumbprint) throw new Refused(401, "invalid_dpop_proof");
+    const wait = await this.#admitted(session);
+    if (wait !== undefined) throw new RateLimitedRefusal(wait);
     return [key, session];
+  }
+
+  /** The host's rate limit on this agent and its signed-in account: seconds to wait, or undefined. */
+  async #admitted(session: IssuedSession): Promise<number | undefined> {
+    const limit = optionalContribution(this.reactor, CompanyRateLimits, "rate limit");
+    if (limit === undefined) return undefined;
+    const wait = await limit.admit(session.clientId, session.accountId);
+    return wait === undefined ? undefined : Math.max(1, Math.trunc(wait));
   }
 
   // Mediated Sign-In attempt limits (§4.7: a company MUST rate-limit attempts) -----------

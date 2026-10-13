@@ -6,6 +6,14 @@
 
 # Changelog
 
+## Unreleased
+
+- **The release gates pass again for 0.20.0's code**: the Python code style
+  (lines over 100 characters, `ruff format`), the TypeScript API reference
+  regenerated (`PAP_REPLIES_VERSION`'s summary), and the examples workflow
+  installs Agent Runtimes with its `ui` extra, which its `sign-in-display`
+  example imports (`ag_ui`). No change of behaviour.
+
 ## 0.20.0 (2026-10-13)
 
 - **A company's rate limit** ([docs](docs/docs/concepts/contribution-points.mdx)):

@@ -710,7 +710,9 @@ class ResolvingTransport(httpx.AsyncBaseTransport):
             raise ValueError("max_response_bytes must be positive")
         self._inner = inner if inner is not None else httpx.AsyncHTTPTransport()
         _pin_transport(self._inner)
-        self._policy = PublicUrlSafetyPolicy(resolver, allow_private_networks=allow_private_networks)
+        self._policy = PublicUrlSafetyPolicy(
+            resolver, allow_private_networks=allow_private_networks
+        )
         self._max = max_response_bytes
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
@@ -722,7 +724,9 @@ class ResolvingTransport(httpx.AsyncBaseTransport):
         declared = response.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > self._max:
             await response.aclose()
-            raise TransportError("response_too_large", "The company's response exceeds the size limit")
+            raise TransportError(
+                "response_too_large", "The company's response exceeds the size limit"
+            )
         return httpx.Response(
             response.status_code,
             headers=response.headers,

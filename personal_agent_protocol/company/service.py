@@ -1696,7 +1696,8 @@ class CompanyService:
         return key, session
 
     async def _admitted(self, session: IssuedSession) -> int | None:
-        """The host's rate limit on this agent and its signed-in account: seconds to wait, or None."""
+        """The host's rate limit on this agent and its signed-in account: seconds to wait, or
+        None."""
 
         limit = optional_contribution(self.reactor, COMPANY_RATE_LIMITS, "rate limit")
         if limit is None:

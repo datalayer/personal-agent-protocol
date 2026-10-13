@@ -59,7 +59,9 @@ async def test_a_company_resolving_inside_is_refused_and_sent_nothing(address: s
     ) as http:
         for method, body in (("GET", None), ("POST", b'{"text": "hello"}')):
             with pytest.raises(DiscoveryError) as raised:
-                await http.request(method, "https://company.example/pap/conversations", content=body)
+                await http.request(
+                    method, "https://company.example/pap/conversations", content=body
+                )
             assert raised.value.code == "unsafe_address"
     assert sent == []
 
@@ -81,7 +83,9 @@ async def test_a_public_company_is_reached_and_plain_http_is_not() -> None:
     async with create_resolving_client(
         resolver=_resolving_to("93.184.216.34"), transport=_company(sent)
     ) as http:
-        answered = await http.post("https://company.example/pap/operations/op_1/confirm", content=b"{}")
+        answered = await http.post(
+            "https://company.example/pap/operations/op_1/confirm", content=b"{}"
+        )
         assert answered.json() == {"ok": True}
         with pytest.raises(DiscoveryError) as raised:
             await http.get("http://company.example/api/orders")

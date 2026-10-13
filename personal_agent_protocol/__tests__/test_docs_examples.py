@@ -575,7 +575,9 @@ async def _confirm_display(docs: Docs) -> tuple[dict[str, Any], Check]:
 
         shown = namespace["meta"]["reactor.ui/display"]
         assert shown["type"] == PAP_CONFIRM_TYPE and shown["data"]["summary"] == operation.summary
-        assert namespace["said"].startswith(f"shop.example asks you to confirm: {operation.summary}")
+        assert namespace["said"].startswith(
+            f"shop.example asks you to confirm: {operation.summary}"
+        )
         assert "ses_docs" not in json.dumps(namespace["display"].model_view())
 
     return {"operation": operation, "session_id": "ses_docs"}, check

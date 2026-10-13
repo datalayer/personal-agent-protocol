@@ -349,7 +349,9 @@ async def test_a_password_reset_ends_the_sign_ins_from_before_it() -> None:
 
     class Accounts:
         def provide_contributions(self, contributions):  # type: ignore[no-untyped-def]
-            contributions.contribute(COMPANY_ACCOUNTS, directory, contribution_id="resets", order=-1)
+            contributions.contribute(
+                COMPANY_ACCOUNTS, directory, contribution_id="resets", order=-1
+            )
 
     world = World()
     world.shop.reactor.register_plugin(PluginManifest(name="resets", version="1"), Accounts())
@@ -374,16 +376,22 @@ async def test_a_password_reset_ends_the_sign_ins_from_before_it() -> None:
     done = await device.poll(started.reference)
     assert done.token is not None and done.account_token_reference is not None
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
-    await world.conversations.start(endpoint, world.message("hi"), token=done.token, wait=0, **world.who)
+    await world.conversations.start(
+        endpoint, world.message("hi"), token=done.token, wait=0, **world.who
+    )
     # Another person's reset ends nothing of Ada's.
     directory.before["acct_bob"] = world.clock.now()
-    await world.conversations.start(endpoint, world.message("hi"), token=done.token, wait=0, **world.who)
+    await world.conversations.start(
+        endpoint, world.message("hi"), token=done.token, wait=0, **world.who
+    )
 
     # Ada resets her password a minute later.
     world.clock.advance(60)
     directory.before["acct_ada"] = world.clock.now()
     with pytest.raises(ConversationError) as raised:
-        await world.conversations.start(endpoint, world.message("hi"), token=done.token, wait=0, **world.who)
+        await world.conversations.start(
+            endpoint, world.message("hi"), token=done.token, wait=0, **world.who
+        )
     assert raised.value.status_code == 401
 
     accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
@@ -396,7 +404,9 @@ async def test_a_password_reset_ends_the_sign_ins_from_before_it() -> None:
         pairwise_user_id=PAIRWISE,
     )
     fresh = await world.signed_out_session()
-    refreshed = await accounts.refresh(done.account_token_reference, context=context, session_id=fresh.session_id)
+    refreshed = await accounts.refresh(
+        done.account_token_reference, context=context, session_id=fresh.session_id
+    )
     assert refreshed.status == "signed_out" and refreshed.token is None
     # Ended whole: its Session goes on signed out, even once nothing is said ended any more.
     directory.before.clear()
@@ -434,10 +444,14 @@ async def test_the_hosts_rate_limit_refuses_with_when_to_ask_again() -> None:
     world.shop.reactor.register_plugin(PluginManifest(name="limit", version="1"), Limit())
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
-    started = await world.conversations.start(endpoint, world.message("hi"), token=session, **world.who)
+    started = await world.conversations.start(
+        endpoint, world.message("hi"), token=session, **world.who
+    )
     assert started.conversation_id
     with pytest.raises(ConversationError) as raised:
-        await world.conversations.start(endpoint, world.message("hi again"), token=session, **world.who)
+        await world.conversations.start(
+            endpoint, world.message("hi again"), token=session, **world.who
+        )
     assert raised.value.status_code == 429 and raised.value.code == "rate_limited"
     assert raised.value.details["retry_after"] == "42"
     assert admitted == [(world.atlas.client_id, None)] * 2

@@ -122,7 +122,9 @@ def _confirm(**overrides: Any) -> PapConfirm:
     fields: dict[str, Any] = {
         "id": "confirm-op_7Hq2",
         "company": "manzanita.example",
-        "summary": "Exchange the Ridge Jacket (M) for the Alpine Parka (M). You pay USD 70.00 more.",
+        "summary": (
+            "Exchange the Ridge Jacket (M) for the Alpine Parka (M). You pay USD 70.00 more."
+        ),
         "terms": {
             "price_difference": {"amount": "70.00", "currency": "USD"},
             "ships_in_days": 5,
@@ -155,7 +157,8 @@ def test_an_operation_to_confirm_is_the_committed_display_both_sdks_read() -> No
         "signed_in": True,
     }
     assert wire["text"] == (
-        "manzanita.example asks you to confirm: Exchange the Ridge Jacket (M) for the Alpine Parka (M). "
+        "manzanita.example asks you to confirm: "
+        "Exchange the Ridge Jacket (M) for the Alpine Parka (M). "
         "You pay USD 70.00 more. (version 2) Changed since version 1."
     )
 
@@ -163,10 +166,12 @@ def test_an_operation_to_confirm_is_the_committed_display_both_sdks_read() -> No
 def test_a_model_is_told_what_is_asked_never_the_session() -> None:
     display = _confirm()
     view = display.model_view()
-    # The company's words, the terms, what it does and which revision: what a model needs to confirm it.
+    # The company's words, the terms, what it does and which revision: what a model needs to
+    # confirm it.
     assert view["data"]["summary"] == display.summary and view["data"]["does"] == "buy"
     assert (view["data"]["operation_ref"], view["data"]["revision"]) == ("op_7Hq2", 2)
-    # Whether the person is signed in there, never which Session: not its ID, not even the reference.
+    # Whether the person is signed in there, never which Session: not its ID, not even the
+    # reference.
     assert view["data"]["session"] == {"signed_in": True}
     seen = json.dumps(view)
     assert (
@@ -268,7 +273,8 @@ def test_each_outcome_says_the_companys_words() -> None:
     sent = PapOutcome.of("manzanita.example", _operation("proposed", None))
     assert sent.state == "in_progress" and sent.result is None
     assert sent.text() == (
-        f"Still in progress at manzanita.example: {EXCHANGE} (version 2) The outcome is not known yet."
+        f"Still in progress at manzanita.example: {EXCHANGE} (version 2) "
+        "The outcome is not known yet."
     )
     cancelled = PapOutcome.of(
         "manzanita.example", _operation("cancelled", "Cancelled at your request.")

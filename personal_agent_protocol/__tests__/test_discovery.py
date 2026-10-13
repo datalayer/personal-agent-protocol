@@ -169,3 +169,44 @@ async def test_metadata_fetches_carry_no_cookie_or_credential() -> None:
     for headers in seen:
         assert "cookie" not in headers
         assert "authorization" not in headers
+
+
+@pytest.mark.asyncio
+async def test_an_alias_publishes_the_companys_discovery_and_its_issuer_lists_it() -> None:
+    """A company on a domain of its owner's (PAP_DATALAYER D-02): the alias names itself as the
+    organization's domain, the issuer stays the company's own and lists it in `poppy_domains`,
+    so a personal agent discovering the alias finds the same company; nothing else answers there."""
+    from dataclasses import replace
+
+    from personal_agent_protocol.company import build_company, company_app
+    from personal_agent_protocol.demo.kit import InProcessNetwork
+    from personal_agent_protocol.demo.manzanita import CONFIG
+
+    with pytest.raises(ValueError, match="another domain"):
+        replace(CONFIG, aliases=(CONFIG.domain,))
+    with pytest.raises(ValueError, match="small letters"):
+        replace(CONFIG, aliases=("Shop.Example",))
+    config = replace(CONFIG, aliases=("shop.example",))
+    network = InProcessNetwork()
+    service = build_company(config, http_client=network.client(), address_resolver=network.resolve)
+    network.add(config.domain, company_app(service))
+    network.add("shop.example", company_app(service))
+    client = DiscoveryClient(http_client=network.client(), address_resolver=network.resolve)
+    company = await client.discover("shop.example")
+    assert company.document.organization.domain == "shop.example"
+    assert company.oauth_metadata is not None
+    assert company.oauth_metadata.issuer == f"https://{config.domain}"
+    assert company.oauth_metadata.poppy_domains == [config.domain, "shop.example"]
+    # Every endpoint is the issuer's: the alias is the same company, never a second identity.
+    assert (
+        company.document.auth is not None
+        and company.document.auth.issuer == f"https://{config.domain}"
+    )
+    assert (await client.discover(config.domain)).document.organization.domain == config.domain
+    async with network.client() as http:
+        assert (
+            await http.get("https://shop.example/.well-known/oauth-authorization-server")
+        ).status_code == 404
+        assert (await http.post("https://shop.example/oauth/token", data={})).status_code == 404
+    with pytest.raises(ValueError, match="not one of this company's domains"):
+        service.discovery_document("elsewhere.example")

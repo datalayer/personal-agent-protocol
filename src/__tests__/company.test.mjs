@@ -104,6 +104,24 @@ test("discovery and OAuth metadata publish one issuer on the company's domain", 
   assert.deepEqual(w.company.document.extensions.operations, { version: "1", endpoint: "https://manzanita.example/poppy/operations" });
 });
 
+test("an alias publishes the company's discovery, its issuer listing it, and answers nothing else (PAP_DATALAYER D-02)", async () => {
+  assert.throws(() => manzanita({ config: { aliases: ["manzanita.example"] } }), /another domain/);
+  assert.throws(() => manzanita({ config: { aliases: ["Shop.Example"] } }), /small letters/);
+  const { service } = manzanita({ config: { aliases: ["shop.example"] } });
+  const at = (host, path, method = "GET") =>
+    service.handle({ method, url: `https://manzanita.example${path}`, headers: { host }, body: new Uint8Array() });
+  const discovery = await at("shop.example", "/.well-known/poppy.json");
+  assert.equal(discovery.status, 200);
+  assert.equal(discovery.body.organization.domain, "shop.example");
+  assert.equal(discovery.body.auth.issuer, "https://manzanita.example");
+  assert.equal((await at("manzanita.example", "/.well-known/poppy.json")).body.organization.domain, "manzanita.example");
+  const metadata = await at("manzanita.example", "/.well-known/oauth-authorization-server");
+  assert.deepEqual(metadata.body.poppy_domains, ["manzanita.example", "shop.example"]);
+  assert.equal((await at("shop.example", "/.well-known/oauth-authorization-server")).status, 404);
+  assert.equal((await at("shop.example", "/oauth/token", "POST")).status, 404);
+  assert.throws(() => service.discoveryDocument("elsewhere.example"), /not one of this company's domains/);
+});
+
 test("Device Sign-In paces polling, then signs the Session in; Account Tokens rotate, narrow, revoke", async () => {
   const w = await world();
   const session = await w.start();

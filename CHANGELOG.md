@@ -6,6 +6,16 @@
 
 # Changelog
 
+## Unreleased
+
+- **Other domains of the same company** ([docs](docs/docs/guides/company.mdx)):
+  `CompanyConfig.aliases` (`aliases` in TypeScript), each alias publishing the
+  company's discovery document under its own name, the issuer's metadata
+  listing it in `poppy_domains`, every endpoint staying on the company's
+  domain and anything else on an alias answering `404 not_found`;
+  `discovery_document(domain)` (`discoveryDocument(domain)`) for one of them
+  (PAP_DATALAYER D-02).
+
 ## 0.21.0 (2026-10-13)
 
 - **A bound Direct Sign-In names its company**: `PapSignIn` gains `company`

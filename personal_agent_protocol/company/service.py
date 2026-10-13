@@ -230,6 +230,15 @@ class ConsentDecision:
     allow: bool
 
 
+def _check_aliases(domain: str, aliases: tuple[str, ...]) -> None:
+    """Each alias a DNS name in small letters, another than `domain`, named once."""
+    for alias in aliases:
+        if alias != alias.lower().rstrip(".") or not alias or "/" in alias or ":" in alias:
+            raise ValueError("an alias is a DNS domain name, in small letters")
+    if domain in aliases or len(set(aliases)) != len(aliases):
+        raise ValueError("each alias is another domain, named once")
+
+
 @dataclass(frozen=True)
 class CompanyConfig:
     """What the company publishes and allows."""
@@ -260,8 +269,14 @@ class CompanyConfig:
     device_page: str | None = None
     #: A hosted consent page with `{request_id}`: `GET /oauth/authorize` answers 303 to it.
     consent_page: str | None = None
+    #: Other domains that are this company (§3): each publishes its discovery document,
+    #: naming itself as the organization's domain, and the issuer's metadata lists it in
+    #: `poppy_domains`. Everything else stays on `domain`, the issuer's: an alias is never
+    #: a second identity, and answers nothing but its discovery document.
+    aliases: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        _check_aliases(self.domain, self.aliases)
         for name, value in (("device_page", self.device_page), ("consent_page", self.consent_page)):
             if value is None:
                 continue
@@ -282,6 +297,14 @@ class CompanyConfig:
     @property
     def base(self) -> str:
         return f"https://{self.domain}"
+
+    def organization_domain(self, domain: str | None = None) -> str:
+        """The domain a discovery document names: the company's own, or one of its aliases."""
+        if domain is None or domain == self.domain:
+            return self.domain
+        if domain not in self.aliases:
+            raise ValueError(f"{domain} is not one of this company's domains")
+        return domain
 
     @property
     def token_endpoint(self) -> str:
@@ -632,6 +655,12 @@ class CompanyService:
                 return self._bearer_refusal(400, "invalid_request")
             return _json_error(400, "invalid_request")
         try:
+            host = request.headers.get("host", "").split(":", 1)[0].lower()
+            if host in self.config.aliases:
+                # An alias publishes the company's discovery document, and nothing else (§3).
+                if method == "GET" and path == "/.well-known/poppy.json":
+                    return CompanyResponse(200, self.discovery_document(host))
+                return _json_error(404, "not_found")
             if method == "GET" and path == "/.well-known/poppy.json":
                 return CompanyResponse(200, self.discovery_document())
             if method == "GET" and path == "/.well-known/oauth-authorization-server":
@@ -681,8 +710,11 @@ class CompanyService:
 
     # Discovery ---------------------------------------------------------------------
 
-    def discovery_document(self) -> dict[str, Any]:
+    def discovery_document(self, domain: str | None = None) -> dict[str, Any]:
+        """The discovery document published at `domain`: the company's own, or one of its
+        aliases, which it names as the organization's domain; its endpoints stay on `base`."""
         config = self.config
+        organization = config.organization_domain(domain)
         auth: dict[str, Any] = {"issuer": config.base}
         if config.direct:
             auth["direct"] = {"scopes": list(config.scopes)}
@@ -701,7 +733,7 @@ class CompanyService:
             auth["custom_scopes"] = dict(config.custom_scopes)
         document: dict[str, Any] = {
             "protocol_version": PROTOCOL_PROFILE,
-            "organization": {"name": config.name, "domain": config.domain},
+            "organization": {"name": config.name, "domain": organization},
             "auth": auth,
             "agent": {"protocols": [{"type": "poppy", "endpoint": config.conversations_endpoint}]},
         }
@@ -743,7 +775,7 @@ class CompanyService:
             "issuer": config.base,
             "token_endpoint": config.token_endpoint,
             "revocation_endpoint": config.revocation_endpoint,
-            "poppy_domains": [config.domain],
+            "poppy_domains": [config.domain, *config.aliases],
             "dpop_signing_alg_values_supported": ["ES256", "RS256"],
         }
         if config.device:

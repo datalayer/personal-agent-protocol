@@ -663,6 +663,28 @@ async def _hosted_pages(docs: Docs) -> tuple[dict[str, Any], Check]:
     return {"CompanyConfig": CompanyConfig}, check
 
 
+@case("docs/docs/guides/company.mdx#3")
+async def _aliases(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        import httpx
+
+        from personal_agent_protocol.company import build_company
+
+        config = namespace["config"]
+        async with httpx.AsyncClient() as http:
+            service = build_company(config, http_client=http)
+            assert (
+                service.discovery_document("orders.example.com")["organization"]["domain"]
+                == "orders.example.com"
+            )
+            assert service.oauth_metadata()["poppy_domains"] == [
+                config.domain,
+                "orders.example.com",
+            ]
+
+    return {"CompanyConfig": CompanyConfig}, check
+
+
 # CLI and extensions -----------------------------------------------------------------------
 
 

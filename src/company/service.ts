@@ -173,6 +173,13 @@ export interface CompanyConfigOptions {
   readonly consentPage?: string;
   /** Web browsing (§5): a browser-session endpoint and a page for each operation. */
   readonly web?: boolean;
+  /**
+   * Other domains that are this company (§3): each publishes its discovery document, naming
+   * itself as the organization's domain, and the issuer's metadata lists it in
+   * `poppy_domains`. Everything else stays on `domain`, the issuer's: an alias is never a
+   * second identity, and answers nothing but its discovery document.
+   */
+  readonly aliases?: readonly string[];
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -211,6 +218,7 @@ export class CompanyConfig {
   readonly devicePage: string | undefined;
   readonly consentPage: string | undefined;
   readonly web: boolean;
+  readonly aliases: readonly string[];
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -233,6 +241,15 @@ export class CompanyConfig {
     this.devicePage = hostedPage("devicePage", options.devicePage);
     this.consentPage = hostedPage("consentPage", options.consentPage);
     this.web = options.web ?? false;
+    this.aliases = [...(options.aliases ?? [])];
+    for (const alias of this.aliases) {
+      if (!alias || alias !== alias.toLowerCase().replace(/\.$/, "") || alias.includes("/") || alias.includes(":")) {
+        throw new RangeError("an alias is a DNS domain name, in small letters");
+      }
+    }
+    if (this.aliases.includes(this.domain) || new Set(this.aliases).size !== this.aliases.length) {
+      throw new RangeError("each alias is another domain, named once");
+    }
     if (this.consentPage !== undefined && !this.consentPage.includes("{request_id}")) {
       throw new RangeError("consentPage must contain {request_id}");
     }
@@ -730,6 +747,14 @@ export class CompanyService {
       return jsonError(400, "invalid_request");
     }
     try {
+      const host = (request.headers.host ?? "").split(":", 1)[0]?.toLowerCase() ?? "";
+      if (this.config.aliases.includes(host)) {
+        // An alias publishes the company's discovery document, and nothing else (§3).
+        if (method === "GET" && path === "/.well-known/poppy.json") {
+          return { status: 200, body: this.discoveryDocument(host), headers: {} };
+        }
+        return jsonError(404, "not_found");
+      }
       if (method === "GET" && path === "/.well-known/poppy.json") {
         return { status: 200, body: this.discoveryDocument(), headers: {} };
       }
@@ -794,8 +819,15 @@ export class CompanyService {
 
   // Discovery -----------------------------------------------------------------------
 
-  discoveryDocument(): Record<string, unknown> {
+  /**
+   * The discovery document published at `domain`: the company's own, or one of its aliases,
+   * which it names as the organization's domain; its endpoints stay on `base`.
+   */
+  discoveryDocument(domain?: string): Record<string, unknown> {
     const config = this.config;
+    if (domain !== undefined && domain !== config.domain && !config.aliases.includes(domain)) {
+      throw new RangeError(`${domain} is not one of this company's domains`);
+    }
     const auth: Record<string, unknown> = { issuer: config.base };
     if (config.direct) auth.direct = { scopes: [...config.scopes] };
     if (config.device) auth.device = { scopes: [...config.scopes] };
@@ -809,7 +841,7 @@ export class CompanyService {
     if (Object.keys(config.customScopes).length) auth.custom_scopes = { ...config.customScopes };
     const document: Record<string, unknown> = {
       protocol_version: PROTOCOL_PROFILE,
-      organization: { name: config.name, domain: config.domain },
+      organization: { name: config.name, domain: domain ?? config.domain },
       auth,
       agent: { protocols: [{ type: "poppy", endpoint: config.conversationsEndpoint }] },
     };
@@ -848,7 +880,7 @@ export class CompanyService {
       issuer: config.base,
       token_endpoint: config.tokenEndpoint,
       revocation_endpoint: config.revocationEndpoint,
-      poppy_domains: [config.domain],
+      poppy_domains: [config.domain, ...config.aliases],
       dpop_signing_alg_values_supported: ["ES256", "RS256"],
     };
     if (config.device) metadata.device_authorization_endpoint = config.deviceEndpoint;

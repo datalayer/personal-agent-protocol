@@ -310,6 +310,29 @@ config = CompanyConfig(
 
 Both templates must be HTTPS URLs without a fragment.
 
+### Other domains of the same company
+
+A company known by more than one domain — its own and a shorter one its
+owner bought, say — names the others as `aliases` (both languages):
+
+```python
+config = CompanyConfig(
+    name="Orders helper",
+    domain="orders-helper.apps.datalayer.ai",
+    scopes=("orders:read",),
+    operations=False,
+    aliases=("orders.example.com",),
+)
+```
+
+Each alias publishes the company's discovery document, naming itself as the
+organization's domain (§3), and the issuer's OAuth metadata lists it in
+`poppy_domains`, so a personal agent that discovers the alias verifies the
+same issuer: one company, never a second identity. Every endpoint stays on
+`domain`; on an alias, which the request's `Host` names, anything but
+`/.well-known/poppy.json` answers `404 not_found`. An alias is a DNS name in
+small letters, another than `domain`, named once.
+
 ### Before production
 
 The defaults keep state in one process. A deployment contributes a durable

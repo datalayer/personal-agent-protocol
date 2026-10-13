@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.18.0 (2026-10-13)
 
 - **Taking a company down** ([docs](docs/docs/guides/company.mdx#the-store)):
   the company store contract gains a seventh method, `records(kind)` — every

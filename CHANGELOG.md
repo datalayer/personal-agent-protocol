@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.23.0 (2026-10-13)
 
 - **One of a company's people answers in a conversation** (decided
   2026-10-13; [docs](docs/docs/guides/company.mdx)): `staff_reply(conversation_id,

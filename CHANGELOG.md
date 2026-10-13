@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.19.0 (2026-10-13)
 
 - **The replies name their conversation** ([docs](docs/docs/guides/conversations.mdx#who-wrote-each-reply-papreplies)):
   `PapReplies` is version 2 of `application/vnd.datalayer.pap.replies+json`,

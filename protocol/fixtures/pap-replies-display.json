@@ -1,0 +1,22 @@
+{
+  "type": "application/vnd.datalayer.pap.replies+json",
+  "version": 1,
+  "id": "conv_4Kp9-msg_1-replies",
+  "text": "manzanita.example, its agent: Your Ridge Jacket shipped on Tuesday.\nmanzanita.example, one of its people: This is Rosa from the store: I can exchange it for you.",
+  "data": {
+    "company": "manzanita.example",
+    "replies": [
+      {
+        "sender": "agent",
+        "text": "Your Ridge Jacket shipped on Tuesday."
+      },
+      {
+        "sender": "human",
+        "text": "This is Rosa from the store: I can exchange it for you."
+      }
+    ],
+    "status": "idle",
+    "responder": "human"
+  },
+  "actions": []
+}

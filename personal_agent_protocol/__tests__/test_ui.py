@@ -17,9 +17,11 @@ from personal_agent_protocol.models import Operation
 from personal_agent_protocol.ui import (
     PAP_CONFIRM_TYPE,
     PAP_OUTCOME_TYPE,
+    PAP_REPLIES_TYPE,
     PAP_SIGN_IN_TYPE,
     PapConfirm,
     PapOutcome,
+    PapReplies,
     PapSessionShown,
     PapSignIn,
 )
@@ -305,6 +307,92 @@ async def test_the_core_plugin_declares_the_outcome_type() -> None:
         assert registry.get(PAP_OUTCOME_TYPE, 1) is PapOutcome
         shown = registry.parse(json.loads(OUTCOME_FIXTURE.read_text()))
         assert shown.tool_meta()["reactor.ui/display"]["data"]["result"] == PARTIAL
+    finally:
+        if http is not None:
+            await http.aclose()
+
+
+REPLIES_FIXTURE = Path(__file__).parents[2] / "protocol" / "fixtures" / "pap-replies-display.json"
+
+
+def _message(id_: str, sender: str, text: str | None, role: str = "company") -> Any:
+    from personal_agent_protocol.models import Message
+
+    data = None if text else {"order": "1043"}
+    return Message(id=id_, sender=sender, role=role, text=text, data=data)
+
+
+def _replies() -> PapReplies:
+    replies = PapReplies.of(
+        "manzanita.example",
+        "conv_4Kp9",
+        [
+            _message("msg_1", "agent", "Your Ridge Jacket shipped on Tuesday."),
+            _message("msg_2", "human", "This is Rosa from the store: I can exchange it for you."),
+        ],
+        status="idle",
+        responder="human",
+    )
+    assert replies is not None
+    return replies
+
+
+def test_replies_are_the_committed_display_each_with_who_wrote_it() -> None:
+    # The TypeScript SDK reads the same file (src/__tests__/ui.test.mjs).
+    wire = _replies().wire().model_dump(mode="json")
+    assert wire == json.loads(REPLIES_FIXTURE.read_text())
+    assert wire["type"] == PAP_REPLIES_TYPE and wire["version"] == 1
+    assert wire["id"] == "conv_4Kp9-msg_1-replies"
+    assert [reply["sender"] for reply in wire["data"]["replies"]] == ["agent", "human"]
+    assert wire["text"] == (
+        "manzanita.example, its agent: Your Ridge Jacket shipped on Tuesday.\n"
+        "manzanita.example, one of its people: "
+        "This is Rosa from the store: I can exchange it for you."
+    )
+
+
+def test_only_the_companys_own_words_are_replies() -> None:
+    # The personal agent's own message, and a company message carrying only data, are not drawn.
+    assert (
+        PapReplies.of(
+            "manzanita.example",
+            "conv_4Kp9",
+            [
+                _message("msg_0", "agent", "Where is my order?", role="user"),
+                _message("msg_1", "agent", None),
+            ],
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"company": " "},
+        {"replies": []},
+        {"replies": [{"sender": "model", "text": "Hello"}]},
+        {"replies": [{"sender": "agent", "text": " "}]},
+        {"replies": [{"sender": "agent", "text": "Hello", "token": "secret"}]},
+        {"status": "waiting"},
+        {"responder": "company"},
+        {"token": "secret"},
+    ],
+)
+def test_replies_are_refused_when_they_say_less_or_other(overrides: dict[str, Any]) -> None:
+    fields = _replies().model_dump()
+    fields.update(overrides)
+    with pytest.raises(ValidationError):
+        PapReplies.model_validate(fields)
+
+
+async def test_the_core_plugin_declares_the_replies_type() -> None:
+    platform, http = build_pap_reactor()
+    try:
+        registry = platform.display_types()
+        assert registry.get(PAP_REPLIES_TYPE, 1) is PapReplies
+        shown = registry.parse(json.loads(REPLIES_FIXTURE.read_text()))
+        assert shown.tool_meta()["reactor.ui/display"]["data"]["responder"] == "human"
     finally:
         if http is not None:
             await http.aclose()

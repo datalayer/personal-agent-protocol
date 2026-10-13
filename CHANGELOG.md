@@ -6,6 +6,17 @@
 
 # Changelog
 
+## Unreleased
+
+- **Who wrote each reply** ([docs](docs/docs/guides/conversations.mdx#who-wrote-each-reply-papreplies)):
+  `PapReplies` (`personal_agent_protocol.ui`; TypeScript `PapRepliesData`,
+  `isPapReplies`, `papRepliesDisplay`, `papRepliesText`), a `reactor.ui`
+  display of type `application/vnd.datalayer.pap.replies+json`, version 1:
+  a company's replies in a conversation, each verbatim with who wrote it there
+  (its agent or one of its people), apart from the conversation's `status` and
+  `responder`. Declared by the core plugin; both SDKs checked against
+  `protocol/fixtures/pap-replies-display.json`.
+
 ## 0.16.0 (2026-10-12)
 
 - **A company reports what it did and refused**

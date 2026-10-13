@@ -15,13 +15,17 @@ import test from "node:test";
 import {
   PAP_CONFIRM_TYPE,
   PAP_OUTCOME_TYPE,
+  PAP_REPLIES_TYPE,
   isPapConfirm,
   isPapConfirmData,
   isPapOutcome,
+  isPapReplies,
   papConfirmDisplay,
   papConfirmText,
   papOutcomeDisplay,
   papOutcomeText,
+  papRepliesDisplay,
+  papRepliesText,
 } from "../../lib/index.js";
 
 const example = JSON.parse(
@@ -117,4 +121,38 @@ test("in progress, the company's words for the operation and that the outcome is
     `Still in progress at ${data.company}: ${data.summary} (version 2) The outcome is not known yet.`,
   );
   assert.throws(() => papOutcomeDisplay("o1", { ...data, result: "done" }), TypeError);
+});
+
+const replies = JSON.parse(
+  readFileSync(new URL("../../protocol/fixtures/pap-replies-display.json", import.meta.url), "utf8"),
+);
+
+test("the Python SDK's replies are one, each with who wrote it, word for word", () => {
+  assert.equal(replies.type, PAP_REPLIES_TYPE);
+  assert.ok(isPapReplies(replies));
+  assert.equal(papRepliesText(replies.data), replies.text);
+  assert.deepEqual(
+    replies.data.replies.map((reply) => reply.sender),
+    ["agent", "human"],
+  );
+  assert.deepEqual(papRepliesDisplay(replies.id, replies.data), replies);
+});
+
+test("replies that say less or other are not one", () => {
+  const changed = (data) => ({ ...replies, data: { ...replies.data, ...data } });
+  assert.equal(isPapReplies({ ...replies, type: PAP_OUTCOME_TYPE }), false);
+  assert.equal(isPapReplies({ ...replies, version: 2 }), false);
+  for (const data of [
+    { company: " " },
+    { replies: [] },
+    { replies: [{ sender: "model", text: "Hello" }] },
+    { replies: [{ sender: "agent", text: " " }] },
+    { replies: [{ sender: "agent", text: "Hello", token: "secret" }] },
+    { status: "waiting" },
+    { responder: "company" },
+    { token: "secret" },
+  ]) {
+    assert.equal(isPapReplies(changed(data)), false, JSON.stringify(data));
+  }
+  assert.throws(() => papRepliesDisplay("r1", { ...replies.data, replies: [] }), TypeError);
 });

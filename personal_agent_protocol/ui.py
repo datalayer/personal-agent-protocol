@@ -4,10 +4,11 @@
 
 """PAP's displays for ``reactor.ui``: what a page draws for a PAP answer.
 
-Three displays: :class:`PapSignIn`, a sign-in waiting for the person;
+Four displays: :class:`PapSignIn`, a sign-in waiting for the person;
 :class:`PapConfirm`, an operation a company proposed, waiting for the person to
-confirm it; and :class:`PapOutcome`, what a confirmed operation came to, in the
-company's own words.
+confirm it; :class:`PapOutcome`, what a confirmed operation came to, in the
+company's own words; and :class:`PapReplies`, what a company answered in a
+conversation, each reply with who wrote it there.
 
 A tool that starts a sign-in answers with a :class:`PapSignIn` beside its
 result — in an MCP result's ``_meta["reactor.ui/display"]`` — and any page with
@@ -50,6 +51,9 @@ PAP_CONFIRM_TYPE = "application/vnd.datalayer.pap.confirm+json"
 
 #: The display type of what a confirmed operation came to.
 PAP_OUTCOME_TYPE = "application/vnd.datalayer.pap.outcome+json"
+
+#: The display type of what a company answered in a conversation.
+PAP_REPLIES_TYPE = "application/vnd.datalayer.pap.replies+json"
 
 #: What confirming an operation does, as an application's Rules class it.
 PapActionClass = Literal["read", "write", "send", "buy", "delete", "publish"]
@@ -325,15 +329,108 @@ class PapOutcome(Display):
         return {DISPLAY_META_KEY: self.wire().model_dump(mode="json")}
 
 
+#: Where a conversation stands (§7.8), apart from who answers in it.
+PapConversationStatus = Literal["working", "idle", "queued", "closed"]
+
+_WROTE: dict[str, str] = {"agent": "its agent", "human": "one of its people"}
+
+
+class PapReply(BaseModel):
+    """One message a company wrote, and who wrote it there: its agent or one of its people."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sender: Literal["agent", "human"]
+    #: The company's words, verbatim.
+    text: str = Field(min_length=1)
+
+    @field_validator("text")
+    @classmethod
+    def _text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("a reply says something, in the company's words")
+        return value
+
+
+@display_type(PAP_REPLIES_TYPE, version=1)
+class PapReplies(Display):
+    """What a company answered in a conversation, each reply with who wrote it (§7.8).
+
+    A company's message is written by its agent or by one of its people
+    (``sender``), whoever answers the conversation now (``responder``) and
+    wherever it stands (``status``: ``working``, ``idle``, ``queued`` while a
+    person is found, ``closed``); the page tells them apart, as PAP-7.8-01
+    asks of the personal agent's own words. Each reply is the company's text,
+    verbatim; a message carrying only data is the model's to read, not the
+    page's to draw. Make one from the company's messages with :meth:`of`.
+    """
+
+    #: The company, as the person knows it (its domain or its name).
+    company: str = Field(min_length=1)
+    replies: list[PapReply] = Field(min_length=1)
+    status: PapConversationStatus | None = None
+    responder: Literal["agent", "human"] | None = None
+
+    @field_validator("company")
+    @classmethod
+    def _company(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("replies name their company")
+        return value.strip()
+
+    @classmethod
+    def of(
+        cls,
+        company: str,
+        conversation_id: str,
+        messages: Any,
+        *,
+        status: str | None = None,
+        responder: str | None = None,
+    ) -> PapReplies | None:
+        """The company's :class:`~personal_agent_protocol.models.Message` s with text, or ``None``.
+
+        Only the company's own messages (``role: company``) are replies; the
+        display's ``id`` is the conversation's and its first reply's.
+        """
+        written = [
+            message
+            for message in messages
+            if message.role == "company" and message.text and message.text.strip()
+        ]
+        if not written:
+            return None
+        return cls(
+            id=f"{conversation_id}-{written[0].id}-replies",
+            company=company,
+            replies=[PapReply(sender=message.sender, text=message.text) for message in written],
+            status=status,
+            responder=responder,
+        )
+
+    def text(self) -> str:
+        return "\n".join(
+            f"{self.company}, {_WROTE[reply.sender]}: {reply.text}" for reply in self.replies
+        )
+
+    def tool_meta(self) -> dict[str, Any]:
+        """The ``_meta`` an MCP tool result carries this display in."""
+        return {DISPLAY_META_KEY: self.wire().model_dump(mode="json")}
+
+
 __all__ = [
     "PAP_CONFIRM_TYPE",
     "PAP_OUTCOME_TYPE",
+    "PAP_REPLIES_TYPE",
     "PAP_SIGN_IN_TYPE",
     "WAITING_FOR_THE_PERSON",
     "PapActionClass",
     "PapConfirm",
+    "PapConversationStatus",
     "PapOutcome",
     "PapOutcomeState",
+    "PapReplies",
+    "PapReply",
     "PapSessionShown",
     "PapSignIn",
     "PapTermsWas",

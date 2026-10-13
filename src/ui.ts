@@ -260,3 +260,84 @@ export function papOutcomeDisplay(id: string, data: PapOutcomeData): PapOutcomeD
   }
   return { type: PAP_OUTCOME_TYPE, version: PAP_OUTCOME_VERSION, id, text: papOutcomeText(data), data, actions: [] };
 }
+
+/** The display type of what a company answered in a conversation. */
+export const PAP_REPLIES_TYPE = "application/vnd.datalayer.pap.replies+json";
+
+/** The version of `PAP_REPLIES_TYPE` this module reads. */
+export const PAP_REPLIES_VERSION = 1;
+
+/** Where a conversation stands (§7.8), apart from who answers in it. */
+export type PapConversationStatus = "working" | "idle" | "queued" | "closed";
+
+/** Every `PapConversationStatus`. */
+export const PAP_CONVERSATION_STATUSES: readonly PapConversationStatus[] = ["working", "idle", "queued", "closed"];
+
+/** One message a company wrote, and who wrote it there: its agent or one of its people. */
+export type PapReply = { sender: "agent" | "human"; text: string };
+
+/** What a company answered, as a display's `data` (`PapReplies`' fields). */
+export type PapRepliesData = {
+  /** The company, as the person knows it (its domain or its name). */
+  company: string;
+  /** Its replies, each in its words, verbatim, with who wrote it. */
+  replies: PapReply[];
+  status: PapConversationStatus | null;
+  /** Who answers the conversation now. */
+  responder: "agent" | "human" | null;
+};
+
+/** A display of what a company answered, as the page receives it. */
+export type PapRepliesDisplay = {
+  type: typeof PAP_REPLIES_TYPE;
+  version: typeof PAP_REPLIES_VERSION;
+  id: string;
+  text: string;
+  data: PapRepliesData;
+  actions?: unknown[];
+};
+
+const REPLIES_KEYS = ["company", "replies", "status", "responder"] as const;
+
+const isSender = (value: unknown): value is "agent" | "human" => value === "agent" || value === "human";
+
+const isReply = (value: unknown): value is PapReply =>
+  isObject(value) && hasExactly(value, ["sender", "text"]) && isSender(value.sender) && isFilled(value.text);
+
+/**
+ * Whether a value is the `data` of what a company answered, as `PapReplies`
+ * sends it: at least one reply, each with who wrote it, and nothing else.
+ */
+export function isPapRepliesData(value: unknown): value is PapRepliesData {
+  if (!isObject(value) || !hasExactly(value, REPLIES_KEYS)) return false;
+  const { company, replies, status, responder } = value;
+  if (!isFilled(company) || !Array.isArray(replies) || replies.length === 0 || !replies.every(isReply)) return false;
+  if (status !== null && !PAP_CONVERSATION_STATUSES.includes(status as PapConversationStatus)) return false;
+  return responder === null || isSender(responder);
+}
+
+/** Whether a display is what a company answered, of the version this SDK reads. */
+export function isPapReplies<D extends DisplayLike>(display: D): display is D & PapRepliesDisplay {
+  return (
+    display.type === PAP_REPLIES_TYPE &&
+    display.version === PAP_REPLIES_VERSION &&
+    typeof display.id === "string" &&
+    typeof display.text === "string" &&
+    isPapRepliesData(display.data)
+  );
+}
+
+const WROTE: Record<PapReply["sender"], string> = { agent: "its agent", human: "one of its people" };
+
+/** What the replies read as without a renderer: `PapReplies.text()`, word for word. */
+export function papRepliesText(data: PapRepliesData): string {
+  return data.replies.map((reply) => `${data.company}, ${WROTE[reply.sender]}: ${reply.text}`).join("\n");
+}
+
+/** What a company answered as its display, `text` included; throws when `data` is not one. */
+export function papRepliesDisplay(id: string, data: PapRepliesData): PapRepliesDisplay {
+  if (!id || !isPapRepliesData(data)) {
+    throw new TypeError("Not a company's replies: PapReplies' fields, each of its type, and no other");
+  }
+  return { type: PAP_REPLIES_TYPE, version: PAP_REPLIES_VERSION, id, text: papRepliesText(data), data, actions: [] };
+}

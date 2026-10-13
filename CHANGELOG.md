@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.17.0 (2026-10-13)
 
 - **Who wrote each reply** ([docs](docs/docs/guides/conversations.mdx#who-wrote-each-reply-papreplies)):
   `PapReplies` (`personal_agent_protocol.ui`; TypeScript `PapRepliesData`,

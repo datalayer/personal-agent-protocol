@@ -39,6 +39,9 @@ What it implements of draft 0.1 and Operations v1:
   company's own cookie for a Session, and each operation's `url` shows it in
   that Session, where it can be confirmed or cancelled — the same operation,
   performed at most once (Operations §4.4).
+- Taking a company down: its owner reads what is under way (`open_work`),
+  settles each open operation as cancelled (`cancel_open_operations`) and
+  ends every sign-in (`end_sign_ins`), before its records go.
 """
 
 from __future__ import annotations
@@ -339,6 +342,28 @@ class CompanyResponse:
     body: Any = None
     headers: Mapping[str, str] = field(default_factory=dict)
     stream: AsyncIterator[bytes] | None = None
+
+
+@dataclass(frozen=True)
+class OpenWork:
+    """What a company has under way: what its owner settles and ends before taking it down.
+
+    `operations` are those still `proposed` or `in_progress` (a proposal past
+    its expiry is not open); `sign_ins` are the agents and accounts, as
+    `(client_id, account_id)`, with a sign-in not ended — each one ended
+    whole by `CompanyService.disconnect`.
+    """
+
+    operations: tuple[Operation, ...] = ()
+    sign_ins: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def empty(self) -> bool:
+        return not self.operations and not self.sign_ins
+
+
+#: The states an operation is not final in (Operations §6).
+_OPEN_STATES = frozenset({"proposed", "in_progress"})
 
 
 class _RefusedError(Exception):
@@ -2371,6 +2396,80 @@ class CompanyService:
         if changed is None:
             raise KeyError(operation_id)
         return changed[1].operation
+
+    # Taking the company down ---------------------------------------------------------
+
+    async def open_work(self) -> OpenWork:
+        """What is under way: open operations and sign-ins not ended, read from the store."""
+
+        operations = []
+        for record in await self.store.records(OPERATION):
+            stored = self._expired(StoredOperation.from_json(record.value))
+            if stored.operation.state in _OPEN_STATES:
+                operations.append(stored.operation)
+        sign_ins = set()
+        for record in await self.store.records(ACCOUNT_FAMILY):
+            family = AccountFamily.from_json(record.value)
+            if not family.revoked:
+                sign_ins.add((family.client_id, family.account_id))
+        operations.sort(key=lambda operation: operation.operation_id)
+        return OpenWork(operations=tuple(operations), sign_ins=tuple(sorted(sign_ins)))
+
+    async def cancel_open_operations(self, reason: str) -> int:
+        """Settle every open operation as `cancelled`, because of `reason` (a sentence).
+
+        For a company being taken down: nothing will perform or settle them
+        after, and a personal agent would otherwise read one as in progress for
+        ever. A proposal was never performed: *Nothing was changed.* One in
+        progress may have changed something before it stopped, which its result
+        says (Operations §6). A proposal past its expiry is recorded as expired.
+        Returns how many were cancelled.
+        """
+
+        reason = reason.strip()
+        if not reason:
+            raise ValueError("say why the operations are cancelled")
+        stopped = OperationResult(
+            summary=(
+                "It was stopped before it finished, and nothing more will be done: "
+                f"whatever it changed until then stands. {reason}"
+            )
+        )
+        untouched = OperationResult(summary=f"Nothing was changed. {reason}")
+
+        def cancel(stored: StoredOperation) -> StoredOperation:
+            stored = self._expired(stored)
+            state = stored.operation.state
+            if state not in _OPEN_STATES:
+                return stored
+            return replace(
+                stored,
+                operation=stored.operation.model_copy(
+                    update={
+                        "state": "cancelled",
+                        "result": stopped if state == "in_progress" else untouched,
+                    }
+                ),
+            )
+
+        cancelled = 0
+        for record in await self.store.records(OPERATION):
+            operation_id = StoredOperation.from_json(record.value).operation.operation_id
+            changed = await self._change(OPERATION, operation_id, StoredOperation.from_json, cancel)
+            if changed is not None and changed[1].operation.state == "cancelled":
+                cancelled += changed[0].operation.state != "cancelled"
+        return cancelled
+
+    async def end_sign_ins(self) -> int:
+        """End every sign-in, as each agent's disconnect does: tokens revoked, Sessions signed out.
+
+        Returns how many agents' sign-ins to an account were ended.
+        """
+
+        work = await self.open_work()
+        for client_id, account_id in work.sign_ins:
+            await self.disconnect(client_id, account_id)
+        return len(work.sign_ins)
 
     async def _operation_route(
         self, request: CompanyRequest, method: str, path: str

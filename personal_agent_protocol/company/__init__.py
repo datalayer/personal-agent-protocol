@@ -70,6 +70,7 @@ from .service import (
     CompanyResponse,
     CompanyService,
     ConsentDecision,
+    OpenWork,
 )
 from .store import RECORD_KINDS, StoredRecord
 from .verify import verify_assertion
@@ -208,6 +209,7 @@ __all__ = [
     "IdentityClientResolver",
     "MemoryCompanyStore",
     "MemoryReplayCache",
+    "OpenWork",
     "OperationExecutor",
     "OperationFailed",
     "OperationOutcomeUnknown",

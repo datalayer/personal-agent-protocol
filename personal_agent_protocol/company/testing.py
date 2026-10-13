@@ -14,7 +14,8 @@ async def test_my_store_conforms() -> None:
 `check_store` raises `StoreConformanceError` naming the first property a
 store breaks: absent and present records, expiry, `take` once under
 concurrency, `create` only if absent, compare-and-set conflicts, kinds kept
-apart, values copied rather than shared, and a JSON round trip of every
+apart, values copied rather than shared, every live record of a kind read
+at once (`records`), and a JSON round trip of every
 record kind the company keeps. `make_store` returns a fresh, empty store
 (or an awaitable of one); `now` is the clock the store judges expiry by;
 `concurrency` is how many callers race for one record.
@@ -185,6 +186,7 @@ async def check_store(
     await _create_once(await fresh(), concurrency)
     await _compare_and_set(await fresh(), concurrency)
     await _round_trips(await fresh(), now())
+    await _records(await fresh(), now())
 
 
 async def check_replay_cache(
@@ -335,3 +337,35 @@ async def _round_trips(store: CompanyStore, now: datetime) -> None:
         _check(entry is not None, f"{kind}: the record reads back")
         if entry is not None:
             _check(RECORD_TYPES[kind](entry.value) == record, f"{kind}: the record round-trips")
+
+
+async def _records(store: CompanyStore, now: datetime) -> None:
+    later = now + timedelta(hours=1)
+    await store.put("operation", "a", {"n": 1})
+    await store.put("operation", "b", {"n": 2}, expires_at=later)
+    await store.put("operation", "gone", {"n": 3}, expires_at=now - timedelta(seconds=1))
+    await store.put("operation", "taken", {"n": 4})
+    await store.take("operation", "taken")
+    await store.put("operation", "deleted", {"n": 5})
+    await store.delete("operation", "deleted")
+    await store.put("conversation", "a", {"n": 6})
+    found = await store.records("operation")
+    _check(
+        sorted(record.value["n"] for record in found) == [1, 2],
+        "records reads every live record of its kind: nothing expired, taken, deleted"
+        " or of another kind",
+    )
+    for record in found:
+        entry = await store.get("operation", "a" if record.value["n"] == 1 else "b")
+        _check(
+            entry is not None
+            and entry.version == record.version
+            and entry.expires_at == record.expires_at,
+            "records gives each record's version and expiry, as get does",
+        )
+        record.value["n"] = 0
+    _check(
+        sorted(record.value["n"] for record in await store.records("operation")) == [1, 2],
+        "records returns copies",
+    )
+    _check(await store.records("device") == [], "records of a kind with nothing live")

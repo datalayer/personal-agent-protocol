@@ -11,7 +11,7 @@ every transition that must not race between replicas goes through
 `create` (only if absent), `take` (read and delete at once), or `replace`
 (compare-and-set on the version read). An expired record reads as absent.
 
-Any backend (a database, a key-value service) implements the six methods;
+Any backend (a database, a key-value service) implements the seven methods;
 `personal_agent_protocol.company.testing.check_store` checks one.
 `MemoryCompanyStore` is the default: one process, nothing persisted.
 """
@@ -97,6 +97,12 @@ class CompanyStore(Protocol):
     - `replace` writes it only if its version is still `version`: `True` when written.
     - `take` reads and deletes it at once: exactly one caller gets it.
     - `delete` removes it, if present.
+    - `records` reads every live record of one kind, in no particular order:
+      what a company's owner settles and ends before taking it down
+      (`CompanyService.open_work`). Only values come back, never keys — a
+      backend may keep keys as digests it cannot reverse — so the records
+      read this way name what they are (an operation its ID, a sign-in its
+      agent and account).
 
     Values are JSON objects; a backend stores copies, never the caller's object.
     """
@@ -124,6 +130,8 @@ class CompanyStore(Protocol):
     async def take(self, kind: str, key: str) -> JsonObject | None: ...
 
     async def delete(self, kind: str, key: str) -> None: ...
+
+    async def records(self, kind: str) -> list[StoredRecord]: ...
 
 
 #: The memory store sweeps expired records once it holds this many, then whenever it doubles.
@@ -210,6 +218,14 @@ class MemoryCompanyStore:
 
     async def delete(self, kind: str, key: str) -> None:
         self._entries.pop((kind, key), None)
+
+    async def records(self, kind: str) -> list[StoredRecord]:
+        found = []
+        for at_kind, key in list(self._entries):
+            entry = self._live(at_kind, key) if at_kind == kind else None
+            if entry is not None:
+                found.append(StoredRecord(json.loads(entry[0]), entry[1], entry[2]))
+        return found
 
     def keys(self, kind: str) -> list[str]:
         """The live keys of one kind, oldest first: for tests and inspection, not the service."""

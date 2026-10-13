@@ -441,6 +441,54 @@ test("operations: revision races, standing permission refused, failure, unknown 
   );
 });
 
+test("taken down: open operations settled as cancelled, saying so; every sign-in ended (PAP_DATALAYER D-06)", async () => {
+  const w = await world();
+  const session = await w.start();
+  const { result } = await directSignIn(w, session);
+  const token = result.token;
+  const operations = new OperationsClient({ reactor: w.host.reactor, transport: w.transport });
+  const target = operationsEndpoint(w.company.document, parseClientMetadata(w.identity.metadata));
+  const reason = "The company was taken down.";
+
+  const late = await proposeAt(w, token, "gift-wrap");
+  w.clock.advance(16 * 60);
+  const exchange = await proposeAt(w, token, "exchanges");
+  const repair = await proposeAt(w, token, "repairs");
+  const performing = await operations.confirm(target, repair, { ...w.who, token, approval: await approve(repair) });
+  assert.equal(performing.operation.state, "in_progress");
+  const returned = await proposeAt(w, token, "returns");
+  const failed = await operations.confirm(target, returned, { ...w.who, token, approval: await approve(returned) });
+  assert.equal(failed.operation.state, "failed");
+
+  const work = await w.shop.openWork();
+  assert.deepEqual(
+    work.operations.map((operation) => operation.operation_id),
+    [exchange.operation_id, repair.operation_id].sort(),
+  );
+  assert.deepEqual(work.signIns, [[w.identity.clientId, "acct_ada"]]);
+
+  await assert.rejects(w.shop.cancelOpenOperations("  "), /say why/);
+  assert.equal(await w.shop.cancelOpenOperations(reason), 2);
+  const proposed = await operations.read(target, exchange.operation_id, { ...w.who, token });
+  assert.equal(proposed.state, "cancelled");
+  assert.equal(proposed.result.summary, `Nothing was changed. ${reason}`);
+  const stopped = await operations.read(target, repair.operation_id, { ...w.who, token });
+  assert.equal(stopped.state, "cancelled");
+  assert.ok(stopped.result.summary.startsWith("It was stopped before it finished"));
+  assert.ok(stopped.result.summary.includes("whatever it changed until then stands"));
+  assert.ok(stopped.result.summary.endsWith(reason));
+  assert.deepEqual((await operations.read(target, returned.operation_id, { ...w.who, token })).result, failed.operation.result);
+  assert.equal((await w.shop.operationRecord(late.operation_id)).operation.state, "expired");
+
+  assert.equal(await w.shop.endSignIns(), 1);
+  assert.deepEqual(await w.shop.openWork(), { operations: [], signIns: [] });
+  const out = await w.transport.request("GET", "https://manzanita.example/api/orders", { ...w.who, token });
+  assert.deepEqual(await out.json(), { error: "sign_in_required", scope: "orders:read" });
+
+  assert.equal(await w.shop.cancelOpenOperations(reason), 0);
+  assert.equal(await w.shop.endSignIns(), 0);
+});
+
 test("standing permission cannot confirm what needs the user's approval", async () => {
   const w = await world();
   const session = await w.start();

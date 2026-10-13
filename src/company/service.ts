@@ -48,6 +48,9 @@
  *   company's own cookie for a Session from a verified browser assertion, and each
  *   operation's `url` shows it in that Session, where the user can confirm or cancel
  *   it: the same operation, performed at most once whichever channel confirms it.
+ * - Taking a company down: its owner reads what is under way (`openWork`), settles
+ *   each open operation as cancelled (`cancelOpenOperations`) and ends every sign-in
+ *   (`endSignIns`), before its records go.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -421,6 +424,26 @@ export const WEB_COOKIE = "__Host-poppy_session";
 export interface ConsentDecision {
   readonly requestId: string;
   readonly allow: boolean;
+}
+
+/**
+ * What a company has under way: what its owner settles and ends before taking it down.
+ *
+ * `operations` are those still `proposed` or `in_progress` (a proposal past its
+ * expiry is not open); `signIns` are the agents and accounts, as `[clientId,
+ * accountId]`, with a sign-in not ended — each one ended whole by
+ * `CompanyService.disconnect`.
+ */
+export interface OpenWork {
+  readonly operations: readonly Operation[];
+  readonly signIns: readonly (readonly [clientId: string, accountId: string])[];
+}
+
+/** The states an operation is not final in (Operations §6). */
+const OPEN_STATES: ReadonlySet<string> = new Set(["proposed", "in_progress"]);
+
+function byCodePoint(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** A form's CSRF token: only a page whose browser holds `secret` (a cookie) can know it. */
@@ -2722,6 +2745,91 @@ export class CompanyService {
     );
     if (changed === undefined) throw new Error("unknown operation");
     return changed[1].operation;
+  }
+
+  // Taking the company down -------------------------------------------------------
+
+  /** What is under way: open operations and sign-ins not ended, read from the store. */
+  async openWork(): Promise<OpenWork> {
+    const operations: Operation[] = [];
+    for (const record of await this.store.records(RecordKinds.operation)) {
+      const stored = this.#expired(record.value as unknown as StoredOperation);
+      if (OPEN_STATES.has(stored.operation.state)) operations.push(stored.operation);
+    }
+    const signIns = new Map<string, readonly [string, string]>();
+    for (const record of await this.store.records(RecordKinds.accountFamily)) {
+      const family = record.value as unknown as AccountFamily;
+      if (!family.revoked) {
+        signIns.set(JSON.stringify([family.clientId, family.accountId]), [
+          family.clientId,
+          family.accountId,
+        ]);
+      }
+    }
+    operations.sort((a, b) => byCodePoint(a.operation_id, b.operation_id));
+    const keys = [...signIns.keys()].sort(byCodePoint);
+    return { operations, signIns: keys.map((key) => signIns.get(key) as readonly [string, string]) };
+  }
+
+  /**
+   * Settle every open operation as `cancelled`, because of `reason` (a sentence).
+   *
+   * For a company being taken down: nothing will perform or settle them after, and a
+   * personal agent would otherwise read one as in progress for ever. A proposal was
+   * never performed: *Nothing was changed.* One in progress may have changed something
+   * before it stopped, which its result says (Operations §6). A proposal past its
+   * expiry is recorded as expired. Resolves to how many were cancelled.
+   */
+  async cancelOpenOperations(reason: string): Promise<number> {
+    const why = reason.trim();
+    if (!why) throw new Error("say why the operations are cancelled");
+    const stopped = {
+      summary:
+        "It was stopped before it finished, and nothing more will be done: " +
+        `whatever it changed until then stands. ${why}`,
+      data: null,
+    };
+    const untouched = { summary: `Nothing was changed. ${why}`, data: null };
+    let cancelled = 0;
+    for (const record of await this.store.records(RecordKinds.operation)) {
+      const operationId = (record.value as unknown as StoredOperation).operation.operation_id;
+      const changed = await this.#change<StoredOperation>(
+        RecordKinds.operation,
+        operationId,
+        (latest) => {
+          const now = this.#expired(latest);
+          const state = now.operation.state;
+          if (!OPEN_STATES.has(state)) return now;
+          return {
+            ...now,
+            operation: {
+              ...now.operation,
+              state: "cancelled",
+              result: state === "in_progress" ? stopped : untouched,
+            } as unknown as Operation,
+          };
+        },
+      );
+      if (
+        changed !== undefined &&
+        changed[0].operation.state !== "cancelled" &&
+        changed[1].operation.state === "cancelled"
+      ) {
+        cancelled += 1;
+      }
+    }
+    return cancelled;
+  }
+
+  /**
+   * End every sign-in, as each agent's disconnect does: tokens revoked, Sessions signed out.
+   *
+   * Resolves to how many agents' sign-ins to an account were ended.
+   */
+  async endSignIns(): Promise<number> {
+    const work = await this.openWork();
+    for (const [clientId, accountId] of work.signIns) await this.disconnect(clientId, accountId);
+    return work.signIns.length;
   }
 
   async #operationRoute(

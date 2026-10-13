@@ -6,6 +6,21 @@
 
 # Changelog
 
+## Unreleased
+
+- **Taking a company down** ([docs](docs/docs/guides/company.mdx#the-store)):
+  the company store contract gains a seventh method, `records(kind)` — every
+  live record of one kind, values only, so a backend may keep its keys as
+  digests — checked by `check_store` / `checkStore`. A store written for an
+  earlier release implements it. The company service, in both languages,
+  reads what is under way (`open_work` / `openWork`: open operations and the
+  agents and accounts still signed in, as `OpenWork`), settles every open
+  operation as `cancelled` saying why and, for one in progress, that whatever
+  it changed until then stands (`cancel_open_operations` /
+  `cancelOpenOperations`), and ends every sign-in as `disconnect` does
+  (`end_sign_ins` / `endSignIns`) — what its owner does before its records go
+  (PAP_DATALAYER D-06).
+
 ## 0.17.0 (2026-10-13)
 
 - **Who wrote each reply** ([docs](docs/docs/guides/conversations.mdx#who-wrote-each-reply-papreplies)):

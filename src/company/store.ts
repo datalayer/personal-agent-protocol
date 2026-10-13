@@ -14,7 +14,7 @@
  * (only if absent), `take` (read and delete at once), or `replace`
  * (compare-and-set on the version read). An expired record reads as absent.
  *
- * Any backend (a database, a key-value service) implements the six methods;
+ * Any backend (a database, a key-value service) implements the seven methods;
  * `checkStore` (`./testing.js`) checks one. `MemoryCompanyStore` is the
  * default: one process, nothing persisted. The port of the Python
  * `personal_agent_protocol.company.store`.
@@ -47,6 +47,11 @@ export interface StoreWriteOptions {
  * - `replace` writes it only if its version is still `version`: `true` when written.
  * - `take` reads and deletes it at once: exactly one caller gets it.
  * - `delete` removes it, if present.
+ * - `records` reads every live record of one kind, in no particular order: what a
+ *   company's owner settles and ends before taking it down (`CompanyService.openWork`).
+ *   Only values come back, never keys — a backend may keep keys as digests it cannot
+ *   reverse — so the records read this way name what they are (an operation its ID, a
+ *   sign-in its agent and account).
  *
  * Values are JSON objects; a backend stores copies, never the caller's object.
  */
@@ -63,6 +68,7 @@ export interface CompanyStore {
   ): Promise<boolean>;
   take(kind: string, key: string): Promise<JsonObject | undefined>;
   delete(kind: string, key: string): Promise<void>;
+  records(kind: string): Promise<StoredRecord[]>;
 }
 
 interface Entry {
@@ -175,6 +181,15 @@ export class MemoryCompanyStore implements CompanyStore {
 
   async delete(kind: string, key: string): Promise<void> {
     this.#entries.delete(this.#slot(kind, key));
+  }
+
+  async records(kind: string): Promise<StoredRecord[]> {
+    const found: StoredRecord[] = [];
+    for (const key of this.keys(kind)) {
+      const record = await this.get(kind, key);
+      if (record !== undefined) found.push(record);
+    }
+    return found;
   }
 
   /** The live keys of one kind, oldest first: for tests and inspection, not the service. */

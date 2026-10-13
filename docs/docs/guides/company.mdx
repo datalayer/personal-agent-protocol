@@ -147,7 +147,7 @@ Everything the company remembers — Sessions and their tokens, Account Tokens
 and the sign-ins they rotate from, pending device, Direct, and Mediated
 sign-ins, one-use codes, conversations and their events, message IDs,
 operations — is a JSON record in the `pap.company.store` contribution, by kind
-and key. The contract is six async methods:
+and key. The contract is seven async methods:
 
 | Method | Does |
 | --- | --- |
@@ -157,6 +157,7 @@ and key. The contract is six async methods:
 | `replace(kind, key, version, value, *, expires_at=None)` | Compare-and-set: write it only if its version is still `version` |
 | `take(kind, key)` | Read and delete at once: exactly one caller gets it |
 | `delete(kind, key)` | Remove it, if present |
+| `records(kind)` | Every live record of one kind (`value`, `version`, `expires_at`), in no particular order — values only, never keys, so a backend may keep keys as digests |
 
 In TypeScript the methods are the same, with `{ expiresAt }` options and
 `undefined` for absent.
@@ -188,15 +189,28 @@ Session within what is offered, and an Account Token refreshed for it is
 `invalid_scope` (the agent's client says `re_consent_required`), while a
 refresh asking only for scopes still offered succeeds with the same token.
 
+Taking a company down, its owner first settles and ends what is under way, so
+no personal agent reads an operation as in progress for ever or keeps a
+sign-in to a company that is gone: `open_work()` lists the operations still
+`proposed` or `in_progress` and the agents and accounts with a sign-in not
+ended (read with `records`); `cancel_open_operations(reason)` settles each as
+`cancelled` — a proposal with *Nothing was changed.*, one in progress saying it
+was stopped before it finished and that whatever it changed until then stands,
+each followed by the reason — and `end_sign_ins()` ends every sign-in as each
+agent's `disconnect` does. Final operations are left as they are. In
+TypeScript: `openWork`, `cancelOpenOperations`, `endSignIns`.
+
 `approve_device`, `deny_device`, `approve_authorization`,
 `deny_authorization`, `authorization_request`, `revise`, `settle`,
-`forget_events`, `disconnect`, and `operation_record` read and write the store,
-so they are coroutines (promises in TypeScript).
+`forget_events`, `disconnect`, `operation_record`, `open_work`,
+`cancel_open_operations` and `end_sign_ins` read and write the store, so they
+are coroutines (promises in TypeScript).
 
 A backend checks itself with the conformance kit, which runs the same checks
 in both languages: absent and present records, expiry, `take` once under
 concurrency, `create` only if absent, compare-and-set conflicts, values copied
-rather than shared, and a round trip of every record kind.
+rather than shared, every live record of a kind read at once, and a round trip
+of every record kind.
 
 ```python
 from personal_agent_protocol.company.testing import check_store

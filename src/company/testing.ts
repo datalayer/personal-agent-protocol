@@ -15,8 +15,8 @@
  * `checkStore` rejects with `StoreConformanceError` naming the first property a
  * store breaks: absent and present records, expiry, `take` once under
  * concurrency, `create` only if absent, compare-and-set conflicts, kinds kept
- * apart, values copied rather than shared, and a JSON round trip of every
- * record kind the company keeps. `makeStore` returns a fresh, empty store (or
+ * apart, values copied rather than shared, every live record of a kind read at
+ * once (`records`), and a JSON round trip of every record kind the company keeps. `makeStore` returns a fresh, empty store (or
  * a promise of one); `now` is the clock the store judges expiry by;
  * `concurrency` is how many callers race for one record.
  *
@@ -47,6 +47,7 @@ import {
   type SignInAttempts,
   type StoredConversation,
   type StoredOperation,
+  type StoredRecord,
   type StoredSession,
   type UserCode,
 } from "./store.js";
@@ -214,6 +215,7 @@ export async function checkStore(
   await createOnce(await makeStore(), concurrency);
   await compareAndSet(await makeStore(), concurrency);
   await roundTrips(await makeStore(), now());
+  await records(await makeStore(), now());
 }
 
 /** Check that the caches `makeCache` returns accept each identifier exactly once. */
@@ -363,4 +365,35 @@ async function roundTrips(store: CompanyStore, now: Date): Promise<void> {
     const entry = await store.get(kind, `${kind}_key`);
     check(same(entry?.value, record), `${kind}: the record round-trips`);
   }
+}
+
+async function records(store: CompanyStore, now: Date): Promise<void> {
+  const later = new Date(now.getTime() + 60 * 60 * 1000);
+  await store.put("operation", "a", { n: 1 });
+  await store.put("operation", "b", { n: 2 }, { expiresAt: later });
+  await store.put("operation", "gone", { n: 3 }, { expiresAt: new Date(now.getTime() - 1000) });
+  await store.put("operation", "taken", { n: 4 });
+  await store.take("operation", "taken");
+  await store.put("operation", "deleted", { n: 5 });
+  await store.delete("operation", "deleted");
+  await store.put("conversation", "a", { n: 6 });
+  const numbers = (found: readonly StoredRecord[]): number[] =>
+    found.map((record) => record.value.n as number).sort((x, y) => x - y);
+  const found = await store.records("operation");
+  check(
+    same(numbers(found), [1, 2]),
+    "records reads every live record of its kind: nothing expired, taken, deleted or of another kind",
+  );
+  for (const record of found) {
+    const entry = await store.get("operation", record.value.n === 1 ? "a" : "b");
+    check(
+      entry !== undefined &&
+        entry.version === record.version &&
+        entry.expiresAt?.getTime() === record.expiresAt?.getTime(),
+      "records gives each record's version and expiry, as get does",
+    );
+    (record.value as { n: number }).n = 0;
+  }
+  check(same(numbers(await store.records("operation")), [1, 2]), "records returns copies");
+  check((await store.records("device")).length === 0, "records of a kind with nothing live");
 }

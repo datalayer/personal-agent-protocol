@@ -115,6 +115,15 @@ implements, of draft 0.1 and Operations v1:
 - conversations with idempotent messages, cursor events, waited replies, SSE,
   handoff, Direct Conversations, `authorization` events, and closing; a
   conversation that is not yours is `conversation_not_found`;
+- with `humans_available` (`humansAvailable` in TypeScript), a handoff gives
+  the conversation to the company's people, and one of them answers in it
+  with `await staff_reply(conversation_id, after=..., text=...)`
+  (`staffReply(conversationId, { after, text })`): `after` is the last event
+  they read (`conversation_record()` reads it), so an answer written over a
+  message they have not seen is refused (`StaleConversationError`) and they
+  read again; their message is `sender: human`, `role: company`, and a closed
+  conversation, one not handed to people, or one with a Direct Conversation
+  open takes none;
 - Operations proposed by the company agent, read, confirmed at most once
   (latest revision, approval rules, write scopes, extension negotiation),
   revised (`revise()`), and cancelled;

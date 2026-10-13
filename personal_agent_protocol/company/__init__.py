@@ -73,6 +73,7 @@ from .service import (
     CompanyService,
     ConsentDecision,
     OpenWork,
+    StaleConversationError,
 )
 from .store import RECORD_KINDS, StoredRecord
 from .verify import verify_assertion
@@ -222,6 +223,7 @@ __all__ = [
     "ReactorClock",
     "Reply",
     "SignInContext",
+    "StaleConversationError",
     "StoreReplayCache",
     "StoredRecord",
     "ToolResult",

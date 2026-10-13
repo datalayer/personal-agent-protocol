@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from personal_agent_protocol import (
@@ -19,7 +21,7 @@ from personal_agent_protocol import (
     generate_message_id,
 )
 from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
-from personal_agent_protocol.company import MemoryCompanyStore
+from personal_agent_protocol.company import MemoryCompanyStore, StaleConversationError
 from personal_agent_protocol.conversations import StreamReconnected, TextDelta
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
@@ -256,3 +258,63 @@ async def test_the_conversation_streams_and_a_stranger_cannot_read_it() -> None:
 def test_a_demo_reactor_stops_cleanly() -> None:
     world = World()
     world.reactor.stop()
+
+
+@pytest.mark.asyncio
+async def test_one_of_the_companys_people_answers_over_what_they_read() -> None:
+    world = World()
+    world.shop.config = dataclasses.replace(world.shop.config, humans_available=True)
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    page = await world.conversations.start(
+        endpoint, world.message("Hello"), token=session, wait=0, **world.who
+    )
+    conversation_id = page.conversation_id
+    read = await world.shop.conversation_record(conversation_id)
+    with pytest.raises(ValueError, match="not handed"):
+        await world.shop.staff_reply(conversation_id, after=read.events[-1].id, text="Marta here.")
+
+    await world.conversations.handoff(endpoint, conversation_id, token=session, **world.who)
+    read = await world.shop.conversation_record(conversation_id)
+    assert read.responder == "human"
+    took = await world.shop.staff_reply(
+        conversation_id, after=read.events[-1].id, text="Marta here."
+    )
+    assert took.message is not None
+    assert (took.message.sender, took.message.role) == ("human", "company")
+
+    # The person writes while Marta answers from what she read before: hers is refused.
+    await world.conversations.send(
+        endpoint, conversation_id, world.message("Is it shipped?"), token=session, **world.who
+    )
+    with pytest.raises(StaleConversationError):
+        await world.shop.staff_reply(conversation_id, after=took.id, text="Anything else?")
+    read = await world.shop.conversation_record(conversation_id)
+    answered = await world.shop.staff_reply(
+        conversation_id, after=read.events[-1].id, text="It is.", data={"order_id": "ord_7Hk2"}
+    )
+
+    seen = await world.conversations.read_events(
+        endpoint, conversation_id, token=session, **world.who
+    )
+    written = [
+        (event.message.sender, event.message.role, event.message.text)
+        for event in seen.events
+        if event.type == "message" and event.message is not None
+    ]
+    assert written[-3:] == [
+        ("human", "company", "Marta here."),
+        ("human", "user", "Is it shipped?"),
+        ("human", "company", "It is."),
+    ]
+    assert seen.events[-1].id == answered.id
+    assert (seen.status, seen.responder) == ("idle", "human")
+
+    await world.conversations.close(endpoint, conversation_id, token=session, **world.who)
+    read = await world.shop.conversation_record(conversation_id)
+    with pytest.raises(ValueError, match="closed"):
+        await world.shop.staff_reply(conversation_id, after=read.events[-1].id, text="Bye.")
+    with pytest.raises(ValueError, match="says something"):
+        await world.shop.staff_reply(conversation_id, after=read.events[-1].id)
+    with pytest.raises(KeyError):
+        await world.shop.staff_reply("cnv_nobody", after="evt_none", text="Hello?")

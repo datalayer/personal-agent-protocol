@@ -27,6 +27,8 @@ What it implements of draft 0.1 and Operations v1:
 - Conversations (§7): idempotent messages, ordered cursor events, waited
   replies, SSE, handoff, Direct Conversations, `authorization` events, and
   closing; a conversation that is not yours is `conversation_not_found`.
+  Once a conversation is handed to the company's people, one of them
+  answers in it (`staff_reply`), over the last event they read.
 - Operations v1: proposals from the company agent, read, confirm (latest
   revision, approval rules, scope, extension negotiation), at most once, and
   cancel.
@@ -74,7 +76,7 @@ from ..errors import (
     SessionError,
 )
 from ..json import loads_strict
-from ..models import Message, Operation, OperationConfirmation, OperationResult
+from ..models import ConversationEvent, Message, Operation, OperationConfirmation, OperationResult
 from ..operations import OPERATIONS_VERSION
 from ..profile import PROTOCOL_PROFILE
 from ..reactor import (
@@ -389,6 +391,15 @@ class OpenWork:
 
 #: The states an operation is not final in (Operations §6).
 _OPEN_STATES = frozenset({"proposed", "in_progress"})
+
+
+class StaleConversationError(ValueError):
+    """One of the company's people answered over events they had not read: read again."""
+
+    def __init__(self, conversation_id: str, after: str) -> None:
+        super().__init__(f"{conversation_id} has events after {after}: read it again")
+        self.conversation_id = conversation_id
+        self.after = after
 
 
 class _RefusedError(Exception):
@@ -2453,6 +2464,66 @@ class CompanyService:
         if changed is None:
             raise KeyError(operation_id)
         return changed[1].operation
+
+    # One of the company's people -------------------------------------------------
+
+    async def conversation_record(self, conversation_id: str) -> StoredConversation:
+        """A conversation as the company keeps it: its status, responder, and events."""
+
+        conversation = await self._read(CONVERSATION, conversation_id, StoredConversation.from_json)
+        if conversation is None:
+            raise KeyError(conversation_id)
+        return conversation
+
+    async def staff_reply(
+        self,
+        conversation_id: str,
+        *,
+        after: str,
+        text: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> ConversationEvent:
+        """One of the company's people answers in a conversation handed to them (§7.9).
+
+        `after` is the ID of the last event they read: compare-and-set, so an
+        answer written over anything they have not read is refused
+        (`StaleConversationError`) and they read the conversation again. Their
+        message is the company's (`role: company`) and written by a person
+        (`sender: human`); a conversation not handed to people, closed, or
+        with a Direct Conversation open takes none (`ValueError`). The event
+        written is returned: its ID is their next `after`.
+        """
+
+        if text is None and data is None:
+            raise ValueError("a reply says something: text, data, or both")
+        message = Message(
+            id=self._id("msg"),
+            sender="human",
+            role="company",
+            text=text,
+            data=data,
+        )
+        event = self._event(
+            type="message", message=message.model_dump(mode="json", exclude_none=True)
+        )
+
+        def reply(current: StoredConversation) -> StoredConversation:
+            if current.status == "closed":
+                raise ValueError("the conversation is closed")
+            if current.responder != "human":
+                raise ValueError("the conversation is not handed to the company's people")
+            if current.direct_child is not None:
+                raise ValueError("a Direct Conversation is open under this conversation")
+            if not current.events or current.events[-1].id != after:
+                raise StaleConversationError(conversation_id, after)
+            return replace(current, events=(*current.events, event))
+
+        changed = await self._change(
+            CONVERSATION, conversation_id, StoredConversation.from_json, reply
+        )
+        if changed is None:
+            raise KeyError(conversation_id)
+        return ConversationEvent.model_validate(event.payload)
 
     # Taking the company down ---------------------------------------------------------
 

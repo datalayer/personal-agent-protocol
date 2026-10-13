@@ -26,7 +26,7 @@ import {
   operationsEndpoint,
   parseClientMetadata,
 } from "../../lib/index.js";
-import { CompanyAccounts, CompanyRateLimits } from "../../lib/server.js";
+import { CompanyAccounts, CompanyRateLimits, StaleConversationError } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
 import { runJourney } from "./support/journey.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -575,6 +575,39 @@ test("conversations: an idempotent retry, a reused ID, handoff, Direct Conversat
   const gone = await w.transport.request("GET", `${w.endpoint}/${page.conversation_id}/events?cursor=${cursor}`, { ...w.who, token: session });
   assert.equal(gone.status, 410);
   assert.deepEqual(await gone.json(), { error: "cursor_expired" });
+});
+
+test("one of the company's people answers over what they read", async () => {
+  const w = await world({ config: { humansAvailable: true } });
+  const session = await w.start();
+  const page = await w.conversations.start(w.endpoint, w.message("Hello"), { ...w.who, token: session, wait: 0 });
+  const id = page.conversation_id;
+  let read = await w.shop.conversationRecord(id);
+  await assert.rejects(w.shop.staffReply(id, { after: read.events.at(-1).id, text: "Marta here." }), /not handed/);
+
+  await w.conversations.handoff(w.endpoint, id, { ...w.who, token: session });
+  read = await w.shop.conversationRecord(id);
+  assert.equal(read.responder, "human");
+  const took = await w.shop.staffReply(id, { after: read.events.at(-1).id, text: "Marta here." });
+  assert.deepEqual([took.message.sender, took.message.role], ["human", "company"]);
+
+  // The person writes while Marta answers from what she read before: hers is refused.
+  await w.conversations.send(w.endpoint, id, w.message("Is it shipped?"), { ...w.who, token: session });
+  await assert.rejects(w.shop.staffReply(id, { after: took.id, text: "Anything else?" }), StaleConversationError);
+  read = await w.shop.conversationRecord(id);
+  const answered = await w.shop.staffReply(id, { after: read.events.at(-1).id, text: "It is.", data: { order_id: "ord_7Hk2" } });
+
+  const seen = await w.conversations.readEvents(w.endpoint, id, { ...w.who, token: session });
+  const written = seen.events.filter((e) => e.type === "message").map((e) => [e.message.sender, e.message.role, e.message.text]);
+  assert.deepEqual(written.slice(-3), [["human", "company", "Marta here."], ["human", "user", "Is it shipped?"], ["human", "company", "It is."]]);
+  assert.equal(seen.events.at(-1).id, answered.id);
+  assert.deepEqual([seen.status, seen.responder], ["idle", "human"]);
+
+  await w.conversations.close(w.endpoint, id, { ...w.who, token: session });
+  read = await w.shop.conversationRecord(id);
+  await assert.rejects(w.shop.staffReply(id, { after: read.events.at(-1).id, text: "Bye." }), /closed/);
+  await assert.rejects(w.shop.staffReply(id, { after: read.events.at(-1).id }), /says something/);
+  await assert.rejects(w.shop.staffReply("cnv_nobody", { after: "evt_none", text: "Hello?" }), /unknown conversation/);
 });
 
 test("an authorization event, then the signed-in Session continues the conversation", async () => {

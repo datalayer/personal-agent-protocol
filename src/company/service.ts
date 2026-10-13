@@ -34,6 +34,8 @@
  * - Conversations (§7): idempotent messages, ordered cursor events, waited
  *   replies, SSE, handoff, Direct Conversations, `authorization` events, and
  *   closing; a conversation that is not yours is `conversation_not_found`.
+ *   Once a conversation is handed to the company's people, one of them
+ *   answers in it (`staffReply`), over the last event they read.
  * - The OpenAPI API point (`/api/…`), its consequential calls answering `202`
  *   with an operation (Operations §4.1).
  * - Operations v1: proposals from the company agent or the API, read, confirm
@@ -67,6 +69,7 @@ import {
   parseMessage,
   parseOperation,
   type ClientMetadata,
+  type ConversationEvent,
   type JsonWebKeySet,
   type Message,
   type Operation,
@@ -321,6 +324,17 @@ export interface CompanyResponse {
   readonly body?: unknown;
   readonly headers: Readonly<Record<string, string>>;
   readonly stream?: AsyncIterable<Uint8Array>;
+}
+
+/** One of the company's people answered over events they had not read: read again. */
+export class StaleConversationError extends Error {
+  constructor(
+    readonly conversationId: string,
+    readonly after: string,
+  ) {
+    super(`${conversationId} has events after ${after}: read it again`);
+    this.name = "StaleConversationError";
+  }
 }
 
 class Refused extends Error {
@@ -2798,6 +2812,69 @@ export class CompanyService {
     );
     if (changed === undefined) throw new Error("unknown operation");
     return changed[1].operation;
+  }
+
+  // One of the company's people ---------------------------------------------------
+
+  /** A conversation as the company keeps it: its status, responder, and events. */
+  async conversationRecord(conversationId: string): Promise<StoredConversation> {
+    const conversation = await this.#read<StoredConversation>(
+      RecordKinds.conversation,
+      conversationId,
+    );
+    if (conversation === undefined) throw new Error("unknown conversation");
+    return conversation;
+  }
+
+  /**
+   * One of the company's people answers in a conversation handed to them (§7.9).
+   *
+   * `after` is the ID of the last event they read: compare-and-set, so an
+   * answer written over anything they have not read is refused
+   * (`StaleConversationError`) and they read the conversation again. Their
+   * message is the company's (`role: company`) and written by a person
+   * (`sender: human`); a conversation not handed to people, closed, or with a
+   * Direct Conversation open takes none. The event written is returned: its
+   * ID is their next `after`.
+   */
+  async staffReply(
+    conversationId: string,
+    reply: {
+      readonly after: string;
+      readonly text?: string;
+      readonly data?: Readonly<Record<string, unknown>>;
+    },
+  ): Promise<ConversationEvent> {
+    if (reply.text === undefined && reply.data === undefined) {
+      throw new Error("a reply says something: text, data, or both");
+    }
+    const message: Record<string, unknown> = {
+      id: this.#id("msg"),
+      sender: "human",
+      role: "company",
+    };
+    if (reply.text !== undefined) message.text = reply.text;
+    if (reply.data !== undefined) message.data = { ...reply.data };
+    const event = this.#event({ type: "message", message });
+    const changed = await this.#change<StoredConversation>(
+      RecordKinds.conversation,
+      conversationId,
+      (current) => {
+        if (current.status === "closed") throw new Error("the conversation is closed");
+        if (current.responder !== "human") {
+          throw new Error("the conversation is not handed to the company's people");
+        }
+        if (current.directChild !== undefined) {
+          throw new Error("a Direct Conversation is open under this conversation");
+        }
+        if (current.events.at(-1)?.id !== reply.after) {
+          throw new StaleConversationError(conversationId, reply.after);
+        }
+        return { ...current, events: [...current.events, event] };
+      },
+    );
+    if (changed === undefined) throw new Error("unknown conversation");
+    return event.payload as unknown as ConversationEvent;
   }
 
   // Taking the company down -------------------------------------------------------

@@ -6,6 +6,20 @@
 
 # Changelog
 
+## Unreleased
+
+- **One of a company's people answers in a conversation** (decided
+  2026-10-13; [docs](docs/docs/guides/company.mdx)): `staff_reply(conversation_id,
+  after=, text=, data=)` (`staffReply(conversationId, { after, text, data })`
+  in TypeScript) writes their message (`sender: human`, `role: company`) in a
+  conversation handed to the company's people, compare-and-set over `after`,
+  the last event they read — an answer over anything newer is refused with
+  `StaleConversationError` — and returns the event written, whose ID is their
+  next `after`; `conversation_record()` (`conversationRecord()`) reads the
+  conversation as the company keeps it. A closed conversation, one not handed
+  to people, or one with a Direct Conversation open takes none
+  (PAP_DATALAYER P-08).
+
 ## 0.22.0 (2026-10-13)
 
 - **Other domains of the same company** ([docs](docs/docs/guides/company.mdx)):

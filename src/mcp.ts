@@ -28,7 +28,7 @@ import { parseJsonStrict } from "./json.js";
 import type { ApiDescriptor, DiscoveryDocument, Operation } from "./models.js";
 import { operationFrom } from "./operations.js";
 import type { SessionToken } from "./sessions.js";
-import { readLimited, readLimitedText } from "./limits.js";
+import { parseRetryAfter, readLimited, readLimitedText } from "./limits.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -253,6 +253,10 @@ export class McpClient {
       await response.body?.cancel().catch(() => undefined);
       return undefined;
     }
+    if (response.status === 429) {
+      await response.body?.cancel().catch(() => undefined);
+      throw rateLimited(response);
+    }
     if (response.status !== 200) {
       await response.body?.cancel().catch(() => undefined);
       throw new McpError("http_error", "MCP request failed", { statusCode: response.status });
@@ -277,6 +281,25 @@ export class McpClient {
       throw new McpError("invalid_json", "MCP answered invalid JSON", { cause });
     }
   }
+}
+
+/**
+ * A `429`: `rate_limited`, its `Retry-After` kept as the other clients keep it (§4.3).
+ *
+ * Never retried here: the caller waits at least this long. The message says when,
+ * in seconds, for the model reading the error.
+ */
+function rateLimited(response: Response): McpError {
+  const retryAfter = response.headers.get("retry-after");
+  const seconds = parseRetryAfter(retryAfter, new Date());
+  return new McpError(
+    "rate_limited",
+    `the MCP server is rate limited${seconds === undefined ? "" : `, retry after ${Math.ceil(seconds)} s`}`,
+    {
+      statusCode: response.status,
+      ...(retryAfter ? { details: { retry_after: retryAfter } } : {}),
+    },
+  );
 }
 
 /** A token refusal, from the Bearer challenge (RFC 6750) or the body. */

@@ -6,6 +6,18 @@
 
 # Changelog
 
+## Unreleased
+
+- **An MCP server's `429` is `rate_limited`, with its `Retry-After`**
+  (PAP_DATALAYER release gates, decided 2026-10-14): `McpClient` raises
+  `McpError("rate_limited")` with `status_code` 429 and
+  `details["retry_after"]` (the header as sent), as the API, conversation and
+  Session clients do, where it raised `http_error: MCP request failed`. Never
+  retried here: the caller waits at least that long. Its text says when, for
+  the model reading it: `rate_limited: the MCP server is rate limited, retry
+  after 30 s` (an HTTP date is said in seconds, through `parse_retry_after` /
+  `parseRetryAfter`). Same in TypeScript.
+
 ## 0.23.0 (2026-10-13)
 
 - **One of a company's people answers in a conversation** (decided

@@ -6,6 +6,11 @@
 
 from __future__ import annotations
 
+import json
+import re
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
+
 import httpx
 import pytest
 
@@ -26,6 +31,7 @@ from personal_agent_protocol.operations import (
     operation_from,
     operation_page,
 )
+from personal_agent_protocol.sessions import SessionToken
 from personal_agent_protocol.transport import DpopHttpClient
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
@@ -391,3 +397,58 @@ def test_an_operation_page_off_the_company_domain_is_refused() -> None:
     assert raised.value.code == "foreign_operation_page"
     shop = operation.model_copy(update={"url": "https://shop.manzanita.example/op_1"})
     assert operation_page(shop, "manzanita.example") == "https://shop.manzanita.example/op_1"
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_429_is_rate_limited_with_its_retry_after() -> None:
+    """A 429 is `rate_limited` with the `Retry-After` kept, as the API and conversation
+    clients do (PAP_DATALAYER release gates, decided 2026-10-14), and says when to retry."""
+
+    refusals: list[httpx.Response] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        message = json.loads(request.content)
+        if "id" not in message:
+            return httpx.Response(202)
+        if message["method"] == "initialize":
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": message["id"], "result": {}})
+        return refusals.pop(0)
+
+    bearer = SessionToken(
+        access_token="sat_test",  # noqa: S106
+        token_type="Bearer",  # noqa: S106
+        expires_in=60,
+        session_id="ses_1",
+        signed_in=True,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        mcp = McpClient(http_client=http, token=bearer, url=MCP)
+        refusals.append(httpx.Response(429, headers={"Retry-After": "30"}, json={"error": "slow"}))
+        with pytest.raises(McpError) as raised:
+            await mcp.call_tool("orders")
+        assert raised.value.code == "rate_limited"
+        assert raised.value.status_code == 429
+        assert raised.value.details == {"retry_after": "30"}
+        assert str(raised.value) == "rate_limited: the MCP server is rate limited, retry after 30 s"
+
+        when = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=90), usegmt=True)
+        refusals.append(httpx.Response(429, headers={"Retry-After": when}))
+        with pytest.raises(McpError) as raised:
+            await mcp.list_tools()
+        assert raised.value.code == "rate_limited"
+        assert raised.value.details == {"retry_after": when}
+        assert re.fullmatch(
+            r"rate_limited: the MCP server is rate limited, retry after (89|90) s",
+            str(raised.value),
+        )
+
+        refusals.append(httpx.Response(429))
+        with pytest.raises(McpError) as raised:
+            await mcp.list_tools()
+        assert (raised.value.code, raised.value.details) == ("rate_limited", {})
+        assert str(raised.value) == "rate_limited: the MCP server is rate limited"
+
+        refusals.append(httpx.Response(503, headers={"Retry-After": "30"}))
+        with pytest.raises(McpError) as raised:
+            await mcp.list_tools()
+        assert (raised.value.code, raised.value.status_code) == ("http_error", 503)

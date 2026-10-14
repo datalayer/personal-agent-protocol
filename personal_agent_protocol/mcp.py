@@ -24,6 +24,7 @@ can use it, so this module sends it only to that exact URL:
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import AsyncIterator, Generator
 from typing import Any
 from urllib.parse import urlsplit
@@ -35,7 +36,7 @@ from .errors import PersonalAgentProtocolError, ProtocolValidationError, Transpo
 from .json import loads_strict
 from .models import ApiDescriptor, DiscoveryDocument, Operation, ProtocolModel
 from .operations import operation_from
-from .reactor import send_bounded
+from .reactor import SystemClock, parse_retry_after, send_bounded
 from .sessions import SessionToken
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -213,6 +214,8 @@ class McpClient:
             raise _refusal(response)
         if response.status_code == 202 or "id" not in message:
             return None
+        if response.status_code == 429:
+            raise _rate_limited(response)
         if response.status_code != 200:
             raise McpError("http_error", "MCP request failed", status_code=response.status_code)
         if len(response.content) > self.max_response_bytes:
@@ -228,6 +231,24 @@ class McpClient:
             return loads_strict(response.content)
         except ProtocolValidationError as exc:
             raise McpError("invalid_json", "MCP answered invalid JSON") from exc
+
+
+def _rate_limited(response: httpx.Response) -> McpError:
+    """A `429`: `rate_limited`, its `Retry-After` kept as the other clients keep it (§4.3).
+
+    Never retried here: the caller waits at least this long. The message says
+    when, in seconds, for the model reading the error.
+    """
+
+    retry_after = response.headers.get("retry-after")
+    seconds = parse_retry_after(retry_after, SystemClock().now())
+    return McpError(
+        "rate_limited",
+        "the MCP server is rate limited"
+        + ("" if seconds is None else f", retry after {math.ceil(seconds)} s"),
+        status_code=response.status_code,
+        details={"retry_after": retry_after} if retry_after else None,
+    )
 
 
 def _refusal(response: httpx.Response) -> McpError:

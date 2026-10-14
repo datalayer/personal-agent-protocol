@@ -300,6 +300,45 @@ test("an MCP answer over SSE, a JSON-RPC error and a malformed operation", async
   assert.equal((await refusal(mcp.callTool("odd"))).code, "invalid_operation");
 });
 
+test("an MCP 429 is rate_limited with its Retry-After, and says when to retry", async () => {
+  // As the API and conversation clients do (PAP_DATALAYER release gates, decided 2026-10-14).
+  const issued = { accessToken: { reveal: () => "sat_test" }, tokenType: "Bearer", expiresIn: 60, scopes: [], sessionId: "ses_1", signedIn: true };
+  const refusals = [];
+  const fetch = async (_url, init) => {
+    const message = JSON.parse(init.body);
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    if (message.method === "initialize") return Response.json({ jsonrpc: "2.0", id: message.id, result: {} });
+    return refusals.shift();
+  };
+  const mcp = new McpClient({ token: issued, url: MCP, fetch });
+
+  refusals.push(Response.json({ error: "slow" }, { status: 429, headers: { "Retry-After": "30" } }));
+  let refused = await refusal(mcp.callTool("orders"));
+  assert.ok(refused instanceof McpError);
+  assert.equal(refused.code, "rate_limited");
+  assert.equal(refused.statusCode, 429);
+  assert.deepEqual(refused.details, { retry_after: "30" });
+  assert.equal(String(refused), "rate_limited: the MCP server is rate limited, retry after 30 s");
+
+  const when = new Date(Date.now() + 90_000).toUTCString();
+  refusals.push(new Response(null, { status: 429, headers: { "Retry-After": when } }));
+  refused = await refusal(mcp.listTools());
+  assert.equal(refused.code, "rate_limited");
+  assert.deepEqual(refused.details, { retry_after: when });
+  assert.match(String(refused), /^rate_limited: the MCP server is rate limited, retry after (89|90) s$/u);
+
+  refusals.push(new Response(null, { status: 429 }));
+  refused = await refusal(mcp.listTools());
+  assert.equal(refused.code, "rate_limited");
+  assert.deepEqual(refused.details, {});
+  assert.equal(String(refused), "rate_limited: the MCP server is rate limited");
+
+  refusals.push(new Response(null, { status: 503, headers: { "Retry-After": "30" } }));
+  refused = await refusal(mcp.listTools());
+  assert.equal(refused.code, "http_error");
+  assert.equal(refused.statusCode, 503);
+});
+
 // The website (§5, Operations §4.4) -------------------------------------------------------
 
 async function join(w, sessionId, returnTo) {

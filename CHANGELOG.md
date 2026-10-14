@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.24.0 (2026-10-14)
 
 - **An MCP server's `429` is `rate_limited`, with its `Retry-After`**
   (PAP_DATALAYER release gates, decided 2026-10-14): `McpClient` raises

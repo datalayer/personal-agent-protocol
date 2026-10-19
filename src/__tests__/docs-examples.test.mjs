@@ -135,6 +135,8 @@ async function docsWorld() {
       tenantId: TENANT,
       pairwiseUserId,
       sessionId: session.sessionId,
+      organization: { name: "Manzanita", domain: metadata.poppy_domains[0] },
+      poppyDomains: metadata.poppy_domains,
     });
     await companies[domain].approveDevice(started.userCode, { accountId: "acct_ada" });
     clock.advance(started.pollInterval);
@@ -241,7 +243,8 @@ example("docs/docs/guides/direct-sign-in.mdx#0", async (w) => {
 });
 
 example("docs/docs/guides/device-sign-in.mdx#0", async (w) => {
-  const metadata = (await w.discovered("shop.example")).oauthMetadata;
+  const company = await w.discovered("shop.example");
+  const metadata = company.oauthMetadata;
   const { pairwiseUserId } = await w.who("shop.example");
   const shown = [];
   return [
@@ -249,6 +252,7 @@ example("docs/docs/guides/device-sign-in.mdx#0", async (w) => {
       DeviceSignInClient: portable.DeviceSignInClient,
       reactor: w.reactor,
       fetch: w.fetch,
+      company,
       metadata,
       pairwiseUserId,
       signedOutSession: await w.signedOut("shop.example"),
@@ -405,8 +409,9 @@ example("docs/docs/sdk/typescript.mdx#6", async (w) => {
     },
     async (values) => {
       assert.equal(values.mcpUrl, "https://shop.example/mcp");
-      assert.equal(values.bearer.status, "signed_in");
-      assert.equal(values.bearer.token.tokenType, "Bearer");
+      assert.equal(values.served.supportsDpop, true);
+      assert.equal(values.signedIn.status, "signed_in");
+      assert.equal(values.signedIn.token.tokenType, "DPoP");
       assert.deepEqual(values.tools.map((tool) => tool.name), ["list_orders", "exchange_jacket"]);
       assert.equal(values.result.operation.state, "proposed");
     },

@@ -20,10 +20,13 @@ import {
 } from "./reactor.js";
 import { byIssuer, sessionResult, traced } from "./telemetry.js";
 import { readLimitedText } from "./limits.js";
+import { refusalDetails, refuseRedirect } from "./refusals.js";
 
 export const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 export const JWT_CLIENT_ASSERTION =
   "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+/** A client or Session assertion's `exp` is at most this long after its `iat` (§4.1, §4.2). */
+export const ASSERTION_MAX_LIFETIME_SECONDS = 300;
 
 export interface SessionAssertionClaims {
   readonly iss: string;
@@ -106,10 +109,40 @@ export async function resolvePairwiseUserId(
 export interface SessionAssertionOptions {
   readonly clientId: string;
   readonly pairwiseUserId: string;
-  readonly tokenEndpoint: string;
+  /** The company's `auth.issuer`: the assertion's `aud`, one string, never an endpoint (§4.2). */
+  readonly issuer: string;
   readonly now?: Date;
   readonly lifetimeSeconds?: number;
   readonly randomBytes?: RandomBytes;
+}
+
+/** The claims of a `private_key_jwt` client assertion (§4.1). */
+export interface ClientAssertionClaims {
+  readonly iss: string;
+  readonly sub: string;
+  readonly aud: string;
+  readonly iat: number;
+  readonly exp: number;
+  readonly jti: string;
+}
+
+export interface ClientAssertionOptions {
+  readonly clientId: string;
+  /** The company's `auth.issuer`, whichever endpoint the assertion goes to (§4.1, §9.4). */
+  readonly issuer: string;
+  readonly now?: Date;
+  readonly lifetimeSeconds?: number;
+  readonly randomBytes?: RandomBytes;
+}
+
+function issuedAt(now: Date | undefined, lifetime: number): number {
+  if (!Number.isInteger(lifetime) || lifetime <= 0 || lifetime > ASSERTION_MAX_LIFETIME_SECONDS) {
+    throw new ProtocolValidationError(
+      "invalid_assertion_lifetime",
+      "Assertion lifetime must be between 1 and 300 seconds",
+    );
+  }
+  return Math.floor((now ?? new Date()).getTime() / 1000);
 }
 
 function httpsUrl(value: string, label: string): string {
@@ -127,31 +160,62 @@ function httpsUrl(value: string, label: string): string {
   return value;
 }
 
+/**
+ * Build unsigned PAP §4.2 claims; a key-custody provider signs them.
+ *
+ * `aud` is the company's `auth.issuer`, one string, never an endpoint (§4.2, §9.4); the
+ * assertion lives at most five minutes.
+ */
 export function buildSessionAssertionClaims(
   options: SessionAssertionOptions,
 ): SessionAssertionClaims {
   const lifetime = options.lifetimeSeconds ?? 60;
-  if (!Number.isInteger(lifetime) || lifetime <= 0) {
-    throw new ProtocolValidationError(
-      "invalid_assertion_lifetime",
-      "Assertion lifetime must be a positive integer",
-    );
-  }
+  const iat = issuedAt(options.now, lifetime);
   if (!/^[A-Za-z0-9_-]{1,256}$/.test(options.pairwiseUserId)) {
     throw new ProtocolValidationError(
       "invalid_user_id",
       "Pairwise user ID must use the URL-safe base64 alphabet",
     );
   }
-  const iat = Math.floor((options.now ?? new Date()).getTime() / 1000);
   return {
     iss: httpsUrl(options.clientId, "clientId"),
     sub: options.pairwiseUserId,
-    aud: httpsUrl(options.tokenEndpoint, "tokenEndpoint"),
+    aud: httpsUrl(options.issuer, "issuer"),
     iat,
     exp: iat + lifetime,
     jti: opaqueId("jti", options.randomBytes ?? defaultRandomBytes),
   };
+}
+
+/**
+ * Build unsigned `private_key_jwt` claims for any request to the company's OAuth server.
+ *
+ * `aud` is the company's `auth.issuer`, one string, whichever endpoint the assertion goes
+ * to: token, revocation, or device authorization (§4.1, §9.4).
+ */
+export function buildClientAssertionClaims(options: ClientAssertionOptions): ClientAssertionClaims {
+  const lifetime = options.lifetimeSeconds ?? 60;
+  const iat = issuedAt(options.now, lifetime);
+  const clientId = httpsUrl(options.clientId, "clientId");
+  return {
+    iss: clientId,
+    sub: clientId,
+    aud: httpsUrl(options.issuer, "issuer"),
+    iat,
+    exp: iat + lifetime,
+    jti: opaqueId("jti", options.randomBytes ?? defaultRandomBytes),
+  };
+}
+
+/**
+ * The token types a token request may be answered with (§4.3).
+ *
+ * With a proof: DPoP, or, for an MCP server (`resource`) that doesn't support DPoP,
+ * Bearer. Without one: Bearer, for an MCP server only.
+ */
+export function tokenTypes(options: { readonly dpop: boolean; readonly resource?: string | undefined }): ReadonlySet<string> {
+  if (!options.dpop) return new Set(["Bearer"]);
+  return options.resource !== undefined ? new Set(["DPoP", "Bearer"]) : new Set(["DPoP"]);
 }
 
 export interface SessionGrantOptions {
@@ -159,7 +223,7 @@ export interface SessionGrantOptions {
   readonly clientId: string;
   readonly clientAssertion: string;
   readonly sessionId?: string;
-  /** An RFC 8707 resource indicator: an MCP server's `url`, for a Bearer token. */
+  /** An RFC 8707 resource indicator: an MCP server's `url`, for a token issued for it. */
   readonly resource?: string;
 }
 
@@ -301,9 +365,16 @@ export interface SessionRenewOptions extends SessionRequestOptions {
   readonly sessionId: string;
 }
 
-export interface McpBearerOptions extends SessionRenewOptions {
+export interface McpTokenOptions extends SessionRequestOptions {
   /** The MCP server's `url` from poppy.json: the only place the token works. */
   readonly resource: string;
+  /**
+   * Whether the server supports DPoP, as its protected resource metadata lists
+   * `dpop_signing_alg_values_supported` (`McpServerMetadata.supportsDpop`).
+   */
+  readonly dpop: boolean;
+  /** The Session to renew; omitted, the request starts one. */
+  readonly sessionId?: string;
 }
 
 export interface SessionClientOptions {
@@ -359,20 +430,25 @@ export class SessionClient {
   }
 
   /**
-   * A signed-out Bearer Session Token for one MCP server (§4.3).
+   * A signed-out Session Token for one MCP server (§4.3).
    *
-   * The renewal request of the Session, without a DPoP proof, with `resource` set to
-   * the MCP server's `url` from poppy.json. The token works only there: hand it to
-   * `McpClient` (or `McpBearerAuth`), never to an API.
+   * The request that starts the Session (no `sessionId`) or renews its token, with
+   * `resource` set to the MCP server's `url` from poppy.json. `dpop` says whether the
+   * server supports DPoP, as its protected resource metadata lists
+   * `dpop_signing_alg_values_supported` (`McpServerMetadata.supportsDpop`): then the
+   * request carries a proof and the token is a DPoP one; otherwise no proof is sent and
+   * the token is a Bearer one, which works only at that server (`McpBearerAuth`). A
+   * token of the other type is refused.
    */
-  async bearerForMcp(options: McpBearerOptions): Promise<SessionToken> {
-    return this.#request(options, options.sessionId, mcpResource(options.resource));
+  async tokenForMcp(options: McpTokenOptions): Promise<SessionToken> {
+    return this.#request(options, options.sessionId, mcpResource(options.resource), options.dpop);
   }
 
   async #request(
     options: SessionRequestOptions,
     sessionId?: string,
-    bearerResource?: string,
+    resource?: string,
+    useDpop = true,
   ): Promise<SessionToken> {
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     const random = firstContribution(this.#reactor, RandomSources, "random source");
@@ -386,33 +462,30 @@ export class SessionClient {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const now = clock.now();
-      const sessionClaims = buildSessionAssertionClaims({
-        clientId: options.clientId,
-        pairwiseUserId: options.pairwiseUserId,
-        tokenEndpoint: options.tokenEndpoint,
-        now,
-        randomBytes: (length) => random.bytes(length),
-      });
-      const iat = Math.floor(now.getTime() / 1000);
       const clientId = httpsUrl(options.clientId, "clientId");
       const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint");
       const issuer = httpsUrl(options.issuer, "issuer");
-      const clientClaims = {
-        iss: clientId,
-        sub: clientId,
-        aud: tokenEndpoint,
-        iat,
-        exp: iat + 60,
-        jti: opaqueId("jti", (length) => random.bytes(length)),
-      };
+      const sessionClaims = buildSessionAssertionClaims({
+        clientId,
+        pairwiseUserId: options.pairwiseUserId,
+        issuer,
+        now,
+        randomBytes: (length) => random.bytes(length),
+      });
+      const clientClaims = buildClientAssertionClaims({
+        clientId,
+        issuer,
+        now,
+        randomBytes: (length) => random.bytes(length),
+      });
       const assertion = await signer.sign({ ...sessionClaims }, {
         purpose: "session_assertion",
       });
-      const clientAssertion = await signer.sign(clientClaims, {
+      const clientAssertion = await signer.sign({ ...clientClaims }, {
         purpose: "client_assertion",
       });
       const headers: Record<string, string> = { Accept: "application/json" };
-      if (bearerResource === undefined) {
+      if (useDpop) {
         const proof = await dpop.create({
           method: "POST",
           url: tokenEndpoint,
@@ -428,7 +501,7 @@ export class SessionClient {
         clientId,
         clientAssertion: clientAssertion.reveal(),
         ...(sessionId === undefined ? {} : { sessionId }),
-        ...(bearerResource === undefined ? {} : { resource: bearerResource }),
+        ...(resource === undefined ? {} : { resource }),
       });
 
       let response: Response;
@@ -438,12 +511,13 @@ export class SessionClient {
           headers,
           body: grant.toForm(),
           credentials: "omit",
-          redirect: "error",
+          redirect: "manual",
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         });
       } catch (cause) {
         throw new SessionError("request_failed", "Session token request failed", { cause });
       }
+      await refuseRedirect(response, SessionError);
 
       const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
       if (contentType !== "application/json") {
@@ -482,14 +556,16 @@ export class SessionClient {
             { statusCode: response.status, cause },
           );
         }
-        const expected = bearerResource === undefined ? "DPoP" : "Bearer";
+        // The scheme `token_type` names is the one used (§4.3). A request with a proof
+        // for an MCP server may get a Bearer token (a server without DPoP); one without a
+        // proof never gets a DPoP token, nor anything else a Bearer.
         if (
-          token.tokenType !== expected ||
-          (bearerResource !== undefined && token.sessionId !== sessionId)
+          !tokenTypes({ dpop: useDpop, resource }).has(token.tokenType) ||
+          (sessionId !== undefined && token.sessionId !== sessionId)
         ) {
           throw new SessionError(
             "unexpected_token_type",
-            `The Session request must return a ${expected} token for this Session`,
+            "The Session request returned another token type or Session",
             { statusCode: response.status },
           );
         }
@@ -510,10 +586,10 @@ export class SessionClient {
         }
         continue;
       }
-      const retryAfter = response.headers.get("retry-after");
+      const details = refusalDetails(response, payload);
       throw new SessionError(code, "Company refused the session token request", {
         statusCode: response.status,
-        ...(retryAfter === null ? {} : { details: { retry_after: retryAfter } }),
+        ...(Object.keys(details).length > 0 ? { details } : {}),
       });
     }
     throw new SessionError("use_dpop_nonce", "Company rejected the refreshed DPoP proof");

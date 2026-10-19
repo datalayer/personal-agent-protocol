@@ -15,7 +15,7 @@
  * the Python `personal_agent_protocol.company.service` and answers the same
  * requests with the same responses.
  *
- * What it implements of draft 0.1 and Operations v1:
+ * What it implements of draft 0.2 and Operations v1:
  *
  * - Discovery (`/.well-known/poppy.json`) and OAuth metadata
  *   (`/.well-known/oauth-authorization-server`), one issuer on the company's
@@ -42,10 +42,14 @@
  *   (latest revision, approval rules, scope, extension negotiation), at most
  *   once, and cancel.
  * - MCP (§4.3, §6), when a `pap.company.mcp` contribution is present: a
- *   Streamable HTTP endpoint at `/mcp` accepting only Bearer Session Tokens
- *   issued for its url (requested without DPoP, `resource` = that url), its
- *   protected resource metadata (RFC 9728), and tools that propose operations
- *   in `structuredContent` (Operations §4.2). Bearer tokens work nowhere else.
+ *   Streamable HTTP endpoint at `/mcp` accepting only Session Tokens issued for
+ *   its url (`resource` = that url), its protected resource metadata (RFC 9728),
+ *   and tools that propose operations in `structuredContent` (Operations §4.2).
+ *   With `mcpDpop` (the default) the server supports DPoP: personal agents get
+ *   DPoP tokens for it and send proofs; without it, they get Bearer tokens, which
+ *   work nowhere else.
+ * - Feedback (§8), with `feedback` (the default): reports of tasks the protocol
+ *   can't do, kept for the company's operator (`feedbackReports`).
  * - Web browsing (§5), with `web: true`: the browser-session endpoint sets the
  *   company's own cookie for a Session from a verified browser assertion, and each
  *   operation's `url` shows it in that Session, where the user can confirm or cancel
@@ -101,6 +105,8 @@ import {
 } from "./points.js";
 import {
   RecordKinds,
+  type IssuedNonce,
+  type StoredFeedback,
   type AccountAgent,
   type AccountFamily,
   type AccountGrant,
@@ -141,6 +147,10 @@ function keyId(compact: string): { readonly kid?: string } {
 const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 const REFRESH_TOKEN_GRANT = "refresh_token";
 const PAGE = 50;
+/** The DPoP algorithms the company accepts: ES256, which every company must (§3.2), and RS256. */
+export const DPOP_ALGORITHMS: readonly string[] = ["ES256", "RS256"];
+/** The longest `wait` the company holds a read for; a larger one is held this long (§7.5). */
+export const MAX_WAIT_SECONDS = 30;
 
 export type MediatedFieldSpec = readonly [name: string, label: string, secret: boolean];
 
@@ -183,6 +193,18 @@ export interface CompanyConfigOptions {
    * second identity, and answers nothing but its discovery document.
    */
   readonly aliases?: readonly string[];
+  /**
+   * The MCP server supports DPoP (§4.3; new MCP servers SHOULD): its protected resource
+   * metadata lists `dpop_signing_alg_values_supported`, and personal agents get DPoP
+   * tokens for it. Off, it is an MCP server that doesn't: they get Bearer tokens.
+   */
+  readonly mcpDpop?: boolean;
+  /** Accept feedback reports at `/poppy/feedback` and list it in poppy.json (§8). */
+  readonly feedback?: boolean;
+  /** Require DPoP proofs to carry a nonce the company issued (§4.3, RFC 9449 §8, §9). */
+  readonly dpopNonce?: boolean;
+  /** How long an issued DPoP nonce is accepted (default five minutes). */
+  readonly dpopNonceLifetimeSeconds?: number;
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -222,6 +244,10 @@ export class CompanyConfig {
   readonly consentPage: string | undefined;
   readonly web: boolean;
   readonly aliases: readonly string[];
+  readonly mcpDpop: boolean;
+  readonly feedback: boolean;
+  readonly dpopNonce: boolean;
+  readonly dpopNonceLifetimeSeconds: number;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -245,6 +271,10 @@ export class CompanyConfig {
     this.consentPage = hostedPage("consentPage", options.consentPage);
     this.web = options.web ?? false;
     this.aliases = [...(options.aliases ?? [])];
+    this.mcpDpop = options.mcpDpop ?? true;
+    this.feedback = options.feedback ?? true;
+    this.dpopNonce = options.dpopNonce ?? false;
+    this.dpopNonceLifetimeSeconds = options.dpopNonceLifetimeSeconds ?? 5 * 60;
     for (const alias of this.aliases) {
       if (!alias || alias !== alias.toLowerCase().replace(/\.$/, "") || alias.includes("/") || alias.includes(":")) {
         throw new RangeError("an alias is a DNS domain name, in small letters");
@@ -252,6 +282,14 @@ export class CompanyConfig {
     }
     if (this.aliases.includes(this.domain) || new Set(this.aliases).size !== this.aliases.length) {
       throw new RangeError("each alias is another domain, named once");
+    }
+    if (this.devicePage !== undefined) {
+      const host = new URL(this.devicePage).hostname.toLowerCase();
+      if (![this.domain, ...this.aliases].some((domain) => host === domain || host.endsWith(`.${domain}`))) {
+        // A personal agent shows the link only on the issuer's host or one of its
+        // poppy_domains, or a subdomain of either (§4.6).
+        throw new RangeError("devicePage must be on the company's domain or a subdomain");
+      }
     }
     if (this.consentPage !== undefined && !this.consentPage.includes("{request_id}")) {
       throw new RangeError("consentPage must contain {request_id}");
@@ -305,6 +343,9 @@ export class CompanyConfig {
   get browserSessionEndpoint(): string {
     return `${this.base}/poppy/browser-session`;
   }
+  get feedbackEndpoint(): string {
+    return `${this.base}/poppy/feedback`;
+  }
 }
 
 /** A request as any framework hands it over: full HTTPS URL, lower-case headers. */
@@ -342,6 +383,7 @@ class Refused extends Error {
     readonly status: number,
     readonly error: string,
     readonly extra: Readonly<Record<string, unknown>> = {},
+    readonly headers: Readonly<Record<string, string>> = {},
   ) {
     super(error);
   }
@@ -369,6 +411,7 @@ const NAMED_ROUTES = new Set([
   "poppy_sign_in",
   "poppy_conversations",
   "poppy_operations",
+  "poppy_feedback",
 ]);
 const ROUTES: Readonly<Record<string, string>> = {
   operations: "operation_page",
@@ -419,23 +462,67 @@ const CHALLENGED = new Set([
   "sign_in_required",
   "insufficient_scope",
   "invalid_dpop_proof",
+  "use_dpop_nonce",
 ]);
 
+/**
+ * A JSON error; a token error at 401 or 403 also in `WWW-Authenticate` (§6).
+ *
+ * The token endpoint answers DPoP failures as OAuth errors with HTTP 400 and no
+ * challenge; APIs and conversation endpoints answer them with HTTP 401 and the `DPoP`
+ * challenge (§4.3). `use_dpop_nonce` carries `DPoP-Nonce` either way.
+ */
 function jsonError(
   status: number,
   error: string,
   extra: Readonly<Record<string, unknown>> = {},
+  headers: Readonly<Record<string, string>> = {},
 ): CompanyResponse {
-  const headers: Record<string, string> = { ...NO_STORE };
-  // A DPoP refusal carries its challenge whatever its status, the token endpoint's 400
-  // included (§4.3, RFC 9449 §7.1).
-  if (CHALLENGED.has(error) && (status === 401 || status === 403 || error === "invalid_dpop_proof")) {
-    // Token errors are also in WWW-Authenticate (§6, RFC 9449).
-    const scope = extra.scope;
-    headers["WWW-Authenticate"] =
-      `DPoP error="${error}"` + (typeof scope === "string" ? `, scope="${scope}"` : "");
+  const out: Record<string, string> = { ...NO_STORE, ...headers };
+  if (CHALLENGED.has(error) && (status === 401 || status === 403)) {
+    out["WWW-Authenticate"] = challenge("DPoP", error, extra);
   }
-  return { status, body: { error, ...extra }, headers };
+  return { status, body: { error, ...extra }, headers: out };
+}
+
+/** One `WWW-Authenticate` challenge with the error's `scope`, `extension`, or `resource_metadata`. */
+function challenge(scheme: string, error: string, extra: Readonly<Record<string, unknown>>): string {
+  let value = `${scheme} error="${error}"`;
+  for (const name of ["scope", "extension", "resource_metadata"]) {
+    const item = extra[name];
+    if (typeof item === "string") value += `, ${name}="${item}"`;
+  }
+  return value;
+}
+
+const IDENTIFIER = /^[A-Za-z0-9_-]{1,256}$/u;
+
+/** A request's query parameters, blank ones kept (Python's `parse_qsl(keep_blank_values=True)`). */
+function queryOf(request: CompanyRequest): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [name, value] of new URL(request.url).searchParams) result[name] = value;
+  return result;
+}
+
+/**
+ * The `wait` query parameter: a whole number of seconds, 0 or more (§7.5).
+ *
+ * Anything else is `invalid_request`; a larger value than the company holds a request
+ * for is held for its cap (`MAX_WAIT_SECONDS`), never refused.
+ */
+function waitOf(request: CompanyRequest): number | undefined {
+  const value = queryOf(request).wait;
+  if (value === undefined) return undefined;
+  if (!/^[0-9]+$/u.test(value)) throw new Refused(400, "invalid_request");
+  return Math.min(Number(value), MAX_WAIT_SECONDS);
+}
+
+/** A message as the personal agent sent it; a `role` it set is ignored (§7.4). */
+function incoming(value: unknown): Message {
+  const message = parseMessage(value);
+  if (message.role === undefined) return message;
+  const { role: _role, ...rest } = message;
+  return rest as Message;
 }
 
 function rpcError(requestId: unknown, code: number, message: string): CompanyResponse {
@@ -576,7 +663,8 @@ function plain(message: Message): Record<string, unknown> {
 const CAS_ATTEMPTS = 32;
 
 type TokenType = "DPoP" | "Bearer";
-const EVERY_TOKEN_TYPE: readonly TokenType[] = ["DPoP", "Bearer"];
+/** Which of a Session's tokens one is: its own, or its token for the MCP server (§4.3). */
+type TokenKind = "own" | "mcp";
 /** How long an expired device or Mediated sign-in is kept, to answer that it expired. */
 const KEPT_EXPIRED_MS = 10 * 60 * 1000;
 
@@ -677,10 +765,10 @@ export class CompanyService {
     });
   }
 
-  /** A Session started or renewed; a Bearer token for the MCP server moves it there. */
-  #reportSession(session: IssuedSession, renewed: boolean, tokenType: TokenType): void {
+  /** A Session started or renewed; a token for one resource (the MCP server) moves it there. */
+  #reportSession(session: IssuedSession, renewed: boolean, forResource: boolean): void {
     const signedIn = session.accountId !== undefined;
-    if (tokenType === "Bearer") {
+    if (forResource) {
       this.#reportSwitch("mcp", signedIn);
       return;
     }
@@ -757,7 +845,7 @@ export class CompanyService {
     if (url.searchParams.has("access_token")) {
       // A token in a URL is logged, cached, and leaked in Referer: never accepted, even
       // beside a header that would be (§4.3, RFC 6750 §2.3).
-      if (path === "/mcp" && this.#mcp() !== undefined) return this.#bearerRefusal(400, "invalid_request");
+      if (path === "/mcp" && this.#mcp() !== undefined) return this.#mcpRefusal(400, "invalid_request");
       return jsonError(400, "invalid_request");
     }
     try {
@@ -816,9 +904,12 @@ export class CompanyService {
       if (path.startsWith("/poppy/operations/") && this.config.operations) {
         return await this.#operationRoute(request, method, path);
       }
+      if (method === "POST" && path === "/poppy/feedback" && this.config.feedback) {
+        return await this.#feedback(request);
+      }
     } catch (error) {
       if (error instanceof RateLimitedRefusal) return rateLimited(error.retryAfter);
-      if (error instanceof Refused) return jsonError(error.status, error.error, error.extra);
+      if (error instanceof Refused) return jsonError(error.status, error.error, error.extra, error.headers);
       if (error instanceof SessionError || error instanceof ProofError) {
         const status = error.statusCode ?? (error.code === "invalid_client" ? 401 : 400);
         return jsonError(status, error.code);
@@ -836,6 +927,8 @@ export class CompanyService {
   /**
    * The discovery document published at `domain`: the company's own, or one of its aliases,
    * which it names as the organization's domain; its endpoints stay on `base`.
+   *
+   * Every domain's document has the same `auth`, which describes the issuer (§3.2).
    */
   discoveryDocument(domain?: string): Record<string, unknown> {
     const config = this.config;
@@ -870,6 +963,7 @@ export class CompanyService {
     }
     if (apis.length) document.apis = apis;
     if (config.web) document.web = { browser_session_endpoint: config.browserSessionEndpoint };
+    if (config.feedback) document.feedback = { endpoint: config.feedbackEndpoint };
     if (config.operations) {
       document.extensions = {
         operations: { version: OPERATIONS_VERSION, endpoint: config.operationsEndpoint },
@@ -880,12 +974,17 @@ export class CompanyService {
 
   /** RFC 9728 metadata for the MCP server: its issuer is the company's (§6). */
   protectedResourceMetadata(): Record<string, unknown> {
-    return {
+    const metadata: Record<string, unknown> = {
       resource: this.config.mcpUrl,
       authorization_servers: [this.config.base],
       scopes_supported: [...this.config.scopes],
       bearer_methods_supported: ["header"],
     };
+    if (this.config.mcpDpop) {
+      // It supports DPoP (RFC 9728 §2), ES256 among its algorithms (§4.3).
+      metadata.dpop_signing_alg_values_supported = [...DPOP_ALGORITHMS];
+    }
+    return metadata;
   }
 
   oauthMetadata(): Record<string, unknown> {
@@ -895,7 +994,7 @@ export class CompanyService {
       token_endpoint: config.tokenEndpoint,
       revocation_endpoint: config.revocationEndpoint,
       poppy_domains: [config.domain, ...config.aliases],
-      dpop_signing_alg_values_supported: ["ES256", "RS256"],
+      dpop_signing_alg_values_supported: [...DPOP_ALGORITHMS],
     };
     if (config.device) metadata.device_authorization_endpoint = config.deviceEndpoint;
     if (config.direct) {
@@ -907,8 +1006,13 @@ export class CompanyService {
 
   // OAuth ---------------------------------------------------------------------------
 
-  /** Verify the client assertion, the agent's keys, and the company's policy. */
-  async #client(form: Readonly<Record<string, string>>, audience: string): Promise<string> {
+  /**
+   * Verify the client assertion, the agent's keys, and the company's policy.
+   *
+   * The assertion's `aud` is the issuer, exactly, whichever endpoint it is sent to
+   * (§4.1); its `jti` is refused again until it expires.
+   */
+  async #client(form: Readonly<Record<string, string>>): Promise<string> {
     const clientId = form.client_id ?? "";
     if (form.client_assertion_type !== JWT_CLIENT_ASSERTION || !clientId) {
       throw new Refused(401, "invalid_client");
@@ -925,8 +1029,7 @@ export class CompanyService {
     await verifyAssertion(form.client_assertion ?? "", {
       keys,
       issuer: clientId,
-      // The issuer, the token endpoint, or the endpoint called (RFC 7523 §3).
-      audience: [...new Set([this.config.base, this.config.tokenEndpoint, audience])],
+      audience: this.config.base,
       subject: clientId,
       replayCache: this.#replay(),
       now: this.#now(),
@@ -958,38 +1061,68 @@ export class CompanyService {
     return known !== undefined && known.extensions.includes("operations");
   }
 
+  /**
+   * Validate the request's DPoP proof as RFC 9449 §4.3 says; its key's thumbprint.
+   *
+   * One `DPoP` header holding one well-formed JWT, `typ` `dpop+jwt`, an accepted
+   * asymmetric `alg`, a public `jwk` only, the signature, `htm` and `htu`, `iat` within
+   * the window, a nonce the company issued when it requires them, and with a Session
+   * Token, `ath`. A replayed `jti` is refused everywhere: at the token endpoint it must
+   * be (§4.3). At the token endpoint a failure is an OAuth error, HTTP 400; elsewhere it
+   * is HTTP 401 with the `DPoP` challenge.
+   */
   async #dpop(request: CompanyRequest, accessToken?: string): Promise<string> {
     const status = accessToken === undefined ? 400 : 401;
     const proof = request.headers.dpop;
     if (!proof) throw new Refused(status, "invalid_dpop_proof");
+    let verified: Awaited<ReturnType<typeof verifyDpopProof>>;
     try {
-      const verified = await verifyDpopProof(proof, {
+      verified = await verifyDpopProof(proof, {
         method: request.method,
         url: request.url,
         replayCache: this.#replay(),
         ...(accessToken === undefined ? {} : { accessToken: new SecretValue(accessToken) }),
         now: this.#now(),
       });
-      return verified.keyThumbprint;
     } catch (error) {
       if (error instanceof ProofError) throw new Refused(status, error.code);
       throw error;
     }
+    if (this.config.dpopNonce && !(await this.#nonceIssued(verified.nonce))) {
+      throw new Refused(status, "use_dpop_nonce", {}, { "DPoP-Nonce": await this.#issueNonce() });
+    }
+    return verified.keyThumbprint;
+  }
+
+  async #issueNonce(): Promise<string> {
+    const nonce = this.#id("nonce");
+    await this.store.put(
+      RecordKinds.dpopNonce,
+      nonce,
+      json({} satisfies IssuedNonce),
+      expiry(this.#later(this.config.dpopNonceLifetimeSeconds)),
+    );
+    return nonce;
+  }
+
+  async #nonceIssued(nonce: string | undefined): Promise<boolean> {
+    return nonce !== undefined && (await this.store.get(RecordKinds.dpopNonce, nonce)) !== undefined;
   }
 
   async #token(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
     const grant = form.grant_type;
-    const clientId = await this.#client(form, this.config.tokenEndpoint);
-    if (request.headers.dpop === undefined && this.#mcp() !== undefined) {
-      // A Bearer token, only for the MCP server's url and an existing Session (§4.3).
-      if (form.resource !== this.config.mcpUrl) throw new Refused(400, "invalid_dpop_proof");
-      if ((grant !== JWT_BEARER_GRANT && grant !== REFRESH_TOKEN_GRANT) || !form.session_id) {
+    const clientId = await this.#client(form);
+    if (this.#bearerMcpRequest(form)) {
+      // An MCP server without DPoP: a Bearer token for its url alone, even when the
+      // request has a proof, and never a DPoP one (§4.3).
+      if (grant !== JWT_BEARER_GRANT && grant !== REFRESH_TOKEN_GRANT) {
         throw new Refused(400, "invalid_request");
       }
       if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, "", "Bearer");
       return this.#refreshGrant(form, clientId, "", "Bearer");
     }
+    // Everywhere else, a DPoP MCP server included, a proof is required (§4.3).
     const thumbprint = await this.#dpop(request);
     if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, thumbprint, "DPoP");
     if (grant === REFRESH_TOKEN_GRANT) {
@@ -1004,6 +1137,20 @@ export class CompanyService {
     throw new Refused(400, "unsupported_grant_type");
   }
 
+  /** A token request for an MCP server that doesn't support DPoP (`resource` = its url). */
+  #bearerMcpRequest(form: Readonly<Record<string, string>>): boolean {
+    return this.#mcp() !== undefined && !this.config.mcpDpop && form.resource === this.config.mcpUrl;
+  }
+
+  /**
+   * Which of a Session's tokens this is: its own, or its token for the MCP server.
+   *
+   * A Session has one of each at a time (§4.3); a new one replaces only its kind.
+   */
+  #kind(session: IssuedSession): TokenKind {
+    return session.resource !== undefined && session.resource === this.config.mcpUrl ? "mcp" : "own";
+  }
+
   async #sessionGrant(
     form: Readonly<Record<string, string>>,
     clientId: string,
@@ -1015,13 +1162,14 @@ export class CompanyService {
     const claims = await verifyAssertion(form.assertion ?? "", {
       keys,
       issuer: clientId,
-      audience: this.config.tokenEndpoint,
+      audience: this.config.base,
       replayCache: this.#replay(),
       now: this.#now(),
       error: "invalid_grant",
     });
     const pairwise = String(claims.sub);
     const sessionId = form.session_id;
+    const resource = form.resource;
     let session: IssuedSession;
     if (sessionId === undefined) {
       session = {
@@ -1031,6 +1179,8 @@ export class CompanyService {
         keyThumbprint: thumbprint,
         expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
         scopes: [],
+        ...(resource === undefined ? {} : { resource }),
+        ...(tokenType === "Bearer" ? { tokenType } : {}),
       };
     } else {
       const known = await this.#sessionById(sessionId);
@@ -1051,15 +1201,15 @@ export class CompanyService {
         keyThumbprint: thumbprint,
         expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
         scopes: [],
-        ...(form.resource === undefined ? {} : { resource: form.resource }),
+        ...(resource === undefined ? {} : { resource }),
         ...(tokenType === "Bearer" ? { tokenType } : {}),
       };
-      const renewed = await this.#issue(session, undefined, [tokenType]);
-      this.#reportSession(session, true, tokenType);
+      const renewed = await this.#issue(session, undefined, [this.#kind(session)]);
+      this.#reportSession(session, true, resource !== undefined);
       return renewed;
     }
     const started = await this.#issue(session);
-    this.#reportSession(session, false, tokenType);
+    this.#reportSession(session, false, resource !== undefined);
     return started;
   }
 
@@ -1092,10 +1242,7 @@ export class CompanyService {
     ) {
       throw new Refused(400, "invalid_session");
     }
-    if (session.accountId !== undefined && session.accountId !== grant.accountId) {
-      // A Session signed in to one account never switches to another (§4.4).
-      throw new Refused(400, "account_mismatch");
-    }
+    await this.#checkAccount(session.sessionId, grant.accountId);
     const requested = words(form.scope);
     if (requested.length && requested.some((scope) => !grant.scopes.includes(scope))) {
       throw new Refused(400, "invalid_scope");
@@ -1139,24 +1286,21 @@ export class CompanyService {
     // The resource is what this refresh asked for, never one an earlier refresh named.
     const { resource: _earlier, tokenType: _type, ...unbound } = signedIn;
     const typed: IssuedSession = tokenType === "Bearer" ? { ...unbound, tokenType } : unbound;
-    const response = await this.#issue(
-      resource === undefined ? typed : { ...typed, resource },
-      rotated,
-      [tokenType],
-    );
+    const issued: IssuedSession = resource === undefined ? typed : { ...typed, resource };
+    const response = await this.#issue(issued, rotated, [this.#kind(issued)]);
     const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, grant.family);
     if (family === undefined || family.revoked) {
       // Revoked while this token was issued: the Session continues signed out (§4.9).
       await this.#signOutSession(session.sessionId, [digest(rotated)]);
       throw new Refused(400, "invalid_grant");
     }
-    this.#reportSession(typed, true, tokenType);
+    this.#reportSession(typed, true, resource !== undefined);
     return response;
   }
 
   async #device(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
-    const clientId = await this.#client(form, this.config.deviceEndpoint);
+    const clientId = await this.#client(form);
     const scopes = words(form.scope);
     if (!scopes.length || scopes.some((scope) => !this.config.scopes.includes(scope))) {
       throw new Refused(400, "invalid_scope");
@@ -1316,7 +1460,7 @@ export class CompanyService {
 
   async #revoke(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
-    const clientId = await this.#client(form, this.config.revocationEndpoint);
+    const clientId = await this.#client(form);
     const grant = await this.#read<AccountGrant>(RecordKinds.accountToken, digest(form.token ?? ""));
     if (grant !== undefined && grant.clientId === clientId) {
       // The token and every one rotated from the same sign-in: each Session signed
@@ -1415,9 +1559,8 @@ export class CompanyService {
     scopes: readonly string[],
     thumbprint: string,
   ): Promise<CompanyResponse> {
-    if (session.accountId !== undefined && session.accountId !== accountId) {
-      throw new Refused(400, "account_mismatch");
-    }
+    // Checked before anything is issued: a mismatch issues no tokens (§4.4).
+    await this.#checkAccount(session.sessionId, accountId);
     const accountToken = this.#id("acct");
     const family = digest(accountToken);
     const expiresAt = this.#later(this.config.accountTokenLifetimeSeconds);
@@ -1442,8 +1585,8 @@ export class CompanyService {
     await this.store.put(RecordKinds.accountFamily, family, json(signIn), expiry(expiresAt));
     await this.#rememberFamily(session.clientId, accountId, family);
     // The signed-in token is the Session's own: DPoP, bound to the key that proved
-    // possession, for no single resource. It replaces only the DPoP token; a Bearer token
-    // for the MCP server is renewed with the Account Token (§4.3, §4.8).
+    // possession, for no single resource. It replaces only that token; a token for the
+    // MCP server is renewed with the Account Token (§4.3, §4.8).
     const signedIn: IssuedSession = {
       sessionId: session.sessionId,
       clientId: session.clientId,
@@ -1454,7 +1597,20 @@ export class CompanyService {
       scopes,
       accountToken: family,
     };
-    return this.#issue(signedIn, accountToken, ["DPoP"]);
+    return this.#issue(signedIn, accountToken, [this.#kind(signedIn)]);
+  }
+
+  /**
+   * A Session that was ever signed in to another account is `account_mismatch` (§4.4).
+   *
+   * Even signed out since (§4.9): the code exchange, the device poll, Mediated Sign-In,
+   * and an Account Token all refuse, and issue nothing.
+   */
+  async #checkAccount(sessionId: string, accountId: string): Promise<void> {
+    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
+    if (stored?.accountId !== undefined && stored.accountId !== accountId) {
+      throw new Refused(400, "account_mismatch");
+    }
   }
 
   async #rememberFamily(clientId: string, accountId: string, family: string): Promise<void> {
@@ -1470,11 +1626,11 @@ export class CompanyService {
     throw new Refused(503, "temporarily_unavailable");
   }
 
-  /** Issue a token for the Session; it replaces the Session's tokens of `replacing` types. */
+  /** Issue a token for the Session; it replaces the Session's tokens of `replacing` kinds. */
   async #issue(
     session: IssuedSession,
     refreshToken?: string,
-    replacing: readonly TokenType[] = EVERY_TOKEN_TYPE,
+    replacing: readonly TokenKind[] = [],
   ): Promise<CompanyResponse> {
     const accessToken = this.#id("sat");
     const key = digest(accessToken);
@@ -1493,19 +1649,34 @@ export class CompanyService {
     return { status: 200, body, headers: { ...NO_STORE } };
   }
 
-  /** One write: the new token joins the Session, the ones it replaces leave it. */
+  /**
+   * One write: the new token joins the Session, the ones it replaces leave it.
+   *
+   * `replacing` names token kinds (`#kind`): the Session's own token, or its token for one
+   * resource. A signed-in token records the account the Session is tied to from then on,
+   * signed out or not (§4.4).
+   */
   async #recordToken(
     session: IssuedSession,
     key: string,
-    replacing: readonly TokenType[],
+    replacing: readonly TokenKind[],
   ): Promise<void> {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
       const entry = await this.store.get(RecordKinds.session, session.sessionId);
       const tokens: Record<string, IssuedSession> = {};
+      let accountId = session.accountId;
       if (entry !== undefined) {
         const current = entry.value as unknown as StoredSession;
+        if (
+          session.accountId !== undefined &&
+          current.accountId !== undefined &&
+          current.accountId !== session.accountId
+        ) {
+          throw new Refused(400, "account_mismatch");
+        }
+        accountId = current.accountId ?? session.accountId;
         for (const [held, token] of Object.entries(current.tokens)) {
-          if (!replacing.includes(token.tokenType ?? "DPoP")) tokens[held] = token;
+          if (!replacing.includes(this.#kind(token))) tokens[held] = token;
         }
       }
       tokens[key] = session;
@@ -1515,6 +1686,7 @@ export class CompanyService {
         pairwiseUserId: session.pairwiseUserId,
         tokens,
         latest: key,
+        ...(accountId === undefined ? {} : { accountId }),
       };
       // A Session is forgotten once no Account Token could renew it any more.
       const latest = Math.max(...Object.values(tokens).map((token) => Date.parse(token.expiresAt)));
@@ -1535,21 +1707,30 @@ export class CompanyService {
   }
 
   /**
-   * The Session by its ID: its latest DPoP token's record, never a Bearer one. A Bearer
-   * token stands for the Session only at the MCP server it was issued for (§4.3): a grant
-   * naming the Session builds on its DPoP record.
+   * The Session by its ID: its own latest token's record, else its token for MCP.
+   *
+   * A token for the MCP server stands for the Session only there (§4.3): a grant naming
+   * the Session builds on the record of its own token, and on the MCP one only when the
+   * Session was started for the MCP server alone. Every grant replaces what a record says
+   * of the token (its key, type, resource, account, and lifetime); only the Session's
+   * identity is read.
    */
   async #sessionById(sessionId: string): Promise<IssuedSession | undefined> {
     const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
     if (stored === undefined) return undefined;
     const latest = stored.tokens[stored.latest];
-    if (latest !== undefined && latest.tokenType === undefined) return latest;
-    let dpop: IssuedSession | undefined;
+    if (latest !== undefined && this.#kind(latest) === "own") return latest;
+    let own: IssuedSession | undefined;
+    let any: IssuedSession | undefined;
     for (const token of Object.values(stored.tokens)) {
-      if (token.tokenType !== undefined) continue;
-      if (dpop === undefined || Date.parse(token.expiresAt) > Date.parse(dpop.expiresAt)) dpop = token;
+      if (any === undefined || Date.parse(token.expiresAt) > Date.parse(any.expiresAt)) any = token;
+      if (this.#kind(token) !== "own") continue;
+      if (own === undefined || Date.parse(token.expiresAt) > Date.parse(own.expiresAt)) own = token;
     }
-    return dpop;
+    if (own !== undefined) return own;
+    if (any === undefined) return undefined;
+    const { accountId: _account, accountToken: _token, resource: _resource, ...base } = any;
+    return { ...base, scopes: [] };
   }
 
   /** The state of the Session token `token`, while the Session still holds it. */
@@ -1851,7 +2032,13 @@ export class CompanyService {
     }
     if (session.accountId === undefined) throw new Refused(403, "sign_in_required");
     if (!(await this.#supportsOperations(session.clientId))) {
-      throw new Refused(403, "extension_required", { extension: "operations" });
+      // At an API, in the WWW-Authenticate challenge with its `extension` (§3.3, §6).
+      throw new Refused(
+        403,
+        "extension_required",
+        { extension: "operations" },
+        { "WWW-Authenticate": 'DPoP error="extension_required", extension="operations"' },
+      );
     }
     const operation = await this.#propose(session, { operation: result.operation });
     return { status: 202, body: { operation }, headers: {} };
@@ -1863,33 +2050,67 @@ export class CompanyService {
     return optionalContribution(this.reactor, CompanyMcps, "MCP server");
   }
 
-  #bearerRefusal(status: number, error: string, scope?: string): CompanyResponse {
-    let challenge = `Bearer error="${error}", resource_metadata="${this.config.mcpResourceMetadata}"`;
-    if (scope !== undefined) challenge += `, scope="${scope}"`;
+  /**
+   * A token refusal at the MCP server: one challenge per scheme it accepts (§6).
+   *
+   * `Bearer`, and `DPoP` when it supports DPoP, each with `resource_metadata` (RFC 9728
+   * §5.1) and the error's `scope`.
+   */
+  #mcpRefusal(
+    status: number,
+    error: string,
+    scope?: string,
+    headers: Readonly<Record<string, string>> = {},
+  ): CompanyResponse {
+    const extra: Record<string, unknown> = { resource_metadata: this.config.mcpResourceMetadata };
+    if (scope !== undefined) extra.scope = scope;
+    const schemes = this.config.mcpDpop ? ["Bearer", "DPoP"] : ["Bearer"];
     return {
       status,
       body: scope === undefined ? { error } : { error, scope },
-      headers: { "WWW-Authenticate": challenge, ...NO_STORE },
+      headers: {
+        "WWW-Authenticate": schemes.map((scheme) => challenge(scheme, error, extra)).join(", "),
+        ...NO_STORE,
+        ...headers,
+      },
     };
   }
 
-  /** The Session of a Bearer token issued for this MCP server, else `undefined`. */
-  async #bearerCaller(request: CompanyRequest): Promise<IssuedSession | undefined> {
+  /**
+   * The Session of a token issued for this MCP server, else its refusal (§4.3, §6).
+   *
+   * A Bearer token issued for its url (from a personal agent when it doesn't support
+   * DPoP, or from an MCP client that doesn't implement the protocol), or, when it
+   * supports DPoP, a DPoP token issued for its url with a valid proof. A DPoP token sent
+   * with the `Bearer` scheme is refused (RFC 9449 §7.1).
+   */
+  async #mcpCaller(request: CompanyRequest): Promise<IssuedSession | CompanyResponse> {
     const authorization = request.headers.authorization ?? "";
     const space = authorization.indexOf(" ");
     const scheme = space < 0 ? authorization : authorization.slice(0, space);
     const token = space < 0 ? "" : authorization.slice(space + 1);
-    if (scheme !== "Bearer" || !token) return undefined;
+    const accepted = this.config.mcpDpop ? ["Bearer", "DPoP"] : ["Bearer"];
+    if (!accepted.includes(scheme) || !token) return this.#mcpRefusal(401, "invalid_token");
     const session = await this.#tokenSession(token);
     if (
       session === undefined ||
       this.#passed(session.expiresAt) ||
-      session.tokenType !== "Bearer" ||
+      (session.tokenType ?? "DPoP") !== scheme ||
       session.resource !== this.config.mcpUrl ||
       !this.#offers(session.scopes) ||
       !(await this.#allowed(session.clientId))
     ) {
-      return undefined;
+      return this.#mcpRefusal(401, "invalid_token");
+    }
+    if (scheme === "DPoP") {
+      let thumbprint: string;
+      try {
+        thumbprint = await this.#dpop(request, token);
+      } catch (error) {
+        if (error instanceof Refused) return this.#mcpRefusal(401, error.error, undefined, error.headers);
+        throw error;
+      }
+      if (thumbprint !== session.keyThumbprint) return this.#mcpRefusal(401, "invalid_dpop_proof");
     }
     return session;
   }
@@ -1906,9 +2127,9 @@ export class CompanyService {
   }
 
   async #mcpRoute(request: CompanyRequest, mcp: CompanyMcp): Promise<CompanyResponse> {
-    const session = await this.#bearerCaller(request);
-    // A missing, expired, DPoP, or other-resource token: none is accepted here.
-    if (session === undefined) return this.#bearerRefusal(401, "invalid_token");
+    const session = await this.#mcpCaller(request);
+    // A missing, expired, or other-resource token, or a token in the wrong scheme.
+    if (!("sessionId" in session)) return session;
     const wait = await this.#admitted(session);
     if (wait !== undefined) return rateLimited(wait);
     if (request.method.toUpperCase() !== "POST") {
@@ -1970,14 +2191,26 @@ export class CompanyService {
     });
     if (answer.refusal !== undefined) {
       const [status, error, scope] = answer.refusal;
-      return { refused: this.#bearerRefusal(status, error, scope) };
+      return { refused: this.#mcpRefusal(status, error, scope) };
     }
     if (answer.operation !== undefined) {
       if (session.accountId === undefined) {
-        return { refused: this.#bearerRefusal(403, "sign_in_required") };
+        return { refused: this.#mcpRefusal(403, "sign_in_required") };
       }
       if (!(await this.#supportsOperations(session.clientId))) {
-        return { refused: jsonError(403, "extension_required", { extension: "operations" }) };
+        // A tool can't be refused with `extension_required`, which refuses the personal
+        // agent entirely: an ordinary tool error (Operations §2, §6).
+        return {
+          result: {
+            content: [
+              {
+                type: "text",
+                text: "This tool needs the Operations extension, which your agent doesn't list.",
+              },
+            ],
+            isError: true,
+          },
+        };
       }
       const operation = await this.#propose(session, { operation: answer.operation });
       return {
@@ -2007,8 +2240,13 @@ export class CompanyService {
     if (scheme !== "DPoP" || !token) throw new Refused(401, "invalid_token");
     const key = digest(token);
     const session = await this.#tokenSession(token);
-    if (session === undefined || this.#passed(session.expiresAt) || session.tokenType === "Bearer") {
-      // A Bearer token works only at the MCP server it was issued for (§4.3).
+    if (
+      session === undefined ||
+      this.#passed(session.expiresAt) ||
+      session.tokenType === "Bearer" ||
+      this.#kind(session) === "mcp"
+    ) {
+      // A token for the MCP server, Bearer or DPoP, works only there (§4.3).
       throw new Refused(401, "invalid_token");
     }
     if (!this.#offers(session.scopes)) {
@@ -2140,6 +2378,8 @@ export class CompanyService {
       await this.#attemptFailed(keys);
       return { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
     }
+    // Tied to another account, even signed out since: refused before any code is sent.
+    await this.#checkAccount(session.sessionId, authenticated.accountId);
     if (authenticated.codeReference === undefined) {
       await this.#attemptsCleared(keys);
       return this.#signedInBody(session, authenticated.accountId, granted);
@@ -2180,19 +2420,18 @@ export class CompanyService {
     const [, session] = await this.#caller(request);
     const pending = await this.#read<PendingMediated>(RecordKinds.mediated, signInId);
     if (pending === undefined || pending.sessionId !== session.sessionId) {
-      // Only the Session that started it can finish it; nothing else is said.
-      throw new Refused(404, "not_found");
+      // Unknown, or another Session's: the same error for both (§4.7).
+      throw new Refused(404, "sign_in_not_found");
     }
-    if (this.#passed(pending.expiresAt)) {
-      await this.store.delete(RecordKinds.mediated, signInId);
-      return { status: 200, body: { status: "expired" }, headers: { ...NO_STORE } };
+    if ((pending.status ?? "code_required") !== "code_required") {
+      // Once failed or expired, it stays so: the same status again, HTTP 200 (§4.7).
+      return { status: 200, body: { status: pending.status }, headers: { ...NO_STORE } };
     }
-    const failed = { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
+    if (this.#passed(pending.expiresAt)) return this.#mediatedEnded(signInId, "expired");
     const codeKey = this.#codeKey(pending.accountId);
     if ((await this.#lockedFor([codeKey])) !== undefined) {
       // The account's code budget is spent, whichever sign-in spent it.
-      await this.store.delete(RecordKinds.mediated, signInId);
-      return failed;
+      return this.#mediatedEnded(signInId, "failed");
     }
     const source = text(request.body);
     const body = source ? parseJsonStrict(source) : {};
@@ -2216,8 +2455,7 @@ export class CompanyService {
         counted[1].attempts >= this.config.maxCodeAttempts ||
         (await this.#lockedFor([codeKey])) !== undefined
       ) {
-        await this.store.delete(RecordKinds.mediated, signInId);
-        return failed;
+        return this.#mediatedEnded(signInId, "failed");
       }
       return {
         status: 200,
@@ -2234,9 +2472,20 @@ export class CompanyService {
     const completed = (await this.store.take(RecordKinds.mediated, signInId)) as unknown as
       | PendingMediated
       | undefined;
-    if (completed === undefined) return failed;
+    if (completed === undefined || (completed.status ?? "code_required") !== "code_required") {
+      return { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
+    }
     await this.#attemptsCleared([...completed.attemptKeys, codeKey]);
     return this.#signedInBody(session, completed.accountId, completed.scopes);
+  }
+
+  /** The sign-in ends as `status`, kept so a later code gets the same answer (§4.7). */
+  async #mediatedEnded(signInId: string, status: "failed" | "expired"): Promise<CompanyResponse> {
+    const changed = await this.#change<PendingMediated>(RecordKinds.mediated, signInId, (current) =>
+      (current.status ?? "code_required") !== "code_required" ? current : { ...current, status },
+    );
+    const ended = changed === undefined ? status : (changed[1].status ?? status);
+    return { status: 200, body: { status: ended }, headers: { ...NO_STORE } };
   }
 
   async #signedInBody(
@@ -2302,8 +2551,9 @@ export class CompanyService {
 
   async #startConversation(request: CompanyRequest): Promise<CompanyResponse> {
     const [, session] = await this.#caller(request);
+    waitOf(request);
     const body = jsonObject(request.body);
-    const message = parseMessage(body.message);
+    const message = incoming(body.message);
     const owner = [session.clientId, session.pairwiseUserId] as const;
     const replay = await this.#replayed(owner, message);
     if (replay !== undefined) {
@@ -2373,10 +2623,18 @@ export class CompanyService {
     const conversationId = parts[3] ?? "";
     const action = parts[4] ?? "";
     const [, session] = await this.#caller(request);
+    if (!IDENTIFIER.test(conversationId)) {
+      // An ID with characters not allowed is malformed, not unknown (§7.2, §7.13).
+      throw new Refused(400, "invalid_request");
+    }
+    waitOf(request);
     const conversation = await this.#owned(conversationId, session);
     if (method === "GET" && action === "events") {
       if ((request.headers.accept ?? "").includes("text/event-stream")) {
-        return this.#stream(conversation, request.headers["last-event-id"]);
+        // Last-Event-ID wins over `cursor`: an SSE client adds it to the URL the stream
+        // was first opened with (§7.6).
+        const cursor = request.headers["last-event-id"] || queryOf(request).cursor;
+        return this.#stream(conversation, cursor);
       }
       return this.#pageResponse(request, conversation, 200);
     }
@@ -2392,6 +2650,10 @@ export class CompanyService {
         conversationId,
         (current) => {
           this.#open(current);
+          if (current.status === "queued" || current.responder === "human") {
+            // Already asked for, or with a person: 202, nothing changes (§7.9).
+            return current;
+          }
           const responder = this.config.humansAvailable ? "human" : current.responder;
           return {
             ...current,
@@ -2409,7 +2671,7 @@ export class CompanyService {
       return this.#receipt(changed[1], 202);
     }
     if (action === "messages") {
-      const message = parseMessage(jsonObject(request.body).message);
+      const message = incoming(jsonObject(request.body).message);
       const owner = [session.clientId, session.pairwiseUserId] as const;
       const replay = await this.#replayed(owner, message);
       if (replay === undefined && (await this.#claim(owner, message, conversationId)) === undefined) {
@@ -2599,7 +2861,7 @@ export class CompanyService {
     conversation: StoredConversation,
     status: number,
   ): CompanyResponse {
-    const query = pairs(new URL(request.url).search);
+    const query = queryOf(request);
     if ("wait" in query || "cursor" in query) {
       return this.#pageResponse(request, conversation, status);
     }
@@ -2611,7 +2873,7 @@ export class CompanyService {
     conversation: StoredConversation,
     status: number,
   ): CompanyResponse {
-    const cursor = pairs(new URL(request.url).search).cursor;
+    const cursor = queryOf(request).cursor || undefined;
     const events = this.#after(conversation, cursor);
     const pageEvents = events.slice(0, PAGE);
     const more = events.length > PAGE;
@@ -2681,6 +2943,57 @@ export class CompanyService {
       headers: { "Content-Type": "text/event-stream", ...NO_STORE },
       stream: frames(),
     };
+  }
+
+  // Feedback (§8) -------------------------------------------------------------------
+
+  /**
+   * Accept a report with a Session Token, signed in or out, no scope needed.
+   *
+   * Any `kind` is accepted, so later versions can add kinds; `task` (at most 200
+   * characters) and `description` (at most 2,000) are required. The text is kept as data
+   * for the operator, never acted on.
+   */
+  async #feedback(request: CompanyRequest): Promise<CompanyResponse> {
+    const [, session] = await this.#caller(request);
+    const body = jsonObject(request.body);
+    const { kind, task, description } = body;
+    if (
+      typeof kind !== "string" ||
+      !kind ||
+      typeof task !== "string" ||
+      !(task.length > 0 && task.length <= 200) ||
+      typeof description !== "string" ||
+      !(description.length > 0 && description.length <= 2000)
+    ) {
+      throw new Refused(400, "invalid_request");
+    }
+    const report: StoredFeedback = {
+      reportId: this.#id("fb"),
+      kind,
+      task,
+      description,
+      clientId: session.clientId,
+      pairwiseUserId: session.pairwiseUserId,
+      receivedAt: this.#now().toISOString(),
+    };
+    await this.store.put(RecordKinds.feedback, report.reportId, json(report));
+    return { status: 202, headers: { ...NO_STORE } };
+  }
+
+  /**
+   * The feedback reports personal agents sent, oldest first, for the operator (§8).
+   *
+   * A report can be wrong or written to mislead: its text is data, never an instruction,
+   * including when a model reads it.
+   */
+  async feedbackReports(): Promise<readonly StoredFeedback[]> {
+    const reports = (await this.store.records(RecordKinds.feedback)).map(
+      (record) => record.value as unknown as StoredFeedback,
+    );
+    return reports.sort(
+      (a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt) || byCodePoint(a.reportId, b.reportId),
+    );
   }
 
   // Operations ----------------------------------------------------------------------
@@ -3005,14 +3318,20 @@ export class CompanyService {
     return operationResponse(changed[1]);
   }
 
-  /** The operation, if this Session may use it (Operations §3.2). */
+  /**
+   * The operation, if this Session may use it now (Operations §3.2).
+   *
+   * One proposed signed in belongs to the account: any Session of the same personal
+   * agent and user may use it while signed in to that account, checked at each request.
+   * Signed out, that Session gets `sign_in_required`; anyone else `operation_not_found`.
+   */
   async #usable(operationId: string, session: IssuedSession): Promise<StoredOperation> {
     const stored = await this.#read<StoredOperation>(RecordKinds.operation, operationId);
-    if (
-      stored === undefined ||
-      !sameOwner(stored.owner, [session.clientId, session.pairwiseUserId]) ||
-      stored.accountId !== session.accountId
-    ) {
+    if (stored === undefined || !sameOwner(stored.owner, [session.clientId, session.pairwiseUserId])) {
+      throw new Refused(404, "operation_not_found");
+    }
+    if (stored.accountId !== session.accountId) {
+      if (session.accountId === undefined) throw new Refused(403, "sign_in_required");
       throw new Refused(404, "operation_not_found");
     }
     const current = await this.#currentOperation(operationId);

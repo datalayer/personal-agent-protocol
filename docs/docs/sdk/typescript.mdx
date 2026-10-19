@@ -130,7 +130,7 @@ const pairwiseUserId = await resolvePairwiseUserId(reactor, {
 const claims = buildSessionAssertionClaims({
   clientId: "https://agent.example/agent.json",
   pairwiseUserId,
-  tokenEndpoint: "https://auth.example.com/oauth/token",
+  issuer: "https://auth.example.com",
 });
 
 // Signing is intentionally provided by a server or key-custody integration.
@@ -246,40 +246,43 @@ const proposed = await api.call(
 console.log(proposed.status, proposed.operation?.summary);
 ```
 
-MCP authorization uses Bearer tokens, so for MCP the personal agent asks for a
-Session Token without a DPoP proof, with `resource` set to the MCP server's
-`url` from discovery (§4.3): `AccountTokenClient.bearerForMcp` signed in (the
-Account Token rotates as on any refresh), or `SessionClient.bearerForMcp`
-signed out. The resource must be an HTTPS URL without a fragment, and the
-token the company returns must be a Bearer token for the same Session. A
-Bearer token works for anyone who holds it, so `McpBearerAuth.fetch` sends it
-only to that exact URL (scheme, host, port and path) and refuses every other
-request before it is made (`bearer_not_for_this_url`); `DpopFetchClient`
-refuses it too. `McpClient` is a minimal Streamable HTTP client (initialize,
-`listTools`, `callTool`) over it; a tool that proposes an operation returns it
-as `result.operation`, the same `Operation` as an API's `202`:
+For MCP the personal agent asks for a Session Token with `resource` set to the
+MCP server's `url` from discovery (§4.3): `AccountTokenClient.tokenForMcp`
+signed in (the Account Token rotates as on any refresh), or
+`SessionClient.tokenForMcp` signed out. `fetchMcpServerMetadata` reads the
+server's protected resource metadata: a server that supports DPoP
+(`supportsDpop`) gets a DPoP token, sent with proofs by `McpDpopAuth`; one that
+doesn't gets a Bearer token, which works for anyone who holds it, so
+`McpBearerAuth.fetch` sends it only to that exact URL (scheme, host, port and
+path) and refuses every other request before it is made
+(`bearer_not_for_this_url`). The resource must be an HTTPS URL without a
+fragment. `McpClient` is a minimal Streamable HTTP client (initialize,
+`listTools`, `callTool`) over either; a tool that proposes an operation returns
+it as `result.operation`, the same `Operation` as an API's `202`:
 
 ```typescript
-import { AccountTokenClient, McpClient, mcpApi } from "@datalayer/personal-agent-protocol";
+import { AccountTokenClient, McpClient, fetchMcpServerMetadata, mcpApi } from "@datalayer/personal-agent-protocol";
 
 const mcpUrl = mcpApi(company.document)!.url;
+const served = await fetchMcpServerMetadata(mcpUrl, { issuer });
 const accounts = new AccountTokenClient({ reactor });
-const bearer = await accounts.bearerForMcp(accountTokenReference, {
+const signedIn = await accounts.tokenForMcp(accountTokenReference, {
   context: { tokenEndpoint, issuer, clientId, tenantId, pairwiseUserId },
   sessionId: session.sessionId,
   resource: mcpUrl,
+  dpop: served.supportsDpop,
 });
-const mcp = new McpClient({ token: bearer.token!, url: mcpUrl });
+const mcp = new McpClient({ token: signedIn.token!, url: mcpUrl, reactor, who: { tenantId, pairwiseUserId, issuer } });
 const tools = await mcp.listTools();
 const result = await mcp.callTool("exchange_jacket");
 console.log(tools.length, result.operation?.operation_id);
 ```
 
-To use another MCP client, hand it `new McpBearerAuth(token, mcpUrl).fetch`.
-An MCP refusal is an `McpError`: the token error from the Bearer challenge
-(`sign_in_required` with `details.scope`, `invalid_token`), or
-`extension_required` with `details.extension` when the agent did not
-negotiate Operations. `operationFrom` reads the one operation from an API body,
+To use another MCP client, hand it `new McpDpopAuth(token, mcpUrl, { reactor, who }).fetch`
+or `new McpBearerAuth(token, mcpUrl).fetch`. An MCP refusal is an `McpError`:
+the token error from the `Bearer` or `DPoP` challenge (`sign_in_required` with
+`details.scope`, `invalid_token`). A tool that needs Operations, which the
+agent did not negotiate, answers an ordinary tool error. `operationFrom` reads the one operation from an API body,
 an MCP result or a message, and `operationPage` checks an operation's `url` is
 on the company's domain before the agent opens it in its own browser.
 

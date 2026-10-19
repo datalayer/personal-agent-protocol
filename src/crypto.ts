@@ -195,6 +195,8 @@ export interface VerifiedDpopProof {
   readonly issuedAt: Date;
   readonly publicJwk: JWK;
   readonly keyThumbprint: string;
+  /** The `nonce` the proof carried, for a company that requires ones it issued (§4.3). */
+  readonly nonce?: string;
 }
 
 /** Verify signature, binding, freshness, nonce, token hash, and replay state. */
@@ -203,6 +205,10 @@ export async function verifyDpopProof(
   options: VerifyDpopProofOptions,
 ): Promise<VerifiedDpopProof> {
   const compact = proof instanceof SecretValue ? proof.reveal() : proof;
+  if (compact.split(".").length !== 3 || /[, \t]/u.test(compact)) {
+    // One `DPoP` header holding one compact JWT: two headers joined are refused (§4.3).
+    throw new ProofError("invalid_dpop_proof", "DPoP header is not one compact JWT");
+  }
   const now = options.now ?? new Date();
   const windowSeconds = options.acceptanceWindowSeconds ?? 60;
   if (!Number.isInteger(windowSeconds) || windowSeconds <= 0) {
@@ -273,7 +279,14 @@ export async function verifyDpopProof(
   ) {
     throw new ProofError("invalid_dpop_proof", "DPoP proof has already been used");
   }
-  return { jti: payload.jti, issuedAt, publicJwk: jwk, keyThumbprint };
+  const carried = payload.nonce;
+  return {
+    jti: payload.jti,
+    issuedAt,
+    publicJwk: jwk,
+    keyThumbprint,
+    ...(typeof carried === "string" ? { nonce: carried } : {}),
+  };
 }
 
 /** Whether two strings are equal, in time that does not depend on where they differ. */

@@ -17,7 +17,15 @@ import {
   TokenStores,
   firstContribution,
 } from "./reactor.js";
-import { JWT_CLIENT_ASSERTION, mcpResource, parseSessionToken, type SessionToken } from "./sessions.js";
+import { refusalDetails, refuseRedirect } from "./refusals.js";
+import {
+  JWT_CLIENT_ASSERTION,
+  buildClientAssertionClaims,
+  mcpResource,
+  parseSessionToken,
+  tokenTypes,
+  type SessionToken,
+} from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
 import { readLimitedText } from "./limits.js";
 
@@ -49,12 +57,6 @@ function httpsUrl(value: string, label: string): string {
   return parsed.toString();
 }
 
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 export interface AccountTokenContext {
   readonly tokenEndpoint: string;
   readonly issuer: string;
@@ -69,16 +71,21 @@ export interface AccountRefreshOptions {
   readonly sessionId: string;
   /** Narrower scopes; omitted, the company grants what the token holds. */
   readonly scopes?: readonly string[];
-  /** An RFC 8707 resource indicator narrowing the DPoP token (for MCP, `bearerForMcp`). */
+  /** An RFC 8707 resource indicator narrowing the DPoP token (for MCP, `tokenForMcp`). */
   readonly resource?: string;
   readonly signal?: AbortSignal;
 }
 
-export interface AccountMcpBearerOptions {
+export interface AccountMcpTokenOptions {
   readonly context: AccountTokenContext;
   readonly sessionId: string;
   /** The MCP server's `url` from poppy.json: the only place the token works. */
   readonly resource: string;
+  /**
+   * Whether the server supports DPoP, from its protected resource metadata
+   * (`McpServerMetadata.supportsDpop`): a DPoP token with a proof, else a Bearer one.
+   */
+  readonly dpop: boolean;
   /** Narrower scopes; omitted, the company grants what the token holds. */
   readonly scopes?: readonly string[];
   readonly signal?: AbortSignal;
@@ -124,7 +131,7 @@ export class AccountTokenClient {
    *
    * `scopes` narrows the request; omitted, the company grants what the token holds.
    * A `resource` is an RFC 8707 indicator narrowing the DPoP token to one service (for
-   * an MCP server, use `bearerForMcp`).
+   * an MCP server, use `tokenForMcp`).
    */
   refresh(reference: string, options: AccountRefreshOptions): Promise<AccountRefreshResult> {
     return traced(
@@ -138,32 +145,34 @@ export class AccountTokenClient {
 
   async #refreshAccount(reference: string, options: AccountRefreshOptions): Promise<AccountRefreshResult> {
     const resource = options.resource === undefined ? undefined : httpsUrl(options.resource, "resource");
-    return this.#refresh(reference, options, resource, false);
+    return this.#refresh(reference, options, resource, true, false);
   }
 
   /**
-   * A signed-in Bearer Session Token for one MCP server (§4.3).
+   * A signed-in Session Token for one MCP server (§4.3).
    *
-   * The Account Token request of the Session, without a DPoP proof, with `resource`
-   * set to the MCP server's `url` from poppy.json. The Bearer token works only at that
-   * server (`McpBearerAuth` refuses any other URL); a rotated Account Token is stored
-   * as with `refresh`.
+   * The Account Token request of the Session with `resource` set to the MCP server's
+   * `url` from poppy.json. For a server that supports DPoP (`dpop`, from its protected
+   * resource metadata) the request carries a proof and the token is a DPoP one;
+   * otherwise it carries none and the token is a Bearer one, which works only at that
+   * server (`McpBearerAuth`). A rotated Account Token is stored as with `refresh`.
    */
-  async bearerForMcp(reference: string, options: AccountMcpBearerOptions): Promise<AccountRefreshResult> {
+  async tokenForMcp(reference: string, options: AccountMcpTokenOptions): Promise<AccountRefreshResult> {
     let resource: string;
     try {
       resource = mcpResource(options.resource);
     } catch (cause) {
       throw new AuthorizationError("invalid_url", "an MCP resource must be an HTTPS URL without a fragment", { cause });
     }
-    return this.#refresh(reference, options, resource, true);
+    return this.#refresh(reference, options, resource, options.dpop, true);
   }
 
   async #refresh(
     reference: string,
     options: Omit<AccountRefreshOptions, "resource">,
     resource: string | undefined,
-    bearer: boolean,
+    dpop: boolean,
+    mcp: boolean,
   ): Promise<AccountRefreshResult> {
     if (!opaque.test(options.sessionId)) {
       throw new AuthorizationError("invalid_context", "sessionId must be an opaque identifier");
@@ -196,7 +205,7 @@ export class AccountTokenClient {
           if (resource) form.set("resource", resource);
           return form;
         },
-        !bearer,
+        dpop,
         options.signal,
       );
       if (!response.ok) {
@@ -208,8 +217,10 @@ export class AccountTokenClient {
         if (error === "invalid_scope") {
           return { status: "re_consent_required", rotated: false, grantedScopes: [], missingScopes: [] };
         }
+        const details = refusalDetails(response, payload);
         throw new AuthorizationError(error ?? "http_error", "Company refused the Account Token", {
           statusCode: response.status,
+          ...(Object.keys(details).length > 0 ? { details } : {}),
         });
       }
       let token: SessionToken;
@@ -221,8 +232,10 @@ export class AccountTokenClient {
           cause,
         });
       }
+      // Only a request for an MCP server may be answered with a Bearer token.
+      const types = tokenTypes({ dpop, resource: mcp ? resource : undefined });
       if (
-        token.tokenType !== (bearer ? "Bearer" : "DPoP") ||
+        !types.has(token.tokenType) ||
         !token.signedIn ||
         token.sessionId !== options.sessionId
       ) {
@@ -313,18 +326,14 @@ export class AccountTokenClient {
     const signer = firstContribution(this.#reactor, Signers, "signer");
     let nonce: string | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const iat = Math.floor(clock.now().getTime() / 1000);
-      const assertion = await signer.sign(
-        {
-          iss: context.clientId,
-          sub: context.clientId,
-          aud: url,
-          iat,
-          exp: iat + 60,
-          jti: `jti_${base64Url(random.bytes(16))}`,
-        },
-        { purpose: "client_assertion" },
-      );
+      // `aud` is the issuer, whichever endpoint the assertion goes to (§4.1).
+      const claims = buildClientAssertionClaims({
+        clientId: context.clientId,
+        issuer: context.issuer,
+        now: clock.now(),
+        randomBytes: (length) => random.bytes(length),
+      });
+      const assertion = await signer.sign({ ...claims }, { purpose: "client_assertion" });
       const headers: Record<string, string> = { Accept: "application/json" };
       if (dpop) {
         const provider = firstContribution(this.#reactor, DpopProofProviders, "DPoP proof provider");
@@ -345,12 +354,13 @@ export class AccountTokenClient {
           headers,
           body: form(assertion.reveal()),
           credentials: "omit",
-          redirect: "error",
+          redirect: "manual",
           ...(signal === undefined ? {} : { signal }),
         });
       } catch (cause) {
         throw new AuthorizationError("request_failed", "Account Token request failed", { cause });
       }
+      await refuseRedirect(response, AuthorizationError);
       const payload = await this.#decode(response);
       if (dpop && attempt === 0 && remoteCode(payload) === "use_dpop_nonce") {
         nonce = response.headers.get("dpop-nonce") ?? undefined;

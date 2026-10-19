@@ -225,6 +225,10 @@ export const RecordKinds = {
   replay: "replay",
   /** Failed sign-in attempts by one key, and until when it is locked out (§4.7). */
   signInAttempts: "sign_in_attempts",
+  /** A feedback report a personal agent sent (§8), kept for the company's operator. */
+  feedback: "feedback",
+  /** A DPoP nonce the company issued, until it stops accepting it (§4.3). */
+  dpopNonce: "dpop_nonce",
 } as const;
 
 export type RecordKind = (typeof RecordKinds)[keyof typeof RecordKinds];
@@ -247,13 +251,19 @@ export interface IssuedSession {
   readonly tokenType?: "Bearer";
 }
 
-/** A Session by its ID: each live token's state by digest, and the latest issued. */
+/**
+ * A Session by its ID: each live token's state by digest, and the latest issued.
+ *
+ * `accountId` is the account the Session was ever signed in to: kept after it signs out,
+ * so it is never signed in to another (§4.4, §4.8).
+ */
 export interface StoredSession {
   readonly sessionId: string;
   readonly clientId: string;
   readonly pairwiseUserId: string;
   readonly tokens: Readonly<Record<string, IssuedSession>>;
   readonly latest: string;
+  readonly accountId?: string;
 }
 
 /** What an Account Token is: one account, one agent, one user, some scopes. */
@@ -352,10 +362,34 @@ export interface PendingMediated {
   /** The `signInAttempts` keys the credentials counted against, cleared on success. */
   readonly attemptKeys: readonly string[];
   readonly attempts: number;
+  /**
+   * `code_required` (absent) while a code is awaited; once `failed` or `expired` it stays
+   * so, and a code sent to it gets the same status again (§4.7).
+   */
+  readonly status?: "code_required" | "failed" | "expired";
 }
 
 /** An identifier seen once: the record is its presence, until its expiry. */
 export type ReplayMark = Record<string, never>;
+
+/** A DPoP nonce the company issued: accepted in a proof until the record expires. */
+export type IssuedNonce = Record<string, never>;
+
+/**
+ * A feedback report as the company received it (§8): data, never instructions.
+ *
+ * `kind` is whatever the personal agent sent (an unknown kind is accepted); `clientId`
+ * and `pairwiseUserId` are the Session's, which sent it.
+ */
+export interface StoredFeedback {
+  readonly reportId: string;
+  readonly kind: string;
+  readonly task: string;
+  readonly description: string;
+  readonly clientId: string;
+  readonly pairwiseUserId: string;
+  readonly receivedAt: string;
+}
 
 /**
  * Failed sign-in attempts by one key (an account, a user, a Session, a code).

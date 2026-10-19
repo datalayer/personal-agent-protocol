@@ -14,7 +14,7 @@ import test from "node:test";
 
 import { exportJWK, generateKeyPair } from "jose";
 
-import { Context, identityFrom, runConformance } from "./support/conformance.mjs";
+import { Context, companyCases, identityFrom, runConformance } from "./support/conformance.mjs";
 import { serveCompany } from "./support/tls-company.mjs";
 import { MutableClock, certificates, tlsFetch } from "./support/world.mjs";
 
@@ -30,7 +30,8 @@ async function agent(domain, name, extensions) {
 /** The cases this pairing does not pass yet, with why (kept exact: a fix shows here). */
 const GAPS = {};
 
-test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", async () => {
+/** Run `cases` (every company case by default) against Manzanita, changed by `config`. */
+async function runPairing({ config, cases } = {}) {
   const atlas = await agent("atlas.example", "Atlas", ["operations"]);
   const plain = await agent("plain.example", "Plain", []);
   const clock = new MutableClock();
@@ -39,6 +40,7 @@ test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", 
   const company = await serveCompany({
     ...tls,
     clock,
+    ...(config === undefined ? {} : { config }),
     agents: { [atlas.domain]: documents(atlas), [plain.domain]: documents(plain) },
   });
   const executors = [company.plugin.executor, company.plugin.giftWrap, company.plugin.returns, company.plugin.repairs];
@@ -79,17 +81,30 @@ test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", 
         },
       },
     });
-    const report = await runConformance(context);
-    // Kept for the compatibility report (scripts/conformance_report.py), when asked.
-    const reports = process.env.PAP_CONFORMANCE_REPORTS;
-    if (reports) {
-      mkdirSync(reports, { recursive: true });
-      writeFileSync(join(reports, "typescript-agent-typescript-company.json"), `${JSON.stringify(report, null, 2)}\n`);
-    }
-    const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
-    assert.deepEqual(Object.keys(failed), Object.keys(GAPS), JSON.stringify(failed));
-    assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
+    return await runConformance(context, cases === undefined ? {} : { cases });
   } finally {
     await company.close();
   }
+}
+
+test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", async () => {
+  const report = await runPairing();
+  // Kept for the compatibility report (scripts/conformance_report.py), when asked.
+  const reports = process.env.PAP_CONFORMANCE_REPORTS;
+  if (reports) {
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, "typescript-agent-typescript-company.json"), `${JSON.stringify(report, null, 2)}\n`);
+  }
+  const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
+  assert.deepEqual(Object.keys(failed), Object.keys(GAPS), JSON.stringify(failed));
+  assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
+});
+
+test("the MCP cases pass against an MCP server without DPoP: Bearer tokens (§4.3)", async () => {
+  const mcp = companyCases().filter((item) => item.id.includes(".mcp-") || item.id === "operations.cross-channel-mcp");
+  assert.ok(mcp.length >= 6);
+  const report = await runPairing({ config: { mcpDpop: false }, cases: mcp });
+  const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
+  assert.deepEqual(failed, {});
+  assert.deepEqual(report.summary, { passed: mcp.length, failed: 0, skipped: 0 });
 });

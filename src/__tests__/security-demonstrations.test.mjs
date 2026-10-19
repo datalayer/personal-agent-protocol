@@ -121,6 +121,8 @@ async function deviceSignIn(w, session) {
     tenantId: TENANT,
     pairwiseUserId: PAIRWISE,
     sessionId: session.sessionId,
+    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
+    poppyDomains: w.metadata.poppy_domains,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);

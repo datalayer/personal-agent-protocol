@@ -34,6 +34,7 @@ import {
   type AccountGrant,
   type CompanyStore,
   type IssuedCode,
+  type IssuedNonce,
   type IssuedSession,
   type JsonObject,
   type KnownClient,
@@ -46,6 +47,7 @@ import {
   type SessionPointer,
   type SignInAttempts,
   type StoredConversation,
+  type StoredFeedback,
   type StoredOperation,
   type StoredRecord,
   type StoredSession,
@@ -113,6 +115,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       pairwiseUserId: "usr_1",
       tokens: { tok_1: signedIn },
       latest: "tok_1",
+      accountId: "acct_1",
     } satisfies StoredSession,
     [RecordKinds.sessionToken]: { sessionId: "ses_1" } satisfies SessionPointer,
     [RecordKinds.accountToken]: {
@@ -171,6 +174,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       expiresAt: later,
       attemptKeys: ["k1", "k2"],
       attempts: 2,
+      status: "failed",
     } satisfies PendingMediated,
     [RecordKinds.conversation]: {
       conversationId: "cnv_1",
@@ -196,6 +200,16 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
     [RecordKinds.browserCookie]: { sessionId: "ses_1" } satisfies SessionPointer,
     [RecordKinds.replay]: {} satisfies ReplayMark,
     [RecordKinds.signInAttempts]: { failures: 3, lockedUntil: later } satisfies SignInAttempts,
+    [RecordKinds.feedback]: {
+      reportId: "fb_1",
+      kind: "missing",
+      task: "Pay with a gift card",
+      description: "No gift card field.",
+      clientId: "c",
+      pairwiseUserId: "u",
+      receivedAt: now.toISOString(),
+    } satisfies StoredFeedback,
+    [RecordKinds.dpopNonce]: {} satisfies IssuedNonce,
   };
   return records as Readonly<Record<string, JsonObject>>;
 }

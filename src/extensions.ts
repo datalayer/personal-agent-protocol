@@ -13,6 +13,7 @@
 // both sides list at the same major version, so either side works with the other under
 // the specification alone.
 import type { ExtensionDescriptor } from "./models.js";
+import { challengeParameters } from "./refusals.js";
 
 /** Extensions this SDK implements, by name and major version. */
 export const SUPPORTED_EXTENSIONS: Readonly<Record<string, string>> = Object.freeze({ operations: "1" });
@@ -49,13 +50,18 @@ export function negotiateExtensions(
   return negotiated;
 }
 
-/** The extension a `403 extension_required` names, else `undefined`. */
-export function extensionRequired(status: number, payload: unknown): string | undefined {
-  if (status !== 403 || typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-    return undefined;
-  }
-  const body = payload as Record<string, unknown>;
-  if (body.error !== "extension_required") return undefined;
-  const name = body.extension;
+/**
+ * The extension a `403 extension_required` names, else `undefined` (§3.3).
+ *
+ * In the JSON body at the token endpoint and the endpoints the protocol or an
+ * extension defines; in the `WWW-Authenticate` challenge's `extension` attribute at an API.
+ */
+export function extensionRequired(status: number, payload: unknown, wwwAuthenticate?: string | null): string | undefined {
+  if (status !== 403) return undefined;
+  let values: Record<string, unknown> =
+    typeof payload === "object" && payload !== null && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+  if (values.error !== "extension_required" && wwwAuthenticate) values = challengeParameters(wwwAuthenticate);
+  if (values.error !== "extension_required") return undefined;
+  const name = values.extension;
   return typeof name === "string" && extensionNameKind(name) !== "invalid" ? name : undefined;
 }

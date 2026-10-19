@@ -18,7 +18,13 @@ import {
   firstContribution,
 } from "./reactor.js";
 import { SecretValue } from "./secret.js";
-import { JWT_CLIENT_ASSERTION, parseSessionToken, type SessionToken } from "./sessions.js";
+import { refusalDetails, refuseRedirect } from "./refusals.js";
+import {
+  JWT_CLIENT_ASSERTION,
+  buildClientAssertionClaims,
+  parseSessionToken,
+  type SessionToken,
+} from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
 import { readLimitedText } from "./limits.js";
 
@@ -35,6 +41,34 @@ function httpsUrl(value: string, label: string): string {
     throw new AuthorizationError("invalid_url", `${label} must be an HTTPS URL`);
   }
   return parsed.toString();
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function within(host: string, domain: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+/**
+ * Whether a device sign-in link may be shown for this company (§4.6).
+ *
+ * Its host is the host of `auth.issuer` or a domain in the issuer's `poppy_domains`, or
+ * a subdomain of either; otherwise a company could pass off another company's sign-in
+ * page as its own.
+ */
+export function verificationHostAllowed(
+  url: string,
+  options: { readonly issuer: string; readonly poppyDomains: readonly string[] },
+): boolean {
+  const host = hostOf(url);
+  const allowed = [hostOf(options.issuer), ...options.poppyDomains.map((domain) => domain.toLowerCase().replace(/\.$/, ""))];
+  return host !== "" && allowed.some((domain) => domain !== "" && within(host, domain));
 }
 
 function scopes(values: readonly string[]): readonly string[] {
@@ -153,8 +187,16 @@ function isPending(value: unknown): value is PendingDeviceSignIn {
   );
 }
 
+/**
+ * User-facing device instructions without the private device code.
+ *
+ * `organizationName` and `organizationDomain` are the company's, shown with the link and
+ * the code whenever they are (§4.6).
+ */
 export interface DeviceSignInStart {
   readonly reference: string;
+  readonly organizationName: string;
+  readonly organizationDomain: string;
   readonly userCode: string;
   readonly verificationUri: string;
   readonly verificationUriComplete?: string;
@@ -181,6 +223,14 @@ export interface DeviceSignInBeginOptions {
   readonly tenantId: string;
   readonly pairwiseUserId: string;
   readonly sessionId: string;
+  /** The company's, from its poppy.json: named with the link and the code (§4.6). */
+  readonly organization: { readonly name: string; readonly domain: string };
+  /**
+   * The issuer's `poppy_domains` (OAuth metadata): the verification link is refused
+   * (`unsafe_verification_uri`) unless its host is the issuer's or one of these, or a
+   * subdomain of either (§4.6).
+   */
+  readonly poppyDomains: readonly string[];
   readonly signal?: AbortSignal;
 }
 
@@ -223,14 +273,15 @@ export class DeviceSignInClient {
     const signer = firstContribution(this.#reactor, Signers, "signer");
     const endpoint = httpsUrl(options.deviceAuthorizationEndpoint, "deviceAuthorizationEndpoint");
     const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint");
-    const issuer = httpsUrl(options.issuer, "issuer").replace(/\/$/, "");
+    // Kept exactly as written: the issuer names the company character for character (§3.2).
+    httpsUrl(options.issuer, "issuer");
+    const issuer = options.issuer;
     const clientId = httpsUrl(options.clientId, "clientId");
     const requestedScopes = scopes(options.scopes);
     const now = clock.now();
-    const clientAssertion = await signer.sign(
-      this.#claims(clientId, endpoint, now, random.bytes(16)),
-      { purpose: "client_assertion" },
-    );
+    const clientAssertion = await signer.sign(this.#claims(clientId, issuer, now, random.bytes(16)), {
+      purpose: "client_assertion",
+    });
     const response = await this.#request(
       endpoint,
       new URLSearchParams({
@@ -245,6 +296,15 @@ export class DeviceSignInClient {
     const payload = await this.#decode(response, "Device authorization");
     if (!response.ok) throw this.#remoteError(response, payload, "Company refused Device Sign-In");
     const authorization = parseDeviceAuthorization(payload);
+    for (const link of [authorization.verificationUri, authorization.verificationUriComplete]) {
+      if (link !== undefined && !verificationHostAllowed(link, { issuer, poppyDomains: options.poppyDomains })) {
+        throw new AuthorizationError(
+          "unsafe_verification_uri",
+          "The device sign-in link is not on the company's issuer or its domains",
+          { statusCode: response.status },
+        );
+      }
+    }
     const expiresAt = new Date(now.getTime() + authorization.expiresIn * 1000);
     const reference = opaqueId("device", random.bytes(16));
     const pending: PendingDeviceSignIn = {
@@ -265,6 +325,8 @@ export class DeviceSignInClient {
     await store.put(reference, pending, { expiresAt });
     return {
       reference,
+      organizationName: options.organization.name,
+      organizationDomain: options.organization.domain,
       userCode: authorization.userCode,
       verificationUri: authorization.verificationUri,
       ...(authorization.verificationUriComplete === undefined
@@ -334,31 +396,48 @@ export class DeviceSignInClient {
     const random = firstContribution(this.#reactor, RandomSources, "random source");
     const signer = firstContribution(this.#reactor, Signers, "signer");
     const dpop = firstContribution(this.#reactor, DpopProofProviders, "DPoP proof provider");
-    const assertion = await signer.sign(
-      this.#claims(pending.clientId, pending.tokenEndpoint, now, random.bytes(16)),
-      { purpose: "client_assertion" },
-    );
-    const proof = await dpop.create({
-      method: "POST",
-      url: pending.tokenEndpoint,
-      tenantId: pending.tenantId,
-      subject: pending.pairwiseUserId,
-      issuer: pending.issuer,
-    });
-    const response = await this.#request(
-      pending.tokenEndpoint,
-      new URLSearchParams({
-        grant_type: DEVICE_CODE_GRANT,
-        device_code: pending.deviceCode.reveal(),
-        session_id: pending.sessionId,
-        client_id: pending.clientId,
-        client_assertion_type: JWT_CLIENT_ASSERTION,
-        client_assertion: assertion.reveal(),
-      }),
-      proof.reveal(),
-      signal,
-    );
-    return { response, payload: await this.#decode(response, "Device token") };
+    let nonce: string | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const assertion = await signer.sign(this.#claims(pending.clientId, pending.issuer, now, random.bytes(16)), {
+        purpose: "client_assertion",
+      });
+      const proof = await dpop.create({
+        method: "POST",
+        url: pending.tokenEndpoint,
+        tenantId: pending.tenantId,
+        subject: pending.pairwiseUserId,
+        issuer: pending.issuer,
+        ...(nonce === undefined ? {} : { nonce }),
+      });
+      const response = await this.#request(
+        pending.tokenEndpoint,
+        new URLSearchParams({
+          grant_type: DEVICE_CODE_GRANT,
+          device_code: pending.deviceCode.reveal(),
+          session_id: pending.sessionId,
+          client_id: pending.clientId,
+          client_assertion_type: JWT_CLIENT_ASSERTION,
+          client_assertion: assertion.reveal(),
+        }),
+        proof.reveal(),
+        signal,
+      );
+      const payload = await this.#decode(response, "Device token");
+      const source = typeof payload === "object" && payload !== null ? payload : {};
+      const remote = "error" in source ? (source as { error?: unknown }).error : undefined;
+      if (remote === "use_dpop_nonce" && attempt === 0) {
+        // The token endpoint's nonce, as an OAuth error (§4.3): retried once with it.
+        nonce = response.headers.get("dpop-nonce") ?? undefined;
+        if (!nonce) {
+          throw new AuthorizationError("missing_dpop_nonce", "Company requested a DPoP nonce but did not send one", {
+            statusCode: response.status,
+          });
+        }
+        continue;
+      }
+      return { response, payload };
+    }
+    throw new AuthorizationError("use_dpop_nonce", "Company rejected the refreshed DPoP proof");
   }
 
   async #complete(response: Response, payload: unknown, pending: PendingDeviceSignIn): Promise<DeviceSignInPoll> {
@@ -398,9 +477,12 @@ export class DeviceSignInClient {
     };
   }
 
-  #claims(clientId: string, audience: string, now: Date, entropy: Uint8Array) {
-    const iat = Math.floor(now.getTime() / 1000);
-    return { iss: clientId, sub: clientId, aud: audience, iat, exp: iat + 60, jti: opaqueId("jti", entropy) };
+  /** A client assertion: `aud` is the issuer, whichever endpoint it goes to (§4.1). */
+  #claims(clientId: string, issuer: string, now: Date, entropy: Uint8Array) {
+    if (entropy.byteLength < 16) {
+      throw new AuthorizationError("weak_entropy", "Device Sign-In requires 128 random bits");
+    }
+    return { ...buildClientAssertionClaims({ clientId, issuer, now, randomBytes: () => entropy }) };
   }
 
   #validateContext(options: DeviceSignInBeginOptions): void {
@@ -417,13 +499,19 @@ export class DeviceSignInClient {
   }
 
   async #request(url: string, body: URLSearchParams, dpop?: string, signal?: AbortSignal): Promise<Response> {
+    const response = await this.#send(url, body, dpop, signal);
+    await refuseRedirect(response, AuthorizationError);
+    return response;
+  }
+
+  async #send(url: string, body: URLSearchParams, dpop?: string, signal?: AbortSignal): Promise<Response> {
     try {
       return await this.#fetch(url, {
         method: "POST",
         headers: { Accept: "application/json", ...(dpop === undefined ? {} : { DPoP: dpop }) },
         body,
         credentials: "omit",
-        redirect: "error",
+        redirect: "manual",
         ...(signal === undefined ? {} : { signal }),
       });
     } catch (cause) {
@@ -456,8 +544,10 @@ export class DeviceSignInClient {
   #remoteError(response: Response, payload: unknown, message: string): AuthorizationError {
     const source = typeof payload === "object" && payload !== null ? payload : {};
     const remote = "error" in source ? (source as { error?: unknown }).error : undefined;
+    const details = refusalDetails(response, payload);
     return new AuthorizationError(typeof remote === "string" ? remote : "http_error", message, {
       statusCode: response.status,
+      ...(Object.keys(details).length > 0 ? { details } : {}),
     });
   }
 }

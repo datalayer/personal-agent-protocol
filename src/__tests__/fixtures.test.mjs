@@ -28,14 +28,14 @@ const invalid = (code) => (error) => error.code === code || (code === undefined 
 
 test("discovery fixture round-trips and preserves extensions", () => {
   const document = parseDiscoveryDocument(fixture("discovery-valid.json"));
-  assert.equal(document.protocol_version, "0.1");
+  assert.equal(document.protocol_version, "0.2");
   assert.equal(document.apis[1].type, "mcp");
   assert.equal(document.extensions.operations.endpoint, "https://api.example.com/poppy/operations");
 });
 
 test("discovery requires auth for an API", () => {
   assert.throws(() => parseDiscoveryDocument({
-    protocol_version: "0.1",
+    protocol_version: "0.2",
     organization: { name: "Example", domain: "example.com" },
     apis: [{ type: "openapi", url: "https://api.example.com/openapi.json", description: "Example" }],
   }));

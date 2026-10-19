@@ -14,13 +14,14 @@ import { systemClock, tlsFetch } from "./world.mjs";
 
 /**
  * Serve Manzanita at `manzanita.example`, and each agent's documents at its domain.
- * The company fetches agents' metadata and keys over the same TLS server.
+ * The company fetches agents' metadata and keys over the same TLS server. `config`
+ * changes Manzanita's configuration (e.g. `{ mcpDpop: false }`).
  */
-export async function serveCompany({ cert, key, ca, agents = {}, clock = systemClock }) {
+export async function serveCompany({ cert, key, ca, agents = {}, clock = systemClock, config }) {
   const domains = ["manzanita.example", ...Object.keys(agents)];
   let port = 0;
   const fetch = (input, init) => tlsFetch({ port, ca, domains })(input, init);
-  const { service, plugin } = manzanita({ fetch, clock });
+  const { service, plugin } = manzanita({ fetch, clock, ...(config === undefined ? {} : { config }) });
   const sites = { "manzanita.example": companyRequestListener(service) };
   for (const [domain, documents] of Object.entries(agents)) sites[domain] = jsonSite(documents);
   const server = createServer({ cert, key }, byHost(sites));

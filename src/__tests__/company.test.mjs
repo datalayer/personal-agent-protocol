@@ -114,7 +114,10 @@ test("an alias publishes the company's discovery, its issuer listing it, and ans
   assert.equal(discovery.status, 200);
   assert.equal(discovery.body.organization.domain, "shop.example");
   assert.equal(discovery.body.auth.issuer, "https://manzanita.example");
-  assert.equal((await at("manzanita.example", "/.well-known/poppy.json")).body.organization.domain, "manzanita.example");
+  const own = await at("manzanita.example", "/.well-known/poppy.json");
+  assert.equal(own.body.organization.domain, "manzanita.example");
+  // Every document naming the issuer has the same auth, which describes it (§3.2).
+  assert.deepEqual(discovery.body.auth, own.body.auth);
   const metadata = await at("manzanita.example", "/.well-known/oauth-authorization-server");
   assert.deepEqual(metadata.body.poppy_domains, ["manzanita.example", "shop.example"]);
   assert.equal((await at("shop.example", "/.well-known/oauth-authorization-server")).status, 404);
@@ -136,6 +139,8 @@ test("Device Sign-In paces polling, then signs the Session in; Account Tokens ro
     tenantId: TENANT,
     pairwiseUserId: PAIRWISE,
     sessionId: session.sessionId,
+    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
+    poppyDomains: w.metadata.poppy_domains,
   });
   assert.match(started.userCode, /^[A-Z0-9XY]{4}-[A-Z0-9XY]{4}$/);
   w.clock.advance(started.pollInterval);
@@ -182,6 +187,8 @@ test("a scope no longer offered ends the Sessions holding it; the Account Token 
     tenantId: TENANT,
     pairwiseUserId: PAIRWISE,
     sessionId: session.sessionId,
+    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
+    poppyDomains: w.metadata.poppy_domains,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -241,6 +248,8 @@ test("a password reset ends the sign-ins from before it; signing in again works"
       tenantId: TENANT,
       pairwiseUserId: PAIRWISE,
       sessionId: session.sessionId,
+      organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
+      poppyDomains: w.metadata.poppy_domains,
     });
     await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
     w.clock.advance(started.pollInterval);
@@ -289,6 +298,8 @@ test("a denied device code is access_denied", async () => {
     tenantId: TENANT,
     pairwiseUserId: PAIRWISE,
     sessionId: session.sessionId,
+    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
+    poppyDomains: w.metadata.poppy_domains,
   });
   const started = await begin();
   await w.shop.denyDevice(started.userCode);
@@ -663,14 +674,16 @@ test("a conversation that used the account stays with it; disconnecting signs Se
   assert.deepEqual(await orders.json(), { error: "sign_in_required", scope: "orders:read" });
 });
 
-const DEVICE_PAGE = "https://datalayer.ai/pap/device?slug=orders-helper";
+const DEVICE_PAGE = "https://pap.manzanita.example/device?slug=orders-helper";
 const CONSENT_PAGE = "https://datalayer.ai/pap/consent?slug=orders-helper&request={request_id}";
 
 test("hosted page templates are checked", async () => {
   const { CompanyConfig } = await import("../../lib/server.js");
   const base = { name: "Shop", domain: "shop.example", scopes: ["orders:read"], operations: false };
   assert.throws(() => new CompanyConfig({ ...base, consentPage: "https://datalayer.ai/pap/consent" }), /consentPage/);
-  assert.throws(() => new CompanyConfig({ ...base, devicePage: "http://datalayer.ai/pap/device" }), /HTTPS/);
+  assert.throws(() => new CompanyConfig({ ...base, devicePage: "http://pap.shop.example/device" }), /HTTPS/);
+  // A device page off the company's domains is a link personal agents refuse (§4.6).
+  assert.throws(() => new CompanyConfig({ ...base, devicePage: "https://datalayer.ai/pap/device" }), /company's domain/);
 });
 
 test("Device Sign-In points at the hosted device page", async () => {
@@ -685,6 +698,8 @@ test("Device Sign-In points at the hosted device page", async () => {
     tenantId: TENANT,
     pairwiseUserId: PAIRWISE,
     sessionId: session.sessionId,
+    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
+    poppyDomains: w.metadata.poppy_domains,
   });
   assert.equal(started.verificationUri, DEVICE_PAGE);
   assert.equal(started.verificationUriComplete, `${DEVICE_PAGE}&${new URLSearchParams({ code: started.userCode })}`);

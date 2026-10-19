@@ -62,6 +62,8 @@ async function signIn(w, granted) {
     tenantId: TENANT,
     pairwiseUserId: PAIRWISE,
     sessionId: w.session.sessionId,
+    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
+    poppyDomains: w.metadata.poppy_domains,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada", ...(granted ? { scopes: granted } : {}) });
   w.clock.advance(started.pollInterval);

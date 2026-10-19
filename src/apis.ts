@@ -20,6 +20,7 @@ import { parseOperation, type ApiDescriptor, type DiscoveryDocument, type Operat
 import type { SessionToken } from "./sessions.js";
 import type { DpopFetchClient } from "./transport.js";
 import { readLimited } from "./limits.js";
+import { challengeParameters, refusalDetails } from "./refusals.js";
 
 /** The API types this SDK speaks. */
 export const KNOWN_API_TYPES: ReadonlySet<string> = new Set(["openapi", "mcp"]);
@@ -73,18 +74,6 @@ export interface ApiClientOptions {
   readonly maxResponseBytes?: number;
 }
 
-const CHALLENGE = /(\w+)="([^"]*)"/g;
-
-/** `error` and `scope` from a `DPoP`/`Bearer` WWW-Authenticate challenge. */
-function challenge(header: string): { error?: string; scope?: string } {
-  const values: Record<string, string> = {};
-  for (const [, name, value] of header.matchAll(CHALLENGE)) values[name as string] = value as string;
-  return {
-    ...(values.error === undefined ? {} : { error: values.error }),
-    ...(values.scope === undefined ? {} : { scope: values.scope }),
-  };
-}
-
 function member(payload: unknown, name: string): unknown {
   return typeof payload === "object" && payload !== null && !Array.isArray(payload)
     ? (payload as Record<string, unknown>)[name]
@@ -133,17 +122,13 @@ export class ApiClient {
     }
     if (response.ok) return { status: response.status, body: payload };
     let error = member(payload, "error");
-    let scope = member(payload, "scope");
     if (typeof error !== "string") {
-      // Token errors may come only in WWW-Authenticate (§6).
-      ({ error, scope } = challenge(response.headers.get("www-authenticate") ?? ""));
+      // Token errors, and `extension_required` with its `extension` attribute, come in
+      // WWW-Authenticate at an API (§3.3, §6).
+      error = challengeParameters(response.headers.get("www-authenticate")).error;
     }
-    const details: Record<string, unknown> = typeof scope === "string" ? { scope } : {};
-    const retryAfter = response.headers.get("retry-after");
-    if (response.status === 429 && retryAfter) {
-      // Never retried here: the caller waits at least this long (§4.3).
-      details.retry_after = retryAfter;
-    }
+    // `scope`, `extension`, and on a 429 `retry_after`: never retried here (§4.3).
+    const details = refusalDetails(response, payload);
     throw new ApiError(typeof error === "string" ? error : "api_request_failed", "the company refused the API call", {
       statusCode: response.status,
       ...(Object.keys(details).length ? { details } : {}),

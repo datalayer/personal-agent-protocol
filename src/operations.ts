@@ -14,6 +14,7 @@ import type { SessionToken } from "./sessions.js";
 import { byEndpoint, operationResult, traced } from "./telemetry.js";
 import type { DpopFetchClient } from "./transport.js";
 import { readLimitedText } from "./limits.js";
+import { challengeParameters, refusalDetails } from "./refusals.js";
 
 /**
  * PAP Operations extension v1 on the personal agent's side, as in Python:
@@ -491,14 +492,9 @@ function errorCode(payload: unknown): string | undefined {
 }
 
 function operationError(response: Response, payload: unknown): OperationError {
-  const code = errorCode(payload);
-  const extension =
-    code === "extension_required" ? (payload as Record<string, unknown>).extension : undefined;
-  const retryAfter = response.status === 429 ? response.headers.get("retry-after") : null;
-  const details = {
-    ...(typeof extension === "string" ? { extension } : {}),
-    ...(retryAfter ? { retry_after: retryAfter } : {}),
-  };
+  // A token error may come only in WWW-Authenticate (§6).
+  const code = errorCode(payload) ?? challengeParameters(response.headers.get("www-authenticate")).error;
+  const details = refusalDetails(response, payload);
   return new OperationError(code ?? "operation_request_failed", "the operation request was refused", {
     statusCode: response.status,
     ...(Object.keys(details).length ? { details } : {}),

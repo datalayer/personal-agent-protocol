@@ -23,6 +23,7 @@ import type { SessionToken } from "./sessions.js";
 import { byEndpoint, conversationResult, traced } from "./telemetry.js";
 import { DpopFetchClient } from "./transport.js";
 import { readLimited } from "./limits.js";
+import { challengeParameters, refusalDetails } from "./refusals.js";
 
 const identifier = /^[A-Za-z0-9_-]{1,256}$/;
 
@@ -607,32 +608,40 @@ export class ConversationClient {
         new TextDecoder("utf-8", { fatal: true }).decode(bytes),
       );
     } catch (cause) {
-      throw new ConversationError(
-        "invalid_response",
-        "conversation returned invalid JSON",
-        {
-          cause,
-        },
-      );
+      if (response.status === expectedStatus) {
+        throw new ConversationError(
+          "invalid_response",
+          "conversation returned invalid JSON",
+          {
+            cause,
+          },
+        );
+      }
+      // A refusal without a JSON body: its token error is in WWW-Authenticate (§6).
+      payload = undefined;
     }
     if (response.status !== expectedStatus) {
-      const error =
+      let error =
         typeof payload === "object" &&
         payload !== null &&
         !Array.isArray(payload)
           ? (payload as Record<string, unknown>).error
           : undefined;
+      if (typeof error !== "string") {
+        // A token error may come only in WWW-Authenticate (§6).
+        error = challengeParameters(response.headers.get("www-authenticate")).error;
+      }
       const openId =
         error === "direct_conversation_open" &&
         typeof (payload as Record<string, unknown>).conversation_id === "string" &&
         identifier.test((payload as Record<string, unknown>).conversation_id as string)
           ? ((payload as Record<string, unknown>).conversation_id as string)
           : undefined;
-      // A 429's Retry-After goes to the caller, who waits at least this long (§4.3).
-      const retryAfter = response.status === 429 ? response.headers.get("retry-after") : null;
+      // `extension` of `extension_required` (§3.3), `scope`, and on a 429 `retry_after`,
+      // never retried here: the caller waits at least this long (§4.3).
       const details = {
+        ...refusalDetails(response, payload),
         ...(openId === undefined ? {} : { conversation_id: openId }),
-        ...(retryAfter ? { retry_after: retryAfter } : {}),
       };
       throw new ConversationError(
         typeof error === "string" ? error : "conversation_request_failed",

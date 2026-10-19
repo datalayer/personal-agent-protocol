@@ -10,6 +10,6 @@
 // OPERATIONS_VERSION (operations.ts). A test holds both SDKs and the docs equal.
 
 /** The Personal Agent Protocol draft implemented. */
-export const PROTOCOL_PROFILE = "0.1";
+export const PROTOCOL_PROFILE = "0.2";
 /** The upstream specification revision (its page date) the draft was implemented from. */
-export const PROTOCOL_REVISION = "2026-10-09";
+export const PROTOCOL_REVISION = "2026-10-18";

@@ -21,6 +21,7 @@ import { parseSessionToken, type SessionToken } from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
 import { DpopFetchClient } from "./transport.js";
 import { readLimitedText } from "./limits.js";
+import { refusalDetails } from "./refusals.js";
 
 /**
  * PAP Mediated Sign-In: the user's credentials, relayed to one endpoint (§4.7).
@@ -118,11 +119,10 @@ export class MediatedSignInClient {
     const limit = options.maxResponseBytes ?? 100 * 1024;
     if (!Number.isInteger(limit) || limit <= 0) throw new RangeError("maxResponseBytes must be positive");
     this.#reactor = options.reactor;
-    // Credentials go to one URL: a redirect is refused, never followed.
+    // Credentials go to one URL: a redirect is refused, never followed (§3).
     this.#transport = new DpopFetchClient({
       reactor: options.reactor,
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-      maxRedirects: 0,
     });
     this.#maxResponseBytes = limit;
   }
@@ -149,6 +149,7 @@ export class MediatedSignInClient {
         purpose: "credentials",
         companyName: options.organization.name,
         companyDomain: options.organization.domain,
+        issuer: options.issuer,
         fields: options.mediated.fields.map(({ name, label, secret }) => ({ name, label, secret })),
       },
       new Set(options.mediated.fields.map((field) => field.name)),
@@ -208,6 +209,7 @@ export class MediatedSignInClient {
         purpose: "one_time_code",
         companyName: pending.companyName,
         companyDomain: pending.companyDomain,
+        issuer: options.issuer,
         fields: [{ name: "code", label: "Code", secret: true }],
         ...(pending.sentTo === undefined ? {} : { sentTo: pending.sentTo }),
       },
@@ -226,10 +228,12 @@ export class MediatedSignInClient {
   async #result(response: Response, pending: PendingCode, reference?: string): Promise<MediatedSignInResult> {
     const payload = await this.#decode(response);
     if (!response.ok) {
-      const retryAfter = response.headers.get("retry-after");
+      // Request problems are JSON errors (§4.7): `invalid_scope`, `account_mismatch`,
+      // `sign_in_not_found`, and `rate_limited` with its `Retry-After`.
+      const details = refusalDetails(response, payload);
       throw new AuthorizationError(remoteCode(payload) ?? "http_error", "Company refused the Mediated Sign-In", {
         statusCode: response.status,
-        ...(retryAfter ? { details: { retry_after: retryAfter } } : {}),
+        ...(Object.keys(details).length > 0 ? { details } : {}),
       });
     }
     const source = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};

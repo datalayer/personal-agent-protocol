@@ -22,10 +22,10 @@ import type { ReplayCache } from "./points.js";
 
 const ALGORITHMS = new Set(["ES256", "RS256"]);
 /**
- * An assertion lives at most this long (`exp - iat`): long enough for any clock, short
- * enough that a captured one is soon useless. The SDKs' own assertions live 60 seconds.
+ * An assertion lives at most this long: `exp` at most five minutes after `iat` (§4.1,
+ * §4.2). The SDKs' own assertions live 60 seconds.
  */
-const MAX_LIFETIME_SECONDS = 120;
+const MAX_LIFETIME_SECONDS = 300;
 /** A `jti` this short is guessable: its replay key could collide with another's. */
 const MIN_JTI = 16;
 const SKEW_SECONDS = 30;
@@ -34,11 +34,11 @@ export interface VerifyAssertionOptions {
   readonly keys: JsonWebKeySet;
   readonly issuer: string;
   /**
-   * The one value `aud` must be, or the values it may be: a client assertion names the
-   * authorization server's issuer, its token endpoint, or the endpoint it is sent to
-   * (RFC 7523 §3).
+   * The one value `aud` must be, compared character for character: the company's
+   * `auth.issuer`, for a client assertion and a Session assertion alike, never an
+   * endpoint URL (§4.1, §4.2, §9.4).
    */
-  readonly audience: string | readonly string[];
+  readonly audience: string;
   readonly replayCache: ReplayCache;
   readonly now: Date;
   /** A client assertion's `sub` is its `client_id`; omitted, `sub` is returned unchecked. */
@@ -53,6 +53,8 @@ function status(error: string): number {
 
 /**
  * Verify signature, `iss`, `aud`, lifetime, and one-time `jti`.
+ *
+ * The `jti` is remembered per `client_id` (the assertion's `iss`) until it expires.
  *
  * A client assertion's `sub` is the `client_id` (`subject: issuer`); a
  * Session assertion's is the pairwise user ID (`subject` omitted returns it
@@ -73,8 +75,9 @@ export async function verifyAssertion(
     throw refuse("Assertion is invalid", cause);
   }
   if (claims === undefined) throw refuse("Assertion signature is invalid");
-  if (typeof claims.aud !== "string") {
-    // `aud` is one string, the token endpoint, so the assertion works at one company (§4.2).
+  if (claims.aud !== options.audience) {
+    // `aud` is one string, the issuer, exactly: an array, or the token endpoint, is
+    // refused, so the assertion works at one company (§4.1, §4.2).
     throw refuse("Assertion audience is invalid");
   }
   const iat = Number(claims.iat);
@@ -105,7 +108,7 @@ async function decode(
   compact: string,
   keys: JsonWebKeySet,
   issuer: string,
-  audience: string | readonly string[],
+  audience: string,
   now: Date,
 ): Promise<JWTPayload | undefined> {
   const header = decodeProtectedHeader(compact);
@@ -124,7 +127,7 @@ async function decode(
       const { payload } = await jwtVerify(compact, publicKey, {
         algorithms: [algorithm],
         issuer,
-        audience: typeof audience === "string" ? audience : [...audience],
+        audience,
         requiredClaims: ["iss", "sub", "aud", "iat", "exp", "jti"],
         // The company's own clock, with the same skew the caller allows.
         currentDate: now,

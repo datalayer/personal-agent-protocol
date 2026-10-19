@@ -112,8 +112,15 @@ export interface ProtectedInputField {
 /** What the host must ask the user for, outside any model (PAP §4.7). */
 export interface ProtectedInputRequest {
   readonly purpose: "credentials" | "one_time_code";
+  /** Shown whenever the host asks, with `companyDomain` (§4.7). */
   readonly companyName: string;
   readonly companyDomain: string;
+  /**
+   * The company's `auth.issuer`: a credential store the user chose picks stored
+   * credentials by it, never by the field labels or the endpoint, which the company
+   * writes and can name anything (§4.7).
+   */
+  readonly issuer: string;
   readonly fields: readonly ProtectedInputField[];
   readonly sentTo?: string;
 }

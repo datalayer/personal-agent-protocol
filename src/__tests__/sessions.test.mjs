@@ -8,12 +8,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ASSERTION_MAX_LIFETIME_SECONDS,
   DpopProofProviders,
   JWT_BEARER_GRANT,
   SessionClient,
   SessionError,
   Signers,
+  buildClientAssertionClaims,
   buildPapReactor,
+  buildSessionAssertionClaims,
 } from "../../lib/index.js";
 
 const tokenResponse = {
@@ -27,10 +30,12 @@ const tokenResponse = {
 
 function securityPlugin() {
   const purposes = [];
+  const claims = [];
   const proofRequests = [];
   const signer = {
-    async sign(_claims, options) {
+    async sign(signed, options) {
       purposes.push(options.purpose);
+      claims.push(signed);
       return {
         reveal: () => `signed-${options.purpose}-${purposes.length}`,
         toString: () => "[REDACTED]",
@@ -57,6 +62,7 @@ function securityPlugin() {
       ],
     },
     purposes,
+    claims,
     proofRequests,
   };
 }
@@ -176,4 +182,129 @@ test("rejects duplicate members in a token response", async () => {
     (error) => error instanceof SessionError && error.code === "invalid_json",
   );
   reactor.stop();
+});
+
+const fixedRandom = (length) => Uint8Array.from({ length }, (_, index) => index);
+const json = (body, status = 200, headers = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+
+test("a client assertion names the issuer and lives at most five minutes", () => {
+  const now = new Date("2026-10-10T00:00:00Z");
+  const claims = buildClientAssertionClaims({
+    clientId: "https://agent.example/agent.json",
+    issuer: "https://auth.provider.example/shop-a",
+    now,
+    randomBytes: fixedRandom,
+  });
+  assert.deepEqual([claims.iss, claims.sub], ["https://agent.example/agent.json", "https://agent.example/agent.json"]);
+  assert.equal(claims.aud, "https://auth.provider.example/shop-a");
+  assert.equal(claims.exp - claims.iat, 60);
+  assert.equal(claims.jti, "jti_AAECAwQFBgcICQoLDA0ODw");
+  const longest = buildClientAssertionClaims({
+    clientId: "https://agent.example/agent.json",
+    issuer: "https://auth.example.com",
+    now,
+    lifetimeSeconds: ASSERTION_MAX_LIFETIME_SECONDS,
+  });
+  assert.equal(longest.exp - longest.iat, 300);
+  for (const build of [buildClientAssertionClaims, buildSessionAssertionClaims]) {
+    assert.throws(
+      () =>
+        build({
+          clientId: "https://agent.example/agent.json",
+          pairwiseUserId: "usr_x",
+          issuer: "https://auth.example.com",
+          now,
+          lifetimeSeconds: 301,
+        }),
+      (error) => error.code === "invalid_assertion_lifetime" && /300/.test(error.message),
+    );
+  }
+  // The company's auth.issuer, one string, never its token endpoint (§4.2, §9.4).
+  const session = buildSessionAssertionClaims({
+    clientId: "https://agent.example/agent.json",
+    pairwiseUserId: "usr_AAECAwQFBgcICQoLDA0ODw",
+    issuer: "https://auth.example.com",
+    now,
+    randomBytes: fixedRandom,
+  });
+  assert.equal(session.aud, "https://auth.example.com");
+});
+
+test("both assertions name the issuer and live one minute", async () => {
+  const security = securityPlugin();
+  const fetch = async () => json(tokenResponse);
+  const reactor = buildPapReactor({ fetch }, [security.plugin]);
+  await new SessionClient({ reactor, fetch }).start(requestOptions);
+  reactor.stop();
+  // aud is the company's auth.issuer, one string, never its token endpoint (§4.1, §4.2).
+  assert.deepEqual(security.claims.map((claims) => claims.aud), ["https://auth.example.com", "https://auth.example.com"]);
+  assert.ok(security.claims.every((claims) => claims.exp - claims.iat === 60));
+});
+
+test("a redirect at the token endpoint gets nothing", async () => {
+  const security = securityPlugin();
+  const sent = [];
+  const fetch = async (input, init) => {
+    sent.push(String(input));
+    assert.equal(init.redirect, "manual");
+    return new Response(null, { status: 307, headers: { Location: "https://elsewhere.example/token" } });
+  };
+  const reactor = buildPapReactor({ fetch }, [security.plugin]);
+  // Nothing is sent to the new URL: no assertion, no proof (§3).
+  await assert.rejects(
+    new SessionClient({ reactor, fetch }).start(requestOptions),
+    (error) => error instanceof SessionError && error.code === "redirect_refused" && error.statusCode === 307,
+  );
+  reactor.stop();
+  assert.deepEqual(sent, ["https://auth.example.com/oauth/token"]);
+});
+
+test("extension_required and rate_limited at the token endpoint are read", async () => {
+  const security = securityPlugin();
+  const answers = [
+    () => json({ error: "extension_required", extension: "operations" }, 403),
+    () => json({ error: "rate_limited" }, 429, { "Retry-After": "7" }),
+  ];
+  const fetch = async () => answers.shift()();
+  const reactor = buildPapReactor({ fetch }, [security.plugin]);
+  const client = new SessionClient({ reactor, fetch });
+  await assert.rejects(client.start(requestOptions), (error) => {
+    assert.deepEqual([error.code, error.statusCode, error.details], ["extension_required", 403, { extension: "operations" }]);
+    return true;
+  });
+  await assert.rejects(client.start(requestOptions), (error) => {
+    assert.deepEqual([error.code, error.details], ["rate_limited", { retry_after: "7" }]);
+    return true;
+  });
+  reactor.stop();
+});
+
+test("a token for an MCP server uses the scheme its token_type names", async () => {
+  const security = securityPlugin();
+  const forms = [];
+  const proofs = [];
+  const answers = ["DPoP", "Bearer", "Bearer", "DPoP"];
+  const fetch = async (_input, init) => {
+    forms.push(new URLSearchParams(init.body));
+    proofs.push("DPoP" in init.headers);
+    return json({ ...tokenResponse, token_type: answers.shift() });
+  };
+  const reactor = buildPapReactor({ fetch }, [security.plugin]);
+  const client = new SessionClient({ reactor, fetch });
+  const mcp = "https://mcp.example.com/mcp";
+  const dpop = await client.tokenForMcp({ ...requestOptions, resource: mcp, dpop: true });
+  // A proof was sent, and the server takes no DPoP: the Bearer token is used (§4.3).
+  const bearerWithProof = await client.tokenForMcp({ ...requestOptions, resource: mcp, dpop: true });
+  const bearer = await client.tokenForMcp({ ...requestOptions, resource: mcp, dpop: false });
+  // No proof was sent: a DPoP token can't be one.
+  await assert.rejects(
+    client.tokenForMcp({ ...requestOptions, resource: mcp, dpop: false }),
+    (error) => error instanceof SessionError && error.code === "unexpected_token_type",
+  );
+  reactor.stop();
+  assert.deepEqual([dpop.tokenType, bearerWithProof.tokenType, bearer.tokenType], ["DPoP", "Bearer", "Bearer"]);
+  assert.deepEqual(proofs, [true, true, false, false]);
+  assert.ok(forms.every((form) => form.get("resource") === mcp));
+  assert.ok(forms.every((form) => !form.has("session_id"))); // starting a Session for it
 });

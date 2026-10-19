@@ -120,6 +120,8 @@ test("a company restarted over its store continues every flow", async () => {
     tenantId: TENANT,
     pairwiseUserId: PAIRWISE,
     sessionId: session.sessionId,
+    organization: { name: "Manzanita", domain: metadata.poppy_domains[0] },
+    poppyDomains: metadata.poppy_domains,
   });
   clock.advance(started.pollInterval);
   assert.equal((await device.poll(started.reference)).status, "pending");

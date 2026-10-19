@@ -8,6 +8,14 @@ import { ProtocolValidationError } from "./errors.js";
 
 export type UnknownFields = Readonly<Record<string, unknown>>;
 
+/**
+ * The `protocol_version` values this SDK uses a document of (§3.1): before 1.0 every
+ * version can break the one before, so only its own `major.minor`.
+ */
+export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set(["0.2"]);
+/** The DPoP algorithm every company accepts (§3.2): a list a company publishes includes it. */
+export const DPOP_REQUIRED_ALGORITHM = "ES256";
+
 export interface Organization extends UnknownFields {
   readonly name: string;
   readonly domain: string;
@@ -61,6 +69,11 @@ export interface ExtensionDescriptor extends UnknownFields {
   readonly version: string;
 }
 
+/** Where personal agents report a task the protocol can't do at this company (§8). */
+export interface FeedbackDescriptor extends UnknownFields {
+  readonly endpoint: string;
+}
+
 export interface DiscoveryDocument extends UnknownFields {
   readonly protocol_version: string;
   readonly organization: Organization;
@@ -68,6 +81,7 @@ export interface DiscoveryDocument extends UnknownFields {
   readonly agent?: AgentDescriptor;
   readonly web?: WebDescriptor;
   readonly apis: readonly ApiDescriptor[];
+  readonly feedback?: FeedbackDescriptor;
   readonly extensions: Readonly<Record<string, ExtensionDescriptor>>;
 }
 
@@ -78,6 +92,7 @@ export interface OAuthServerMetadata extends UnknownFields {
   readonly authorization_endpoint?: string;
   readonly device_authorization_endpoint?: string;
   readonly poppy_domains: readonly string[];
+  readonly dpop_signing_alg_values_supported?: readonly string[];
 }
 
 export interface ClientMetadata extends UnknownFields {
@@ -349,8 +364,11 @@ function stringMap(value: unknown, label: string): Readonly<Record<string, strin
 export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
   const source = record(value, "poppy.json");
   const version = string(source.protocol_version, "protocol_version");
-  const versionMatch = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.exec(version);
-  if (!versionMatch || versionMatch[1] !== "0") {
+  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version)) {
+    throw new ProtocolValidationError("unsupported_protocol_version", "protocol_version must use major.minor");
+  }
+  if (!SUPPORTED_PROTOCOL_VERSIONS.has(version)) {
+    // Before 1.0 a document is used only at a major.minor this SDK supports (§3.1).
     throw new ProtocolValidationError(
       "unsupported_protocol_version",
       "protocol_version must be a supported major.minor version",
@@ -396,7 +414,8 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     }
     auth = {
       ...authSource,
-      issuer: httpsUrl(authSource.issuer, "auth.issuer").replace(/\/$/, ""),
+      // Kept exactly as written: the issuer is compared character for character (§3.2).
+      issuer: httpsUrl(authSource.issuer, "auth.issuer"),
       ...(authSource.direct === undefined
         ? {}
         : { direct: scopes(authSource.direct, "auth.direct") }),
@@ -469,16 +488,22 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     };
   }
 
+  let feedback: FeedbackDescriptor | undefined;
+  if (source.feedback !== undefined) {
+    const feedbackSource = record(source.feedback, "feedback");
+    feedback = { ...feedbackSource, endpoint: httpsUrl(feedbackSource.endpoint, "feedback.endpoint") };
+  }
+
   if (!agent && apis.length === 0 && !web) {
     throw new ProtocolValidationError(
       "missing_interface",
       "one of agent, apis, or web is required",
     );
   }
-  if ((agent || apis.length > 0 || web?.browser_session_endpoint) && !auth) {
+  if ((agent || apis.length > 0 || feedback || web?.browser_session_endpoint) && !auth) {
     throw new ProtocolValidationError(
       "missing_auth",
-      "auth is required for sessions, APIs, or conversations",
+      "auth is required for sessions, APIs, conversations, or feedback",
     );
   }
 
@@ -492,8 +517,19 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     ...(agent ? { agent } : {}),
     ...(web ? { web } : {}),
     apis,
+    ...(feedback ? { feedback } : {}),
     extensions: parsedExtensions,
   } as DiscoveryDocument;
+}
+
+/** A `dpop_signing_alg_values_supported` list: when listed, it includes ES256 (§3.2, §4.3). */
+export function dpopAlgorithms(value: unknown, label: string): readonly string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  const algorithms = array(value, label).map((item) => string(item, `${label} entry`));
+  if (!algorithms.includes(DPOP_REQUIRED_ALGORITHM)) {
+    throw new ProtocolValidationError("invalid_oauth_metadata", `${label} must include ES256`);
+  }
+  return algorithms;
 }
 
 export function parseOAuthServerMetadata(value: unknown): OAuthServerMetadata {
@@ -507,9 +543,11 @@ export function parseOAuthServerMetadata(value: unknown): OAuthServerMetadata {
       "poppy_domains must not be empty",
     );
   }
+  const algorithms = dpopAlgorithms(source.dpop_signing_alg_values_supported, "dpop_signing_alg_values_supported");
   return {
     ...source,
-    issuer: httpsUrl(source.issuer, "issuer").replace(/\/$/, ""),
+    // Compared with `auth.issuer` character for character (§3.2): never normalized.
+    issuer: httpsUrl(source.issuer, "issuer"),
     token_endpoint: httpsUrl(source.token_endpoint, "token_endpoint"),
     revocation_endpoint: httpsUrl(source.revocation_endpoint, "revocation_endpoint"),
     ...(source.authorization_endpoint === undefined
@@ -529,6 +567,7 @@ export function parseOAuthServerMetadata(value: unknown): OAuthServerMetadata {
           ),
         }),
     poppy_domains: poppyDomains,
+    ...(algorithms === undefined ? {} : { dpop_signing_alg_values_supported: algorithms }),
   } as OAuthServerMetadata;
 }
 

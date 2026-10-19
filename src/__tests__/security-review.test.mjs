@@ -15,6 +15,7 @@ import {
   AccountTokenClient,
   ConversationClient,
   DeviceSignInClient,
+  DpopProofProviders,
   DpopFetchClient,
   OperationsClient,
   RateLimitBudgets,
@@ -40,13 +41,13 @@ const TENANT = "atlas-demo";
 const PAIRWISE = "usr_ada_at_manzanita_000000";
 const MEDIATED = "https://manzanita.example/poppy/sign-in";
 
-async function world({ plugins } = {}) {
+async function world({ plugins, config } = {}) {
   const clock = new MutableClock();
   const sites = {};
   const fetch = inProcessFetch(sites);
   const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
   sites["atlas.example"] = identity.documents;
-  const { service: shop, plugin } = manzanita({ fetch, clock, ...(plugins ? { plugins } : {}) });
+  const { service: shop, plugin } = manzanita({ fetch, clock, ...(plugins ? { plugins } : {}), ...(config ? { config } : {}) });
   sites["manzanita.example"] = shop;
   const host = await agentHost({ identity, fetch, clock });
   const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
@@ -75,6 +76,8 @@ async function deviceSignIn(w, session, { bearerFirst = false } = {}) {
     tenantId: TENANT,
     pairwiseUserId: PAIRWISE,
     sessionId: session.sessionId,
+    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
+    poppyDomains: w.metadata.poppy_domains,
   });
   if (bearerFirst) await bearer(w, session);
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
@@ -82,8 +85,10 @@ async function deviceSignIn(w, session, { bearerFirst = false } = {}) {
   return device.poll(started.reference);
 }
 
+/** The Session's token for the MCP server: DPoP (the default server), or Bearer (`mcpDpop: false`). */
 async function bearer(w, session) {
-  const token = await w.sessions.bearerForMcp({
+  const dpop = w.shop.config.mcpDpop;
+  const token = await w.sessions.tokenForMcp({
     clientId: w.identity.clientId,
     pairwiseUserId: PAIRWISE,
     issuer: w.metadata.issuer,
@@ -91,8 +96,9 @@ async function bearer(w, session) {
     tenantId: TENANT,
     sessionId: session.sessionId,
     resource: "https://manzanita.example/mcp",
+    dpop,
   });
-  assert.equal(token.tokenType, "Bearer");
+  assert.equal(token.tokenType, dpop ? "DPoP" : "Bearer");
   return token;
 }
 
@@ -101,8 +107,9 @@ async function assertSignedInDpop(w, sessionId, accessToken) {
   const kinds = Object.values(stored.tokens)
     .map((t) => `${t.tokenType ?? "DPoP"}:${t.accountId !== undefined}:${t.resource ?? "-"}`)
     .sort();
-  // The signed-in token is DPoP and for no resource; the MCP Bearer token is kept, signed out.
-  assert.deepEqual(kinds, ["Bearer:false:https://manzanita.example/mcp", "DPoP:true:-"]);
+  // The signed-in token is the Session's own, for no resource; its token for the MCP server
+  // is kept, signed out.
+  assert.deepEqual(kinds, ["DPoP:false:https://manzanita.example/mcp", "DPoP:true:-"]);
   const used = await w.fetch("https://manzanita.example/mcp", {
     method: "POST",
     headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
@@ -211,7 +218,44 @@ for (const body of ["[]", '"text"', "{", '{"message": {"id": 3}}', '{"message": 
   });
 }
 
-for (const name of ["authorization", "dpop"]) {
+/** One raw HTTP/1.1 request to the company's Node listener: the answer as text. */
+async function rawRequest(w, request) {
+  const server = createServer(companyRequestListener(w.shop));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    return await new Promise((resolve, reject) => {
+      const socket = connect(server.address().port, "127.0.0.1");
+      let answer = "";
+      socket.on("data", (chunk) => (answer += chunk));
+      socket.on("end", () => resolve(answer));
+      socket.on("error", reject);
+      socket.end(request);
+    });
+  } finally {
+    server.close();
+  }
+}
+
+test("finding 10: a repeated dpop header is an invalid proof", async () => {
+  // Exactly one DPoP header, holding one JWT (§4.3, RFC 9449 §4.3).
+  const w = await world();
+  const session = await w.start();
+  const url = "https://manzanita.example/poppy/conversations";
+  const provider = firstContribution(w.host.reactor, DpopProofProviders, "DPoP");
+  const proof = async () =>
+    (await provider.create({ method: "POST", url, tenantId: TENANT, subject: PAIRWISE, issuer: w.who.issuer, accessToken: session.accessToken })).reveal();
+  const raw = await rawRequest(
+    w,
+    "POST /poppy/conversations HTTP/1.1\r\nHost: manzanita.example\r\n" +
+      `authorization: DPoP ${session.accessToken.reveal()}\r\n` +
+      `dpop: ${await proof()}\r\ndpop: ${await proof()}\r\n` +
+      "Content-Length: 2\r\nConnection: close\r\n\r\n{}",
+  );
+  assert.match(raw, /^HTTP\/1\.1 401 /);
+  assert.match(raw, /\{"error":"invalid_dpop_proof"\}/);
+});
+
+for (const name of ["authorization"]) {
   test(`finding 10: a repeated ${name} header is refused by the Node adapter`, async () => {
     const w = await world();
     const server = createServer(companyRequestListener(w.shop));
@@ -240,6 +284,8 @@ for (const name of ["authorization", "dpop"]) {
 test("finding 11: a blocked agent is never resolved, and its tokens stop at once", async () => {
   const blocked = new Set();
   const w = await world({
+    // An MCP server without DPoP: its tokens are Bearer ones (§4.3).
+    config: { mcpDpop: false },
     plugins: [
       {
         name: "blocklist",
@@ -544,7 +590,8 @@ test("finding 15: a token response is read only up to its limit", async () => {
 
 test("finding 15: an MCP response is read only up to its limit", async () => {
   const { McpClient } = await import("../../lib/index.js");
-  const w = await world();
+  // An MCP server without DPoP: its tokens are Bearer ones (§4.3).
+  const w = await world({ config: { mcpDpop: false } });
   const session = await w.start();
   const token = await bearer(w, session);
   const { counter, response } = endless();
@@ -633,8 +680,11 @@ async function deviceWith(w, clientAssertion) {
 }
 
 for (const [audience, status] of [
-  ["https://manzanita.example/oauth/device", 200],
-  ["https://manzanita.example/oauth/token", 200],
+  // The issuer, compared character for character, and nothing else (§4.1, §9.4).
+  ["https://manzanita.example/oauth/device", 401],
+  ["https://manzanita.example/oauth/token", 401],
+  ["https://manzanita.example/", 401],
+  ["https://Manzanita.example", 401],
   ["https://manzanita.example", 200],
   ["https://other.example/oauth/token", 401],
 ]) {
@@ -644,16 +694,17 @@ for (const [audience, status] of [
   });
 }
 
-for (const [lifetime, jti, status] of [[300, undefined, 401], [121, undefined, 401], [120, undefined, 200], [60, "short-jti", 401]]) {
+for (const [lifetime, jti, status] of [[600, undefined, 401], [301, undefined, 401], [300, undefined, 200], [60, "short-jti", 401]]) {
   test(`O7: an assertion living ${lifetime}s with jti ${jti ?? "long"} is ${status}`, async () => {
     const w = await world();
-    const device = "https://manzanita.example/oauth/device";
-    assert.equal((await deviceWith(w, await assertion(w, device, { lifetime, jti }))).status, status);
+    assert.equal((await deviceWith(w, await assertion(w, "https://manzanita.example", { lifetime, jti }))).status, status);
   });
 }
 
-test("O3: a token-endpoint DPoP refusal carries its challenge", async () => {
+test("O3: a token-endpoint DPoP refusal is an OAuth error", async () => {
+  // At the token endpoint, an OAuth error with HTTP 400; at APIs a 401 challenge (§4.3).
   const w = await world();
+  const session = await w.start();
   const response = await w.fetch("https://manzanita.example/oauth/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -661,16 +712,25 @@ test("O3: a token-endpoint DPoP refusal carries its challenge", async () => {
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       client_id: w.identity.clientId,
       client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-      client_assertion: await assertion(w, "https://manzanita.example/oauth/token"),
+      client_assertion: await assertion(w, "https://manzanita.example"),
       assertion: "x",
     }).toString(),
   });
   assert.equal(response.status, 400);
-  assert.match(response.headers.get("www-authenticate") ?? "", /^DPoP error="invalid_dpop_proof"/);
+  assert.deepEqual(await response.json(), { error: "invalid_dpop_proof" });
+  assert.equal(response.headers.get("www-authenticate"), null);
+  const api = await w.fetch("https://manzanita.example/api/orders", {
+    method: "GET",
+    headers: { authorization: `DPoP ${session.accessToken.reveal()}` },
+  });
+  assert.equal(api.status, 401);
+  assert.deepEqual(await api.json(), { error: "invalid_dpop_proof" });
+  assert.equal(api.headers.get("www-authenticate"), 'DPoP error="invalid_dpop_proof"');
 });
 
 test("O4: a token in the query is refused even beside a valid header", async () => {
-  const w = await world();
+  // An MCP server without DPoP: its tokens are Bearer ones (§4.3).
+  const w = await world({ config: { mcpDpop: false } });
   const token = await bearer(w, await w.start());
   for (const query of [`access_token=${token.accessToken.reveal()}`, "access_token="]) {
     const response = await w.fetch(`https://manzanita.example/mcp?${query}`, {

@@ -81,6 +81,8 @@ const started = await client.begin({
   tenantId: 'application-42',
   pairwiseUserId,
   sessionId: signedOutSession.sessionId,
+  organization: company.document.organization,
+  poppyDomains: metadata.poppy_domains,
 });
 
 renderHumanHandoff(started.verificationUriComplete ?? started.verificationUri,

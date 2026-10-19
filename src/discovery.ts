@@ -9,6 +9,7 @@ import { DiscoveryError, ProtocolValidationError } from "./errors.js";
 import { readBoundedBody, withinDeadline, type CacheBounds } from "./limits.js";
 import { parseJsonStrict } from "./json.js";
 import {
+  SUPPORTED_PROTOCOL_VERSIONS,
   parseDiscoveryDocument,
   parseOAuthServerMetadata,
   type DiscoveredCompany,
@@ -45,6 +46,12 @@ function normalizeDomain(domain: string): string {
   return value;
 }
 
+/**
+ * The issuer's RFC 8414 §3.1 metadata URL: the well-known path between host and path.
+ *
+ * `https://auth.provider.example/shop-a` has its metadata at
+ * `https://auth.provider.example/.well-known/oauth-authorization-server/shop-a` (§3.2).
+ */
 function metadataUrl(issuer: string): URL {
   const parsed = new URL(issuer);
   const path = parsed.pathname.replace(/\/$/, "");
@@ -190,14 +197,26 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
     new URL(`https://${requestedDomain}/.well-known/poppy.json`),
     read,
   );
-  const document = parseDiscoveryDocument(discovery.value);
-  if (
-    document.organization.domain.replace(/^www\./, "") !==
-    requestedDomain.replace(/^www\./, "")
-  ) {
+  const raw = discovery.value;
+  const version =
+    typeof raw === "object" && raw !== null && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>).protocol_version
+      : undefined;
+  if (typeof version === "string" && !SUPPORTED_PROTOCOL_VERSIONS.has(version)) {
+    // Before 1.0 each version can break the last: only a supported major.minor (§3.1).
+    throw new DiscoveryError(
+      "unsupported_protocol_version",
+      "poppy.json follows a protocol version this personal agent does not support",
+    );
+  }
+  const document = parseDiscoveryDocument(raw);
+  // The document speaks for the host that served it, after redirects, compared
+  // ignoring case and nothing else (§3, §3.1).
+  const servedBy = discovery.finalUrl.hostname.toLowerCase().replace(/\.$/, "");
+  if (document.organization.domain !== servedBy) {
     throw new DiscoveryError(
       "organization_domain_mismatch",
-      "Discovery organization domain does not match the requested domain",
+      "Discovery organization domain is not the host that served the document",
     );
   }
   if (!document.auth) {
@@ -206,9 +225,11 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
 
   const metadataResponse = await readJson(metadataUrl(document.auth.issuer), read);
   const oauthMetadata = parseOAuthServerMetadata(metadataResponse.value);
+  // Character for character: no case folding, no trailing-slash trimming (§3.2).
   if (oauthMetadata.issuer !== document.auth.issuer) {
     throw new DiscoveryError("issuer_mismatch", "OAuth metadata issuer does not match auth.issuer");
   }
+  // Both lower-cased when parsed: domains compare ignoring case (§3.2).
   if (!oauthMetadata.poppy_domains.includes(document.organization.domain)) {
     throw new DiscoveryError(
       "domain_not_authorized",

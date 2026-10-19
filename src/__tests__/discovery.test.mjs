@@ -36,7 +36,7 @@ const fixture = async (name) =>
 
 test("parses the shared discovery fixture and preserves extension fields", async () => {
   const document = parseDiscoveryDocument(await fixture("discovery-valid.json"));
-  assert.equal(document.protocol_version, "0.1");
+  assert.equal(document.protocol_version, "0.2");
   assert.equal(document.apis[1].type, "mcp");
   assert.equal(document.auth.mediated.fields[1].secret, true);
   assert.equal(document.auth.custom_scopes.addresses, "Manage saved shipping addresses");
@@ -182,7 +182,7 @@ test("builds redacted PAP session primitives", async () => {
   const claims = buildSessionAssertionClaims({
     clientId: "https://agent.example/agent.json",
     pairwiseUserId: userId,
-    tokenEndpoint: "https://auth.example.com/oauth/token",
+    issuer: "https://auth.example.com",
     now: new Date("2026-10-10T00:00:00Z"),
     randomBytes,
   });

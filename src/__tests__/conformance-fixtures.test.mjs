@@ -92,7 +92,7 @@ const CHECKS = {
   },
 
   extension_negotiation(given, expect) {
-    const document = (extensions) => parseDiscoveryDocument({ protocol_version: "0.1", organization: { name: "E", domain: "example.com" }, web: {}, extensions });
+    const document = (extensions) => parseDiscoveryDocument({ protocol_version: "0.2", organization: { name: "E", domain: "example.com" }, web: {}, extensions });
     assert.deepEqual(negotiateExtensions(document(given.company).extensions, document(given.agent).extensions), expect.negotiated);
   },
 
@@ -103,7 +103,7 @@ const CHECKS = {
     assert.deepEqual(kinds.plain.sort(), expect.plain);
     assert.deepEqual(kinds.invalid.sort(), [...expect.invalid].sort());
     const preserved = parseDiscoveryDocument({
-      protocol_version: "0.1",
+      protocol_version: "0.2",
       organization: { name: "E", domain: "example.com" },
       web: {},
       extensions: Object.fromEntries(Object.entries(given).filter(([name]) => extensionNameKind(name) !== "invalid")),
@@ -112,7 +112,7 @@ const CHECKS = {
   },
 
   extension_required(given, expect) {
-    assert.equal(extensionRequired(given.status, given.body), expect.extension);
+    assert.equal(extensionRequired(given.status, given.body, given.www_authenticate), expect.extension);
   },
 
   conversation_page(given, expect) {

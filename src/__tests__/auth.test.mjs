@@ -137,6 +137,7 @@ function orchestrationPlugin() {
   const browserUrls = [];
   const proofRequests = [];
   const purposes = [];
+  const claims = [];
   let signature = 0;
   return {
     plugin: {
@@ -168,8 +169,9 @@ function orchestrationPlugin() {
         {
           point: Signers,
           value: {
-            async sign(_claims, options) {
+            async sign(signed, options) {
               purposes.push(options.purpose);
+              claims.push(signed);
               signature += 1;
               const value = `client-assertion-${signature}`;
               return {
@@ -217,6 +219,7 @@ function orchestrationPlugin() {
     browserUrls,
     proofRequests,
     purposes,
+    claims,
   };
 }
 
@@ -255,7 +258,8 @@ test("orchestrates one-use Direct Sign-In with nonce and partial scopes", async 
     forms.push(new URLSearchParams(init.body));
     signals.push(init.signal);
     assert.equal(init.headers.DPoP, `dpop-${calls}`);
-    assert.equal(init.redirect, "error");
+    // A redirect is answered, never followed: nothing goes to a new URL (§3).
+    assert.equal(init.redirect, "manual");
     if (calls === 1) {
       return new Response(JSON.stringify({ error: "use_dpop_nonce" }), {
         status: 400,
@@ -306,6 +310,8 @@ test("orchestrates one-use Direct Sign-In with nonce and partial scopes", async 
     [undefined, "company-nonce"],
   );
   assert.deepEqual(orchestration.purposes, ["client_assertion", "client_assertion"]);
+  // The client assertion names the issuer, never the token endpoint (§4.1).
+  assert.deepEqual(orchestration.claims.map((claims) => claims.aud), ["https://auth.example.com", "https://auth.example.com"]);
   assert.equal(forms[0].get("session_id"), "ses_existing");
   assert.equal(forms[0].get("code_verifier"), forms[1].get("code_verifier"));
   assert.notEqual(forms[0].get("client_assertion"), forms[1].get("client_assertion"));
@@ -339,4 +345,22 @@ test("Direct Sign-In denial consumes state without exposing remote text", async 
       error instanceof AuthorizationError && error.code === "invalid_or_expired_state",
   );
   reactor.stop();
+});
+
+test("a Direct Sign-In token endpoint answering with a redirect gets nothing", async () => {
+  const orchestration = orchestrationPlugin();
+  const sent = [];
+  const fetch = async (input) => {
+    sent.push(String(input));
+    return new Response(null, { status: 307, headers: { Location: "https://elsewhere.example/token" } });
+  };
+  const reactor = buildPapReactor({ fetch }, [orchestration.plugin]);
+  const client = new DirectSignInClient({ reactor, fetch });
+  await client.begin(orchestrationOptions);
+  await assert.rejects(
+    client.complete({ callbackUrl: browserCallback(orchestration.browserUrls[0]) }),
+    (error) => error instanceof AuthorizationError && error.code === "redirect_refused" && error.statusCode === 307,
+  );
+  reactor.stop();
+  assert.deepEqual(sent, ["https://auth.example.com/oauth/token"]);
 });

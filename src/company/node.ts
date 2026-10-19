@@ -29,8 +29,12 @@ export interface CompanyRequestListenerOptions {
 class TooLarge extends Error {}
 class RepeatedHeader extends Error {}
 
-/** Headers a request carries at most once: a second is refused (`400`). */
-const SINGLE_HEADERS = ["authorization", "dpop"] as const;
+/**
+ * Headers a request carries at most once: a second is refused (`400`). One credential
+ * per request: a repeated one is never merged or picked from (RFC 6750 §2). A repeated
+ * `DPoP` header is joined, so its proof fails as `invalid_dpop_proof` (§4.3).
+ */
+const SINGLE_HEADERS = ["authorization"] as const;
 
 async function readBody(request: IncomingMessage, limit: number): Promise<Uint8Array> {
   const chunks: Buffer[] = [];
@@ -45,9 +49,9 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Uint8A
 }
 
 function lowerCaseHeaders(request: IncomingMessage): Record<string, string> {
-  // One credential and one proof per request: a repeated one is never merged or picked
-  // from (RFC 9449 §4.3, RFC 6750 §2). `headers` keeps one `authorization` and joins
-  // `dpop`; `headersDistinct` keeps every value.
+  // One credential per request: a repeated one is never merged or picked from (RFC 6750
+  // §2). `headers` keeps one `authorization` and joins `dpop`, whose joined proofs are no
+  // compact JWT (§4.3); `headersDistinct` keeps every value.
   for (const name of SINGLE_HEADERS) {
     if ((request.headersDistinct[name]?.length ?? 0) > 1) throw new RepeatedHeader();
   }

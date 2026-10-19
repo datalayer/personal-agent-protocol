@@ -5,28 +5,37 @@
  */
 
 /**
- * A company's MCP server with a resource-bound Bearer Session Token (§4.3, §6), as in
+ * A company's MCP server, with a Session Token issued for its url (§4.3, §6), as in
  * Python's `personal_agent_protocol.mcp`.
  *
- * MCP authorization uses Bearer tokens, so for MCP the personal agent asks for a
- * Session Token without a DPoP proof and with `resource` set to the MCP server's
- * `url` from poppy.json (`SessionClient.bearerForMcp`, or
- * `AccountTokenClient.bearerForMcp` signed in). Anyone holding a Bearer token can use
- * it, so this module sends it only to that exact URL:
+ * An MCP server supports DPoP when its protected resource metadata (RFC 9728) lists
+ * `dpop_signing_alg_values_supported`; `fetchMcpServerMetadata` reads it
+ * (`McpServerMetadata.supportsDpop`). The personal agent then asks for a Session Token
+ * with `resource` set to the server's `url` from poppy.json (`SessionClient.tokenForMcp`,
+ * or `AccountTokenClient.tokenForMcp` signed in), with a DPoP proof for a DPoP server
+ * and without one otherwise, and uses the scheme `token_type` names:
  *
- * - `McpBearerAuth` is a `fetch` that adds the token to requests for the MCP server's
- *   URL and refuses every other request, before it is sent. Hand its `fetch` to any MCP
- *   client that takes one (for example the MCP SDK's Streamable HTTP transport).
- * - `McpClient` is a minimal Streamable HTTP client (initialize, tools/list,
- *   tools/call) over that auth, with no MCP SDK dependency.
- * - `McpToolResult.operation` is the operation a consequential tool proposes in
- *   `structuredContent.operation` (Operations §4.2): the same `Operation` as an API's
- *   `202` or a conversation message, confirmed at the operations endpoint.
+ * - `McpDpopAuth` sends a DPoP token with a fresh proof on each request, and retries
+ *   once with the server's nonce on `use_dpop_nonce`.
+ * - `McpBearerAuth` sends a Bearer token. Anyone holding one can use it, so it goes
+ *   only to that exact URL.
+ *
+ * Both are `fetch`es that refuse any other URL before a request is sent; hand one to
+ * any MCP client that takes a `fetch` (for example the MCP SDK's Streamable HTTP
+ * transport). `McpClient` is a minimal Streamable HTTP client (initialize, tools/list,
+ * tools/call) over them, with no MCP SDK dependency. `McpToolResult.operation` is the
+ * operation a consequential tool proposes in `structuredContent.operation` (Operations
+ * §4.2): the same `Operation` as an API's `202` or a conversation message, confirmed at
+ * the operations endpoint.
  */
-import { PersonalAgentProtocolError, TransportError } from "./errors.js";
+import type { ReactorPlatformView } from "@datalayer/reactor";
+
+import { PersonalAgentProtocolError, ProtocolValidationError, TransportError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
-import type { ApiDescriptor, DiscoveryDocument, Operation } from "./models.js";
+import { DPOP_REQUIRED_ALGORITHM, type ApiDescriptor, type DiscoveryDocument, type Operation } from "./models.js";
 import { operationFrom } from "./operations.js";
+import { DpopProofProviders, firstContribution } from "./reactor.js";
+import { challengeParameters, refuseRedirect } from "./refusals.js";
 import type { SessionToken } from "./sessions.js";
 import { parseRetryAfter, readLimited, readLimitedText } from "./limits.js";
 
@@ -47,6 +56,136 @@ export class McpError extends PersonalAgentProtocolError {
 /** The company's MCP server, when it lists one. */
 export function mcpApi(document: DiscoveryDocument): ApiDescriptor | undefined {
   return (document.apis ?? []).find((api) => api.type === "mcp");
+}
+
+/** Whose Session a request is for: the user and company a DPoP proof is signed for. */
+export interface McpWho {
+  readonly tenantId: string;
+  readonly pairwiseUserId: string;
+  readonly issuer: string;
+}
+
+/**
+ * An MCP server's protected resource metadata (RFC 9728, §6).
+ *
+ * `dpop_signing_alg_values_supported`, when listed, says the server supports DPoP, and
+ * then includes ES256 (§4.3): `supportsDpop`.
+ */
+export interface McpServerMetadata {
+  readonly resource: string;
+  readonly authorization_servers: readonly string[];
+  readonly scopes_supported: readonly string[];
+  readonly bearer_methods_supported: readonly string[];
+  readonly dpop_signing_alg_values_supported?: readonly string[];
+  /** Whether the server takes DPoP Session Tokens with proofs (§4.3). */
+  readonly supportsDpop: boolean;
+}
+
+function httpsOnly(value: unknown, label: string): string {
+  let parsed: URL | undefined;
+  try {
+    parsed = typeof value === "string" ? new URL(value) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed === undefined || parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw new ProtocolValidationError("invalid_url", `${label} must be an HTTPS URL`);
+  }
+  return value as string;
+}
+
+function strings(value: unknown, label: string): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new ProtocolValidationError("invalid_type", `${label} must be a list of strings`);
+  }
+  return value as string[];
+}
+
+/** Protected resource metadata, validated; `invalid_resource_metadata` otherwise. */
+export function parseMcpServerMetadata(value: unknown): McpServerMetadata {
+  if (!isObject(value)) throw new ProtocolValidationError("invalid_type", "resource metadata must be an object");
+  const servers = strings(value.authorization_servers, "authorization_servers").map((item) =>
+    httpsOnly(item, "authorization server"),
+  );
+  if (servers.length === 0) {
+    throw new ProtocolValidationError("invalid_type", "authorization_servers must not be empty");
+  }
+  const listed = value.dpop_signing_alg_values_supported;
+  let algorithms: readonly string[] | undefined;
+  if (listed !== undefined && listed !== null) {
+    algorithms = strings(listed, "dpop_signing_alg_values_supported");
+    if (!algorithms.includes(DPOP_REQUIRED_ALGORITHM)) {
+      throw new ProtocolValidationError("invalid_type", "an MCP server that supports DPoP lists ES256");
+    }
+  }
+  return {
+    resource: httpsOnly(value.resource, "resource"),
+    authorization_servers: servers,
+    scopes_supported: strings(value.scopes_supported, "scopes_supported"),
+    bearer_methods_supported: strings(value.bearer_methods_supported, "bearer_methods_supported"),
+    ...(algorithms === undefined ? {} : { dpop_signing_alg_values_supported: algorithms }),
+    supportsDpop: algorithms !== undefined,
+  };
+}
+
+/** Where an MCP server's RFC 9728 metadata is: the well-known path before its own. */
+export function protectedResourceMetadataUrl(url: string): string {
+  const parsed = new URL(url);
+  const path = parsed.pathname.replace(/\/$/, "");
+  return `${parsed.protocol}//${parsed.host}/.well-known/oauth-protected-resource${path}`;
+}
+
+/**
+ * The MCP server's protected resource metadata, checked against poppy.json (§6).
+ *
+ * Its `resource` is the server's `url`, and its `authorization_servers` include the
+ * company's `auth.issuer`; anything else is `McpError` (`invalid_resource_metadata`).
+ * No redirect is followed.
+ */
+export async function fetchMcpServerMetadata(
+  url: string,
+  options: {
+    readonly issuer: string;
+    readonly fetch?: typeof globalThis.fetch;
+    readonly maxResponseBytes?: number;
+    readonly signal?: AbortSignal;
+  },
+): Promise<McpServerMetadata> {
+  const fetcher = options.fetch ?? globalThis.fetch;
+  if (!fetcher) throw new TransportError("fetch_unavailable", "A fetch implementation is required");
+  const limit = options.maxResponseBytes ?? 64 * 1024;
+  let response: Response;
+  try {
+    response = await fetcher(protectedResourceMetadataUrl(url), {
+      headers: { Accept: "application/json" },
+      credentials: "omit",
+      redirect: "manual",
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+  } catch (cause) {
+    throw new McpError("request_failed", "MCP resource metadata request failed", { cause });
+  }
+  await refuseRedirect(response, McpError);
+  const bytes = await readLimited(response, limit);
+  if (response.status !== 200 || bytes.byteLength > limit) {
+    throw new McpError("invalid_resource_metadata", "MCP resource metadata is unavailable", {
+      statusCode: response.status,
+    });
+  }
+  let metadata: McpServerMetadata;
+  try {
+    metadata = parseMcpServerMetadata(parseJsonStrict(new TextDecoder().decode(bytes)));
+  } catch (cause) {
+    throw new McpError("invalid_resource_metadata", "MCP resource metadata is malformed", { cause });
+  }
+  if (metadata.resource !== url || !metadata.authorization_servers.includes(options.issuer)) {
+    throw new McpError(
+      "invalid_resource_metadata",
+      "MCP resource metadata names another resource or authorization server",
+    );
+  }
+  return metadata;
 }
 
 function target(url: string | URL): string | undefined {
@@ -116,6 +255,81 @@ export class McpBearerAuth {
   };
 }
 
+/**
+ * Send a DPoP Session Token with a fresh proof to one MCP server's URL (§4.3).
+ *
+ * The proof is signed by the host's `pap.dpopProofProvider` for the user and company in
+ * `who`. A `use_dpop_nonce` refusal is retried once, with a new proof carrying the
+ * server's `DPoP-Nonce`. Any other URL is refused before a request is made.
+ */
+export class McpDpopAuth {
+  readonly resource: string;
+  readonly #token: SessionToken;
+  readonly #reactor: ReactorPlatformView;
+  readonly #who: McpWho;
+  readonly #fetch: typeof globalThis.fetch;
+
+  constructor(
+    token: SessionToken,
+    resource: string,
+    options: { readonly reactor: ReactorPlatformView; readonly who: McpWho; readonly fetch?: typeof globalThis.fetch },
+  ) {
+    if (token.tokenType !== "DPoP") {
+      throw new TransportError("unexpected_token_type", "A DPoP MCP server takes a DPoP token issued for its url");
+    }
+    let protocol: string | undefined;
+    try {
+      protocol = new URL(resource).protocol;
+    } catch {
+      protocol = undefined;
+    }
+    if (protocol !== "https:") throw new TransportError("invalid_url", "an MCP server's url must use HTTPS");
+    const fetcher = options.fetch ?? globalThis.fetch;
+    if (!fetcher) throw new TransportError("fetch_unavailable", "A fetch implementation is required");
+    this.#token = token;
+    this.resource = resource;
+    this.#reactor = options.reactor;
+    this.#who = options.who;
+    this.#fetch = fetcher;
+  }
+
+  /** `fetch` with the DPoP token and a fresh proof, for the MCP server's URL only. */
+  readonly fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
+    const url = requestUrl(input);
+    if (target(url) === undefined || target(url) !== target(this.resource)) {
+      throw new TransportError(
+        "token_not_for_this_url",
+        "A Session Token for an MCP server is sent only to that server",
+      );
+    }
+    const method = (init.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const provider = firstContribution(this.#reactor, DpopProofProviders, "DPoP proof provider");
+    let nonce: string | undefined;
+    for (let attempt = 0; ; attempt += 1) {
+      const proof = await provider.create({
+        method,
+        url,
+        tenantId: this.#who.tenantId,
+        subject: this.#who.pairwiseUserId,
+        issuer: this.#who.issuer,
+        accessToken: this.#token.accessToken,
+        ...(nonce === undefined ? {} : { nonce }),
+      });
+      const headers = new Headers(input instanceof Request ? input.headers : undefined);
+      for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
+      headers.set("Authorization", `DPoP ${this.#token.accessToken.reveal()}`);
+      headers.set("DPoP", proof.reveal());
+      const response = await this.#fetch(url, { ...init, method, headers, credentials: "omit", redirect: "manual" });
+      const challenge = challengeParameters(response.headers.get("www-authenticate"));
+      if (response.status !== 401 || challenge.error !== "use_dpop_nonce") return response;
+      const next = response.headers.get("dpop-nonce");
+      if (attempt > 0 || !next) return response;
+      await response.body?.cancel().catch(() => undefined);
+      nonce = next;
+    }
+  };
+}
+
 /** A tool's answer; `operation` is set when it proposed one (Operations §4.2). */
 export interface McpToolResult {
   readonly content: readonly Readonly<Record<string, unknown>>[];
@@ -130,6 +344,10 @@ export interface McpClientOptions {
   readonly token: SessionToken;
   /** The MCP server's `url` from poppy.json (`mcpApi(document).url`). */
   readonly url: string;
+  /** For a DPoP token: the host's reactor, whose `pap.dpopProofProvider` signs the proofs. */
+  readonly reactor?: ReactorPlatformView;
+  /** For a DPoP token: whose Session it is. */
+  readonly who?: McpWho;
   readonly fetch?: typeof globalThis.fetch;
   readonly maxResponseBytes?: number;
 }
@@ -138,10 +356,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Initialize, list, and call tools on one MCP server with a resource-bound Bearer token. */
+/**
+ * Initialize, list, and call tools on one MCP server with a token issued for its url.
+ *
+ * A DPoP token (from a server that supports DPoP) is sent with proofs and needs the
+ * host's `reactor` and `who` the Session is for; a Bearer token needs neither.
+ */
 export class McpClient {
   readonly url: string;
-  readonly auth: McpBearerAuth;
+  readonly auth: McpBearerAuth | McpDpopAuth;
   readonly #maxResponseBytes: number;
   #nextId = 0;
   #sessionId: string | undefined;
@@ -151,9 +374,15 @@ export class McpClient {
     const limit = options.maxResponseBytes ?? 1024 * 1024;
     if (!Number.isInteger(limit) || limit <= 0) throw new RangeError("maxResponseBytes must be positive");
     this.url = options.url;
-    this.auth = new McpBearerAuth(options.token, options.url, {
-      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-    });
+    const fetch = options.fetch === undefined ? {} : { fetch: options.fetch };
+    if (options.token.tokenType === "DPoP") {
+      if (options.reactor === undefined || options.who === undefined) {
+        throw new TransportError("dpop_unavailable", "A DPoP token for MCP needs the host's reactor and who");
+      }
+      this.auth = new McpDpopAuth(options.token, options.url, { reactor: options.reactor, who: options.who, ...fetch });
+    } else {
+      this.auth = new McpBearerAuth(options.token, options.url, fetch);
+    }
     this.#maxResponseBytes = limit;
   }
 
@@ -246,6 +475,7 @@ export class McpClient {
       if (cause instanceof TransportError) throw cause;
       throw new TransportError("request_failed", "MCP request failed", { cause });
     }
+    await refuseRedirect(response, McpError);
     const sessionId = response.headers.get("mcp-session-id");
     if (sessionId) this.#sessionId = sessionId;
     if (response.status === 401 || response.status === 403) throw await refusal(response);
@@ -302,15 +532,9 @@ function rateLimited(response: Response): McpError {
   );
 }
 
-/** A token refusal, from the Bearer challenge (RFC 6750) or the body. */
+/** A token refusal, from the `Bearer` or `DPoP` challenges (§6) or the body. */
 async function refusal(response: Response): Promise<McpError> {
-  const values: Record<string, string> = {};
-  const challenge = (response.headers.get("www-authenticate") ?? "").replace(/^Bearer/u, "");
-  for (const part of challenge.split(",")) {
-    const at = part.indexOf("=");
-    const name = (at < 0 ? part : part.slice(0, at)).trim();
-    if (name) values[name] = (at < 0 ? "" : part.slice(at + 1)).trim().replace(/^"|"$/gu, "");
-  }
+  const values = challengeParameters(response.headers.get("www-authenticate"));
   let payload: unknown;
   try {
     payload = parseJsonStrict(await readLimitedText(response, 64 * 1024));
@@ -324,7 +548,9 @@ async function refusal(response: Response): Promise<McpError> {
   }
   const details: Record<string, unknown> = {};
   if (values.scope !== undefined) details.scope = values.scope;
-  if (isObject(payload) && typeof payload.extension === "string") details.extension = payload.extension;
+  const extension = isObject(payload) && typeof payload.extension === "string" ? payload.extension : values.extension;
+  // The server refuses the personal agent entirely, never one tool (§6).
+  if (extension) details.extension = extension;
   return new McpError(code, "the MCP server refused the token", {
     statusCode: response.status,
     ...(Object.keys(details).length ? { details } : {}),

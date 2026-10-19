@@ -42,6 +42,8 @@ import {
   approve,
   buildPapReactor,
   discoverCompany,
+  feedbackEndpoint,
+  fetchMcpServerMetadata,
   mcpApi,
   operationPage,
   operationsEndpoint,
@@ -327,6 +329,8 @@ export class Context {
       tenantId: this.tenantId,
       pairwiseUserId: user,
       sessionId: session.sessionId,
+      organization: (await this.company()).document.organization,
+      poppyDomains: metadata.poppy_domains,
     });
     await this.driver.approveDevice(started.userCode, { account: account ?? this.driver.accounts[0], scopes: granted });
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -422,7 +426,7 @@ export class Context {
 
   async clientForm(identity = this.agent.identity) {
     const metadata = await this.metadata();
-    const claims = { ...this.claims({ subject: identity.clientId, audience: metadata.token_endpoint }), iss: identity.clientId };
+    const claims = { ...this.claims({ subject: identity.clientId, audience: metadata.issuer }), iss: identity.clientId };
     return {
       client_id: identity.clientId,
       client_assertion_type: CLIENT_ASSERTION,
@@ -477,13 +481,16 @@ caseFor(
   "security.client-assertion-embedded-key-ignored",
   "security.client-assertion-bad-audience",
   "security.client-assertion-audience-array",
+  "security.client-assertion-token-endpoint-audience",
 )(async (ctx, fixture) => {
   const metadata = await ctx.metadata();
   const mutation = fixture.mutation;
   const user = ctx.newUser();
   const clientId = ctx.agent.identity.clientId;
-  let audience = mutation.aud ?? metadata.token_endpoint;
-  if (mutation.aud_array) audience = [metadata.token_endpoint, "https://other-company.example/oauth/token"];
+  let audience = mutation.aud ?? metadata.issuer;
+  // The token endpoint is not the issuer: refused, compared character for character.
+  if (mutation.aud === "token_endpoint") audience = metadata.token_endpoint;
+  if (mutation.aud_array) audience = [metadata.issuer, "https://other-company.example"];
   const headers = {};
   let identity;
   if (mutation.signer === "stranger") {
@@ -499,7 +506,7 @@ caseFor(
   });
   const form = {
     grant_type: JWT_BEARER,
-    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.token_endpoint })),
+    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.issuer })),
     client_id: clientId,
     client_assertion_type: CLIENT_ASSERTION,
     client_assertion: clientAssertion,
@@ -511,6 +518,8 @@ caseFor(
 
 caseFor(
   "security.session-assertion-bad-audience",
+  "security.session-assertion-token-endpoint-audience",
+  "security.session-assertion-five-minutes",
   "security.session-assertion-wrong-issuer",
   "security.session-assertion-clock-skew-tolerated",
   "security.session-assertion-from-the-future",
@@ -524,7 +533,7 @@ caseFor(
   const user = ctx.newUser();
   const claims = ctx.claims({
     subject: user,
-    audience: mutation.aud ?? metadata.token_endpoint,
+    audience: mutation.aud === "token_endpoint" ? metadata.token_endpoint : (mutation.aud ?? metadata.issuer),
     lifetime: Number(mutation.lifetime ?? 60),
     shift: Number(mutation.iat_offset ?? 0),
   });
@@ -550,7 +559,7 @@ caseFor("security.token-request-without-dpop", "security.token-dpop-with-ath")(a
   const user = ctx.newUser();
   const form = {
     grant_type: JWT_BEARER,
-    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.token_endpoint })),
+    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.issuer })),
     ...(await ctx.clientForm()),
   };
   const response = fixture.mutation.omit
@@ -648,7 +657,7 @@ caseFor("security.token-responses-not-cached")(async (ctx) => {
   const user = ctx.newUser();
   const issued = await ctx.tokenRequest(user, {
     grant_type: JWT_BEARER,
-    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.token_endpoint })),
+    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.issuer })),
     ...(await ctx.clientForm()),
   });
   check(issued.status === 200, "the Session starts");
@@ -658,7 +667,7 @@ caseFor("security.token-responses-not-cached")(async (ctx) => {
       scope: ctx.scenario.read_scope,
       ...(await ctx.clientForm()),
       client_assertion: await ctx.assertion(
-        ctx.claims({ subject: ctx.agent.identity.clientId, audience: metadata.device_authorization_endpoint }),
+        ctx.claims({ subject: ctx.agent.identity.clientId, audience: metadata.issuer }),
       ),
     };
     const codes = await ctx.send("POST", metadata.device_authorization_endpoint, {
@@ -760,6 +769,8 @@ caseFor("lifecycle.unknown-scope-refused")(async (ctx) => {
       tenantId: ctx.tenantId,
       pairwiseUserId: user,
       sessionId: session.sessionId,
+      organization: (await ctx.company()).document.organization,
+      poppyDomains: metadata.poppy_domains,
     }),
     "an unknown scope",
   );
@@ -1478,20 +1489,29 @@ function tool(name) {
   return name;
 }
 
+/** Whether the MCP server supports DPoP, from its protected resource metadata (§4.3). */
+async function mcpDpop(ctx, url) {
+  const metadata = await ctx.metadata();
+  return (await fetchMcpServerMetadata(url, { issuer: metadata.issuer, fetch: ctx.fetch })).supportsDpop;
+}
+
+/** A signed-in Session's token for the MCP server: DPoP or Bearer, as the server says. */
 async function signedInBearer(ctx) {
   const url = await mcpUrl(ctx);
+  const dpop = await mcpDpop(ctx, url);
   const { user, signed } = await signedInUser(ctx);
-  const result = await ctx.agent.accounts.bearerForMcp(signed.reference, {
+  const result = await ctx.agent.accounts.tokenForMcp(signed.reference, {
     context: await ctx.accountContext(user),
     sessionId: signed.token.sessionId,
     resource: url,
+    dpop,
   });
-  check(result.status === "signed_in" && result.token !== undefined, "a signed-in Bearer");
+  check(result.status === "signed_in" && result.token !== undefined, "a signed-in MCP token");
   return { user, signed, bearer: result.token, url };
 }
 
-function mcpClient(ctx, token, url) {
-  return new McpClient({ token, url, fetch: ctx.fetch });
+async function mcpClient(ctx, user, token, url) {
+  return new McpClient({ token, url, fetch: ctx.fetch, reactor: ctx.agent.reactor, who: await ctx.who(user) });
 }
 
 caseFor("lifecycle.mcp-protected-resource-metadata")(async (ctx) => {
@@ -1502,6 +1522,10 @@ caseFor("lifecycle.mcp-protected-resource-metadata")(async (ctx) => {
   const document = await (await ctx.send("GET", location)).json();
   check(document.resource === url, "the metadata names the MCP server as its resource");
   check((document.authorization_servers ?? []).includes(metadata.issuer), "authorization_servers includes auth.issuer");
+  const supportsDpop = "dpop_signing_alg_values_supported" in document;
+  if (supportsDpop) {
+    check(document.dpop_signing_alg_values_supported.includes("ES256"), "an MCP server that supports DPoP lists ES256");
+  }
   const bare = await ctx.send("POST", url, {
     headers: { "Content-Type": "application/json" },
     body: '{"jsonrpc":"2.0","id":1,"method":"ping"}',
@@ -1509,19 +1533,26 @@ caseFor("lifecycle.mcp-protected-resource-metadata")(async (ctx) => {
   check(bare.status === 401, "an unauthenticated MCP call is 401");
   const challenge = bare.headers.get("www-authenticate") ?? "";
   check(challenge.startsWith("Bearer") && challenge.includes("resource_metadata"), "Bearer challenge");
+  if (supportsDpop) {
+    // One challenge per scheme it accepts, each with resource_metadata (§6).
+    check(challenge.includes(", DPoP "), "a DPoP server also challenges with DPoP");
+    check(challenge.split("resource_metadata=").length - 1 === 2, "each challenge names the metadata");
+  }
 });
 
 caseFor("lifecycle.mcp-bearer-for-its-url")(async (ctx) => {
   const readTool = tool(ctx.scenario.mcp_read_tool);
-  const { signed, bearer, url } = await signedInBearer(ctx);
-  check(bearer.tokenType === "Bearer", "a Bearer token");
+  const { user, signed, bearer, url } = await signedInBearer(ctx);
+  const dpop = await mcpDpop(ctx, url);
+  const expected = dpop ? "DPoP" : "Bearer";
+  check(bearer.tokenType === expected, `a ${expected} token, as the server supports`);
   check(bearer.sessionId === signed.token.sessionId, "for the same Session");
-  const answer = await mcpClient(ctx, bearer, url).callTool(readTool);
+  const answer = await (await mcpClient(ctx, user, bearer, url)).callTool(readTool);
   check(!answer.isError, "the MCP server accepts it");
   const metadata = await ctx.metadata();
   const other = ctx.newUser();
   const session = await ctx.session(other);
-  const signedOut = await ctx.agent.sessions.bearerForMcp({
+  const signedOut = await ctx.agent.sessions.tokenForMcp({
     clientId: ctx.agent.identity.clientId,
     pairwiseUserId: other,
     issuer: metadata.issuer,
@@ -1529,9 +1560,10 @@ caseFor("lifecycle.mcp-bearer-for-its-url")(async (ctx) => {
     tenantId: ctx.tenantId,
     sessionId: session.sessionId,
     resource: url,
+    dpop,
   });
-  check(!signedOut.signedIn, "a signed-out Session gets a signed-out Bearer");
-  const error = await refused(mcpClient(ctx, signedOut, url).callTool(readTool), "a signed-out Bearer");
+  check(!signedOut.signedIn, "a signed-out Session gets a signed-out MCP token");
+  const error = await refused((await mcpClient(ctx, other, signedOut, url)).callTool(readTool), "a signed-out MCP token");
   check(
     error.code === "sign_in_required" || error.code === "insufficient_scope",
     `the MCP server enforces scopes, got ${error.code}`,
@@ -1557,7 +1589,7 @@ caseFor("lifecycle.mcp-bearer-only-at-mcp")(async (ctx) => {
       const headers = { Authorization: `${scheme} ${secret}`, "Content-Type": "application/json" };
       if (scheme === "DPoP") headers.DPoP = await ctx.proof(user, method, target, { token: bearer });
       const response = await ctx.send(method, target, { headers, ...(method === "GET" ? {} : { body: "{}" }) });
-      check(response.status === 401, `a Bearer token is refused at ${method} ${target}`);
+      check(response.status === 401, `an MCP token is refused at ${method} ${target}`);
       check(!(await response.text()).includes(secret), "and never echoed");
     }
   }
@@ -1580,7 +1612,7 @@ caseFor("lifecycle.mcp-bearer-only-at-mcp")(async (ctx) => {
 caseFor("lifecycle.mcp-sign-out-takes-effect")(async (ctx) => {
   const readTool = tool(ctx.scenario.mcp_read_tool);
   const { user, signed, bearer, url } = await signedInBearer(ctx);
-  const client = mcpClient(ctx, bearer, url);
+  const client = await mcpClient(ctx, user, bearer, url);
   check(!(await client.callTool(readTool)).isError, "signed in, the tool answers");
   await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
   const error = await refused(client.callTool(readTool), "a revoked sign-in");
@@ -1592,9 +1624,115 @@ caseFor("operations.cross-channel-mcp")(async (ctx) => {
   const proposeTool = tool(ctx.scenario.mcp_propose_tool);
   const { user, signed, bearer, url } = await signedInBearer(ctx);
   const throughApi = await propose(ctx, user, signed, "user");
-  const answer = await mcpClient(ctx, bearer, url).callTool(proposeTool);
+  const answer = await (await mcpClient(ctx, user, bearer, url)).callTool(proposeTool);
   check(answer.operation !== undefined, "the tool returns structuredContent.operation");
   check(JSON.stringify(answer.operation) === JSON.stringify(throughApi), "the same operation as through the API");
+});
+
+// Draft 0.2 company rules ------------------------------------------------------------------
+
+caseFor("security.dpop-header-twice")(async (ctx) => {
+  // Exactly one DPoP header holding one JWT (§4.3): two are an invalid proof.
+  const metadata = await ctx.metadata();
+  const user = ctx.newUser();
+  const form = {
+    grant_type: JWT_BEARER,
+    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.issuer })),
+    ...(await ctx.clientForm()),
+  };
+  const headers = new Headers({ "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" });
+  headers.append("DPoP", await ctx.proof(user, "POST", metadata.token_endpoint));
+  headers.append("DPoP", await ctx.proof(user, "POST", metadata.token_endpoint));
+  const response = await ctx.send("POST", metadata.token_endpoint, { headers, body: new URLSearchParams(form).toString() });
+  check(response.status === 400, `two DPoP headers: expected 400, got ${response.status}`);
+  const error = await errorOf(response);
+  check(["invalid_dpop_proof", "invalid_request"].includes(error), `two DPoP headers: got ${error}`);
+});
+
+caseFor("lifecycle.account-mismatch-after-sign-out")(async (ctx) => {
+  // A Session ever signed in to one account is never signed in to another (§4.4, §4.8).
+  const user = ctx.newUser();
+  const [first, second] = ctx.driver.accounts;
+  const session = await ctx.session(user);
+  const signed = await ctx.signIn(user, session, { account: first });
+  const other = await ctx.signIn(user, await ctx.session(user), { account: second });
+  await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
+  const renewed = await ctx.renew(user, session.sessionId);
+  check(!renewed.signedIn, "after sign-out the Session continues signed out");
+  const error = await refused(
+    ctx.agent.accounts.refresh(other.reference, { context: await ctx.accountContext(user), sessionId: session.sessionId }),
+    "another account's Account Token on a Session signed out of the first",
+  );
+  check(error.code === "account_mismatch", `got ${error.code}`);
+});
+
+caseFor("lifecycle.mcp-token-type-by-server")(async (ctx) => {
+  // The company chooses the token type by the MCP server in `resource` (§4.3).
+  const url = await mcpUrl(ctx);
+  const dpop = await mcpDpop(ctx, url);
+  const issuer = (await ctx.metadata()).issuer;
+  const user = ctx.newUser();
+  const session = await ctx.session(user);
+  const form = async () => ({
+    grant_type: JWT_BEARER,
+    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: issuer })),
+    session_id: session.sessionId,
+    resource: url,
+    ...(await ctx.clientForm()),
+  });
+  if (dpop) {
+    // Never a Bearer token to a personal agent for a DPoP server: no proof is refused.
+    const refusedToken = await ctx.tokenRequest(user, await form(), { dpop: null });
+    await expectRefusal(refusedToken, 400, "invalid_dpop_proof", "a DPoP MCP server without a proof");
+    const issued = await ctx.tokenRequest(user, await form());
+    check(issued.status === 200, "with a proof, a token is issued");
+    check((await issued.json()).token_type === "DPoP", "a DPoP token for a DPoP MCP server");
+  } else {
+    // A Bearer token even when the request has a proof, never a DPoP one.
+    const issued = await ctx.tokenRequest(user, await form());
+    check(issued.status === 200, "a token is issued");
+    check((await issued.json()).token_type === "Bearer", "a Bearer token for this MCP server");
+  }
+});
+
+caseFor("protocol.feedback-report")(async (ctx) => {
+  // A report with a Session Token, no scope: 202; an unknown kind too; malformed 400 (§8).
+  const endpoint = feedbackEndpoint((await ctx.company()).document);
+  if (endpoint === undefined) throw new SkipCase("the company lists no feedback endpoint");
+  const user = ctx.newUser();
+  const session = await ctx.session(user);
+  const post = async (body) =>
+    ctx.send("POST", endpoint, {
+      headers: {
+        Authorization: `DPoP ${session.accessToken.reveal()}`,
+        DPoP: await ctx.proof(user, "POST", endpoint, { token: session }),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const report = { kind: "missing", task: "Conformance task", description: "Not offered." };
+  const accepted = await post(report);
+  check(accepted.status === 202, `a report is accepted with 202, got ${accepted.status}`);
+  const unknown = await post({ ...report, kind: "conformance-later-kind" });
+  check(unknown.status === 202, "a kind it doesn't recognize is accepted");
+  await expectRefusal(await post({ ...report, task: "x".repeat(201) }), 400, "invalid_request", "too long");
+  const bare = await ctx.send("POST", endpoint, { headers: { "Content-Type": "application/json" }, body: "{}" });
+  check(bare.status === 401, "a report needs a Session Token");
+});
+
+caseFor("conversations.read-fields")(async (ctx) => {
+  // Every read has conversation_id, events, cursor, has_more, status, responder (§7.5).
+  const { user, session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, user, session);
+  const url = `${endpoint.replace(/\/$/u, "")}/${conversation}/events`;
+  const page = await (await ctx.read(user, url, session)).json();
+  const empty = await (await ctx.read(user, `${url}?cursor=${page.cursor}`, session)).json();
+  const fields = ["conversation_id", "events", "cursor", "has_more", "status", "responder"];
+  for (const read of [page, empty]) {
+    const missing = fields.filter((field) => !(field in read));
+    check(missing.length === 0, `a read has ${missing.join(", ")} missing`);
+  }
+  check(Array.isArray(empty.events) && empty.events.length === 0, "events is an empty list when there are none");
 });
 
 // The website (§5, Operations §4.4) --------------------------------------------------------

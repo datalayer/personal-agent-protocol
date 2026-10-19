@@ -9,8 +9,10 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 import { AuthorizationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { SecretValue } from "./secret.js";
+import { refusalDetails, refuseRedirect } from "./refusals.js";
 import {
   JWT_CLIENT_ASSERTION,
+  buildClientAssertionClaims,
   parseSessionToken,
   type RandomBytes,
   type SessionToken,
@@ -123,7 +125,9 @@ export async function buildDirectSignInRequest(
   const scopes = validScopes(options.scopes);
   const clientId = httpsUrl(options.clientId, "clientId").toString();
   const redirectUri = httpsUrl(options.redirectUri, "redirectUri").toString();
-  const issuer = httpsUrl(options.issuer, "issuer").toString().replace(/\/$/, "");
+  // Kept exactly as written: the callback's `iss` is compared character for character (§3.2).
+  httpsUrl(options.issuer, "issuer");
+  const issuer = options.issuer;
   endpoint.searchParams.set("response_type", "code");
   endpoint.searchParams.set("client_id", clientId);
   endpoint.searchParams.set("redirect_uri", redirectUri);
@@ -482,18 +486,14 @@ export class DirectSignInClient {
     let nonce: string | undefined;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const iat = Math.floor(clock.now().getTime() / 1000);
-      const clientAssertion = await signer.sign(
-        {
-          iss: pending.request.clientId,
-          sub: pending.request.clientId,
-          aud: pending.tokenEndpoint,
-          iat,
-          exp: iat + 60,
-          jti: `jti_${base64Url(entropy(16, (length) => random.bytes(length)))}`,
-        },
-        { purpose: "client_assertion" },
-      );
+      // `aud` is the issuer, never the token endpoint (§4.1).
+      const claims = buildClientAssertionClaims({
+        clientId: pending.request.clientId,
+        issuer: pending.request.issuer,
+        now: clock.now(),
+        randomBytes: (length) => entropy(length, (size) => random.bytes(size)),
+      });
+      const clientAssertion = await signer.sign({ ...claims }, { purpose: "client_assertion" });
       const proof = await dpop.create({
         method: "POST",
         url: pending.tokenEndpoint,
@@ -517,7 +517,7 @@ export class DirectSignInClient {
           headers: { Accept: "application/json", DPoP: proof.reveal() },
           body: grant.toForm(),
           credentials: "omit",
-          redirect: "error",
+          redirect: "manual",
           ...(signal === undefined ? {} : { signal }),
         });
       } catch (cause) {
@@ -527,6 +527,7 @@ export class DirectSignInClient {
           { cause },
         );
       }
+      await refuseRedirect(response, AuthorizationError);
       const payload = await this.#decode(response);
       if (response.ok) return await this.#result(response, payload, pending);
 
@@ -544,8 +545,10 @@ export class DirectSignInClient {
         }
         continue;
       }
+      const details = refusalDetails(response, payload);
       throw new AuthorizationError(code, "Company refused the Direct Sign-In token exchange", {
         statusCode: response.status,
+        ...(Object.keys(details).length > 0 ? { details } : {}),
       });
     }
     throw new AuthorizationError("use_dpop_nonce", "Company rejected the refreshed DPoP proof");

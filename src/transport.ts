@@ -17,9 +17,9 @@ import {
   firstContribution,
   optionalContribution,
 } from "./reactor.js";
+import { refuseRedirect } from "./refusals.js";
 import type { SessionToken } from "./sessions.js";
 
-const redirects = new Set([301, 302, 303, 307, 308]);
 /** Refusals that ask the caller to come back later (Guides, retries and rate limits). */
 const later = new Set([429, 503]);
 /** Methods retried on their own: they change nothing at the company. */
@@ -43,7 +43,6 @@ function httpsUrl(value: string): URL {
 export interface DpopFetchClientOptions {
   readonly reactor: ReactorPlatformView;
   readonly fetch?: typeof globalThis.fetch;
-  readonly maxRedirects?: number;
 }
 
 export interface DpopFetchRequestOptions {
@@ -57,11 +56,10 @@ export interface DpopFetchRequestOptions {
   readonly signal?: AbortSignal;
 }
 
-/** Send proof-bound PAP requests with fresh proofs and safe redirect handling. */
+/** Send proof-bound PAP requests with fresh proofs; a redirect is refused, never followed (§3). */
 export class DpopFetchClient {
   readonly #reactor: ReactorPlatformView;
   readonly #fetch: typeof globalThis.fetch;
-  readonly #maxRedirects: number;
 
   constructor(options: DpopFetchClientOptions) {
     const fetcher = options.fetch ?? globalThis.fetch;
@@ -70,13 +68,8 @@ export class DpopFetchClient {
         "fetch_unavailable",
         "A fetch implementation is required",
       );
-    const maxRedirects = options.maxRedirects ?? 3;
-    if (!Number.isInteger(maxRedirects) || maxRedirects < 0) {
-      throw new RangeError("maxRedirects must not be negative");
-    }
     this.#reactor = options.reactor;
     this.#fetch = fetcher;
-    this.#maxRedirects = maxRedirects;
   }
 
   /**
@@ -157,10 +150,9 @@ export class DpopFetchClient {
       DpopProofProviders,
       "DPoP proof provider",
     );
-    let currentUrl = httpsUrl(url);
-    let currentMethod = method.toUpperCase();
-    let currentBody = options.body;
-    let redirectCount = 0;
+    const currentUrl = httpsUrl(url);
+    const currentMethod = method.toUpperCase();
+    const currentBody = options.body;
     let nonce: string | undefined;
     let nonceRetried = false;
     while (true) {
@@ -208,40 +200,9 @@ export class DpopFetchClient {
         nonceRetried = true;
         continue;
       }
-      if (!redirects.has(response.status)) return response;
-      if (currentBody !== undefined && response.status !== 303) {
-        // A body (credentials, a code, a confirmation) is sent once, to the URL it was
-        // meant for: never again to wherever a redirect points.
-        await response.body?.cancel().catch(() => undefined);
-        throw new TransportError("redirect_refused", "A request with a body is never sent to a redirect");
-      }
-      if (redirectCount >= this.#maxRedirects) {
-        throw new TransportError(
-          "too_many_redirects",
-          "PAP resource request exceeded redirect limit",
-        );
-      }
-      const location = response.headers.get("location");
-      if (!location)
-        throw new TransportError(
-          "invalid_redirect",
-          "PAP resource redirect has no location",
-        );
-      const target = httpsUrl(new URL(location, currentUrl).toString());
-      if (target.origin !== currentUrl.origin) {
-        throw new TransportError(
-          "cross_origin_redirect",
-          "PAP credentials are never forwarded to another origin",
-        );
-      }
-      redirectCount += 1;
-      currentUrl = target;
-      nonce = undefined;
-      nonceRetried = false;
-      if (response.status === 303) {
-        currentMethod = "GET";
-        currentBody = undefined;
-      }
+      // A redirect would carry the token and a proof to another URL: refused (§3).
+      await refuseRedirect(response);
+      return response;
     }
   }
 }

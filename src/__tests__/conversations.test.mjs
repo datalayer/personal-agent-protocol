@@ -212,3 +212,27 @@ test("rejects event pages for a different conversation", async () => {
   );
   reactor.stop();
 });
+
+test("a conversation refusal reads its code from the body or the challenge, and its extension", async () => {
+  const answers = [
+    () => new Response(null, { status: 401, headers: { "WWW-Authenticate": 'DPoP error="invalid_token"' } }),
+    () =>
+      new Response(JSON.stringify({ error: "extension_required", extension: "operations" }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      }),
+    () =>
+      new Response(JSON.stringify({ error: "invalid_request" }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }),
+  ];
+  const { reactor, client } = setup(async () => answers.shift()());
+  const read = () => client.readEvents("https://shop.example/poppy/conversations", "cnv_example", request);
+  // A token error may come only in WWW-Authenticate (§6).
+  await assert.rejects(read(), (error) => error instanceof ConversationError && error.code === "invalid_token" && error.statusCode === 401);
+  // extension_required names its extension in the JSON body at a conversation (§3.3).
+  await assert.rejects(read(), (error) => error.code === "extension_required" && error.details.extension === "operations");
+  await assert.rejects(read(), (error) => error.code === "invalid_request" && error.statusCode === 400);
+  reactor.stop();
+});

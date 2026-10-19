@@ -55,6 +55,10 @@ BROWSER_COOKIE = "browser_cookie"
 REPLAY = "replay"
 #: Failed sign-in attempts by one key, and until when it is locked out (§4.7).
 SIGN_IN_ATTEMPTS = "sign_in_attempts"
+#: A feedback report a personal agent sent (§8), kept for the company's operator.
+FEEDBACK = "feedback"
+#: A DPoP nonce the company issued, until it stops accepting it (§4.3).
+DPOP_NONCE = "dpop_nonce"
 
 RECORD_KINDS = (
     SESSION,
@@ -75,6 +79,8 @@ RECORD_KINDS = (
     BROWSER_COOKIE,
     REPLAY,
     SIGN_IN_ATTEMPTS,
+    FEEDBACK,
+    DPOP_NONCE,
 )
 
 
@@ -303,13 +309,18 @@ class IssuedSession:
 
 @dataclass(frozen=True)
 class StoredSession:
-    """A Session by its ID: each live token's state by digest, and the latest issued."""
+    """A Session by its ID: each live token's state by digest, and the latest issued.
+
+    `account_id` is the account the Session was ever signed in to: kept after
+    it signs out, so it is never signed in to another (§4.4, §4.8).
+    """
 
     session_id: str
     client_id: str
     pairwise_user_id: str
     tokens: dict[str, IssuedSession]
     latest: str
+    account_id: str | None = None
 
     @property
     def current(self) -> IssuedSession:
@@ -322,6 +333,7 @@ class StoredSession:
             "pairwise_user_id": self.pairwise_user_id,
             "tokens": {digest: token.to_json() for digest, token in self.tokens.items()},
             "latest": self.latest,
+            "account_id": self.account_id,
         }
 
     @classmethod
@@ -334,6 +346,7 @@ class StoredSession:
                 digest: IssuedSession.from_json(token) for digest, token in value["tokens"].items()
             },
             latest=value["latest"],
+            account_id=value["account_id"],
         )
 
 
@@ -583,6 +596,9 @@ class PendingMediated:
     #: The `SIGN_IN_ATTEMPTS` keys the credentials counted against, cleared on success.
     attempt_keys: tuple[str, ...] = ()
     attempts: int = 0
+    #: `code_required` while a code is awaited; once `failed` or `expired` it stays so,
+    #: and a code sent to it gets the same status again (§4.7).
+    status: Literal["code_required", "failed", "expired"] = "code_required"
 
     def to_json(self) -> JsonObject:
         return {
@@ -593,6 +609,7 @@ class PendingMediated:
             "expires_at": _time(self.expires_at),
             "attempt_keys": list(self.attempt_keys),
             "attempts": self.attempts,
+            "status": self.status,
         }
 
     @classmethod
@@ -605,6 +622,7 @@ class PendingMediated:
             expires_at=_parse(value["expires_at"]),
             attempt_keys=tuple(value["attempt_keys"]),
             attempts=value["attempts"],
+            status=value["status"],
         )
 
 
@@ -773,6 +791,60 @@ class SignInAttempts:
         return cls(failures=value["failures"], locked_until=_maybe_parse(value["locked_until"]))
 
 
+@dataclass(frozen=True)
+class StoredFeedback:
+    """A feedback report as the company received it (§8): data, never instructions.
+
+    `kind` is whatever the personal agent sent (an unknown kind is accepted);
+    `client_id` and `pairwise_user_id` are the Session's, which sent it.
+    """
+
+    report_id: str
+    kind: str
+    task: str
+    description: str
+    client_id: str
+    pairwise_user_id: str
+    received_at: datetime
+
+    def to_json(self) -> JsonObject:
+        return {
+            "report_id": self.report_id,
+            "kind": self.kind,
+            "task": self.task,
+            "description": self.description,
+            "client_id": self.client_id,
+            "pairwise_user_id": self.pairwise_user_id,
+            "received_at": _time(self.received_at),
+        }
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> StoredFeedback:
+        return cls(
+            report_id=value["report_id"],
+            kind=value["kind"],
+            task=value["task"],
+            description=value["description"],
+            client_id=value["client_id"],
+            pairwise_user_id=value["pairwise_user_id"],
+            received_at=_parse(value["received_at"]),
+        )
+
+
+@dataclass(frozen=True)
+class IssuedNonce:
+    """A DPoP nonce the company issued: accepted in a proof until the record expires."""
+
+    def to_json(self) -> JsonObject:
+        return {}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> IssuedNonce:
+        if value:
+            raise ValueError("an issued nonce has no members")
+        return cls()
+
+
 #: Each kind's record type: `to_json()` writes it, `from_json()` reads it back.
 RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     SESSION: StoredSession.from_json,
@@ -793,4 +865,6 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     BROWSER_COOKIE: SessionPointer.from_json,
     REPLAY: ReplayMark.from_json,
     SIGN_IN_ATTEMPTS: SignInAttempts.from_json,
+    FEEDBACK: StoredFeedback.from_json,
+    DPOP_NONCE: IssuedNonce.from_json,
 }

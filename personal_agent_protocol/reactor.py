@@ -213,11 +213,17 @@ class ProtectedInputRequest:
     `purpose` is `credentials` (Mediated Sign-In's declared fields) or
     `one_time_code` (its `code_required` continuation, `sent_to` saying where
     the company sent it). The answers never pass through a model.
+
+    The host shows `company_name` and `company_domain` whenever it asks
+    (§4.7), and a credential store the user chose picks stored credentials by
+    `issuer`, the company's `auth.issuer`: never by the field labels or the
+    endpoint, which the company writes and can name anything.
     """
 
     purpose: Literal["credentials", "one_time_code"]
     company_name: str
     company_domain: str
+    issuer: str
     fields: tuple[ProtectedInputField, ...]
     sent_to: str | None = None
 

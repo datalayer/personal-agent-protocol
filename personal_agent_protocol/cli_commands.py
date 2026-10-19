@@ -80,7 +80,7 @@ from .conversations import generate_message_id
 from .device import DeviceSignInClient
 from .errors import PersonalAgentProtocolError
 from .identity import AgentIdentityClient
-from .mcp import McpClient, mcp_api
+from .mcp import McpClient, fetch_mcp_server_metadata, mcp_api
 from .mediated import MediatedSignInClient
 from .models import DiscoveredCompany, Message, Operation
 from .operations import UserApproval, approve
@@ -544,9 +544,16 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 tenant_id=record.tenant_id,
                 pairwise_user_id=record.pairwise_user_id,
                 session_id=session_id,
+                organization=company.document.organization,
+                poppy_domains=metadata.poppy_domains,
             )
             link = started.verification_uri_complete or started.verification_uri
-            typer.echo(f"Sign in at {link} with the code {started.user_code}.", err=True)
+            # The company that asks, by name and domain, with the link and code (§4.6).
+            typer.echo(
+                f"Sign in to {started.organization_name} ({started.organization_domain}) "
+                f"at {link} with the code {started.user_code}.",
+                err=True,
+            )
             waited = 0.0
             while waited <= timeout:
                 await runtime.sleep(started.poll_interval)
@@ -673,7 +680,11 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         arguments: str = typer.Option("{}", "--arguments", help="The tool's JSON arguments."),
         json_output: bool = JSON,
     ) -> None:
-        """Call the company's MCP server with a Bearer token for its url only (§4.3)."""
+        """Call the company's MCP server with a token issued for its url only (§4.3).
+
+        DPoP with proofs when its protected resource metadata says it supports
+        DPoP, a Bearer token otherwise.
+        """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
@@ -681,22 +692,23 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             server = mcp_api(company.document)
             if server is None:
                 raise NotConfiguredError("no_mcp", "The company lists no MCP server")
+            served = await fetch_mcp_server_metadata(runtime.http, server.url, issuer=record.issuer)
+            token = None
             if record.account_reference is not None:
                 result = await AccountTokenClient(
                     reactor=runtime.reactor, http_client=runtime.http
-                ).bearer_for_mcp(
+                ).token_for_mcp(
                     record.account_reference,
                     context=account_context(record),
                     session_id=session_id,
                     resource=server.url,
+                    dpop=served.supports_dpop,
                 )
-                bearer = result.token
-            else:
-                bearer = None
-            if bearer is None:
-                bearer = await SessionClient(
+                token = result.token
+            if token is None:
+                token = await SessionClient(
                     reactor=runtime.reactor, http_client=runtime.http
-                ).bearer_for_mcp(
+                ).token_for_mcp(
                     client_id=record.client_id,
                     pairwise_user_id=record.pairwise_user_id,
                     issuer=record.issuer,
@@ -704,9 +716,16 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                     tenant_id=record.tenant_id,
                     session_id=session_id,
                     resource=server.url,
+                    dpop=served.supports_dpop,
                 )
-            await runtime.secrets.put(f"mcp:{session_id}", bearer.access_token)
-            client = McpClient(http_client=runtime.http, token=bearer, url=server.url)
+            await runtime.secrets.put(f"mcp:{session_id}", token.access_token)
+            client = McpClient(
+                http_client=runtime.http,
+                token=token,
+                url=server.url,
+                reactor=runtime.reactor,
+                who=who_of(record),
+            )
             if tool is None:
                 return {"tools": await client.list_tools()}
             answer = await client.call_tool(tool, json.loads(arguments))

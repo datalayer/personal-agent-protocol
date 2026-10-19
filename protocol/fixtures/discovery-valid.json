@@ -1,5 +1,5 @@
 {
-  "protocol_version": "0.1",
+  "protocol_version": "0.2",
   "organization": {"name": "Example Company", "domain": "example.com"},
   "auth": {
     "issuer": "https://auth.example.com",
@@ -35,6 +35,7 @@
       "description": "Product search"
     }
   ],
+  "feedback": {"endpoint": "https://api.example.com/poppy/feedback"},
   "extensions": {
     "operations": {
       "version": "1",

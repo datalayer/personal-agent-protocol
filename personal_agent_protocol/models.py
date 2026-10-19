@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Wire models for Personal Agent Protocol draft 0.1."""
+"""Wire models for Personal Agent Protocol draft 0.2."""
 
 from __future__ import annotations
 
@@ -23,6 +23,11 @@ from pydantic import (
 )
 
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
+#: The `protocol_version` values this SDK uses a document of (§3.1): before 1.0 every
+#: version can break the one before, so only its own `major.minor`.
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({"0.2"})
+#: The DPoP algorithm every company accepts (§3.2): a list a company publishes includes it.
+DPOP_REQUIRED_ALGORITHM = "ES256"
 _EXTENSION_VERSION = re.compile(r"^(0|[1-9][0-9]*)$")
 _DOMAIN = re.compile(
     r"^(?=.{1,253}\.?$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
@@ -100,7 +105,8 @@ class AuthCapabilities(ProtocolModel):
     @field_validator("issuer")
     @classmethod
     def validate_issuer(cls, value: str) -> str:
-        return _https_url(value, "auth issuer").rstrip("/")
+        # Kept exactly as written: the issuer is compared character for character (§3.2).
+        return _https_url(value, "auth issuer")
 
 
 class AgentProtocol(ProtocolModel):
@@ -139,6 +145,17 @@ class WebDescriptor(ProtocolModel):
         return _https_url(value, "browser session endpoint") if value is not None else None
 
 
+class FeedbackDescriptor(ProtocolModel):
+    """Where personal agents report a task the protocol can't do at this company (§8)."""
+
+    endpoint: str
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value: str) -> str:
+        return _https_url(value, "feedback endpoint")
+
+
 class ExtensionDescriptor(ProtocolModel):
     version: str
 
@@ -157,16 +174,17 @@ class DiscoveryDocument(ProtocolModel):
     agent: AgentDescriptor | None = None
     web: WebDescriptor | None = None
     apis: list[ApiDescriptor] = Field(default_factory=list)
+    feedback: FeedbackDescriptor | None = None
     extensions: dict[str, ExtensionDescriptor] = Field(default_factory=dict)
 
     @field_validator("protocol_version")
     @classmethod
     def validate_protocol_version(cls, value: str) -> str:
-        match = _VERSION.fullmatch(value)
-        if not match:
+        if not _VERSION.fullmatch(value):
             raise ValueError("protocol_version must use major.minor")
-        if match.group("major") != "0":
-            raise ValueError("unsupported Personal Agent Protocol major version")
+        if value not in SUPPORTED_PROTOCOL_VERSIONS:
+            # Before 1.0 a document is used only at a major.minor this SDK supports (§3.1).
+            raise ValueError("unsupported Personal Agent Protocol version")
         return value
 
     @model_validator(mode="after")
@@ -174,9 +192,10 @@ class DiscoveryDocument(ProtocolModel):
         if self.agent is None and not self.apis and self.web is None:
             raise ValueError("one of agent, apis, or web is required")
         needs_auth = self.agent is not None or bool(self.apis)
+        needs_auth = needs_auth or self.feedback is not None
         needs_auth = needs_auth or bool(self.web and self.web.browser_session_endpoint)
         if needs_auth and self.auth is None:
-            raise ValueError("auth is required for sessions, APIs, or conversations")
+            raise ValueError("auth is required for sessions, APIs, conversations, or feedback")
         return self
 
 
@@ -187,9 +206,22 @@ class OAuthServerMetadata(ProtocolModel):
     authorization_endpoint: str | None = None
     device_authorization_endpoint: str | None = None
     poppy_domains: list[str] = Field(min_length=1)
+    dpop_signing_alg_values_supported: list[str] | None = None
+
+    @field_validator("issuer")
+    @classmethod
+    def validate_issuer(cls, value: str) -> str:
+        # Compared with `auth.issuer` character for character (§3.2): never normalized.
+        return _https_url(value, "issuer")
+
+    @field_validator("dpop_signing_alg_values_supported")
+    @classmethod
+    def validate_dpop_algorithms(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and DPOP_REQUIRED_ALGORITHM not in value:
+            raise ValueError("dpop_signing_alg_values_supported must include ES256")
+        return value
 
     @field_validator(
-        "issuer",
         "token_endpoint",
         "revocation_endpoint",
         "authorization_endpoint",
@@ -396,7 +428,7 @@ class Message(ProtocolModel):
         return self
 
 
-#: Event types draft 0.1 defines (§7.5); a personal agent skips any other type.
+#: Event types draft 0.2 defines (§7.5); a personal agent skips any other type.
 KNOWN_EVENT_TYPES = frozenset(
     {"message", "state", "authorization", "user_requested", "direct_opened", "direct_closed"}
 )

@@ -58,7 +58,8 @@ from .demo.kit import AgentIdentity, ControlledBrowser, MemoryVault, MutableCloc
 from .device import DeviceSignInClient
 from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError, TransportError
-from .mcp import McpClient, McpError, mcp_api
+from .feedback import feedback_endpoint
+from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
 from .models import ConversationEvent, DiscoveredCompany, Message, Operation
 from .operations import (
     STANDING_PERMISSION_STORES,
@@ -464,6 +465,8 @@ class ConformanceContext:
             tenant_id=self.tenant_id,
             pairwise_user_id=user,
             session_id=session.session_id,
+            organization=(await self.company()).document.organization,
+            poppy_domains=metadata.poppy_domains,
         )
         await self.driver.approve_device(
             started.user_code, account=account or self.driver.accounts[0], scopes=granted
@@ -641,7 +644,7 @@ class ConformanceContext:
     async def client_form(self, identity: AgentIdentity | None = None) -> dict[str, str]:
         metadata = await self.metadata()
         actor = identity or self.agent.identity
-        claims = self.claims(subject=actor.client_id, audience=metadata.token_endpoint)
+        claims = self.claims(subject=actor.client_id, audience=metadata.issuer)
         claims["iss"] = actor.client_id
         return {
             "client_id": actor.client_id,
@@ -735,15 +738,19 @@ async def _extension_required(ctx: ConformanceContext, _: FixtureCase) -> None:
     "security.client-assertion-embedded-key-ignored",
     "security.client-assertion-bad-audience",
     "security.client-assertion-audience-array",
+    "security.client-assertion-token-endpoint-audience",
 )
 async def _client_assertion(ctx: ConformanceContext, fixture: FixtureCase) -> None:
     metadata = await ctx.metadata()
     mutation = fixture.mutation
     user = ctx.new_user()
     client_id = ctx.agent.identity.client_id
-    audience: Any = mutation.get("aud", metadata.token_endpoint)
+    audience: Any = mutation.get("aud", metadata.issuer)
+    if mutation.get("aud") == "token_endpoint":
+        # The token endpoint is not the issuer: refused, compared character for character.
+        audience = metadata.token_endpoint
     if mutation.get("aud_array"):
-        audience = [metadata.token_endpoint, "https://other-company.example/oauth/token"]
+        audience = [metadata.issuer, "https://other-company.example"]
     claims = ctx.claims(subject=client_id, audience=audience)
     headers: dict[str, Any] = {}
     identity = None
@@ -754,7 +761,7 @@ async def _client_assertion(ctx: ConformanceContext, fixture: FixtureCase) -> No
     client_assertion = ctx.assertion(
         claims, identity=identity, algorithm=mutation.get("alg", "ES256"), headers=headers
     )
-    session_claims = ctx.claims(subject=user, audience=metadata.token_endpoint)
+    session_claims = ctx.claims(subject=user, audience=metadata.issuer)
     form = {
         "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
         "assertion": ctx.assertion(session_claims),
@@ -769,6 +776,8 @@ async def _client_assertion(ctx: ConformanceContext, fixture: FixtureCase) -> No
 
 @case(
     "security.session-assertion-bad-audience",
+    "security.session-assertion-token-endpoint-audience",
+    "security.session-assertion-five-minutes",
     "security.session-assertion-wrong-issuer",
     "security.session-assertion-clock-skew-tolerated",
     "security.session-assertion-from-the-future",
@@ -783,7 +792,9 @@ async def _session_assertion(ctx: ConformanceContext, fixture: FixtureCase) -> N
     user = ctx.new_user()
     claims = ctx.claims(
         subject=user,
-        audience=mutation.get("aud", metadata.token_endpoint),
+        audience=metadata.token_endpoint
+        if mutation.get("aud") == "token_endpoint"
+        else mutation.get("aud", metadata.issuer),
         lifetime=int(mutation.get("lifetime", 60)),
         shift=int(mutation.get("iat_offset", 0)),
     )
@@ -817,7 +828,7 @@ async def _token_dpop(ctx: ConformanceContext, fixture: FixtureCase) -> None:
     user = ctx.new_user()
     form = {
         "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        "assertion": ctx.assertion(ctx.claims(subject=user, audience=metadata.token_endpoint)),
+        "assertion": ctx.assertion(ctx.claims(subject=user, audience=metadata.issuer)),
         **(await ctx.client_form()),
     }
     if fixture.mutation.get("omit"):
@@ -948,7 +959,7 @@ async def _no_store(ctx: ConformanceContext, _: FixtureCase) -> None:
     user = ctx.new_user()
     form = {
         "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        "assertion": ctx.assertion(ctx.claims(subject=user, audience=metadata.token_endpoint)),
+        "assertion": ctx.assertion(ctx.claims(subject=user, audience=metadata.issuer)),
         **(await ctx.client_form()),
     }
     issued = await ctx.token_request(user, form)
@@ -959,10 +970,7 @@ async def _no_store(ctx: ConformanceContext, _: FixtureCase) -> None:
             "scope": ctx.scenario.read_scope,
             **(await ctx.client_form()),
             "client_assertion": ctx.assertion(
-                ctx.claims(
-                    subject=ctx.agent.identity.client_id,
-                    audience=metadata.device_authorization_endpoint,
-                )
+                ctx.claims(subject=ctx.agent.identity.client_id, audience=metadata.issuer)
             ),
         }
         codes = await ctx.send(
@@ -1116,6 +1124,8 @@ async def _unknown_scope(ctx: ConformanceContext, _: FixtureCase) -> None:
             tenant_id=ctx.tenant_id,
             pairwise_user_id=user,
             session_id=session.session_id,
+            organization=(await ctx.company()).document.organization,
+            poppy_domains=metadata.poppy_domains,
         )
     check(raised.value.code == "invalid_scope", f"got {raised.value.code}")
 
@@ -2227,16 +2237,40 @@ def _tool(name: str | None) -> str:
     return name
 
 
+async def _mcp_dpop(ctx: ConformanceContext, url: str) -> bool:
+    """Whether the MCP server supports DPoP, from its protected resource metadata (§4.3)."""
+
+    metadata = await ctx.metadata()
+    served = await fetch_mcp_server_metadata(ctx.http, url, issuer=metadata.issuer)
+    return served.supports_dpop
+
+
+async def _mcp_client(
+    ctx: ConformanceContext, user: str, token: SessionToken, url: str
+) -> McpClient:
+    return McpClient(
+        http_client=ctx.http,
+        token=token,
+        url=url,
+        reactor=ctx.agent.reactor,
+        who=await ctx.who(user),
+    )
+
+
 async def _signed_in_bearer(ctx: ConformanceContext) -> tuple[str, SignedIn, SessionToken, str]:
+    """A signed-in Session's token for the MCP server: DPoP or Bearer, as the server says."""
+
     url = await _mcp_url(ctx)
+    dpop = await _mcp_dpop(ctx, url)
     user, signed = await _signed_in_user(ctx)
-    result = await ctx.agent.accounts.bearer_for_mcp(
+    result = await ctx.agent.accounts.token_for_mcp(
         signed.reference,
         context=await ctx.account_context(user),
         session_id=signed.token.session_id,
         resource=url,
+        dpop=dpop,
     )
-    check(result.status == "signed_in" and result.token is not None, "a signed-in Bearer")
+    check(result.status == "signed_in" and result.token is not None, "a signed-in MCP token")
     return user, signed, cast(SessionToken, result.token), url
 
 
@@ -2252,6 +2286,12 @@ async def _mcp_metadata(ctx: ConformanceContext, _: FixtureCase) -> None:
         metadata.issuer in document.get("authorization_servers", []),
         "authorization_servers includes auth.issuer",
     )
+    supports_dpop = "dpop_signing_alg_values_supported" in document
+    if supports_dpop:
+        check(
+            "ES256" in document["dpop_signing_alg_values_supported"],
+            "an MCP server that supports DPoP lists ES256",
+        )
     bare = await ctx.send(
         "POST",
         url,
@@ -2261,20 +2301,26 @@ async def _mcp_metadata(ctx: ConformanceContext, _: FixtureCase) -> None:
     check(bare.status_code == 401, "an unauthenticated MCP call is 401")
     challenge = bare.headers.get("www-authenticate", "")
     check(challenge.startswith("Bearer") and "resource_metadata" in challenge, "Bearer challenge")
+    if supports_dpop:
+        # One challenge per scheme it accepts, each with resource_metadata (§6).
+        check(", DPoP " in challenge, "a DPoP server also challenges with DPoP")
+        check(challenge.count("resource_metadata=") == 2, "each challenge names the metadata")
 
 
 @case("lifecycle.mcp-bearer-for-its-url")
 async def _mcp_bearer(ctx: ConformanceContext, _: FixtureCase) -> None:
     read_tool = _tool(ctx.scenario.mcp_read_tool)
     user, signed, bearer, url = await _signed_in_bearer(ctx)
-    check(bearer.token_type == "Bearer", "a Bearer token")  # noqa: S105
+    dpop = await _mcp_dpop(ctx, url)
+    expected = "DPoP" if dpop else "Bearer"
+    check(bearer.token_type == expected, f"a {expected} token, as the server supports")
     check(bearer.session_id == signed.token.session_id, "for the same Session")
-    answer = await McpClient(http_client=ctx.http, token=bearer, url=url).call_tool(read_tool)
+    answer = await (await _mcp_client(ctx, user, bearer, url)).call_tool(read_tool)
     check(not answer.is_error, "the MCP server accepts it")
     metadata = await ctx.metadata()
     other = ctx.new_user()
     session = await ctx.session(other)
-    signed_out = await ctx.agent.sessions.bearer_for_mcp(
+    signed_out = await ctx.agent.sessions.token_for_mcp(
         client_id=ctx.agent.identity.client_id,
         pairwise_user_id=other,
         issuer=metadata.issuer,
@@ -2282,10 +2328,11 @@ async def _mcp_bearer(ctx: ConformanceContext, _: FixtureCase) -> None:
         tenant_id=ctx.tenant_id,
         session_id=session.session_id,
         resource=url,
+        dpop=dpop,
     )
-    check(not signed_out.signed_in, "a signed-out Session gets a signed-out Bearer")
+    check(not signed_out.signed_in, "a signed-out Session gets a signed-out MCP token")
     with _raises(McpError) as raised:
-        await McpClient(http_client=ctx.http, token=signed_out, url=url).call_tool(read_tool)
+        await (await _mcp_client(ctx, other, signed_out, url)).call_tool(read_tool)
     check(
         raised.value.code in {"sign_in_required", "insufficient_scope"},
         f"the MCP server enforces scopes, got {raised.value.code}",
@@ -2308,7 +2355,7 @@ async def _mcp_only(ctx: ConformanceContext, _: FixtureCase) -> None:
             if scheme == "DPoP":
                 headers["DPoP"] = await ctx.proof(user, method, target, token=bearer)
             response = await ctx.send(method, target, headers=headers, content=b"{}")
-            check(response.status_code == 401, f"a Bearer token is refused at {method} {target}")
+            check(response.status_code == 401, f"an MCP token is refused at {method} {target}")
             check(secret not in response.text, "and never echoed")
     dpop_at_mcp = await ctx.send(
         "POST",
@@ -2335,7 +2382,7 @@ async def _mcp_only(ctx: ConformanceContext, _: FixtureCase) -> None:
 async def _mcp_sign_out(ctx: ConformanceContext, _: FixtureCase) -> None:
     read_tool = _tool(ctx.scenario.mcp_read_tool)
     user, signed, bearer, url = await _signed_in_bearer(ctx)
-    client = McpClient(http_client=ctx.http, token=bearer, url=url)
+    client = await _mcp_client(ctx, user, bearer, url)
     check(not (await client.call_tool(read_tool)).is_error, "signed in, the tool answers")
     await ctx.agent.accounts.revoke(signed.reference, context=await ctx.account_context(user))
     with _raises(McpError) as raised:
@@ -2349,9 +2396,176 @@ async def _cross_channel_mcp(ctx: ConformanceContext, _: FixtureCase) -> None:
     propose_tool = _tool(ctx.scenario.mcp_propose_tool)
     user, signed, bearer, url = await _signed_in_bearer(ctx)
     through_api = await _propose(ctx, user, signed, "user")
-    answer = await McpClient(http_client=ctx.http, token=bearer, url=url).call_tool(propose_tool)
+    answer = await (await _mcp_client(ctx, user, bearer, url)).call_tool(propose_tool)
     check(answer.operation is not None, "the tool returns structuredContent.operation")
     check(answer.operation == through_api, "the same operation as through the API")
+
+
+# Draft 0.2 company rules --------------------------------------------------------------
+
+
+@case("security.dpop-header-twice")
+async def _dpop_twice(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    """Exactly one DPoP header holding one JWT (§4.3): two are an invalid proof."""
+
+    metadata = await ctx.metadata()
+    user = ctx.new_user()
+    form = {
+        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        "assertion": ctx.assertion(ctx.claims(subject=user, audience=metadata.issuer)),
+        **(await ctx.client_form()),
+    }
+    proofs = [await ctx.proof(user, "POST", metadata.token_endpoint) for _ in range(2)]
+    request = httpx.Request(
+        "POST",
+        metadata.token_endpoint,
+        headers=[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Accept", "application/json"),
+            ("DPoP", proofs[0]),
+            ("DPoP", proofs[1]),
+        ],
+        content=urlencode(form).encode(),
+    )
+    response = await ctx.http.send(request, follow_redirects=False)
+    check(
+        response.status_code == 400, f"two DPoP headers: expected 400, got {response.status_code}"
+    )
+    check(
+        _error(response) in {"invalid_dpop_proof", "invalid_request"},
+        f"two DPoP headers: got {_error(response)!r}",
+    )
+
+
+@case("lifecycle.account-mismatch-after-sign-out")
+async def _mismatch_after_sign_out(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A Session ever signed in to one account is never signed in to another (§4.4, §4.8)."""
+
+    metadata = await ctx.metadata()
+    user = ctx.new_user()
+    first, second = ctx.driver.accounts
+    session = await ctx.session(user)
+    signed = await ctx.sign_in(user, session, account=first)
+    other = await ctx.sign_in(user, await ctx.session(user), account=second)
+    await ctx.agent.accounts.revoke(signed.reference, context=await ctx.account_context(user))
+    renewed = await ctx.agent.sessions.renew(
+        client_id=ctx.agent.identity.client_id,
+        pairwise_user_id=user,
+        issuer=metadata.issuer,
+        token_endpoint=metadata.token_endpoint,
+        tenant_id=ctx.tenant_id,
+        session_id=session.session_id,
+    )
+    check(not renewed.signed_in, "after sign-out the Session continues signed out")
+    with _raises(PersonalAgentProtocolError) as raised:
+        await ctx.agent.accounts.refresh(
+            other.reference,
+            context=await ctx.account_context(user),
+            session_id=session.session_id,
+        )
+    check(raised.value.code == "account_mismatch", f"got {raised.value.code}")
+
+
+@case("lifecycle.mcp-token-type-by-server")
+async def _mcp_token_type(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """The company chooses the token type by the MCP server in `resource` (§4.3)."""
+
+    url = await _mcp_url(ctx)
+    dpop = await _mcp_dpop(ctx, url)
+    issuer = (await ctx.metadata()).issuer
+    user = ctx.new_user()
+    session = await ctx.session(user)
+
+    async def form() -> dict[str, str]:
+        return {
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": ctx.assertion(ctx.claims(subject=user, audience=issuer)),
+            "session_id": session.session_id,
+            "resource": url,
+            **(await ctx.client_form()),
+        }
+
+    if dpop:
+        # Never a Bearer token to a personal agent for a DPoP server: no proof is refused.
+        refused = await ctx.token_request(user, await form(), dpop=None)
+        expect_refusal(refused, 400, "invalid_dpop_proof", "a DPoP MCP server without a proof")
+        issued = await ctx.token_request(user, await form())
+        check(issued.status_code == 200, "with a proof, a token is issued")
+        check(issued.json().get("token_type") == "DPoP", "a DPoP token for a DPoP MCP server")
+    else:
+        # A Bearer token even when the request has a proof, never a DPoP one.
+        issued = await ctx.token_request(user, await form())
+        check(issued.status_code == 200, "a token is issued")
+        check(issued.json().get("token_type") == "Bearer", "a Bearer token for this MCP server")
+
+
+@case("protocol.feedback-report")
+async def _feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A report with a Session Token, no scope: 202; an unknown kind too; malformed 400 (§8)."""
+
+    endpoint = feedback_endpoint((await ctx.company()).document)
+    if endpoint is None:
+        raise SkipCase("the company lists no feedback endpoint")
+    user = ctx.new_user()
+    session = await ctx.session(user)
+
+    async def post(body: dict[str, Any]) -> httpx.Response:
+        return await ctx.send(
+            "POST",
+            endpoint,
+            headers={
+                "Authorization": f"DPoP {session.access_token.get_secret_value()}",
+                "DPoP": await ctx.proof(user, "POST", endpoint, token=session),
+                "Content-Type": "application/json",
+            },
+            content=json.dumps(body).encode(),
+        )
+
+    report = {"kind": "missing", "task": "Conformance task", "description": "Not offered."}
+    accepted = await post(report)
+    check(accepted.status_code == 202, f"a report is accepted with 202, got {accepted.status_code}")
+    unknown = await post({**report, "kind": "conformance-later-kind"})
+    check(unknown.status_code == 202, "a kind it doesn't recognize is accepted")
+    expect_refusal(await post({**report, "task": "x" * 201}), 400, "invalid_request", "too long")
+    bare = await ctx.send(
+        "POST", endpoint, headers={"Content-Type": "application/json"}, content=b"{}"
+    )
+    check(bare.status_code == 401, "a report needs a Session Token")
+
+
+@case("conversations.read-fields")
+async def _read_fields(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """Every read has conversation_id, events, cursor, has_more, status, responder (§7.5)."""
+
+    user = ctx.new_user()
+    session = await ctx.session(user)
+    endpoint = await ctx.conversations_endpoint()
+    conversation = await _conversation(ctx, user, session)
+    url = f"{endpoint.rstrip('/')}/{conversation}/events"
+    first = await ctx.send(
+        "GET",
+        url,
+        headers={
+            "Authorization": f"DPoP {session.access_token.get_secret_value()}",
+            "DPoP": await ctx.proof(user, "GET", url, token=session),
+        },
+    )
+    page = first.json()
+    later = f"{url}?cursor={page['cursor']}"
+    empty = (
+        await ctx.send(
+            "GET",
+            later,
+            headers={
+                "Authorization": f"DPoP {session.access_token.get_secret_value()}",
+                "DPoP": await ctx.proof(user, "GET", later, token=session),
+            },
+        )
+    ).json()
+    fields = {"conversation_id", "events", "cursor", "has_more", "status", "responder"}
+    for read in (page, empty):
+        check(fields <= set(read), f"a read has {sorted(fields - set(read))} missing")
+    check(empty["events"] == [], "events is an empty list when there are none")
 
 
 # The website (§5, Operations §4.4) ---------------------------------------------------

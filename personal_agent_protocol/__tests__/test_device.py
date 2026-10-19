@@ -21,6 +21,7 @@ from personal_agent_protocol import (
     DeviceSignInClient,
     DpopProofRequest,
 )
+from personal_agent_protocol.models import Organization
 from personal_agent_protocol.reactor import build_pap_reactor
 
 
@@ -147,6 +148,8 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
                 tenant_id="application-one",
                 pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
                 session_id="ses_existing",
+                organization=Organization(name="Company", domain="company.example"),
+                poppy_domains=("company.example",),
             )
             assert started.user_code == "WDJB-MJHT"
             assert "private-device-code" not in started.model_dump_json()
@@ -214,6 +217,8 @@ def test_device_sign_in_denial_is_terminal() -> None:
                 tenant_id="application-one",
                 pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
                 session_id="ses_existing",
+                organization=Organization(name="Company", domain="company.example"),
+                poppy_domains=("company.example",),
             )
             plugin.clock.advance(1)
             with pytest.raises(AuthorizationError) as caught:
@@ -225,5 +230,116 @@ def test_device_sign_in_denial_is_terminal() -> None:
         assert caught.value.code == "access_denied"
         assert "private detail" not in str(caught.value)
         assert reused.value.code == "invalid_or_expired_device_session"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("link", "allowed"),
+    [
+        ("https://company.example/device", True),
+        ("https://login.company.example/device", True),
+        ("https://auth.example.com/device", True),
+        ("https://www.auth.example.com/device", True),
+        ("https://COMPANY.example/device", True),
+        ("https://other-company.example/device", False),
+        ("https://company.example.evil.example/device", False),
+        ("https://evilcompany.example/device", False),
+    ],
+)
+def test_a_device_link_is_shown_only_on_the_issuer_or_its_domains(link: str, allowed: bool) -> None:
+    """Its host is the issuer's, a domain in poppy_domains, or a subdomain of either (§4.6)."""
+
+    async def scenario() -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "device_code": "private-device-code",
+                    "user_code": "WDJB-MJHT",
+                    "verification_uri": link,
+                    "expires_in": 600,
+                    "interval": 5,
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            reactor, _ = build_pap_reactor(http_client=http)
+            plugin = DevicePlugin()
+            reactor.register_plugin(PluginManifest(name="pap-test-device", version="1"), plugin)
+            begin = DeviceSignInClient(reactor=reactor, http_client=http).begin(
+                device_authorization_endpoint="https://auth.example.com/oauth/device",
+                token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
+                issuer="https://auth.example.com",
+                client_id="https://agent.example/agent.json",
+                scopes=("poppy:read",),
+                tenant_id="application-one",
+                pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
+                session_id="ses_existing",
+                organization=Organization(name="Company", domain="company.example"),
+                poppy_domains=("company.example",),
+            )
+            if allowed:
+                started = await begin
+                assert (started.organization_name, started.organization_domain) == (
+                    "Company",
+                    "company.example",
+                )
+            else:
+                with pytest.raises(AuthorizationError) as refused:
+                    await begin
+                assert refused.value.code == "unsafe_verification_uri"
+                assert plugin.state.values == {}  # nothing kept for a link never shown
+            reactor.stop()
+
+    asyncio.run(scenario())
+
+
+def test_the_device_poll_retries_once_with_the_token_endpoints_nonce() -> None:
+    async def scenario() -> None:
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "device_code": "private-device-code",
+                        "user_code": "WDJB-MJHT",
+                        "verification_uri": "https://company.example/device",
+                        "expires_in": 600,
+                        "interval": 5,
+                    },
+                )
+            if calls == 2:
+                return httpx.Response(
+                    400, json={"error": "use_dpop_nonce"}, headers={"DPoP-Nonce": "n-1"}
+                )
+            return httpx.Response(400, json={"error": "authorization_pending"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            reactor, _ = build_pap_reactor(http_client=http)
+            plugin = DevicePlugin()
+            reactor.register_plugin(PluginManifest(name="pap-test-device", version="1"), plugin)
+            client = DeviceSignInClient(reactor=reactor, http_client=http)
+            started = await client.begin(
+                device_authorization_endpoint="https://auth.example.com/oauth/device",
+                token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
+                issuer="https://auth.example.com",
+                client_id="https://agent.example/agent.json",
+                scopes=("poppy:read",),
+                tenant_id="application-one",
+                pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
+                session_id="ses_existing",
+                organization=Organization(name="Company", domain="company.example"),
+                poppy_domains=("company.example",),
+            )
+            plugin.clock.advance(5)
+            polled = await client.poll(started.reference)
+            assert polled.status == "pending"
+            assert [request.nonce for request in plugin.dpop.requests] == [None, "n-1"]
+            reactor.stop()
 
     asyncio.run(scenario())

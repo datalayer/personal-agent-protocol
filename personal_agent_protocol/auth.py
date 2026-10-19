@@ -43,11 +43,12 @@ from .reactor import (
     first_contribution,
     send_bounded,
 )
+from .refusals import refusal_details, refuse_redirect
 from .sessions import (
     JWT_CLIENT_ASSERTION,
-    ClientAssertionClaims,
     SessionToken,
     _opaque_id,
+    build_client_assertion_claims,
 )
 from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
@@ -414,15 +415,11 @@ class DirectSignInClient:
         )
         nonce: str | None = None
         for attempt in range(2):
-            now = clock.now()
-            issued_at = int(now.timestamp())
-            claims = ClientAssertionClaims(
-                iss=pending.request.client_id,
-                sub=pending.request.client_id,
-                aud=pending.token_endpoint,
-                iat=issued_at,
-                exp=issued_at + 60,
-                jti=_opaque_id("jti", random_source.bytes),
+            claims = build_client_assertion_claims(
+                client_id=pending.request.client_id,
+                issuer=pending.request.issuer,
+                now=clock.now(),
+                random_bytes=random_source.bytes,
             )
             assertion = await signer.sign(
                 claims.model_dump(),
@@ -461,6 +458,7 @@ class DirectSignInClient:
                 raise AuthorizationError(
                     "request_failed", "Direct Sign-In token exchange failed"
                 ) from exc
+            refuse_redirect(response, AuthorizationError)
             payload = self._decode(response)
             if response.is_success:
                 return await self._result(response, payload, pending)
@@ -479,6 +477,7 @@ class DirectSignInClient:
                 safe_code,
                 "Company refused the Direct Sign-In token exchange",
                 status_code=response.status_code,
+                details=refusal_details(response, payload) or None,
             )
         raise AuthorizationError("use_dpop_nonce", "Company rejected the refreshed DPoP proof")
 

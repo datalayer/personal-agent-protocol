@@ -97,6 +97,8 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     world.clock.advance(started.poll_interval)
     assert (await device.poll(started.reference)).status == "pending"

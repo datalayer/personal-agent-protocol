@@ -33,12 +33,15 @@ from .reactor import (
     first_contribution,
     send_bounded,
 )
+from .refusals import refusal_details, refuse_redirect
 from .telemetry import by_issuer, session_result, traced
 
 JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 JWT_CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
 RandomBytes = Callable[[int], bytes]
+#: A client or Session assertion's `exp` is at most this long after its `iat` (§4.1, §4.2).
+ASSERTION_MAX_LIFETIME_SECONDS = 300
 
 
 def _opaque_id(prefix: str, random_bytes: RandomBytes = secrets.token_bytes) -> str:
@@ -77,32 +80,70 @@ class SessionAssertionClaims(ProtocolModel):
 
     @model_validator(mode="after")
     def validate_lifetime(self) -> SessionAssertionClaims:
-        if self.exp <= self.iat:
-            raise ValueError("assertion expiration must be after issuance")
+        _check_lifetime(self.iat, self.exp)
         return self
+
+
+def _check_lifetime(iat: int, exp: int) -> None:
+    if exp <= iat:
+        raise ValueError("assertion expiration must be after issuance")
+    if exp - iat > ASSERTION_MAX_LIFETIME_SECONDS:
+        raise ValueError("an assertion expires at most five minutes after it is issued")
+
+
+def _issued_at(now: datetime | None, lifetime_seconds: int) -> int:
+    if not 0 < lifetime_seconds <= ASSERTION_MAX_LIFETIME_SECONDS:
+        raise ValueError("assertion lifetime must be between 1 and 300 seconds")
+    issued_at = now or datetime.now(timezone.utc)
+    if issued_at.tzinfo is None:
+        raise ValueError("assertion time must include a timezone")
+    return int(issued_at.timestamp())
 
 
 def build_session_assertion_claims(
     *,
     client_id: str,
     pairwise_user_id: str,
-    token_endpoint: str,
+    issuer: str,
     now: datetime | None = None,
     lifetime_seconds: int = 60,
     random_bytes: RandomBytes = secrets.token_bytes,
 ) -> SessionAssertionClaims:
-    """Build unsigned PAP 4.2 claims; a key-custody provider signs them."""
+    """Build unsigned PAP 4.2 claims; a key-custody provider signs them.
 
-    if lifetime_seconds <= 0:
-        raise ValueError("assertion lifetime must be positive")
-    issued_at = now or datetime.now(timezone.utc)
-    if issued_at.tzinfo is None:
-        raise ValueError("assertion time must include a timezone")
-    issued_at_seconds = int(issued_at.timestamp())
+    `aud` is the company's `auth.issuer`, one string, never an endpoint (§4.2, §9.4).
+    """
+
+    issued_at_seconds = _issued_at(now, lifetime_seconds)
     return SessionAssertionClaims(
         iss=client_id,
         sub=pairwise_user_id,
-        aud=token_endpoint,
+        aud=issuer,
+        iat=issued_at_seconds,
+        exp=issued_at_seconds + lifetime_seconds,
+        jti=_opaque_id("jti", random_bytes),
+    )
+
+
+def build_client_assertion_claims(
+    *,
+    client_id: str,
+    issuer: str,
+    now: datetime | None = None,
+    lifetime_seconds: int = 60,
+    random_bytes: RandomBytes = secrets.token_bytes,
+) -> ClientAssertionClaims:
+    """Build unsigned `private_key_jwt` claims for any request to the company's OAuth server.
+
+    `aud` is the company's `auth.issuer`, one string, whichever endpoint the
+    assertion goes to: token, revocation, or device authorization (§4.1, §9.4).
+    """
+
+    issued_at_seconds = _issued_at(now, lifetime_seconds)
+    return ClientAssertionClaims(
+        iss=client_id,
+        sub=client_id,
+        aud=issuer,
         iat=issued_at_seconds,
         exp=issued_at_seconds + lifetime_seconds,
         jti=_opaque_id("jti", random_bytes),
@@ -195,9 +236,20 @@ class ClientAssertionClaims(ProtocolModel):
 
     @model_validator(mode="after")
     def validate_lifetime(self) -> ClientAssertionClaims:
-        if self.exp <= self.iat:
-            raise ValueError("assertion expiration must be after issuance")
+        _check_lifetime(self.iat, self.exp)
         return self
+
+
+def token_types(*, dpop: bool, resource: str | None) -> frozenset[str]:
+    """The token types a token request may be answered with (§4.3).
+
+    With a proof: DPoP, or, for an MCP server (`resource`) that doesn't
+    support DPoP, Bearer. Without one: Bearer, for an MCP server only.
+    """
+
+    if not dpop:
+        return frozenset({"Bearer"})
+    return frozenset({"DPoP", "Bearer"}) if resource is not None else frozenset({"DPoP"})
 
 
 def _mcp_resource(value: str) -> str:
@@ -274,7 +326,7 @@ class SessionClient:
             session_id=session_id,
         )
 
-    async def bearer_for_mcp(
+    async def token_for_mcp(
         self,
         *,
         client_id: str,
@@ -282,14 +334,20 @@ class SessionClient:
         issuer: str,
         token_endpoint: str,
         tenant_id: str,
-        session_id: str,
         resource: str,
+        dpop: bool,
+        session_id: str | None = None,
     ) -> SessionToken:
-        """A signed-out Bearer Session Token for one MCP server (§4.3).
+        """A signed-out Session Token for one MCP server (§4.3).
 
-        The renewal request of the Session, without a DPoP proof, with
-        `resource` set to the MCP server's `url` from poppy.json. The token
-        works only there: hand it to `mcp.McpBearerAuth`, never to an API.
+        The request that starts the Session (no `session_id`) or renews its
+        token, with `resource` set to the MCP server's `url` from poppy.json.
+        `dpop` says whether the server supports DPoP, as its protected
+        resource metadata lists `dpop_signing_alg_values_supported`
+        (`mcp.McpServerMetadata.supports_dpop`): then the request carries a
+        proof and the token is a DPoP one; otherwise no proof is sent and the
+        token is a Bearer one, which works only at that server
+        (`mcp.McpBearerAuth`). A token of the other type is refused.
         """
 
         return await self._request(
@@ -299,7 +357,8 @@ class SessionClient:
             token_endpoint=token_endpoint,
             tenant_id=tenant_id,
             session_id=session_id,
-            bearer_resource=_mcp_resource(resource),
+            resource=_mcp_resource(resource),
+            dpop=dpop,
         )
 
     async def _request(
@@ -311,7 +370,8 @@ class SessionClient:
         token_endpoint: str,
         tenant_id: str,
         session_id: str | None,
-        bearer_resource: str | None = None,
+        resource: str | None = None,
+        dpop: bool = True,
     ) -> SessionToken:
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
         random_source = cast(
@@ -319,7 +379,7 @@ class SessionClient:
             first_contribution(self.reactor, RANDOM_SOURCES, "random source"),
         )
         signer = cast(Signer, first_contribution(self.reactor, SIGNERS, "signer"))
-        dpop = cast(
+        prover = cast(
             DpopProofProvider,
             first_contribution(
                 self.reactor,
@@ -333,26 +393,20 @@ class SessionClient:
             session_claims = build_session_assertion_claims(
                 client_id=client_id,
                 pairwise_user_id=pairwise_user_id,
-                token_endpoint=token_endpoint,
+                issuer=issuer,
                 now=now,
                 random_bytes=random_source.bytes,
             )
-            issued_at = int(now.timestamp())
-            client_claims = ClientAssertionClaims(
-                iss=client_id,
-                sub=client_id,
-                aud=token_endpoint,
-                iat=issued_at,
-                exp=issued_at + 60,
-                jti=_opaque_id("jti", random_source.bytes),
+            client_claims = build_client_assertion_claims(
+                client_id=client_id, issuer=issuer, now=now, random_bytes=random_source.bytes
             )
             assertion = await signer.sign(session_claims.model_dump(), purpose="session_assertion")
             client_assertion = await signer.sign(
                 client_claims.model_dump(), purpose="client_assertion"
             )
             headers = {"Accept": "application/json"}
-            if bearer_resource is None:
-                proof = await dpop.create(
+            if dpop:
+                proof = await prover.create(
                     DpopProofRequest(
                         method="POST",
                         url=token_endpoint,
@@ -368,7 +422,7 @@ class SessionClient:
                 client_id=client_id,
                 client_assertion=client_assertion,
                 session_id=session_id,
-                resource=bearer_resource,
+                resource=resource,
             )
             try:
                 response = await send_bounded(
@@ -380,6 +434,7 @@ class SessionClient:
                 )
             except httpx.HTTPError as exc:
                 raise SessionError("request_failed", "Session token request failed") from exc
+            refuse_redirect(response, SessionError)
 
             if len(response.content) > self.max_response_bytes:
                 raise SessionError(
@@ -397,13 +452,15 @@ class SessionClient:
                         "Session token response is malformed",
                         status_code=response.status_code,
                     ) from exc
-                expected = "DPoP" if bearer_resource is None else "Bearer"
-                if token.token_type != expected or (
-                    bearer_resource is not None and token.session_id != session_id
+                # The scheme `token_type` names is the one used (§4.3). A request with a
+                # proof for an MCP server may get a Bearer token (a server without DPoP);
+                # one without a proof never gets a DPoP token, nor anything else a Bearer.
+                if token.token_type not in token_types(dpop=dpop, resource=resource) or (
+                    session_id is not None and token.session_id != session_id
                 ):
                     raise SessionError(
                         "unexpected_token_type",
-                        f"The Session request must return a {expected} token for this Session",
+                        "The Session request returned another token type or Session",
                         status_code=response.status_code,
                     )
                 return token
@@ -419,12 +476,11 @@ class SessionClient:
                         status_code=response.status_code,
                     )
                 continue
-            retry_after = response.headers.get("retry-after")
             raise SessionError(
                 safe_code,
                 "Company refused the session token request",
                 status_code=response.status_code,
-                details={"retry_after": retry_after} if retry_after else None,
+                details=refusal_details(response, payload) or None,
             )
 
         raise SessionError("use_dpop_nonce", "Company rejected the refreshed DPoP proof")

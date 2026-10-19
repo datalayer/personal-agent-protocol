@@ -37,6 +37,7 @@ from personal_agent_protocol.extensions import (
     extension_required,
     negotiate_extensions,
 )
+from personal_agent_protocol.feedback import feedback_endpoint
 from personal_agent_protocol.json import loads_strict
 from personal_agent_protocol.models import (
     ConversationEventPage,
@@ -124,6 +125,8 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             assert [api.type for api in known_apis(document)] == expect["known_api_types"]
         if "conversation_endpoint" in expect:
             assert conversation_endpoint(document) == expect["conversation_endpoint"]
+        if "feedback_endpoint" in expect:
+            assert feedback_endpoint(document) == expect["feedback_endpoint"]
     elif case.check == "extension_negotiation":
         negotiated = negotiate_extensions(
             _descriptors(given["company"]), _descriptors(given["agent"])
@@ -141,7 +144,10 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         )
         assert preserved["example.com/gift-wrap"].model_extra == {"color": "red"}
     elif case.check == "extension_required":
-        assert extension_required(given["status"], given["body"]) == expect["extension"]
+        assert (
+            extension_required(given["status"], given["body"], given.get("www_authenticate"))
+            == expect["extension"]
+        )
     elif case.check == "conversation_page":
         page = ConversationEventPage.model_validate(given)
         assert [event.type for event in page.events if event.known] == expect["known_types"]

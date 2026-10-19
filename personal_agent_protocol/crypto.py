@@ -176,6 +176,8 @@ class VerifiedDpopProof:
     issued_at: datetime
     public_jwk: dict[str, Any]
     key_thumbprint: str
+    #: The `nonce` the proof carried, for a company that requires ones it issued (§4.3).
+    nonce: str | None = None
 
 
 def _thumbprint(jwk_value: dict[str, Any]) -> str:
@@ -203,6 +205,9 @@ async def verify_dpop_proof(  # noqa: C901 - every bound claim is checked in seq
     if acceptance_window_seconds <= 0:
         raise ValueError("acceptance_window_seconds must be positive")
     compact = proof.get_secret_value() if isinstance(proof, SecretStr) else proof
+    if compact.count(".") != 2 or any(char in compact for char in ", \t"):
+        # One `DPoP` header holding one compact JWT: two headers joined are refused (§4.3).
+        raise ProofError("invalid_dpop_proof", "DPoP header is not one compact JWT")
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         raise ValueError("verification time must be timezone-aware")
@@ -254,4 +259,7 @@ async def verify_dpop_proof(  # noqa: C901 - every bound claim is checked in seq
     # Remembered for as long as the proof would be accepted: until `iat` leaves the window.
     if not await replay_cache.mark_once(replay_key, expires_at=issued_at + window):
         raise ProofError("invalid_dpop_proof", "DPoP proof has already been used")
-    return VerifiedDpopProof(jti, issued_at, public_jwk, thumbprint)
+    carried = claims.get("nonce")
+    return VerifiedDpopProof(
+        jti, issued_at, public_jwk, thumbprint, carried if isinstance(carried, str) else None
+    )

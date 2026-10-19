@@ -91,11 +91,23 @@ class PapSignIn(Display):
     #: What the company said it needs before it answers: the scope its ``authorization``
     #: event named (§7.11), when one did. The person sees what they are asked to allow.
     needs: list[str] = Field(default_factory=list)
+    #: The company's ``organization.name`` and ``organization.domain`` from its poppy.json:
+    #: shown whenever the person is asked for a code or credentials (§4.6, §4.7), so
+    #: required for ``device`` and ``mediated``.
+    organization_name: str | None = None
+    organization_domain: str | None = None
 
-    @field_validator("company")
+    @field_validator("company", "organization_domain")
     @classmethod
     def _company(cls, value: str | None) -> str | None:
         return _domain(value) if value is not None else None
+
+    @field_validator("organization_name")
+    @classmethod
+    def _organization_name(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("a company's name is not blank")
+        return value.strip() if value is not None else None
 
     @field_validator("needs")
     @classmethod
@@ -116,6 +128,9 @@ class PapSignIn(Display):
     def _code_for_device(self) -> PapSignIn:
         if self.mode == "device" and not self.code:
             raise ValueError("a device sign-in needs its code")
+        if self.mode != "direct" and (not self.organization_name or not self.organization_domain):
+            # Asking for a code or credentials names the company that asks (§4.6, §4.7).
+            raise ValueError("a device or mediated sign-in names the company: name and domain")
         return self
 
     @property
@@ -127,6 +142,13 @@ class PapSignIn(Display):
     def at(self) -> str:
         """Where the person signs in: the company named, or the page's own domain."""
         return self.company or self.host
+
+    @property
+    def organization(self) -> str:
+        """The company as poppy.json names it, ``name (domain)``, when the display has it."""
+        if self.organization_name and self.organization_domain:
+            return f"{self.organization_name} ({self.organization_domain})"
+        return ""
 
     def text(self) -> str:
         # Neither the page nor the code: the text is also what a model and a
@@ -143,13 +165,13 @@ class PapSignIn(Display):
             )
         if self.mode == "device":
             return (
-                f"Sign in at {self.host}: open its sign-in page, shown here, "
-                "and enter the code shown with it."
+                f"Sign in to {self.organization} at {self.host}: open its sign-in page, "
+                "shown here, and enter the code shown with it."
             )
         sent = f" A code was sent to {self.sent_to}." if self.sent_to else ""
         return (
-            f"Sign in at {self.host}: open the page shown here and type what the company "
-            f"asks there, never in this conversation.{sent}"
+            f"Sign in to {self.organization} at {self.host}: open the page shown here and type "
+            f"what the company asks there, never in this conversation.{sent}"
         )
 
     @classmethod
@@ -157,7 +179,17 @@ class PapSignIn(Display):
         """The display for a ``pap_sign_in`` answer, or ``None`` for any other status."""
         if answer.get("status") != WAITING_FOR_THE_PERSON:
             return None
-        fields = ("mode", "open", "code", "expires_at", "sent_to", "company", "needs")
+        fields = (
+            "mode",
+            "open",
+            "code",
+            "expires_at",
+            "sent_to",
+            "company",
+            "needs",
+            "organization_name",
+            "organization_domain",
+        )
         return cls.model_validate({key: answer[key] for key in fields if answer.get(key)})
 
     def tool_meta(self) -> dict[str, Any]:

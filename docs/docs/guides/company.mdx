@@ -21,7 +21,7 @@ interfaces that are deployed and authorized consistently.
 
 ```json
 {
-  "protocol_version": "0.1",
+  "protocol_version": "0.2",
   "organization": {
     "name": "Example Company",
     "domain": "example.com"
@@ -295,7 +295,7 @@ config = CompanyConfig(
     domain="orders.example",
     scopes=("orders:read",),
     operations=False,
-    device_page="https://datalayer.ai/pap/device?slug=orders-helper",
+    device_page="https://pap.orders.example/device?slug=orders-helper",
     consent_page="https://datalayer.ai/pap/consent?slug=orders-helper&request={request_id}",
 )
 ```

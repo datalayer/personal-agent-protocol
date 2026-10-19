@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Python SDK for Personal Agent Protocol draft 0.1."""
+"""Python SDK for Personal Agent Protocol draft 0.2."""
 
 from .__version__ import __version__
 from .accounts import (
@@ -63,6 +63,7 @@ from .device import (
     DeviceSignInClient,
     DeviceSignInPoll,
     DeviceSignInStart,
+    verification_host_allowed,
 )
 from .discovery import DiscoveryClient
 from .errors import (
@@ -77,17 +78,20 @@ from .errors import (
     SessionError,
     TransportError,
 )
+from .feedback import FeedbackClient, FeedbackError, FeedbackReport, feedback_endpoint
 from .identity import AgentIdentityClient
 from .mediated import (
     MediatedSignInClient,
     MediatedSignInResult,
 )
 from .models import (
+    SUPPORTED_PROTOCOL_VERSIONS,
     ClientMetadata,
     ConversationEvent,
     ConversationEventPage,
     DiscoveredCompany,
     DiscoveryDocument,
+    FeedbackDescriptor,
     JsonWebKey,
     JsonWebKeySet,
     Message,
@@ -177,6 +181,7 @@ from .sessions import (
     SessionClient,
     SessionGrant,
     SessionToken,
+    build_client_assertion_claims,
     build_session_assertion_claims,
     generate_pairwise_user_id,
 )
@@ -216,6 +221,7 @@ __all__ = [
     "RETRY_POLICIES",
     "SIGNERS",
     "STANDING_PERMISSION_STORES",
+    "SUPPORTED_PROTOCOL_VERSIONS",
     "TELEMETRY_ATTRIBUTES",
     "TELEMETRY_EVENTS",
     "TELEMETRY_SINKS",
@@ -271,6 +277,10 @@ __all__ = [
     "DpopProofProvider",
     "DpopProofRequest",
     "DpopReplayCache",
+    "FeedbackClient",
+    "FeedbackDescriptor",
+    "FeedbackError",
+    "FeedbackReport",
     "IdentityError",
     "InMemoryProtocolCache",
     "InMemoryStandingPermissionStore",
@@ -333,11 +343,13 @@ __all__ = [
     "__version__",
     "approve",
     "build_browser_assertion_claims",
+    "build_client_assertion_claims",
     "build_direct_sign_in_request",
     "build_pap_reactor",
     "build_session_assertion_claims",
     "covers",
     "create_resolving_client",
+    "feedback_endpoint",
     "generate_message_id",
     "generate_pairwise_user_id",
     "openapi_url",
@@ -346,6 +358,7 @@ __all__ = [
     "resolve_pairwise_user_id",
     "terms_digest",
     "validate_direct_sign_in_callback",
+    "verification_host_allowed",
     "verify_browser_assertion",
     "verify_dpop_proof",
 ]

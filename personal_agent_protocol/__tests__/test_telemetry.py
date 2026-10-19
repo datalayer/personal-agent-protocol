@@ -176,7 +176,7 @@ async def test_a_company_reports_what_it_did_and_refused(
         "session_id": session.session_id,
     }
     await sessions.renew(**who)
-    await sessions.bearer_for_mcp(**who, resource="https://manzanita.example/mcp")
+    await sessions.token_for_mcp(**who, resource="https://manzanita.example/mcp", dpop=True)
     company = [e for e in recorded.events if e.stage == "company"]
     by_name = {e.name: e for e in company}
     agent = world.atlas.client_id
@@ -193,7 +193,7 @@ async def test_a_company_reports_what_it_did_and_refused(
     assert started.attributes["pap.session.signed_in"] is False
     renewed = by_name["pap.company.session.renew"]
     assert renewed.attributes["pap.session.signed_in"] is False
-    # A Bearer token for its MCP server moves the Session there.
+    # A token for its MCP server moves the Session there.
     switched = by_name["pap.company.interface.switch"]
     assert switched.attributes["pap.interface"] == "mcp"
     assert not [e for e in company if e.name == "pap.company.refused"]

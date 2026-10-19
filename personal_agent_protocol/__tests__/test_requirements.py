@@ -44,7 +44,7 @@ def _resolves(reference: str) -> bool:
 def test_the_ledger_is_well_formed() -> None:
     ids = [item.id for item in LEDGER.all()]
     assert len(ids) == len(set(ids)), "ledger IDs are unique"
-    assert LEDGER.profile == "0.1"
+    assert LEDGER.profile == "0.2"
     for item in LEDGER.all():
         assert item.level in LEVELS and item.status in STATUSES, item.id
         assert item.text.strip() and item.role in {"personal-agent", "company", "both"}, item.id

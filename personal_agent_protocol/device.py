@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal, cast
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import Field, SecretStr, field_validator
@@ -17,7 +19,7 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 from .auth import _https_url, _scopes
 from .errors import AuthorizationError, ProtocolValidationError
 from .json import loads_strict
-from .models import ProtocolModel
+from .models import Organization, ProtocolModel
 from .reactor import (
     AUTHORIZATION_STATE_STORES,
     CLOCKS,
@@ -35,7 +37,13 @@ from .reactor import (
     first_contribution,
     send_bounded,
 )
-from .sessions import JWT_CLIENT_ASSERTION, ClientAssertionClaims, SessionToken, _opaque_id
+from .refusals import refusal_details, refuse_redirect
+from .sessions import (
+    JWT_CLIENT_ASSERTION,
+    SessionToken,
+    _opaque_id,
+    build_client_assertion_claims,
+)
 from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
@@ -57,10 +65,37 @@ class DeviceAuthorizationResponse(ProtocolModel):
         return None if value is None else _https_url(value, "verification URI")
 
 
+def _host(url: str) -> str:
+    return (urlsplit(url).hostname or "").lower().rstrip(".")
+
+
+def _within(host: str, domain: str) -> bool:
+    return host == domain or host.endswith(f".{domain}")
+
+
+def verification_host_allowed(url: str, *, issuer: str, poppy_domains: Sequence[str]) -> bool:
+    """Whether a device sign-in link may be shown for this company (§4.6).
+
+    Its host is the host of `auth.issuer` or a domain in the issuer's
+    `poppy_domains`, or a subdomain of either; otherwise a company could pass
+    off another company's sign-in page as its own.
+    """
+
+    host = _host(url)
+    allowed = [_host(issuer), *(domain.lower().rstrip(".") for domain in poppy_domains)]
+    return bool(host) and any(domain and _within(host, domain) for domain in allowed)
+
+
 class DeviceSignInStart(ProtocolModel):
-    """User-facing device instructions without the private device code."""
+    """User-facing device instructions without the private device code.
+
+    `organization_name` and `organization_domain` are the company's, shown
+    with the link and the code whenever they are (§4.6).
+    """
 
     reference: str = Field(pattern=r"^device_[A-Za-z0-9_-]{22,}$")
+    organization_name: str
+    organization_domain: str
     user_code: str
     verification_uri: str
     verification_uri_complete: str | None = None
@@ -123,8 +158,16 @@ class DeviceSignInClient:
         tenant_id: str,
         pairwise_user_id: str,
         session_id: str,
+        organization: Organization,
+        poppy_domains: Sequence[str],
     ) -> DeviceSignInStart:
-        """Request a device code and retain it behind an opaque state reference."""
+        """Request a device code and retain it behind an opaque state reference.
+
+        `organization` is the company's, from its poppy.json, and
+        `poppy_domains` its issuer's (OAuth metadata): the verification link
+        is refused (`unsafe_verification_uri`) unless its host is the
+        issuer's or one of those domains, or a subdomain of either (§4.6).
+        """
 
         clock, random_source, signer = self._proof_inputs()
         now = clock.now()
@@ -135,7 +178,9 @@ class DeviceSignInClient:
         requested_scopes = _scopes(scopes)
         self._validate_context(tenant_id, pairwise_user_id, session_id)
         assertion = await signer.sign(
-            self._client_assertion(client_url, endpoint, now, random_source).model_dump(),
+            build_client_assertion_claims(
+                client_id=client_url, issuer=issuer_url, now=now, random_bytes=random_source.bytes
+            ).model_dump(),
             purpose="client_assertion",
         )
         try:
@@ -158,6 +203,7 @@ class DeviceSignInClient:
             raise AuthorizationError(
                 "request_failed", "Device authorization request failed"
             ) from exc
+        refuse_redirect(response, AuthorizationError)
         payload = self._decode(response, "device authorization")
         if not response.is_success:
             raise self._remote_error(response, payload, "Company refused Device Sign-In")
@@ -169,6 +215,15 @@ class DeviceSignInClient:
                 "Device authorization response is malformed",
                 status_code=response.status_code,
             ) from exc
+        for link in (authorization.verification_uri, authorization.verification_uri_complete):
+            if link is not None and not verification_host_allowed(
+                link, issuer=issuer_url, poppy_domains=poppy_domains
+            ):
+                raise AuthorizationError(
+                    "unsafe_verification_uri",
+                    "The device sign-in link is not on the company's issuer or its domains",
+                    status_code=response.status_code,
+                )
         expires_at = now + timedelta(seconds=authorization.expires_in)
         reference = _opaque_id("device", random_source.bytes)
         pending = _PendingDeviceSignIn(
@@ -188,6 +243,8 @@ class DeviceSignInClient:
         await store.put(reference, pending, expires_at=expires_at)
         return DeviceSignInStart(
             reference=reference,
+            organization_name=organization.name,
+            organization_domain=organization.domain,
             user_code=authorization.user_code,
             verification_uri=authorization.verification_uri,
             verification_uri_complete=authorization.verification_uri_complete,
@@ -245,46 +302,66 @@ class DeviceSignInClient:
         random_source: RandomSource,
         signer: Signer,
     ) -> tuple[httpx.Response, object]:
-        assertion = await signer.sign(
-            self._client_assertion(
-                pending.client_id, pending.token_endpoint, now, random_source
-            ).model_dump(),
-            purpose="client_assertion",
-        )
         dpop = cast(
             DpopProofProvider,
             first_contribution(self.reactor, DPOP_PROOF_PROVIDERS, "DPoP proof provider"),
         )
-        proof = await dpop.create(
-            DpopProofRequest(
-                method="POST",
-                url=pending.token_endpoint,
-                tenant_id=pending.tenant_id,
-                subject=pending.pairwise_user_id,
-                issuer=pending.issuer,
+        nonce: str | None = None
+        for attempt in range(2):
+            assertion = await signer.sign(
+                build_client_assertion_claims(
+                    client_id=pending.client_id,
+                    issuer=pending.issuer,
+                    now=now,
+                    random_bytes=random_source.bytes,
+                ).model_dump(),
+                purpose="client_assertion",
             )
-        )
-        try:
-            response = await send_bounded(
-                self.http,
-                self.http.build_request(
-                    "POST",
-                    pending.token_endpoint,
-                    data={
-                        "grant_type": DEVICE_CODE_GRANT,
-                        "device_code": pending.device_code.get_secret_value(),
-                        "session_id": pending.session_id,
-                        "client_id": pending.client_id,
-                        "client_assertion_type": JWT_CLIENT_ASSERTION,
-                        "client_assertion": assertion.get_secret_value(),
-                    },
-                    headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
-                ),
-                max_bytes=self.max_response_bytes,
+            proof = await dpop.create(
+                DpopProofRequest(
+                    method="POST",
+                    url=pending.token_endpoint,
+                    tenant_id=pending.tenant_id,
+                    subject=pending.pairwise_user_id,
+                    issuer=pending.issuer,
+                    nonce=nonce,
+                )
             )
-        except httpx.HTTPError as exc:
-            raise AuthorizationError("request_failed", "Device token request failed") from exc
-        return response, self._decode(response, "device token")
+            try:
+                response = await send_bounded(
+                    self.http,
+                    self.http.build_request(
+                        "POST",
+                        pending.token_endpoint,
+                        data={
+                            "grant_type": DEVICE_CODE_GRANT,
+                            "device_code": pending.device_code.get_secret_value(),
+                            "session_id": pending.session_id,
+                            "client_id": pending.client_id,
+                            "client_assertion_type": JWT_CLIENT_ASSERTION,
+                            "client_assertion": assertion.get_secret_value(),
+                        },
+                        headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
+                    ),
+                    max_bytes=self.max_response_bytes,
+                )
+            except httpx.HTTPError as exc:
+                raise AuthorizationError("request_failed", "Device token request failed") from exc
+            refuse_redirect(response, AuthorizationError)
+            payload = self._decode(response, "device token")
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if error == "use_dpop_nonce" and attempt == 0:
+                # The token endpoint's nonce, as an OAuth error (§4.3): retried once with it.
+                nonce = response.headers.get("dpop-nonce")
+                if not nonce:
+                    raise AuthorizationError(
+                        "missing_dpop_nonce",
+                        "Company requested a DPoP nonce but did not send one",
+                        status_code=response.status_code,
+                    )
+                continue
+            return response, payload
+        raise AuthorizationError("use_dpop_nonce", "Company rejected the refreshed DPoP proof")
 
     async def _complete(
         self,
@@ -365,23 +442,6 @@ class DeviceSignInClient:
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", value):
                 raise ValueError(f"{label} must be an opaque URL-safe identifier")
 
-    @staticmethod
-    def _client_assertion(
-        client_id: str,
-        audience: str,
-        now: datetime,
-        random_source: RandomSource,
-    ) -> ClientAssertionClaims:
-        issued_at = int(now.timestamp())
-        return ClientAssertionClaims(
-            iss=client_id,
-            sub=client_id,
-            aud=audience,
-            iat=issued_at,
-            exp=issued_at + 60,
-            jti=_opaque_id("jti", random_source.bytes),
-        )
-
     def _decode(self, response: httpx.Response, label: str) -> object:
         if len(response.content) > self.max_response_bytes:
             raise AuthorizationError(
@@ -413,4 +473,5 @@ class DeviceSignInClient:
             remote if isinstance(remote, str) else "http_error",
             message,
             status_code=response.status_code,
+            details=refusal_details(response, payload) or None,
         )

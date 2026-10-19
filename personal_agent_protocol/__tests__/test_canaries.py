@@ -464,11 +464,12 @@ async def test_no_credential_reaches_logs_errors_urls_or_model_text(harvest: Har
     await direct.test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchange()
     await direct.test_a_code_works_once()
     await test_guide_security.test_the_consent_form_is_bound_to_the_browser_that_was_shown_it()
-    # MCP with a Bearer token, and the website with its cookie.
-    await (
-        test_mcp_and_web.test_a_signed_in_bearer_reads_and_proposes_through_mcp_the_same_operation()
-    )
-    await test_mcp_and_web.test_a_bearer_token_is_refused_everywhere_but_its_mcp_server()
+    # MCP with a DPoP token and with a Bearer one, and the website with its cookie.
+    for dpop in (True, False):
+        await test_mcp_and_web.test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation(
+            dpop
+        )
+        await test_mcp_and_web.test_an_mcp_token_is_refused_everywhere_but_its_mcp_server(dpop)
     await test_mcp_and_web.test_the_operation_confirmed_on_the_website_is_the_same_operation_once()
     await test_mcp_and_web.test_the_website_follows_the_session_and_refuses_bad_assertions()
     await test_guide_security.test_the_operation_page_refuses_cross_site_and_another_browsers_form()
@@ -503,6 +504,8 @@ def _sign_in_views(harvest: Harvest) -> list[tuple[str, str]]:
             mode="device",
             open=f"https://manzanita.example/device?user_code={user_code}",
             code=user_code,
+            organization_name="Manzanita",
+            organization_domain="manzanita.example",
         )
         views.append(
             (f"PapSignIn(device {user_code}).model_view()", json.dumps(display.model_view()))
@@ -515,6 +518,8 @@ def _sign_in_views(harvest: Harvest) -> list[tuple[str, str]]:
         mode="mediated",
         open="https://datalayer.example/pap/sign-in?ticket=t",
         sent_to="a•••@example.com",
+        organization_name="Manzanita",
+        organization_domain="manzanita.example",
     )
     views.append(("PapSignIn(mediated).model_view()", json.dumps(mediated.model_view())))
     assert user_codes and len(views) > len(user_codes) + 1

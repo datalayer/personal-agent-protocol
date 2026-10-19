@@ -148,7 +148,7 @@ pairwise_user_id = await resolve_pairwise_user_id(
 claims = build_session_assertion_claims(
     client_id="https://agent.example/agent.json",
     pairwise_user_id=pairwise_user_id,
-    token_endpoint="https://auth.example.com/oauth/token",
+    issuer="https://auth.example.com",
 )
 
 # Signing is intentionally not performed by this module.

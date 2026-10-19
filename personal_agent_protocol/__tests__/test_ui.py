@@ -32,6 +32,8 @@ DEVICE = {
     "open": "https://manzanita.example/device?user_code=WDJB-MJHT",
     "code": "WDJB-MJHT",
     "expires_at": "2026-10-11T12:15:00+00:00",
+    "organization_name": "Manzanita",
+    "organization_domain": "manzanita.example",
 }
 
 
@@ -50,7 +52,8 @@ def test_a_device_answer_is_a_display_whose_code_only_the_page_sees() -> None:
     assert "code" not in view["data"] and "open" not in view["data"]
     seen = json.dumps(view)
     assert "WDJB-MJHT" not in seen and "user_code" not in seen
-    assert view["text"].startswith("Sign in at manzanita.example")
+    # The company that asks, by its name and domain (§4.6).
+    assert view["text"].startswith("Sign in to Manzanita (manzanita.example) at manzanita.example")
 
 
 def test_direct_and_mediated_answers() -> None:
@@ -68,10 +71,14 @@ def test_direct_and_mediated_answers() -> None:
             "mode": "mediated",
             "open": "https://studio.example/pap/sign-in?ticket=t",
             "sent_to": "a•••@example.com",
+            "organization_name": "Example",
+            "organization_domain": "example.com",
         }
     )
     assert mediated is not None
     assert "never in this conversation" in mediated.text()
+    # Asked for credentials or a code, the person sees which company asks (§4.7).
+    assert "Example (example.com)" in mediated.text()
     assert "a•••@example.com" in mediated.text()
     # The page's address, with its ticket, is the page's alone.
     for display in (direct, mediated):
@@ -456,3 +463,19 @@ async def test_the_core_plugin_declares_the_replies_type() -> None:
     finally:
         if http is not None:
             await http.aclose()
+
+
+def test_a_device_or_mediated_sign_in_names_its_company() -> None:
+    """Whenever a person is asked for a code or credentials, the company is named (§4.6, §4.7)."""
+    for mode, extra in (("device", {"code": "ABCD-EFGH"}), ("mediated", {})):
+        with pytest.raises(ValidationError, match="names the company"):
+            PapSignIn(mode=mode, open="https://a.example/sign-in", **extra)  # type: ignore[arg-type]
+        named = PapSignIn(
+            mode=mode,  # type: ignore[arg-type]
+            open="https://a.example/sign-in",
+            organization_name="A Company",
+            organization_domain="A.Example",
+            **extra,
+        )
+        assert named.organization == "A Company (a.example)"
+        assert "A Company (a.example)" in named.text()

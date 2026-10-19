@@ -102,7 +102,7 @@ def test_company_commands_emit_stable_json(
             "verified": True,
             "domain": domain,
             "organization": "Example Company",
-            "protocol_version": "0.1",
+            "protocol_version": "0.2",
             "issuer": "https://auth.example.com",
             "sign_in": ["direct"],
             "apis": ["openapi"],

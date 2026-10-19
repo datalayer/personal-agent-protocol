@@ -84,6 +84,8 @@ async def read_sign_in_display() -> dict[str, Any]:
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
 
     # A sign-in tool's answer, and the display a page draws for it.
@@ -93,6 +95,9 @@ async def read_sign_in_display() -> dict[str, Any]:
         "open": started.verification_uri_complete or started.verification_uri,
         "code": started.user_code,
         "expires_at": started.expires_at,
+        # The company that asks for the code, by name and domain (§4.6).
+        "organization_name": started.organization_name,
+        "organization_domain": started.organization_domain,
     }
     display = PapSignIn.from_answer(answer)
     if display is None:

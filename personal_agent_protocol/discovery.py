@@ -15,7 +15,12 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 from .caching import CacheBounds, MetadataCache
 from .errors import DiscoveryError, ProtocolValidationError
 from .json import loads_strict
-from .models import DiscoveredCompany, DiscoveryDocument, OAuthServerMetadata
+from .models import (
+    SUPPORTED_PROTOCOL_VERSIONS,
+    DiscoveredCompany,
+    DiscoveryDocument,
+    OAuthServerMetadata,
+)
 from .reactor import (
     DISCOVERY_TRANSPORTS,
     URL_SAFETY_POLICIES,
@@ -32,6 +37,12 @@ from .telemetry import by_domain, company_result, traced
 
 
 def _metadata_url(issuer: str) -> str:
+    """The issuer's RFC 8414 §3.1 metadata URL: the well-known path between host and path.
+
+    `https://auth.provider.example/shop-a` has its metadata at
+    `https://auth.provider.example/.well-known/oauth-authorization-server/shop-a` (§3.2).
+    """
+
     parsed = urlsplit(issuer)
     path = parsed.path.rstrip("/")
     metadata_path = "/.well-known/oauth-authorization-server" + path
@@ -85,6 +96,13 @@ class DiscoveryClient:
         requested_domain = self._normalize_domain(domain)
         discovery_url = f"https://{requested_domain}/.well-known/poppy.json"
         document_data, final_url = await self._get_json(discovery_url)
+        version = document_data.get("protocol_version") if isinstance(document_data, dict) else None
+        if isinstance(version, str) and version not in SUPPORTED_PROTOCOL_VERSIONS:
+            # Before 1.0 each version can break the last: only a supported major.minor (§3.1).
+            raise DiscoveryError(
+                "unsupported_protocol_version",
+                "poppy.json follows a protocol version this personal agent does not support",
+            )
         try:
             document = DiscoveryDocument.model_validate(document_data)
         except ValidationError as exc:
@@ -92,12 +110,13 @@ class DiscoveryClient:
                 "invalid_discovery_document", "poppy.json failed protocol validation"
             ) from exc
 
-        expected = requested_domain.removeprefix("www.")
-        actual = document.organization.domain.removeprefix("www.")
-        if actual != expected:
+        # The document speaks for the host that served it, after redirects, compared
+        # ignoring case and nothing else (§3, §3.1).
+        served_by = (final_url.host or "").lower().rstrip(".")
+        if document.organization.domain != served_by:
             raise DiscoveryError(
                 "organization_domain_mismatch",
-                "Discovery organization domain does not match the requested domain",
+                "Discovery organization domain is not the host that served the document",
             )
 
         metadata: OAuthServerMetadata | None = None
@@ -109,10 +128,12 @@ class DiscoveryClient:
                 raise ProtocolValidationError(
                     "invalid_oauth_metadata", "OAuth server metadata failed validation"
                 ) from exc
+            # Character for character: no case folding, no trailing-slash trimming (§3.2).
             if metadata.issuer != document.auth.issuer:
                 raise DiscoveryError(
                     "issuer_mismatch", "OAuth metadata issuer does not match auth.issuer"
                 )
+            # Both lower-cased by their models: domains compare ignoring case (§3.2).
             if document.organization.domain not in metadata.poppy_domains:
                 raise DiscoveryError(
                     "domain_not_authorized",

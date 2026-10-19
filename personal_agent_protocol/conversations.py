@@ -1,7 +1,7 @@
 # Copyright (c) 2025-2026 Datalayer, Inc.
 # BSD 3-Clause License
 
-"""PAP 0.1 conversation creation and message continuation."""
+"""PAP 0.2 conversation creation and message continuation."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from .errors import ConversationError, ProtocolValidationError
 from .json import loads_strict
 from .models import ConversationEvent, ConversationEventPage, Message, ProtocolModel
 from .reactor import RANDOM_SOURCES, RandomSource, first_contribution
+from .refusals import challenge_parameters, refusal_details
 from .sessions import SessionToken
 from .telemetry import by_endpoint, conversation_result, traced
 from .transport import DpopHttpClient
@@ -453,15 +454,16 @@ class ConversationClient:
     @staticmethod
     def _rejected(response: httpx.Response, payload: object) -> ConversationError:
         code = payload.get("error") if isinstance(payload, dict) else None
-        details: dict[str, object] = {}
+        if not isinstance(code, str):
+            # A token error may come only in WWW-Authenticate (§6).
+            code = challenge_parameters(response.headers.get("www-authenticate", "")).get("error")
+        # `extension` of `extension_required` (§3.3), `scope`, and on a 429 `retry_after`,
+        # never retried here: the caller waits at least this long (§4.3).
+        details = refusal_details(response, payload)
         if code == "direct_conversation_open" and isinstance(payload, dict):
             open_id = payload.get("conversation_id")
             if isinstance(open_id, str) and _IDENTIFIER.fullmatch(open_id):
                 details["conversation_id"] = open_id
-        retry_after = response.headers.get("retry-after")
-        if response.status_code == 429 and retry_after:
-            # Never retried here: the caller waits at least this long (§4.3).
-            details["retry_after"] = retry_after
         return ConversationError(
             code if isinstance(code, str) else "conversation_request_failed",
             "conversation request was rejected",

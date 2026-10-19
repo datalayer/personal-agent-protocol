@@ -126,6 +126,8 @@ async def device_sign_in(world: World, session: SessionToken) -> tuple[SessionTo
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)

@@ -51,6 +51,7 @@ from .reactor import (
     TokenStore,
     first_contribution,
 )
+from .refusals import refusal_details
 from .sessions import SessionToken, _opaque_id
 from .telemetry import sign_in_result, signed_in_as, traced
 from .transport import DpopHttpClient
@@ -111,11 +112,10 @@ class MediatedSignInClient:
         if max_response_bytes <= 0:
             raise ValueError("max_response_bytes must be positive")
         self.reactor = reactor
-        # Credentials go to one URL: a redirect is refused, never followed.
+        # Credentials go to one URL: a redirect is refused, never followed (§3).
         self.transport = DpopHttpClient(
             reactor=reactor,
             http_client=http_client,
-            max_redirects=0,
             max_response_bytes=max_response_bytes,
         )
         self.max_response_bytes = max_response_bytes
@@ -141,6 +141,7 @@ class MediatedSignInClient:
                 purpose="credentials",
                 company_name=organization.name,
                 company_domain=organization.domain,
+                issuer=issuer,
                 fields=tuple(
                     ProtectedInputField(name=field.name, label=field.label, secret=field.secret)
                     for field in mediated.fields
@@ -206,6 +207,7 @@ class MediatedSignInClient:
                 purpose="one_time_code",
                 company_name=pending.company_name,
                 company_domain=pending.company_domain,
+                issuer=issuer,
                 fields=(ProtectedInputField(name="code", label="Code", secret=True),),
                 sent_to=pending.sent_to,
             ),
@@ -234,13 +236,14 @@ class MediatedSignInClient:
     ) -> MediatedSignInResult:
         payload = self._decode(response)
         if not response.is_success:
+            # Request problems are JSON errors (§4.7): `invalid_scope`, `account_mismatch`,
+            # `sign_in_not_found`, and `rate_limited` with its `Retry-After`.
             error = payload.get("error") if isinstance(payload, dict) else None
-            retry_after = response.headers.get("retry-after")
             raise AuthorizationError(
                 error if isinstance(error, str) else "http_error",
                 "Company refused the Mediated Sign-In",
                 status_code=response.status_code,
-                details={"retry_after": retry_after} if retry_after else None,
+                details=refusal_details(response, payload) or None,
             )
         status = payload.get("status") if isinstance(payload, dict) else None
         if status in {"failed", "expired"}:

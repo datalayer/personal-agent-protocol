@@ -21,7 +21,7 @@ from personal_agent_protocol.demo.kit import personal_agent_reactor
 from .test_company_end_to_end import PAIRWISE, TENANT, World
 from .test_direct_and_api import begin
 
-DEVICE_PAGE = "https://datalayer.ai/pap/device?slug=orders-helper"
+DEVICE_PAGE = "https://pap.manzanita.example/device?slug=orders-helper"
 CONSENT_PAGE = "https://datalayer.ai/pap/consent?slug=orders-helper&request={request_id}"
 
 
@@ -57,7 +57,10 @@ def test_hosted_page_templates_are_checked() -> None:
     with pytest.raises(ValueError, match="consent_page"):
         CompanyConfig(**base, consent_page="https://datalayer.ai/pap/consent")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="HTTPS"):
-        CompanyConfig(**base, device_page="http://datalayer.ai/pap/device")  # type: ignore[arg-type]
+        CompanyConfig(**base, device_page="http://pap.shop.example/device")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="company's domain"):
+        # A device page off the company's domains is a link personal agents refuse (§4.6).
+        CompanyConfig(**base, device_page="https://datalayer.ai/pap/device")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="HTTPS"):
         CompanyConfig(**base, consent_page="https://x.example/c?r={request_id}#frag")  # type: ignore[arg-type]
 
@@ -77,6 +80,8 @@ async def test_device_sign_in_points_at_the_hosted_device_page() -> None:
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     assert started.verification_uri == DEVICE_PAGE
     assert started.verification_uri_complete == (

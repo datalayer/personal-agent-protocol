@@ -73,6 +73,8 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     await firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
     clock.advance(started.poll_interval)

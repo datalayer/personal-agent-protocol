@@ -1,0 +1,139 @@
+# Copyright (c) 2025-2026 Datalayer, Inc.
+#
+# BSD 3-Clause License
+
+"""Feedback: telling a company what its users couldn't do through the protocol (§8).
+
+A company that wants to know lists `feedback.endpoint` in its poppy.json.
+When a user's task can't be done — not with the Company Agent, not with its
+APIs, not on its website in a browser session — the personal agent MAY send
+one `FeedbackReport` for that task with the Session's token and a DPoP proof:
+
+```python
+endpoint = feedback_endpoint(company.document)
+if endpoint is not None:
+    await FeedbackClient(transport=transport).report(
+        endpoint,
+        FeedbackReport(task="Pay with a gift card", description="..."),
+        token=token, **who,
+    )
+```
+
+The report describes the task, never the user: no names, contact details,
+order or account numbers (SHOULD NOT), and never a secret (MUST NOT). The
+Session already tells the company which personal agent and which user sent
+it. `kind` is `missing`, the only value this version defines; personal
+agents MUST NOT send others. Errors are reported, never retried here: send
+one report per task, not one per attempt.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Literal
+
+import httpx
+from pydantic import ConfigDict, Field
+
+from .errors import PersonalAgentProtocolError
+from .json import loads_strict
+from .models import DiscoveryDocument, ProtocolModel
+from .refusals import challenge_parameters, refusal_details
+from .sessions import SessionToken
+from .transport import DpopHttpClient
+
+#: The longest `task` a report carries (§8).
+FEEDBACK_TASK_MAX_LENGTH = 200
+#: The longest `description` a report carries (§8).
+FEEDBACK_DESCRIPTION_MAX_LENGTH = 2000
+
+
+class FeedbackError(PersonalAgentProtocolError):
+    """The company refused a feedback report: `invalid_request`, `rate_limited`, a token error."""
+
+
+class FeedbackReport(ProtocolModel):
+    """One report of a task the company offers no way to do through the protocol (§8).
+
+    Exactly these three fields: nothing about the user, no identifiers, no secret.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["missing"] = "missing"
+    task: str = Field(min_length=1, max_length=FEEDBACK_TASK_MAX_LENGTH)
+    description: str = Field(min_length=1, max_length=FEEDBACK_DESCRIPTION_MAX_LENGTH)
+
+
+def feedback_endpoint(document: DiscoveryDocument) -> str | None:
+    """The company's feedback endpoint, when it asks for feedback."""
+
+    return document.feedback.endpoint if document.feedback is not None else None
+
+
+class FeedbackClient:
+    """Send feedback reports with a Session Token, signed in or out, and a DPoP proof."""
+
+    def __init__(self, *, transport: DpopHttpClient, max_response_bytes: int = 16 * 1024) -> None:
+        if max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be positive")
+        self.transport = transport
+        self.max_response_bytes = max_response_bytes
+
+    async def report(
+        self,
+        endpoint: str,
+        report: FeedbackReport,
+        *,
+        token: SessionToken,
+        tenant_id: str,
+        pairwise_user_id: str,
+        issuer: str,
+    ) -> None:
+        """`POST {feedback.endpoint}`: accepted (`202`, no body), or a `FeedbackError`.
+
+        A refusal is never retried here: a 429 carries its `Retry-After` in
+        `details["retry_after"]`, and the caller waits at least that long (§4.3).
+        """
+
+        response = await self.transport.request(
+            "POST",
+            endpoint,
+            token=token,
+            tenant_id=tenant_id,
+            pairwise_user_id=pairwise_user_id,
+            issuer=issuer,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            content=json.dumps(report.model_dump(mode="json"), separators=(",", ":")).encode(),
+        )
+        if response.status_code == 202:
+            return
+        payload = self._payload(response)
+        code = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(code, str):
+            # A token error may come only in WWW-Authenticate (§6).
+            code = challenge_parameters(response.headers.get("www-authenticate", "")).get("error")
+        raise FeedbackError(
+            code if isinstance(code, str) else "feedback_request_failed",
+            "the company refused the feedback report",
+            status_code=response.status_code,
+            details=refusal_details(response, payload) or None,
+        )
+
+    def _payload(self, response: httpx.Response) -> object:
+        if not response.content or len(response.content) > self.max_response_bytes:
+            return None
+        try:
+            return loads_strict(response.content)
+        except (ValueError, PersonalAgentProtocolError):
+            return None
+
+
+__all__ = [
+    "FEEDBACK_DESCRIPTION_MAX_LENGTH",
+    "FEEDBACK_TASK_MAX_LENGTH",
+    "FeedbackClient",
+    "FeedbackError",
+    "FeedbackReport",
+    "feedback_endpoint",
+]

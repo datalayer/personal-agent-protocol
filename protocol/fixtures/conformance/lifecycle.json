@@ -1,6 +1,6 @@
 {
   "suite": "lifecycle",
-  "profile": "0.1",
+  "profile": "0.2",
   "description": "Parallel Sessions, renewal, account binding, rotation, narrowing, and sign-out.",
   "cases": [
     {
@@ -124,6 +124,15 @@
       "description": "A Session signed in to one account refuses an Account Token for another: account_mismatch."
     },
     {
+      "id": "lifecycle.account-mismatch-after-sign-out",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-4.8-04"
+      ],
+      "description": "A Session signed in to one account and signed out since still refuses an Account Token for another account: account_mismatch, and nothing is issued."
+    },
+    {
       "id": "lifecycle.account-token-for-another-users-session",
       "kind": "negative",
       "role": "company",
@@ -198,9 +207,10 @@
       "role": "company",
       "requirements": [
         "PAP-6-06",
-        "PAP-6-03"
+        "PAP-6-03",
+        "PAP-4.3-26"
       ],
-      "description": "The MCP server's protected resource metadata names it as the resource and the company's issuer among its authorization servers; an unauthenticated call is 401 with a Bearer challenge pointing there."
+      "description": "The MCP server's protected resource metadata names it as the resource and the company's issuer among its authorization servers; a server that supports DPoP lists ES256. An unauthenticated call is 401 with one challenge per scheme it accepts, each pointing there."
     },
     {
       "id": "lifecycle.mcp-bearer-for-its-url",
@@ -208,10 +218,11 @@
       "role": "company",
       "requirements": [
         "PAP-4.3-09",
+        "PAP-4.3-24",
         "PAP-6-04",
         "GUIDE-pa-tokens-01"
       ],
-      "description": "A Session's token request without DPoP and with resource set to the MCP url returns a Bearer token for the same Session; the MCP server accepts it and enforces its scopes."
+      "description": "A Session's token request with resource set to the MCP url returns a token for the same Session, DPoP for a server that supports DPoP and Bearer otherwise; the MCP server accepts it and enforces its scopes."
     },
     {
       "id": "lifecycle.mcp-bearer-only-at-mcp",
@@ -219,9 +230,20 @@
       "role": "company",
       "requirements": [
         "PAP-4.3-10",
+        "PAP-4.3-11",
         "PAP-6-05"
       ],
-      "description": "The Bearer token is refused at every API, conversation, and operations endpoint; the MCP server refuses a DPoP token; no Bearer is issued for another resource."
+      "description": "The MCP server's token is refused at every API, conversation, and operations endpoint; the MCP server refuses the Session's own DPoP token; no token is issued without a proof for another resource."
+    },
+    {
+      "id": "lifecycle.mcp-token-type-by-server",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-4.3-23",
+        "PAP-4.3-11"
+      ],
+      "description": "For an MCP server that supports DPoP, a token request without a proof is invalid_dpop_proof and one with a proof gets a DPoP token; for one that doesn't, a request with a proof still gets a Bearer token."
     },
     {
       "id": "lifecycle.mcp-sign-out-takes-effect",
@@ -231,7 +253,7 @@
         "PAP-4.9-01",
         "PAP-6-04"
       ],
-      "description": "After revocation the MCP server handles the Bearer token as signed out (sign_in_required)."
+      "description": "After revocation the MCP server handles the Session's token for it as signed out (sign_in_required)."
     },
     {
       "id": "lifecycle.browser-joins-session",

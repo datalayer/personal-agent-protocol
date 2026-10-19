@@ -4,5 +4,6 @@
   "revocation_endpoint": "https://auth.example.com/oauth/revoke",
   "authorization_endpoint": "https://auth.example.com/oauth/authorize",
   "device_authorization_endpoint": "https://auth.example.com/oauth/device",
+  "dpop_signing_alg_values_supported": ["ES256", "RS256"],
   "poppy_domains": ["example.com"]
 }

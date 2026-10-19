@@ -157,3 +157,33 @@ def test_rejects_private_dpop_jwk_in_protected_header() -> None:
 
     with pytest.raises(ValueError, match="private key material"):
         DpopKeyMaterial(private_key, private_jwk)
+
+
+@pytest.mark.asyncio
+async def test_each_user_id_at_each_issuer_has_its_own_dpop_key() -> None:
+    """A different key pair for each User ID (§4.3), keyed by the full issuer (Guides)."""
+
+    from personal_agent_protocol.demo.kit import DpopKeys
+    from personal_agent_protocol.reactor import DpopProofRequest
+
+    keys = DpopKeys()
+
+    async def key(subject: str, issuer: str) -> object:
+        material = await keys(
+            DpopProofRequest(
+                method="POST",
+                url="https://auth.provider.example/oauth/token",
+                tenant_id="tenant",
+                subject=subject,
+                issuer=issuer,
+            )
+        )
+        return material.public_jwk["x"]
+
+    shop_a = "https://auth.provider.example/shop-a"
+    shop_b = "https://auth.provider.example/shop-b"
+    assert await key("usr_1", shop_a) == await key("usr_1", shop_a)
+    assert (
+        len({await key("usr_1", shop_a), await key("usr_2", shop_a), await key("usr_1", shop_b)})
+        == 3
+    )

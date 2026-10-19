@@ -42,7 +42,7 @@ from personal_agent_protocol.demo.kit import (
 )
 from personal_agent_protocol.demo.manzanita import DOMAIN, manzanita
 from personal_agent_protocol.errors import TransportError
-from personal_agent_protocol.mcp import McpClient, mcp_api
+from personal_agent_protocol.mcp import McpClient, fetch_mcp_server_metadata, mcp_api
 
 TENANT = "atlas-example"
 PAIRWISE = "usr_ada_at_manzanita_000000"
@@ -113,6 +113,8 @@ async def run_company_apis() -> dict[str, Any]:
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     await shop.approve_device(started.user_code, account_id="acct_ada")
     clock.advance(started.poll_interval)
@@ -127,9 +129,11 @@ async def run_company_apis() -> dict[str, Any]:
     if proposed.operation is None:
         raise RuntimeError("the example world is incomplete")
 
-    # The MCP server, with a Bearer token issued for its URL alone (the Account Token
+    # The MCP server, with a token issued for its URL alone: DPoP when its protected
+    # resource metadata says it supports DPoP, Bearer otherwise (the Account Token
     # rotated and stored in the host, never returned).
-    bearer = await AccountTokenClient(reactor=reactor, http_client=http).bearer_for_mcp(
+    served = await fetch_mcp_server_metadata(http, mcp_server.url, issuer=metadata.issuer)
+    bearer = await AccountTokenClient(reactor=reactor, http_client=http).token_for_mcp(
         done.account_token_reference,
         context=AccountTokenContext(
             token_endpoint=metadata.token_endpoint,
@@ -141,21 +145,25 @@ async def run_company_apis() -> dict[str, Any]:
         ),
         session_id=signed_in.session_id,
         resource=mcp_server.url,
+        dpop=served.supports_dpop,
     )
     if bearer.token is None:
         raise RuntimeError("the example world is incomplete")
-    mcp = McpClient(http_client=http, token=bearer.token, url=mcp_server.url)
+    mcp = McpClient(
+        http_client=http, token=bearer.token, url=mcp_server.url, reactor=reactor, who=who
+    )
     tools = [tool["name"] for tool in await mcp.list_tools()]
     listed = await mcp.call_tool("list_orders")
     through_mcp = await mcp.call_tool("exchange_jacket")
     if through_mcp.operation is None:
         raise RuntimeError("the example world is incomplete")
 
-    # The Bearer token is for the MCP server only: the SDK never sends it to the API.
+    # The token is for the MCP server only: the SDK never sends a Bearer token to the API,
+    # and the company refuses a DPoP one issued for the MCP server there (§4.3).
     try:
         await api.call("GET", orders_url, token=bearer.token, **who)
         bearer_at_the_api = "sent"
-    except TransportError as error:
+    except (TransportError, ApiError) as error:
         bearer_at_the_api = error.code
     await http.aclose()
 

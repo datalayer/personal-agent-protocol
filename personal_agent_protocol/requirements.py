@@ -4,7 +4,7 @@
 
 """The normative requirement ledger (`protocol/requirements.yaml`) and shared fixtures.
 
-Every MUST, MUST NOT, SHOULD, and SHOULD NOT of draft 0.1 and Operations v1
+Every MUST, MUST NOT, SHOULD, and SHOULD NOT of draft 0.2 and Operations v1
 has one entry: its section, level, role, exact text, where it is implemented
 (`module:symbol`), and the test that shows it (`file::name`), or an `open`
 status with the reason. Recommendations from the upstream guides are kept

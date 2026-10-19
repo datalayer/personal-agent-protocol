@@ -15,8 +15,8 @@ holds all of them equal.
 from __future__ import annotations
 
 #: The Personal Agent Protocol draft implemented.
-PROTOCOL_PROFILE = "0.1"
+PROTOCOL_PROFILE = "0.2"
 #: The upstream specification revision (its page date) the draft was implemented from.
-PROTOCOL_REVISION = "2026-10-09"
+PROTOCOL_REVISION = "2026-10-18"
 
 __all__ = ["PROTOCOL_PROFILE", "PROTOCOL_REVISION"]

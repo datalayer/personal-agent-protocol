@@ -1,6 +1,6 @@
 {
   "suite": "security",
-  "profile": "0.1",
+  "profile": "0.2",
   "description": "Duplicate JSON members, SSRF, redirects, oversized metadata, JOSE algorithm confusion, audiences, clock skew, replay, and DPoP mismatches.",
   "cases": [
     {
@@ -112,17 +112,17 @@
       "requirements": ["PAP-3-02", "PAP-3-03"],
       "check": "discovery",
       "input": {
-        "domain": "example.com",
+        "domain": "www.example.com",
         "responses": {
-          "https://example.com/.well-known/poppy.json": {"status": 302, "headers": {"location": "https://docs.provider.example/example.com/poppy.json"}},
-          "https://docs.provider.example/example.com/poppy.json": {"status": 200, "json": {
-            "protocol_version": "0.1",
+          "https://www.example.com/.well-known/poppy.json": {"status": 302, "headers": {"location": "https://example.com/.well-known/poppy.json"}},
+          "https://example.com/.well-known/poppy.json": {"status": 200, "json": {
+            "protocol_version": "0.2",
             "organization": {"name": "Example", "domain": "example.com"},
             "web": {}
           }}
         }
       },
-      "expect": {"organization_domain": "example.com", "discovery_url": "https://docs.provider.example/example.com/poppy.json"}
+      "expect": {"organization_domain": "example.com", "discovery_url": "https://example.com/.well-known/poppy.json"}
     },
     {
       "id": "security.discovery-redirect-limit",
@@ -152,7 +152,7 @@
         "domain": "example.com",
         "responses": {
           "https://example.com/.well-known/poppy.json": {"status": 200, "padding_bytes": 102401, "json": {
-            "protocol_version": "0.1",
+            "protocol_version": "0.2",
             "organization": {"name": "Example", "domain": "example.com"},
             "web": {}
           }}
@@ -172,7 +172,7 @@
         "timeout_seconds": 0.3,
         "responses": {
           "https://example.com/.well-known/poppy.json": {"status": 200, "trickle": {"chunk_bytes": 8, "interval_seconds": 0.05}, "json": {
-            "protocol_version": "0.1",
+            "protocol_version": "0.2",
             "organization": {"name": "Example", "domain": "example.com"},
             "web": {}
           }}
@@ -249,13 +249,40 @@
       "expect": {"status": 401, "error": "invalid_client"}
     },
     {
+      "id": "security.client-assertion-token-endpoint-audience",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.1-05"],
+      "target": "client_assertion",
+      "mutation": {"aud": "token_endpoint"},
+      "expect": {"status": 401, "error": "invalid_client"}
+    },
+    {
       "id": "security.session-assertion-bad-audience",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-04"],
+      "requirements": ["GUIDE-jwt-04", "PAP-4.2-07"],
       "target": "session_assertion",
       "mutation": {"aud": "https://other-company.example/oauth/token"},
       "expect": {"status": 400, "error": "invalid_grant"}
+    },
+    {
+      "id": "security.session-assertion-token-endpoint-audience",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.2-07"],
+      "target": "session_assertion",
+      "mutation": {"aud": "token_endpoint"},
+      "expect": {"status": 400, "error": "invalid_grant"}
+    },
+    {
+      "id": "security.session-assertion-five-minutes",
+      "kind": "positive",
+      "role": "company",
+      "requirements": ["PAP-4.2-08"],
+      "target": "session_assertion",
+      "mutation": {"lifetime": 300},
+      "expect": {"status": 200}
     },
     {
       "id": "security.session-assertion-wrong-issuer",
@@ -297,7 +324,7 @@
       "id": "security.session-assertion-long-lived",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-04"],
+      "requirements": ["GUIDE-jwt-04", "PAP-4.2-08"],
       "target": "session_assertion",
       "mutation": {"lifetime": 3600},
       "expect": {"status": 400, "error": "invalid_grant"}
@@ -306,7 +333,7 @@
       "id": "security.session-assertion-replay",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-05"],
+      "requirements": ["GUIDE-jwt-05", "PAP-4.2-09"],
       "target": "session_assertion",
       "mutation": {"replay": true},
       "expect": {"status": 400, "error": "invalid_grant"}
@@ -342,7 +369,7 @@
       "id": "security.dpop-alg-none",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-02", "GUIDE-jwt-02"],
+      "requirements": ["PAP-4.3-02", "GUIDE-jwt-02", "PAP-4.3-20"],
       "target": "resource_dpop",
       "mutation": {"alg": "none"},
       "expect": {"status": 401, "error": "invalid_dpop_proof"}
@@ -391,6 +418,13 @@
       "target": "resource_dpop",
       "mutation": {"iat_offset": -300},
       "expect": {"status": 401, "error": "invalid_dpop_proof"}
+    },
+    {
+      "id": "security.dpop-header-twice",
+      "kind": "negative",
+      "role": "company",
+      "requirements": ["PAP-4.3-19"],
+      "description": "A token request with two DPoP headers is refused (HTTP 400): exactly one DPoP header holding one JWT."
     },
     {
       "id": "security.dpop-replay",

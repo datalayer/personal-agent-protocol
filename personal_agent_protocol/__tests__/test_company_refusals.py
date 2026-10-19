@@ -37,6 +37,8 @@ async def signed_in(world: World):  # type: ignore[no-untyped-def]
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -102,6 +104,8 @@ async def test_polling_too_fast_is_slow_down() -> None:
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     store = world.shop.store
     (key,) = store.keys(DEVICE)
@@ -271,6 +275,8 @@ async def test_a_scope_no_longer_offered_ends_the_sessions_holding_it() -> None:
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -370,6 +376,8 @@ async def test_a_password_reset_ends_the_sign_ins_from_before_it() -> None:
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)

@@ -28,7 +28,6 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Literal, cast
 
 import httpx
@@ -55,12 +54,13 @@ from .reactor import (
     first_contribution,
     send_bounded,
 )
+from .refusals import refusal_details, refuse_redirect
 from .sessions import (
     JWT_CLIENT_ASSERTION,
-    ClientAssertionClaims,
     SessionToken,
     _mcp_resource,
-    _opaque_id,
+    build_client_assertion_claims,
+    token_types,
 )
 from .telemetry import sign_in_result, signed_in_as, traced
 
@@ -136,7 +136,7 @@ class AccountTokenClient:
 
         `scopes` narrows the request; omitted, the company grants what the
         token holds. A `resource` is an RFC 8707 indicator narrowing the DPoP
-        token to one service (for an MCP server, use `bearer_for_mcp`).
+        token to one service (for an MCP server, use `token_for_mcp`).
         """
 
         return await self._refresh(
@@ -151,12 +151,15 @@ class AccountTokenClient:
         session_id: str,
         scopes: tuple[str, ...] | None,
         resource: str | None,
-        bearer: bool = False,
+        dpop: bool = True,
+        mcp: bool = False,
     ) -> AccountRefreshResult:
         if not _OPAQUE.fullmatch(session_id):
             raise ValueError("session_id must be an opaque URL-safe identifier")
         requested = _scopes(scopes) if scopes is not None else None
         resource_url = _https_url(resource, "resource") if resource is not None else None
+        # Only a request for an MCP server may be answered with a Bearer token.
+        bearer_ok = mcp
         token_url = _https_url(context.token_endpoint, "token endpoint")
         lock = cast(
             AccountTokenLock,
@@ -180,7 +183,7 @@ class AccountTokenClient:
                     **({"scope": " ".join(requested)} if requested is not None else {}),
                     **({"resource": resource_url} if resource_url is not None else {}),
                 },
-                dpop=not bearer,
+                dpop=dpop,
             )
             if not response.is_success:
                 error = payload.get("error") if isinstance(payload, dict) else None
@@ -191,7 +194,13 @@ class AccountTokenClient:
                 if error == "invalid_scope":
                     return AccountRefreshResult(status="re_consent_required")
                 raise self._remote_error(response, payload, "Company refused the Account Token")
-            token = self._session_token(response, payload, session_id, requested, bearer=bearer)
+            token = self._session_token(
+                response,
+                payload,
+                session_id,
+                requested,
+                types=token_types(dpop=dpop, resource=resource_url if bearer_ok else None),
+            )
             rotated = token.refresh_token is not None
             if token.refresh_token is not None:
                 # The new token replaces the old before anyone can use either again.
@@ -207,21 +216,24 @@ class AccountTokenClient:
             ),
         )
 
-    async def bearer_for_mcp(
+    async def token_for_mcp(
         self,
         reference: str,
         *,
         context: AccountTokenContext,
         session_id: str,
         resource: str,
+        dpop: bool,
         scopes: tuple[str, ...] | None = None,
     ) -> AccountRefreshResult:
-        """A signed-in Bearer Session Token for one MCP server (§4.3).
+        """A signed-in Session Token for one MCP server (§4.3).
 
-        The Account Token request of the Session, without a DPoP proof, with
-        `resource` set to the MCP server's `url` from poppy.json. The Bearer
-        token works only at that server (`mcp.McpBearerAuth` refuses any
-        other URL); a rotated Account Token is stored as with `refresh`.
+        The Account Token request of the Session with `resource` set to the
+        MCP server's `url` from poppy.json. For a server that supports DPoP
+        (`dpop`, from its protected resource metadata) the request carries a
+        proof and the token is a DPoP one; otherwise it carries none and the
+        token is a Bearer one, which works only at that server
+        (`mcp.McpBearerAuth`). A rotated Account Token is stored as with `refresh`.
         """
 
         return await self._refresh(
@@ -230,7 +242,8 @@ class AccountTokenClient:
             session_id=session_id,
             scopes=scopes,
             resource=_mcp_resource(resource),
-            bearer=True,
+            dpop=dpop,
+            mcp=True,
         )
 
     @traced(
@@ -292,7 +305,12 @@ class AccountTokenClient:
         for attempt in range(2):
             now = clock.now()
             assertion = await signer.sign(
-                self._client_assertion(context.client_id, url, now, random_source).model_dump(),
+                build_client_assertion_claims(
+                    client_id=context.client_id,
+                    issuer=context.issuer,
+                    now=now,
+                    random_bytes=random_source.bytes,
+                ).model_dump(),
                 purpose="client_assertion",
             )
             headers = {"Accept": "application/json"}
@@ -322,6 +340,7 @@ class AccountTokenClient:
                 )
             except httpx.HTTPError as exc:
                 raise AuthorizationError("request_failed", "Account Token request failed") from exc
+            refuse_redirect(response, AuthorizationError)
             payload = self._decode(response, required=json_body or not response.is_success)
             error = payload.get("error") if isinstance(payload, dict) else None
             if dpop and error == "use_dpop_nonce" and attempt == 0:
@@ -343,7 +362,7 @@ class AccountTokenClient:
         session_id: str,
         requested: tuple[str, ...] | None,
         *,
-        bearer: bool = False,
+        types: frozenset[str],
     ) -> SessionToken:
         try:
             token = SessionToken.model_validate(payload)
@@ -353,11 +372,7 @@ class AccountTokenClient:
                 "Account Token response is malformed",
                 status_code=response.status_code,
             ) from exc
-        if (
-            token.token_type != ("Bearer" if bearer else "DPoP")
-            or not token.signed_in
-            or token.session_id != session_id
-        ):
+        if token.token_type not in types or not token.signed_in or token.session_id != session_id:
             raise AuthorizationError(
                 "invalid_token_response",
                 "A refresh must sign in the same Session with the token type asked for",
@@ -373,20 +388,6 @@ class AccountTokenClient:
 
     def _store(self) -> TokenStore:
         return cast(TokenStore, first_contribution(self.reactor, TOKEN_STORES, "token store"))
-
-    @staticmethod
-    def _client_assertion(
-        client_id: str, audience: str, now: datetime, random_source: RandomSource
-    ) -> ClientAssertionClaims:
-        issued_at = int(now.timestamp())
-        return ClientAssertionClaims(
-            iss=client_id,
-            sub=client_id,
-            aud=audience,
-            iat=issued_at,
-            exp=issued_at + 60,
-            jti=_opaque_id("jti", random_source.bytes),
-        )
 
     def _decode(self, response: httpx.Response, *, required: bool) -> object:
         if len(response.content) > self.max_response_bytes:
@@ -423,4 +424,5 @@ class AccountTokenClient:
             remote if isinstance(remote, str) else "http_error",
             message,
             status_code=response.status_code,
+            details=refusal_details(response, payload) or None,
         )

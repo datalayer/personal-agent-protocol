@@ -354,6 +354,8 @@ async def test_many_device_pollers_respect_interval_and_slow_down() -> None:
             tenant_id=TENANT,
             pairwise_user_id=user,
             session_id=session.session_id,
+            organization=world.company.document.organization,
+            poppy_domains=metadata.poppy_domains,
         )
 
     started = await asyncio.gather(*(begin(user) for user in users))

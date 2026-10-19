@@ -10,13 +10,14 @@ fix it names, and passes after.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import httpx
 import pytest
 from reactor import PluginManifest
 
-from personal_agent_protocol import DeviceSignInClient, SessionClient
+from personal_agent_protocol import DeviceSignInClient, DpopProofRequest, SessionClient
 from personal_agent_protocol.company import CLIENT_POLICIES, CompanyConfig
 from personal_agent_protocol.company.asgi import company_app
 from personal_agent_protocol.company.service import WEB_COOKIE
@@ -60,7 +61,7 @@ def _spy_token_responses(world: World) -> list[httpx.Response]:
 async def _bearer(world: World, session_id: str) -> None:
     md = world.company.oauth_metadata
     mcp = next(a.url for a in world.company.document.apis if a.type == "mcp")  # type: ignore[union-attr]
-    bearer = await SessionClient(reactor=world.reactor, http_client=world.http).bearer_for_mcp(
+    for_mcp = await SessionClient(reactor=world.reactor, http_client=world.http).token_for_mcp(
         client_id=world.atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=md.issuer,  # type: ignore[union-attr]
@@ -68,8 +69,9 @@ async def _bearer(world: World, session_id: str) -> None:
         tenant_id=TENANT,
         session_id=session_id,
         resource=mcp,
+        dpop=True,
     )
-    assert bearer.token_type == "Bearer"
+    assert for_mcp.token_type == "DPoP"
 
 
 async def _assert_signed_in_dpop(world: World, session_id: str, access_token: str) -> None:
@@ -77,8 +79,9 @@ async def _assert_signed_in_dpop(world: World, session_id: str, access_token: st
         (await world.shop.store.get(SESSION, session_id)).value  # type: ignore[union-attr]
     )
     kinds = sorted((t.token_type, t.signed_in, t.resource) for t in stored.tokens.values())
-    # The signed-in token is DPoP and for no resource; the MCP Bearer token is kept, signed out.
-    assert kinds == [("Bearer", False, "https://manzanita.example/mcp"), ("DPoP", True, None)]
+    # The signed-in token is the Session's own, for no resource; its token for the MCP server
+    # is kept, signed out.
+    assert kinds == [("DPoP", False, "https://manzanita.example/mcp"), ("DPoP", True, None)]
     used = await world.http.post(
         "https://manzanita.example/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
@@ -102,6 +105,8 @@ async def test_finding_1_device_sign_in_after_an_mcp_bearer_token_stays_dpop() -
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=md.poppy_domains,  # type: ignore[union-attr]
     )
     await _bearer(world, session.session_id)
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
@@ -174,6 +179,8 @@ async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=md.poppy_domains,  # type: ignore[union-attr]
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -255,7 +262,60 @@ async def test_finding_10_a_malformed_conversation_body_is_a_400(body: bytes) ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", [b"authorization", b"dpop"])
+async def test_finding_10_a_repeated_dpop_header_is_an_invalid_proof() -> None:
+    """Exactly one DPoP header, holding one JWT (§4.3, RFC 9449 §4.3)."""
+
+    from personal_agent_protocol.reactor import DPOP_PROOF_PROVIDERS, first_contribution
+
+    world = World()
+    session = await world.signed_out_session()
+    app = company_app(world.shop)
+    sent: list[dict[str, object]] = []
+    provider = first_contribution(world.reactor, DPOP_PROOF_PROVIDERS, "DPoP")
+    url = "https://manzanita.example/poppy/conversations"
+    proofs = [
+        (
+            await provider.create(
+                DpopProofRequest(
+                    method="POST",
+                    url=url,
+                    tenant_id=TENANT,
+                    subject=PAIRWISE,
+                    issuer=world.who["issuer"],
+                    access_token=session.access_token,
+                )
+            )
+        ).get_secret_value()
+        for _ in range(2)
+    ]
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    await app(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/poppy/conversations",
+            "query_string": b"",
+            "headers": [
+                (b"authorization", f"DPoP {session.access_token.get_secret_value()}".encode()),
+                (b"dpop", proofs[0].encode()),
+                (b"dpop", proofs[1].encode()),
+            ],
+        },
+        receive,  # type: ignore[arg-type]
+        send,  # type: ignore[arg-type]
+    )
+    assert sent[0]["status"] == 401
+    assert json.loads(sent[1]["body"]) == {"error": "invalid_dpop_proof"}  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [b"authorization"])
 async def test_finding_10_a_repeated_credential_header_is_refused(name: bytes) -> None:
     world = World()
     await world.signed_out_session()
@@ -862,15 +922,16 @@ async def _assertion(
 @pytest.mark.parametrize(
     ("audience", "status"),
     [
-        ("https://manzanita.example/oauth/device", 200),
-        ("https://manzanita.example/oauth/token", 200),
+        # The issuer, compared character for character, and nothing else (§4.1, §9.4).
+        ("https://manzanita.example/oauth/device", 401),
+        ("https://manzanita.example/oauth/token", 401),
+        ("https://manzanita.example/", 401),
+        ("https://Manzanita.example", 401),
         ("https://manzanita.example", 200),
         ("https://other.example/oauth/token", 401),
     ],
 )
-async def test_o2_a_client_assertion_names_the_issuer_the_token_or_the_called_endpoint(
-    audience: str, status: int
-) -> None:
+async def test_o2_a_client_assertion_names_the_issuer_only(audience: str, status: int) -> None:
     from personal_agent_protocol.sessions import JWT_CLIENT_ASSERTION
 
     world = World()
@@ -890,9 +951,9 @@ async def test_o2_a_client_assertion_names_the_issuer_the_token_or_the_called_en
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("lifetime", "jti", "status"),
-    [(300, None, 401), (121, None, 401), (120, None, 200), (60, "short-jti", 401)],
+    [(600, None, 401), (301, None, 401), (300, None, 200), (60, "short-jti", 401)],
 )
-async def test_o7_an_assertion_lives_at_most_120_seconds_and_names_a_long_jti(
+async def test_o7_an_assertion_lives_at_most_five_minutes_and_names_a_long_jti(
     lifetime: int, jti: str | None, status: int
 ) -> None:
     from personal_agent_protocol.sessions import JWT_CLIENT_ASSERTION
@@ -905,7 +966,7 @@ async def test_o7_an_assertion_lives_at_most_120_seconds_and_names_a_long_jti(
             "client_id": world.atlas.client_id,
             "client_assertion_type": JWT_CLIENT_ASSERTION,
             "client_assertion": await _assertion(
-                world, "https://manzanita.example/oauth/device", lifetime=lifetime, jti=jti
+                world, "https://manzanita.example", lifetime=lifetime, jti=jti
             ),
             "scope": "orders:read",
         },
@@ -949,31 +1010,41 @@ async def test_o7_a_dpop_proof_with_a_short_jti_is_refused() -> None:
 
 
 @pytest.mark.asyncio
-async def test_o3_a_token_endpoint_dpop_refusal_carries_its_challenge() -> None:
+async def test_o3_a_token_endpoint_dpop_refusal_is_an_oauth_error() -> None:
+    """At the token endpoint, an OAuth error with HTTP 400; at APIs a 401 challenge (§4.3)."""
+
     from personal_agent_protocol.sessions import JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION
 
     world = World()
-    await world.signed_out_session()
+    session = await world.signed_out_session()
     answer = await world.http.post(
         "https://manzanita.example/oauth/token",
         data={
             "grant_type": JWT_BEARER_GRANT,
             "client_id": world.atlas.client_id,
             "client_assertion_type": JWT_CLIENT_ASSERTION,
-            "client_assertion": await _assertion(world, "https://manzanita.example/oauth/token"),
+            "client_assertion": await _assertion(world, "https://manzanita.example"),
             "assertion": "x",
         },
     )
-    assert answer.status_code == 400 and answer.json()["error"] == "invalid_dpop_proof"
-    assert answer.headers["www-authenticate"].startswith('DPoP error="invalid_dpop_proof"')
+    assert answer.status_code == 400 and answer.json() == {"error": "invalid_dpop_proof"}
+    assert "www-authenticate" not in answer.headers
+    api = await world.http.get(
+        "https://manzanita.example/api/orders",
+        headers={"authorization": f"DPoP {session.access_token.get_secret_value()}"},
+    )
+    assert api.status_code == 401 and api.json() == {"error": "invalid_dpop_proof"}
+    assert api.headers["www-authenticate"] == 'DPoP error="invalid_dpop_proof"'
 
 
 @pytest.mark.asyncio
 async def test_o4_a_token_in_the_query_is_refused_even_beside_a_valid_header() -> None:
     world = World()
+    # An MCP server without DPoP: its tokens are Bearer ones (§4.3).
+    world.shop.config = dataclasses.replace(world.shop.config, mcp_dpop=False)
     session = await world.signed_out_session()
     md = world.company.oauth_metadata
-    bearer = await SessionClient(reactor=world.reactor, http_client=world.http).bearer_for_mcp(
+    bearer = await SessionClient(reactor=world.reactor, http_client=world.http).token_for_mcp(
         client_id=world.atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=md.issuer,  # type: ignore[union-attr]
@@ -981,6 +1052,7 @@ async def test_o4_a_token_in_the_query_is_refused_even_beside_a_valid_header() -
         tenant_id=TENANT,
         session_id=session.session_id,
         resource="https://manzanita.example/mcp",
+        dpop=False,
     )
     value = bearer.access_token.get_secret_value()
     for query in (f"access_token={value}", "access_token="):

@@ -47,6 +47,7 @@ from .errors import PersonalAgentProtocolError, ProtocolValidationError, Transpo
 from .json import loads_strict
 from .models import ClientMetadata, DiscoveryDocument, Message, Operation, ProtocolModel
 from .reactor import CLOCKS, STANDING_PERMISSION_STORES, Clock, first_contribution
+from .refusals import challenge_parameters, refusal_details
 from .sessions import SessionToken
 from .telemetry import by_endpoint, operation_result, traced
 from .transport import DpopHttpClient
@@ -529,14 +530,10 @@ class OperationsClient:
     @staticmethod
     def _error(response: httpx.Response, payload: object) -> OperationError:
         code = payload.get("error") if isinstance(payload, dict) else None
-        details: dict[str, object] = {}
-        if code == "extension_required" and isinstance(payload, dict):
-            extension = payload.get("extension")
-            if isinstance(extension, str):
-                details["extension"] = extension
-        retry_after = response.headers.get("retry-after")
-        if response.status_code == 429 and retry_after:
-            details["retry_after"] = retry_after
+        if not isinstance(code, str):
+            # A token error may come only in WWW-Authenticate (spec §6).
+            code = challenge_parameters(response.headers.get("www-authenticate", "")).get("error")
+        details = refusal_details(response, payload)
         return OperationError(
             code if isinstance(code, str) else "operation_request_failed",
             "the operation request was refused",

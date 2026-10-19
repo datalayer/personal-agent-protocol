@@ -32,7 +32,7 @@ def _typescript(path: str, name: str) -> str:
 
 
 def test_the_typescript_sdk_declares_the_same_profile_and_operations_version() -> None:
-    assert _typescript("src/profile.ts", "PROTOCOL_PROFILE") == PROTOCOL_PROFILE == "0.1"
+    assert _typescript("src/profile.ts", "PROTOCOL_PROFILE") == PROTOCOL_PROFILE == "0.2"
     assert _typescript("src/profile.ts", "PROTOCOL_REVISION") == PROTOCOL_REVISION
     assert _typescript("src/operations.ts", "OPERATIONS_VERSION") == OPERATIONS_VERSION == "1"
 

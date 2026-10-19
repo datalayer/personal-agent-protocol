@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import cast
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
 
 import httpx
 from reactor import PluginPlatform  # type: ignore[import-untyped]
@@ -34,9 +34,9 @@ from .reactor import (
     parse_retry_after,
     send_bounded,
 )
+from .refusals import refuse_redirect
 from .sessions import SessionToken
 
-_REDIRECTS = frozenset({301, 302, 303, 307, 308})
 #: Refusals that ask the caller to come back later (Guides, retries and rate limits).
 _LATER = frozenset({429, 503})
 #: Methods retried on their own: they change nothing at the company.
@@ -63,23 +63,19 @@ def budget_key(url: str) -> str:
 
 
 class DpopHttpClient:
-    """Send replay-safe DPoP requests without forwarding credentials across origins."""
+    """Send replay-safe DPoP requests; a redirect is refused, never followed (§3)."""
 
     def __init__(
         self,
         *,
         reactor: PluginPlatform,
         http_client: httpx.AsyncClient,
-        max_redirects: int = 3,
         max_response_bytes: int = 1024 * 1024,
     ) -> None:
-        if max_redirects < 0:
-            raise ValueError("max_redirects must not be negative")
         if max_response_bytes <= 0:
             raise ValueError("max_response_bytes must be positive")
         self.reactor = reactor
         self.http = http_client
-        self.max_redirects = max_redirects
         #: No more than this (and one byte) of a response is read; the client checks the rest.
         self.max_response_bytes = max_response_bytes
 
@@ -151,7 +147,7 @@ class DpopHttpClient:
             return 0.5
         return int.from_bytes(source.bytes(4), "big") / 2**32
 
-    async def _request_once(  # noqa: C901 - security state machine is clearer in one loop
+    async def _request_once(
         self,
         method: str,
         url: str,
@@ -163,7 +159,7 @@ class DpopHttpClient:
         headers: Mapping[str, str] | None = None,
         content: bytes | None = None,
     ) -> httpx.Response:
-        """One DPoP request: retry one nonce and follow same-origin redirects."""
+        """One DPoP request: one retry with the company's nonce, no redirect followed."""
 
         if token.token_type != "DPoP":  # noqa: S105 - OAuth token type
             raise TransportError(
@@ -171,7 +167,6 @@ class DpopHttpClient:
             )
         current_url = _https_url(url)
         current_method = method.upper()
-        current_content = content
         supplied = dict(headers or {})
         if any(name.lower() in {"authorization", "dpop"} for name in supplied):
             raise TransportError(
@@ -181,7 +176,6 @@ class DpopHttpClient:
             DpopProofProvider,
             first_contribution(self.reactor, DPOP_PROOF_PROVIDERS, "DPoP proof provider"),
         )
-        redirects = 0
         nonce: str | None = None
         nonce_retried = False
         while True:
@@ -202,7 +196,7 @@ class DpopHttpClient:
                     self.http.build_request(
                         current_method,
                         current_url,
-                        content=current_content,
+                        content=content,
                         headers={
                             **supplied,
                             "Authorization": f"DPoP {token.access_token.get_secret_value()}",
@@ -225,34 +219,9 @@ class DpopHttpClient:
                 nonce_retried = True
                 continue
 
-            if response.status_code not in _REDIRECTS:
-                return response
-            if current_content is not None and response.status_code != 303:
-                # A body (credentials, a code, a confirmation) is sent once, to the URL it
-                # was meant for: never again to wherever a redirect points.
-                raise TransportError(
-                    "redirect_refused", "A request with a body is never sent to a redirect"
-                )
-            if redirects >= self.max_redirects:
-                raise TransportError(
-                    "too_many_redirects", "PAP resource request exceeded redirect limit"
-                )
-            location = response.headers.get("location")
-            if not location:
-                raise TransportError("invalid_redirect", "PAP resource redirect has no location")
-            target = _https_url(urljoin(current_url, location))
-            if _origin(target) != _origin(current_url):
-                raise TransportError(
-                    "cross_origin_redirect",
-                    "PAP credentials are never forwarded to another origin",
-                )
-            redirects += 1
-            current_url = target
-            nonce = None
-            nonce_retried = False
-            if response.status_code == 303:
-                current_method = "GET"
-                current_content = None
+            # A redirect would carry the token and a proof to another URL: refused (§3).
+            refuse_redirect(response)
+            return response
 
     @asynccontextmanager
     async def stream(
@@ -317,10 +286,7 @@ class DpopHttpClient:
                             "missing_dpop_nonce", "DPoP nonce challenge omitted its nonce"
                         )
                     continue
-                if response.status_code in _REDIRECTS:
-                    raise TransportError(
-                        "stream_redirect", "A PAP stream is never followed through a redirect"
-                    )
+                refuse_redirect(response)
                 yield response
                 return
             finally:

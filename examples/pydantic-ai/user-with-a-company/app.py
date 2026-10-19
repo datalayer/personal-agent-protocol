@@ -105,6 +105,8 @@ async def run_manzanita_journey() -> dict[str, Any]:
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     steps.append(f"Ada opened {started.verification_uri} and entered the code")
     await shop.approve_device(started.user_code, account_id="acct_ada")

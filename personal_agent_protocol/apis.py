@@ -13,7 +13,6 @@ conversation, so one approval flow serves both channels.
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 import httpx
@@ -21,6 +20,7 @@ import httpx
 from .errors import PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
 from .models import ApiDescriptor, DiscoveryDocument, Operation, ProtocolModel
+from .refusals import challenge_parameters, refusal_details
 from .sessions import SessionToken
 from .transport import DpopHttpClient
 
@@ -37,7 +37,7 @@ class ApiResponse(ProtocolModel):
     operation: Operation | None = None
 
 
-#: API types draft 0.1 defines (§6); any other type is skipped.
+#: API types draft 0.2 defines (§6); any other type is skipped.
 KNOWN_API_TYPES = frozenset({"openapi", "mcp"})
 
 
@@ -65,16 +65,6 @@ def openapi_url(document: DiscoveryDocument) -> str | None:
         if api.type == "openapi":
             return api.url
     return None
-
-
-_CHALLENGE = re.compile(r'(\w+)="([^"]*)"')
-
-
-def _challenge(header: str) -> tuple[str | None, str | None]:
-    """`error` and `scope` from a `DPoP`/`Bearer` WWW-Authenticate challenge."""
-
-    values = dict(_CHALLENGE.findall(header))
-    return values.get("error"), values.get("scope")
 
 
 class ApiClient:
@@ -126,15 +116,12 @@ class ApiClient:
         if response.is_success:
             return ApiResponse(status=response.status_code, body=payload)
         error = payload.get("error") if isinstance(payload, dict) else None
-        scope = payload.get("scope") if isinstance(payload, dict) else None
         if not isinstance(error, str):
-            # Token errors may come only in WWW-Authenticate (§6).
-            error, scope = _challenge(response.headers.get("www-authenticate", ""))
-        details: dict[str, object] = {"scope": scope} if isinstance(scope, str) else {}
-        retry_after = response.headers.get("retry-after")
-        if response.status_code == 429 and retry_after:
-            # Never retried here: the caller waits at least this long (§4.3).
-            details["retry_after"] = retry_after
+            # Token errors, and `extension_required` with its `extension` attribute,
+            # come in WWW-Authenticate at an API (§3.3, §6).
+            error = challenge_parameters(response.headers.get("www-authenticate", "")).get("error")
+        # `scope`, `extension`, and on a 429 `retry_after`: never retried here (§4.3).
+        details = refusal_details(response, payload)
         raise ApiError(
             error if isinstance(error, str) else "api_request_failed",
             "the company refused the API call",

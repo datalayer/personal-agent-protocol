@@ -55,6 +55,8 @@ started = await client.begin(
     tenant_id="application-42",
     pairwise_user_id=pairwise_user_id,
     session_id=signed_out_session.session_id,
+    organization=company.document.organization,
+    poppy_domains=metadata.poppy_domains,
 )
 
 # Render only these human-facing values. A UI may turn the complete URI into a QR.

@@ -171,6 +171,8 @@ class LedgerlyAsPersonalAgent:
                 tenant_id=TENANT,
                 pairwise_user_id=link.pairwise_user_id,
                 session_id=link.session.session_id,
+                organization=company.document.organization,
+                poppy_domains=metadata.poppy_domains,
             )
             link.device_reference, link.user_code = started.reference, started.user_code
             return link

@@ -47,7 +47,7 @@ user_id = await resolve_pairwise_user_id(
 claims = build_session_assertion_claims(
     client_id="https://agent.example/agent.json",
     pairwise_user_id=user_id,
-    token_endpoint="https://auth.example.com/oauth/token",
+    issuer=company.oauth_metadata.issuer,
 )
 ```
 

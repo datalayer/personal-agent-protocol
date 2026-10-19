@@ -114,6 +114,8 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
         tenant_id=TENANT,
         pairwise_user_id=PAIRWISE,
         session_id=session.session_id,
+        organization=world.company.document.organization,
+        poppy_domains=metadata.poppy_domains,
     )
     world.clock.advance(started.poll_interval)
     assert (await device.poll(started.reference)).status == "pending"

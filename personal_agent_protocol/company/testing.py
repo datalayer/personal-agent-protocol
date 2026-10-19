@@ -50,6 +50,8 @@ from .store import (
     CODE,
     CONVERSATION,
     DEVICE,
+    DPOP_NONCE,
+    FEEDBACK,
     MEDIATED,
     MESSAGE_ID,
     OPERATION,
@@ -66,6 +68,7 @@ from .store import (
     AccountGrant,
     CompanyStore,
     IssuedCode,
+    IssuedNonce,
     IssuedSession,
     KnownClient,
     MessageReceipt,
@@ -78,6 +81,7 @@ from .store import (
     SignInAttempts,
     StoredConversation,
     StoredEvent,
+    StoredFeedback,
     StoredOperation,
     StoredSession,
     UserCode,
@@ -130,6 +134,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
             pairwise_user_id="usr_1",
             tokens={"tok_1": signed_in, "tok_2": IssuedSession("ses_1", "c", "u", "k", now)},
             latest="tok_1",
+            account_id="acct_1",
         ),
         SESSION_TOKEN: SessionPointer("ses_1"),
         ACCOUNT_TOKEN: AccountGrant("acct_1", "c", "u", ("a", "b"), later, True, "fam_1"),
@@ -142,7 +147,9 @@ def record_samples(now: datetime) -> dict[str, Any]:
             "c", "https://atlas.example/cb", ("a",), "st", "chal", later, "Atlas", "bind"
         ),
         CODE: IssuedCode("c", "https://atlas.example/cb", "chal", "acct_1", ("a",), later),
-        MEDIATED: PendingMediated("ses_1", "acct_1", ("a",), "ref", later, ("k1", "k2"), 2),
+        MEDIATED: PendingMediated(
+            "ses_1", "acct_1", ("a",), "ref", later, ("k1", "k2"), 2, "failed"
+        ),
         CONVERSATION: StoredConversation(
             conversation_id="cnv_1",
             owner=("c", "u"),
@@ -162,6 +169,10 @@ def record_samples(now: datetime) -> dict[str, Any]:
         BROWSER_COOKIE: SessionPointer("ses_1"),
         REPLAY: ReplayMark(),
         SIGN_IN_ATTEMPTS: SignInAttempts(3, later),
+        FEEDBACK: StoredFeedback(
+            "fb_1", "missing", "Pay with a gift card", "No gift card field.", "c", "u", now
+        ),
+        DPOP_NONCE: IssuedNonce(),
     }
 
 

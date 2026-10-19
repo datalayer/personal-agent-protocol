@@ -1,6 +1,6 @@
 {
   "suite": "conversations",
-  "profile": "0.1",
+  "profile": "0.2",
   "description": "Message IDs, cursors, has_more, SSE, text-delta, attribution, handoff, Direct Conversations, closure, and errors.",
   "cases": [
     {
@@ -68,6 +68,15 @@
         "PAP-7.5-03"
       ],
       "description": "A read with nothing new returns no events, the request's cursor, has_more false, status, and responder."
+    },
+    {
+      "id": "conversations.read-fields",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-7.5-03"
+      ],
+      "description": "Every successful read includes conversation_id, events (empty when there are none), cursor, has_more, status, and responder."
     },
     {
       "id": "conversations.sse-reconnect",

@@ -25,7 +25,7 @@ def test_discovery_fixture_round_trips_and_preserves_extensions() -> None:
     source = json.loads((FIXTURES / "discovery-valid.json").read_text())
     document = DiscoveryDocument.model_validate(source)
 
-    assert document.protocol_version == "0.1"
+    assert document.protocol_version == "0.2"
     assert document.apis[1].type == "mcp"
     assert document.extensions["operations"].model_extra == {
         "endpoint": "https://api.example.com/poppy/operations"
@@ -36,7 +36,7 @@ def test_discovery_requires_auth_for_an_api() -> None:
     with pytest.raises(ValidationError, match="auth is required"):
         DiscoveryDocument.model_validate(
             {
-                "protocol_version": "0.1",
+                "protocol_version": "0.2",
                 "organization": {"name": "Example", "domain": "example.com"},
                 "apis": [
                     {

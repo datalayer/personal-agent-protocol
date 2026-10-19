@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -19,9 +18,9 @@ from ..models import JsonWebKeySet
 from .points import ReplayCache
 
 _ALGORITHMS = ("ES256", "RS256")
-#: An assertion lives at most this long (`exp - iat`): long enough for any clock, short
-#: enough that a captured one is soon useless. The SDKs' own assertions live 60 seconds.
-_MAX_LIFETIME = timedelta(seconds=120)
+#: An assertion lives at most this long: `exp` at most five minutes after `iat` (§4.1,
+#: §4.2). The SDKs' own assertions live 60 seconds.
+_MAX_LIFETIME = timedelta(seconds=300)
 #: A `jti` this short is guessable: its replay key could collide with another's.
 _MIN_JTI = 16
 
@@ -31,7 +30,7 @@ async def verify_assertion(  # noqa: C901 - one check per claim, in order
     *,
     keys: JsonWebKeySet,
     issuer: str,
-    audience: str | Sequence[str],
+    audience: str,
     replay_cache: ReplayCache,
     now: datetime,
     subject: str | None = None,
@@ -39,9 +38,10 @@ async def verify_assertion(  # noqa: C901 - one check per claim, in order
 ) -> dict[str, Any]:
     """Verify signature, `iss`, `aud`, lifetime, and one-time `jti`.
 
-    `audience` is the one value `aud` must be, or the values it may be: a
-    client assertion names the authorization server's issuer, its token
-    endpoint, or the endpoint it is sent to (RFC 7523 §3).
+    `audience` is the one value `aud` must be, compared character for
+    character: the company's `auth.issuer`, for a client assertion and a
+    Session assertion alike, never an endpoint URL (§4.1, §4.2, §9.4).
+    The `jti` is remembered per `client_id` until the assertion expires.
 
     A client assertion's `sub` is the `client_id` (`subject=issuer`); a
     Session assertion's is the pairwise user ID (`subject=None` returns it
@@ -56,8 +56,9 @@ async def verify_assertion(  # noqa: C901 - one check per claim, in order
         raise SessionError(error, "Assertion is invalid", status_code=_status(error)) from exc
     if claims is None:
         raise SessionError(error, "Assertion signature is invalid", status_code=_status(error))
-    if not isinstance(claims.get("aud"), str):
-        # `aud` is one string, the token endpoint, so the assertion works at one company (§4.2).
+    if claims.get("aud") != audience:
+        # `aud` is one string, the issuer, exactly: an array, or the token endpoint, is
+        # refused, so the assertion works at one company (§4.1, §4.2).
         raise SessionError(error, "Assertion audience is invalid", status_code=_status(error))
 
     try:
@@ -92,7 +93,7 @@ async def verify_assertion(  # noqa: C901 - one check per claim, in order
 
 
 def _decode(
-    compact: str, keys: JsonWebKeySet, *, issuer: str, audience: str | Sequence[str]
+    compact: str, keys: JsonWebKeySet, *, issuer: str, audience: str
 ) -> dict[str, Any] | None:
     """The verified claims, or `None` when no published key signed them."""
 
@@ -117,7 +118,7 @@ def _decode(
                 compact,
                 public,
                 algorithms=[algorithm],
-                audience=audience if isinstance(audience, str) else list(audience),
+                audience=audience,
                 issuer=issuer,
                 # Lifetimes are checked against the company's own clock, below.
                 options={

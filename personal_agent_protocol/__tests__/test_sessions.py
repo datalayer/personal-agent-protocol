@@ -22,10 +22,12 @@ from personal_agent_protocol import (
     SessionError,
     SessionGrant,
     SessionToken,
+    build_client_assertion_claims,
     build_session_assertion_claims,
     generate_pairwise_user_id,
 )
 from personal_agent_protocol.reactor import build_pap_reactor
+from personal_agent_protocol.sessions import ClientAssertionClaims
 
 FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
 
@@ -44,15 +46,55 @@ def test_builds_short_lived_session_assertion_claims() -> None:
     claims = build_session_assertion_claims(
         client_id="https://agent.example/agent.json",
         pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-        token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
+        issuer="https://auth.example.com",
         now=datetime(2026, 10, 10, tzinfo=timezone.utc),
         random_bytes=fixed_random,
     )
 
     assert claims.iss == "https://agent.example/agent.json"
-    assert claims.aud == "https://auth.example.com/oauth/token"
+    # The company's auth.issuer, one string, never its token endpoint (§4.2, §9.4).
+    assert claims.aud == "https://auth.example.com"
     assert claims.exp - claims.iat == 60
     assert claims.jti == "jti_AAECAwQFBgcICQoLDA0ODw"
+
+
+def test_a_client_assertion_names_the_issuer_and_lives_at_most_five_minutes() -> None:
+    now = datetime(2026, 10, 10, tzinfo=timezone.utc)
+    claims = build_client_assertion_claims(
+        client_id="https://agent.example/agent.json",
+        issuer="https://auth.provider.example/shop-a",
+        now=now,
+        random_bytes=fixed_random,
+    )
+    assert (claims.iss, claims.sub) == ("https://agent.example/agent.json",) * 2
+    assert claims.aud == "https://auth.provider.example/shop-a"
+    assert claims.exp - claims.iat == 60
+    longest = build_client_assertion_claims(
+        client_id="https://agent.example/agent.json",
+        issuer="https://auth.example.com",
+        now=now,
+        lifetime_seconds=300,
+    )
+    assert longest.exp - longest.iat == 300
+    for build in (build_client_assertion_claims, build_session_assertion_claims):
+        extra = {"pairwise_user_id": "usr_x"} if build is build_session_assertion_claims else {}
+        with pytest.raises(ValueError, match="300"):
+            build(  # type: ignore[operator]
+                client_id="https://agent.example/agent.json",
+                issuer="https://auth.example.com",
+                now=now,
+                lifetime_seconds=301,
+                **extra,
+            )
+    with pytest.raises(ValueError, match="five minutes"):
+        ClientAssertionClaims(
+            iss="https://agent.example/agent.json",
+            sub="https://agent.example/agent.json",
+            aud="https://auth.example.com",
+            iat=1000,
+            exp=1301,
+            jti="jti_AAECAwQFBgcICQoLDA0ODw",
+        )
 
 
 def test_session_grant_redacts_assertions_until_form_serialization() -> None:
@@ -87,9 +129,11 @@ def test_parses_session_token_as_opaque_secret() -> None:
 class FakeSigner:
     def __init__(self) -> None:
         self.purposes: list[str] = []
+        self.claims: list[dict[str, object]] = []
 
-    async def sign(self, _: dict[str, object], *, purpose: str) -> SecretStr:
+    async def sign(self, claims: dict[str, object], *, purpose: str) -> SecretStr:
         self.purposes.append(purpose)
+        self.claims.append(claims)
         return SecretStr(f"signed-{purpose}-{len(self.purposes)}")
 
 
@@ -228,3 +272,97 @@ async def test_session_error_never_includes_remote_error_description() -> None:
     assert caught.value.code == "invalid_client"
     assert caught.value.status_code == 401
     assert "secret-token" not in str(caught.value)
+
+
+WHO = {
+    "client_id": "https://agent.example/agent.json",
+    "pairwise_user_id": "usr_AAECAwQFBgcICQoLDA0ODw",
+    "issuer": "https://auth.example.com",
+    "token_endpoint": "https://auth.example.com/oauth/token",
+    "tenant_id": "tenant-one",
+}
+
+
+@pytest.mark.asyncio
+async def test_both_assertions_name_the_issuer_and_live_one_minute() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=token_response()))
+    ) as http:
+        reactor, signer, _ = session_reactor(http)
+        await SessionClient(reactor=reactor, http_client=http).start(**WHO)
+        reactor.stop()
+    # aud is the company's auth.issuer, one string, never its token endpoint (§4.1, §4.2).
+    assert [claims["aud"] for claims in signer.claims] == ["https://auth.example.com"] * 2
+    assert all(claims["exp"] - claims["iat"] == 60 for claims in signer.claims)  # type: ignore[operator]
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_at_the_token_endpoint_gets_nothing() -> None:
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(307, headers={"Location": "https://elsewhere.example/token"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        reactor, _, _ = session_reactor(http)
+        with pytest.raises(SessionError) as refused:
+            await SessionClient(reactor=reactor, http_client=http).start(**WHO)
+        reactor.stop()
+    # Nothing is sent to the new URL: no assertion, no proof (§3).
+    assert refused.value.code == "redirect_refused" and refused.value.status_code == 307
+    assert [str(request.url) for request in sent] == ["https://auth.example.com/oauth/token"]
+
+
+@pytest.mark.asyncio
+async def test_extension_required_and_rate_limited_at_the_token_endpoint_are_read() -> None:
+    answers = [
+        httpx.Response(403, json={"error": "extension_required", "extension": "operations"}),
+        httpx.Response(429, json={"error": "rate_limited"}, headers={"Retry-After": "7"}),
+    ]
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: answers.pop(0))) as http:
+        reactor, _, _ = session_reactor(http)
+        client = SessionClient(reactor=reactor, http_client=http)
+        with pytest.raises(SessionError) as required:
+            await client.start(**WHO)
+        with pytest.raises(SessionError) as limited:
+            await client.start(**WHO)
+        reactor.stop()
+    assert (required.value.code, required.value.status_code) == ("extension_required", 403)
+    assert required.value.details == {"extension": "operations"}
+    assert (limited.value.code, limited.value.details) == ("rate_limited", {"retry_after": "7"})
+
+
+@pytest.mark.asyncio
+async def test_a_token_for_an_mcp_server_uses_the_scheme_its_token_type_names() -> None:
+    forms: list[dict[str, list[str]]] = []
+    proofs: list[bool] = []
+    answers = ["DPoP", "Bearer", "Bearer", "DPoP"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        forms.append(parse_qs(request.content.decode()))
+        proofs.append("dpop" in request.headers)
+        return httpx.Response(200, json={**token_response(), "token_type": answers.pop(0)})
+
+    mcp = "https://mcp.example.com/mcp"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        reactor, _, _ = session_reactor(http)
+        client = SessionClient(reactor=reactor, http_client=http)
+        dpop = await client.token_for_mcp(**WHO, resource=mcp, dpop=True)
+        # A proof was sent, and the server takes no DPoP: the Bearer token is used (§4.3).
+        bearer_with_proof = await client.token_for_mcp(**WHO, resource=mcp, dpop=True)
+        bearer = await client.token_for_mcp(**WHO, resource=mcp, dpop=False)
+        with pytest.raises(SessionError) as wrong:
+            # No proof was sent: a DPoP token can't be one.
+            await client.token_for_mcp(**WHO, resource=mcp, dpop=False)
+        reactor.stop()
+    assert [dpop.token_type, bearer_with_proof.token_type, bearer.token_type] == [
+        "DPoP",
+        "Bearer",
+        "Bearer",
+    ]
+    assert wrong.value.code == "unexpected_token_type"
+    assert proofs == [True, True, False, False]
+    assert all(form["resource"] == [mcp] for form in forms)
+    assert all("session_id" not in form for form in forms)  # starting a Session for it

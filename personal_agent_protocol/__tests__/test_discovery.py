@@ -202,7 +202,13 @@ async def test_an_alias_publishes_the_companys_discovery_and_its_issuer_lists_it
         company.document.auth is not None
         and company.document.auth.issuer == f"https://{config.domain}"
     )
-    assert (await client.discover(config.domain)).document.organization.domain == config.domain
+    own = await client.discover(config.domain)
+    assert own.document.organization.domain == config.domain
+    # Every document naming the issuer has the same auth, which describes it (§3.2).
+    assert own.document.auth == company.document.auth
+    assert (
+        service.discovery_document("shop.example")["auth"] == service.discovery_document()["auth"]
+    )
     async with network.client() as http:
         assert (
             await http.get("https://shop.example/.well-known/oauth-authorization-server")

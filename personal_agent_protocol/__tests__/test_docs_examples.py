@@ -256,6 +256,8 @@ class Docs:
             tenant_id=TENANT,
             pairwise_user_id=who["pairwise_user_id"],
             session_id=session.session_id,
+            organization=(await self.discovered(domain)).document.organization,
+            poppy_domains=metadata.poppy_domains,
         )
         account = "acct_ada_northwind" if domain == northwind_demo.DOMAIN else "acct_ada"
         await self.companies[domain].approve_device(started.user_code, account_id=account)
@@ -413,6 +415,7 @@ async def _device_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
         "reactor": docs.reactor,
         "http": docs.http,
         "metadata": company.oauth_metadata,
+        "company": company,
         "pairwise_user_id": who["pairwise_user_id"],
         "signed_out_session": await docs.signed_out("shop.example"),
         "show_to_user": shown.append,
@@ -430,6 +433,7 @@ async def _protected_input(docs: Docs) -> tuple[dict[str, Any], Check]:
             purpose="credentials",
             company_name="Example Shop",
             company_domain="shop.example",
+            issuer="https://shop.example",
             fields=(ProtectedInputField(name="password", label="Password", secret=True),),
         )
         answer = await namespace["PasswordSheet"]().collect(request)
@@ -811,7 +815,7 @@ def test_the_json_example_is_valid(key: str) -> None:
     else:
         DiscoveryDocument.model_validate(
             {
-                "protocol_version": "0.1",
+                "protocol_version": "0.2",
                 "organization": {"name": "Example", "domain": "example.com"},
                 "auth": {"issuer": "https://example.com", "direct": {"scopes": ["a"]}},
                 "agent": {"protocols": [{"type": "poppy", "endpoint": "https://example.com/c"}]},

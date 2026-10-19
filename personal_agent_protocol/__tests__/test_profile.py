@@ -52,7 +52,7 @@ def test_the_packages_and_the_docs_state_it() -> None:
     assert f'description = "Python SDK for Personal Agent Protocol {STATEMENT}"\n' in pyproject
     assert package["description"] == f"TypeScript SDK for Personal Agent Protocol {STATEMENT}"
     readme = " ".join((ROOT / "README.md").read_text().split())
-    spec = "https://personalagentprotocol.org/docs/spec"
+    spec = f"https://personalagentprotocol.org/docs/{PROTOCOL_PROFILE}/spec"
     assert f"draft {PROTOCOL_PROFILE}]({spec}) ({PROTOCOL_REVISION})" in readme
     assert f"Operations extension v{OPERATIONS_VERSION}" in readme
     docs = ROOT / "docs" / "docs"

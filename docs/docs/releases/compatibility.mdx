@@ -10,12 +10,12 @@ This page is versioned with the SDK: it describes **SDK 0.24.0**.
 
 | | Python (`personal_agent_protocol`) | TypeScript (`@datalayer/personal-agent-protocol`) |
 | --- | --- | --- |
-| PAP profile | `PROTOCOL_PROFILE` = `0.1` | `PROTOCOL_PROFILE` = `"0.1"` |
-| Specification revision | `PROTOCOL_REVISION` = `2026-10-09` | `PROTOCOL_REVISION` = `"2026-10-09"` |
+| PAP profile | `PROTOCOL_PROFILE` = `0.2` | `PROTOCOL_PROFILE` = `"0.2"` |
+| Specification revision | `PROTOCOL_REVISION` = `2026-10-18` | `PROTOCOL_REVISION` = `"2026-10-18"` |
 | Operations extension | `OPERATIONS_VERSION` = `1` | `OPERATIONS_VERSION` = `"1"` |
 
-Both SDKs implement [PAP draft 0.1](https://personalagentprotocol.org/docs/spec)
-as its specification page stood on **2026-10-09**, and the **Operations
+Both SDKs implement [PAP draft 0.2](https://personalagentprotocol.org/docs/0.2/spec)
+as its specification page stood on **2026-10-18**, and the **Operations
 extension version 1**. A test holds the two SDKs, this page, the package
 descriptions, `protocol/UPSTREAM.md`, and the requirement ledger
 (`protocol/requirements.yaml`) to the same three values. Upstream is a draft:
@@ -71,7 +71,7 @@ release, and the [conformance report](/protocol/conformance-report/) lists
 every case's outcome; a case a side cannot run is skipped, never passed, with
 its reason. Use the same SDK version on both sides when you control both;
 across organizations, the wire is the protocol: any two implementations of
-draft 0.1 and Operations v1 are meant to interoperate, and the conformance
+draft 0.2 and Operations v1 are meant to interoperate, and the conformance
 runner (`pap conformance run`) checks a company against it.
 
 ## Agent Runtimes

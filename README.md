@@ -10,7 +10,7 @@
 
 Python and TypeScript SDKs for the
 [Personal Agent Protocol](https://personalagentprotocol.org): both implement
-[draft 0.1](https://personalagentprotocol.org/docs/spec) (2026-10-09) and its
+[draft 0.2](https://personalagentprotocol.org/docs/0.2/spec) (2026-10-18) and its
 Operations extension v1. See
 [Compatibility](https://personal-agent-protocol.datalayer.tech/releases/compatibility/),
 [Migration](https://personal-agent-protocol.datalayer.tech/releases/migration/),
@@ -296,7 +296,7 @@ The shared fixtures are in `fixtures/`. Documentation is a Docusaurus site in
 
 - [Documentation](https://personalagentprotocol.org/docs)
 - [Overview](https://personalagentprotocol.org/docs/overview)
-- [Specification](https://personalagentprotocol.org/docs/spec)
+- [Specification](https://personalagentprotocol.org/docs/0.2/spec)
 - [Implementation guides](https://personalagentprotocol.org/docs/guides)
 - [Extensions](https://personalagentprotocol.org/docs/extensions)
 - [Open topics](https://personalagentprotocol.org/docs/open-topics)

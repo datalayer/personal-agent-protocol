@@ -4,7 +4,7 @@ title: Mediated Sign-In
 
 # Mediated Sign-In
 
-Mediated Sign-In (PAP draft 0.1 §4.7) is for companies whose users cannot
+Mediated Sign-In (PAP draft 0.2 §4.7) is for companies whose users cannot
 leave for a browser. The company declares the fields it needs in
 `auth.mediated.fields` and an `endpoint`; the personal agent relays what the
 user types. It is the one sign-in mode where a password passes through the
@@ -86,4 +86,4 @@ code was sent. It must never ask for a password or code in chat. If a user
 pastes one into the conversation anyway, the host should not forward it.
 
 See the runnable [Mediated Sign-In example](/examples/mediated-sign-in/) and
-the upstream [Mediated Sign-In specification](https://personalagentprotocol.org/docs/spec#47-mediated-sign-in).
+the upstream [Mediated Sign-In specification](https://personalagentprotocol.org/docs/0.2/spec#mediated-sign-in).

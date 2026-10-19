@@ -7,31 +7,57 @@ slug: /
 # 🤖 🌸 Personal Agent Protocol
 
 Python and TypeScript SDKs for the
-[Personal Agent Protocol](https://personalagentprotocol.org), currently
-targeting [draft 0.1](https://personalagentprotocol.org/docs/spec).
+[Personal Agent Protocol](https://personalagentprotocol.org) (PAP, or Poppy),
+targeting [draft 0.2](https://personalagentprotocol.org/docs/0.2/spec) and its
+[Operations extension](https://personalagentprotocol.org/docs/0.2/extensions/operations)
+version 1.
 
 Build software that lets a personal agent work with a company on a user's
-behalf—without pretending to be the user or hiding automation.
-
-The Personal Agent Protocol (PAP, or Poppy) gives both sides a common path for
-discovery, scoped authorization, web and API access, and conversations. These
-Python and TypeScript SDKs target
-[PAP draft 0.1](https://personalagentprotocol.org/docs/spec) and use
+behalf, without pretending to be the user or hiding automation. PAP gives
+both sides a common path for discovery, scoped authorization, web and API
+access, and conversations. The SDKs use
 [Datalayer Reactor](https://reactor.datalayer.tech) for replaceable platform
 services and optional protocol extensions.
 
-:::caution Draft and preview software
+## The specification and where it lives
 
-PAP can change incompatibly before its first stable version. The SDKs are an
-early implementation: discovery, foundational session value objects, and
-Direct Sign-In primitives and one-use browser/proof-bound exchange
-orchestration work in both SDKs. Signed-out session
-start and renewal work when the host supplies secure signing and DPoP
-providers. Browser Session form-post handoff and company-side assertion
-verification are also implemented. Conversation creation, continuation, and
-ordered JSON event reads work in both SDKs. Local JOSE providers are available;
-managed key custody, Account Token lifecycle, company services, conversation
-SSE, and Operations are not ready.
+The protocol is specified by the
+[Personal Agent Protocol organization on GitHub](https://github.com/personal-agent-protocol),
+in the public
+[personal-agent-protocol/personal-agent-protocol](https://github.com/personal-agent-protocol/personal-agent-protocol)
+repository. That repository is the source of the protocol's website,
+[personalagentprotocol.org](https://personalagentprotocol.org), which
+publishes:
+
+- the [introduction](https://personalagentprotocol.org/docs/introduction) and
+  the [path to 1.0](https://personalagentprotocol.org/docs/path-to-1);
+- each version of the
+  [specification](https://personalagentprotocol.org/docs/0.2/spec),
+  [extensions](https://personalagentprotocol.org/docs/0.2/extensions) and
+  [guides](https://personalagentprotocol.org/docs/0.2/guides): draft 0.2 is in
+  progress, and version 0.1 is frozen at
+  [/docs/0.1/spec](https://personalagentprotocol.org/docs/0.1/spec);
+- the [changelog](https://personalagentprotocol.org/docs/changelog) between
+  versions; and
+- a Company implementation kit.
+
+Feedback on the protocol goes to the
+[issues of that repository](https://github.com/personal-agent-protocol/personal-agent-protocol/issues)
+(see [How to give feedback](https://personalagentprotocol.org/docs/path-to-1#feedback)).
+Issues with these SDKs go to
+[datalayer/personal-agent-protocol](https://github.com/datalayer/personal-agent-protocol/issues).
+
+The specification is authoritative. These docs record which upstream revision
+the SDKs implement ([Protocol coverage](/protocol/coverage/)) and how they
+implement it.
+
+:::caution Draft protocol
+
+PAP can change incompatibly before its first stable version. Before 1.0, each
+`major.minor` version can break the one before, so a personal agent uses only
+a company document whose `protocol_version` it supports: these SDKs speak
+draft 0.2. See [Compatibility](/releases/compatibility/) and
+[Migration](/releases/migration/).
 
 :::
 
@@ -47,37 +73,6 @@ SSE, and Operations are not ready.
 | Against one of the SDKs                     | [Python](/sdk/python/) · [TypeScript](/sdk/typescript/) |
 | Datalayer Studio integration                | [Studio integration](/studio/integration/)              |
 
-## What is available
-
-The current `0.3.x` preview line includes:
-
-- strict, forward-compatible discovery and OAuth metadata models;
-- safe `/.well-known/poppy.json` discovery with domain and issuer binding;
-- Python and TypeScript packages driven by Datalayer Reactor contribution
-  points;
-- strict duplicate-member rejection at both JSON trust boundaries;
-- aligned, fail-closed Reactor contracts for signing, protected keys, tokens,
-  DPoP proofs, cache, and browser handoff;
-- session-token and assertion primitives plus signed-out session start and
-  renewal over HTTP for the PAP 4.2 implementation slice;
-- ES256/RS256 assertion signing and DPoP creation and verification with nonce,
-  request, token-hash, freshness, and replay checks;
-- Direct Sign-In state, S256 PKCE, callback, exchange-grant, and
-  browser/exchange orchestration in both SDKs;
-- Browser Session assertion, controlled form POST, and replay-safe company
-  verification in both SDKs;
-- DPoP-aware conversation creation and continuation with user-global
-  idempotent message IDs in both SDKs;
-- a Reactor-extensible `pap` CLI for non-secret profiles, verified discovery,
-  and extension diagnostics; and
-- shared fixtures and cross-language validation tests.
-
-Managed key custody, durable replay storage, device and mediated sign-in,
-conversation SSE and advanced lifecycle actions, Operations v1, and
-company/server adapters
-remain under active development.
-Pages label planned surfaces rather than presenting them as released behavior.
-
 ## The interaction at a glance
 
 ```mermaid
@@ -86,9 +81,9 @@ sequenceDiagram
   participant P as Personal agent
   participant C as Company
   P->>C: Discover /.well-known/poppy.json
-  C-->>P: Identity, auth, APIs, web, agent, extensions
+  C-->>P: Identity, auth, APIs, web, agent, feedback, extensions
   P->>C: Start a signed-out session
-  C-->>P: Short-lived session token
+  C-->>P: Short-lived, proof-bound session token
   P->>U: Ask for sign-in or exact approval when needed
   U-->>P: Consent
   P->>C: Use an authorized interface
@@ -97,20 +92,17 @@ sequenceDiagram
 ```
 
 [Get started](/getting-started/) with working discovery code, take the
-[protocol tour](/concepts/protocol-tour/), or review the exact
-[implementation status](/protocol/status/) and
-[protocol coverage target](/protocol/coverage/).
+[protocol tour](/concepts/protocol-tour/), or review the
+[implementation status](/protocol/status/) and the
+[protocol coverage](/protocol/coverage/), requirement by requirement.
 
 ## Two protocol roles
 
-The SDKs will support both sides of PAP:
+The SDKs implement both sides of PAP:
 
-1. A **personal agent client** discovers and works with companies for one user.
-1. A **company implementation** publishes discovery, issues sessions, and
-   exposes APIs or a company agent.
-
-The current executable vertical slice covers personal-agent discovery and
-signed-out session start or renewal when the host supplies secure signing and
-DPoP providers. Availability labels in these docs are deliberate:
-**implemented** means code and tests exist; **planned** describes the intended
-API and must not be relied on.
+1. A **personal agent client** discovers and works with companies for one
+   user: Sessions, every sign-in type, Account Tokens, APIs and MCP, the
+   website, conversations, feedback, and Operations.
+1. A **reference company**, in Python and in TypeScript, publishes discovery,
+   issues Sessions, and serves APIs, MCP, a company agent and Operations; every
+   replaceable part is a Reactor contribution point.

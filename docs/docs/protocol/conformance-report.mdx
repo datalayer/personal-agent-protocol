@@ -6,22 +6,23 @@ title: Compatibility and conformance report
 
 # Compatibility and conformance report
 
-SDK version **0.24.0**, PAP profile **0.1** (draft updated 2026-10-09), Operations extension **v1**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
+SDK version **0.25.0**, PAP profile **0.2** (draft updated 2026-10-18), Operations extension **v1**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
 
 ## Pairings
 
 | Personal agent | Company | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: |
-| Python | Python | 91 | 0 | 0 |
-| Python | TypeScript | 91 | 0 | 0 |
-| TypeScript | Python | 91 | 0 | 0 |
-| TypeScript | TypeScript | 91 | 0 | 0 |
+| Python | Python | 99 | 0 | 0 |
+| Python | TypeScript | 99 | 0 | 0 |
+| TypeScript | Python | 99 | 0 | 0 |
+| TypeScript | TypeScript | 99 | 0 | 0 |
 
 ## Protocol
 
 | Case | Kind | Requirements | Python → Python | Python → TypeScript | TypeScript → Python | TypeScript → TypeScript |
 | --- | --- | --- | --- | --- | --- | --- |
 | `protocol.extension-required-company` | negative | OPS-2-01, PAP-3.3-03 | pass | pass | pass | pass |
+| `protocol.feedback-report` | positive | PAP-8-01, PAP-8-06 | pass | pass | pass | pass |
 
 ## Security
 
@@ -33,22 +34,26 @@ SDK version **0.24.0**, PAP profile **0.1** (draft updated 2026-10-09), Operatio
 | `security.client-assertion-embedded-key-ignored` | negative | GUIDE-jwt-03 | pass | pass | pass | pass |
 | `security.client-assertion-bad-audience` | negative | GUIDE-jwt-04, PAP-4.8-02 | pass | pass | pass | pass |
 | `security.client-assertion-audience-array` | negative | GUIDE-jwt-04 | pass | pass | pass | pass |
-| `security.session-assertion-bad-audience` | negative | GUIDE-jwt-04 | pass | pass | pass | pass |
+| `security.client-assertion-token-endpoint-audience` | negative | PAP-4.1-05 | pass | pass | pass | pass |
+| `security.session-assertion-bad-audience` | negative | GUIDE-jwt-04, PAP-4.2-07 | pass | pass | pass | pass |
+| `security.session-assertion-token-endpoint-audience` | negative | PAP-4.2-07 | pass | pass | pass | pass |
+| `security.session-assertion-five-minutes` | positive | PAP-4.2-08 | pass | pass | pass | pass |
 | `security.session-assertion-wrong-issuer` | negative | GUIDE-jwt-03 | pass | pass | pass | pass |
 | `security.session-assertion-clock-skew-tolerated` | positive | GUIDE-jwt-04 | pass | pass | pass | pass |
 | `security.session-assertion-from-the-future` | negative | GUIDE-jwt-04 | pass | pass | pass | pass |
 | `security.session-assertion-expired` | negative | GUIDE-jwt-04 | pass | pass | pass | pass |
-| `security.session-assertion-long-lived` | negative | GUIDE-jwt-04 | pass | pass | pass | pass |
-| `security.session-assertion-replay` | negative | GUIDE-jwt-05 | pass | pass | pass | pass |
+| `security.session-assertion-long-lived` | negative | GUIDE-jwt-04, PAP-4.2-08 | pass | pass | pass | pass |
+| `security.session-assertion-replay` | negative | GUIDE-jwt-05, PAP-4.2-09 | pass | pass | pass | pass |
 | `security.browser-assertion-at-token-endpoint` | negative | PAP-5-05 | pass | pass | pass | pass |
 | `security.token-request-without-dpop` | negative | PAP-4.3-11 | pass | pass | pass | pass |
 | `security.token-dpop-with-ath` | negative | PAP-4.3-07 | pass | pass | pass | pass |
-| `security.dpop-alg-none` | negative | PAP-4.3-02, GUIDE-jwt-02 | pass | pass | pass | pass |
+| `security.dpop-alg-none` | negative | PAP-4.3-02, GUIDE-jwt-02, PAP-4.3-20 | pass | pass | pass | pass |
 | `security.dpop-wrong-signature` | negative | PAP-4.3-02 | pass | pass | pass | pass |
 | `security.dpop-other-key` | negative | PAP-4.3-03 | pass | pass | pass | pass |
 | `security.dpop-method-mismatch` | negative | PAP-4.3-04 | pass | pass | pass | pass |
 | `security.dpop-url-mismatch` | negative | PAP-4.3-04 | pass | pass | pass | pass |
 | `security.dpop-stale` | negative | PAP-4.3-05 | pass | pass | pass | pass |
+| `security.dpop-header-twice` | negative | PAP-4.3-19 | pass | pass | pass | pass |
 | `security.dpop-replay` | negative | PAP-4.3-06 | pass | pass | pass | pass |
 | `security.dpop-token-hash-mismatch` | negative | PAP-4.3-07 | pass | pass | pass | pass |
 | `security.dpop-missing` | negative | PAP-4.3-01, PAP-4.3-11 | pass | pass | pass | pass |
@@ -75,14 +80,16 @@ SDK version **0.24.0**, PAP profile **0.1** (draft updated 2026-10-09), Operatio
 | `lifecycle.account-token-from-another-client` | negative | PAP-4.8-02 | pass | pass | pass | pass |
 | `lifecycle.account-token-at-api` | negative | PAP-4.8-01 | pass | pass | pass | pass |
 | `lifecycle.account-mismatch` | negative | PAP-4.8-04 | pass | pass | pass | pass |
+| `lifecycle.account-mismatch-after-sign-out` | negative | PAP-4.8-04 | pass | pass | pass | pass |
 | `lifecycle.account-token-for-another-users-session` | negative | PAP-4.8-03 | pass | pass | pass | pass |
 | `lifecycle.sign-out-takes-effect` | positive | PAP-4.9-01 | pass | pass | pass | pass |
 | `lifecycle.sign-out-session-continues` | positive | PAP-4.9-01 | pass | pass | pass | pass |
 | `lifecycle.sign-out-every-session` | positive | PAP-4.9-01, PAP-4.8-05 | pass | pass | pass | pass |
 | `lifecycle.disconnect-from-account-settings` | positive | GUIDE-co-account-01 | pass | pass | pass | pass |
-| `lifecycle.mcp-protected-resource-metadata` | positive | PAP-6-06, PAP-6-03 | pass | pass | pass | pass |
-| `lifecycle.mcp-bearer-for-its-url` | positive | PAP-4.3-09, PAP-6-04, GUIDE-pa-tokens-01 | pass | pass | pass | pass |
-| `lifecycle.mcp-bearer-only-at-mcp` | negative | PAP-4.3-10, PAP-6-05 | pass | pass | pass | pass |
+| `lifecycle.mcp-protected-resource-metadata` | positive | PAP-6-06, PAP-6-03, PAP-4.3-26 | pass | pass | pass | pass |
+| `lifecycle.mcp-bearer-for-its-url` | positive | PAP-4.3-09, PAP-4.3-24, PAP-6-04, GUIDE-pa-tokens-01 | pass | pass | pass | pass |
+| `lifecycle.mcp-bearer-only-at-mcp` | negative | PAP-4.3-10, PAP-4.3-11, PAP-6-05 | pass | pass | pass | pass |
+| `lifecycle.mcp-token-type-by-server` | negative | PAP-4.3-23, PAP-4.3-11 | pass | pass | pass | pass |
 | `lifecycle.mcp-sign-out-takes-effect` | positive | PAP-4.9-01, PAP-6-04 | pass | pass | pass | pass |
 | `lifecycle.browser-joins-session` | positive | PAP-5-01, PAP-5-03, PAP-5-12, PAP-5-10, PAP-5-11 | pass | pass | pass | pass |
 | `lifecycle.browser-assertion-refused` | negative | PAP-5-05, PAP-5-06, PAP-5-07, PAP-5-08, PAP-5-09 | pass | pass | pass | pass |
@@ -98,6 +105,7 @@ SDK version **0.24.0**, PAP profile **0.1** (draft updated 2026-10-09), Operatio
 | `conversations.cursor-expired-recovery` | recovery | PAP-7.5-04 | pass | pass | pass | pass |
 | `conversations.has-more-drained` | positive | PAP-7.5-03 | pass | pass | pass | pass |
 | `conversations.empty-read` | positive | PAP-7.5-03 | pass | pass | pass | pass |
+| `conversations.read-fields` | positive | PAP-7.5-03 | pass | pass | pass | pass |
 | `conversations.sse-reconnect` | recovery | PAP-7.6-01 | pass | pass | pass | pass |
 | `conversations.text-delta-not-actionable` | positive | PAP-7.6-01 | pass | pass | pass | pass |
 | `conversations.attribution` | positive | PAP-7.8-01, PAP-7.7-02 | pass | pass | pass | pass |
@@ -135,12 +143,14 @@ SDK version **0.24.0**, PAP profile **0.1** (draft updated 2026-10-09), Operatio
 
 ## Decided by each SDK alone
 
-33 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
+44 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
 
 | Case | Kind | Check | SDKs |
 | --- | --- | --- | --- |
 | `protocol.major-version-unsupported` | negative | discovery_document | python, typescript |
-| `protocol.minor-version-newer` | positive | discovery_document | python, typescript |
+| `protocol.minor-version-newer` | negative | discovery_document | python, typescript |
+| `protocol.unknown-fields-ignored` | positive | discovery_document | python, typescript |
+| `protocol.older-version-unsupported` | negative | discovery | python, typescript |
 | `protocol.version-not-major-minor` | negative | discovery_document | python, typescript |
 | `protocol.unknown-api-type` | positive | discovery_document | python, typescript |
 | `protocol.unknown-conversation-protocol` | positive | discovery_document | python, typescript |
@@ -148,14 +158,23 @@ SDK version **0.24.0**, PAP profile **0.1** (draft updated 2026-10-09), Operatio
 | `protocol.extension-version-mismatch` | negative | extension_negotiation | python, typescript |
 | `protocol.third-party-extension-name` | positive | extension_names | python, typescript |
 | `protocol.extension-required-error` | negative | extension_required | python, typescript |
+| `protocol.extension-required-at-an-api` | negative | extension_required | python, typescript |
 | `protocol.unknown-event-type` | positive | conversation_page | python, typescript |
 | `protocol.unknown-operation-fields` | positive | operation | python, typescript |
 | `protocol.message-context-fields` | negative | message_context | python, typescript |
 | `protocol.multi-domain-issuer` | positive | discovery | python, typescript |
 | `protocol.issuer-not-claiming-domain` | negative | discovery | python, typescript |
 | `protocol.issuer-mismatch` | negative | discovery | python, typescript |
-| `protocol.organization-domain-www` | positive | discovery | python, typescript |
+| `protocol.issuer-compared-exactly` | negative | discovery | python, typescript |
+| `protocol.issuer-with-a-path` | positive | discovery | python, typescript |
+| `protocol.dpop-algorithms-include-es256` | negative | discovery | python, typescript |
+| `protocol.organization-domain-www` | negative | discovery | python, typescript |
 | `protocol.organization-domain-after-redirect` | negative | discovery | python, typescript |
+| `protocol.organization-domain-redirect-www` | positive | discovery | python, typescript |
+| `protocol.organization-domain-case-insensitive` | positive | discovery | python, typescript |
+| `protocol.feedback-needs-auth` | negative | discovery_document | python, typescript |
+| `protocol.feedback-endpoint-https` | negative | discovery_document | python, typescript |
+| `protocol.feedback-endpoint-listed` | positive | discovery_document | python, typescript |
 | `security.duplicate-json-members` | negative | strict_json | python, typescript |
 | `security.ssrf-loopback` | negative | url_safety | python, typescript |
 | `security.ssrf-private` | negative | url_safety | python, typescript |

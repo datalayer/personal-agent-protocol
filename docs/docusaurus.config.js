@@ -68,6 +68,20 @@ module.exports = {
         },
         {to: '/blog', label: 'Blog', position: 'left'},
         {
+          type: 'dropdown',
+          position: 'left',
+          label: 'Specification',
+          items: [
+            {label: 'personalagentprotocol.org', href: 'https://personalagentprotocol.org'},
+            {label: 'Draft 0.2', href: 'https://personalagentprotocol.org/docs/0.2/spec'},
+            {label: 'Changelog', href: 'https://personalagentprotocol.org/docs/changelog'},
+            {
+              label: 'GitHub: personal-agent-protocol',
+              href: 'https://github.com/personal-agent-protocol/personal-agent-protocol',
+            },
+          ],
+        },
+        {
           href: 'https://discord.gg/YQFwvmSSuR',
           position: 'right',
           className: 'header-discord-link',
@@ -138,6 +152,23 @@ module.exports = {
             {
               label: 'Blog',
               to: '/blog',
+            },
+          ],
+        },
+        {
+          title: 'Specification',
+          items: [
+            {
+              label: 'personalagentprotocol.org',
+              href: 'https://personalagentprotocol.org',
+            },
+            {
+              label: 'Specification on GitHub',
+              href: 'https://github.com/personal-agent-protocol/personal-agent-protocol',
+            },
+            {
+              label: 'Protocol feedback',
+              href: 'https://github.com/personal-agent-protocol/personal-agent-protocol/issues',
             },
           ],
         },

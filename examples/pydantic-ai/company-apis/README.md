@@ -5,10 +5,13 @@ its `poppy.json` lists. The OpenAPI API is called with `ApiClient` and the
 Session's DPoP-bound token: signed out, it answers `sign_in_required` with the
 scope signing in would give; signed in, it reads Ada's orders and answers the
 exchange with `202` and a proposed operation. The MCP server is called with
-`McpClient` and a Bearer token issued for its URL alone
-(`AccountTokenClient.bearer_for_mcp`): it lists its tools, reads the same
-orders, and proposes the same exchange, one operation record across both
-channels. The SDK never sends that Bearer token anywhere else.
+`McpClient` and a token issued for its URL alone
+(`AccountTokenClient.token_for_mcp`): DPoP, since Manzanita's protected
+resource metadata lists `dpop_signing_alg_values_supported`
+(`fetch_mcp_server_metadata`), or Bearer for an MCP server without DPoP. It
+lists its tools, reads the same orders, and proposes the same exchange, one
+operation record across both channels. The company refuses that token
+anywhere else.
 
 The tool returns statuses, scopes, tool names, the orders, and Manzanita's
 summaries as written. Tokens, the device code, and proofs stay in the host.

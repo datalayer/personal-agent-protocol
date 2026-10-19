@@ -7,8 +7,9 @@ description: Send PAP API and conversation requests with fresh proofs and safe r
 
 Creating a valid proof is only half of DPoP safety. The HTTP transport must
 create a new proof for the exact method and URL of every attempt—including a
-nonce retry or redirect—and must never let caller-controlled headers override
-the Session Token or proof.
+nonce retry—must refuse a redirect rather than resend the token and a proof to
+another URL, and must never let caller-controlled headers override the Session
+Token or proof.
 
 ```mermaid
 sequenceDiagram
@@ -23,12 +24,13 @@ sequenceDiagram
   C-->>H: 401 use_dpop_nonce + nonce
   H->>P: Proof 2 for same request + nonce
   H->>C: Retry with proof 2
-  C-->>H: 307 Location: /orders/current
-  H->>H: Require HTTPS and same origin
-  H->>P: Proof 3 for GET /orders/current
-  H->>C: Redirected request with proof 3
   C-->>H: 200 API result
   H-->>A: Response without token or proof material
+  A->>H: GET orders again
+  H->>P: Proof 3 for GET /orders + token hash
+  H->>C: Authorization: DPoP + DPoP proof 3
+  C-->>H: 307 Location: /orders/current
+  H-->>A: redirect_refused (nothing sent to the new URL)
 ```
 
 ## Enforced boundaries
@@ -39,12 +41,10 @@ sequenceDiagram
 - Every attempt receives a fresh proof bound to its method, normalized target,
   and Session Token hash.
 - A `use_dpop_nonce` challenge is retried once with the company's nonce.
-- Same-origin redirects receive a new target-bound proof. Cross-origin
-  redirects fail before a credential reaches the new origin.
-- Redirects are bounded and handled manually; the underlying HTTP client never
-  forwards authorization automatically.
-- Request bodies are replayable values rather than unbounded streams. A `303`
-  changes the redirected request to `GET` and discards the body.
+- A redirect is refused (`redirect_refused`): under draft 0.2 §3 no token,
+  proof, assertion or body goes to the URL a protocol endpoint redirects to.
+  The underlying HTTP client never follows redirects.
+- Request bodies are replayable values rather than unbounded streams.
 
 Python exposes `DpopHttpClient`; TypeScript exposes `DpopFetchClient`. Both
 resolve proof generation through Reactor and keep Session Tokens, proofs,
@@ -61,4 +61,4 @@ keeps MCP acquisition and enforcement open until that lifecycle exists.
 
 Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/dpop-transport)
 or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/dpop-transport).
-See upstream [Using Session Tokens](https://personalagentprotocol.org/docs/spec#sending-tokens).
+See upstream [Using Session Tokens](https://personalagentprotocol.org/docs/0.2/spec#sending-tokens).

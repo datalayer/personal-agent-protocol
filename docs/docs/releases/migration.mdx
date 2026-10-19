@@ -10,6 +10,32 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.24 → 0.25
+
+0.25.0 implements [PAP draft 0.2](https://personalagentprotocol.org/docs/0.2/spec)
+(upstream revision 2026-10-18) in place of draft 0.1. Before 1.0 each
+`major.minor` version can break the one before, so a 0.25 personal agent uses
+only `poppy.json` documents with `protocol_version` `0.2`, and a 0.25 company
+publishes `0.2`. Upgrade personal agents and the companies they talk to
+together. The protocol changes are listed in the upstream
+[changelog](https://personalagentprotocol.org/docs/changelog#v0-2); in the SDKs:
+
+| Change | Python | TypeScript |
+| --- | --- | --- |
+| A Bearer-only MCP token request is gone: every MCP server gets a token for its `url`, DPoP when its protected resource metadata lists `dpop_signing_alg_values_supported`, Bearer otherwise | `bearer_for_mcp` → `token_for_mcp(..., resource=, dpop=)`, with `fetch_mcp_server_metadata(...).supports_dpop`; `McpClient(..., reactor=, who=)` | `bearerForMcp` → `tokenForMcp({ ..., resource, dpop })`, `fetchMcpServerMetadata(url, { issuer })`, `McpClient({ ..., reactor, who })` |
+| Assertions name the company's `auth.issuer` in `aud` and live at most five minutes | `build_session_assertion_claims(..., issuer=)` (no `token_endpoint=`); new `build_client_assertion_claims` | `buildSessionAssertionClaims({ ..., issuer })`; new `buildClientAssertionClaims` |
+| A device link is shown only on the issuer's host or one of its `poppy_domains` (or a subdomain), with the company's name and domain | `DeviceSignInClient.begin(..., organization=, poppy_domains=)` (required); `DeviceSignInStart.organization_name` / `organization_domain`; refusal `unsafe_verification_uri` | `begin({ ..., organization, poppyDomains })`; `organizationName` / `organizationDomain` |
+| Mediated Sign-In asks for credentials with the company's issuer, name and domain | `ProtectedInputRequest(..., issuer, ...)` | `ProtectedInputRequest.issuer` |
+| The sign-in display names the company | `PapSignIn.organization_name` / `organization_domain`, required for `device` and `mediated` | — |
+| No redirect is followed outside discovery | `DpopHttpClient` loses `max_redirects`; a redirect raises `TransportError("redirect_refused")` | `DpopFetchClientOptions.maxRedirects` removed |
+| `organization.domain` is the host that served the document after redirects, compared ignoring case only; issuers are compared exactly (no trailing-slash or `www.` normalisation) | `DiscoveryError` | `DiscoveryError` |
+| A company's assertion check takes one audience, its issuer | `verify_assertion(audience: str)` | `verifyAssertion({ audience })` |
+| New: feedback (section 8) | `FeedbackClient.report`, `FeedbackReport`; `CompanyConfig.feedback`, `CompanyService.feedback_reports()` | `FeedbackClient.report`, `FeedbackReport`; `feedback`, `feedbackReports()` |
+| Reference company: DPoP at its MCP server by default, nonces on demand, a device page on its own domain | `CompanyConfig.mcp_dpop=True`, `dpop_nonce`; `device_page` must be on the company's domain or a subdomain | `mcpDpop`, `dpopNonce` |
+
+A custom company store sees two new record kinds (`feedback`, `dpop_nonce`)
+and `StoredSession.account_id` (the account a Session was ever signed in to).
+
 ## 0.9 → 0.10
 
 A security review of both SDKs changed these contracts:

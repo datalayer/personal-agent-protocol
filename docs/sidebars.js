@@ -42,6 +42,8 @@ const sidebars = {
             "protocol/coverage/browser",
             "protocol/coverage/apis",
             "protocol/coverage/conversations",
+            "protocol/coverage/feedback",
+            "protocol/coverage/security-considerations",
             "protocol/coverage/operations",
             "protocol/coverage/operational-guidance",
           ],

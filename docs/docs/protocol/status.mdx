@@ -5,8 +5,8 @@ title: Protocol status
 
 # Protocol implementation status
 
-Target: [PAP draft 0.1, updated October 9,
-2026](https://personalagentprotocol.org/docs/spec), and the Operations
+Target: [PAP draft 0.2, updated October 18,
+2026](https://personalagentprotocol.org/docs/0.2/spec), and the Operations
 extension version 1 (see [Compatibility](/releases/compatibility/)).
 
 | Area                                                                                    | Status                                                                                                                                                     |
@@ -23,14 +23,15 @@ extension version 1 (see [Compatibility](/releases/compatibility/)).
 | Reactor clock, randomness, signer, DPoP proof, token, cache, browser, Account Token lock, protected input, standing permission, and company contracts ([Contribution points](/concepts/contribution-points/)) | Implemented and lifecycle-tested in Python and TypeScript                                                                                                  |
 | ES256/RS256 assertion signing                                                           | Implemented in Python and TypeScript                                                                                                                       |
 | DPoP proof creation and verification                                                    | Implemented in Python and TypeScript; host key resolver and replay cache required                                                                          |
-| DPoP-aware API/conversation HTTP transport                                              | Implemented in Python and TypeScript with nonce retry and same-origin redirect proof rebinding                                                             |
+| DPoP-aware API/conversation HTTP transport                                              | Implemented in Python and TypeScript with nonce retry in both error shapes; every redirect refused                                                             |
 | Conversation creation, continuation, and ordered JSON event reads                       | Implemented in Python and TypeScript with long polling, backlog draining, cursor recovery, and duplicate suppression                                       |
 | Direct Sign-In browser handoff and token exchange                                       | Implemented in Python and TypeScript; host state, browser, signer, and DPoP providers required                                                             |
 | Browser Session assertion, controlled form POST, and verification                       | Implemented in Python and TypeScript; host signer/form-post and company replay cache required                                                              |
-| Device Sign-In | Implemented in Python and TypeScript; host state store, signer, and DPoP provider required |
+| Device Sign-In | Implemented in Python and TypeScript; host state store, signer, and DPoP provider required; the link shown only on the issuer's host or its `poppy_domains`, with the company's name and domain |
+| Feedback (draft 0.2 §8) | Implemented in Python and TypeScript: `FeedbackClient.report` (`kind` `missing`, bounded `task` and `description`) and the reference companies' `POST /poppy/feedback` |
 | Mediated Sign-In | Implemented in Python and TypeScript; credentials only through the host's `pap.protectedInput`, one endpoint on the company's domain, no redirects, one-time code from the same Session |
 | Account Token refresh, rotation, narrowing, and revocation | Implemented in Python and TypeScript; rotation serialized by `pap.accountTokenLock`, `invalid_grant` signs out, wider scopes are `re_consent_required` |
-| OpenAPI and MCP clients | Implemented in Python and TypeScript: `ApiClient` (DPoP, `202` operations, scope-carrying refusals) and `McpClient`/`McpBearerAuth` with a resource-bound Bearer token from `bearer_for_mcp`/`bearerForMcp`, sent only to its MCP server's exact URL |
+| OpenAPI and MCP clients | Implemented in Python and TypeScript: `ApiClient` (DPoP, `202` operations, scope-carrying refusals) and `McpClient` with a token for its MCP server's exact URL from `token_for_mcp`/`tokenForMcp`: DPoP (`McpDpopAuth`) when the server's protected resource metadata lists `dpop_signing_alg_values_supported`, a Bearer token (`McpBearerAuth`) otherwise |
 | Conversation SSE streaming, handoff, Direct Conversations, sign-in mid-conversation, and active close | Implemented in Python and TypeScript: `Last-Event-ID` reconnects, display-only text deltas, discarded partial messages, `direct_conversation_open` details |
 | Operations v1 | Client implemented in Python and TypeScript: negotiation, exact approval (revision + digest), `terms_changed`, recovery after a lost confirm, cancel, `extension_required`, and standing permissions through `pap.standingPermissionStore`; company handlers in both reference companies |
 | Extensible `pap` CLI                                                                    | Reactor host/plugin, non-secret profiles, company discovery, agent identity/JWKS inspection, extension diagnostics, and live discovery command implemented |
@@ -70,9 +71,10 @@ page; the [Support](/releases/support/) page says which versions get fixes.
   and one-use `jti`. Company adapters still own cookie creation and must bind
   cookie state and lifetime to the underlying PAP Session.
 - DPoP resource clients own authorization headers, create a fresh proof for
-  every attempt, retry one nonce challenge, and refuse cross-origin credential
-  forwarding. The Account Token lifecycle and resource-bound MCP Bearer
-  acquisition on top of it are implemented in both SDKs.
+  every attempt, retry one nonce challenge, and refuse every redirect. The
+  Account Token lifecycle and the resource-bound MCP token (DPoP or Bearer, as
+  the MCP server's protected resource metadata says) on top of it are
+  implemented in both SDKs.
 - Conversation clients (messages, JSON events, SSE, handoff, Direct
   Conversations, closing), Account Tokens, Mediated Sign-In, and the
   Operations client are aligned in Python and TypeScript, and so are the two

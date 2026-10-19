@@ -4,26 +4,38 @@ title: Protocol coverage
 
 # Protocol coverage
 
-The SDKs target **Personal Agent Protocol draft 0.1, updated October 9, 2026**.
-The upstream draft remains authoritative. This page records the surface that
-the implementation and conformance suite must eventually cover.
+The SDKs target **Personal Agent Protocol draft 0.2, as of October 18, 2026**
+(upstream commit `30c4764`) and the Operations extension version 1. The
+upstream draft remains authoritative. This page records, requirement by
+requirement, what the implementation and the conformance suite cover.
 
 ## Sources
 
-- [Overview and principles](https://personalagentprotocol.org/docs/overview)
-- [Draft specification](https://personalagentprotocol.org/docs/spec)
-- [Implementation guides](https://personalagentprotocol.org/docs/guides)
-- [Extensions](https://personalagentprotocol.org/docs/extensions)
-- [Operations version 1](https://personalagentprotocol.org/docs/extensions/operations)
-- [Open topics](https://personalagentprotocol.org/docs/open-topics)
+The specification is published by the
+[Personal Agent Protocol organization](https://github.com/personal-agent-protocol)
+at [personalagentprotocol.org](https://personalagentprotocol.org), built from
+[personal-agent-protocol/personal-agent-protocol](https://github.com/personal-agent-protocol/personal-agent-protocol).
+Draft 0.2 is in progress there; version 0.1, which SDK 0.24 and earlier
+implement, is frozen at [/docs/0.1/spec](https://personalagentprotocol.org/docs/0.1/spec).
+What changed between them is in the upstream
+[changelog](https://personalagentprotocol.org/docs/changelog#v0-2) and, for the
+SDKs, in [Migration](/releases/migration/#024--025).
+
+- [Overview and principles](https://personalagentprotocol.org/docs/introduction)
+- [Draft specification](https://personalagentprotocol.org/docs/0.2/spec)
+- [Implementation guides](https://personalagentprotocol.org/docs/0.2/guides)
+- [Extensions](https://personalagentprotocol.org/docs/0.2/extensions)
+- [Operations version 1](https://personalagentprotocol.org/docs/0.2/extensions/operations)
+- [Open topics](https://personalagentprotocol.org/docs/path-to-1#open-topics)
 
 The repository records the reviewed upstream revision in
 `protocol/UPSTREAM.md` and maps individual normative requirements in
 `protocol/requirements.yaml`.
 
-The shared fixture corpus now covers discovery, OAuth metadata, client
-metadata, session-token responses, conversation event pages, and Operations
-objects. Both SDKs preserve unknown compatible fields and event types while
+The shared fixture corpus covers discovery (including the served host after
+redirects, `major.minor` versions and issuers with a path), OAuth and MCP
+protected resource metadata, client metadata, session-token responses,
+conversation event pages, feedback reports, and Operations objects. Both SDKs preserve unknown compatible fields and event types while
 validating the required shape of known types.
 
 ## Coverage by area
@@ -54,19 +66,20 @@ and SHOULDs.
 
 | Area | Required behavior |
 | --- | --- |
-| Discovery | Fetch `/.well-known/poppy.json`; validate domain, supported major version, HTTPS redirects, interfaces, issuer, and extensions; cache within safe bounds. |
-| Company identity | Fetch RFC 8414 metadata and bind the exact issuer to an authorized `poppy_domains` entry. |
-| Personal-agent identity | Publish and verify HTTPS client metadata, same-domain JWKS and redirects, and `private_key_jwt` authentication. |
+| Discovery | Fetch `/.well-known/poppy.json`; require the supported `major.minor` version (`0.2`), `organization.domain` equal to the host that served it after HTTPS redirects (case-insensitive), HTTPS for every URL, interfaces, issuer, and extensions; cache within safe bounds. |
+| Company identity | Fetch RFC 8414 metadata (path-aware for an issuer with a path) and bind the issuer, compared character for character, to a `poppy_domains` entry; one issuer per company, the same `auth` on every domain naming it. |
+| Personal-agent identity | Publish and verify HTTPS client metadata, same-domain JWKS and redirects, and `private_key_jwt` authentication; client and Session assertions name the company's `auth.issuer` in `aud`, live at most five minutes, and a `jti` is refused again per `client_id`. |
 | User identity | Maintain one stable, opaque, non-personal ID per user and company issuer. |
 | Sessions | Start signed out, renew by session ID, preserve parallel sessions, and treat session tokens as opaque. |
-| Proof of possession | Bind non-MCP tokens to per-user/per-company DPoP keys; use a new proof per request and support nonces and replay protection. |
-| Sign-in | Support direct authorization code with PKCE, device authorization, and mediated sign-in with protected one-time-code continuation. |
+| Proof of possession | A DPoP key pair per User ID; sign ES256 (or a listed algorithm); a new proof per request; nonces; RFC 9449 §4.3 checks at the company, replay refused at the token endpoint; 400 OAuth errors at the token endpoint, 401 challenges elsewhere. |
+| Sign-in | Direct authorization code with PKCE, device authorization (link only on the issuer host or `poppy_domains`, with the company's name and domain), and mediated sign-in (HTTP 200 statuses, `invalid_scope` / `account_mismatch` / `sign_in_not_found`, credentials chosen by issuer and discarded after); a Session stays tied to the account it was ever signed in to. |
 | Account access | Store rotating account tokens as secrets; exchange them only at the token endpoint; narrow scopes/resources and revoke on sign-out. |
-| APIs | Use DPoP for OpenAPI. Use resource-bound Bearer tokens only for the advertised MCP server. |
+| APIs | DPoP for OpenAPI; for MCP, a token requested with `resource` = the server's URL: DPoP when its protected resource metadata lists `dpop_signing_alg_values_supported`, Bearer otherwise, valid only at that exact URL; no redirect followed outside discovery. |
 | Web | Join an isolated browser context to the session with a short-lived assertion and a validated return location. |
-| Conversations | Create, retry idempotently, read cursor events, poll or stream, identify speakers, hand off, sign in, and close. |
+| Conversations | Create, retry idempotently, read cursor events (`cursor`, `wait` as query parameters; `conversation_id` and `events` on every read), poll or stream (`Last-Event-ID` wins), identify speakers (`role` set by the company), hand off and close idempotently, sign in, stay open after sign-out. |
 | Extensions | Negotiate named major versions while ignoring unsupported extensions and unknown fields. |
-| Operations v1 | Propose immutable revisions, obtain exact approval, confirm at most once, track, recover, and cancel across channels. |
+| Feedback | Report a task the company offers no way to do (`kind` `missing`, `task`, `description`) with a Session Token; the company answers 202. |
+| Operations v1 | Propose immutable revisions, obtain exact approval, confirm at most once, track, recover, and cancel across channels; an account's operation only from a Session signed in to that account (`sign_in_required` otherwise). |
 
 ## Coverage expectations
 
@@ -78,8 +91,8 @@ fresh proofs, retries, rate limits, sign-in preferences, consent presentation,
 and safe errors.
 
 Operations is implemented as an optional Reactor-backed PAP extension: the
-client in Python and TypeScript, the company side in the Python reference
-company. Its conformance suite must cover exact revisions, ownership, expiry,
+client in Python and TypeScript, the company side in both reference
+companies. Its conformance suite must cover exact revisions, ownership, expiry,
 idempotent confirmation, recovery, and cancellation regardless of the channel
 where an operation was proposed.
 
@@ -94,16 +107,17 @@ where an operation was proposed.
 | Conversations: messages, events, SSE, handoff, Direct, sign-in, close | Python and TypeScript | Python and TypeScript reference companies | [Streaming](/examples/conversation-streaming/), [control](/examples/conversation-control/) |
 | Operations v1 | Python and TypeScript | Python and TypeScript reference companies | [Operations](/examples/operations/) |
 | Web (Browser Session) | Python and TypeScript | Python and TypeScript reference companies | [Browser Session](/examples/browser-session/) |
-| OpenAPI and MCP | Python and TypeScript (`ApiClient`, `McpClient`, resource-bound Bearer) | Python and TypeScript reference companies | [TypeScript SDK](/sdk/typescript/#openapi-and-mcp) |
+| OpenAPI and MCP | Python and TypeScript (`ApiClient`, `McpClient`, resource-bound DPoP or Bearer token) | Python and TypeScript reference companies | [TypeScript SDK](/sdk/typescript/#openapi-and-mcp) |
+| Feedback | Python and TypeScript (`FeedbackClient`) | Python and TypeScript reference companies (`POST /poppy/feedback`) | [Feedback coverage](/protocol/coverage/feedback/) |
 
 The end-to-end journeys, [a user with a company](/examples/user-with-a-company/)
-and [two companies](/examples/two-companies/) (composition, not a draft 0.1
+and [two companies](/examples/two-companies/) (composition, not a draft 0.2
 company-to-company feature), run in Python only, on the demo worlds in
 `personal_agent_protocol.demo`.
 
 ## Deliberate boundaries
 
-Draft 0.1 does not define payments, push notifications, or message
+Draft 0.2 does not define payments, push notifications, or message
 attachments. The SDKs preserve unknown extension data but do not invent wire
 formats for those areas. Company registration policy is also outside the
 protocol; implementations may expose allow/block policy without presenting it

@@ -100,7 +100,7 @@ app = company_app(service)  # any ASGI server, or httpx.ASGITransport in tests
 response, so any web framework can serve it; `company_app()` serves it over
 plain ASGI and rebuilds each request URL on the company's published origin so
 DPoP `htu` checks compare against what the personal agent signed. It
-implements, of draft 0.1 and Operations v1:
+implements, of draft 0.2 and Operations v1:
 
 - discovery (`/.well-known/poppy.json`) and OAuth metadata on one issuer;
 - Sessions with verified client and Session assertions, DPoP-bound tokens,
@@ -364,5 +364,5 @@ checked with `check_store`, a company agent, and one executor, serves it with
 [`company-apis`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis)
 example reads and proposes through Manzanita's OpenAPI API and MCP server.
 
-Use the upstream [company implementation guidance](https://personalagentprotocol.org/docs/guides)
+Use the upstream [company implementation guidance](https://personalagentprotocol.org/docs/0.2/guides)
 alongside the normative specification.

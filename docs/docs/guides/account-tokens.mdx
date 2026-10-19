@@ -6,7 +6,7 @@ title: Account Tokens
 
 A Direct, Device, or Mediated Sign-In returns an Account Token: the OAuth
 `refresh_token` that keeps the user signed in after the short-lived Session
-Token expires (PAP draft 0.1 §4.8, §4.9). It is the most valuable credential a
+Token expires (PAP draft 0.2 §4.8, §4.9). It is the most valuable credential a
 personal agent holds for a user, so the SDK never hands it to a caller. It is
 written straight into the Reactor `pap.tokenStore` by the sign-in client and
 used only at the company's `token_endpoint` and `revocation_endpoint`.
@@ -87,4 +87,4 @@ and the SDK does not retry.
 - Sign-out in the product revokes, then deletes.
 
 See the runnable [Account Tokens example](/examples/account-tokens/) and the
-upstream [Account Tokens specification](https://personalagentprotocol.org/docs/spec#48-account-tokens).
+upstream [Account Tokens specification](https://personalagentprotocol.org/docs/0.2/spec#account-tokens).

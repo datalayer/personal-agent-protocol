@@ -6,6 +6,65 @@
 
 # Changelog
 
+## 0.25.0 (2026-10-19)
+
+**PAP draft 0.2** ([migration](docs/docs/releases/migration.mdx)): both SDKs
+and both reference companies move from draft 0.1 (2026-10-09) to draft 0.2 as
+of 2026-10-18 (commit `30c4764` of
+[personal-agent-protocol/personal-agent-protocol](https://github.com/personal-agent-protocol/personal-agent-protocol),
+the source of [personalagentprotocol.org](https://personalagentprotocol.org)).
+`PROTOCOL_PROFILE` is `0.2`; a personal agent uses only `0.2` documents. Breaking.
+
+- **Discovery**: `organization.domain` is the host that served `poppy.json`
+  after redirects, compared ignoring case only (no `www.` stripping); issuers
+  are compared exactly; every protocol URL is HTTPS; `feedback.endpoint`;
+  OAuth metadata that lists `dpop_signing_alg_values_supported` includes ES256.
+- **Assertions**: client and Session assertions name the company's
+  `auth.issuer` in `aud`, live at most five minutes; companies refuse any
+  other `aud` and a `jti` seen from the same `client_id`
+  (`build_client_assertion_claims` / `buildClientAssertionClaims` new;
+  `build_session_assertion_claims(issuer=)`).
+- **DPoP**: companies check proofs as RFC 9449 §4.3 says (one `DPoP` header,
+  `typ`, asymmetric `alg`, public `jwk`, nonce window), may require nonces
+  (`dpop_nonce` / `dpopNonce`), answer 400 OAuth errors at the token endpoint
+  and 401 challenges elsewhere; personal agents retry a nonce in both shapes
+  and use a key pair per User ID.
+- **MCP**: `token_for_mcp` / `tokenForMcp` replace `bearer_for_mcp` /
+  `bearerForMcp`: a token for the server's URL, DPoP when its protected
+  resource metadata supports DPoP (`fetch_mcp_server_metadata`,
+  `McpDpopAuth`), Bearer otherwise. The reference company's MCP server takes
+  DPoP by default (`mcp_dpop` / `mcpDpop`), a Bearer token only at its exact
+  URL, refuses a DPoP token sent as Bearer, and answers 401 with a challenge
+  per scheme with `resource_metadata`.
+- **Redirects**: no redirect is followed outside discovery
+  (`redirect_refused`); no connection to private addresses either side was
+  given.
+- **Sign-in**: a Device Sign-In link is shown only on the issuer's host or
+  its `poppy_domains`, with the company's name and domain
+  (`DeviceSignInClient.begin(organization=, poppy_domains=)`,
+  `unsafe_verification_uri`); Mediated Sign-In answers every status with 200,
+  `invalid_scope`, `account_mismatch`, `sign_in_not_found`, asks with the
+  company's issuer, name and domain (`ProtectedInputRequest.issuer`,
+  `PapSignIn.organization_name` / `organization_domain`); a Session stays tied
+  to the account it was ever signed in to.
+- **Conversations**: `role` is set by the company and never sent;
+  context-only messages are recorded; `wait` is a whole number of seconds,
+  capped, else `invalid_request`; `Last-Event-ID` wins over `cursor`; a
+  repeated handoff or close changes nothing; conversations stay open after
+  sign-out (`sign_in_required`); `extension_required` and `rate_limited` in
+  their JSON or `WWW-Authenticate` shapes.
+- **Feedback** (§8): `FeedbackClient.report` with `FeedbackReport`
+  (`missing`, `task` ≤ 200, `description` ≤ 2000); the reference companies'
+  `POST /poppy/feedback` (202) and `feedback_reports()` / `feedbackReports()`.
+- **Operations**: an account's operation is usable only by a Session signed
+  in to that account at the time (`sign_in_required` for a signed-out one);
+  a tool needing the extension returns a tool error over MCP.
+- **Ledger and docs**: `protocol/requirements.yaml` covers draft 0.2, its
+  Operations extension and guides (229 entries, with new Feedback and
+  Security considerations areas); the coverage pages, conformance report,
+  compatibility, migration and API references are regenerated; the docs site
+  links the specification's organization and website.
+
 ## 0.24.0 (2026-10-14)
 
 - **An MCP server's `429` is `rate_limited`, with its `Retry-After`**

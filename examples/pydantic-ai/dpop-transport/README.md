@@ -1,8 +1,9 @@
 # DPoP-aware HTTP transport
 
 This example sends a PAP API request with a Session Token and fresh DPoP proof,
-handles one company nonce challenge, follows a same-origin redirect with a new
-target-bound proof, and rejects caller-supplied authorization headers.
+handles one company nonce challenge, refuses a redirect (draft 0.2 §3: no token
+or proof goes to the URL a protocol endpoint redirects to), and rejects
+caller-supplied authorization headers.
 
 Tokens, proofs, nonces, and pairwise identity remain host-owned.
 

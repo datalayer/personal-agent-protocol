@@ -242,7 +242,7 @@ pap company verify --profile work --json
 pap extensions list --profile work
 ```
 
-See the [CLI guide](https://personalagentprotocol.org/docs/guides/cli) for
+See the [CLI guide](https://personal-agent-protocol.datalayer.tech/guides/cli/) for
 configuration precedence, security boundaries, machine-readable output, and
 third-party extensions.
 
@@ -295,11 +295,11 @@ The shared fixtures are in `fixtures/`. Documentation is a Docusaurus site in
 ## Learn more
 
 - [Documentation](https://personalagentprotocol.org/docs)
-- [Overview](https://personalagentprotocol.org/docs/overview)
+- [Overview](https://personalagentprotocol.org/docs/introduction)
 - [Specification](https://personalagentprotocol.org/docs/0.2/spec)
-- [Implementation guides](https://personalagentprotocol.org/docs/guides)
-- [Extensions](https://personalagentprotocol.org/docs/extensions)
-- [Open topics](https://personalagentprotocol.org/docs/open-topics)
+- [Implementation guides](https://personalagentprotocol.org/docs/0.2/guides)
+- [Extensions](https://personalagentprotocol.org/docs/0.2/extensions)
+- [Open topics](https://personalagentprotocol.org/docs/path-to-1#open-topics)
 - [Datalayer Reactor](https://github.com/datalayer/reactor)
 - [Datalayer Agent Runtimes](https://github.com/datalayer/agent-runtimes)
 

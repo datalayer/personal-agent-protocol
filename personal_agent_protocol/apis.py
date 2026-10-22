@@ -8,11 +8,19 @@ A read answers its JSON body. A consequential call answers `202` with an
 operation: proposed, not performed, until it is confirmed at the operations
 endpoint (`OperationsClient`). The same operation object arrives through a
 conversation, so one approval flow serves both channels.
+
+Every write (POST, PUT, PATCH, DELETE) carries an `Idempotency-Key` (guides,
+*Retries*): a random UUID (version 4), or the caller's own key when it
+retries the same request. The key used comes back on the response and on
+the `ApiError`, so a retry can send it again; the company answers a repeated
+key with its original response.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import uuid
 from typing import Any
 
 import httpx
@@ -26,7 +34,12 @@ from .transport import DpopHttpClient
 
 
 class ApiError(PersonalAgentProtocolError):
-    """The company refused an API call; `code` is its error, never its body."""
+    """The company refused an API call; `code` is its error, never its body.
+
+    `idempotency_key` is the key a write was sent with, to send again on a retry.
+    """
+
+    idempotency_key: str | None = None
 
 
 class ApiResponse(ProtocolModel):
@@ -35,6 +48,21 @@ class ApiResponse(ProtocolModel):
     status: int
     body: Any = None
     operation: Operation | None = None
+    #: The `Idempotency-Key` a write was sent with; `None` for a read.
+    idempotency_key: str | None = None
+
+
+#: The methods that change something: each carries an `Idempotency-Key` (guides, *Retries*).
+WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+#: What a company accepts as an `Idempotency-Key`: 1 to 255 visible ASCII characters.
+IDEMPOTENCY_KEY = re.compile(r"[\x21-\x7e]{1,255}")
+
+
+def new_idempotency_key() -> str:
+    """A fresh key for a write: a random UUID (version 4)."""
+
+    return str(uuid.uuid4())
 
 
 #: API types draft 0.2 defines (§6); any other type is skipped.
@@ -86,10 +114,24 @@ class ApiClient:
         pairwise_user_id: str,
         issuer: str,
         body: Any = None,
+        idempotency_key: str | None = None,
     ) -> ApiResponse:
-        """One call; `sign_in_required` and `insufficient_scope` carry the scope asked for."""
+        """One call; `sign_in_required` and `insufficient_scope` carry the scope asked for.
 
+        A write sends `idempotency_key`, or a new random one; pass the key of an
+        earlier attempt to retry the same request. A read takes none.
+        """
+
+        method = method.upper()
         headers = {"Accept": "application/json"}
+        key: str | None = None
+        if method in WRITE_METHODS:
+            key = new_idempotency_key() if idempotency_key is None else idempotency_key
+            if not IDEMPOTENCY_KEY.fullmatch(key):
+                raise ValueError("an Idempotency-Key is 1 to 255 visible ASCII characters")
+            headers["Idempotency-Key"] = key
+        elif idempotency_key is not None:
+            raise ValueError("only a write (POST, PUT, PATCH, DELETE) takes an Idempotency-Key")
         content = None
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -104,17 +146,28 @@ class ApiClient:
             headers=headers,
             content=content,
         )
+        try:
+            return self._answer(response, key)
+        except ApiError as error:
+            error.idempotency_key = key
+            raise
+
+    def _answer(self, response: httpx.Response, key: str | None) -> ApiResponse:
         payload = self._payload(response)
         if response.status_code == 202:
             operation = payload.get("operation") if isinstance(payload, dict) else None
             try:
-                return ApiResponse(status=202, operation=Operation.model_validate(operation))
+                return ApiResponse(
+                    status=202,
+                    operation=Operation.model_validate(operation),
+                    idempotency_key=key,
+                )
             except ValueError as exc:
                 raise ApiError(
                     "invalid_operation", "202 answer carries no valid operation", status_code=202
                 ) from exc
         if response.is_success:
-            return ApiResponse(status=response.status_code, body=payload)
+            return ApiResponse(status=response.status_code, body=payload, idempotency_key=key)
         error = payload.get("error") if isinstance(payload, dict) else None
         if not isinstance(error, str):
             # Token errors, and `extension_required` with its `extension` attribute,

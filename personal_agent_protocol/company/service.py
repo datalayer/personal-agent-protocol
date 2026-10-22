@@ -72,6 +72,7 @@ import jwt
 from pydantic import SecretStr, ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
+from ..apis import IDEMPOTENCY_KEY, WRITE_METHODS
 from ..browser import verify_browser_assertion
 from ..crypto import verify_dpop_proof
 from ..errors import (
@@ -136,6 +137,7 @@ from .store import (
     DPOP,
     DPOP_NONCE,
     FEEDBACK,
+    IDEMPOTENCY,
     MEDIATED,
     MESSAGE_ID,
     OPERATION,
@@ -148,6 +150,7 @@ from .store import (
     AccountFamily,
     AccountGrant,
     CompanyStore,
+    IdempotencyRecord,
     IssuedCode,
     IssuedNonce,
     IssuedSession,
@@ -176,6 +179,9 @@ _PAGE = 50
 _CAS_ATTEMPTS = 32
 #: How long an expired device or Mediated sign-in is kept, to answer that it expired.
 _KEPT_EXPIRED = timedelta(minutes=10)
+#: How long the first request with an `Idempotency-Key` holds it: a repeat in that time
+#: is told to wait (503, `Retry-After`); a holder that never answered lets it go then.
+_IDEMPOTENCY_HELD = timedelta(minutes=1)
 #: The DPoP algorithms the company accepts: ES256, which every company must (§3.2), and RS256.
 DPOP_ALGORITHMS = ("ES256", "RS256")
 #: The longest `wait` the company holds a read for; a larger one is held this long (§7.5).
@@ -253,6 +259,12 @@ def _check_aliases(domain: str, aliases: tuple[str, ...]) -> None:
         raise ValueError("each alias is another domain, named once")
 
 
+def _check_positive(**lifetimes: timedelta) -> None:
+    for name, lifetime in lifetimes.items():
+        if lifetime <= timedelta(0):
+            raise ValueError(f"{name} must be positive")
+
+
 @dataclass(frozen=True)
 class CompanyConfig:
     """What the company publishes and allows."""
@@ -298,9 +310,13 @@ class CompanyConfig:
     dpop_nonce: bool = False
     #: How long an issued DPoP nonce is accepted.
     dpop_nonce_lifetime: timedelta = timedelta(minutes=5)
+    #: How long an API write's `Idempotency-Key` is remembered in its Session, with the
+    #: original response a repeated key gets again (guides, *Retries*: a set time, a day).
+    idempotency_lifetime: timedelta = timedelta(days=1)
 
     def __post_init__(self) -> None:
         _check_aliases(self.domain, self.aliases)
+        _check_positive(idempotency_lifetime=self.idempotency_lifetime)
         for name, value in (("device_page", self.device_page), ("consent_page", self.consent_page)):
             if value is None:
                 continue
@@ -1892,6 +1908,72 @@ class CompanyService:
     async def _api_call(self, request: CompanyRequest, method: str, path: str) -> CompanyResponse:
         _, session = await self._caller(request)
         body = loads_strict(request.body) if request.body else None
+        key = request.headers.get("idempotency-key")
+        if key is None or method not in WRITE_METHODS:
+            return await self._api_answer(request, method, path, session, body)
+        # A write with an Idempotency-Key (guides, *Retries*): remembered per Session for
+        # `idempotency_lifetime`, a repeat answered with the original response.
+        if not IDEMPOTENCY_KEY.fullmatch(key):
+            raise _RefusedError(400, "invalid_request")
+        record = _composite(session.session_id, key)
+        request_digest = _composite(
+            method,
+            path,
+            urlsplit(request.url).query,
+            json.dumps(body, sort_keys=True, separators=(",", ":")),
+        )
+        earlier = await self._hold_idempotency_key(record, request_digest)
+        if earlier is not None:
+            return earlier
+        try:
+            response = await self._api_answer(request, method, path, session, body)
+        except BaseException:
+            await self.store.delete(IDEMPOTENCY, record)
+            raise
+        if 200 <= response.status < 300:
+            answered = IdempotencyRecord(request_digest, response.status, response.body)
+            await self.store.put(
+                IDEMPOTENCY,
+                record,
+                answered.to_json(),
+                expires_at=self._now() + self.config.idempotency_lifetime,
+            )
+        else:
+            # A refusal is not remembered: the retry, once signed in or granted, is new.
+            await self.store.delete(IDEMPOTENCY, record)
+        return response
+
+    async def _hold_idempotency_key(self, record: str, digest: str) -> CompanyResponse | None:
+        """Hold the key for this request: `None` when held, else the answer to a repeat.
+
+        A repeat with another request is `409 idempotency_key_conflict`; a repeat while
+        the first is under way waits (`503`, `Retry-After`).
+        """
+
+        held = IdempotencyRecord(digest)
+        for _ in range(_CAS_ATTEMPTS):
+            if await self.store.create(
+                IDEMPOTENCY, record, held.to_json(), expires_at=self._now() + _IDEMPOTENCY_HELD
+            ):
+                return None
+            known = await self._read(IDEMPOTENCY, record, IdempotencyRecord.from_json)
+            if known is None:
+                continue
+            if known.digest != digest:
+                raise _RefusedError(409, "idempotency_key_conflict")
+            if known.status is None:
+                raise _RefusedError(503, "temporarily_unavailable", headers={"Retry-After": "1"})
+            return CompanyResponse(known.status, known.body)
+        raise _RefusedError(503, "temporarily_unavailable")
+
+    async def _api_answer(
+        self,
+        request: CompanyRequest,
+        method: str,
+        path: str,
+        session: IssuedSession,
+        body: Any,
+    ) -> CompanyResponse:
         result: ApiResult = await cast(CompanyApi, self._api()).handle(
             ApiCall(
                 method=method,

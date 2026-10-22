@@ -337,12 +337,17 @@ class ManzanitaPlugin:
 
 
 def manzanita(
-    network: InProcessNetwork, clock: MutableClock, *, store: CompanyStore | None = None
+    network: InProcessNetwork,
+    clock: MutableClock,
+    *,
+    store: CompanyStore | None = None,
+    config: CompanyConfig | None = None,
 ) -> tuple[CompanyService, ManzanitaPlugin]:
     """Build Manzanita and put it on the network at `manzanita.example`.
 
     With `store`, Manzanita keeps its state there: building it again over the
-    same store is Manzanita restarted (or another replica of it).
+    same store is Manzanita restarted (or another replica of it). `config`
+    replaces `CONFIG`, for a test that changes one of its settings.
     """
 
     plugin = ManzanitaPlugin()
@@ -353,7 +358,7 @@ def manzanita(
     if store is not None:
         plugins.append((PluginManifest(name="manzanita-store", version="1"), StorePlugin(store)))
     service = build_company(
-        CONFIG,
+        CONFIG if config is None else config,
         http_client=network.client(),
         address_resolver=network.resolve,
         plugins=plugins,

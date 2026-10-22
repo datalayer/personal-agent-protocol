@@ -229,6 +229,8 @@ export const RecordKinds = {
   feedback: "feedback",
   /** A DPoP nonce the company issued, until it stops accepting it (§4.3). */
   dpopNonce: "dpop_nonce",
+  /** An API write's `Idempotency-Key` in one Session, and its original response (guides, *Retries*). */
+  idempotency: "idempotency",
 } as const;
 
 export type RecordKind = (typeof RecordKinds)[keyof typeof RecordKinds];
@@ -374,6 +376,19 @@ export type ReplayMark = Record<string, never>;
 
 /** A DPoP nonce the company issued: accepted in a proof until the record expires. */
 export type IssuedNonce = Record<string, never>;
+
+/**
+ * An API write's `Idempotency-Key` in one Session: the request's digest, and its answer.
+ *
+ * `status` is absent while the first request with the key is under way; then the status
+ * and JSON body it answered, returned again for a repeated key. The digest covers the
+ * method, path, query and body, never the credentials.
+ */
+export interface IdempotencyRecord {
+  readonly digest: string;
+  readonly status?: number;
+  readonly body?: unknown;
+}
 
 /**
  * A feedback report as the company received it (§8): data, never instructions.

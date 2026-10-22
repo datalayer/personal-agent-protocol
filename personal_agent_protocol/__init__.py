@@ -16,6 +16,7 @@ from .apis import (
     ApiClient,
     ApiError,
     ApiResponse,
+    new_idempotency_key,
     openapi_url,
 )
 from .auth import (
@@ -352,6 +353,7 @@ __all__ = [
     "feedback_endpoint",
     "generate_message_id",
     "generate_pairwise_user_id",
+    "new_idempotency_key",
     "openapi_url",
     "operations_endpoint",
     "pin_connections",

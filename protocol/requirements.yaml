@@ -15,7 +15,7 @@
 protocol: personal-agent-protocol
 profile: '0.2'
 upstream_revision: '2026-10-18'
-reviewed: '2026-10-19'
+reviewed: '2026-10-22'
 sources:
   spec: https://personalagentprotocol.org/docs/0.2/spec
   operations: https://personalagentprotocol.org/docs/0.2/extensions/operations
@@ -2669,8 +2669,14 @@ guide:
   role: personal-agent
   text: Send an Idempotency-Key on API writes that accept one. Use a random UUID (version 4), and reuse
     the same key when you retry the same request.
-  status: open
-  reason: ApiClient sends no Idempotency-Key.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.apis:ApiClient.call
+  - personal_agent_protocol.apis:new_idempotency_key
+  tests:
+  - personal_agent_protocol/__tests__/test_idempotency.py::test_every_write_carries_a_random_uuid_v4_and_a_read_none
+  - personal_agent_protocol/__tests__/test_idempotency.py::test_a_retry_sends_the_callers_key_and_a_refusal_carries_it
+  - personal_agent_protocol/__tests__/test_idempotency.py::test_a_bad_key_or_a_key_on_a_read_is_the_callers_mistake
 - id: GUIDE-retry-02
   source: guide
   section: Retries
@@ -2696,6 +2702,21 @@ guide:
   tests:
   - personal_agent_protocol/__tests__/test_guidance.py::test_retry_policy_honours_retry_after_backs_off_with_jitter_and_caps
   - personal_agent_protocol/__tests__/test_guidance.py::test_safe_requests_retry_after_retry_after_with_fresh_proofs
+- id: GUIDE-retry-04
+  source: guide
+  section: Retries
+  level: SHOULD
+  role: company
+  text: Companies keep idempotency records for a set time, such as a day, scoped to the session. They
+    return the original response for a repeated key, and reject a repeated key with a different body.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._api_call
+  - personal_agent_protocol.company.service:CompanyConfig.idempotency_lifetime
+  - personal_agent_protocol.company.store:IdempotencyRecord
+  tests:
+  - personal_agent_protocol/__tests__/test_idempotency.py::test_the_reference_company_keeps_each_key_per_session_for_its_lifetime
+  - personal_agent_protocol/__tests__/test_idempotency.py::test_a_bad_key_is_invalid_request_and_a_refusal_is_not_remembered
 - id: GUIDE-rate-01
   source: guide
   section: Rate limits

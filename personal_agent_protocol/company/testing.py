@@ -52,6 +52,7 @@ from .store import (
     DEVICE,
     DPOP_NONCE,
     FEEDBACK,
+    IDEMPOTENCY,
     MEDIATED,
     MESSAGE_ID,
     OPERATION,
@@ -67,6 +68,7 @@ from .store import (
     AccountFamily,
     AccountGrant,
     CompanyStore,
+    IdempotencyRecord,
     IssuedCode,
     IssuedNonce,
     IssuedSession,
@@ -173,6 +175,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
             "fb_1", "missing", "Pay with a gift card", "No gift card field.", "c", "u", now
         ),
         DPOP_NONCE: IssuedNonce(),
+        IDEMPOTENCY: IdempotencyRecord("digest", 202, {"operation": {"operation_id": "op_1"}}),
     }
 
 

@@ -14,6 +14,11 @@
 // proposed, not performed, until it is confirmed at the operations endpoint
 // (`OperationsClient`). The same operation object arrives through a conversation and
 // through MCP, so one approval flow serves every channel.
+//
+// Every write (POST, PUT, PATCH, DELETE) carries an `Idempotency-Key` (guides, *Retries*):
+// a random UUID (version 4), or the caller's own key when it retries the same request.
+// The key used comes back on the response and on the `ApiError`, so a retry can send it
+// again; the company answers a repeated key with its original response.
 import { PersonalAgentProtocolError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { parseOperation, type ApiDescriptor, type DiscoveryDocument, type Operation } from "./models.js";
@@ -40,15 +45,38 @@ export function openapiUrl(document: DiscoveryDocument): string | undefined {
   return (document.apis ?? []).find((api) => api.type === "openapi")?.url;
 }
 
-/** The company refused an API call; `code` is its error, never its body. */
+/** The methods that change something: each carries an `Idempotency-Key` (guides, *Retries*). */
+export const WRITE_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/** What a company accepts as an `Idempotency-Key`: 1 to 255 visible ASCII characters. */
+export const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/u;
+
+/** A fresh key for a write: a random UUID (version 4). */
+export function newIdempotencyKey(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+/**
+ * The company refused an API call; `code` is its error, never its body.
+ *
+ * `idempotencyKey` is the key a write was sent with, to send again on a retry.
+ */
 export class ApiError extends PersonalAgentProtocolError {
+  idempotencyKey: string | undefined;
+
   constructor(
     code: string,
     message: string,
-    options: { statusCode?: number; details?: Readonly<Record<string, unknown>>; cause?: unknown } = {},
+    options: {
+      statusCode?: number;
+      details?: Readonly<Record<string, unknown>>;
+      cause?: unknown;
+      idempotencyKey?: string;
+    } = {},
   ) {
     super(code, message, options);
     this.name = "ApiError";
+    this.idempotencyKey = options.idempotencyKey;
   }
 }
 
@@ -57,6 +85,8 @@ export interface ApiResponse {
   readonly status: number;
   readonly body?: unknown;
   readonly operation?: Operation;
+  /** The `Idempotency-Key` a write was sent with; absent for a read. */
+  readonly idempotencyKey?: string;
 }
 
 export interface ApiCallOptions {
@@ -66,6 +96,11 @@ export interface ApiCallOptions {
   readonly issuer: string;
   /** A JSON body, sent as `application/json`. */
   readonly body?: unknown;
+  /**
+   * A write's `Idempotency-Key`: the key of an earlier attempt, to retry the same request.
+   * Absent, a write gets a new random one; a read takes none.
+   */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -92,9 +127,25 @@ export class ApiClient {
     this.#maxResponseBytes = limit;
   }
 
-  /** One call; `sign_in_required` and `insufficient_scope` carry the scope asked for. */
-  async call(method: string, url: string, options: ApiCallOptions): Promise<ApiResponse> {
+  /**
+   * One call; `sign_in_required` and `insufficient_scope` carry the scope asked for.
+   *
+   * A write sends `options.idempotencyKey`, or a new random one; pass the key of an
+   * earlier attempt to retry the same request. A read takes none.
+   */
+  async call(name: string, url: string, options: ApiCallOptions): Promise<ApiResponse> {
+    const method = name.toUpperCase();
     const headers: Record<string, string> = { Accept: "application/json" };
+    let key: string | undefined;
+    if (WRITE_METHODS.has(method)) {
+      key = options.idempotencyKey ?? newIdempotencyKey();
+      if (!IDEMPOTENCY_KEY.test(key)) {
+        throw new RangeError("an Idempotency-Key is 1 to 255 visible ASCII characters");
+      }
+      headers["Idempotency-Key"] = key;
+    } else if (options.idempotencyKey !== undefined) {
+      throw new RangeError("only a write (POST, PUT, PATCH, DELETE) takes an Idempotency-Key");
+    }
     let body: string | undefined;
     if (options.body !== undefined) {
       headers["Content-Type"] = "application/json";
@@ -109,10 +160,20 @@ export class ApiClient {
       ...(body === undefined ? {} : { body }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
+    try {
+      return await this.#answer(response, key);
+    } catch (error) {
+      if (error instanceof ApiError) error.idempotencyKey = key;
+      throw error;
+    }
+  }
+
+  async #answer(response: Response, key: string | undefined): Promise<ApiResponse> {
+    const sent = key === undefined ? {} : { idempotencyKey: key };
     const payload = await this.#payload(response);
     if (response.status === 202) {
       try {
-        return { status: 202, operation: parseOperation(member(payload, "operation")) };
+        return { status: 202, operation: parseOperation(member(payload, "operation")), ...sent };
       } catch (cause) {
         throw new ApiError("invalid_operation", "202 answer carries no valid operation", {
           statusCode: 202,
@@ -120,7 +181,7 @@ export class ApiClient {
         });
       }
     }
-    if (response.ok) return { status: response.status, body: payload };
+    if (response.ok) return { status: response.status, body: payload, ...sent };
     let error = member(payload, "error");
     if (typeof error !== "string") {
       // Token errors, and `extension_required` with its `extension` attribute, come in

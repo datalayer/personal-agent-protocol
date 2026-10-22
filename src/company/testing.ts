@@ -33,6 +33,7 @@ import {
   type AccountFamily,
   type AccountGrant,
   type CompanyStore,
+  type IdempotencyRecord,
   type IssuedCode,
   type IssuedNonce,
   type IssuedSession,
@@ -210,6 +211,11 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       receivedAt: now.toISOString(),
     } satisfies StoredFeedback,
     [RecordKinds.dpopNonce]: {} satisfies IssuedNonce,
+    [RecordKinds.idempotency]: {
+      digest: "digest",
+      status: 202,
+      body: { operation: { operation_id: "op_1" } },
+    } satisfies IdempotencyRecord,
   };
   return records as Readonly<Record<string, JsonObject>>;
 }

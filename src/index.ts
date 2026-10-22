@@ -201,6 +201,7 @@ export {
   KNOWN_API_TYPES,
   conversationEndpoint,
   knownApis,
+  newIdempotencyKey,
   openapiUrl,
   type ApiCallOptions,
   type ApiClientOptions,

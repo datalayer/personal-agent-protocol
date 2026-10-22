@@ -59,6 +59,8 @@ SIGN_IN_ATTEMPTS = "sign_in_attempts"
 FEEDBACK = "feedback"
 #: A DPoP nonce the company issued, until it stops accepting it (§4.3).
 DPOP_NONCE = "dpop_nonce"
+#: An API write's `Idempotency-Key` in one Session, and its original response (guides, *Retries*).
+IDEMPOTENCY = "idempotency"
 
 RECORD_KINDS = (
     SESSION,
@@ -81,6 +83,7 @@ RECORD_KINDS = (
     SIGN_IN_ATTEMPTS,
     FEEDBACK,
     DPOP_NONCE,
+    IDEMPOTENCY,
 )
 
 
@@ -845,6 +848,27 @@ class IssuedNonce:
         return cls()
 
 
+@dataclass(frozen=True)
+class IdempotencyRecord:
+    """An API write's `Idempotency-Key` in one Session: the request's digest, and its answer.
+
+    `status` is `None` while the first request with the key is under way; then
+    the status and JSON body it answered, returned again for a repeated key.
+    The digest covers the method, path, query and body, never the credentials.
+    """
+
+    digest: str
+    status: int | None = None
+    body: Any = None
+
+    def to_json(self) -> JsonObject:
+        return {"digest": self.digest, "status": self.status, "body": self.body}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> IdempotencyRecord:
+        return cls(digest=value["digest"], status=value["status"], body=value["body"])
+
+
 #: Each kind's record type: `to_json()` writes it, `from_json()` reads it back.
 RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     SESSION: StoredSession.from_json,
@@ -867,4 +891,5 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     SIGN_IN_ATTEMPTS: SignInAttempts.from_json,
     FEEDBACK: StoredFeedback.from_json,
     DPOP_NONCE: IssuedNonce.from_json,
+    IDEMPOTENCY: IdempotencyRecord.from_json,
 }

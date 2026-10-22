@@ -1,0 +1,124 @@
+{
+  "description": "Idempotency-Key on API writes (guides, Retries): the personal agent sends a random UUID (version 4) on every write and the same key on a retry; the company keeps a record per Session for a set time, answers a repeated key with the original response, and refuses a repeated key with another request. Each SDK runs these steps against its reference company (manzanita.example), signed in with orders:write.",
+  "header": "Idempotency-Key",
+  "write_methods": [
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE"
+  ],
+  "read_methods": [
+    "GET",
+    "HEAD",
+    "OPTIONS"
+  ],
+  "uuid_v4": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+  "default_lifetime_seconds": 86400,
+  "lifetime_seconds": 600,
+  "conflict": {
+    "status": 409,
+    "error": "idempotency_key_conflict"
+  },
+  "invalid_keys": [
+    "",
+    "has space",
+    "caf\u00e9",
+    "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+  ],
+  "answers": {
+    "fresh": "the API answered anew: an operation other than the first step's",
+    "first": "the first step's response again, exactly as it was sent (the operation still proposed, though since confirmed)"
+  },
+  "steps": [
+    {
+      "name": "first",
+      "path": "/api/orders/ord_7Hk2/exchanges",
+      "body": {
+        "size": "M"
+      },
+      "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
+      "expect": {
+        "status": 202,
+        "answer": "fresh"
+      }
+    },
+    {
+      "name": "confirmed",
+      "confirm": "first"
+    },
+    {
+      "name": "retry",
+      "path": "/api/orders/ord_7Hk2/exchanges",
+      "body": {
+        "size": "M"
+      },
+      "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
+      "expect": {
+        "status": 202,
+        "answer": "first"
+      }
+    },
+    {
+      "name": "another body",
+      "path": "/api/orders/ord_7Hk2/exchanges",
+      "body": {
+        "size": "L"
+      },
+      "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
+      "expect": {
+        "status": 409,
+        "error": "idempotency_key_conflict"
+      }
+    },
+    {
+      "name": "another path",
+      "path": "/api/orders/ord_7Hk2/gift-wrap",
+      "body": {
+        "size": "M"
+      },
+      "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
+      "expect": {
+        "status": 409,
+        "error": "idempotency_key_conflict"
+      }
+    },
+    {
+      "name": "another key",
+      "path": "/api/orders/ord_7Hk2/exchanges",
+      "body": {
+        "size": "M"
+      },
+      "key": "0b6d3f6e-2c1a-4e7b-9d8f-5a4c3b2e1f0d",
+      "expect": {
+        "status": 202,
+        "answer": "fresh"
+      }
+    },
+    {
+      "name": "another session",
+      "session": "second",
+      "path": "/api/orders/ord_7Hk2/exchanges",
+      "body": {
+        "size": "M"
+      },
+      "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
+      "expect": {
+        "status": 202,
+        "answer": "fresh"
+      }
+    },
+    {
+      "name": "expired",
+      "advance_seconds": 600,
+      "path": "/api/orders/ord_7Hk2/exchanges",
+      "body": {
+        "size": "M"
+      },
+      "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
+      "expect": {
+        "status": 202,
+        "answer": "fresh"
+      }
+    }
+  ]
+}

@@ -155,7 +155,8 @@ test("refusals: a challenge only, a rate limit, a bad 202, invalid and oversized
   assert.deepEqual([error.code, error.statusCode], ["api_request_failed", 500]);
 
   s = await scripted(() => new Response(null, { status: 204 }));
-  assert.deepEqual(await s.api.call("DELETE", ORDERS, { ...s.w.who, token: s.w.session }), { status: 204, body: undefined });
+  const deleted = await s.api.call("DELETE", ORDERS, { ...s.w.who, token: s.w.session, idempotencyKey: "del-1" });
+  assert.deepEqual(deleted, { status: 204, body: undefined, idempotencyKey: "del-1" });
 });
 
 test("the request: JSON in, host-owned credentials, no Bearer token", async () => {

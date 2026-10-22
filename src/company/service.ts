@@ -65,6 +65,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { ReactorPlatformView } from "@datalayer/reactor";
 import { decodeJwt, decodeProtectedHeader, importJWK, type JWK } from "jose";
 
+import { IDEMPOTENCY_KEY, WRITE_METHODS } from "../apis.js";
 import { verifyBrowserAssertion, type VerifiedBrowserAssertion } from "../browser-server.js";
 import { verifyDpopProof } from "../crypto.js";
 import { ProofError, ProtocolValidationError, SessionError } from "../errors.js";
@@ -111,6 +112,7 @@ import {
   type AccountFamily,
   type AccountGrant,
   type CompanyStore,
+  type IdempotencyRecord,
   type IssuedCode,
   type IssuedSession,
   type JsonObject,
@@ -205,6 +207,11 @@ export interface CompanyConfigOptions {
   readonly dpopNonce?: boolean;
   /** How long an issued DPoP nonce is accepted (default five minutes). */
   readonly dpopNonceLifetimeSeconds?: number;
+  /**
+   * How long an API write's `Idempotency-Key` is remembered in its Session, with the
+   * original response a repeated key gets again (guides, *Retries*: a set time; default a day).
+   */
+  readonly idempotencyLifetimeSeconds?: number;
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -248,6 +255,7 @@ export class CompanyConfig {
   readonly feedback: boolean;
   readonly dpopNonce: boolean;
   readonly dpopNonceLifetimeSeconds: number;
+  readonly idempotencyLifetimeSeconds: number;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -275,6 +283,10 @@ export class CompanyConfig {
     this.feedback = options.feedback ?? true;
     this.dpopNonce = options.dpopNonce ?? false;
     this.dpopNonceLifetimeSeconds = options.dpopNonceLifetimeSeconds ?? 5 * 60;
+    this.idempotencyLifetimeSeconds = options.idempotencyLifetimeSeconds ?? 24 * 60 * 60;
+    if (!(this.idempotencyLifetimeSeconds > 0)) {
+      throw new RangeError("idempotencyLifetimeSeconds must be positive");
+    }
     for (const alias of this.aliases) {
       if (!alias || alias !== alias.toLowerCase().replace(/\.$/, "") || alias.includes("/") || alias.includes(":")) {
         throw new RangeError("an alias is a DNS domain name, in small letters");
@@ -667,6 +679,11 @@ type TokenType = "DPoP" | "Bearer";
 type TokenKind = "own" | "mcp";
 /** How long an expired device or Mediated sign-in is kept, to answer that it expired. */
 const KEPT_EXPIRED_MS = 10 * 60 * 1000;
+/**
+ * How long the first request with an `Idempotency-Key` holds it: a repeat in that time is
+ * told to wait (503, `Retry-After`); a holder that never answered lets it go then.
+ */
+const IDEMPOTENCY_HELD_SECONDS = 60;
 
 /** A record as the store keeps it. */
 function json(record: object): JsonObject {
@@ -2018,6 +2035,81 @@ export class CompanyService {
     const [, session] = await this.#caller(request);
     const source = text(request.body);
     const body = source ? parseJsonStrict(source) : undefined;
+    const key = request.headers["idempotency-key"];
+    if (key === undefined || !WRITE_METHODS.has(method)) {
+      return await this.#apiAnswer(request, api, method, path, session, body);
+    }
+    // A write with an Idempotency-Key (guides, *Retries*): remembered per Session for
+    // `idempotencyLifetimeSeconds`, a repeat answered with the original response.
+    if (!IDEMPOTENCY_KEY.test(key)) throw new Refused(400, "invalid_request");
+    const record = composite(session.sessionId, key);
+    const requestDigest = composite(method, path, new URL(request.url).search, canonical(body ?? null));
+    const earlier = await this.#holdIdempotencyKey(record, requestDigest);
+    if (earlier !== undefined) return earlier;
+    let response: CompanyResponse;
+    try {
+      response = await this.#apiAnswer(request, api, method, path, session, body);
+    } catch (error) {
+      await this.store.delete(RecordKinds.idempotency, record);
+      throw error;
+    }
+    if (response.status >= 200 && response.status < 300) {
+      const answered: IdempotencyRecord = {
+        digest: requestDigest,
+        status: response.status,
+        ...(response.body === undefined ? {} : { body: response.body }),
+      };
+      await this.store.put(
+        RecordKinds.idempotency,
+        record,
+        json(answered),
+        expiry(this.#later(this.config.idempotencyLifetimeSeconds)),
+      );
+    } else {
+      // A refusal is not remembered: the retry, once signed in or granted, is new.
+      await this.store.delete(RecordKinds.idempotency, record);
+    }
+    return response;
+  }
+
+  /**
+   * Hold the key for this request: `undefined` when held, else the answer to a repeat.
+   *
+   * A repeat with another request is `409 idempotency_key_conflict`; a repeat while the
+   * first is under way waits (`503`, `Retry-After`).
+   */
+  async #holdIdempotencyKey(record: string, requestDigest: string): Promise<CompanyResponse | undefined> {
+    const held: IdempotencyRecord = { digest: requestDigest };
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
+      if (
+        await this.store.create(
+          RecordKinds.idempotency,
+          record,
+          json(held),
+          expiry(this.#later(IDEMPOTENCY_HELD_SECONDS)),
+        )
+      ) {
+        return undefined;
+      }
+      const known = await this.#read<IdempotencyRecord>(RecordKinds.idempotency, record);
+      if (known === undefined) continue;
+      if (known.digest !== requestDigest) throw new Refused(409, "idempotency_key_conflict");
+      if (known.status === undefined) {
+        throw new Refused(503, "temporarily_unavailable", {}, { "Retry-After": "1" });
+      }
+      return { status: known.status, body: known.body, headers: {} };
+    }
+    throw new Refused(503, "temporarily_unavailable");
+  }
+
+  async #apiAnswer(
+    request: CompanyRequest,
+    api: CompanyApi,
+    method: string,
+    path: string,
+    session: IssuedSession,
+    body: unknown,
+  ): Promise<CompanyResponse> {
     const result = await api.handle({
       method,
       path: path.slice("/api".length),

@@ -192,11 +192,23 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
 
     orders = pap("api", "openapi", session, "GET", "/api/orders", "--json")
     assert orders["body"]["orders"][0]["order_id"] == "ord_7Hk2"
-    proposed = pap("api", "openapi", session, "POST", "/api/orders/ord_7Hk2/exchanges", "--json")[
-        "operation"
-    ]
+    write = pap("api", "openapi", session, "POST", "/api/orders/ord_7Hk2/exchanges", "--json")
+    proposed = write["operation"]
     operation = proposed["operation_id"]
     assert proposed["state"] == "proposed"
+    # A retry with the printed Idempotency-Key gets the original answer.
+    key = write["idempotency_key"]
+    retried = pap(
+        "api",
+        "openapi",
+        session,
+        "POST",
+        "/api/orders/ord_7Hk2/exchanges",
+        "--idempotency-key",
+        key,
+        "--json",
+    )
+    assert (retried["idempotency_key"], retried["operation"]) == (key, proposed)
 
     # The same operation through MCP, with a Bearer for the MCP url only.
     tools = pap("api", "mcp", session, "--json")["tools"]

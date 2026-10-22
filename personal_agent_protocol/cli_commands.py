@@ -640,9 +640,17 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         method: str = typer.Argument(..., help="GET, POST, …"),
         path: str = typer.Argument(..., help="A path on the company's origin, or its URL."),
         body_file: Path | None = BODY_FILE,
+        idempotency_key: str | None = typer.Option(
+            None,
+            "--idempotency-key",
+            help="A write's Idempotency-Key: the one printed by an earlier attempt, to retry it.",
+        ),
         json_output: bool = JSON,
     ) -> None:
-        """Call the company's OpenAPI API with the Session's DPoP token (§6)."""
+        """Call the company's OpenAPI API with the Session's DPoP token (§6).
+
+        A write sends an `Idempotency-Key` (a new random one unless given) and prints it.
+        """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session_id)
@@ -658,11 +666,17 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 url,
                 token=await session_token(runtime, record),
                 body=body if body is not None or method.upper() == "GET" else {},
+                idempotency_key=idempotency_key,
                 **who_of(record),
             )
+            sent = (
+                {}
+                if answer.idempotency_key is None
+                else {"idempotency_key": answer.idempotency_key}
+            )
             if answer.operation is not None:
-                return {"status": answer.status, **operation_view(answer.operation)}
-            return {"status": answer.status, "body": answer.body}
+                return {"status": answer.status, **sent, **operation_view(answer.operation)}
+            return {"status": answer.status, **sent, "body": answer.body}
 
         def render(payload: dict) -> None:
             if "operation" in payload:

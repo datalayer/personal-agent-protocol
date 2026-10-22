@@ -100,15 +100,13 @@ the source of [personalagentprotocol.org](https://personalagentprotocol.org)).
   `details["retry_after"]` (the header as sent), as the API, conversation and
   Session clients do, where it raised `http_error: MCP request failed`. Never
   retried here: the caller waits at least that long. Its text says when, for
-  the model reading it: `rate_limited: the MCP server is rate limited, retry
-  after 30 s` (an HTTP date is said in seconds, through `parse_retry_after` /
+  the model reading it: `rate_limited: the MCP server is rate limited, retry after 30 s` (an HTTP date is said in seconds, through `parse_retry_after` /
   `parseRetryAfter`). Same in TypeScript.
 
 ## 0.23.0 (2026-10-13)
 
 - **One of a company's people answers in a conversation** (decided
-  2026-10-13; [docs](docs/docs/guides/company.mdx)): `staff_reply(conversation_id,
-  after=, text=, data=)` (`staffReply(conversationId, { after, text, data })`
+  2026-10-13; [docs](docs/docs/guides/company.mdx)): `staff_reply(conversation_id, after=, text=, data=)` (`staffReply(conversationId, { after, text, data })`
   in TypeScript) writes their message (`sender: human`, `role: company`) in a
   conversation handed to the company's people, compare-and-set over `after`,
   the last event they read — an answer over anything newer is refused with

@@ -6,6 +6,33 @@
 
 # Changelog
 
+## Unreleased
+
+Reviewed against upstream `39b35bd` (22 October 2026): since `30c4764`,
+upstream changed its website and clarified the examples and guides with no new
+wire behavior; every clarification already held in the SDKs.
+
+- **Idempotency-Key on API writes** (Guides, *Retries*): `ApiClient.call` /
+  `apiClient.call` send a random UUID (version 4) `Idempotency-Key` on `POST`,
+  `PUT`, `PATCH` and `DELETE`, take the caller's key to retry
+  (`idempotency_key=` / `idempotencyKey`), and return the key used on
+  `ApiResponse` and `ApiError`; `new_idempotency_key()` /
+  `newIdempotencyKey()`. A key on a read, or one that is not 1 to 255 visible
+  ASCII characters, is refused locally. `pap api openapi` prints the key and
+  takes `--idempotency-key`.
+- **Reference companies keep idempotency records** per Session for
+  `idempotency_lifetime` / `idempotencyLifetimeSeconds` (default a day): a
+  repeated key gets the original `2xx` response, a repeated key with another
+  request is `409 idempotency_key_conflict` (the SDK's choice; the Guides name
+  no code), a repeat while the first is under way is `503` with
+  `Retry-After`, a malformed key is `400 invalid_request`. Refusals are not
+  kept. A custom company store sees a new record kind, `idempotency`.
+- Python `manzanita(..., config=)` replaces the demo company's configuration,
+  as the TypeScript `manzanita({ config })` does.
+- Shared fixture `protocol/fixtures/idempotency-api-writes.json`; ledger
+  `GUIDE-retry-01` implemented, `GUIDE-retry-04` added.
+- README: *What is not implemented yet* lists what is actually missing.
+
 ## 0.25.0 (2026-10-19)
 
 **PAP draft 0.2** ([migration](docs/docs/releases/migration.mdx)): both SDKs

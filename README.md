@@ -200,18 +200,26 @@ Duplicate JSON members are rejected at Python and TypeScript trust boundaries.
 
 ## What is not implemented yet
 
-The following work remains before the SDKs cover the complete planned PAP
-surface:
+Every flow of draft 0.2 and Operations v1 is implemented in both SDKs and
+both reference companies: discovery, Sessions, Direct, Device and Mediated
+Sign-In, Account Tokens, OpenAPI and MCP (DPoP or resource-bound Bearer),
+conversations with SSE, handoff and close, browser sessions, feedback, and
+Operations. What remains:
 
-- managed key custody and durable replay storage;
-- Account Token exchange;
-- resource-bound MCP Bearer transport;
-- device and mediated sign-in;
-- conversation SSE streaming, handoff, and explicit close requests;
-- the Operations client and server;
+- production backends the host contributes: the SDK ships no KMS/HSM signer
+  or DPoP key custody, no durable token store, and only in-memory company
+  stores and replay caches (`check_store` checks a durable one);
+- helpers the Guides suggest but the host decides today: choosing among the
+  sign-in methods, matching a task's scopes to a held Account Token, and
+  revoking the previous Account Token after a wider sign-in;
+- rate limits and `RateLimit` headers in the reference companies (a host can
+  contribute `pap.company.rateLimit`), and redaction hooks for logs and
+  traces;
+- in Node, socket pinning for metadata fetches (an egress proxy closes the
+  DNS-rebinding interval meanwhile).
 
-Models for Operations v1 exist, but a complete Operations workflow does not.
-Applications should not infer client support from model availability alone.
+Each open or partial requirement is listed with its reason in
+[Protocol coverage](https://personal-agent-protocol.datalayer.tech/protocol/coverage/).
 
 ## Security boundary
 

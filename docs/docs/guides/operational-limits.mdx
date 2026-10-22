@@ -123,6 +123,36 @@ the rotation against each reference company.
    key or message ID unchanged.
 5. Every attempt has a fresh DPoP proof.
 
+## Idempotency keys on API writes
+
+`ApiClient.call` / `apiClient.call` send an `Idempotency-Key` on every write
+(`POST`, `PUT`, `PATCH`, `DELETE`): a random UUID (version 4) from
+`new_idempotency_key()` / `newIdempotencyKey()`, or the caller's own key
+(`idempotency_key=` / `idempotencyKey`). The key used is on the response
+(`ApiResponse.idempotency_key` / `idempotencyKey`) and on an `ApiError`, so a
+retry of the same request sends it again. A read takes none. To retry after a
+network failure, where no response or refusal came back, choose the key before
+the first attempt and pass it each time. `pap api openapi` prints the key and
+takes `--idempotency-key`.
+
+The reference companies keep a record per Session for
+`idempotency_lifetime` / `idempotencyLifetimeSeconds` (default a day) in the
+company store (record kind `idempotency`), holding a digest of the method,
+path, query and body and the response, never the credentials:
+
+| A request with a key that is | Answer |
+| --- | --- |
+| New | The API's answer; a `2xx` answer is kept, a refusal is not (a retry after signing in is a new request) |
+| Repeated, same request | The original response, as it was sent |
+| Repeated, another method, path, query, or body | `409 idempotency_key_conflict` |
+| Repeated while the first is still under way | `503 temporarily_unavailable`, `Retry-After: 1` |
+| Not 1 to 255 visible ASCII characters | `400 invalid_request` |
+
+The Guides name no error for a repeated key with a different body;
+`idempotency_key_conflict` (409) is this SDK's choice, alongside
+`message_id_conflict` for a reused conversation message ID. Operations'
+confirm takes no key: the operation ID identifies a retry.
+
 ## Shared rate-limit budgets
 
 The Guides ask personal agents to keep track of each company's limits and to

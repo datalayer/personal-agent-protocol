@@ -180,6 +180,9 @@ of the atomic methods:
   and approved device sign-ins are taken once (`take`);
 - message IDs are recorded with `create`, so a retried message is answered
   once however many replicas receive it;
+- an API write's `Idempotency-Key` is held with `create` before the API runs,
+  so a repeated key is answered once with the original response
+  ([idempotency keys](/guides/operational-limits/#idempotency-keys-on-api-writes));
 - device approval and polling, Account Token rotation (the presented token is
   claimed by exactly one refresh; reusing it is `invalid_grant`), revocation
   of a whole sign-in, Mediated attempt counting, conversation events and

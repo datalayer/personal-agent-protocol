@@ -6,7 +6,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.26.0 (2026-10-22)
 
 Reviewed against upstream `39b35bd` (22 October 2026): since `30c4764`,
 upstream changed its website and clarified the examples and guides with no new

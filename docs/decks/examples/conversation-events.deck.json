@@ -1,0 +1,70 @@
+{
+  "deck": {
+    "title": "Conversation events",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Conversation events",
+      "subtitle": "Read the company's ordered event log, recover a lost cursor, never deliver twice",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "After sending a message, the personal agent reads what the company did next from an ordered event log. This example follows a conversation page by page, recovers from an expired cursor, and drops events the company repeats."
+    },
+    {
+      "type": "statement",
+      "title": "Why a cursor",
+      "statement": "The cursor is **opaque**: save it exactly, send it back as is, advance it only after handling the page.",
+      "notes": "The cursor marks how far the host has read. The host never interprets it. It moves the cursor forward only once a page has been handled, so a crash in between replays events rather than losing them."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Agent or product UI", "type": "text", "content": "Follows the conversation and receives only the event fields it needs." },
+        { "heading": "Trusted PAP host", "type": "text", "content": "Long polls with DPoP, keeps the cursor, and remembers which events it delivered." },
+        { "heading": "Company agent", "type": "text", "content": "Serves pages of events with a cursor and a `has_more` flag." }
+      ],
+      "notes": "The agent or the product's interface follows the conversation. The trusted host does the reading, with the Session Token and DPoP proofs. The company serves the events in order."
+    },
+    {
+      "type": "mermaid",
+      "title": "One read, start to finish",
+      "diagram": "sequenceDiagram\n  participant H as PAP host\n  participant C as Company\n  H->>C: GET events, saved cursor, wait=30\n  C-->>H: 410 cursor_expired\n  H->>C: GET events from the beginning\n  C-->>H: evt_1, evt_2, has_more\n  H->>C: GET events after evt_2, wait=0\n  C-->>H: evt_2 again, evt_3\n  Note over H: Drop the repeated evt_2",
+      "notes": "The saved cursor has expired, so the host tells the person and reads once from the beginning. The page has more behind it, so the host drains the next page at once. The company repeats evt_2 after the reconnect; the host drops it and delivers only evt_3."
+    },
+    {
+      "type": "bullets",
+      "title": "What the iterator does",
+      "icon": "check",
+      "items": [
+        "Long polls for a chosen time, normally 30 seconds",
+        "Drains the next page at once while `has_more` is true",
+        "Keeps the company's order; cursors stay opaque strings",
+        "Suppresses repeated event IDs, in a bounded set that fails closed",
+        "Stops after a closed page with no backlog"
+      ],
+      "notes": "Python's events() and TypeScript's events() are async iterators over the same rules. read_events and readEvents read a single page when you want to drive it yourself."
+    },
+    {
+      "type": "statement",
+      "title": "When the cursor expires",
+      "statement": "Reading from the beginning recovers **retained** events, not the ones the company **deleted**.",
+      "notes": "Before its one recovery read, the iterator calls the host's cursor-expiry callback. That is where the host tells the person that part of the conversation may be missing, because nothing can bring back events the company no longer keeps."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Token", "DPoP proofs", "Pairwise identity", "The saved cursor"] },
+      "right": { "heading": "What the model or UI sees", "type": "bullets", "items": ["Event types, in order", "The company's messages", "Whether the conversation closed"] },
+      "notes": "Tokens, proofs, pairwise identity and the cursor stay in the trusted host. The model or the interface receives only the event fields it needs."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples follow a local conversation until it closes",
+      "notes": "A company that streams can be read over SSE instead, with reconnects and display-only text deltas. That is the conversation streaming example."
+    }
+  ]
+}

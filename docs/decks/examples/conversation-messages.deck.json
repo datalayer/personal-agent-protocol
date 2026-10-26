@@ -1,0 +1,80 @@
+{
+  "deck": {
+    "title": "Conversation messages",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Conversation messages",
+      "subtitle": "Start and continue a conversation, and retry without sending twice",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Once a Session exists, the personal agent talks to the company in a conversation. This example starts one, continues it, and shows the one rule that makes retries safe: a message keeps its ID and its content."
+    },
+    {
+      "type": "statement",
+      "title": "Why message IDs matter",
+      "statement": "A message ID is an **idempotency key**: the same ID always means the same message.",
+      "notes": "Networks fail in ambiguous ways: the request may or may not have arrived. PAP message IDs are user-global idempotency keys, so the host can send the exact same message again and the company handles it once."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Agent tool", "type": "text", "content": "Asks to start or continue a conversation. It never holds a credential." },
+        { "heading": "Trusted host", "type": "text", "content": "Generates message IDs, keeps each `Message`, and signs every request with DPoP." },
+        { "heading": "Company agent", "type": "text", "content": "Receives the messages and answers with the conversation's status and responder." }
+      ],
+      "notes": "The agent tool asks; the trusted host does the work, generating IDs and holding the Session Token and DPoP proofs; the company agent answers. Authentication stays in DpopHttpClient and never enters the tool's inputs or results."
+    },
+    {
+      "type": "flow",
+      "title": "Start, then continue",
+      "items": [
+        { "label": "1", "title": "Generate", "detail": "A msg_ ID with at least 128 random bits" },
+        { "label": "2", "title": "Start", "detail": "POST the first message + DPoP" },
+        { "label": "3", "title": "Created", "detail": "201: conversation_id, status, responder" },
+        { "label": "4", "title": "Continue", "detail": "A new message ID, 202 or a waited event page", "current": true }
+      ],
+      "notes": "The host generates a random message ID and posts the first message. The company answers 201 with the conversation ID, its status and who is responding. Every following message gets its own new ID; the company answers 202, or a page of events when the host asked to wait."
+    },
+    {
+      "type": "comparison",
+      "title": "Retrying after a network failure",
+      "columns": ["Same ID", "Same content", "Result"],
+      "rows": [
+        { "label": "Retry the retained Message", "values": [true, true, "Handled once"] },
+        { "label": "Reuse the ID, change the content", "values": [true, false, "message_id_conflict"] },
+        { "label": "New ID for the same text", "values": [false, true, "A second message"] }
+      ],
+      "notes": "After an ambiguous failure, retry the very same Message object you kept. Reusing its ID with different content is refused with message_id_conflict. And a new ID would be a brand new message, so the company could act on it twice."
+    },
+    {
+      "type": "bullets",
+      "title": "What ConversationClient does",
+      "icon": "check",
+      "items": [
+        "Validates opaque IDs",
+        "Sends `text`, `data` and `context` messages",
+        "Bounds response bodies and rejects duplicate JSON members",
+        "Surfaces company error codes, never response bodies",
+        "Requests replies with `cursor` and `wait`"
+      ],
+      "notes": "Python and TypeScript both expose ConversationClient. It checks what comes back as strictly as what goes out, and reports the company's error codes without passing on response bodies. TypeScript also honours a caller's AbortSignal."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Token", "DPoP proofs", "Pairwise user ID", "Message IDs"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["Conversation status", "That the IDs were unique", "The retry rule"] },
+      "notes": "The model only learns the conversation's status. The token, the proofs, the pairwise user ID and the message IDs stay in the host."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI example starts and continues one conversation against a local company",
+      "notes": "Reading the company's ordered events is its own example, conversation events. Streaming, handoff, Direct Conversations and closing each have theirs too."
+    }
+  ]
+}

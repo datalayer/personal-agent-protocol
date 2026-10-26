@@ -3,7 +3,12 @@ title: Conversation events
 description: Consume ordered PAP events with safe cursor recovery and duplicate suppression.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/conversation-events.deck.json';
+
 # Conversation events
+
+<Deck spec={deck} />
 
 After sending a message, a personal agent reads the company's ordered event
 log. The cursor is opaque: save it exactly, send it back without interpreting

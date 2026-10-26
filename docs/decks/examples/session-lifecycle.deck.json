@@ -1,0 +1,84 @@
+{
+  "deck": {
+    "title": "Signed-out Session lifecycle",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Signed-out Session lifecycle",
+      "subtitle": "Start a Session, survive a nonce challenge, renew it before it expires",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Every interaction a personal agent has with a company happens inside a Session. This example starts one signed out, meets the company's DPoP nonce challenge on the way, and renews the Session before its token expires."
+    },
+    {
+      "type": "statement",
+      "title": "Why start signed out",
+      "statement": "The company recognises the **same user** across visits, without learning **who** they are.",
+      "notes": "A signed-out Session gives the company a stable, pairwise context: the same user ID every time this agent comes back for this user, and a different one at every other company. Public questions and a conversation can start here, and continue later through sign-in."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "PAP host", "type": "text", "content": "Your code. It asks for the Session and keeps every credential out of the model's reach." },
+        { "heading": "Reactor contributions", "type": "text", "content": "The **signer** makes assertions; the **DPoP provider** makes proofs. Both are replaceable." },
+        { "heading": "Company", "type": "text", "content": "Its authorization server issues the Session Token, and may demand a fresh **nonce**." }
+      ],
+      "notes": "Three parties: the host, which is your application; the Reactor contributions that hold the keys, a signer for assertions and a DPoP provider for proofs; and the company's authorization server."
+    },
+    {
+      "type": "flow",
+      "title": "Starting the Session",
+      "items": [
+        { "label": "1", "title": "Sign", "detail": "A fresh Session assertion and client assertion" },
+        { "label": "2", "title": "Prove", "detail": "A DPoP proof, no nonce yet" },
+        { "label": "3", "title": "Ask", "detail": "JWT bearer grant at the token endpoint" },
+        { "label": "4", "title": "Challenged", "detail": "use_dpop_nonce, with the company's nonce", "current": true }
+      ],
+      "notes": "The host signs two assertions, proves possession of its key with a DPoP proof, and asks the token endpoint for a Session. This company answers use_dpop_nonce: it wants proofs bound to a nonce it issued, so no proof can be made in advance."
+    },
+    {
+      "type": "flow",
+      "title": "The retry",
+      "items": [
+        { "label": "5", "title": "Sign again", "detail": "New assertions: a jti is never reused" },
+        { "label": "6", "title": "Prove again", "detail": "A new proof carrying the nonce" },
+        { "label": "7", "title": "Signed-out Session", "detail": "A DPoP Session Token, bound to the key", "current": true }
+      ],
+      "notes": "The retry is not a resend. Assertions and proofs each carry a unique identifier the company refuses to see twice, so the host signs fresh ones and puts the nonce in the new proof. The answer is a DPoP-bound Session Token: useless to anyone who copies it without the key."
+    },
+    {
+      "type": "mermaid",
+      "title": "The whole exchange",
+      "diagram": "sequenceDiagram\n  participant H as PAP host\n  participant C as Company\n  H->>C: Start Session (assertions, proof)\n  C-->>H: use_dpop_nonce\n  H->>C: Retry (fresh assertions, proof with nonce)\n  C-->>H: Session Token (signed out)\n  Note over H,C: Before expiry\n  H->>C: Renew (fresh assertions, fresh proof)\n  C-->>H: Renewed Session Token",
+      "notes": "Here is the whole exchange at once: the challenge, the retry, and later the renewal of the same Session before its token expires."
+    },
+    {
+      "type": "bullets",
+      "title": "Renewing, not restarting",
+      "icon": "check",
+      "items": [
+        "Before expiry, the host renews **the same Session**",
+        "Fresh assertions and a fresh proof, every time",
+        "The conversation and its context carry on",
+        "A Session that has ended answers an error: start a new one"
+      ],
+      "notes": "Renewal keeps the same Session, so the conversational state the company holds carries on. Every renewal still signs fresh assertions and a fresh proof."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Tokens", "Assertions and proofs", "Pairwise user IDs", "Nonces and Session identifiers"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["Lifecycle status", "Granted scopes", "Safe invariants"] },
+      "notes": "None of the credentials reach the model. Tokens, assertions, proofs, pairwise subjects and nonces stay in host code and protected storage; the model sees the Session's status, its scopes, and nothing it could leak."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples run this lifecycle against a deterministic company",
+      "notes": "The example's company always answers one nonce challenge, so the retry path is exercised on every run. Production code uses the same SessionClient over real HTTPS, with managed Reactor contributions."
+    }
+  ]
+}

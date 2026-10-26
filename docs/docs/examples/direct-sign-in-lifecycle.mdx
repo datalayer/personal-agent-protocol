@@ -3,7 +3,12 @@ title: Direct Sign-In lifecycle
 description: Consume a browser callback once and upgrade the original Session with proof-bound consent.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/direct-sign-in-lifecycle.deck.json';
+
 # Direct Sign-In lifecycle
+
+<Deck spec={deck} />
 
 The complete flow resumes after the user authorizes on the company's page. The
 host consumes the pending state exactly once, verifies the callback, exchanges

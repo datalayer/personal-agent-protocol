@@ -1,0 +1,69 @@
+{
+  "deck": {
+    "title": "Personal-agent identity",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Personal-agent identity",
+      "subtitle": "Verify agent metadata and same-domain signing keys before trusting assertions",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "A company needs a stable way to know which software is acting for a user. This example shows how it verifies a personal agent's public identity before it accepts anything the agent signs."
+    },
+    {
+      "type": "statement",
+      "title": "The identity is a URL",
+      "statement": "The agent's HTTPS `client_id` points to **public metadata**: its name, redirect URIs and JWKS location.",
+      "notes": "There is no registration step. The client_id is itself an HTTPS URL, and what it serves describes the agent: its name, where users may be sent back to, and where its public signing keys live."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Company", "type": "text", "content": "Wants to know who signs the assertions it receives." },
+        { "heading": "PAP host and policy", "type": "text", "content": "Fetches and validates, through the **Reactor discovery policy**." },
+        { "heading": "Agent's domain", "type": "text", "content": "Serves `agent.json` and the JWKS. The private key stays with its custodian." }
+      ],
+      "notes": "The company asks for the client_id to be resolved. The host fetches the metadata and keys through the same discovery policy as company discovery. The agent's domain serves only public documents; its private key never leaves its custodian."
+    },
+    {
+      "type": "flow",
+      "title": "How it flows",
+      "items": [
+        { "label": "1", "title": "Approve", "detail": "An HTTPS metadata destination" },
+        { "label": "2", "title": "Fetch", "detail": "`agent.json`, no credentials" },
+        { "label": "3", "title": "Validate", "detail": "Schema and the exact `client_id`" },
+        { "label": "4", "title": "Check the domain", "detail": "JWKS on the allowed domain" },
+        { "label": "5", "title": "Fetch keys", "detail": "The public JWK set", "current": true }
+      ],
+      "notes": "The destination is approved, the metadata fetched without credentials, and its schema checked. The identity it declares must be exactly the URL that was requested. The JWKS must live on the allowed domain, and only then are the public keys fetched."
+    },
+    {
+      "type": "bullets",
+      "title": "What the example proves",
+      "icon": "check",
+      "items": [
+        "Metadata and JWKS are public, credential-free resources",
+        "The declared identity matches the requested URL",
+        "Redirect URIs are explicit, never inferred from a callback",
+        "JWKS domain policy stops silent delegation to an unrelated key host"
+      ],
+      "notes": "Each check closes a door. A document cannot claim to be a different agent, cannot accept a redirect it never declared, and cannot quietly hand its trust to keys hosted somewhere unrelated."
+    },
+    {
+      "type": "two-columns",
+      "title": "What the model sees",
+      "left": { "heading": "Visible", "type": "bullets", "items": ["The verified identity", "The signing policy"] },
+      "right": { "heading": "Never", "type": "bullets", "items": ["Key coordinates", "Raw metadata"] },
+      "notes": "The tool output describes policy: who the agent is and how its keys are governed. The key coordinates and the raw documents stay outside model context."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples verify an identity through AgentIdentityClient",
+      "notes": "Run either example to watch the checks pass. Then continue with Session assertions, the first thing a verified agent signs, and read the personal-agent guide."
+    }
+  ]
+}

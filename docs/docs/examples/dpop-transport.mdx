@@ -3,7 +3,12 @@ title: DPoP-aware transport
 description: Send PAP API and conversation requests with fresh proofs and safe retry boundaries.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/dpop-transport.deck.json';
+
 # DPoP-aware transport
+
+<Deck spec={deck} />
 
 Creating a valid proof is only half of DPoP safety. The HTTP transport must
 create a new proof for the exact method and URL of every attempt—including a

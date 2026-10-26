@@ -1,0 +1,79 @@
+{
+  "deck": {
+    "title": "Device Sign-In",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Device Sign-In",
+      "subtitle": "Sign in on the company's page when the agent cannot take a browser callback",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Some personal agents run in a terminal or on a device with no browser callback. Device Sign-In lets the user sign in on the company's page with a link and a code, while the agent polls politely for the result."
+    },
+    {
+      "type": "statement",
+      "title": "Why Device Sign-In",
+      "statement": "The user signs in **elsewhere**. The agent **waits**, at the company's pace.",
+      "notes": "The user opens a link on any device and types a short code. Meanwhile the agent asks the company whether sign-in is done, never faster than the company allows."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Agent tool", "type": "text", "content": "A read-only tool. Shows the user the **link and code**." },
+        { "heading": "DeviceSignInClient", "type": "text", "content": "The real SDK state machine. Polls with **DPoP**, keeps the device code private." },
+        { "heading": "Company and Reactor", "type": "text", "content": "The company signs the user in; **Reactor** stores hold the device code and the Account Token." }
+      ],
+      "notes": "The tool only presents what the user needs. The SDK client runs the state machine against a deterministic company transport, and Reactor stores keep the secrets: the device code, and later the Account Token."
+    },
+    {
+      "type": "flow",
+      "title": "Starting",
+      "items": [
+        { "label": "1", "title": "Begin", "detail": "For an existing signed-out Session" },
+        { "label": "2", "title": "Authorize", "detail": "Link, user code, interval, private device code" },
+        { "label": "3", "title": "Hand off", "detail": "The user opens the link and enters the code", "current": true }
+      ],
+      "notes": "The client asks the company for a device authorization on the Session that already exists. The company returns a link, a user code, a polling interval and a private device code. The device code goes into a Reactor store; the tool gets the link, the code and an opaque reference."
+    },
+    {
+      "type": "flow",
+      "title": "Polling at the company's pace",
+      "items": [
+        { "label": "4", "title": "Too early", "detail": "No request: the interval has not passed" },
+        { "label": "5", "title": "Pending", "detail": "authorization_pending: keep waiting" },
+        { "label": "6", "title": "Slow down", "detail": "slow_down: add five seconds" },
+        { "label": "7", "title": "Signed in", "detail": "Same Session, Account Token, partial scopes", "current": true }
+      ],
+      "notes": "A poll before the interval sends nothing. Then the company says pending, then slow down, and the client adds five seconds to its interval. Every poll that goes out carries a fresh DPoP proof. Finally the same Session comes back signed in, with an Account Token and one requested scope missing."
+    },
+    {
+      "type": "bullets",
+      "title": "What the example proves",
+      "icon": "check",
+      "items": [
+        "The link and the code were shown to the user",
+        "Early polling was suppressed",
+        "Pending and slow-down were respected",
+        "The **original Session** was upgraded",
+        "One requested scope was left out, and reported"
+      ],
+      "notes": "The tool result is a list of evidence like this. It shows the polling rules held and that the Session was upgraded rather than replaced."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["The device code", "Assertions and proofs", "Session Token", "Account Token"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["The link and user code, as shown", "Lifecycle evidence", "Granted and missing scopes", "An opaque token reference"] },
+      "notes": "The user code is meant for the user; the device code is not, and never leaves the host. Tokens, assertions and proofs stay host-only too."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples run the real state machine against a deterministic company",
+      "notes": "The company in the examples always answers pending, then slow down, so every rule is exercised on each run. The Device Sign-In guide covers the production setup."
+    }
+  ]
+}

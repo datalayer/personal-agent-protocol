@@ -3,7 +3,12 @@ title: Company discovery
 description: Discover a company's PAP interfaces without sending credentials.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/company-discovery.deck.json';
+
 # Company discovery
+
+<Deck spec={deck} />
 
 Discovery turns a company domain into verified, public PAP metadata. The
 personal agent fetches `/.well-known/poppy.json`, validates the document and

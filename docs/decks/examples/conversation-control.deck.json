@@ -1,0 +1,84 @@
+{
+  "deck": {
+    "title": "Conversation control",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Conversation control",
+      "subtitle": "Sign in mid-conversation, talk directly, hand off to a person, close",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "A conversation is more than messages. This example drives one Manzanita conversation through four controls: signing in part-way through, a Direct Conversation, a handoff to a person at the support desk, and closing."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Ada", "type": "text", "content": "The user. She signs in on Manzanita's page and asks to talk to the company herself." },
+        { "heading": "Atlas", "type": "text", "content": "Her personal agent. Its host holds the tokens and drives the conversation." },
+        { "heading": "Manzanita", "type": "text", "content": "The company, with a support desk staffed for the handoff." }
+      ],
+      "notes": "Ada is the user, Atlas is her personal agent, and Manzanita is the company. In this example Manzanita has people at its support desk, so a handoff can be taken."
+    },
+    {
+      "type": "flow",
+      "title": "Sign-in mid-conversation",
+      "items": [
+        { "label": "1", "title": "Ask", "detail": "Where is my jacket order? Signed out" },
+        { "label": "2", "title": "Authorization", "detail": "sign_in_required, orders:read orders:write" },
+        { "label": "3", "title": "Sign in", "detail": "Ada approves the device code" },
+        { "label": "4", "title": "Same conversation", "detail": "Signed-in token, same conversation ID", "current": true }
+      ],
+      "notes": "Signed out, Manzanita cannot look up an order, so it answers with an authorization event: sign_in_required and the scopes it needs. The host signs Ada in with a mode the company offers, here device sign-in, and keeps sending to the same conversation ID with the new token."
+    },
+    {
+      "type": "flow",
+      "title": "A Direct Conversation",
+      "items": [
+        { "label": "1", "title": "Ada asks", "detail": "To talk about sizing herself" },
+        { "label": "2", "title": "start_direct", "detail": "Under the parent, sender human" },
+        { "label": "3", "title": "Parent locked", "detail": "409 direct_conversation_open", "current": true },
+        { "label": "4", "title": "Close it", "detail": "The parent sees direct_closed" }
+      ],
+      "notes": "Only the personal agent starts a Direct Conversation, so the user can talk with the company in the agent's own interface. While it is open, the parent refuses messages and handoff with direct_conversation_open, and the SDK puts the open conversation's ID in the error details."
+    },
+    {
+      "type": "flow",
+      "title": "Handoff, then close",
+      "items": [
+        { "label": "1", "title": "handoff()", "detail": "Ask for a person at the company" },
+        { "label": "2", "title": "Queued", "detail": "Until someone takes it" },
+        { "label": "3", "title": "Human", "detail": "Idle, responder is human" },
+        { "label": "4", "title": "close()", "detail": "Later messages: conversation_closed", "current": true }
+      ],
+      "notes": "A handoff puts the conversation in the queued state until a person takes it; then the responder is human. When nobody is available, the company says so and the agent carries on. Closing ends the conversation, but operations it proposed or started are not cancelled."
+    },
+    {
+      "type": "comparison",
+      "title": "The four controls",
+      "columns": ["Who starts it", "What to expect"],
+      "rows": [
+        { "label": "Sign-in (§7.11)", "values": ["The company, with an authorization event", "sign_in_required or insufficient_scope"] },
+        { "label": "Direct (§7.10)", "values": ["Only the personal agent", "Parent refuses with direct_conversation_open"] },
+        { "label": "Handoff (§7.9)", "values": ["Either side", "queued, then responder human"] },
+        { "label": "Close (§7.12)", "values": ["The agent", "Operations are not cancelled"] }
+      ],
+      "notes": "Here are the four side by side. Each comes back to the model as an event type, a status or an error code it can explain to the user."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host-only", "type": "bullets", "items": ["Tokens", "The device code", "DPoP proofs", "The user code, shown by the host"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["Event types and statuses", "The company's answers", "Error codes"] },
+      "notes": "The model sees what happened, never the means. Tokens, the device code and proofs stay in the host, and the user code is shown to the user by the host, not by the model."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples drive one Manzanita conversation through all four",
+      "notes": "Run the Pydantic AI example with PAP_EXAMPLE_MODEL set to the model you want. TypeScript has startDirect, handoff and close on ConversationClient, with the same error codes and details."
+    }
+  ]
+}

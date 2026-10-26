@@ -1,0 +1,82 @@
+{
+  "deck": {
+    "title": "DPoP-aware transport",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "DPoP-aware transport",
+      "subtitle": "Send every request with a fresh proof, and know when not to send it",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Once a Session exists, the agent calls the company's APIs and conversations with its Session Token. This example shows the HTTP client that does that safely: fresh proofs on every attempt, one nonce retry, and no redirects."
+    },
+    {
+      "type": "statement",
+      "title": "Why a transport of its own",
+      "statement": "A valid proof is **only half** of DPoP safety. The other half is **where and when** it is sent.",
+      "notes": "Making a correct DPoP proof is not enough. The transport has to make a new one for each attempt, refuse to follow a redirect with the token attached, and stop callers from swapping in their own credentials."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Agent tool", "type": "text", "content": "Asks for a company resource with an **opaque reference** to the Session Token." },
+        { "heading": "DPoP HTTP client", "type": "text", "content": "`DpopHttpClient` in Python, `DpopFetchClient` in TypeScript. Owns `Authorization` and `DPoP`." },
+        { "heading": "Reactor proof provider", "type": "text", "content": "Makes each proof, bound to the method, target and token hash." }
+      ],
+      "notes": "The agent tool never holds the token, only a reference to it. The HTTP client attaches the token and the proof, and the proof itself comes from a Reactor contribution that holds the key. The company API is on the other side."
+    },
+    {
+      "type": "flow",
+      "title": "A request with a nonce challenge",
+      "items": [
+        { "label": "1", "title": "Prove", "detail": "Proof 1 for GET /orders and the token hash" },
+        { "label": "2", "title": "Send", "detail": "Authorization: DPoP, plus the proof" },
+        { "label": "3", "title": "Challenged", "detail": "401 use_dpop_nonce, with a nonce" },
+        { "label": "4", "title": "Retry once", "detail": "Proof 2 carries the nonce: 200", "current": true }
+      ],
+      "notes": "The first attempt gets a nonce challenge. The client makes a second proof for the same request, this time with the company's nonce, and retries once. The tool gets the API result, with no token or proof in it."
+    },
+    {
+      "type": "mermaid",
+      "title": "The redirect is refused",
+      "diagram": "sequenceDiagram\n  participant A as Agent tool\n  participant H as DPoP client\n  participant C as Company API\n  A->>H: GET orders again\n  H->>C: Token + proof 3\n  C-->>H: 307 to /orders/current\n  H-->>A: redirect_refused",
+      "notes": "On the second call the company answers with a redirect. The client does not follow it: under draft 0.2 no token, proof, assertion or body goes to the URL a protocol endpoint redirects to. The tool gets redirect_refused, and nothing reaches the new URL."
+    },
+    {
+      "type": "bullets",
+      "title": "Enforced boundaries",
+      "icon": "check",
+      "items": [
+        "HTTPS resource URLs only, with no embedded credentials",
+        "`Authorization` and `DPoP` are host-owned: callers cannot set them",
+        "A fresh proof for every attempt, including the retry",
+        "One retry on `use_dpop_nonce`, never more",
+        "Redirects are never followed",
+        "Request bodies are replayable values, not streams"
+      ],
+      "notes": "These are the rules the client enforces. Notice the last one: because a retry may resend the body, bodies are values that can be sent twice, not streams that can be read once."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Tokens", "DPoP proofs", "Nonces", "Pairwise identity"] },
+      "right": { "heading": "What the tool sees", "type": "bullets", "items": ["The API result", "redirect_refused, when it happens"] },
+      "notes": "Both clients resolve proofs through Reactor and keep tokens, proofs, nonces and pairwise identity out of anything the model reads or returns."
+    },
+    {
+      "type": "statement",
+      "title": "MCP is a separate milestone",
+      "statement": "MCP uses a **Bearer** Session Token. This transport accepts **DPoP only**, and never downgrades.",
+      "notes": "MCP works differently: a resource-bound Bearer token, which depends on the Account Token exchange. So this transport refuses Bearer tokens instead of quietly downgrading, and MCP stays open in the plan until that lifecycle exists."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples send a request through a nonce challenge, then meet a refused redirect",
+      "notes": "Both examples run the same two calls: one that succeeds after a nonce retry, and one that stops at a redirect. Upstream's Using Session Tokens section has the rules in full."
+    }
+  ]
+}

@@ -3,7 +3,12 @@ title: Mediated Sign-In
 description: Relay the user's credentials to one company endpoint, once, without a model seeing them.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/mediated-sign-in.deck.json';
+
 # Mediated Sign-In
+
+<Deck spec={deck} />
 
 Some companies cannot send their users to a browser. They declare the fields
 they need (`auth.mediated.fields`) and an endpoint on their own domain, and

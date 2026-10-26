@@ -3,7 +3,12 @@ title: DPoP proof
 description: Bind a one-use proof to an HTTP request, access token, and protected key.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/dpop-proof.deck.json';
+
 # DPoP proof
+
+<Deck spec={deck} />
 
 Demonstrating Proof of Possession (DPoP) prevents a stolen bearer value from
 being sufficient on its own. For every request, the host signs a fresh proof

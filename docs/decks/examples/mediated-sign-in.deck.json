@@ -1,0 +1,76 @@
+{
+  "deck": {
+    "title": "Mediated Sign-In",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Mediated Sign-In",
+      "subtitle": "Relay the user's credentials to one company endpoint, once, out of the model's sight",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Some companies cannot send their users to a browser. With Mediated Sign-In, the personal agent relays what the user types to the company. The example runs the real MediatedSignInClient against Manzanita Outfitters, which asks for an email, a password, and then a one-time code."
+    },
+    {
+      "type": "statement",
+      "title": "Why it needs care",
+      "statement": "The one sign-in mode where a **password** passes through the host. So the SDK **narrows** what the host can do with it.",
+      "notes": "In every other mode the company's own page takes the password. Here it passes through the agent's host, so the SDK limits where it can go, how often, and who can see it."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Company", "type": "text", "content": "Declares `auth.mediated.fields` and an endpoint **on its own domain**." },
+        { "heading": "MediatedSignInClient", "type": "text", "content": "Checks the endpoint, sends the values **once**, then drops them." },
+        { "heading": "pap.protectedInput", "type": "text", "content": "The host's trusted surface where the user types. **Never the chat.**" }
+      ],
+      "notes": "The company says which fields it needs and where to send them. The SDK client does the relaying. The user types into a protected input that the host provides, never into the conversation."
+    },
+    {
+      "type": "flow",
+      "title": "Credentials, then a code",
+      "items": [
+        { "label": "1", "title": "Check", "detail": "Endpoint on the company's domain, or refuse" },
+        { "label": "2", "title": "Ask", "detail": "Email and password, in protected input" },
+        { "label": "3", "title": "Send once", "detail": "POST with DPoP, no redirect followed; values dropped" },
+        { "label": "4", "title": "Code", "detail": "code_required, masked sent_to" },
+        { "label": "5", "title": "Complete", "detail": "Signed-in Session and Account Token", "current": true }
+      ],
+      "notes": "The client checks the endpoint before asking the user anything. It sends the credentials once, with a DPoP proof, follows no redirect, and drops the values. The company asks for a code sent to a masked address; the user types it, the code goes only to that sign-in, and the Session comes back signed in."
+    },
+    {
+      "type": "bullets",
+      "title": "The refusals",
+      "icon": "arrow",
+      "items": [
+        "Endpoint off the company's domain: `unsafe_mediated_endpoint`, before asking",
+        "Protected input must answer exactly the declared fields, none empty",
+        "Only the Session that started it can finish: `session_mismatch`",
+        "A wrong code: `code_required` again, same reference",
+        "Too many wrong codes: the company answers `failed`"
+      ],
+      "notes": "The walkthrough also shows what is refused. Note that a session mismatch keeps the pending state for the right Session, and the attempt limit belongs to the company."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Never the model's", "type": "bullets", "items": ["Credentials and the code: protected input and one request body", "Session Token and Account Token: Reactor stores"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["Field labels, and which are secret", "The company's domain", "The masked code destination", "Statuses and granted scopes"] },
+      "notes": "The model knows enough to guide the user: which fields, which company, where the code went. The values themselves exist only in the protected input and in the single request that carries them."
+    },
+    {
+      "type": "statement",
+      "title": "In TypeScript",
+      "statement": "`new MediatedSignInClient({ reactor, fetch })`, with `signIn()` and `submitCode()`.",
+      "notes": "TypeScript has the same client. The trusted input surface is contributed at the ProtectedInputs contribution point."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples sign in to Manzanita Outfitters, and show each refusal",
+      "notes": "Run either example to see the full sign-in and every refusal. The Mediated Sign-In guide covers the production setup."
+    }
+  ]
+}

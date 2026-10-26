@@ -1,0 +1,75 @@
+{
+  "deck": {
+    "title": "Company discovery",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Company discovery",
+      "subtitle": "Turn a company domain into verified, public PAP metadata",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Before a personal agent can talk to a company, it needs to know what the company supports and where. Discovery starts from nothing but a domain name and ends with verified, public metadata."
+    },
+    {
+      "type": "statement",
+      "title": "Why discovery carries nothing",
+      "statement": "No Session Token, cookie, assertion or user identifier belongs on a **discovery** request.",
+      "notes": "At this point the host has not verified anything about the company. Keeping discovery credential-free means a mistake can never forward a token to a host that turns out to be the wrong one."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "PAP host", "type": "text", "content": "Your code. It fetches, validates, and hands the model a summary." },
+        { "heading": "Reactor discovery policy", "type": "text", "content": "Approves only **HTTPS**, public-network destinations." },
+        { "heading": "Company", "type": "text", "content": "Publishes `/.well-known/poppy.json` and its OAuth metadata." }
+      ],
+      "notes": "The host does the work, a Reactor policy decides which destinations are allowed at all, and the company publishes two public documents: its PAP document and its authorization server's metadata."
+    },
+    {
+      "type": "flow",
+      "title": "How it flows",
+      "items": [
+        { "label": "1", "title": "Approve", "detail": "Validate the HTTPS URL, resolve public addresses" },
+        { "label": "2", "title": "Fetch", "detail": "`/.well-known/poppy.json`, no credentials" },
+        { "label": "3", "title": "Validate", "detail": "Strict JSON, version, domain" },
+        { "label": "4", "title": "Follow", "detail": "OAuth metadata, no credentials" },
+        { "label": "5", "title": "Bind", "detail": "Issuer to the company domain", "current": true }
+      ],
+      "notes": "The policy approves the destination first. The host fetches the PAP document, validates it strictly, then follows the advertised OAuth metadata to find the authorization and token endpoints. Finally it checks the issuer really belongs to the company's domain."
+    },
+    {
+      "type": "bullets",
+      "title": "Checked before it is trusted",
+      "icon": "check",
+      "items": [
+        "Redirects, response sizes and content types",
+        "Duplicate JSON members",
+        "Domains, protocol versions, issuer relationships"
+      ],
+      "notes": "Nothing in the response is trusted until it passes these checks. A duplicate JSON member, for example, could make two parsers disagree about what the document says, so it is refused."
+    },
+    {
+      "type": "two-columns",
+      "title": "No second DNS lookup",
+      "left": { "heading": "Python SDK", "type": "text", "content": "Pins the connection: the policy returns the addresses it approved (`ApprovedUrl`), and the transport dials only those. TLS still checks the host name." },
+      "right": { "heading": "TypeScript SDK", "type": "text", "content": "Checks addresses but does not yet pin the socket. Pair it with an **egress proxy** that enforces the same decision." },
+      "notes": "Checking an address and then looking the name up again is not enough: DNS rebinding could swap the answer in between. The Python SDK dials only the approved addresses. The TypeScript SDK does not yet, so put it behind an egress proxy."
+    },
+    {
+      "type": "two-columns",
+      "title": "What the model sees",
+      "left": { "heading": "Visible", "type": "bullets", "items": ["A verified capability summary", "Organization and interfaces"] },
+      "right": { "heading": "Never", "type": "bullets", "items": ["Raw response bodies", "Any credential: none were sent"] },
+      "notes": "The tool result is an inventory of what the company supports, not the raw documents it served. And since discovery sends no credential, there is none to leak."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples discover a company through PAP's DiscoveryClient",
+      "notes": "Run either example to see discovery end to end. Then continue with personal-agent identity, where the company does the same kind of check on the agent."
+    }
+  ]
+}

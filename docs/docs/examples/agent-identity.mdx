@@ -3,7 +3,12 @@ title: Personal-agent identity
 description: Verify agent metadata and same-domain signing keys before a company trusts assertions.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/agent-identity.deck.json';
+
 # Personal-agent identity
+
+<Deck spec={deck} />
 
 A company needs a stable way to identify the software acting for a user. The
 agent's HTTPS `client_id` points to public metadata describing its name,

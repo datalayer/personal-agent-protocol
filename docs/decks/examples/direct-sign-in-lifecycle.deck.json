@@ -1,0 +1,84 @@
+{
+  "deck": {
+    "title": "Direct Sign-In lifecycle",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Direct Sign-In lifecycle",
+      "subtitle": "Take the callback once, exchange the code, upgrade the same Session",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "This example picks up where the boundary example stopped: the user has approved on the company's page. The host now has to turn the browser callback into a signed-in Session, once, and without widening access."
+    },
+    {
+      "type": "statement",
+      "title": "Why it matters",
+      "statement": "Sign-in upgrades **the same Session**. Partial consent is a **result**, not an error.",
+      "notes": "The user is signed in on the Session the conversation already has, not a new one. And if the user grants less than was asked, the host reports it plainly instead of quietly asking for more."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "User and browser", "type": "text", "content": "Approves `orders:read`, declines `orders:return`; the browser hits the registered HTTPS callback." },
+        { "heading": "PAP host", "type": "text", "content": "Takes the pending state from **Reactor**, verifies, and exchanges the code." },
+        { "heading": "Company", "type": "text", "content": "Issues the signed-in DPoP token, after one **nonce** challenge." }
+      ],
+      "notes": "The user approves one scope and declines the other. The company redirects the browser to the host's registered callback. The host uses the Reactor state store, a signer and a DPoP provider to finish the exchange."
+    },
+    {
+      "type": "flow",
+      "title": "From callback to checks",
+      "items": [
+        { "label": "1", "title": "Callback", "detail": "Code, state and issuer reach the host" },
+        { "label": "2", "title": "Take state", "detail": "Atomically, by hashed state" },
+        { "label": "3", "title": "Verify", "detail": "Exact redirect, state, issuer, expiry", "current": true }
+      ],
+      "notes": "The callback carries a code, the state and the issuer. The host takes the pending request out of the store in one atomic step, getting back the verifier and the existing session_id, then checks the redirect, state, issuer and expiry."
+    },
+    {
+      "type": "flow",
+      "title": "The exchange",
+      "items": [
+        { "label": "4", "title": "Exchange", "detail": "Code, verifier and existing session_id" },
+        { "label": "5", "title": "Challenged", "detail": "use_dpop_nonce, with a nonce" },
+        { "label": "6", "title": "Retry once", "detail": "Same code and verifier, fresh assertion and proof" },
+        { "label": "7", "title": "Signed in", "detail": "Same Session, `orders:read` only", "current": true }
+      ],
+      "notes": "The host exchanges the code with a client assertion and a DPoP proof. The company asks for a nonce, so the host retries once: same authorization code and verifier, but a fresh assertion and a fresh proof. The answer is a signed-in token for the same Session, with orders:read."
+    },
+    {
+      "type": "bullets",
+      "title": "What gets validated",
+      "icon": "check",
+      "items": [
+        "Redirect location, issuer, state and expiry",
+        "Content type, response size and token type",
+        "Sign-in status and the **same** Session ID",
+        "Scopes: never more than requested; missing ones reported"
+      ],
+      "notes": "Everything the company sends back is checked. If the company returns a scope the user was never asked for, the host rejects it. Scopes that are missing are reported, so the application can degrade or explain."
+    },
+    {
+      "type": "statement",
+      "title": "A replayed callback",
+      "statement": "State is consumed **before** the exchange. The second callback finds **nothing** and is rejected.",
+      "notes": "The example submits the callback twice. Because the state was taken out of the store before the exchange, whether it then failed or succeeded, the second attempt finds no state and is rejected."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Token", "Account Token, in `pap.tokenStore`", "Code, state and verifier", "Assertions and proofs"] },
+      "right": { "heading": "What the user and model see", "type": "bullets", "items": ["Signed in", "Granted and missing scopes", "`account_token_reference`"] },
+      "notes": "The Account Token goes into the host's token store before complete returns; the result carries only a reference, with no refresh token. No token reaches URLs, logs, analytics, React state or a model transcript."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples grant only orders:read, then replay the callback",
+      "notes": "Both examples ask for read and return access, get read only, and show the replayed callback being rejected. The Direct Sign-In guide covers the production setup."
+    }
+  ]
+}

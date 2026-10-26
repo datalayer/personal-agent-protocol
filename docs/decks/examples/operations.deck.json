@@ -1,0 +1,90 @@
+{
+  "deck": {
+    "title": "Operations",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Operations",
+      "subtitle": "Confirm exactly what the user approved, at most once, and recover a lost answer",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "An operation is something a company proposes and performs only once it is confirmed: a payment, an exchange, a cancellation. This example confirms Northwind Bank's proposed payments with the Operations extension, version 1."
+    },
+    {
+      "type": "statement",
+      "title": "Why operations",
+      "statement": "The approval is **exact** and **durable**: a chat message never confirms anything.",
+      "notes": "Money moves only on an explicit confirmation of one revision of the terms. The user approves in the host's own interface, and the company performs a confirmed operation once, even when answers get lost."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Ada and the Atlas host", "type": "text", "content": "Ada approves in the host's interface; the host confirms with `OperationsClient`." },
+        { "heading": "Standing permission store", "type": "text", "content": "The Reactor `pap.standingPermissionStore` checks a permission term by term." },
+        { "heading": "Northwind Bank", "type": "text", "content": "Proposes payments and performs them once confirmed." }
+      ],
+      "notes": "Ada is the user and Atlas her personal agent's host. A Reactor contribution holds standing permissions. Northwind Bank proposes the payments; it marks them as not requiring the user's own approval, so a standing permission may confirm them too."
+    },
+    {
+      "type": "flow",
+      "title": "Approval, and changed terms",
+      "items": [
+        { "label": "1", "title": "Negotiate", "detail": "Both sides list operations version 1" },
+        { "label": "2", "title": "Proposal", "detail": "op_1 revision 1: EUR 1250.00 to Acme GmbH" },
+        { "label": "3", "title": "Approve", "detail": "Ada approves revision 1: revision + digest" },
+        { "label": "4", "title": "terms_changed", "detail": "Revision 2: EUR 1262.50, a fee added", "current": true }
+      ],
+      "notes": "The host finds the endpoint only when the bank and the agent both list the extension. Nothing standing covers op_1, so Ada sees the summary and terms and approves revision 1. The bank has since added a fee, so the confirm is refused with terms_changed and the new revision."
+    },
+    {
+      "type": "flow",
+      "title": "Confirm, and recover",
+      "items": [
+        { "label": "5", "title": "Show the change", "detail": "summary, amount.amount" },
+        { "label": "6", "title": "Approve again", "detail": "Ada approves revision 2" },
+        { "label": "7", "title": "Answer lost", "detail": "The bank performed it; the reply never came" },
+        { "label": "8", "title": "Read back", "detail": "GET op_1: succeeded, result.summary", "current": true }
+      ],
+      "notes": "The host shows Ada which terms changed and she approves revision 2. The bank performs the payment but the answer is lost. The SDK reads the same operation back: it is never re-proposed or assumed failed, and a retried confirm returns the same record."
+    },
+    {
+      "type": "bullets",
+      "title": "Exact approval",
+      "icon": "check",
+      "items": [
+        "`approve()` records the revision and a digest of its summary and terms",
+        "A confirm for any other revision is refused locally: `approval_mismatch`",
+        "`terms_changed` returns the new revision and the changed term paths",
+        "An agent without the extension gets `extension_required`"
+      ],
+      "notes": "Approval is tied to one revision. If the terms move, the old approval no longer fits, and the host refuses it before anything is sent."
+    },
+    {
+      "type": "flow",
+      "title": "A standing permission",
+      "items": [
+        { "label": "1", "title": "Proposal", "detail": "op_2: EUR 980.00" },
+        { "label": "2", "title": "Reserve", "detail": "Payee, amount ≤ 2000.00, EUR, one use" },
+        { "label": "3", "title": "Confirm", "detail": "approved_by standing_permission" },
+        { "label": "4", "title": "Commit", "detail": "A refusal would release the use", "current": true }
+      ],
+      "notes": "A standing permission names one company, account and action, with limits on term paths, an expiry and optional uses. The store reserves a use only when every limit covers the revision, commits it when the bank confirms, and releases it when the bank refuses. A revision that requires the user's approval is never confirmed this way."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host and user only", "type": "bullets", "items": ["Tokens and proofs", "The decision to approve"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["States and revisions", "Changed term paths", "Error codes", "The bank's result.summary, as written"] },
+      "notes": "The model can explain what happened, but it cannot approve. Tokens and proofs stay in the host, and the decision stays with the user in the host's own interface. A cancelled proposal's summary says nothing was changed."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples confirm Northwind Bank's payments end to end",
+      "notes": "Run the Pydantic AI example with PAP_EXAMPLE_MODEL set to the model you want. TypeScript offers OperationsClient, operationsEndpoint and an asynchronous approve, with standing permissions contributed at StandingPermissionStores."
+    }
+  ]
+}

@@ -3,7 +3,12 @@ title: Direct Sign-In boundary
 description: Hand authorization to the user's browser without exposing OAuth material to an agent model.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/direct-sign-in-boundary.deck.json';
+
 # Direct Sign-In boundary
+
+<Deck spec={deck} />
 
 Direct Sign-In upgrades an existing signed-out Session. The personal agent may
 explain why authorization is needed, but the host—not the model—constructs the

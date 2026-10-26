@@ -29,6 +29,8 @@ module.exports = {
   },
   plugins: [
     'docusaurus-lunr-search',
+    // Each example explained as a short deck (docs/decks), at most ten slides.
+    ['@datalayer/decks-docusaurus', { decksDir: 'decks', maxSlides: 10 }],
   ],
   themes: [
     '@docusaurus/theme-mermaid',

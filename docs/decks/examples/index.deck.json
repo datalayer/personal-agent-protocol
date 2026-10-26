@@ -1,0 +1,91 @@
+{
+  "deck": {
+    "title": "Example flows",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Example flows",
+      "subtitle": "Follow each PAP feature from a user's intent to a safe agent result",
+      "meta": "Personal Agent Protocol · examples",
+      "notes": "These pages walk through the protocol behaviour that the runnable Python and Agent Runtimes examples demonstrate. Each one takes a single feature and follows it from what the user wants to what the agent can safely say about it."
+    },
+    {
+      "type": "statement",
+      "title": "What every flow shows",
+      "statement": "Where the data travels, **who owns** the sensitive work, and what may cross into **model context**.",
+      "notes": "Every page answers the same three questions. Which requests go where; which Reactor capability holds the keys, tokens and secrets; and what is left that the model may see. The answer to the last one is always: much less than the host knows."
+    },
+    {
+      "type": "flow",
+      "title": "Before a Session",
+      "items": [
+        { "label": "1", "title": "Company discovery", "detail": "Resolve and validate public PAP capabilities" },
+        { "label": "2", "title": "Agent identity", "detail": "Verify agent metadata and signing policy" },
+        { "label": "3", "title": "Session assertion", "detail": "Bind a short-lived request to a pairwise user" },
+        { "label": "4", "title": "DPoP proof", "detail": "Bind one proof to one HTTP request" }
+      ],
+      "notes": "The first flows are the building blocks. A personal agent finds out what a company supports, the company checks who the agent is, and the agent learns to make the two signed things every request needs: a Session assertion and a DPoP proof."
+    },
+    {
+      "type": "three-columns",
+      "title": "Sessions, sign-in and conversations",
+      "columns": [
+        { "heading": "Sessions", "type": "bullets", "items": ["Session lifecycle", "DPoP transport", "Browser Session"] },
+        { "heading": "Signing in", "type": "bullets", "items": ["Direct Sign-In boundary and lifecycle", "Mediated Sign-In", "Account Tokens"] },
+        { "heading": "Conversations", "type": "bullets", "items": ["Messages and events", "Streaming over SSE", "Control and Operations"] }
+      ],
+      "notes": "The middle of the set builds on those blocks. Sessions start, renew and travel safely; users sign in without the model ever touching OAuth state or tokens; and conversations carry messages, events, streams and the operations a user approves."
+    },
+    {
+      "type": "two-columns",
+      "title": "Two journeys put it together",
+      "left": { "heading": "A user with a company", "type": "text", "content": "Ada asks Atlas to exchange a jacket at **Manzanita**: discovery to sign-out, both sides from the SDK." },
+      "right": { "heading": "Two companies", "type": "text", "content": "**Ledgerly** pays Ada's invoices at **Northwind Bank**, by composing two PAP relationships." },
+      "notes": "Each other page showcases one feature. The last two combine several: one user with one company from first question to sign-out, and an accounting firm acting for the same user at her bank."
+    },
+    {
+      "type": "bullets",
+      "title": "Runnable without real credentials",
+      "icon": "check",
+      "items": [
+        "Deterministic or local transports where needed",
+        "Newer flows use the reference company in `personal_agent_protocol.demo`",
+        "Real keys and real HTTP over ASGI, in one process, no network",
+        "Production hosts swap the fixtures through **Reactor contributions**"
+      ],
+      "notes": "The examples teach the boundary without any real secret. The newer ones talk to a reference company with real keys and real HTTP, all inside one process. In production, the same code gets egress, state, browsers, signing, DPoP, key custody and token storage from Reactor contributions."
+    },
+    {
+      "type": "comparison",
+      "title": "Two implementations, one boundary",
+      "columns": ["Pydantic AI", "Agent Runtimes"],
+      "rows": [
+        { "label": "Lives in", "values": ["The PAP repository", "Agent Runtimes"] },
+        { "label": "Shape", "values": ["Plain agent examples", "Loop applications with Reactor views"] },
+        { "label": "Protocol and secret rules", "values": ["The same", "The same"] }
+      ],
+      "notes": "Every flow exists twice. The PAP repository has plain Pydantic AI examples, and Agent Runtimes has matching Loop applications with interactive Reactor views. The protocol and the rules for handling secrets are identical in both."
+    },
+    {
+      "type": "bullets",
+      "title": "Shown by an example alone",
+      "icon": "arrow",
+      "items": [
+        "**Company APIs**: OpenAPI with DPoP, MCP with a Bearer for its URL alone",
+        "**Company service**: build a company with `personal_agent_protocol.company`",
+        "**Sign-in display**: what a page and a model each get of `PapSignIn`",
+        "**Telemetry**: one allowlisted event per protocol stage"
+      ],
+      "notes": "A few features have a runnable Pydantic AI example and a guide, but no page of their own here. They cover calling a company's APIs, building a company, displaying a sign-in, and telemetry."
+    },
+    {
+      "type": "closing",
+      "title": "Pick a flow",
+      "cta": "Start with company discovery, or jump to the feature you need",
+      "notes": "If PAP is new to you, follow the table in order, starting with company discovery. Otherwise, open the page for the feature you are building; each one links to its Pydantic AI and Agent Runtimes examples."
+    }
+  ]
+}

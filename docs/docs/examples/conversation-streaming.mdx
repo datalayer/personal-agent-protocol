@@ -3,7 +3,12 @@ title: Conversation streaming
 description: Stream a company's reply over SSE, reconnect from Last-Event-ID, and never act on a delta.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/conversation-streaming.deck.json';
+
 # Conversation streaming
+
+<Deck spec={deck} />
 
 A company that streams answers `GET …/events` with `Accept: text/event-stream`.
 Events arrive as SSE frames with their IDs, and `text-delta` frames carry a

@@ -1,0 +1,75 @@
+{
+  "deck": {
+    "title": "Direct Sign-In boundary",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Direct Sign-In boundary",
+      "subtitle": "Hand authorization to the user's browser, without the model seeing OAuth",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Direct Sign-In upgrades a signed-out Session to a signed-in one through the company's own sign-in page. This example covers the first half: everything up to the moment the user's browser opens that page."
+    },
+    {
+      "type": "statement",
+      "title": "Why a boundary",
+      "statement": "The model may **explain** why sign-in is needed. The **host** builds the request.",
+      "notes": "The agent can tell the user that it needs access to their orders. But the OAuth request, its state and its secrets are built by host code, and the company's page opens in a trusted browser, never inside the conversation."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Agent and model", "type": "text", "content": "Asks for `orders:read` on the existing Session, then waits." },
+        { "heading": "PAP host", "type": "text", "content": "Generates state and the PKCE verifier, stores them in **Reactor**, opens the browser." },
+        { "heading": "Browser and company", "type": "text", "content": "The user signs in on the **company's** page and sees the exact scopes." }
+      ],
+      "notes": "The model asks for a scope on a Session that already exists. The host does the OAuth work and keeps the pending request in a Reactor state store. The user's trusted browser talks to the company's authorization server."
+    },
+    {
+      "type": "flow",
+      "title": "Up to the browser",
+      "items": [
+        { "label": "1", "title": "Generate", "detail": "Random state and PKCE verifier" },
+        { "label": "2", "title": "Derive", "detail": "The S256 code challenge" },
+        { "label": "3", "title": "Store", "detail": "Pending request by hashed state, with expiry" },
+        { "label": "4", "title": "Open", "detail": "The authorization URL, in the trusted browser", "current": true }
+      ],
+      "notes": "The host makes a random state and a PKCE verifier, derives the S256 challenge, and stores the pending request under a hash of the state, with an expiry. Then it hands the authorization URL to the browser."
+    },
+    {
+      "type": "mermaid",
+      "title": "The whole handoff",
+      "diagram": "sequenceDiagram\n  participant M as Model\n  participant H as PAP host\n  participant B as Browser\n  participant C as Company\n  M->>H: Request orders:read\n  H->>B: Open authorization URL\n  B->>C: Sign-in page\n  C-->>B: Authenticate, ask for scopes\n  H-->>M: Waiting for user, scopes, expiry",
+      "notes": "Here is the handoff at once. The model asks, the host opens the company's page in the browser, the company authenticates the user and asks for the scopes, and the model is told only that it is waiting for the user."
+    },
+    {
+      "type": "bullets",
+      "title": "What the example proves",
+      "icon": "check",
+      "items": [
+        "State and verifier come from secure randomness",
+        "Only the **S256 challenge** reaches the authorization endpoint",
+        "The authorization URL is a secret: only the browser handoff sees it",
+        "Pending state expires, and can later be consumed atomically",
+        "The company owns the sign-in UI: no password reaches the agent"
+      ],
+      "notes": "The URL counts as a secret because it carries the state and the user's intent, so only the browser handoff capability ever receives it. And because the company owns the sign-in page, the agent never sees a password."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["The authorization URL", "State and PKCE verifier", "User credentials", "The authorization code"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["Waiting for the user", "The requested scopes", "The expiry"] },
+      "notes": "The model gets a status it can explain to the user: waiting, for which scopes, until when. Everything an attacker could use stays with the host."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The example stops at the browser boundary. The Direct Sign-In lifecycle example continues from the callback",
+      "notes": "This example ends deliberately at the browser. The complete Direct Sign-In lifecycle example picks up at the callback, with its validation and the token exchange."
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "deck": {
+    "title": "Browser Session",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Browser Session",
+      "subtitle": "Join a controlled browser to an existing Session with a one-use signed assertion",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "PAP can carry one Session across APIs, conversations and the company's website. This example shows how a browser the agent controls joins the Session the agent already has."
+    },
+    {
+      "type": "statement",
+      "title": "Why a Browser Session",
+      "statement": "One Session, on the **API** and on the **website**: the same user, the same sign-in, the same scopes.",
+      "notes": "Sometimes the agent needs a company web page, say to confirm an operation. Instead of signing in again, the browser joins the Session the agent already holds."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Personal agent", "type": "text", "content": "Builds a short-lived **browser assertion**, signed by the **Reactor signer**." },
+        { "heading": "Agent-controlled browser", "type": "text", "content": "POSTs the assertion in a top-level form. **Not** the user's ordinary browser." },
+        { "heading": "Company", "type": "text", "content": "Its `web.browser_session_endpoint` verifies it, accepts its `jti` once, sets a cookie." }
+      ],
+      "notes": "The agent signs the assertion through Reactor. A browser it controls posts it to the endpoint that discovery advertised. The company verifies the assertion, records it in a replay cache, and sets its own Session cookie."
+    },
+    {
+      "type": "flow",
+      "title": "Joining the Session",
+      "items": [
+        { "label": "1", "title": "Validate", "detail": "HTTPS endpoint, company-domain return_to" },
+        { "label": "2", "title": "Sign", "detail": "iss, pairwise sub, session_id, jti; typ poppy-browser+jwt" },
+        { "label": "3", "title": "POST", "detail": "The assertion, in the form body" },
+        { "label": "4", "title": "Verify", "detail": "Signature, audience, owner, lifetime, one use" },
+        { "label": "5", "title": "Cookie", "detail": "303, then GET return_to", "current": true }
+      ],
+      "notes": "The agent checks the endpoint and where it will return to, builds the claims and signs them with the distinct type poppy-browser+jwt. The browser posts it. The company verifies it, accepts the jti once, answers 303 with a cookie, and the browser lands on the requested page."
+    },
+    {
+      "type": "bullets",
+      "title": "Agent responsibilities",
+      "icon": "check",
+      "items": [
+        "The advertised HTTPS endpoint is the exact audience",
+        "`return_to` only on the company's domain or a subdomain",
+        "The pairwise User ID and Session ID that belong together",
+        "At most **60 seconds** of life; a `jti` of at least 128 bits",
+        "A top-level form POST: never a query string, never the user's browser"
+      ],
+      "notes": "BrowserSessionClient resolves the clock, randomness, signing and the form POST through Reactor. It returns only the endpoint, the safe return location and the expiry; the compact assertion never leaves the host."
+    },
+    {
+      "type": "bullets",
+      "title": "Company responsibilities",
+      "icon": "check",
+      "items": [
+        "ES256 or RS256 signature against the agent's verified JWKS",
+        "Exact `poppy-browser+jwt` type and endpoint audience",
+        "Expected client, pairwise User ID, active Session, safe return target",
+        "Atomic one-use acceptance of `(client_id, jti)` until expiry"
+      ],
+      "notes": "verify_browser_assertion in Python and verifyBrowserAssertion in TypeScript's server entry do these checks, including a lifetime of 60 seconds at most. Creating the cookie is left to the company's web framework, on purpose."
+    },
+    {
+      "type": "statement",
+      "title": "The company's cookie",
+      "statement": "`Secure`, `HttpOnly`, `SameSite` Lax or None, and it **never outlives** the PAP Session.",
+      "notes": "The cookie follows later sign-in, sign-out and scope changes. In the reference companies, the __Host-poppy_session cookie has no lifetime of its own, so signing out reaches the website on its next request."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Never in a URL or model context", "type": "bullets", "items": ["The compact assertion", "The signing key", "The company's cookie"] },
+      "right": { "heading": "What the tool returns", "type": "bullets", "items": ["The endpoint", "A safe return location", "The expiry", "Boolean policy evidence"] },
+      "notes": "The assertion travels only in the form body, from the agent's own browser. What the model gets back is the endpoint, where the browser landed, and yes-or-no evidence that each rule held."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples sign a real ES256 assertion, verify it, then replay it and see it refused",
+      "notes": "Both examples pass a real assertion through a Reactor form POST contribution, verify it, and submit it a second time to show replay rejection. Upstream's Web browsing section has the rules in full."
+    }
+  ]
+}

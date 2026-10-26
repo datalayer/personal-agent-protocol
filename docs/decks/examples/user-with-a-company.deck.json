@@ -1,0 +1,94 @@
+{
+  "deck": {
+    "title": "A user with a company",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "A user with a company",
+      "subtitle": "One user, one company, from a first question to a confirmed exchange and sign-out",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Ada's jacket is not warm enough, and she asks her personal agent, Atlas, to exchange it at Manzanita Outfitters. This example is the whole journey, with every PAP feature it needs, end to end."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Ada", "type": "text", "content": "The user. She signs in on Manzanita's page and approves the exchange." },
+        { "heading": "Atlas", "type": "text", "content": "Her personal agent, with a real **ES256** identity. Its host holds every credential." },
+        { "heading": "Manzanita", "type": "text", "content": "The **reference company**, assembled from Reactor contributions." }
+      ],
+      "notes": "Both sides come from this SDK. Atlas and Manzanita talk real HTTP over ASGI in one process, with no network, and there is no model anywhere in the protocol path."
+    },
+    {
+      "type": "flow",
+      "title": "Getting to a conversation",
+      "items": [
+        { "label": "1", "title": "Discover", "detail": "Manzanita's PAP and OAuth metadata" },
+        { "label": "2", "title": "Signed-out Session", "detail": "Assertion and DPoP proof" },
+        { "label": "3", "title": "Ask", "detail": "Where is my jacket order?" },
+        { "label": "4", "title": "Sign in first", "detail": "An `authorization` event: sign_in_required", "current": true }
+      ],
+      "notes": "Atlas discovers Manzanita and starts a signed-out Session. When Ada asks about her order, Manzanita answers in the conversation with an authorization event: she has to sign in first."
+    },
+    {
+      "type": "flow",
+      "title": "Signing in on the company's page",
+      "items": [
+        { "label": "5", "title": "Device authorization", "detail": "For the same Session" },
+        { "label": "6", "title": "Ada approves", "detail": "On manzanita.example/device, with the code" },
+        { "label": "7", "title": "Poll", "detail": "Signed-in Session and an Account Token", "current": true }
+      ],
+      "notes": "Atlas asks for Device Sign-In on the same Session and tells Ada where to go. She enters the code and approves on Manzanita's own page. Atlas polls, and the Session is now signed in, with an Account Token."
+    },
+    {
+      "type": "flow",
+      "title": "The exchange",
+      "items": [
+        { "label": "8", "title": "Same conversation", "detail": "Exchange it for something warmer" },
+        { "label": "9", "title": "Proposal", "detail": "Operation op_1 rev 1: USD 70.00 more" },
+        { "label": "10", "title": "Ada approves", "detail": "This revision, in the host's interface" },
+        { "label": "11", "title": "Confirmed", "detail": "succeeded, with Manzanita's summary", "current": true }
+      ],
+      "notes": "The conversation carries on, now signed in. Manzanita proposes an Operation with a revision and terms. Atlas shows the summary and terms, Ada approves that exact revision, and Atlas confirms it with approved_by user."
+    },
+    {
+      "type": "bullets",
+      "title": "Performed once, then signed out",
+      "icon": "check",
+      "items": [
+        "A retried confirm returns **the same record**: performed once",
+        "The Account Token is refreshed, narrowed to `orders:read`",
+        "Sign me out: the host **revokes** the Account Token"
+      ],
+      "notes": "Atlas confirms again, as a network retry would, and gets back the same record: the exchange happened once. Then it narrows the Account Token to reading orders, and when Ada signs out, it revokes the token."
+    },
+    {
+      "type": "two-columns",
+      "title": "What the model sees",
+      "left": { "heading": "In plain words", "type": "bullets", "items": ["What the company asked", "Where Ada signed in", "What was proposed and approved", "What Manzanita did, in its own words"] },
+      "right": { "heading": "Never", "type": "bullets", "items": ["The device code", "A token", "An assertion or a proof", "The power to approve"] },
+      "notes": "The model gets the story in plain words, so it can explain the proposal to Ada. It never sees a code, token, assertion or proof, and it cannot approve anything: Ada approves in the host's interface."
+    },
+    {
+      "type": "bullets",
+      "title": "One feature per step",
+      "icon": "arrow",
+      "items": [
+        "Company discovery and Session lifecycle",
+        "Conversation control, for the `authorization` event",
+        "Device Sign-In",
+        "Operations and Account Tokens"
+      ],
+      "notes": "Each step of the journey is one feature with its own page. Follow those pages when you want the detail of a single step."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples run Ada's whole journey in one process",
+      "notes": "The same world runs in the SDK's end-to-end test, which also covers Mediated Sign-In with a one-time code, streaming, and a stranger refused with conversation_not_found. Read the company guide to build a company of your own."
+    }
+  ]
+}

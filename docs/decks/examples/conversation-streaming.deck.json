@@ -1,0 +1,87 @@
+{
+  "deck": {
+    "title": "Conversation streaming",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "Conversation streaming",
+      "subtitle": "Stream a reply over SSE, reconnect from Last-Event-ID, never act on a delta",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Some companies stream their replies as they are written. This example streams a Manzanita conversation over Server-Sent Events, through a connection that breaks in the middle of the company's first reply."
+    },
+    {
+      "type": "statement",
+      "title": "Why stream",
+      "statement": "Show the reply **as it is written**, but act only on the **complete** message.",
+      "notes": "Streaming lets the user see the company typing. The pieces, called text deltas, are for display only. The complete message event replaces them, and that is the only thing a host shows as final or acts on."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "Agent tool", "type": "text", "content": "Iterates the stream and gets messages, deltas and reconnect notices." },
+        { "heading": "ConversationClient.stream()", "type": "text", "content": "Opens the SSE stream with DPoP, reconnects, and suppresses repeats." },
+        { "heading": "Company", "type": "text", "content": "Answers `GET …/events` with `Accept: text/event-stream`." }
+      ],
+      "notes": "The agent tool consumes the stream. The SDK's stream method opens it, reconnects when it ends, and keeps track of what was delivered. The company sends SSE frames with event IDs."
+    },
+    {
+      "type": "flow",
+      "title": "The break in the middle",
+      "items": [
+        { "label": "1", "title": "evt_1", "detail": "The user's message arrives" },
+        { "label": "2", "title": "Delta", "detail": "Half of the reply, msg_r: display only" },
+        { "label": "3", "title": "Drop", "detail": "The connection breaks before msg_r completes", "current": true },
+        { "label": "4", "title": "Reconnect", "detail": "Last-Event-ID: evt_1, msg_r discarded" },
+        { "label": "5", "title": "evt_2", "detail": "The complete message: show and act on it" }
+      ],
+      "notes": "The first stream delivers evt_1 and half of the reply as a delta, then drops. The SDK yields StreamReconnected, listing msg_r as discarded, and reopens from evt_1. The company sends the reply again, this time to completion, as evt_2."
+    },
+    {
+      "type": "flow",
+      "title": "Closing the stream",
+      "items": [
+        { "label": "6", "title": "Stream ends", "detail": "The conversation is still open" },
+        { "label": "7", "title": "Reconnect", "detail": "Last-Event-ID: evt_2" },
+        { "label": "8", "title": "close()", "detail": "The agent closes the conversation" },
+        { "label": "9", "title": "evt_3", "detail": "State closed: the iterator ends", "current": true }
+      ],
+      "notes": "When the company ends a stream while the conversation is still open, the SDK reconnects from the last event handled. The agent closes the conversation, the company sends the closed state, and the iterator stops."
+    },
+    {
+      "type": "bullets",
+      "title": "What the stream guarantees",
+      "icon": "check",
+      "items": [
+        "**Deltas are display only**: `actionable` is always false",
+        "**Reconnects resume** from `Last-Event-ID`",
+        "**Partial messages are discarded**: `discarded_message_ids`",
+        "**No event twice**, in a bounded set that fails closed",
+        "**Bounded retries**: `max_reconnects`, then `stream_unavailable`"
+      ],
+      "notes": "Route deltas to a typing indicator, never to anything that acts. After too many reconnects in a row without a new event, the stream fails with stream_unavailable."
+    },
+    {
+      "type": "statement",
+      "title": "A company that does not stream",
+      "statement": "It answers JSON, the SDK raises `sse_unsupported`, and the host falls back to `events()`.",
+      "notes": "Streaming is optional for the company. When it is not offered, the host reads the same events with the long-polling iterator from the conversation events example."
+    },
+    {
+      "type": "two-columns",
+      "title": "What stays where",
+      "left": { "heading": "Host-only", "type": "bullets", "items": ["Session Token", "DPoP proofs", "Pairwise identity"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["The company's complete messages", "How many deltas and reconnects", "That nothing came twice"] },
+      "notes": "The model sees complete messages and counts, never a partial reply to act on. The token, proofs and pairwise identity stay with the host."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples stream a Manzanita conversation through a broken connection",
+      "notes": "Run the Pydantic AI example with PAP_EXAMPLE_MODEL set to the model you want. In TypeScript, the same stream is a for-await loop over client.stream, where item.kind tells deltas and reconnects apart."
+    }
+  ]
+}

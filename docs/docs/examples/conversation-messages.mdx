@@ -3,7 +3,12 @@ title: Conversation messages
 description: Start and continue a PAP conversation with safe idempotent message IDs.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/conversation-messages.deck.json';
+
 # Conversation messages
+
+<Deck spec={deck} />
 
 PAP message IDs are user-global idempotency keys. Generate one with at least
 128 random bits, retain the complete `Message`, and retry that same object after

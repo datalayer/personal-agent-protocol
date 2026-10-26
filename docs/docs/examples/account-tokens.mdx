@@ -3,7 +3,12 @@ title: Account Tokens
 description: Keep a user signed in with a rotating Account Token that never leaves the host.
 ---
 
+import Deck from '@theme/Deck';
+import deck from '@site/decks/examples/account-tokens.deck.json';
+
 # Account Tokens
+
+<Deck spec={deck} />
 
 A sign-in returns an Account Token (the OAuth `refresh_token`). The personal
 agent uses it only at the company's token and revocation endpoints, to sign a

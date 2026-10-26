@@ -1,0 +1,75 @@
+{
+  "deck": {
+    "title": "DPoP proof",
+    "subtitle": "Personal Agent Protocol, by example",
+    "template": "datalayer"
+  },
+  "slides": [
+    {
+      "type": "title",
+      "title": "DPoP proof",
+      "subtitle": "Bind a one-use proof to an HTTP request, an access token and a protected key",
+      "meta": "Personal Agent Protocol · example",
+      "notes": "Demonstrating Proof of Possession, DPoP for short, is how PAP makes sure a token on its own is never enough. This example makes a real proof, verifies it, and then shows a replay being refused."
+    },
+    {
+      "type": "statement",
+      "title": "Why a proof",
+      "statement": "A stolen bearer value is **not sufficient** on its own: every request also needs a fresh proof from the key.",
+      "notes": "With a plain bearer token, whoever copies it can use it. With DPoP, each request carries a proof signed by a key the host protects, so a copied token without the key is useless."
+    },
+    {
+      "type": "three-columns",
+      "title": "Who takes part",
+      "columns": [
+        { "heading": "PAP host", "type": "text", "content": "Asks for a proof for each request, and sends it with the Session Token." },
+        { "heading": "Reactor key store / signer", "type": "text", "content": "Holds the key and signs a fresh **ES256** proof." },
+        { "heading": "Company API", "type": "text", "content": "Verifies the proof and records its `jti` in a **replay cache**." }
+      ],
+      "notes": "The host asks for a proof covering one request. The Reactor key store signs it without ever giving the key out. The company verifies it, and remembers it so it can never be used twice."
+    },
+    {
+      "type": "comparison",
+      "title": "What a proof covers",
+      "columns": ["Covers", "Binds the proof to"],
+      "rows": [
+        { "label": "htm", "values": ["Method", "This HTTP method"] },
+        { "label": "htu", "values": ["Normalized URL", "This target, without query or fragment"] },
+        { "label": "ath", "values": ["Token hash", "This token, without embedding it"] },
+        { "label": "nonce", "values": ["Company nonce", "Freshness the server chose"] },
+        { "label": "jti", "values": ["Unique ID", "One use only"] }
+      ],
+      "notes": "Each claim narrows where the proof works. Method and URL tie it to one request target. The token hash ties it to the token without putting the token in the proof. A nonce adds freshness from the company, and the jti makes it single-use."
+    },
+    {
+      "type": "mermaid",
+      "title": "First use, then a replay",
+      "diagram": "sequenceDiagram\n  participant H as PAP host\n  participant C as Company API\n  participant X as Replay cache\n  H->>C: Request, token, proof\n  C->>X: Record jti until expiry\n  X-->>C: Accepted\n  C-->>H: API response\n  H->>C: Same proof again\n  C->>X: Record jti\n  X-->>C: Already seen\n  C-->>H: Safe replay error",
+      "notes": "The first time, the company verifies the proof and records its identifier atomically, and the request goes through. The same proof a second time is already in the cache, so the company answers with a safe replay error."
+    },
+    {
+      "type": "bullets",
+      "title": "What the example proves",
+      "icon": "check",
+      "items": [
+        "A new proof and `jti` for every attempt, retry and redirect",
+        "A nonce challenge means a **fresh** proof, never an edited or replayed one",
+        "Replay protection is the server's job, **atomic** across its fleet"
+      ],
+      "notes": "Retries and redirects always get a new proof. When a company asks for a nonce, the host signs a new proof with it rather than changing the old one. And the company's replay check must be atomic across every server it runs, or a replay could slip through on another node."
+    },
+    {
+      "type": "two-columns",
+      "title": "What the model sees",
+      "left": { "heading": "Visible", "type": "bullets", "items": ["Policy booleans: method, URL, token and nonce bound", "Signature verified, replay rejected"] },
+      "right": { "heading": "Never", "type": "bullets", "items": ["The proof or the token", "The nonce or the `jti`", "The JWK, thumbprint or private key"] },
+      "notes": "The tool returns only yes-or-no evidence about the policy. The proof, the token, the nonce, the key and everything that identifies it stay in host code."
+    },
+    {
+      "type": "closing",
+      "title": "Run it yourself",
+      "cta": "The Pydantic AI and Agent Runtimes examples create, verify and replay a real ES256 proof",
+      "notes": "Run either example to see the replay refused. For production key custody and replay stores, read the JOSE and DPoP guide, then the DPoP transport example for retries and redirects."
+    }
+  ]
+}

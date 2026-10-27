@@ -65,7 +65,6 @@ export interface ConversationStreamOptions extends ConversationRequestOptions {
 export interface ConversationRequestOptions {
   readonly token: SessionToken;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
   readonly issuer: string;
   readonly cursor?: string;
   readonly wait?: number;
@@ -238,7 +237,6 @@ export class ConversationClient {
     const response = await this.#transport.request("GET", target, {
       token: options.token,
       tenantId: options.tenantId,
-      pairwiseUserId: options.pairwiseUserId,
       issuer: options.issuer,
       headers: { Accept: "application/json" },
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -422,7 +420,6 @@ export class ConversationClient {
       const response = await this.#transport.request("GET", url, {
         token: options.token,
         tenantId: options.tenantId,
-        pairwiseUserId: options.pairwiseUserId,
         issuer: options.issuer,
         headers: {
           Accept: "text/event-stream",
@@ -496,7 +493,6 @@ export class ConversationClient {
       {
         token: options.token,
         tenantId: options.tenantId,
-        pairwiseUserId: options.pairwiseUserId,
         issuer: options.issuer,
         headers: { "Content-Type": "application/json" },
         body: "{}",
@@ -550,7 +546,6 @@ export class ConversationClient {
     const response = await this.#transport.request("POST", target.toString(), {
       token: options.token,
       tenantId: options.tenantId,
-      pairwiseUserId: options.pairwiseUserId,
       issuer: options.issuer,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

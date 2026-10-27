@@ -24,6 +24,7 @@ import {
   DpopFetchClient,
   OperationError,
   OperationsClient,
+  ProofError,
   SessionClient,
   TokenStores,
   approve,
@@ -74,7 +75,7 @@ async function world({ durable = false } = {}) {
   w.accounts = new AccountTokenClient({ reactor: w.host.reactor, fetch });
   w.company = await discoverCompany("manzanita.example", { reactor: w.host.reactor });
   w.metadata = w.company.oauthMetadata;
-  w.who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: w.metadata.issuer };
+  w.who = { tenantId: TENANT, issuer: w.metadata.issuer };
   w.endpoint = w.company.document.agent.protocols[0].endpoint;
   w.ops = w.company.document.extensions.operations.endpoint;
   w.context = {
@@ -94,7 +95,7 @@ async function world({ durable = false } = {}) {
       tokenEndpoint: w.metadata.token_endpoint,
       tenantId: TENANT,
     });
-  w.message = (text, id = w.conversations.generateMessageId()) => ({ id, sender: "human", text });
+  w.message = (text, id = w.conversations.generateMessageId()) => ({ id, author: { type: "human" }, text });
   w.last = (method, path) =>
     [...wire].reverse().find((item) => (item.init.method ?? "GET") === method && new URL(item.url).pathname === path);
   w.resend = (item) => network(item.url, item.init);
@@ -119,10 +120,9 @@ async function deviceSignIn(w, session) {
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
-    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-    poppyDomains: w.metadata.poppy_domains,
+    sessionKey: session.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -148,8 +148,7 @@ async function beginDirect(w, session) {
     redirectUri: "https://atlas.example/oauth/callback",
     scopes: ["orders:read"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
   });
   const callbackUrl = await w.shop.approveAuthorization(w.host.browser.requestId, { accountId: "acct_ada" });
   return { client, callbackUrl };
@@ -192,16 +191,18 @@ test("cross-tenant access is refused", async () => {
   const w = await world();
   const { token } = await deviceSignIn(w, await w.start());
   const page = await w.conversations.start(w.endpoint, w.message("Where is my jacket order?"), { token, wait: 0, ...w.who });
+  // Another tenant of Atlas presents the token: its key custody holds no Session Key of
+  // Ada's, so it cannot even make the proof the token needs (§4.3).
   const other = { ...w.who, tenantId: "another-tenant" };
-  assert.equal(await probe(w, token, other), 401);
+  await assert.rejects(probe(w, token, other), (error) => error instanceof ProofError);
   await assert.rejects(
     w.conversations.readEvents(w.endpoint, page.conversation_id, { token, ...other }),
-    (error) => error instanceof ConversationError && error.statusCode === 401,
+    (error) => error instanceof ProofError,
   );
   const stranger = "usr_somebody_else_000000";
   const theirs = await w.start(stranger);
   await assert.rejects(
-    w.conversations.readEvents(w.endpoint, page.conversation_id, { token: theirs, ...w.who, pairwiseUserId: stranger }),
+    w.conversations.readEvents(w.endpoint, page.conversation_id, { token: theirs, ...w.who }),
     (error) => error instanceof ConversationError && error.code === "conversation_not_found",
   );
   assert.equal(await probe(w, token), 200);
@@ -275,7 +276,7 @@ test("rollback is safe", async () => {
   const session = await w.start();
   const { reference } = await deviceSignIn(w, session);
   const before = await w.tokens.get(reference);
-  const refreshed = await w.accounts.refresh(reference, { context: w.context, sessionId: session.sessionId });
+  const refreshed = await w.accounts.refresh(reference, { context: w.context, sessionKey: session.sessionKey });
   assert.equal(refreshed.rotated, true);
   const rotated = await w.tokens.get(reference);
   const operation = await proposal(w, refreshed.token);
@@ -285,9 +286,9 @@ test("rollback is safe", async () => {
   // The previous release (no website yet), over the same store (and so its replay cache).
   await w.deploy({ web: false });
   await w.tokens.put(reference, before);
-  assert.equal((await w.accounts.refresh(reference, { context: w.context, sessionId: session.sessionId })).status, "signed_out");
+  assert.equal((await w.accounts.refresh(reference, { context: w.context, sessionKey: session.sessionKey })).status, "signed_out");
   await w.tokens.put(reference, rotated);
-  const current = await w.accounts.refresh(reference, { context: w.context, sessionId: session.sessionId });
+  const current = await w.accounts.refresh(reference, { context: w.context, sessionKey: session.sessionKey });
   assert.equal(current.status, "signed_in");
   const again = await w.operations.confirm(w.ops, operation, { approval: await approve(operation), token: current.token, ...w.who });
   assert.equal(again.operation.state, "succeeded");
@@ -300,20 +301,20 @@ test("revocation is safe", async () => {
   const session = await w.start();
   const { token, reference } = await deviceSignIn(w, session);
   const second = await w.start();
-  const other = await w.accounts.refresh(reference, { context: w.context, sessionId: second.sessionId });
+  const other = await w.accounts.refresh(reference, { context: w.context, sessionKey: second.sessionKey });
   assert.equal(other.status, "signed_in");
   const revoked = await w.accounts.revoke(reference, { context: w.context });
   assert.equal(revoked.revoked, true);
   assert.equal(await probe(w, token), 403);
   assert.equal(await probe(w, other.token), 403);
-  assert.equal((await w.accounts.refresh(reference, { context: w.context, sessionId: session.sessionId })).status, "signed_out");
+  assert.equal((await w.accounts.refresh(reference, { context: w.context, sessionKey: session.sessionKey })).status, "signed_out");
   const renewed = await new SessionClient({ reactor: w.host.reactor, fetch: w.fetch }).renew({
     clientId: w.identity.clientId,
     pairwiseUserId: PAIRWISE,
     issuer: w.metadata.issuer,
     tokenEndpoint: w.metadata.token_endpoint,
     tenantId: TENANT,
-    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
   });
   assert.equal(renewed.signedIn, false);
   assert.equal(await probe(w, renewed), 403);
@@ -325,16 +326,16 @@ test("rotation is safe", async () => {
   const { reference } = await deviceSignIn(w, session);
   const first = await w.tokens.get(reference);
   const results = await Promise.all([
-    w.accounts.refresh(reference, { context: w.context, sessionId: session.sessionId }),
-    w.accounts.refresh(reference, { context: w.context, sessionId: session.sessionId }),
+    w.accounts.refresh(reference, { context: w.context, sessionKey: session.sessionKey }),
+    w.accounts.refresh(reference, { context: w.context, sessionKey: session.sessionKey }),
   ]);
   assert.deepEqual(results.map((r) => [r.status, r.rotated]), [["signed_in", true], ["signed_in", true]]);
   const live = await w.tokens.get(reference);
   assert.notEqual(live.reveal(), first.reveal());
   await w.tokens.put(reference, first);
-  assert.equal((await w.accounts.refresh(reference, { context: w.context, sessionId: session.sessionId })).status, "signed_out");
+  assert.equal((await w.accounts.refresh(reference, { context: w.context, sessionKey: session.sessionKey })).status, "signed_out");
   await w.tokens.put(reference, live);
-  assert.equal((await w.accounts.refresh(reference, { context: w.context, sessionId: session.sessionId })).status, "signed_in");
+  assert.equal((await w.accounts.refresh(reference, { context: w.context, sessionKey: session.sessionKey })).status, "signed_in");
 
   // The agent's signing key: both keys published during the overlap, then the old retired.
   const newer = await agentIdentity({ domain: "atlas.example", name: "Atlas", kid: "key-2" });

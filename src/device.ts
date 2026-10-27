@@ -6,12 +6,11 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { AuthorizationError } from "./errors.js";
+import { AuthorizationError, ProtocolValidationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import {
   AuthorizationStateStores,
   Clocks,
-  DpopProofProviders,
   RandomSources,
   Signers,
   TokenStores,
@@ -21,9 +20,12 @@ import { SecretValue } from "./secret.js";
 import { refusalDetails, refuseRedirect } from "./refusals.js";
 import {
   JWT_CLIENT_ASSERTION,
+  SESSION_KEY,
+  SessionClient,
   buildClientAssertionClaims,
-  parseSessionToken,
+  sessionTokenFromResponse,
   type SessionToken,
+  type TokenResponse,
 } from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
 import { readLimitedText } from "./limits.js";
@@ -58,16 +60,16 @@ function within(host: string, domain: string): boolean {
 /**
  * Whether a device sign-in link may be shown for this company (§4.6).
  *
- * Its host is the host of `auth.issuer` or a domain in the issuer's `poppy_domains`, or
- * a subdomain of either; otherwise a company could pass off another company's sign-in
+ * Its host is the host of `auth.issuer` or of a URL in the issuer's `protected_resources`,
+ * or a subdomain of either; otherwise a company could pass off another company's sign-in
  * page as its own.
  */
 export function verificationHostAllowed(
   url: string,
-  options: { readonly issuer: string; readonly poppyDomains: readonly string[] },
+  options: { readonly issuer: string; readonly protectedResources: readonly string[] },
 ): boolean {
   const host = hostOf(url);
-  const allowed = [hostOf(options.issuer), ...options.poppyDomains.map((domain) => domain.toLowerCase().replace(/\.$/, ""))];
+  const allowed = [hostOf(options.issuer), ...options.protectedResources.map(hostOf)];
   return host !== "" && allowed.some((domain) => domain !== "" && within(host, domain));
 }
 
@@ -166,8 +168,7 @@ interface PendingDeviceSignIn {
   readonly issuer: string;
   readonly clientId: string;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
-  readonly sessionId: string;
+  readonly sessionKey: string;
   readonly scopes: readonly string[];
   readonly expiresAt: Date;
   readonly nextPollAt: Date;
@@ -221,16 +222,19 @@ export interface DeviceSignInBeginOptions {
   readonly clientId: string;
   readonly scopes: readonly string[];
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
-  readonly sessionId: string;
+  /**
+   * The Session to sign in: the polls carry its proofs, and the company binds the device
+   * code to the key of the first (§4.6).
+   */
+  readonly sessionKey: string;
   /** The company's, from its poppy.json: named with the link and the code (§4.6). */
   readonly organization: { readonly name: string; readonly domain: string };
   /**
-   * The issuer's `poppy_domains` (OAuth metadata): the verification link is refused
-   * (`unsafe_verification_uri`) unless its host is the issuer's or one of these, or a
-   * subdomain of either (§4.6).
+   * The issuer's `protected_resources` (OAuth metadata): the verification link is
+   * refused (`unsafe_verification_uri`) unless its host is the issuer's or one of these
+   * resources', or a subdomain of either (§4.6).
    */
-  readonly poppyDomains: readonly string[];
+  readonly protectedResources: readonly string[];
   readonly signal?: AbortSignal;
 }
 
@@ -245,6 +249,7 @@ export class DeviceSignInClient {
   readonly #reactor: ReactorPlatformView;
   readonly #fetch: typeof globalThis.fetch;
   readonly #maxResponseBytes: number;
+  readonly #sessions: SessionClient;
 
   constructor(options: DeviceSignInClientOptions) {
     const fetcher = options.fetch ?? globalThis.fetch;
@@ -254,6 +259,7 @@ export class DeviceSignInClient {
     this.#reactor = options.reactor;
     this.#fetch = fetcher;
     this.#maxResponseBytes = limit;
+    this.#sessions = new SessionClient({ reactor: options.reactor, fetch: fetcher, maxResponseBytes: limit });
   }
 
   begin(options: DeviceSignInBeginOptions): Promise<DeviceSignInStart> {
@@ -297,7 +303,7 @@ export class DeviceSignInClient {
     if (!response.ok) throw this.#remoteError(response, payload, "Company refused Device Sign-In");
     const authorization = parseDeviceAuthorization(payload);
     for (const link of [authorization.verificationUri, authorization.verificationUriComplete]) {
-      if (link !== undefined && !verificationHostAllowed(link, { issuer, poppyDomains: options.poppyDomains })) {
+      if (link !== undefined && !verificationHostAllowed(link, { issuer, protectedResources: options.protectedResources })) {
         throw new AuthorizationError(
           "unsafe_verification_uri",
           "The device sign-in link is not on the company's issuer or its domains",
@@ -314,8 +320,7 @@ export class DeviceSignInClient {
       issuer,
       clientId,
       tenantId: options.tenantId,
-      pairwiseUserId: options.pairwiseUserId,
-      sessionId: options.sessionId,
+      sessionKey: options.sessionKey,
       scopes: requestedScopes,
       expiresAt,
       nextPollAt: new Date(now.getTime() + authorization.interval * 1000),
@@ -366,99 +371,58 @@ export class DeviceSignInClient {
       await store.put(reference, pending, { expiresAt: pending.expiresAt });
       return { status: "pending", retryAt: pending.nextPollAt, grantedScopes: [], missingScopes: [] };
     }
+    let response: TokenResponse;
     try {
-      const result = await this.#pollToken(pending, now, signal);
-      if (result.response.ok) return await this.#complete(result.response, result.payload, pending);
-      const source = typeof result.payload === "object" && result.payload !== null ? result.payload : {};
-      const remote = "error" in source ? (source as { error?: unknown }).error : undefined;
-      if (remote === "authorization_pending" || remote === "slow_down") {
-        const interval = pending.interval + (remote === "slow_down" ? 5 : 0);
-        const resumed = { ...pending, interval, nextPollAt: new Date(now.getTime() + interval * 1000) };
-        await store.put(reference, resumed, { expiresAt: pending.expiresAt });
-        return { status: "pending", retryAt: resumed.nextPollAt, grantedScopes: [], missingScopes: [] };
-      }
-      if (remote === "access_denied" || remote === "expired_token") {
-        throw new AuthorizationError(remote, "Device Sign-In ended without authorization");
-      }
-      await store.put(reference, pending, { expiresAt: pending.expiresAt });
-      throw this.#remoteError(result.response, result.payload, "Company refused the device token request");
-    } catch (cause) {
-      if (cause instanceof AuthorizationError && ["access_denied", "expired_token"].includes(cause.code)) {
-        throw cause;
-      }
-      const existing = await store.take(reference);
-      if (existing === undefined) await store.put(reference, pending, { expiresAt: pending.expiresAt });
-      throw cause;
-    }
-  }
-
-  async #pollToken(pending: PendingDeviceSignIn, now: Date, signal?: AbortSignal) {
-    const random = firstContribution(this.#reactor, RandomSources, "random source");
-    const signer = firstContribution(this.#reactor, Signers, "signer");
-    const dpop = firstContribution(this.#reactor, DpopProofProviders, "DPoP proof provider");
-    let nonce: string | undefined;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const assertion = await signer.sign(this.#claims(pending.clientId, pending.issuer, now, random.bytes(16)), {
-        purpose: "client_assertion",
-      });
-      const proof = await dpop.create({
-        method: "POST",
-        url: pending.tokenEndpoint,
-        tenantId: pending.tenantId,
-        subject: pending.pairwiseUserId,
+      response = await this.#sessions.tokenRequest({
+        clientId: pending.clientId,
         issuer: pending.issuer,
-        ...(nonce === undefined ? {} : { nonce }),
+        tokenEndpoint: pending.tokenEndpoint,
+        tenantId: pending.tenantId,
+        sessionKey: pending.sessionKey,
+        form: () => ({ grant_type: DEVICE_CODE_GRANT, device_code: pending.deviceCode.reveal() }),
+        error: AuthorizationError,
+        ...(signal === undefined ? {} : { signal }),
       });
-      const response = await this.#request(
-        pending.tokenEndpoint,
-        new URLSearchParams({
-          grant_type: DEVICE_CODE_GRANT,
-          device_code: pending.deviceCode.reveal(),
-          session_id: pending.sessionId,
-          client_id: pending.clientId,
-          client_assertion_type: JWT_CLIENT_ASSERTION,
-          client_assertion: assertion.reveal(),
-        }),
-        proof.reveal(),
-        signal,
-      );
-      const payload = await this.#decode(response, "Device token");
-      const source = typeof payload === "object" && payload !== null ? payload : {};
-      const remote = "error" in source ? (source as { error?: unknown }).error : undefined;
-      if (remote === "use_dpop_nonce" && attempt === 0) {
-        // The token endpoint's nonce, as an OAuth error (§4.3): retried once with it.
-        nonce = response.headers.get("dpop-nonce") ?? undefined;
-        if (!nonce) {
-          throw new AuthorizationError("missing_dpop_nonce", "Company requested a DPoP nonce but did not send one", {
-            statusCode: response.status,
+    } catch (cause) {
+      if (cause instanceof AuthorizationError) {
+        if (cause.code === "authorization_pending" || cause.code === "slow_down") {
+          const interval = pending.interval + (cause.code === "slow_down" ? 5 : 0);
+          const resumed = { ...pending, interval, nextPollAt: new Date(now.getTime() + interval * 1000) };
+          await store.put(reference, resumed, { expiresAt: pending.expiresAt });
+          return { status: "pending", retryAt: resumed.nextPollAt, grantedScopes: [], missingScopes: [] };
+        }
+        if (cause.code === "access_denied" || cause.code === "expired_token") {
+          throw new AuthorizationError(cause.code, "Device Sign-In ended without authorization", {
+            cause,
           });
         }
-        continue;
       }
-      return { response, payload };
+      await store.put(reference, pending, { expiresAt: pending.expiresAt });
+      throw cause;
     }
-    throw new AuthorizationError("use_dpop_nonce", "Company rejected the refreshed DPoP proof");
+    return this.#complete(response, pending);
   }
 
-  async #complete(response: Response, payload: unknown, pending: PendingDeviceSignIn): Promise<DeviceSignInPoll> {
-    let token: SessionToken;
-    try {
-      token = parseSessionToken(payload);
-    } catch (cause) {
-      throw new AuthorizationError("invalid_token_response", "Device token response is malformed", {
-        statusCode: response.status,
-        cause,
-      });
-    }
-    if (token.tokenType !== "DPoP" || !token.signedIn || token.sessionId !== pending.sessionId) {
+  async #complete(response: TokenResponse, pending: PendingDeviceSignIn): Promise<DeviceSignInPoll> {
+    if (response.tokenType !== "DPoP") {
       throw new AuthorizationError(
         "invalid_token_response",
-        "Device Sign-In must return the signed-in proof-bound Session",
-        { statusCode: response.status },
+        "Device Sign-In must return a DPoP Session Token",
       );
     }
+    let token: SessionToken;
+    try {
+      token = sessionTokenFromResponse(response, {
+        sessionKey: pending.sessionKey,
+        signedIn: true,
+        requestedScopes: pending.scopes,
+      });
+    } catch (cause) {
+      if (!(cause instanceof ProtocolValidationError)) throw cause;
+      throw new AuthorizationError("invalid_token_response", cause.message, { cause });
+    }
     if (token.scopes.some((scope) => !pending.scopes.includes(scope))) {
-      throw new AuthorizationError("scope_escalation", "Company returned an unrequested scope");
+      throw new AuthorizationError("scope_escalation", "Company returned a scope that was not requested");
     }
     if (!token.accountToken) {
       throw new AuthorizationError("missing_account_token", "Device Sign-In did not return an Account Token");
@@ -487,14 +451,8 @@ export class DeviceSignInClient {
 
   #validateContext(options: DeviceSignInBeginOptions): void {
     if (!options.tenantId || options.tenantId.length > 256) throw new RangeError("Invalid tenantId");
-    const identifiers: ReadonlyArray<readonly [string, string]> = [
-      ["pairwiseUserId", options.pairwiseUserId],
-      ["sessionId", options.sessionId],
-    ];
-    for (const [label, value] of identifiers) {
-      if (!/^[A-Za-z0-9_-]{1,256}$/.test(value)) {
-        throw new AuthorizationError("invalid_context", `Invalid ${label}`);
-      }
+    if (!SESSION_KEY.test(options.sessionKey)) {
+      throw new AuthorizationError("invalid_context", "sessionKey must be a JWK SHA-256 thumbprint");
     }
   }
 

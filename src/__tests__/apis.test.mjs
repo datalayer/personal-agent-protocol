@@ -40,7 +40,7 @@ async function world() {
   const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const session = await new SessionClient({ reactor: host.reactor, fetch }).start({
     clientId: identity.clientId,
     pairwiseUserId: PAIRWISE,
@@ -60,10 +60,9 @@ async function signIn(w, granted) {
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: w.session.sessionId,
-    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-    poppyDomains: w.metadata.poppy_domains,
+    sessionKey: w.session.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada", ...(granted ? { scopes: granted } : {}) });
   w.clock.advance(started.pollInterval);
@@ -87,9 +86,9 @@ test("signed out, then signed in: a read and a proposed exchange", async () => {
   const api = new ApiClient({ transport: w.transport });
   assert.equal(openapiUrl(w.company.document), "https://manzanita.example/api/openapi.json");
 
-  // Signed out: the API says which scope signing in would give.
+  // Signed out: the API names the scopes the request needs (§6).
   const signedOut = await refusal(api.call("GET", ORDERS, { ...w.who, token: w.session }));
-  assert.equal(signedOut.code, "sign_in_required");
+  assert.equal(signedOut.code, "insufficient_scope");
   assert.deepEqual(signedOut.details, { scope: "orders:read" });
 
   const token = await signIn(w);

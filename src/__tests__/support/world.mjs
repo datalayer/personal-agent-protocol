@@ -17,10 +17,11 @@ import { exportJWK, generateKeyPair, importJWK } from "jose";
 
 import {
   AuthorizationStateStores,
-  BrowserFormPosts,
   BrowserHandoffs,
+  BrowserJoins,
   Clocks,
   DpopProofProviders,
+  InMemorySessionKeys,
   JoseDpopProofProvider,
   ProtectedInputs,
   SecretValue,
@@ -97,7 +98,11 @@ function bodyOf(init) {
 }
 
 function toResponse(answer) {
-  const headers = new Headers(answer.headers);
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(answer.headers ?? {})) {
+    // Several cookies in one `Set-Cookie`, one per line, are one header each.
+    for (const line of name.toLowerCase() === "set-cookie" ? value.split("\n") : [value]) headers.append(name, line);
+  }
   if (answer.stream) return new Response(ReadableStream.from(answer.stream), { status: answer.status, headers });
   let payload = null;
   if (typeof answer.body === "string") payload = answer.body;
@@ -236,13 +241,13 @@ export class ScriptedInput {
 }
 
 /**
- * A personal agent's Reactor host: its signer, DPoP keys, clock, stores, browser, input,
- * and, when given, its own controlled browser (`pap.browserFormPost`).
+ * A personal agent's Reactor host: its signer, Session Keys, clock, stores, browser,
+ * input, and, when given, its own controlled browser (`pap.browserJoin`).
  */
 export async function agentHost({ identity, fetch, clock, answers = [], controlledBrowser }) {
   const state = new Map();
   const tokens = new Map();
-  const keys = new Map();
+  const sessionKeys = new InMemorySessionKeys();
   const browser = new ScriptedBrowser(fetch);
   const input = new ScriptedInput(...answers);
   const now = () => clock.now();
@@ -254,23 +259,7 @@ export async function agentHost({ identity, fetch, clock, answers = [], controll
         { point: Signers, value: identity.signer, options: { id: "agent-key" } },
         {
           point: DpopProofProviders,
-          value: new JoseDpopProofProvider({
-            now,
-            async resolveKey(request) {
-              const key = `${request.tenantId}\u0000${request.subject}\u0000${request.issuer}`;
-              // One key per (tenant, user, company), even for requests made at the same time.
-              if (!keys.has(key)) {
-                keys.set(
-                  key,
-                  generateKeyPair("ES256", { extractable: true }).then(async (pair) => ({
-                    privateKey: pair.privateKey,
-                    publicJwk: await exportJWK(pair.publicKey),
-                  })),
-                );
-              }
-              return keys.get(key);
-            },
-          }),
+          value: new JoseDpopProofProvider({ now, keys: sessionKeys }),
           options: { id: "dpop-keys" },
         },
         {
@@ -294,11 +283,11 @@ export async function agentHost({ identity, fetch, clock, answers = [], controll
         { point: ProtectedInputs, value: input, options: { id: "trusted-input" } },
         ...(controlledBrowser === undefined
           ? []
-          : [{ point: BrowserFormPosts, value: controlledBrowser, options: { id: "controlled-browser" } }]),
+          : [{ point: BrowserJoins, value: controlledBrowser, options: { id: "controlled-browser" } }]),
       ],
     },
   ]);
-  return { reactor, browser, input, tokens };
+  return { reactor, browser, input, tokens, sessionKeys, state };
 }
 
 /** The system clock, for parties in different processes. */

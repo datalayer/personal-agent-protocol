@@ -15,13 +15,14 @@
  * the Python `personal_agent_protocol.company.service` and answers the same
  * requests with the same responses.
  *
- * What it implements of draft 0.2 and Operations v1:
+ * What it implements of draft 0.3 and Operations v1:
  *
  * - Discovery (`/.well-known/poppy.json`) and OAuth metadata
  *   (`/.well-known/oauth-authorization-server`), one issuer on the company's
  *   own domain.
  * - Sessions (§4.2): the JWT-bearer grant with a verified client assertion and
- *   Session assertion, DPoP-bound tokens, renewal by `session_id`.
+ *   Session assertion, DPoP-bound tokens; each Session named by its key's thumbprint
+ *   (the Session Key), renewed with a proof from it, its key refused once it ends.
  * - Direct Sign-In (§4.5): the company's consent page, the user's decision as
  *   `approveAuthorization` / `denyAuthorization`, PKCE, one-use codes.
  * - Device Sign-In (§4.6) with `authorization_pending` and `slow_down`, and the
@@ -46,12 +47,13 @@
  *   its url (`resource` = that url), its protected resource metadata (RFC 9728),
  *   and tools that propose operations in `structuredContent` (Operations §4.2).
  *   With `mcpDpop` (the default) the server supports DPoP: personal agents get
- *   DPoP tokens for it and send proofs; without it, they get Bearer tokens, which
- *   work nowhere else.
+ *   DPoP tokens for it and send proofs; without it, they get Bearer tokens by Token
+ *   Exchange, which work nowhere else.
  * - Feedback (§8), with `feedback` (the default): reports of tasks the protocol
  *   can't do, kept for the company's operator (`feedbackReports`).
- * - Web browsing (§5), with `web: true`: the browser-session endpoint sets the
- *   company's own cookie for a Session from a verified browser assertion, and each
+ * - Web browsing (§5), with `web: true`: the browser-session endpoint gives a join form
+ *   with a one-time code and sets the company's own cookie for the Session whose key
+ *   signed a proof over that code, and each
  *   operation's `url` shows it in that Session, where the user can confirm or cancel
  *   it: the same operation, performed at most once whichever channel confirms it.
  * - Taking a company down: its owner reads what is under way (`openWork`), settles
@@ -63,16 +65,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
-import { decodeJwt, decodeProtectedHeader, importJWK, type JWK } from "jose";
 
 import { IDEMPOTENCY_KEY, WRITE_METHODS } from "../apis.js";
-import { verifyBrowserAssertion, type VerifiedBrowserAssertion } from "../browser-server.js";
 import { verifyDpopProof } from "../crypto.js";
 import { ProofError, ProtocolValidationError, SessionError } from "../errors.js";
 import { parseJsonStrict } from "../json.js";
 import {
+  AUTHORIZATION_CODE_GRANT,
+  parseAuthor,
+  DEVICE_CODE_GRANT,
+  REFRESH_TOKEN_GRANT,
+  TOKEN_EXCHANGE_GRANT,
   parseMessage,
   parseOperation,
+  redirectUriMatches,
   type ClientMetadata,
   type ConversationEvent,
   type JsonWebKeySet,
@@ -84,7 +90,7 @@ import { OPERATIONS_VERSION } from "../operations.js";
 import { PROTOCOL_PROFILE } from "../profile.js";
 import { Clocks, RandomSources, firstContribution, optionalContribution } from "../reactor.js";
 import { SecretValue } from "../secret.js";
-import { JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION } from "../sessions.js";
+import { ACCESS_TOKEN_TYPE, JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION } from "../sessions.js";
 import { emit, telemetrySink, type TelemetryInterface } from "../telemetry.js";
 import {
   ClientPolicies,
@@ -115,6 +121,7 @@ import {
   type IdempotencyRecord,
   type IssuedCode,
   type IssuedSession,
+  type JoinCode,
   type JsonObject,
   type KnownClient,
   type MessageReceipt,
@@ -146,9 +153,13 @@ function keyId(compact: string): { readonly kid?: string } {
   }
 }
 
-const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const REFRESH_TOKEN_GRANT = "refresh_token";
 const PAGE = 50;
+const OPAQUE_ID = /^[A-Za-z0-9_-]{1,256}$/;
+const THUMBPRINT = /^[A-Za-z0-9_-]{43}$/;
+/** Ties a join code to the browser that loaded the join page (§5). */
+export const JOIN_COOKIE = "__Host-poppy_join";
+/** A join code lives at most this long (§5: no more than 60 seconds). */
+const JOIN_LIFETIME_SECONDS = 60;
 /** The DPoP algorithms the company accepts: ES256, which every company must (§3.2), and RS256. */
 export const DPOP_ALGORITHMS: readonly string[] = ["ES256", "RS256"];
 /** The longest `wait` the company holds a read for; a larger one is held this long (§7.5). */
@@ -181,7 +192,26 @@ export interface CompanyConfigOptions {
    * day), and the count is forgotten once a key has failed nothing for this long.
    */
   readonly signInLockoutSeconds?: number;
-  readonly customScopes?: Readonly<Record<string, string>>;
+  /**
+   * What each scope allows, in words a user and a model understand, published as
+   * `auth.scopes` (§3.1, §4.4): every scope in `scopes` needs one.
+   */
+  readonly scopeDescriptions: Readonly<Record<string, string>>;
+  /**
+   * `auth.scope_hints` (§4.4): per scope, its most consequential operation's `changes`
+   * (none, reversible, irreversible) and whether it touches personal data.
+   */
+  readonly scopeHints?: Readonly<Record<string, readonly [changes: string, personalData: boolean]>>;
+  /**
+   * The tasks the company chose not to offer through the protocol, published at
+   * `/poppy/excluded-tasks.json` (§8.1): each a `task` and an optional `alternative`.
+   */
+  readonly excludedTasks?: readonly Readonly<Record<string, unknown>>[];
+  /**
+   * Tasks a feedback report may name that can be done after all: the alternative (§8.2)
+   * the company answers with, HTTP 200, keyed by task, compared ignoring case.
+   */
+  readonly feedbackAnswers?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   /** A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it. */
   readonly devicePage?: string;
   /** A hosted consent page with `{request_id}`: `GET /oauth/authorize` answers 303 to it. */
@@ -191,14 +221,15 @@ export interface CompanyConfigOptions {
   /**
    * Other domains that are this company (§3): each publishes its discovery document, naming
    * itself as the organization's domain, and the issuer's metadata lists it in
-   * `poppy_domains`. Everything else stays on `domain`, the issuer's: an alias is never a
+   * `protected_resources`. Everything else stays on `domain`, the issuer's: an alias is never a
    * second identity, and answers nothing but its discovery document.
    */
   readonly aliases?: readonly string[];
   /**
    * The MCP server supports DPoP (§4.3; new MCP servers SHOULD): its protected resource
    * metadata lists `dpop_signing_alg_values_supported`, and personal agents get DPoP
-   * tokens for it. Off, it is an MCP server that doesn't: they get Bearer tokens.
+   * tokens for it. Off, it is an MCP server that doesn't: they get Bearer tokens, by
+   * Token Exchange alone.
    */
   readonly mcpDpop?: boolean;
   /** Accept feedback reports at `/poppy/feedback` and list it in poppy.json (§8). */
@@ -207,6 +238,8 @@ export interface CompanyConfigOptions {
   readonly dpopNonce?: boolean;
   /** How long an issued DPoP nonce is accepted (default five minutes). */
   readonly dpopNonceLifetimeSeconds?: number;
+  /** How long an ended Session's key is remembered and refused (§4.2; default 30 days). */
+  readonly endedSessionMemorySeconds?: number;
   /**
    * How long an API write's `Idempotency-Key` is remembered in its Session, with the
    * original response a repeated key gets again (guides, *Retries*: a set time; default a day).
@@ -246,7 +279,10 @@ export class CompanyConfig {
   readonly maxCodeAttempts: number;
   readonly maxSignInFailures: number;
   readonly signInLockoutSeconds: number;
-  readonly customScopes: Readonly<Record<string, string>>;
+  readonly scopeDescriptions: Readonly<Record<string, string>>;
+  readonly scopeHints: Readonly<Record<string, readonly [string, boolean]>>;
+  readonly excludedTasks: readonly Readonly<Record<string, unknown>>[];
+  readonly feedbackAnswers: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly devicePage: string | undefined;
   readonly consentPage: string | undefined;
   readonly web: boolean;
@@ -255,6 +291,7 @@ export class CompanyConfig {
   readonly feedback: boolean;
   readonly dpopNonce: boolean;
   readonly dpopNonceLifetimeSeconds: number;
+  readonly endedSessionMemorySeconds: number;
   readonly idempotencyLifetimeSeconds: number;
 
   constructor(options: CompanyConfigOptions) {
@@ -274,7 +311,10 @@ export class CompanyConfig {
     this.maxCodeAttempts = options.maxCodeAttempts ?? 3;
     this.maxSignInFailures = options.maxSignInFailures ?? 5;
     this.signInLockoutSeconds = options.signInLockoutSeconds ?? 15 * 60;
-    this.customScopes = { ...(options.customScopes ?? {}) };
+    this.scopeDescriptions = { ...options.scopeDescriptions };
+    this.scopeHints = { ...(options.scopeHints ?? {}) };
+    this.excludedTasks = [...(options.excludedTasks ?? [])];
+    this.feedbackAnswers = { ...(options.feedbackAnswers ?? {}) };
     this.devicePage = hostedPage("devicePage", options.devicePage);
     this.consentPage = hostedPage("consentPage", options.consentPage);
     this.web = options.web ?? false;
@@ -283,6 +323,7 @@ export class CompanyConfig {
     this.feedback = options.feedback ?? true;
     this.dpopNonce = options.dpopNonce ?? false;
     this.dpopNonceLifetimeSeconds = options.dpopNonceLifetimeSeconds ?? 5 * 60;
+    this.endedSessionMemorySeconds = options.endedSessionMemorySeconds ?? 30 * 24 * 60 * 60;
     this.idempotencyLifetimeSeconds = options.idempotencyLifetimeSeconds ?? 24 * 60 * 60;
     if (!(this.idempotencyLifetimeSeconds > 0)) {
       throw new RangeError("idempotencyLifetimeSeconds must be positive");
@@ -298,8 +339,8 @@ export class CompanyConfig {
     if (this.devicePage !== undefined) {
       const host = new URL(this.devicePage).hostname.toLowerCase();
       if (![this.domain, ...this.aliases].some((domain) => host === domain || host.endsWith(`.${domain}`))) {
-        // A personal agent shows the link only on the issuer's host or one of its
-        // poppy_domains, or a subdomain of either (§4.6).
+        // A personal agent shows the link only on the issuer's host or the host of one of
+        // its protected_resources, or a subdomain of either (§4.6).
         throw new RangeError("devicePage must be on the company's domain or a subdomain");
       }
     }
@@ -308,6 +349,22 @@ export class CompanyConfig {
     }
     if (this.writeScopes.some((scope) => !this.scopes.includes(scope))) {
       throw new RangeError("writeScopes must be among scopes");
+    }
+    if (this.scopes.some((scope) => scope.startsWith("poppy:"))) {
+      throw new RangeError("scope names starting with poppy: are reserved (§4.4)");
+    }
+    const described = Object.keys(this.scopeDescriptions);
+    if (
+      described.length !== new Set(this.scopes).size ||
+      this.scopes.some((scope) => !this.scopeDescriptions[scope])
+    ) {
+      // Every scope in scopes_supported is described (§4.4).
+      throw new RangeError("scopeDescriptions must describe every scope, and only those");
+    }
+    for (const [name, [changes]] of Object.entries(this.scopeHints)) {
+      if (!this.scopes.includes(name) || !["none", "reversible", "irreversible"].includes(changes)) {
+        throw new RangeError("scopeHints name a scope and its changes");
+      }
     }
     if (!(Number.isInteger(this.maxSignInFailures) && this.maxSignInFailures >= 1 && this.signInLockoutSeconds > 0)) {
       throw new RangeError("sign-in attempts need a positive limit and lockout");
@@ -358,6 +415,9 @@ export class CompanyConfig {
   get feedbackEndpoint(): string {
     return `${this.base}/poppy/feedback`;
   }
+  get excludedTasksUrl(): string {
+    return `${this.base}/poppy/excluded-tasks.json`;
+  }
 }
 
 /** A request as any framework hands it over: full HTTPS URL, lower-case headers. */
@@ -399,6 +459,16 @@ class Refused extends Error {
   ) {
     super(error);
   }
+}
+
+/**
+ * `insufficient_scope` (RFC 6750), naming the scopes the request needs (§4.4, §6).
+ *
+ * What a signed-out token gets for anything that needs the account: it has no scopes, so
+ * the error fits, and the agent signs in or uses an Account Token.
+ */
+function insufficientScope(scopes: readonly string[]): Refused {
+  return new Refused(403, "insufficient_scope", { scope: scopes.join(" ") });
 }
 
 /** The host's rate limit refused the request: `429` and when to ask again. */
@@ -471,7 +541,6 @@ class WatchedReplayCache implements ReplayCache {
 
 const CHALLENGED = new Set([
   "invalid_token",
-  "sign_in_required",
   "insufficient_scope",
   "invalid_dpop_proof",
   "use_dpop_nonce",
@@ -674,7 +743,6 @@ function plain(message: Message): Record<string, unknown> {
 /** How often a compare-and-set is retried against concurrent writers before giving up. */
 const CAS_ATTEMPTS = 32;
 
-type TokenType = "DPoP" | "Bearer";
 /** Which of a Session's tokens one is: its own, or its token for the MCP server (§4.3). */
 type TokenKind = "own" | "mcp";
 /** How long an expired device or Mediated sign-in is kept, to answer that it expired. */
@@ -885,8 +953,14 @@ export class CompanyService {
         return { status: 200, body: this.protectedResourceMetadata(), headers: {} };
       }
       if (path === "/mcp" && mcp !== undefined) return await this.#mcpRoute(request, mcp);
+      if (method === "GET" && path === "/poppy/browser-session" && this.config.web) {
+        return await this.#joinPage();
+      }
       if (method === "POST" && path === "/poppy/browser-session" && this.config.web) {
         return await this.#browserSession(request);
+      }
+      if (method === "GET" && path === "/poppy/excluded-tasks.json" && this.config.excludedTasks.length) {
+        return { status: 200, body: { tasks: this.config.excludedTasks.map((task) => ({ ...task })) }, headers: {} };
       }
       if (path.startsWith("/operations/") && this.config.web && this.config.operations) {
         return await this.#operationPage(request, method, path.split("/")[2] ?? "");
@@ -952,9 +1026,8 @@ export class CompanyService {
     if (domain !== undefined && domain !== config.domain && !config.aliases.includes(domain)) {
       throw new RangeError(`${domain} is not one of this company's domains`);
     }
+    // Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
     const auth: Record<string, unknown> = { issuer: config.base };
-    if (config.direct) auth.direct = { scopes: [...config.scopes] };
-    if (config.device) auth.device = { scopes: [...config.scopes] };
     if (config.mediatedFields.length) {
       auth.mediated = {
         endpoint: config.mediatedEndpoint,
@@ -962,7 +1035,15 @@ export class CompanyService {
         scopes: [...config.scopes],
       };
     }
-    if (Object.keys(config.customScopes).length) auth.custom_scopes = { ...config.customScopes };
+    auth.scopes = Object.fromEntries(config.scopes.map((scope) => [scope, config.scopeDescriptions[scope]]));
+    if (Object.keys(config.scopeHints).length) {
+      auth.scope_hints = Object.fromEntries(
+        Object.entries(config.scopeHints).map(([scope, [changes, personal]]) => [
+          scope,
+          { changes, personal_data: personal },
+        ]),
+      );
+    }
     const document: Record<string, unknown> = {
       protocol_version: PROTOCOL_PROFILE,
       organization: { name: config.name, domain: domain ?? config.domain },
@@ -981,6 +1062,7 @@ export class CompanyService {
     if (apis.length) document.apis = apis;
     if (config.web) document.web = { browser_session_endpoint: config.browserSessionEndpoint };
     if (config.feedback) document.feedback = { endpoint: config.feedbackEndpoint };
+    if (config.excludedTasks.length) document.excluded_tasks = { url: config.excludedTasksUrl };
     if (config.operations) {
       document.extensions = {
         operations: { version: OPERATIONS_VERSION, endpoint: config.operationsEndpoint },
@@ -1006,17 +1088,32 @@ export class CompanyService {
 
   oauthMetadata(): Record<string, unknown> {
     const config = this.config;
+    const grants: string[] = [JWT_BEARER_GRANT, REFRESH_TOKEN_GRANT];
+    // `https://{domain}` for each domain whose poppy.json names the issuer, then the MCP
+    // server: exact strings (§3.2, RFC 9728 §4).
+    const resources = [config.domain, ...config.aliases].map((domain) => `https://${domain}`);
     const metadata: Record<string, unknown> = {
       issuer: config.base,
       token_endpoint: config.tokenEndpoint,
       revocation_endpoint: config.revocationEndpoint,
-      poppy_domains: [config.domain, ...config.aliases],
+      grant_types_supported: grants,
+      scopes_supported: [...config.scopes],
+      protected_resources: resources,
       dpop_signing_alg_values_supported: [...DPOP_ALGORITHMS],
     };
-    if (config.device) metadata.device_authorization_endpoint = config.deviceEndpoint;
+    if (this.#mcp() !== undefined) {
+      resources.push(config.mcpUrl);
+      // Bearer tokens for an MCP server without DPoP come from Token Exchange alone (§4.3).
+      if (!config.mcpDpop) grants.push(TOKEN_EXCHANGE_GRANT);
+    }
     if (config.direct) {
+      grants.push(AUTHORIZATION_CODE_GRANT);
       metadata.authorization_endpoint = config.authorizationEndpoint;
       metadata.code_challenge_methods_supported = ["S256"];
+    }
+    if (config.device) {
+      grants.push(DEVICE_CODE_GRANT);
+      metadata.device_authorization_endpoint = config.deviceEndpoint;
     }
     return metadata;
   }
@@ -1126,26 +1223,31 @@ export class CompanyService {
     return nonce !== undefined && (await this.store.get(RecordKinds.dpopNonce, nonce)) !== undefined;
   }
 
+  /**
+   * The token endpoint: every grant carries a proof, whose key names the Session (§4.3).
+   *
+   * The JWT bearer grant starts a Session with a new key or renews the one a known key
+   * names; the refresh grant signs in the key's Session, or starts one signed in with a
+   * new key; the code and device grants sign in the Session their code is bound to;
+   * Token Exchange turns a DPoP Session Token into a Bearer one for an MCP server without
+   * DPoP, and nothing else issues a Bearer token.
+   */
   async #token(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
     const grant = form.grant_type;
     const clientId = await this.#client(form);
-    if (this.#bearerMcpRequest(form)) {
-      // An MCP server without DPoP: a Bearer token for its url alone, even when the
-      // request has a proof, and never a DPoP one (§4.3).
-      if (grant !== JWT_BEARER_GRANT && grant !== REFRESH_TOKEN_GRANT) {
-        throw new Refused(400, "invalid_request");
-      }
-      if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, "", "Bearer");
-      return this.#refreshGrant(form, clientId, "", "Bearer");
-    }
-    // Everywhere else, a DPoP MCP server included, a proof is required (§4.3).
     const thumbprint = await this.#dpop(request);
-    if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, thumbprint, "DPoP");
-    if (grant === REFRESH_TOKEN_GRANT) {
-      return this.#refreshGrant(form, clientId, thumbprint, "DPoP");
+    if (grant === TOKEN_EXCHANGE_GRANT && this.#bearerMcpResource(form)) {
+      return this.#exchangeGrant(form, clientId, thumbprint);
     }
-    if (grant === "authorization_code" && this.config.direct) {
+    if (grant === TOKEN_EXCHANGE_GRANT || this.#bearerMcpResource(form)) {
+      // Token Exchange only for an MCP server without DPoP, and such a server's tokens
+      // only by Token Exchange (§4.3).
+      throw new Refused(400, "invalid_target");
+    }
+    if (grant === JWT_BEARER_GRANT) return this.#sessionGrant(form, clientId, thumbprint);
+    if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, thumbprint);
+    if (grant === AUTHORIZATION_CODE_GRANT && this.config.direct) {
       return this.#codeGrant(form, clientId, thumbprint);
     }
     if (grant === DEVICE_CODE_GRANT && this.config.device) {
@@ -1154,9 +1256,24 @@ export class CompanyService {
     throw new Refused(400, "unsupported_grant_type");
   }
 
-  /** A token request for an MCP server that doesn't support DPoP (`resource` = its url). */
-  #bearerMcpRequest(form: Readonly<Record<string, string>>): boolean {
+  /** Whether `resource` names the MCP server that doesn't support DPoP (§4.3). */
+  #bearerMcpResource(form: Readonly<Record<string, string>>): boolean {
     return this.#mcp() !== undefined && !this.config.mcpDpop && form.resource === this.config.mcpUrl;
+  }
+
+  /** The `resource` a token is issued for (RFC 8707): one this company serves. */
+  #resource(form: Readonly<Record<string, string>>): string | undefined {
+    const resource = form.resource;
+    if (resource !== undefined && resource !== this.config.mcpUrl && resource !== this.config.base) {
+      throw new Refused(400, "invalid_target");
+    }
+    return resource;
+  }
+
+  /** The scopes that read the account: the company's scopes that change nothing. */
+  #accountScopes(): readonly string[] {
+    const read = this.config.scopes.filter((scope) => !this.config.writeScopes.includes(scope));
+    return read.length ? read : this.config.scopes;
   }
 
   /**
@@ -1168,11 +1285,11 @@ export class CompanyService {
     return session.resource !== undefined && session.resource === this.config.mcpUrl ? "mcp" : "own";
   }
 
+  /** Start a Session with a new key, or renew the signed-out one a known key names (§4.2). */
   async #sessionGrant(
     form: Readonly<Record<string, string>>,
     clientId: string,
     thumbprint: string,
-    tokenType: TokenType,
   ): Promise<CompanyResponse> {
     const resolver = firstContribution(this.reactor, ClientResolvers, "client");
     const [, keys] = await resolver.resolve(clientId, keyId(form.assertion ?? ""));
@@ -1185,57 +1302,62 @@ export class CompanyService {
       error: "invalid_grant",
     });
     const pairwise = String(claims.sub);
-    const sessionId = form.session_id;
-    const resource = form.resource;
-    let session: IssuedSession;
-    if (sessionId === undefined) {
-      session = {
-        sessionId: this.#id("ses"),
+    const agentId = claims.agent_id;
+    if (agentId !== undefined && (typeof agentId !== "string" || !OPAQUE_ID.test(agentId))) {
+      throw new Refused(400, "invalid_grant");
+    }
+    const resource = this.#resource(form);
+    const known = await this.#sessionByKey(thumbprint);
+    if (known === undefined) {
+      const session: IssuedSession = {
+        sessionKey: thumbprint,
         clientId,
         pairwiseUserId: pairwise,
         keyThumbprint: thumbprint,
         expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
         scopes: [],
         ...(resource === undefined ? {} : { resource }),
-        ...(tokenType === "Bearer" ? { tokenType } : {}),
+        ...(agentId === undefined ? {} : { agentId }),
       };
-    } else {
-      const known = await this.#sessionById(sessionId);
-      if (known === undefined || known.clientId !== clientId || known.pairwiseUserId !== pairwise) {
-        throw new Refused(400, "invalid_session");
-      }
-      // Renewal with the assertion gives a signed-out token; a signed-in Session is
-      // renewed with its Account Token instead (§4.2, §4.8).
-      const {
-        accountId: _account,
-        accountToken: _token,
-        resource: _resource,
-        tokenType: _type,
-        ...signedOut
-      } = known;
-      session = {
-        ...signedOut,
-        keyThumbprint: thumbprint,
-        expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
-        scopes: [],
-        ...(resource === undefined ? {} : { resource }),
-        ...(tokenType === "Bearer" ? { tokenType } : {}),
-      };
-      const renewed = await this.#issue(session, undefined, [this.#kind(session)]);
-      this.#reportSession(session, true, resource !== undefined);
-      return renewed;
+      const started = await this.#issue(session);
+      this.#reportSession(session, false, resource !== undefined);
+      return started;
     }
-    const started = await this.#issue(session);
-    this.#reportSession(session, false, resource !== undefined);
-    return started;
+    if (known.clientId !== clientId || known.pairwiseUserId !== pairwise) {
+      // The key names another agent's or user's Session (§4.2).
+      throw new Refused(400, "invalid_grant");
+    }
+    if (known.agentId !== agentId) {
+      // A Session keeps the Agent ID it started with, or none (§4.2).
+      throw new Refused(400, "invalid_grant");
+    }
+    // Renewal with the assertion gives a signed-out token; a signed-in Session is renewed
+    // with its Account Token instead (§4.2, §4.8).
+    const {
+      accountId: _account,
+      accountToken: _token,
+      resource: _resource,
+      tokenType: _type,
+      ...signedOut
+    } = known;
+    const session: IssuedSession = {
+      ...signedOut,
+      expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
+      scopes: [],
+      ...(resource === undefined ? {} : { resource }),
+    };
+    const renewed = await this.#issue(session, { replacing: [this.#kind(session)] });
+    this.#reportSession(session, true, resource !== undefined);
+    return renewed;
   }
 
+  /** Sign in the key's Session with an Account Token, or start one signed in (§4.8). */
   async #refreshGrant(
     form: Readonly<Record<string, string>>,
     clientId: string,
     thumbprint: string,
-    tokenType: TokenType,
   ): Promise<CompanyResponse> {
+    const resource = this.#resource(form);
     const presented = digest(form.refresh_token ?? "");
     const entry = await this.store.get(RecordKinds.accountToken, presented);
     const grant = entry?.value as unknown as AccountGrant | undefined;
@@ -1251,15 +1373,22 @@ export class CompanyService {
     if (await this.#signInEnded(grant)) {
       throw new Refused(400, "invalid_grant");
     }
-    const session = await this.#sessionById(form.session_id ?? "");
-    if (
-      session === undefined ||
-      session.clientId !== clientId ||
-      session.pairwiseUserId !== grant.pairwiseUserId
-    ) {
-      throw new Refused(400, "invalid_session");
+    let session = await this.#sessionByKey(thumbprint);
+    if (session === undefined) {
+      // A new key: a new Session, already signed in, with no Agent ID (§4.2, §4.8).
+      session = {
+        sessionKey: thumbprint,
+        clientId,
+        pairwiseUserId: grant.pairwiseUserId,
+        keyThumbprint: thumbprint,
+        expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
+        scopes: [],
+      };
+    } else if (session.clientId !== clientId || session.pairwiseUserId !== grant.pairwiseUserId) {
+      throw new Refused(400, "invalid_grant");
+    } else {
+      await this.#checkAccount(session.sessionKey, grant.accountId);
     }
-    await this.#checkAccount(session.sessionId, grant.accountId);
     const requested = words(form.scope);
     if (requested.length && requested.some((scope) => !grant.scopes.includes(scope))) {
       throw new Refused(400, "invalid_scope");
@@ -1286,32 +1415,81 @@ export class CompanyService {
       json({ ...grant, revoked: false } satisfies AccountGrant),
       expiry(grant.expiresAt),
     );
-    if (!(await this.#joinFamily(grant.family, digest(rotated), session.sessionId))) {
+    if (!(await this.#joinFamily(grant.family, digest(rotated), session.sessionKey))) {
       // The sign-in was revoked meanwhile: its new token is too.
       await this.#revokeGrants([digest(rotated)]);
       throw new Refused(400, "invalid_grant");
     }
-    const resource = form.resource;
+    // The resource is what this refresh asked for, never one an earlier refresh named.
+    const { resource: _earlier, tokenType: _type, ...unbound } = session;
     const signedIn: IssuedSession = {
-      ...session,
-      keyThumbprint: thumbprint,
+      ...unbound,
       accountId: grant.accountId,
       scopes: requested.length ? requested : grant.scopes,
       accountToken: digest(rotated),
       expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
+      ...(resource === undefined ? {} : { resource }),
     };
-    // The resource is what this refresh asked for, never one an earlier refresh named.
-    const { resource: _earlier, tokenType: _type, ...unbound } = signedIn;
-    const typed: IssuedSession = tokenType === "Bearer" ? { ...unbound, tokenType } : unbound;
-    const issued: IssuedSession = resource === undefined ? typed : { ...typed, resource };
-    const response = await this.#issue(issued, rotated, [this.#kind(issued)]);
+    const response = await this.#issue(signedIn, {
+      refreshToken: rotated,
+      replacing: [this.#kind(signedIn)],
+      // A refresh naming no scope gets them in the response: the agent can't know.
+      requested,
+      accountTokenExpiresAt: grant.expiresAt,
+    });
     const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, grant.family);
     if (family === undefined || family.revoked) {
       // Revoked while this token was issued: the Session continues signed out (§4.9).
-      await this.#signOutSession(session.sessionId, [digest(rotated)]);
+      await this.#signOutSession(session.sessionKey, [digest(rotated)]);
       throw new Refused(400, "invalid_grant");
     }
-    this.#reportSession(typed, true, resource !== undefined);
+    this.#reportSession(signedIn, true, resource !== undefined);
+    return response;
+  }
+
+  /**
+   * A Bearer Session Token for the MCP server without DPoP, by Token Exchange (§4.3).
+   *
+   * The subject token is a current DPoP Session Token of the same agent, bound to the
+   * proof's key; the answer belongs to the same Session, with its scopes or the fewer
+   * `scope` asks for, and works only at that server.
+   */
+  async #exchangeGrant(
+    form: Readonly<Record<string, string>>,
+    clientId: string,
+    thumbprint: string,
+  ): Promise<CompanyResponse> {
+    if (form.subject_token_type !== ACCESS_TOKEN_TYPE) throw new Refused(400, "invalid_request");
+    const subject = await this.#tokenSession(form.subject_token ?? "");
+    if (
+      subject === undefined ||
+      subject.tokenType === "Bearer" ||
+      subject.clientId !== clientId ||
+      subject.keyThumbprint !== thumbprint ||
+      this.#passed(subject.expiresAt) ||
+      this.#kind(subject) !== "own"
+    ) {
+      throw new Refused(400, "invalid_grant");
+    }
+    const requested = words(form.scope);
+    if (requested.some((scope) => !subject.scopes.includes(scope))) {
+      throw new Refused(400, "invalid_scope");
+    }
+    const lifetime = this.#later(this.config.sessionLifetimeSeconds).getTime();
+    const bearer: IssuedSession = {
+      ...subject,
+      tokenType: "Bearer",
+      keyThumbprint: "",
+      resource: this.config.mcpUrl,
+      scopes: requested.length ? requested : subject.scopes,
+      expiresAt: new Date(Math.min(Date.parse(subject.expiresAt), lifetime)).toISOString(),
+    };
+    const response = await this.#issue(bearer, {
+      replacing: [this.#kind(bearer)],
+      requested,
+      exchanged: true,
+    });
+    this.#reportSession(bearer, false, true);
     return response;
   }
 
@@ -1419,6 +1597,12 @@ export class CompanyService {
       if (entry === undefined || pending === undefined || pending.clientId !== clientId) {
         throw new Refused(400, "invalid_grant");
       }
+      if (pending.sessionKey !== undefined && pending.sessionKey !== thumbprint) {
+        // Bound to the key of its first poll: any other key is refused (§4.6).
+        throw new Refused(400, "invalid_grant");
+      }
+      const bound: PendingDevice =
+        pending.sessionKey === undefined ? { ...pending, sessionKey: thumbprint } : pending;
       if (this.#passed(pending.expiresAt)) {
         await this.#forgetDevice(key, pending);
         throw new Refused(400, "expired_token");
@@ -1433,10 +1617,10 @@ export class CompanyService {
         pending.lastPoll !== undefined &&
         now.getTime() - new Date(pending.lastPoll).getTime() < pending.interval * 1000
       ) {
-        next = { ...pending, interval: pending.interval + 5, lastPoll: now.toISOString() };
+        next = { ...bound, interval: pending.interval + 5, lastPoll: now.toISOString() };
         refusal = "slow_down";
       } else if (pending.accountId === undefined) {
-        next = { ...pending, lastPoll: now.toISOString() };
+        next = { ...bound, lastPoll: now.toISOString() };
         refusal = "authorization_pending";
       } else {
         polled = true;
@@ -1455,9 +1639,10 @@ export class CompanyService {
       }
     }
     if (!polled) throw new Refused(503, "temporarily_unavailable");
-    const session = await this.#sessionById(form.session_id ?? "");
+    // Approved: the Session the bound key names is signed in (§4.6).
+    const session = await this.#sessionByKey(thumbprint);
     if (session === undefined || session.clientId !== clientId) {
-      throw new Refused(400, "invalid_session");
+      throw new Refused(400, "invalid_grant");
     }
     // Consumed once: of concurrent polls, only the one that takes it signs in.
     const approved = (await this.store.take(RecordKinds.device, key)) as unknown as
@@ -1467,7 +1652,7 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     await this.store.delete(RecordKinds.userCode, approved.userCode);
-    return this.#signIn(session, approved.accountId, approved.granted, thumbprint);
+    return this.#signIn(session, approved.accountId, approved.granted, thumbprint, approved.scopes);
   }
 
   async #forgetDevice(key: string, pending: PendingDevice): Promise<void> {
@@ -1516,8 +1701,8 @@ export class CompanyService {
         this.#report("pap.company.sign_out", "ok", { "pap.session.signed_in": false });
       }
       revoked += await this.#revokeGrants(family.tokens);
-      for (const sessionId of family.sessions) {
-        await this.#signOutSession(sessionId, family.tokens);
+      for (const sessionKey of family.sessions) {
+        await this.#signOutSession(sessionKey, family.tokens);
       }
     }
     return revoked;
@@ -1535,8 +1720,8 @@ export class CompanyService {
   }
 
   /** Each token of the Session signed in with one of `accountTokens` continues signed out. */
-  async #signOutSession(sessionId: string, accountTokens: readonly string[]): Promise<void> {
-    await this.#change<StoredSession>(RecordKinds.session, sessionId, (stored) => {
+  async #signOutSession(sessionKey: string, accountTokens: readonly string[]): Promise<void> {
+    await this.#change<StoredSession>(RecordKinds.session, sessionKey, (stored) => {
       let changed = false;
       const tokens: Record<string, IssuedSession> = {};
       for (const [key, token] of Object.entries(stored.tokens)) {
@@ -1553,7 +1738,7 @@ export class CompanyService {
   }
 
   /** Add a token and a Session to a sign-in; `false` once it is revoked. */
-  async #joinFamily(familyId: string, token: string, sessionId: string): Promise<boolean> {
+  async #joinFamily(familyId: string, token: string, sessionKey: string): Promise<boolean> {
     const changed = await this.#change<AccountFamily>(
       RecordKinds.accountFamily,
       familyId,
@@ -1563,21 +1748,31 @@ export class CompanyService {
           : {
               ...family,
               tokens: withItem(family.tokens, token),
-              sessions: withItem(family.sessions, sessionId),
+              sessions: withItem(family.sessions, sessionKey),
             },
     );
     return changed !== undefined && !changed[1].revoked;
   }
 
-  /** Sign the Session in: `session` is its DPoP record, `thumbprint` the proven key. */
+  /**
+   * Sign the Session in: `session` is its DPoP record, `thumbprint` the proven key.
+   *
+   * `scopes` are the ones the user approved of those `requested`; the response leaves
+   * `scope` out when they are the same (§4.4, RFC 6749 §5.1).
+   */
   async #signIn(
     session: IssuedSession,
     accountId: string,
     scopes: readonly string[],
     thumbprint: string,
+    requested: readonly string[],
   ): Promise<CompanyResponse> {
+    if (!scopes.length) {
+      // A sign-in grants at least one scope: approving none is a decline (§4.4).
+      throw new Refused(400, "access_denied");
+    }
     // Checked before anything is issued: a mismatch issues no tokens (§4.4).
-    await this.#checkAccount(session.sessionId, accountId);
+    await this.#checkAccount(session.sessionKey, accountId);
     const accountToken = this.#id("acct");
     const family = digest(accountToken);
     const expiresAt = this.#later(this.config.accountTokenLifetimeSeconds);
@@ -1596,7 +1791,7 @@ export class CompanyService {
       clientId: session.clientId,
       accountId,
       tokens: [family],
-      sessions: [session.sessionId],
+      sessions: [session.sessionKey],
       revoked: false,
     };
     await this.store.put(RecordKinds.accountFamily, family, json(signIn), expiry(expiresAt));
@@ -1605,7 +1800,7 @@ export class CompanyService {
     // possession, for no single resource. It replaces only that token; a token for the
     // MCP server is renewed with the Account Token (§4.3, §4.8).
     const signedIn: IssuedSession = {
-      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
       clientId: session.clientId,
       pairwiseUserId: session.pairwiseUserId,
       keyThumbprint: thumbprint,
@@ -1613,8 +1808,14 @@ export class CompanyService {
       accountId,
       scopes,
       accountToken: family,
+      ...(session.agentId === undefined ? {} : { agentId: session.agentId }),
     };
-    return this.#issue(signedIn, accountToken, [this.#kind(signedIn)]);
+    return this.#issue(signedIn, {
+      refreshToken: accountToken,
+      replacing: [this.#kind(signedIn)],
+      requested,
+      accountTokenExpiresAt: expiresAt.toISOString(),
+    });
   }
 
   /**
@@ -1623,8 +1824,8 @@ export class CompanyService {
    * Even signed out since (§4.9): the code exchange, the device poll, Mediated Sign-In,
    * and an Account Token all refuse, and issue nothing.
    */
-  async #checkAccount(sessionId: string, accountId: string): Promise<void> {
-    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
+  async #checkAccount(sessionKey: string, accountId: string): Promise<void> {
+    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionKey);
     if (stored?.accountId !== undefined && stored.accountId !== accountId) {
       throw new Refused(400, "account_mismatch");
     }
@@ -1643,26 +1844,48 @@ export class CompanyService {
     throw new Refused(503, "temporarily_unavailable");
   }
 
-  /** Issue a token for the Session; it replaces the Session's tokens of `replacing` kinds. */
+  /**
+   * Issue a token for the Session; it replaces the Session's tokens of `replacing` kinds.
+   *
+   * The response names no Session: its key does (§4.3). `scope` follows RFC 6749: left
+   * out of a signed-out token's response, and of a signed-in one granting exactly the
+   * scopes `requested` (§4.2, §4.4).
+   */
   async #issue(
     session: IssuedSession,
-    refreshToken?: string,
-    replacing: readonly TokenKind[] = [],
+    options: {
+      readonly refreshToken?: string;
+      readonly replacing?: readonly TokenKind[];
+      readonly requested?: readonly string[];
+      readonly accountTokenExpiresAt?: string;
+      readonly exchanged?: boolean;
+    } = {},
   ): Promise<CompanyResponse> {
     const accessToken = this.#id("sat");
     const key = digest(accessToken);
-    await this.#recordToken(session, key, replacing);
-    const pointer: SessionPointer = { sessionId: session.sessionId };
+    await this.#recordToken(session, key, options.replacing ?? []);
+    const pointer: SessionPointer = { sessionKey: session.sessionKey };
     await this.store.put(RecordKinds.sessionToken, key, json(pointer), expiry(session.expiresAt));
     const body: Record<string, unknown> = {
       access_token: accessToken,
       token_type: session.tokenType ?? "DPoP",
       expires_in: Math.trunc((new Date(session.expiresAt).getTime() - this.#now().getTime()) / 1000),
-      scope: session.scopes.join(" "),
-      session_id: session.sessionId,
-      signed_in: session.accountId !== undefined,
     };
-    if (refreshToken !== undefined) body.refresh_token = refreshToken;
+    const requested = new Set(options.requested ?? []);
+    const granted = new Set(session.scopes);
+    if (granted.size && (granted.size !== requested.size || [...granted].some((scope) => !requested.has(scope)))) {
+      body.scope = session.scopes.join(" ");
+    }
+    if (options.exchanged) body.issued_token_type = ACCESS_TOKEN_TYPE;
+    if (options.refreshToken !== undefined) {
+      body.refresh_token = options.refreshToken;
+      if (options.accountTokenExpiresAt !== undefined) {
+        // So the agent tells an expired Account Token from a revoked one (guides).
+        body.refresh_token_expires_in = Math.trunc(
+          (Date.parse(options.accountTokenExpiresAt) - this.#now().getTime()) / 1000,
+        );
+      }
+    }
     return { status: 200, body, headers: { ...NO_STORE } };
   }
 
@@ -1679,7 +1902,7 @@ export class CompanyService {
     replacing: readonly TokenKind[],
   ): Promise<void> {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
-      const entry = await this.store.get(RecordKinds.session, session.sessionId);
+      const entry = await this.store.get(RecordKinds.session, session.sessionKey);
       const tokens: Record<string, IssuedSession> = {};
       let accountId = session.accountId;
       if (entry !== undefined) {
@@ -1697,25 +1920,28 @@ export class CompanyService {
         }
       }
       tokens[key] = session;
+      // A Session ends once no Account Token could renew it any more; its record is kept
+      // past its end, so its key is refused rather than reused (§4.2).
+      const latest = Math.max(...Object.values(tokens).map((token) => Date.parse(token.expiresAt)));
+      const endsAt = new Date(latest + this.config.accountTokenLifetimeSeconds * 1000);
       const stored: StoredSession = {
-        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
         clientId: session.clientId,
         pairwiseUserId: session.pairwiseUserId,
         tokens,
         latest: key,
         ...(accountId === undefined ? {} : { accountId }),
+        endsAt: endsAt.toISOString(),
       };
-      // A Session is forgotten once no Account Token could renew it any more.
-      const latest = Math.max(...Object.values(tokens).map((token) => Date.parse(token.expiresAt)));
-      const kept = expiry(new Date(latest + this.config.accountTokenLifetimeSeconds * 1000));
+      const kept = expiry(new Date(endsAt.getTime() + this.config.endedSessionMemorySeconds * 1000));
       if (entry === undefined) {
-        if (await this.store.create(RecordKinds.session, session.sessionId, json(stored), kept)) {
+        if (await this.store.create(RecordKinds.session, session.sessionKey, json(stored), kept)) {
           return;
         }
         continue;
       }
       if (
-        await this.store.replace(RecordKinds.session, session.sessionId, entry.version, json(stored), kept)
+        await this.store.replace(RecordKinds.session, session.sessionKey, entry.version, json(stored), kept)
       ) {
         return;
       }
@@ -1724,7 +1950,21 @@ export class CompanyService {
   }
 
   /**
-   * The Session by its ID: its own latest token's record, else its token for MCP.
+   * The Session a key's thumbprint names, or `undefined` for a key never seen (§4.3).
+   *
+   * A key whose Session has ended is refused, `invalid_grant`, rather than starting a new
+   * Session the agent would not know of (§4.2).
+   */
+  async #sessionByKey(sessionKey: string): Promise<IssuedSession | undefined> {
+    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionKey);
+    if (stored?.endsAt !== undefined && this.#passed(stored.endsAt)) {
+      throw new Refused(400, "invalid_grant");
+    }
+    return this.#sessionRecord(sessionKey);
+  }
+
+  /**
+   * The Session by its key: its own latest token's record, else its token for MCP.
    *
    * A token for the MCP server stands for the Session only there (§4.3): a grant naming
    * the Session builds on the record of its own token, and on the MCP one only when the
@@ -1732,8 +1972,8 @@ export class CompanyService {
    * of the token (its key, type, resource, account, and lifetime); only the Session's
    * identity is read.
    */
-  async #sessionById(sessionId: string): Promise<IssuedSession | undefined> {
-    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
+  async #sessionRecord(sessionKey: string): Promise<IssuedSession | undefined> {
+    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionKey);
     if (stored === undefined) return undefined;
     const latest = stored.tokens[stored.latest];
     if (latest !== undefined && this.#kind(latest) === "own") return latest;
@@ -1755,7 +1995,7 @@ export class CompanyService {
     const key = digest(token);
     const pointer = await this.#read<SessionPointer>(RecordKinds.sessionToken, key);
     if (pointer === undefined) return undefined;
-    const stored = await this.#read<StoredSession>(RecordKinds.session, pointer.sessionId);
+    const stored = await this.#read<StoredSession>(RecordKinds.session, pointer.sessionKey);
     const session = stored?.tokens[key];
     if (session !== undefined && (await this.#signedInBeforeItsEnd(session))) return undefined;
     return session;
@@ -1808,7 +2048,8 @@ export class CompanyService {
       return page(400, "This agent could not be verified.");
     }
     // An unknown client or redirect is never redirected to: that would be an open redirector.
-    if (!metadata.redirect_uris.includes(redirectUri)) {
+    // Exactly, but a loopback redirect URI matches with any port (§4.5, RFC 8252 §7.3).
+    if (!metadata.redirect_uris.some((entry) => redirectUriMatches(entry, redirectUri))) {
       return page(400, "This sign-in request is not valid.");
     }
     const state = query.state ?? "";
@@ -1817,6 +2058,11 @@ export class CompanyService {
       return this.#redirect(redirectUri, { error: "unsupported_response_type", state });
     }
     if (query.code_challenge_method !== "S256" || !query.code_challenge) {
+      return this.#redirect(redirectUri, { error: "invalid_request", state });
+    }
+    if (!THUMBPRINT.test(query.dpop_jkt ?? "")) {
+      // The code is bound to the Session Key: without one it could sign in no Session
+      // (§4.5, RFC 9449 §10).
       return this.#redirect(redirectUri, { error: "invalid_request", state });
     }
     if (!scopes.length || scopes.some((scope) => !this.config.scopes.includes(scope))) {
@@ -1834,6 +2080,7 @@ export class CompanyService {
       scopes,
       state,
       codeChallenge: query.code_challenge,
+      dpopJkt: query.dpop_jkt as string,
       expiresAt: expiresAt.toISOString(),
       clientName: metadata.client_name,
       ...(hosted === undefined ? { browserBinding: digest(browser) } : {}),
@@ -1852,7 +2099,7 @@ export class CompanyService {
     const agent = escapeHtml(metadata.client_name);
     const agentDomain = escapeHtml(new URL(clientId).hostname);
     const described = scopes
-      .map((scope) => `<li>${escapeHtml(this.config.customScopes[scope] ?? scope)}</li>`)
+      .map((scope) => `<li>${escapeHtml(this.config.scopeDescriptions[scope] ?? scope)}</li>`)
       .join("");
     return page(
       200,
@@ -1902,7 +2149,7 @@ export class CompanyService {
    * A pending Direct Sign-In request, for a consent page to show; not consumed.
    *
    * Who asks (`client_name`, the `client_id` domain), for what (each scope with its
-   * `customScopes` words), until when; never `state`, PKCE, or the redirect. Rejects
+   * `scopeDescriptions` words), until when; never `state`, PKCE, or the redirect. Rejects
    * for an unknown, used, or expired request.
    */
   async authorizationRequest(requestId: string): Promise<{
@@ -1920,7 +2167,7 @@ export class CompanyService {
       request_id: requestId,
       client_name: pending.clientName ?? "",
       client_domain: new URL(pending.clientId).hostname,
-      scopes: pending.scopes.map((scope) => ({ scope, description: this.config.customScopes[scope] ?? scope })),
+      scopes: pending.scopes.map((scope) => ({ scope, description: this.config.scopeDescriptions[scope] ?? scope })),
       expires_at: isoZ(new Date(pending.expiresAt)),
     };
   }
@@ -1944,6 +2191,8 @@ export class CompanyService {
       clientId: pending.clientId,
       redirectUri: pending.redirectUri,
       codeChallenge: pending.codeChallenge,
+      dpopJkt: pending.dpopJkt,
+      requested: pending.scopes,
       accountId: options.accountId,
       scopes: granted,
       expiresAt: expiresAt.toISOString(),
@@ -1984,8 +2233,10 @@ export class CompanyService {
       issued === undefined ||
       this.#passed(issued.expiresAt) ||
       issued.clientId !== clientId ||
-      issued.redirectUri !== form.redirect_uri
+      issued.redirectUri !== form.redirect_uri ||
+      issued.dpopJkt !== thumbprint
     ) {
+      // Expired, reused, or redeemed with another key than the one it is bound to.
       throw new Refused(400, "invalid_grant");
     }
     const challenge = createHash("sha256")
@@ -1996,11 +2247,11 @@ export class CompanyService {
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
       throw new Refused(400, "invalid_grant");
     }
-    const session = await this.#sessionById(form.session_id ?? "");
+    const session = await this.#sessionByKey(thumbprint);
     if (session === undefined || session.clientId !== clientId) {
-      throw new Refused(400, "invalid_session");
+      throw new Refused(400, "invalid_grant");
     }
-    return this.#signIn(session, issued.accountId, issued.scopes, thumbprint);
+    return this.#signIn(session, issued.accountId, issued.scopes, thumbprint, issued.requested);
   }
 
   #redirectUrl(redirectUri: string, values: Readonly<Record<string, string>>): string {
@@ -2042,7 +2293,7 @@ export class CompanyService {
     // A write with an Idempotency-Key (guides, *Retries*): remembered per Session for
     // `idempotencyLifetimeSeconds`, a repeat answered with the original response.
     if (!IDEMPOTENCY_KEY.test(key)) throw new Refused(400, "invalid_request");
-    const record = composite(session.sessionId, key);
+    const record = composite(session.sessionKey, key);
     const requestDigest = composite(method, path, new URL(request.url).search, canonical(body ?? null));
     const earlier = await this.#holdIdempotencyKey(record, requestDigest);
     if (earlier !== undefined) return earlier;
@@ -2122,7 +2373,7 @@ export class CompanyService {
     if (result.operation === undefined) {
       return { status: result.status ?? 200, body: result.body, headers: {} };
     }
-    if (session.accountId === undefined) throw new Refused(403, "sign_in_required");
+    if (session.accountId === undefined) throw insufficientScope(this.config.writeScopes);
     if (!(await this.#supportsOperations(session.clientId))) {
       // At an API, in the WWW-Authenticate challenge with its `extension` (§3.3, §6).
       throw new Refused(
@@ -2221,7 +2472,7 @@ export class CompanyService {
   async #mcpRoute(request: CompanyRequest, mcp: CompanyMcp): Promise<CompanyResponse> {
     const session = await this.#mcpCaller(request);
     // A missing, expired, or other-resource token, or a token in the wrong scheme.
-    if (!("sessionId" in session)) return session;
+    if (!("sessionKey" in session)) return session;
     const wait = await this.#admitted(session);
     if (wait !== undefined) return rateLimited(wait);
     if (request.method.toUpperCase() !== "POST") {
@@ -2287,7 +2538,9 @@ export class CompanyService {
     }
     if (answer.operation !== undefined) {
       if (session.accountId === undefined) {
-        return { refused: this.#mcpRefusal(403, "sign_in_required") };
+        return {
+          refused: this.#mcpRefusal(403, "insufficient_scope", this.config.writeScopes.join(" ")),
+        };
       }
       if (!(await this.#supportsOperations(session.clientId))) {
         // A tool can't be refused with `extension_required`, which refuses the personal
@@ -2372,7 +2625,7 @@ export class CompanyService {
   #attemptKeys(session: IssuedSession, credentials: Readonly<Record<string, unknown>>): string[] {
     const keys = [
       composite("user", session.clientId, session.pairwiseUserId),
-      composite("session", session.sessionId),
+      composite("session", session.sessionKey),
     ];
     const named = this.config.mediatedFields
       .filter(([, , secret]) => !secret)
@@ -2463,7 +2716,7 @@ export class CompanyService {
     }
     const authenticated = await accounts.authenticate(secrets, {
       clientId: session.clientId,
-      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
     });
     for (const name of Object.keys(secrets)) delete secrets[name];
     if (authenticated === undefined) {
@@ -2471,7 +2724,7 @@ export class CompanyService {
       return { status: 200, body: { status: "failed" }, headers: { ...NO_STORE } };
     }
     // Tied to another account, even signed out since: refused before any code is sent.
-    await this.#checkAccount(session.sessionId, authenticated.accountId);
+    await this.#checkAccount(session.sessionKey, authenticated.accountId);
     if (authenticated.codeReference === undefined) {
       await this.#attemptsCleared(keys);
       return this.#signedInBody(session, authenticated.accountId, granted);
@@ -2482,7 +2735,7 @@ export class CompanyService {
     const signInId = this.#id("si");
     const expiresAt = this.#later(5 * 60);
     const pending: PendingMediated = {
-      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
       accountId: authenticated.accountId,
       scopes: granted,
       codeReference: authenticated.codeReference,
@@ -2511,7 +2764,7 @@ export class CompanyService {
   async #mediatedCode(request: CompanyRequest, signInId: string): Promise<CompanyResponse> {
     const [, session] = await this.#caller(request);
     const pending = await this.#read<PendingMediated>(RecordKinds.mediated, signInId);
-    if (pending === undefined || pending.sessionId !== session.sessionId) {
+    if (pending === undefined || pending.sessionKey !== session.sessionKey) {
       // Unknown, or another Session's: the same error for both (§4.7).
       throw new Refused(404, "sign_in_not_found");
     }
@@ -2585,7 +2838,9 @@ export class CompanyService {
     accountId: string,
     scopes: readonly string[],
   ): Promise<CompanyResponse> {
-    const response = await this.#signIn(session, accountId, scopes, session.keyThumbprint);
+    // Every requested scope is granted here, so `scope` is left out, as at the token
+    // endpoint (§4.4, §4.7).
+    const response = await this.#signIn(session, accountId, scopes, session.keyThumbprint, scopes);
     return {
       ...response,
       body: { status: "complete", ...(response.body as Record<string, unknown>) },
@@ -2616,7 +2871,7 @@ export class CompanyService {
     }
     if (conversation.accountId !== undefined && session.accountId !== conversation.accountId) {
       // Once it used the account, it belongs to that account (§7.2, §7.11).
-      if (session.accountId === undefined) throw new Refused(403, "sign_in_required");
+      if (session.accountId === undefined) throw insufficientScope(this.#accountScopes());
       throw new Refused(404, "conversation_not_found");
     }
     return conversation;
@@ -2853,7 +3108,7 @@ export class CompanyService {
       conversationId,
       ...(message.text === undefined ? {} : { text: message.text }),
       ...(message.data === undefined ? {} : { data: message.data }),
-      sender: message.sender,
+      author: message.author.type,
       ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
       scopes: session.scopes,
       clientId: session.clientId,
@@ -2890,7 +3145,7 @@ export class CompanyService {
     }
     const message: Record<string, unknown> = {
       id: this.#id("msg"),
-      sender: "agent",
+      author: { type: "agent", ...(reply.persona ?? {}) },
       role: "company",
     };
     if (reply.text !== undefined) message.text = reply.text;
@@ -3070,6 +3325,14 @@ export class CompanyService {
       receivedAt: this.#now().toISOString(),
     };
     await this.store.put(RecordKinds.feedback, report.reportId, json(report));
+    const answers = new Map(
+      Object.entries(this.config.feedbackAnswers).map(([key, value]) => [key.toLowerCase(), value]),
+    );
+    const alternative = answers.get(task.toLowerCase());
+    if (alternative !== undefined) {
+      // The task can be done after all: here is how (§8.3).
+      return { status: 200, body: { ...alternative }, headers: { ...NO_STORE } };
+    }
     return { status: 202, headers: { ...NO_STORE } };
   }
 
@@ -3238,7 +3501,8 @@ export class CompanyService {
    * answer written over anything they have not read is refused
    * (`StaleConversationError`) and they read the conversation again. Their
    * message is the company's (`role: company`) and written by a person
-   * (`sender: human`); a conversation not handed to people, closed, or with a
+   * (`author.type: human`, with the person's `id`, display `name`, and `image` when given,
+   * §7.4); a conversation not handed to people, closed, or with a
    * Direct Conversation open takes none. The event written is returned: its
    * ID is their next `after`.
    */
@@ -3248,14 +3512,23 @@ export class CompanyService {
       readonly after: string;
       readonly text?: string;
       readonly data?: Readonly<Record<string, unknown>>;
+      readonly authorId?: string;
+      readonly authorName?: string;
+      readonly authorImage?: string;
     },
   ): Promise<ConversationEvent> {
     if (reply.text === undefined && reply.data === undefined) {
       throw new Error("a reply says something: text, data, or both");
     }
+    const author = parseAuthor({
+      type: "human",
+      ...(reply.authorId === undefined ? {} : { id: reply.authorId }),
+      ...(reply.authorName === undefined ? {} : { name: reply.authorName }),
+      ...(reply.authorImage === undefined ? {} : { image: reply.authorImage }),
+    });
     const message: Record<string, unknown> = {
       id: this.#id("msg"),
-      sender: "human",
+      author: { ...author },
       role: "company",
     };
     if (reply.text !== undefined) message.text = reply.text;
@@ -3415,7 +3688,8 @@ export class CompanyService {
    *
    * One proposed signed in belongs to the account: any Session of the same personal
    * agent and user may use it while signed in to that account, checked at each request.
-   * Signed out, that Session gets `sign_in_required`; anyone else `operation_not_found`.
+   * Signed out, that Session gets `insufficient_scope` (Operations 3.2); anyone else
+   * `operation_not_found`.
    */
   async #usable(operationId: string, session: IssuedSession): Promise<StoredOperation> {
     const stored = await this.#read<StoredOperation>(RecordKinds.operation, operationId);
@@ -3423,7 +3697,7 @@ export class CompanyService {
       throw new Refused(404, "operation_not_found");
     }
     if (stored.accountId !== session.accountId) {
-      if (session.accountId === undefined) throw new Refused(403, "sign_in_required");
+      if (session.accountId === undefined) throw insufficientScope(this.config.writeScopes);
       throw new Refused(404, "operation_not_found");
     }
     const current = await this.#currentOperation(operationId);
@@ -3586,8 +3860,8 @@ export class CompanyService {
   // Web browsing (§5, Operations §4.4) -------------------------------------------------
 
   /** The Session as it is now: its latest unexpired DPoP token's record. */
-  async #liveSession(sessionId: string): Promise<IssuedSession | undefined> {
-    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionId);
+  async #liveSession(sessionKey: string): Promise<IssuedSession | undefined> {
+    const stored = await this.#read<StoredSession>(RecordKinds.session, sessionKey);
     let live: IssuedSession | undefined;
     for (const token of Object.values(stored?.tokens ?? {})) {
       if ((token.tokenType ?? "DPoP") !== "DPoP" || this.#passed(token.expiresAt)) continue;
@@ -3597,68 +3871,80 @@ export class CompanyService {
     return live;
   }
 
-  /** Verify a browser assertion with one of the agent's published keys, else `undefined`. */
-  async #browserAssertion(assertion: string): Promise<VerifiedBrowserAssertion | undefined> {
-    let claims: Record<string, unknown>;
-    let algorithm: string;
-    let kid: unknown;
-    try {
-      claims = decodeJwt(assertion);
-      const header = decodeProtectedHeader(assertion);
-      algorithm = String(header.alg ?? "");
-      kid = header.kid;
-    } catch {
-      return undefined;
-    }
-    if (typeof claims.iss !== "string") return undefined;
-    const clientId = claims.iss;
-    if (!(await this.#allowed(clientId))) return undefined;
-    const resolver = firstContribution(this.reactor, ClientResolvers, "client");
-    let keys: JsonWebKeySet;
-    try {
-      [, keys] = await resolver.resolve(clientId, keyId(assertion));
-    } catch {
-      return undefined;
-    }
-    for (const key of keys.keys) {
-      if (kid !== undefined && key.kid !== kid) continue;
-      if (key.alg !== undefined && key.alg !== algorithm) continue;
-      try {
-        return await verifyBrowserAssertion(assertion, {
-          publicKey: await importJWK({ ...key } as JWK, algorithm),
-          expectedEndpoint: this.config.browserSessionEndpoint,
-          companyDomain: this.config.domain,
-          expectedClientId: clientId,
-          expectedPairwiseUserId: String(claims.sub ?? ""),
-          expectedSessionId: String(claims.session_id ?? ""),
-          replayCache: this.#replay(),
-          now: this.#now(),
-        });
-      } catch {
-        continue;
-      }
-    }
-    return undefined;
+  /**
+   * Step 1 of joining a browser (§5): a form with a one-time code, tied to this browser.
+   *
+   * Loading it starts, ends or changes no Session and no other cookie. The page is never
+   * cached, framed, or kept by the page that opened it.
+   */
+  async #joinPage(): Promise<CompanyResponse> {
+    const code = this.#id("bc");
+    const browser = this.#id("join");
+    await this.store.put(
+      RecordKinds.joinCode,
+      digest(code),
+      json({ browser: digest(browser) } satisfies JoinCode),
+      expiry(this.#later(JOIN_LIFETIME_SECONDS)),
+    );
+    return {
+      status: 200,
+      body:
+        "<!doctype html><meta charset=utf-8><title>Connecting</title>" +
+        '<form method="post" action="/poppy/browser-session">' +
+        `<input type="hidden" name="code" value="${escapeHtml(code)}">` +
+        '<input type="text" name="proof"></form>',
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        ...NO_STORE,
+        "Content-Security-Policy": "frame-ancestors 'none'",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Set-Cookie": `${JOIN_COOKIE}=${browser}; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Strict`,
+      },
+    };
   }
 
   /**
-   * Join the agent's own browser to its Session: a verified, one-time browser assertion,
-   * form-posted (never in a URL), answers `303` to its `return_to` with the company's
-   * own cookie, which lives no longer than the Session (§5).
+   * Step 3 (§5): the cookie, the code, and a proof over it from an active Session's key.
+   *
+   * A code is used by the first request that sends it, whatever the result. A key the
+   * company doesn't know is an error here, never a new Session. Answers `303` with the
+   * company's own cookie, which lives no longer than the Session.
    */
   async #browserSession(request: CompanyRequest): Promise<CompanyResponse> {
-    const refused = page(400, "This browser could not join the session.");
-    const verified = await this.#browserAssertion(pairs(text(request.body)).assertion ?? "");
-    if (verified === undefined) return refused;
-    const session = await this.#liveSession(verified.sessionId);
-    if (
-      session === undefined ||
-      !sameOwner([session.clientId, session.pairwiseUserId], [verified.clientId, verified.pairwiseUserId])
-    ) {
-      return refused;
+    const refused = page(
+      400,
+      "This browser could not join the session.",
+      `${JOIN_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`,
+    );
+    const form = pairs(text(request.body));
+    const code = form.code ?? "";
+    const proof = form.proof ?? "";
+    const browser = cookie(request, JOIN_COOKIE);
+    const taken = code
+      ? ((await this.store.take(RecordKinds.joinCode, digest(code))) as unknown as JoinCode | undefined)
+      : undefined;
+    if (taken === undefined || browser === undefined) return refused;
+    const expected = Buffer.from(taken.browser);
+    const actual = Buffer.from(digest(browser));
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return refused;
+    let thumbprint: string;
+    try {
+      const verified = await verifyDpopProof(proof, {
+        method: "POST",
+        url: this.config.browserSessionEndpoint,
+        replayCache: this.#replay(),
+        nonce: code,
+        now: this.#now(),
+      });
+      thumbprint = verified.keyThumbprint;
+    } catch (error) {
+      if (error instanceof ProofError) return refused;
+      throw error;
     }
+    const session = await this.#liveSession(thumbprint);
+    if (session === undefined || !(await this.#allowed(session.clientId))) return refused;
     const webCookie = this.#id("web");
-    const pointer: SessionPointer = { sessionId: session.sessionId };
+    const pointer: SessionPointer = { sessionKey: session.sessionKey };
     await this.store.put(
       RecordKinds.browserCookie,
       digest(webCookie),
@@ -3666,14 +3952,17 @@ export class CompanyService {
       expiry(new Date(new Date(session.expiresAt).getTime() + this.config.accountTokenLifetimeSeconds * 1000)),
     );
     const exchange = exchanges.getStore();
-    if (exchange !== undefined) exchange.clientId = verified.clientId;
+    if (exchange !== undefined) exchange.clientId = session.clientId;
     this.#reportSwitch("web", session.accountId !== undefined);
     return {
       status: 303,
       headers: {
-        Location: verified.returnTo,
-        // The company's own cookie: no Max-Age, and only as alive as its Session.
-        "Set-Cookie": `${WEB_COOKIE}=${webCookie}; Path=/; Secure; HttpOnly; SameSite=Lax`,
+        Location: `${this.config.base}/`,
+        // The company's own cookie, `__Host-`: no Max-Age, only as alive as its Session
+        // (§5). The join cookie is cleared; several cookies are one per line.
+        "Set-Cookie":
+          `${WEB_COOKIE}=${webCookie}; Path=/; Secure; HttpOnly; SameSite=Strict\n` +
+          `${JOIN_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`,
         ...NO_STORE,
       },
     };
@@ -3684,7 +3973,7 @@ export class CompanyService {
     if (webCookie === undefined) return undefined;
     const pointer = await this.#read<SessionPointer>(RecordKinds.browserCookie, digest(webCookie));
     if (pointer === undefined) return undefined;
-    const session = await this.#liveSession(pointer.sessionId);
+    const session = await this.#liveSession(pointer.sessionKey);
     // The cookie does not outlive the Session.
     if (session === undefined) await this.store.delete(RecordKinds.browserCookie, digest(webCookie));
     return session;

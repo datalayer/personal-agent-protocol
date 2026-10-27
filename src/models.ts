@@ -12,9 +12,73 @@ export type UnknownFields = Readonly<Record<string, unknown>>;
  * The `protocol_version` values this SDK uses a document of (§3.1): before 1.0 every
  * version can break the one before, so only its own `major.minor`.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set(["0.2"]);
+export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set(["0.3"]);
 /** The DPoP algorithm every company accepts (§3.2): a list a company publishes includes it. */
 export const DPOP_REQUIRED_ALGORITHM = "ES256";
+/** OAuth scope syntax (RFC 6749 §3.3): one scope token. */
+const SCOPE = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
+/** Scope names starting with this are reserved for the protocol, which defines none (§4.4). */
+export const RESERVED_SCOPE_PREFIX = "poppy:";
+/** The grants a Company's token endpoint MUST accept (§3.2): Sessions and Account Tokens. */
+export const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+export const REFRESH_TOKEN_GRANT = "refresh_token";
+/** The grants that say the Company offers Direct and Device Sign-In (§3.2, §4.4). */
+export const AUTHORIZATION_CODE_GRANT = "authorization_code";
+export const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+/** The grant for a Bearer token at an MCP server that doesn't support DPoP (§4.3). */
+export const TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange";
+/** `changes` values a scope hint may give (§4.4); any other is read as `irreversible`. */
+export const SCOPE_CHANGES = ["none", "reversible", "irreversible"] as const;
+export type ScopeChanges = (typeof SCOPE_CHANGES)[number];
+
+function scopeToken(value: unknown, label: string): string {
+  if (typeof value !== "string" || !SCOPE.test(value)) {
+    throw new ProtocolValidationError("invalid_scope", `${label} must follow OAuth scope syntax`);
+  }
+  return value;
+}
+
+/**
+ * A loopback redirect URI (RFC 8252 §7.3): `http` to a loopback IP literal, any port.
+ *
+ * An app on the User's computer receives Direct Sign-In's answer there (§4.1).
+ */
+export function isLoopbackRedirect(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" || !parsed.hostname || parsed.username || parsed.password) {
+    return false;
+  }
+  if (parsed.hash || value.includes("#")) return false;
+  const host = parsed.hostname;
+  if (host.startsWith("[") && host.endsWith("]")) return host === "[::1]";
+  const octets = host.split(".");
+  // The WHATWG parser normalizes IPv4 literals; a name is not a loopback IP literal.
+  return (
+    octets.length === 4 &&
+    octets.every((octet) => /^(0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255) &&
+    octets[0] === "127"
+  );
+}
+
+/**
+ * Whether `given` is the redirect URI `registered` names (§4.1, §4.5).
+ *
+ * Exactly, except that a loopback redirect URI matches with any port (RFC 8252 §7.3).
+ */
+export function redirectUriMatches(registered: string, given: string): boolean {
+  if (registered === given) return true;
+  if (!(isLoopbackRedirect(registered) && isLoopbackRedirect(given))) return false;
+  const one = new URL(registered);
+  const other = new URL(given);
+  return (
+    one.hostname === other.hostname && one.pathname === other.pathname && one.search === other.search
+  );
+}
 
 export interface Organization extends UnknownFields {
   readonly name: string;
@@ -31,17 +95,34 @@ export interface MediatedField extends UnknownFields {
   readonly secret: boolean;
 }
 
+/** Mediated Sign-In, transitional (§4.7): the only sign-in type with its own scopes. */
 export interface MediatedSignIn extends ScopeOption {
   readonly endpoint: string;
   readonly fields: readonly MediatedField[];
 }
 
+/** What a scope allows, its most consequential operation (§4.4): a Company's claim. */
+export interface ScopeHint extends UnknownFields {
+  readonly changes: string;
+  readonly personal_data: boolean;
+}
+
+/** A hint's `changes`, with a value this SDK doesn't know read as `irreversible` (§4.4). */
+export function effectiveChanges(hint: ScopeHint): ScopeChanges {
+  return hint.changes === "none" || hint.changes === "reversible" ? hint.changes : "irreversible";
+}
+
+/**
+ * `auth` (§3.1): the issuer, Mediated Sign-In, and the Company's scopes.
+ *
+ * Direct and Device Sign-In are not here: the issuer's `grant_types_supported` says
+ * whether the Company offers them (§3.2, §4.4).
+ */
 export interface AuthCapabilities extends UnknownFields {
   readonly issuer: string;
-  readonly direct?: ScopeOption;
-  readonly device?: ScopeOption;
   readonly mediated?: MediatedSignIn;
-  readonly custom_scopes?: Readonly<Record<string, string>>;
+  readonly scopes: Readonly<Record<string, string>>;
+  readonly scope_hints: Readonly<Record<string, ScopeHint>>;
 }
 
 export interface AgentProtocol extends UnknownFields {
@@ -74,6 +155,11 @@ export interface FeedbackDescriptor extends UnknownFields {
   readonly endpoint: string;
 }
 
+/** Where the tasks the Company chose not to offer through the protocol are listed (§8.1). */
+export interface ExcludedTasksDescriptor extends UnknownFields {
+  readonly url: string;
+}
+
 export interface DiscoveryDocument extends UnknownFields {
   readonly protocol_version: string;
   readonly organization: Organization;
@@ -82,17 +168,56 @@ export interface DiscoveryDocument extends UnknownFields {
   readonly web?: WebDescriptor;
   readonly apis: readonly ApiDescriptor[];
   readonly feedback?: FeedbackDescriptor;
+  readonly excluded_tasks?: ExcludedTasksDescriptor;
   readonly extensions: Readonly<Record<string, ExtensionDescriptor>>;
 }
 
+/** The issuer's RFC 8414 metadata, with the fields this protocol requires (§3.2). */
 export interface OAuthServerMetadata extends UnknownFields {
   readonly issuer: string;
   readonly token_endpoint: string;
   readonly revocation_endpoint: string;
+  readonly grant_types_supported: readonly string[];
+  /**
+   * RFC 9728 §4: `https://{domain}` for every domain whose `poppy.json` names the issuer,
+   * exactly as written, compared as a string (§3.2).
+   */
+  readonly protected_resources: readonly string[];
   readonly authorization_endpoint?: string;
   readonly device_authorization_endpoint?: string;
-  readonly poppy_domains: readonly string[];
+  readonly pushed_authorization_request_endpoint?: string;
+  readonly scopes_supported?: readonly string[];
   readonly dpop_signing_alg_values_supported?: readonly string[];
+}
+
+/** Whether the Company offers Direct Sign-In (§3.2, §4.4). */
+export function offersDirect(metadata: OAuthServerMetadata): boolean {
+  return metadata.grant_types_supported.includes(AUTHORIZATION_CODE_GRANT);
+}
+
+/** Whether the Company offers Device Sign-In (§3.2, §4.4). */
+export function offersDevice(metadata: OAuthServerMetadata): boolean {
+  return metadata.grant_types_supported.includes(DEVICE_CODE_GRANT);
+}
+
+/** Whether Bearer tokens for MCP servers without DPoP can be had (§4.3). */
+export function offersTokenExchange(metadata: OAuthServerMetadata): boolean {
+  return metadata.grant_types_supported.includes(TOKEN_EXCHANGE_GRANT);
+}
+
+/**
+ * Whether `protected_resources` names `https://{domain}` (§3.2).
+ *
+ * Exactly, except that the host compares ignoring case: an entry with a path, a port or
+ * a trailing slash does not match.
+ */
+export function listsResource(metadata: OAuthServerMetadata, domain: string): boolean {
+  const wanted = domain.toLowerCase().replace(/\.$/, "");
+  return metadata.protected_resources.some((entry) => {
+    if (!entry.startsWith("https://")) return false;
+    const host = entry.slice("https://".length);
+    return Boolean(host) && !/[/?#:@]/.test(host) && host.toLowerCase() === wanted;
+  });
 }
 
 export interface ClientMetadata extends UnknownFields {
@@ -153,9 +278,22 @@ export interface Operation extends UnknownFields {
   readonly result: OperationResult | null;
 }
 
+/**
+ * Who wrote a message (§7.4): `agent` or `human`, and for a Company message, who.
+ *
+ * `id`, `name` and `image` name the Company's person or AI persona; each is optional, and
+ * the Personal Agent never sends them.
+ */
+export interface Author extends UnknownFields {
+  readonly type: "agent" | "human";
+  readonly id?: string;
+  readonly name?: string;
+  readonly image?: string;
+}
+
 export interface Message extends UnknownFields {
   readonly id: string;
-  readonly sender: "agent" | "human";
+  readonly author: Author;
   readonly role?: "user" | "company";
   readonly text?: string;
   readonly data?: Readonly<Record<string, unknown>>;
@@ -173,7 +311,7 @@ export interface ConversationEvent extends UnknownFields {
   readonly message?: Message;
   readonly status?: ConversationStatus;
   readonly responder?: ConversationResponder;
-  readonly error?: "sign_in_required" | "insufficient_scope";
+  readonly error?: "insufficient_scope";
   readonly scope?: string;
   readonly reason?: string;
   readonly conversation_id?: string;
@@ -350,7 +488,9 @@ function scopes(value: unknown, label: string): ScopeOption {
   const source = record(value, label);
   return {
     ...source,
-    scopes: array(source.scopes ?? [], `${label}.scopes`).map((item) => string(item, "scope")),
+    scopes: array(source.scopes ?? [], `${label}.scopes`).map((item) =>
+      scopeToken(item, `${label}.scopes entry`),
+    ),
   } as ScopeOption;
 }
 
@@ -412,22 +552,39 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
         fields,
       } as MediatedSignIn;
     }
+    const scopeNames = stringMap(authSource.scopes ?? {}, "auth.scopes");
+    for (const name of Object.keys(scopeNames)) {
+      scopeToken(name, "auth.scopes name");
+      if (name.startsWith(RESERVED_SCOPE_PREFIX)) {
+        // The protocol defines no scope; `poppy:` names are its own (§4.4).
+        throw new ProtocolValidationError(
+          "invalid_scope",
+          "scope names starting with poppy: are reserved",
+        );
+      }
+    }
+    const hintsSource = record(authSource.scope_hints ?? {}, "auth.scope_hints");
+    const scopeHints = Object.fromEntries(
+      Object.entries(hintsSource).map(([name, item]) => {
+        scopeToken(name, "auth.scope_hints name");
+        const hint = record(item, `auth.scope_hints.${name}`);
+        return [
+          name,
+          {
+            ...hint,
+            changes: string(hint.changes, `auth.scope_hints.${name}.changes`),
+            personal_data: boolean(hint.personal_data, `auth.scope_hints.${name}.personal_data`),
+          } as ScopeHint,
+        ];
+      }),
+    );
     auth = {
       ...authSource,
       // Kept exactly as written: the issuer is compared character for character (§3.2).
       issuer: httpsUrl(authSource.issuer, "auth.issuer"),
-      ...(authSource.direct === undefined
-        ? {}
-        : { direct: scopes(authSource.direct, "auth.direct") }),
-      ...(authSource.device === undefined
-        ? {}
-        : { device: scopes(authSource.device, "auth.device") }),
       ...(mediated === undefined ? {} : { mediated }),
-      ...(authSource.custom_scopes === undefined
-        ? {}
-        : {
-            custom_scopes: stringMap(authSource.custom_scopes, "auth.custom_scopes"),
-          }),
+      scopes: scopeNames,
+      scope_hints: scopeHints,
     } as AuthCapabilities;
   }
 
@@ -494,6 +651,15 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     feedback = { ...feedbackSource, endpoint: httpsUrl(feedbackSource.endpoint, "feedback.endpoint") };
   }
 
+  let excludedTasks: ExcludedTasksDescriptor | undefined;
+  if (source.excluded_tasks !== undefined) {
+    const excludedSource = record(source.excluded_tasks, "excluded_tasks");
+    excludedTasks = {
+      ...excludedSource,
+      url: httpsUrl(excludedSource.url, "excluded_tasks.url"),
+    };
+  }
+
   if (!agent && apis.length === 0 && !web) {
     throw new ProtocolValidationError(
       "missing_interface",
@@ -518,6 +684,7 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     ...(web ? { web } : {}),
     apis,
     ...(feedback ? { feedback } : {}),
+    ...(excludedTasks ? { excluded_tasks: excludedTasks } : {}),
     extensions: parsedExtensions,
   } as DiscoveryDocument;
 }
@@ -534,41 +701,62 @@ export function dpopAlgorithms(value: unknown, label: string): readonly string[]
 
 export function parseOAuthServerMetadata(value: unknown): OAuthServerMetadata {
   const source = record(value, "OAuth metadata");
-  const poppyDomains = array(source.poppy_domains, "poppy_domains").map((item) =>
-    domain(item, "poppy_domains entry"),
+  const grants = array(source.grant_types_supported, "grant_types_supported").map((item) =>
+    string(item, "grant_types_supported entry"),
   );
-  if (poppyDomains.length === 0) {
+  if (!grants.includes(JWT_BEARER_GRANT) || !grants.includes(REFRESH_TOKEN_GRANT)) {
     throw new ProtocolValidationError(
       "invalid_oauth_metadata",
-      "poppy_domains must not be empty",
+      "grant_types_supported must include the JWT bearer and refresh grants",
     );
   }
+  const resources = array(source.protected_resources, "protected_resources").map((item) =>
+    httpsUrl(item, "protected_resources entry"),
+  );
+  if (resources.length === 0) {
+    throw new ProtocolValidationError(
+      "invalid_oauth_metadata",
+      "protected_resources must not be empty",
+    );
+  }
+  const scopesSupported =
+    source.scopes_supported === undefined || source.scopes_supported === null
+      ? undefined
+      : array(source.scopes_supported, "scopes_supported").map((item) =>
+          scopeToken(item, "scopes_supported entry"),
+        );
   const algorithms = dpopAlgorithms(source.dpop_signing_alg_values_supported, "dpop_signing_alg_values_supported");
-  return {
+  const endpoint = (name: string): Record<string, string> => {
+    const item = source[name];
+    return item === undefined || item === null ? {} : { [name]: httpsUrl(item, name) };
+  };
+  const metadata = {
     ...source,
     // Compared with `auth.issuer` character for character (§3.2): never normalized.
     issuer: httpsUrl(source.issuer, "issuer"),
     token_endpoint: httpsUrl(source.token_endpoint, "token_endpoint"),
     revocation_endpoint: httpsUrl(source.revocation_endpoint, "revocation_endpoint"),
-    ...(source.authorization_endpoint === undefined
-      ? {}
-      : {
-          authorization_endpoint: httpsUrl(
-            source.authorization_endpoint,
-            "authorization_endpoint",
-          ),
-        }),
-    ...(source.device_authorization_endpoint === undefined
-      ? {}
-      : {
-          device_authorization_endpoint: httpsUrl(
-            source.device_authorization_endpoint,
-            "device_authorization_endpoint",
-          ),
-        }),
-    poppy_domains: poppyDomains,
+    ...endpoint("authorization_endpoint"),
+    ...endpoint("device_authorization_endpoint"),
+    ...endpoint("pushed_authorization_request_endpoint"),
+    grant_types_supported: grants,
+    protected_resources: resources,
+    ...(scopesSupported === undefined ? {} : { scopes_supported: scopesSupported }),
     ...(algorithms === undefined ? {} : { dpop_signing_alg_values_supported: algorithms }),
   } as OAuthServerMetadata;
+  if (offersDirect(metadata) && metadata.authorization_endpoint === undefined) {
+    throw new ProtocolValidationError(
+      "invalid_oauth_metadata",
+      "authorization_code needs authorization_endpoint",
+    );
+  }
+  if (offersDevice(metadata) && metadata.device_authorization_endpoint === undefined) {
+    throw new ProtocolValidationError(
+      "invalid_oauth_metadata",
+      "the device grant needs device_authorization_endpoint",
+    );
+  }
+  return metadata;
 }
 
 export function parseClientMetadata(value: unknown): ClientMetadata {
@@ -576,16 +764,17 @@ export function parseClientMetadata(value: unknown): ClientMetadata {
   const clientId = httpsUrl(source.client_id, "client_id");
   const clientDomain = new URL(clientId).hostname;
   const jwksUri = httpsUrl(source.jwks_uri, "jwks_uri");
+  // An HTTPS URL, or a loopback redirect URI for an app on the User's computer (§4.1).
   const redirectUris = array(source.redirect_uris ?? [], "redirect_uris").map((item) =>
-    httpsUrl(item, "redirect URI"),
+    typeof item === "string" && isLoopbackRedirect(item) ? item : httpsUrl(item, "redirect URI"),
   );
   if (
     new URL(jwksUri).hostname !== clientDomain ||
-    redirectUris.some((uri) => new URL(uri).hostname !== clientDomain)
+    redirectUris.some((uri) => !isLoopbackRedirect(uri) && new URL(uri).hostname !== clientDomain)
   ) {
     throw new ProtocolValidationError(
       "client_domain_mismatch",
-      "jwks_uri and redirect_uris must use the client_id domain",
+      "jwks_uri and HTTPS redirect_uris must use the client_id domain",
     );
   }
   const authMethod = source.token_endpoint_auth_method ?? "private_key_jwt";
@@ -789,6 +978,20 @@ function messageContext(
   return context;
 }
 
+/** Who wrote a message (§7.4): `type`, and the Company's optional `id`, `name`, `image`. */
+export function parseAuthor(value: unknown): Author {
+  const source = nullsAbsent(value, "message.author", ["id", "name", "image"]);
+  return {
+    ...source,
+    type: oneOf(source.type, ["agent", "human"] as const, "message.author.type"),
+    ...(source.id === undefined ? {} : { id: identifier(source.id, "message.author.id") }),
+    ...(source.name === undefined ? {} : { name: string(source.name, "message.author.name") }),
+    ...(source.image === undefined
+      ? {}
+      : { image: httpsUrl(source.image, "message.author.image") }),
+  } as Author;
+}
+
 export function parseMessage(value: unknown): Message {
   const source = nullsAbsent(value, "message", [
     "role",
@@ -811,7 +1014,7 @@ export function parseMessage(value: unknown): Message {
   return {
     ...source,
     id: identifier(source.id, "message.id"),
-    sender: oneOf(source.sender, ["agent", "human"] as const, "message.sender"),
+    author: parseAuthor(source.author),
     ...(source.role === undefined
       ? {}
       : { role: oneOf(source.role, ["user", "company"] as const, "message.role") }),
@@ -862,7 +1065,7 @@ export function parseConversationEvent(value: unknown): ConversationEvent {
       : {
           error: oneOf(
             source.error,
-            ["sign_in_required", "insufficient_scope"] as const,
+            ["insufficient_scope"] as const,
             "conversation event.error",
           ),
         }),
@@ -888,19 +1091,12 @@ export function parseConversationEvent(value: unknown): ConversationEvent {
       "a state event requires status and responder",
     );
   }
-  if (type === "authorization") {
-    if (parsed.error === undefined) {
-      throw new ProtocolValidationError(
-        "invalid_event",
-        "an authorization event requires error",
-      );
-    }
-    if (parsed.error === "insufficient_scope" && parsed.scope === undefined) {
-      throw new ProtocolValidationError(
-        "invalid_event",
-        "insufficient_scope requires scope",
-      );
-    }
+  // Always both: the error, and the scopes the request needs (§7.11).
+  if (type === "authorization" && (parsed.error === undefined || !parsed.scope)) {
+    throw new ProtocolValidationError(
+      "invalid_event",
+      "an authorization event requires error and scope",
+    );
   }
   if (type === "user_requested" && parsed.reason === undefined) {
     throw new ProtocolValidationError(
@@ -935,4 +1131,128 @@ export function parseConversationEventPage(value: unknown): ConversationEventPag
     ),
     responder: oneOf(source.responder, ["agent", "human"] as const, "responder"),
   } as ConversationEventPage;
+}
+
+/** Where an alternative points (§8.2): an OpenAPI operation, an MCP tool, or a page. */
+export interface AlternativeReference extends UnknownFields {
+  readonly type: string;
+  readonly url?: string;
+  readonly operation_id?: string;
+  readonly tool?: string;
+}
+
+/**
+ * Another way to do a task (§8.2): `instructions`, `references`, or both.
+ *
+ * Content from the company (§9.1): a description of its interfaces, never instructions
+ * the agent has to follow.
+ */
+export interface Alternative extends UnknownFields {
+  readonly instructions?: string;
+  readonly references: readonly AlternativeReference[];
+}
+
+/** A task the company chose not to offer through the protocol (§8.1). */
+export interface ExcludedTask extends UnknownFields {
+  readonly task: string;
+  readonly alternative?: Alternative;
+}
+
+/** The document at `excluded_tasks.url` (§8.1): the same for every user. */
+export interface ExcludedTasks extends UnknownFields {
+  readonly tasks: readonly ExcludedTask[];
+}
+
+const REFERENCE_FIELDS: Readonly<Record<string, readonly ("url" | "operation_id" | "tool")[]>> = {
+  openapi: ["url", "operation_id"],
+  mcp: ["url", "tool"],
+  web: ["url"],
+};
+
+export function parseAlternativeReference(value: unknown): AlternativeReference {
+  const source = nullsAbsent(value, "reference", ["url", "operation_id", "tool"]);
+  const reference = {
+    ...source,
+    type: string(source.type, "reference.type"),
+    ...(source.url === undefined ? {} : { url: httpsUrl(source.url, "reference.url") }),
+    ...(source.operation_id === undefined
+      ? {}
+      : { operation_id: string(source.operation_id, "reference.operation_id") }),
+    ...(source.tool === undefined ? {} : { tool: string(source.tool, "reference.tool") }),
+  } as AlternativeReference;
+  for (const name of REFERENCE_FIELDS[reference.type] ?? []) {
+    if (reference[name] === undefined) {
+      throw new ProtocolValidationError(
+        "invalid_alternative",
+        `a ${reference.type} reference lacks a required field`,
+      );
+    }
+  }
+  return reference;
+}
+
+export function parseAlternative(value: unknown): Alternative {
+  const source = nullsAbsent(value, "alternative", ["instructions"]);
+  let instructions: string | undefined;
+  if (source.instructions !== undefined) {
+    instructions = string(source.instructions, "alternative.instructions");
+    if (instructions.length > 2000) {
+      throw new ProtocolValidationError(
+        "invalid_alternative",
+        "alternative.instructions must be at most 2000 characters",
+      );
+    }
+  }
+  const references = array(source.references ?? [], "alternative.references").map(
+    parseAlternativeReference,
+  );
+  if (instructions === undefined && references.length === 0) {
+    throw new ProtocolValidationError(
+      "invalid_alternative",
+      "an alternative needs instructions or references",
+    );
+  }
+  return {
+    ...source,
+    ...(instructions === undefined ? {} : { instructions }),
+    references,
+  } as Alternative;
+}
+
+/**
+ * The references an agent may follow (§8.2).
+ *
+ * Types it knows only, and an `openapi` or `mcp` reference only when its `url` is an API
+ * of that type the company's poppy.json lists: never another company's server.
+ */
+export function usableReferences(
+  alternative: Alternative,
+  document: DiscoveryDocument,
+): readonly AlternativeReference[] {
+  return alternative.references.filter(
+    (reference) =>
+      reference.type === "web" ||
+      ((reference.type === "openapi" || reference.type === "mcp") &&
+        document.apis.some((api) => api.type === reference.type && api.url === reference.url)),
+  );
+}
+
+export function parseExcludedTasks(value: unknown): ExcludedTasks {
+  const source = record(value, "excluded tasks");
+  const tasks = array(source.tasks, "excluded tasks.tasks").map((item, index) => {
+    const task = nullsAbsent(item, `tasks[${index}]`, ["alternative"]);
+    const name = string(task.task, `tasks[${index}].task`);
+    if (name.length > 200) {
+      throw new ProtocolValidationError(
+        "invalid_excluded_task",
+        `tasks[${index}].task must be at most 200 characters`,
+      );
+    }
+    return {
+      ...task,
+      task: name,
+      ...(task.alternative === undefined ? {} : { alternative: parseAlternative(task.alternative) }),
+    } as ExcludedTask;
+  });
+  return { ...source, tasks } as ExcludedTasks;
 }

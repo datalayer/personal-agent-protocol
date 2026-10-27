@@ -17,21 +17,25 @@ import {
   buildClientAssertionClaims,
   buildPapReactor,
   buildSessionAssertionClaims,
+  parseTokenResponse,
+  sessionTokenFromResponse,
 } from "../../lib/index.js";
+
+/** A Session Key's thumbprint: 43 base64url characters (RFC 7638, SHA-256). */
+const KEY = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
 
 const tokenResponse = {
   access_token: "opaque-session-token",
   token_type: "DPoP",
   expires_in: 3600,
-  scope: "",
-  session_id: "ses_2Lm0",
-  signed_in: false,
 };
 
 function securityPlugin() {
   const purposes = [];
   const claims = [];
   const proofRequests = [];
+  const made = [];
+  const discarded = [];
   const signer = {
     async sign(signed, options) {
       purposes.push(options.purpose);
@@ -44,6 +48,13 @@ function securityPlugin() {
     },
   };
   const dpop = {
+    async newSessionKey() {
+      made.push(`${"k".repeat(42)}${made.length}`);
+      return made.at(-1);
+    },
+    async discardSessionKey({ sessionKey }) {
+      discarded.push(sessionKey);
+    },
     async create(request) {
       proofRequests.push(request);
       return {
@@ -64,6 +75,8 @@ function securityPlugin() {
     purposes,
     claims,
     proofRequests,
+    made,
+    discarded,
   };
 }
 
@@ -96,15 +109,19 @@ test("starts and renews a signed-out session over HTTP", async () => {
   const started = await client.start({ ...requestOptions, signal: controller.signal });
   const renewed = await client.renew({
     ...requestOptions,
-    sessionId: started.sessionId,
+    sessionKey: started.sessionKey,
     signal: controller.signal,
   });
   reactor.stop();
 
-  assert.equal(started.sessionId, "ses_2Lm0");
-  assert.equal(renewed.sessionId, "ses_2Lm0");
-  assert.equal(forms[0].has("session_id"), false);
-  assert.equal(forms[1].get("session_id"), "ses_2Lm0");
+  // A new key starts the Session; the renewal is signed with the same key, which names the
+  // Session: nothing else does (§4.3).
+  assert.equal(started.sessionKey, security.made[0]);
+  assert.equal(renewed.sessionKey, security.made[0]);
+  assert.deepEqual(security.proofRequests.map((request) => request.sessionKey), [security.made[0], security.made[0]]);
+  assert.ok(forms.every((form) => !form.has("session_id") && !form.has("session_key")));
+  assert.equal(started.signedIn, false);
+  assert.deepEqual(started.scopes, []);
   assert.equal(forms[0].get("grant_type"), JWT_BEARER_GRANT);
   assert.deepEqual(signals, [controller.signal, controller.signal]);
   assert.deepEqual(security.purposes, [
@@ -139,7 +156,7 @@ test("retries one DPoP nonce challenge with fresh assertions and proof", async (
   const token = await new SessionClient({ reactor, fetch }).start(requestOptions);
   reactor.stop();
 
-  assert.equal(token.sessionId, "ses_2Lm0");
+  assert.equal(token.sessionKey, security.made[0]);
   assert.deepEqual(
     security.proofRequests.map((request) => request.nonce),
     [undefined, "company-nonce"],
@@ -172,7 +189,7 @@ test("rejects duplicate members in a token response", async () => {
   const fetch = async () =>
     new Response(
       '{"access_token":"one","access_token":"two","token_type":"DPoP",' +
-        '"expires_in":3600,"session_id":"ses_2Lm0","signed_in":false}',
+        '"expires_in":3600}',
       { status: 200, headers: { "content-type": "application/json" } },
     );
   const reactor = buildPapReactor({ fetch }, [security.plugin]);
@@ -280,31 +297,83 @@ test("extension_required and rate_limited at the token endpoint are read", async
   reactor.stop();
 });
 
-test("a token for an MCP server uses the scheme its token_type names", async () => {
+test("the shared Session Token fixture is a signed-out token", () => {
+  const token = sessionTokenFromResponse(parseTokenResponse(tokenResponse), { sessionKey: KEY, signedIn: false });
+  // Signed out: no `scope` in the response, and none granted (§4.2).
+  assert.deepEqual(token.scopes, []);
+  assert.equal(token.signedIn, false);
+});
+
+test("a signed-in response without scope granted exactly what was asked", () => {
+  const response = parseTokenResponse({ access_token: "t", token_type: "DPoP", expires_in: 60, refresh_token: "r" });
+  const token = sessionTokenFromResponse(response, { sessionKey: KEY, signedIn: true, requestedScopes: ["orders:read"] });
+  assert.deepEqual(token.scopes, ["orders:read"]);
+  // A sign-in grants at least one scope (§4.4).
+  assert.throws(() => sessionTokenFromResponse(response, { sessionKey: KEY, signedIn: true }), (error) => error.code === "invalid_token_response");
+});
+
+test("invalid_grant on a renewal discards the key for good", async () => {
+  const security = securityPlugin();
+  const answers = [() => json(tokenResponse), () => json({ error: "invalid_grant" }, 400)];
+  const fetch = async () => answers.shift()();
+  const reactor = buildPapReactor({ fetch }, [security.plugin]);
+  const client = new SessionClient({ reactor, fetch });
+  const started = await client.start(requestOptions);
+  await assert.rejects(
+    client.renew({ ...requestOptions, sessionKey: started.sessionKey }),
+    (error) => error instanceof SessionError && error.code === "invalid_grant",
+  );
+  reactor.stop();
+  // The Session has ended: its key is never used again (§4.2).
+  assert.deepEqual(security.discarded, [started.sessionKey]);
+});
+
+test("an Agent ID rides in the Session assertion", async () => {
+  const security = securityPlugin();
+  const fetch = async () => json(tokenResponse);
+  const reactor = buildPapReactor({ fetch }, [security.plugin]);
+  const client = new SessionClient({ reactor, fetch });
+  await client.start({ ...requestOptions, agentId: "agt_shopping" });
+  await client.start(requestOptions);
+  reactor.stop();
+  const sessions = security.claims.filter((_, index) => security.purposes[index] === "session_assertion");
+  assert.equal(sessions[0].agent_id, "agt_shopping");
+  assert.equal("agent_id" in sessions[1], false); // a user with one agent leaves it out (§4.2)
+  assert.throws(() => buildSessionAssertionClaims({ ...requestOptions, agentId: "not valid!" }), (error) => error.code === "invalid_agent_id");
+});
+
+test("a Bearer token for an MCP server comes from Token Exchange", async () => {
   const security = securityPlugin();
   const forms = [];
   const proofs = [];
-  const answers = ["DPoP", "Bearer", "Bearer", "DPoP"];
+  const answers = [
+    tokenResponse,
+    { access_token: "bearer", token_type: "Bearer", issued_token_type: "urn:ietf:params:oauth:token-type:access_token", expires_in: 60 },
+    { access_token: "dpop", token_type: "DPoP", expires_in: 60 },
+  ];
   const fetch = async (_input, init) => {
     forms.push(new URLSearchParams(init.body));
     proofs.push("DPoP" in init.headers);
-    return json({ ...tokenResponse, token_type: answers.shift() });
+    return json(answers.shift());
   };
   const reactor = buildPapReactor({ fetch }, [security.plugin]);
   const client = new SessionClient({ reactor, fetch });
   const mcp = "https://mcp.example.com/mcp";
-  const dpop = await client.tokenForMcp({ ...requestOptions, resource: mcp, dpop: true });
-  // A proof was sent, and the server takes no DPoP: the Bearer token is used (§4.3).
-  const bearerWithProof = await client.tokenForMcp({ ...requestOptions, resource: mcp, dpop: true });
-  const bearer = await client.tokenForMcp({ ...requestOptions, resource: mcp, dpop: false });
-  // No proof was sent: a DPoP token can't be one.
+  const session = await client.start(requestOptions);
+  const { pairwiseUserId: _user, ...exchange } = requestOptions;
+  const bearer = await client.tokenForMcp({ ...exchange, sessionKey: session.sessionKey, subjectToken: session.accessToken, resource: mcp });
+  // Token Exchange answers with a Bearer token, or it is refused (§4.3).
   await assert.rejects(
-    client.tokenForMcp({ ...requestOptions, resource: mcp, dpop: false }),
+    client.tokenForMcp({ ...exchange, sessionKey: session.sessionKey, subjectToken: session.accessToken, resource: mcp }),
     (error) => error instanceof SessionError && error.code === "unexpected_token_type",
   );
   reactor.stop();
-  assert.deepEqual([dpop.tokenType, bearerWithProof.tokenType, bearer.tokenType], ["DPoP", "Bearer", "Bearer"]);
-  assert.deepEqual(proofs, [true, true, false, false]);
-  assert.ok(forms.every((form) => form.get("resource") === mcp));
-  assert.ok(forms.every((form) => !form.has("session_id"))); // starting a Session for it
+  assert.equal(bearer.tokenType, "Bearer");
+  assert.equal(bearer.sessionKey, session.sessionKey);
+  // Every token request carries a proof, Token Exchange included (§4.3).
+  assert.deepEqual(proofs, [true, true, true]);
+  assert.equal(forms[1].get("grant_type"), "urn:ietf:params:oauth:grant-type:token-exchange");
+  assert.equal(forms[1].get("subject_token"), "opaque-session-token");
+  assert.equal(forms[1].get("subject_token_type"), "urn:ietf:params:oauth:token-type:access_token");
+  assert.equal(forms[1].get("resource"), mcp);
 });

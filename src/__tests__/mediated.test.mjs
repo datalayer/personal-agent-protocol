@@ -30,10 +30,10 @@ const signedOut = {
   tokenType: "DPoP",
   expiresIn: 300,
   scopes: [],
-  sessionId: "ses_1",
+  sessionKey: "K".repeat(43),
   signedIn: false,
 };
-const who = { tenantId: "t", pairwiseUserId: "usr_1", issuer: "https://auth.shop.example" };
+const who = { tenantId: "t", issuer: "https://auth.shop.example" };
 const credentials = { email: "ada@example.com", password: "correct horse" };
 
 function memory() {
@@ -83,7 +83,7 @@ const json = (status, body, headers = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 const complete = (extra = {}) => ({
   status: "complete", access_token: "signed-in", token_type: "DPoP", expires_in: 300,
-  scope: "orders:read", session_id: "ses_1", signed_in: true, refresh_token: "account-token", ...extra,
+  scope: "orders:read", refresh_token: "account-token", ...extra,
 });
 const signIn = (client) =>
   client.signIn({ mediated, organization: { name: "Shop", domain: "shop.example" }, scopes: ["orders:read", "orders:return"], token: signedOut, ...who });
@@ -113,7 +113,7 @@ test("a one-time code continues without the credentials, from the same Session o
   assert.equal(started.status, "code_required");
   assert.equal(started.sentTo, "a•••@example.com");
   await assert.rejects(
-    client.submitCode(started.reference, { token: { ...signedOut, sessionId: "ses_2" }, ...who }),
+    client.submitCode(started.reference, { token: { ...signedOut, sessionKey: "O".repeat(43) }, ...who }),
     (error) => error.code === "session_mismatch",
   );
   const done = await client.submitCode(started.reference, { token: signedOut, ...who });

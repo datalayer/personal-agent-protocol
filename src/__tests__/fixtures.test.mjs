@@ -19,7 +19,8 @@ import {
   parseMessage,
   parseOAuthServerMetadata,
   parseOperation,
-  parseSessionToken,
+  parseTokenResponse,
+  sessionTokenFromResponse,
 } from "../../lib/index.js";
 
 const fixtures = new URL("../../protocol/fixtures/", import.meta.url);
@@ -28,14 +29,14 @@ const invalid = (code) => (error) => error.code === code || (code === undefined 
 
 test("discovery fixture round-trips and preserves extensions", () => {
   const document = parseDiscoveryDocument(fixture("discovery-valid.json"));
-  assert.equal(document.protocol_version, "0.2");
+  assert.equal(document.protocol_version, "0.3");
   assert.equal(document.apis[1].type, "mcp");
   assert.equal(document.extensions.operations.endpoint, "https://api.example.com/poppy/operations");
 });
 
 test("discovery requires auth for an API", () => {
   assert.throws(() => parseDiscoveryDocument({
-    protocol_version: "0.2",
+    protocol_version: "0.3",
     organization: { name: "Example", domain: "example.com" },
     apis: [{ type: "openapi", url: "https://api.example.com/openapi.json", description: "Example" }],
   }));
@@ -69,14 +70,17 @@ test("shared client, conversation, and operation fixtures", () => {
 
 test("the JWKS, OAuth metadata, and Session token fixtures parse", () => {
   assert.equal(parseJsonWebKeySet(fixture("jwks-valid.json")).keys[0].kid, "agent-signing-2026-10");
-  assert.deepEqual(parseOAuthServerMetadata(fixture("oauth-metadata-valid.json")).poppy_domains, ["example.com"]);
-  const token = parseSessionToken(fixture("session-token-valid.json"));
+  assert.deepEqual(parseOAuthServerMetadata(fixture("oauth-metadata-valid.json")).protected_resources, ["https://example.com", "https://mcp.example.com/mcp"]);
+  const token = sessionTokenFromResponse(parseTokenResponse(fixture("session-token-valid.json")), {
+    sessionKey: "K".repeat(43),
+    signedIn: false,
+  });
   assert.equal(token.signedIn, false);
-  assert.deepEqual(token.scopes, ["poppy:read", "poppy:write"]);
+  assert.deepEqual(token.scopes, []);
 });
 
 test("a message requires content", () => {
-  assert.throws(() => parseMessage({ id: "msg_empty", sender: "agent" }), /requires text, data, context, or operation/);
+  assert.throws(() => parseMessage({ id: "msg_empty", author: { type: "agent" } }), /requires text, data, context, or operation/);
 });
 
 test("a known conversation event requires its fields", () => {
@@ -112,8 +116,8 @@ test("optional members serialized as null read as absent, as Python's models do"
   assert.equal("terms" in operation, false);
   assert.equal("expires_at" in operation, false);
   assert.deepEqual(operation.result, { summary: "Nothing was changed." });
-  const message = parseMessage({ id: "msg_1", sender: "agent", role: null, text: "Hi", data: null, context: null, operation: null });
-  assert.deepEqual(message, { id: "msg_1", sender: "agent", text: "Hi" });
+  const message = parseMessage({ id: "msg_1", author: { type: "agent" }, role: null, text: "Hi", data: null, context: null, operation: null });
+  assert.deepEqual(message, { id: "msg_1", author: { type: "agent" }, text: "Hi" });
   // A null where a member is required is still refused.
   assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), summary: null }));
   assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), expires_at: null }), /requires expires_at/);

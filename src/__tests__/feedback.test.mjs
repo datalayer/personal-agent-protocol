@@ -21,6 +21,7 @@ import {
   feedbackEndpoint,
   parseDiscoveryDocument,
   parseFeedbackReport,
+  usableReferences,
 } from "../../lib/index.js";
 import { CompanyRateLimits } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
@@ -47,7 +48,7 @@ async function world({ config, plugins } = {}) {
   const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const start = () =>
     sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT });
@@ -64,10 +65,9 @@ async function signedIn(w) {
     clientId: w.identity.clientId,
     scopes: ["orders:read"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
     organization: w.company.document.organization,
-    poppyDomains: w.metadata.poppy_domains,
+    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -90,7 +90,7 @@ test("a report is missing, task and description only", () => {
 });
 
 test("feedback is listed with an HTTPS endpoint, and needs auth", () => {
-  const base = { protocol_version: "0.2", organization: { name: "Example", domain: "example.com" }, web: {} };
+  const base = { protocol_version: "0.3", organization: { name: "Example", domain: "example.com" }, web: {} };
   const listed = parseDiscoveryDocument({ ...base, auth: { issuer: "https://example.com" }, feedback: { endpoint: "https://example.com/poppy/feedback" } });
   assert.equal(feedbackEndpoint(listed), "https://example.com/poppy/feedback");
   assert.equal(feedbackEndpoint(parseDiscoveryDocument(base)), undefined);
@@ -106,9 +106,15 @@ test("a signed-out and a signed-in Session report, with no scope", async () => {
   const endpoint = feedbackEndpoint(w.company.document);
   assert.equal(endpoint, FEEDBACK);
   const client = new FeedbackClient({ transport: w.transport });
-  assert.equal(await client.report(endpoint, GIFT_CARD, { token: session, ...w.who }), undefined);
+  // The task can be done after all: 200 and an alternative, content from the company (§8.3).
+  const alternative = await client.report(endpoint, GIFT_CARD, { token: session, ...w.who });
+  assert.ok(alternative.instructions);
+  assert.deepEqual(usableReferences(alternative, w.company.document).map((reference) => reference.type), ["web"]);
   const token = await signedIn(w);
-  await client.report(endpoint, { task: "Return a jacket", description: "No return option in any channel." }, { token, ...w.who });
+  assert.equal(
+    await client.report(endpoint, { task: "Return a jacket", description: "No return option in any channel." }, { token, ...w.who }),
+    undefined,
+  );
   const reports = await w.shop.feedbackReports();
   assert.deepEqual(reports.map((report) => [report.kind, report.task]), [
     ["missing", "Pay with a gift card"],

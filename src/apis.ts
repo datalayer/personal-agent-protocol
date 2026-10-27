@@ -92,7 +92,6 @@ export interface ApiResponse {
 export interface ApiCallOptions {
   readonly token: SessionToken;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
   readonly issuer: string;
   /** A JSON body, sent as `application/json`. */
   readonly body?: unknown;
@@ -128,7 +127,7 @@ export class ApiClient {
   }
 
   /**
-   * One call; `sign_in_required` and `insufficient_scope` carry the scope asked for.
+   * One call; `insufficient_scope` carries the scopes the request needs (§6).
    *
    * A write sends `options.idempotencyKey`, or a new random one; pass the key of an
    * earlier attempt to retry the same request. A read takes none.
@@ -154,7 +153,6 @@ export class ApiClient {
     const response = await this.#transport.request(method, url, {
       token: options.token,
       tenantId: options.tenantId,
-      pairwiseUserId: options.pairwiseUserId,
       issuer: options.issuer,
       headers,
       ...(body === undefined ? {} : { body }),

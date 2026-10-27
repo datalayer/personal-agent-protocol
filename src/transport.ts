@@ -48,7 +48,6 @@ export interface DpopFetchClientOptions {
 export interface DpopFetchRequestOptions {
   readonly token: SessionToken;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
   readonly issuer: string;
   readonly headers?: Readonly<Record<string, string>>;
   /** Replayable request body. Streaming bodies are intentionally unsupported. */
@@ -160,7 +159,7 @@ export class DpopFetchClient {
         method: currentMethod,
         url: currentUrl.toString(),
         tenantId: options.tenantId,
-        subject: options.pairwiseUserId,
+        sessionKey: options.token.sessionKey,
         issuer: options.issuer,
         accessToken: options.token.accessToken,
         ...(nonce === undefined ? {} : { nonce }),

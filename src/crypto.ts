@@ -8,6 +8,8 @@ import {
   SignJWT,
   calculateJwkThumbprint,
   decodeProtectedHeader,
+  exportJWK,
+  generateKeyPair,
   importJWK,
   jwtVerify,
   type JWK,
@@ -108,7 +110,7 @@ export class JoseSigner implements Signer {
       const token = await new SignJWT(claims as JWTPayload)
         .setProtectedHeader({
           alg: this.#algorithm,
-          typ: _options.purpose === "browser_assertion" ? "poppy-browser+jwt" : "JWT",
+          typ: "JWT",
           ...(this.#keyId === undefined ? {} : { kid: this.#keyId }),
         })
         .sign(this.#privateKey);
@@ -125,30 +127,117 @@ export interface DpopKeyMaterial {
   readonly algorithm?: JoseAlgorithm;
 }
 
-export type DpopKeyResolver = (
-  request: DpopProofRequest,
-) => DpopKeyMaterial | Promise<DpopKeyMaterial>;
+/**
+ * Where Session Keys live: made one per Session, found by thumbprint, then forgotten.
+ *
+ * A host keeps them in its KMS or HSM; `InMemorySessionKeys` is for one process.
+ */
+export interface SessionKeyCustody {
+  generate(options: { readonly tenantId: string; readonly issuer: string }): Promise<DpopKeyMaterial>;
+  get(options: {
+    readonly tenantId: string;
+    readonly issuer: string;
+    readonly thumbprint: string;
+  }): Promise<DpopKeyMaterial | undefined>;
+  discard(options: {
+    readonly tenantId: string;
+    readonly issuer: string;
+    readonly thumbprint: string;
+  }): Promise<void>;
+}
+
+/** A public JWK's RFC 7638 SHA-256 thumbprint: a Session Key's name (§4.3). */
+export function jwkThumbprint(jwk: JWK): Promise<string> {
+  return calculateJwkThumbprint(jwk, "sha256");
+}
+
+/** Session Keys in this process's memory: a new P-256 key for each Session (§4.3). */
+export class InMemorySessionKeys implements SessionKeyCustody {
+  readonly #keys = new Map<string, DpopKeyMaterial>();
+
+  async generate(options: {
+    readonly tenantId: string;
+    readonly issuer: string;
+  }): Promise<DpopKeyMaterial> {
+    const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true });
+    const exported = await exportJWK(publicKey);
+    const publicJwk: JWK = {
+      kty: exported.kty as string,
+      crv: exported.crv as string,
+      x: exported.x as string,
+      y: exported.y as string,
+    };
+    const material: DpopKeyMaterial = { privateKey, publicJwk };
+    const thumbprint = await jwkThumbprint(material.publicJwk);
+    this.#keys.set(JSON.stringify([options.tenantId, options.issuer, thumbprint]), material);
+    return material;
+  }
+
+  async get(options: {
+    readonly tenantId: string;
+    readonly issuer: string;
+    readonly thumbprint: string;
+  }): Promise<DpopKeyMaterial | undefined> {
+    return this.#keys.get(JSON.stringify([options.tenantId, options.issuer, options.thumbprint]));
+  }
+
+  async discard(options: {
+    readonly tenantId: string;
+    readonly issuer: string;
+    readonly thumbprint: string;
+  }): Promise<void> {
+    this.#keys.delete(JSON.stringify([options.tenantId, options.issuer, options.thumbprint]));
+  }
+}
 
 export interface JoseDpopProofProviderOptions {
-  readonly resolveKey: DpopKeyResolver;
+  readonly keys: SessionKeyCustody;
   readonly now?: () => Date;
   readonly randomBytes?: (length: number) => Uint8Array;
 }
 
-/** Create fresh RFC 9449 proofs using per-user/company key material. */
+/** Create fresh RFC 9449 proofs, each with the key of its own Session (§4.3). */
 export class JoseDpopProofProvider implements DpopProofProvider {
-  readonly #resolveKey: DpopKeyResolver;
+  readonly keys: SessionKeyCustody;
   readonly #now: () => Date;
   readonly #randomBytes: (length: number) => Uint8Array;
 
   constructor(options: JoseDpopProofProviderOptions) {
-    this.#resolveKey = options.resolveKey;
+    this.keys = options.keys;
     this.#now = options.now ?? (() => new Date());
     this.#randomBytes = options.randomBytes ?? randomBytes;
   }
 
+  async newSessionKey(options: {
+    readonly tenantId: string;
+    readonly issuer: string;
+  }): Promise<string> {
+    const material = await this.keys.generate(options);
+    return jwkThumbprint(material.publicJwk);
+  }
+
+  async discardSessionKey(options: {
+    readonly tenantId: string;
+    readonly issuer: string;
+    readonly sessionKey: string;
+  }): Promise<void> {
+    await this.keys.discard({
+      tenantId: options.tenantId,
+      issuer: options.issuer,
+      thumbprint: options.sessionKey,
+    });
+  }
+
   async create(request: DpopProofRequest): Promise<SecretValue> {
-    const material = await this.#resolveKey(request);
+    const material = await this.keys.get({
+      tenantId: request.tenantId,
+      issuer: request.issuer,
+      thumbprint: request.sessionKey,
+    });
+    if (material === undefined) {
+      // A key this provider never made, or one it discarded: never a stand-in (§4.2).
+      throw new ProofError("unknown_session_key", "No Session Key with that thumbprint");
+    }
     const alg = algorithm(material.algorithm ?? "ES256");
     const jwk = publicJwk(material.publicJwk, alg);
     const entropy = this.#randomBytes(16);

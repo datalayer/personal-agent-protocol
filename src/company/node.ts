@@ -63,6 +63,15 @@ function lowerCaseHeaders(request: IncomingMessage): Record<string, string> {
   return headers;
 }
 
+/** Response headers; a `Set-Cookie` holding several cookies, one per line, is one each. */
+function outgoing(headers: Readonly<Record<string, string>>): Record<string, string | string[]> {
+  const result: Record<string, string | string[]> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    result[name] = name.toLowerCase() === "set-cookie" && value.includes("\n") ? value.split("\n") : value;
+  }
+  return result;
+}
+
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   response.writeHead(status, {
@@ -96,7 +105,7 @@ export function companyRequestListener(
           body,
         });
         if (answer.stream !== undefined) {
-          response.writeHead(answer.status, { ...answer.headers });
+          response.writeHead(answer.status, outgoing(answer.headers));
           for await (const chunk of answer.stream) response.write(chunk);
           response.end();
           return;
@@ -112,7 +121,7 @@ export function companyRequestListener(
           headers = { "Content-Type": "application/json", ...answer.headers };
         }
         response.writeHead(answer.status, {
-          ...headers,
+          ...outgoing(headers),
           "Content-Length": String(Buffer.byteLength(payload)),
         });
         response.end(payload);

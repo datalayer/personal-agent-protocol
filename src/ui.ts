@@ -264,8 +264,11 @@ export function papOutcomeDisplay(id: string, data: PapOutcomeData): PapOutcomeD
 /** The display type of what a company answered in a conversation. */
 export const PAP_REPLIES_TYPE = "application/vnd.datalayer.pap.replies+json";
 
-/** The version of `PAP_REPLIES_TYPE` this module reads: 2 names the conversation. */
-export const PAP_REPLIES_VERSION = 2;
+/**
+ * The version of `PAP_REPLIES_TYPE` this module reads: 2 names the conversation, 3 gives
+ * each reply its `author` and, when the company gives one, the writer's `name`.
+ */
+export const PAP_REPLIES_VERSION = 3;
 
 /** Where a conversation stands (§7.8), apart from who answers in it. */
 export type PapConversationStatus = "working" | "idle" | "queued" | "closed";
@@ -273,8 +276,12 @@ export type PapConversationStatus = "working" | "idle" | "queued" | "closed";
 /** Every `PapConversationStatus`. */
 export const PAP_CONVERSATION_STATUSES: readonly PapConversationStatus[] = ["working", "idle", "queued", "closed"];
 
-/** One message a company wrote, and who wrote it there: its agent or one of its people. */
-export type PapReply = { sender: "agent" | "human"; text: string };
+/**
+ * One message a company wrote, and who wrote it there: its agent or one of its people
+ * (`author.type`, §7.4, §7.8), with the writer's display name when the company gives one
+ * (`author.name`), else `null`.
+ */
+export type PapReply = { author: "agent" | "human"; name: string | null; text: string };
 
 /** What a company answered, as a display's `data` (`PapReplies`' fields). */
 export type PapRepliesData = {
@@ -311,7 +318,11 @@ const isConversationId = (value: unknown): value is string =>
 const isSender = (value: unknown): value is "agent" | "human" => value === "agent" || value === "human";
 
 const isReply = (value: unknown): value is PapReply =>
-  isObject(value) && hasExactly(value, ["sender", "text"]) && isSender(value.sender) && isFilled(value.text);
+  isObject(value) &&
+  hasExactly(value, ["author", "name", "text"]) &&
+  isSender(value.author) &&
+  (value.name === null || isFilled(value.name)) &&
+  isFilled(value.text);
 
 /**
  * Whether a value is the `data` of what a company answered, as `PapReplies`
@@ -337,11 +348,13 @@ export function isPapReplies<D extends DisplayLike>(display: D): display is D & 
   );
 }
 
-const WROTE: Record<PapReply["sender"], string> = { agent: "its agent", human: "one of its people" };
+const WROTE: Record<PapReply["author"], string> = { agent: "its agent", human: "one of its people" };
 
 /** What the replies read as without a renderer: `PapReplies.text()`, word for word. */
 export function papRepliesText(data: PapRepliesData): string {
-  return data.replies.map((reply) => `${data.company}, ${WROTE[reply.sender]}: ${reply.text}`).join("\n");
+  return data.replies
+    .map((reply) => `${data.company}, ${WROTE[reply.author]}${reply.name ? ` (${reply.name})` : ""}: ${reply.text}`)
+    .join("\n");
 }
 
 /** What a company answered as its display, `text` included; throws when `data` is not one. */

@@ -92,7 +92,7 @@ const CHECKS = {
   },
 
   extension_negotiation(given, expect) {
-    const document = (extensions) => parseDiscoveryDocument({ protocol_version: "0.2", organization: { name: "E", domain: "example.com" }, web: {}, extensions });
+    const document = (extensions) => parseDiscoveryDocument({ protocol_version: "0.3", organization: { name: "E", domain: "example.com" }, web: {}, extensions });
     assert.deepEqual(negotiateExtensions(document(given.company).extensions, document(given.agent).extensions), expect.negotiated);
   },
 
@@ -103,7 +103,7 @@ const CHECKS = {
     assert.deepEqual(kinds.plain.sort(), expect.plain);
     assert.deepEqual(kinds.invalid.sort(), [...expect.invalid].sort());
     const preserved = parseDiscoveryDocument({
-      protocol_version: "0.2",
+      protocol_version: "0.3",
       organization: { name: "E", domain: "example.com" },
       web: {},
       extensions: Object.fromEntries(Object.entries(given).filter(([name]) => extensionNameKind(name) !== "invalid")),
@@ -123,8 +123,8 @@ const CHECKS = {
   },
 
   message_context(given) {
-    for (const context of given.valid) assert.deepEqual(parseMessage({ id: "msg_ctx", sender: "agent", context }).context, context);
-    for (const context of given.invalid) assert.throws(() => parseMessage({ id: "msg_ctx", sender: "agent", context }));
+    for (const context of given.valid) assert.deepEqual(parseMessage({ id: "msg_ctx", author: { type: "agent" }, context }).context, context);
+    for (const context of given.invalid) assert.throws(() => parseMessage({ id: "msg_ctx", author: { type: "agent" }, context }));
   },
 
   operation(given, expect) {
@@ -165,7 +165,7 @@ const CHECKS = {
         name: "@tests/rate-limited",
         contributes: [
           { point: Signers, value: { sign: async () => new SecretValue("assertion") }, options: { id: "signer" } },
-          { point: DpopProofProviders, value: { create: async () => new SecretValue("proof") }, options: { id: "proofs" } },
+          { point: DpopProofProviders, value: { newSessionKey: async () => "K".repeat(43), create: async () => new SecretValue("proof"), discardSessionKey: async () => {} }, options: { id: "proofs" } },
         ],
       },
     ]);
@@ -181,13 +181,12 @@ const CHECKS = {
       refused,
     );
     // An API read is not retried either: the caller is told how long to wait.
-    const token = { accessToken: new SecretValue("sat"), tokenType: "DPoP", expiresIn: 60, scopes: [], sessionId: "ses_rate_limited", signedIn: false };
+    const token = { accessToken: new SecretValue("sat"), tokenType: "DPoP", expiresIn: 60, scopes: [], sessionKey: "K".repeat(43), signedIn: false };
     const conversations = new ConversationClient({ reactor, transport: new DpopFetchClient({ reactor, fetch }) });
     await assert.rejects(
       conversations.readEvents("https://shop.example/poppy/conversations", "cnv_rate_limited", {
         token,
         tenantId: "t",
-        pairwiseUserId: "usr_rate_limited_0000000",
         issuer: "https://shop.example",
       }),
       refused,

@@ -45,7 +45,7 @@ const pointOf = (entry) => (entry.role === "company" ? server : portable)[entry.
 
 function reactorFor(entry, plugins = []) {
   if (entry.role === "company") {
-    const config = new server.CompanyConfig({ name: "Points", domain: "points.example", scopes: ["a:read"], operations: false });
+    const config = new server.CompanyConfig({ name: "Points", domain: "points.example", scopes: ["a:read"], scopeDescriptions: { "a:read": "Read" }, operations: false });
     return server.buildCompany(config, { plugins }).reactor;
   }
   return portable.buildPapReactor({}, plugins);
@@ -165,7 +165,7 @@ test("each DPoP proof is asked for the request's own tenant", async () => {
   const asked = [];
   const proofs = {
     async create(request) {
-      asked.push([request.tenantId, request.subject]);
+      asked.push([request.tenantId, request.sessionKey]);
       return new portable.SecretValue(`proof-for-${request.tenantId}`);
     },
   };
@@ -178,23 +178,25 @@ test("each DPoP proof is asked for the request's own tenant", async () => {
     contributor("proofs", portable.DpopProofProviders, proofs, 10),
   ]);
   const client = new portable.DpopFetchClient({ reactor, fetch });
-  const token = {
+  const token = (sessionKey) => ({
     accessToken: new portable.SecretValue("sat"),
     tokenType: "DPoP",
     expiresIn: 60,
     scopes: [],
-    sessionId: "ses_1",
+    sessionKey,
     signedIn: false,
-  };
-  for (const [tenantId, pairwiseUserId] of [["tenant-one", "usr_one"], ["tenant-two", "usr_two"]]) {
+  });
+  const one = "1".repeat(43);
+  const two = "2".repeat(43);
+  for (const [tenantId, sessionKey] of [["tenant-one", one], ["tenant-two", two]]) {
     await client.request("GET", "https://shop.example/api/orders", {
-      token,
+      token: token(sessionKey),
       tenantId,
-      pairwiseUserId,
       issuer: "https://shop.example",
     });
   }
   reactor.stop();
-  assert.deepEqual(asked, [["tenant-one", "usr_one"], ["tenant-two", "usr_two"]]);
+  // Each proof names its tenant, and its Session by the token's key (§4.3).
+  assert.deepEqual(asked, [["tenant-one", one], ["tenant-two", two]]);
   assert.deepEqual(seen, ["proof-for-tenant-one", "proof-for-tenant-two"]);
 });

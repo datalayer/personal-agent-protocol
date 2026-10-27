@@ -101,9 +101,9 @@ test("a company restarted over its store continues every flow", async () => {
   const conversations = new ConversationClient({ reactor: host.reactor, transport });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const endpoint = company.document.agent.protocols[0].endpoint;
-  const message = (text) => ({ id: conversations.generateMessageId(), sender: "human", text });
+  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
   const session = await new SessionClient({ reactor: host.reactor, fetch }).start({
     clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT,
   });
@@ -118,10 +118,9 @@ test("a company restarted over its store continues every flow", async () => {
     clientId: identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
-    organization: { name: "Manzanita", domain: metadata.poppy_domains[0] },
-    poppyDomains: metadata.poppy_domains,
+    sessionKey: session.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(metadata.protected_resources[0]).hostname },
+    protectedResources: metadata.protected_resources,
   });
   clock.advance(started.pollInterval);
   assert.equal((await device.poll(started.reference)).status, "pending");
@@ -133,7 +132,7 @@ test("a company restarted over its store continues every flow", async () => {
   clock.advance(started.pollInterval);
   const done = await device.poll(started.reference);
   assert.equal(done.status, "complete");
-  assert.equal(done.token.sessionId, session.sessionId);
+  assert.equal(done.token.sessionKey, session.sessionKey);
   const reference = done.accountTokenReference;
 
   // The Account Token rotates before the next restart.
@@ -148,7 +147,7 @@ test("a company restarted over its store continues every flow", async () => {
   };
   const tokens = firstContribution(host.reactor, TokenStores, "token store");
   const before = await tokens.get(reference);
-  const refreshed = await accounts.refresh(reference, { context, sessionId: session.sessionId });
+  const refreshed = await accounts.refresh(reference, { context, sessionKey: session.sessionKey });
   assert.equal(refreshed.status, "signed_in");
   assert.equal(refreshed.rotated, true);
   const rotated = await tokens.get(reference);
@@ -168,9 +167,9 @@ test("a company restarted over its store continues every flow", async () => {
   const old = await store.get("account_token", sha256(before.reveal()));
   assert.equal(old.value.revoked, true);
   await tokens.put(reference, before);
-  assert.equal((await accounts.refresh(reference, { context, sessionId: session.sessionId })).status, "signed_out");
+  assert.equal((await accounts.refresh(reference, { context, sessionKey: session.sessionKey })).status, "signed_out");
   await tokens.put(reference, rotated);
-  const again = await accounts.refresh(reference, { context, sessionId: session.sessionId });
+  const again = await accounts.refresh(reference, { context, sessionKey: session.sessionKey });
   assert.equal(again.status, "signed_in");
 
   // The operation proposed before the restart is confirmed once after it.

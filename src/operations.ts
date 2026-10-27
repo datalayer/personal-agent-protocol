@@ -268,7 +268,6 @@ export interface ConfirmOutcome {
 export interface OperationRequestOptions {
   readonly token: SessionToken;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
   readonly issuer: string;
   readonly signal?: AbortSignal;
 }
@@ -457,7 +456,6 @@ export class OperationsClient {
     return this.#transport.request(method, `${endpoint.replace(/\/$/, "")}/${path}`, {
       token: options.token,
       tenantId: options.tenantId,
-      pairwiseUserId: options.pairwiseUserId,
       issuer: options.issuer,
       headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
       ...(body === undefined ? {} : { body }),

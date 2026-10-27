@@ -162,12 +162,11 @@ test("a refusal is an error event carrying its code only", async () => {
     reactor: host.reactor,
     transport: new pap.DpopFetchClient({ reactor: host.reactor, fetch }),
   });
-  const token = { accessToken: new pap.SecretValue("not-a-token"), tokenType: "DPoP", expiresIn: 60, scopes: [], sessionId: "ses_x", signedIn: false };
+  const token = { accessToken: new pap.SecretValue("not-a-token"), tokenType: "DPoP", expiresIn: 60, scopes: [], sessionKey: "K".repeat(43), signedIn: false };
   await assert.rejects(
     conversations.readEvents("https://manzanita.example/poppy/conversations", "conv_unknown", {
       token,
       tenantId: "atlas-demo",
-      pairwiseUserId: "usr_ada_at_manzanita_000000",
       issuer: "https://manzanita.example",
     }),
   );

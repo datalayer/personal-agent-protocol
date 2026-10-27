@@ -10,9 +10,12 @@ import { readBoundedBody, withinDeadline, type CacheBounds } from "./limits.js";
 import { parseJsonStrict } from "./json.js";
 import {
   SUPPORTED_PROTOCOL_VERSIONS,
+  listsResource,
   parseDiscoveryDocument,
+  parseExcludedTasks,
   parseOAuthServerMetadata,
   type DiscoveredCompany,
+  type ExcludedTasks,
 } from "./models.js";
 import {
   DiscoveryTransports,
@@ -169,8 +172,7 @@ export function discoverCompany(
   );
 }
 
-async function discover(domain: string, options: DiscoveryOptions): Promise<DiscoveredCompany> {
-  const requestedDomain = normalizeDomain(domain);
+function readOptions(options: DiscoveryOptions): { reactor: ReactorPlatformView; read: ReadOptions } {
   const reactor = options.reactor ?? buildPapReactor(options);
   const transport = firstContribution<DiscoveryTransport>(
     reactor,
@@ -193,10 +195,24 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
     cache: new MetadataCache(reactor, options.cacheBounds),
     signal: options.signal,
   };
+  return { reactor, read };
+}
+
+async function discover(domain: string, options: DiscoveryOptions): Promise<DiscoveredCompany> {
+  const requestedDomain = normalizeDomain(domain);
+  const { read } = readOptions(options);
   const discovery = await readJson(
     new URL(`https://${requestedDomain}/.well-known/poppy.json`),
     read,
   );
+  // A redirect may change host, but only a document at the well-known path itself, with
+  // no query, speaks for a domain: not an upload elsewhere on it (§3, §9.3).
+  if (discovery.finalUrl.pathname !== "/.well-known/poppy.json" || discovery.finalUrl.search) {
+    throw new DiscoveryError(
+      "invalid_discovery_location",
+      "Discovery redirects must end at /.well-known/poppy.json with no query",
+    );
+  }
   const raw = discovery.value;
   const version =
     typeof raw === "object" && raw !== null && !Array.isArray(raw)
@@ -229,8 +245,8 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
   if (oauthMetadata.issuer !== document.auth.issuer) {
     throw new DiscoveryError("issuer_mismatch", "OAuth metadata issuer does not match auth.issuer");
   }
-  // Both lower-cased when parsed: domains compare ignoring case (§3.2).
-  if (!oauthMetadata.poppy_domains.includes(document.organization.domain)) {
+  // `https://{domain}` exactly, the host ignoring case (§3.2, RFC 9728 §3.3).
+  if (!listsResource(oauthMetadata, document.organization.domain)) {
     throw new DiscoveryError(
       "domain_not_authorized",
       "OAuth metadata does not authorize the discovered company domain",
@@ -241,4 +257,30 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
     document,
     oauthMetadata,
   };
+}
+
+/**
+ * The tasks the company chose not to offer through the protocol (§8.1).
+ *
+ * A public document: a GET with no token, cached as its headers allow. `undefined` when
+ * the company lists none. Read it before starting on a task there; whether a user's task
+ * is one of them is the agent's judgment.
+ */
+export async function excludedTasks(
+  company: DiscoveredCompany,
+  options: DiscoveryOptions = {},
+): Promise<ExcludedTasks | undefined> {
+  const descriptor = company.document.excluded_tasks;
+  if (descriptor === undefined) return undefined;
+  const { read } = readOptions(options);
+  const fetched = await readJson(new URL(descriptor.url), read);
+  try {
+    return parseExcludedTasks(fetched.value);
+  } catch (cause) {
+    throw new ProtocolValidationError(
+      "invalid_excluded_tasks",
+      "The excluded tasks document failed validation",
+      { cause },
+    );
+  }
 }

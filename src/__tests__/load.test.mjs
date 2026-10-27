@@ -13,7 +13,7 @@ import test from "node:test";
 
 import { exportJWK, generateKeyPair } from "jose";
 
-import { JoseDpopProofProvider, ProofError, SharedRateLimitBudget, TransportError } from "../../lib/index.js";
+import { JoseDpopProofProvider, ProofError, SharedRateLimitBudget, TransportError, jwkThumbprint } from "../../lib/index.js";
 import {
   MemoryCompanyStore,
   MemoryReplayCache,
@@ -33,9 +33,11 @@ function report(name, numbers) {
 test("concurrent verifications of one DPoP proof accept exactly one; the kits pass at concurrency", async () => {
   const keys = await generateKeyPair("ES256", { extractable: true });
   const publicJwk = await exportJWK(keys.publicKey);
-  const provider = new JoseDpopProofProvider({ resolveKey: async () => ({ privateKey: keys.privateKey, publicJwk }), now: () => NOW });
+  const sessionKey = await jwkThumbprint(publicJwk);
+  const custody = { get: async () => ({ privateKey: keys.privateKey, publicJwk }), generate: async () => undefined, discard: async () => {} };
+  const provider = new JoseDpopProofProvider({ keys: custody, now: () => NOW });
   const url = "https://manzanita.example/oauth/token";
-  const proof = await provider.create({ method: "POST", url, tenantId: "t", subject: "usr_one", issuer: "https://manzanita.example" });
+  const proof = await provider.create({ method: "POST", url, tenantId: "t", issuer: "https://manzanita.example", sessionKey });
   const clock = { now: () => NOW };
   const cache = new MemoryReplayCache({ clock });
   const start = performance.now();

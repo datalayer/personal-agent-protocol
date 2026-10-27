@@ -6,7 +6,7 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { ProtocolValidationError, SessionError } from "./errors.js";
+import { PersonalAgentProtocolError, ProtocolValidationError, SessionError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { SecretValue } from "./secret.js";
 import {
@@ -28,6 +28,11 @@ export const JWT_CLIENT_ASSERTION =
 /** A client or Session assertion's `exp` is at most this long after its `iat` (§4.1, §4.2). */
 export const ASSERTION_MAX_LIFETIME_SECONDS = 300;
 
+export const TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange";
+export const ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token";
+/** A Session Key's name: its RFC 7638 SHA-256 JWK thumbprint (§4.3). */
+export const SESSION_KEY = /^[A-Za-z0-9_-]{43}$/;
+
 export interface SessionAssertionClaims {
   readonly iss: string;
   readonly sub: string;
@@ -35,16 +40,39 @@ export interface SessionAssertionClaims {
   readonly iat: number;
   readonly exp: number;
   readonly jti: string;
+  /** Which of the User's agents the Session is for (§4.2): User-ID rules, kept for life. */
+  readonly agent_id?: string;
 }
 
+/** A token endpoint's answer, as on the wire (§4.2, §4.4): no Session named in it. */
+export interface TokenResponse {
+  readonly accessToken: SecretValue;
+  readonly tokenType: "DPoP" | "Bearer";
+  readonly expiresIn: number;
+  readonly scope?: string;
+  readonly refreshToken?: SecretValue;
+  readonly refreshTokenExpiresIn?: number;
+  readonly issuedTokenType?: string;
+}
+
+/**
+ * A Session Token, with what the SDK knows of it beside the wire response.
+ *
+ * `sessionKey` is the Session Key's thumbprint, which names the Session (§4.3).
+ * `signedIn` comes from the grant, never from the response (§4.2): the JWT bearer grant
+ * always answers signed out, a sign-in or an Account Token signed in. `scopes` is what was
+ * granted: a signed-in response that leaves `scope` out granted exactly the scopes
+ * requested (RFC 6749 §5.1), a signed-out one has none.
+ */
 export interface SessionToken {
   readonly accessToken: SecretValue;
   readonly tokenType: "DPoP" | "Bearer";
   readonly expiresIn: number;
   readonly scopes: readonly string[];
-  readonly sessionId: string;
+  readonly sessionKey: string;
   readonly signedIn: boolean;
   readonly accountToken?: SecretValue;
+  readonly accountTokenExpiresIn?: number;
 }
 
 export type RandomBytes = (length: number) => Uint8Array;
@@ -114,6 +142,8 @@ export interface SessionAssertionOptions {
   readonly now?: Date;
   readonly lifetimeSeconds?: number;
   readonly randomBytes?: RandomBytes;
+  /** When the User has several agents, which one; left out otherwise (§4.2). */
+  readonly agentId?: string;
 }
 
 /** The claims of a `private_key_jwt` client assertion (§4.1). */
@@ -177,6 +207,12 @@ export function buildSessionAssertionClaims(
       "Pairwise user ID must use the URL-safe base64 alphabet",
     );
   }
+  if (options.agentId !== undefined && !/^[A-Za-z0-9_-]{1,256}$/.test(options.agentId)) {
+    throw new ProtocolValidationError(
+      "invalid_agent_id",
+      "Agent ID must use the URL-safe base64 alphabet",
+    );
+  }
   return {
     iss: httpsUrl(options.clientId, "clientId"),
     sub: options.pairwiseUserId,
@@ -184,6 +220,7 @@ export function buildSessionAssertionClaims(
     iat,
     exp: iat + lifetime,
     jti: opaqueId("jti", options.randomBytes ?? defaultRandomBytes),
+    ...(options.agentId === undefined ? {} : { agent_id: options.agentId }),
   };
 }
 
@@ -205,26 +242,6 @@ export function buildClientAssertionClaims(options: ClientAssertionOptions): Cli
     exp: iat + lifetime,
     jti: opaqueId("jti", options.randomBytes ?? defaultRandomBytes),
   };
-}
-
-/**
- * The token types a token request may be answered with (§4.3).
- *
- * With a proof: DPoP, or, for an MCP server (`resource`) that doesn't support DPoP,
- * Bearer. Without one: Bearer, for an MCP server only.
- */
-export function tokenTypes(options: { readonly dpop: boolean; readonly resource?: string | undefined }): ReadonlySet<string> {
-  if (!options.dpop) return new Set(["Bearer"]);
-  return options.resource !== undefined ? new Set(["DPoP", "Bearer"]) : new Set(["DPoP"]);
-}
-
-export interface SessionGrantOptions {
-  readonly assertion: string;
-  readonly clientId: string;
-  readonly clientAssertion: string;
-  readonly sessionId?: string;
-  /** An RFC 8707 resource indicator: an MCP server's `url`, for a token issued for it. */
-  readonly resource?: string;
 }
 
 /** An MCP server's `url` as a `resource` indicator: HTTPS, no fragment (RFC 8707). */
@@ -252,54 +269,6 @@ export function mcpResource(value: string): string {
   return value;
 }
 
-export class SessionGrant {
-  readonly assertion: SecretValue;
-  readonly clientId: string;
-  readonly clientAssertion: SecretValue;
-  readonly sessionId: string | undefined;
-  readonly resource: string | undefined;
-
-  constructor(options: SessionGrantOptions) {
-    this.assertion = new SecretValue(options.assertion);
-    this.clientId = httpsUrl(options.clientId, "clientId");
-    this.clientAssertion = new SecretValue(options.clientAssertion);
-    if (options.sessionId !== undefined && !/^[A-Za-z0-9_-]{1,256}$/.test(options.sessionId)) {
-      throw new ProtocolValidationError("invalid_session_id", "Invalid PAP session ID");
-    }
-    this.sessionId = options.sessionId;
-    this.resource = options.resource;
-  }
-
-  toForm(): URLSearchParams {
-    const form = new URLSearchParams({
-      grant_type: JWT_BEARER_GRANT,
-      assertion: this.assertion.reveal(),
-      client_id: this.clientId,
-      client_assertion_type: JWT_CLIENT_ASSERTION,
-      client_assertion: this.clientAssertion.reveal(),
-    });
-    if (this.sessionId !== undefined) {
-      form.set("session_id", this.sessionId);
-    }
-    if (this.resource !== undefined) {
-      form.set("resource", this.resource);
-    }
-    return form;
-  }
-
-  toJSON(): Record<string, unknown> {
-    return {
-      grant_type: JWT_BEARER_GRANT,
-      assertion: this.assertion,
-      client_id: this.clientId,
-      client_assertion_type: JWT_CLIENT_ASSERTION,
-      client_assertion: this.clientAssertion,
-      ...(this.sessionId === undefined ? {} : { session_id: this.sessionId }),
-      ...(this.resource === undefined ? {} : { resource: this.resource }),
-    };
-  }
-}
-
 function object(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new ProtocolValidationError("invalid_type", `${label} must be an object`);
@@ -314,8 +283,9 @@ function nonEmptyString(value: unknown, label: string): string {
   return value;
 }
 
-export function parseSessionToken(value: unknown): SessionToken {
-  const source = object(value, "session token response");
+/** A token endpoint's JSON answer (§4.2): no Session named in it. */
+export function parseTokenResponse(value: unknown): TokenResponse {
+  const source = object(value, "token response");
   const tokenType = nonEmptyString(source.token_type, "token_type");
   if (tokenType !== "DPoP" && tokenType !== "Bearer") {
     throw new ProtocolValidationError("invalid_token_type", "Unsupported token_type");
@@ -324,31 +294,81 @@ export function parseSessionToken(value: unknown): SessionToken {
   if (!Number.isInteger(expiresIn) || (expiresIn as number) <= 0) {
     throw new ProtocolValidationError("invalid_expiry", "expires_in must be positive");
   }
-  const sessionId = nonEmptyString(source.session_id, "session_id");
-  if (!/^[A-Za-z0-9_-]{1,256}$/.test(sessionId)) {
-    throw new ProtocolValidationError("invalid_session_id", "Invalid PAP session ID");
+  const optionalString = (name: string): string | undefined => {
+    const item = source[name];
+    if (item === undefined || item === null) return undefined;
+    if (typeof item !== "string") {
+      throw new ProtocolValidationError("invalid_type", `${name} must be a string`);
+    }
+    return item;
+  };
+  const scope = optionalString("scope");
+  const refresh = source.refresh_token;
+  const refreshExpiresIn = source.refresh_token_expires_in;
+  if (
+    refreshExpiresIn !== undefined &&
+    refreshExpiresIn !== null &&
+    (!Number.isInteger(refreshExpiresIn) || (refreshExpiresIn as number) <= 0)
+  ) {
+    throw new ProtocolValidationError("invalid_expiry", "refresh_token_expires_in must be positive");
   }
-  if (typeof source.signed_in !== "boolean") {
-    throw new ProtocolValidationError("invalid_type", "signed_in must be boolean");
-  }
-  if (source.scope !== undefined && typeof source.scope !== "string") {
-    throw new ProtocolValidationError("invalid_type", "scope must be a string");
-  }
-  const scope = (source.scope as string | undefined) ?? "";
+  const issuedTokenType = optionalString("issued_token_type");
   return {
     accessToken: new SecretValue(nonEmptyString(source.access_token, "access_token")),
     tokenType,
     expiresIn: expiresIn as number,
-    scopes: scope.split(" ").filter(Boolean),
-    sessionId,
-    signedIn: source.signed_in,
-    ...(source.refresh_token === undefined
+    ...(scope === undefined ? {} : { scope }),
+    ...(refresh === undefined || refresh === null
       ? {}
-      : {
-          accountToken: new SecretValue(
-            nonEmptyString(source.refresh_token, "refresh_token"),
-          ),
-        }),
+      : { refreshToken: new SecretValue(nonEmptyString(refresh, "refresh_token")) }),
+    ...(refreshExpiresIn === undefined || refreshExpiresIn === null
+      ? {}
+      : { refreshTokenExpiresIn: refreshExpiresIn as number }),
+    ...(issuedTokenType === undefined ? {} : { issuedTokenType }),
+  };
+}
+
+/**
+ * A Session Token from a token response and what the grant says of it (§4.2).
+ *
+ * Signed in, a response without `scope` granted exactly `requestedScopes`, and one that
+ * grants none is refused: approving none is a decline (§4.4). Signed out, no `scope`
+ * means none.
+ */
+export function sessionTokenFromResponse(
+  response: TokenResponse,
+  options: {
+    readonly sessionKey: string;
+    readonly signedIn: boolean;
+    readonly requestedScopes?: readonly string[];
+  },
+): SessionToken {
+  if (!SESSION_KEY.test(options.sessionKey)) {
+    throw new ProtocolValidationError("invalid_session_key", "A Session Key is a JWK thumbprint");
+  }
+  let scope: string;
+  if (options.signedIn) {
+    scope = response.scope ?? (options.requestedScopes ?? []).join(" ");
+    if (!scope.trim()) {
+      throw new ProtocolValidationError(
+        "invalid_token_response",
+        "A signed-in token response grants no scope",
+      );
+    }
+  } else {
+    scope = response.scope ?? "";
+  }
+  return {
+    accessToken: response.accessToken,
+    tokenType: response.tokenType,
+    expiresIn: response.expiresIn,
+    scopes: scope.split(" ").filter(Boolean),
+    sessionKey: options.sessionKey,
+    signedIn: options.signedIn,
+    ...(response.refreshToken === undefined ? {} : { accountToken: response.refreshToken }),
+    ...(response.refreshTokenExpiresIn === undefined
+      ? {}
+      : { accountTokenExpiresIn: response.refreshTokenExpiresIn }),
   };
 }
 
@@ -358,23 +378,54 @@ export interface SessionRequestOptions {
   readonly issuer: string;
   readonly tokenEndpoint: string;
   readonly tenantId: string;
+  /** Which of the User's agents the Session is for, kept for the Session's life (§4.2). */
+  readonly agentId?: string;
+  /** A token for one service, such as an MCP server that supports DPoP (§4.3). */
+  readonly resource?: string;
   readonly signal?: AbortSignal;
 }
 
 export interface SessionRenewOptions extends SessionRequestOptions {
-  readonly sessionId: string;
+  /** The Session Key's thumbprint, which names the Session (§4.3). */
+  readonly sessionKey: string;
 }
 
-export interface McpTokenOptions extends SessionRequestOptions {
+export interface McpTokenOptions {
+  readonly clientId: string;
+  readonly issuer: string;
+  readonly tokenEndpoint: string;
+  readonly tenantId: string;
+  readonly sessionKey: string;
+  /** A current DPoP Session Token of the Session `sessionKey` names. */
+  readonly subjectToken: SecretValue;
   /** The MCP server's `url` from poppy.json: the only place the token works. */
   readonly resource: string;
-  /**
-   * Whether the server supports DPoP, as its protected resource metadata lists
-   * `dpop_signing_alg_values_supported` (`McpServerMetadata.supportsDpop`).
-   */
-  readonly dpop: boolean;
-  /** The Session to renew; omitted, the request starts one. */
-  readonly sessionId?: string;
+  /** Fewer scopes than the subject token has; left out, the same ones. */
+  readonly scope?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** Error classes a token request raises: each takes `(code, message, options)`. */
+export type TokenErrorClass = new (
+  code: string,
+  message: string,
+  options?: {
+    readonly statusCode?: number;
+    readonly details?: Readonly<Record<string, unknown>>;
+    readonly cause?: unknown;
+  },
+) => PersonalAgentProtocolError;
+
+export interface TokenRequestOptions {
+  readonly clientId: string;
+  readonly issuer: string;
+  readonly tokenEndpoint: string;
+  readonly tenantId: string;
+  readonly sessionKey: string;
+  /** The grant's own fields, made again for a `use_dpop_nonce` retry. */
+  readonly form: () => Record<string, string> | Promise<Record<string, string>>;
+  readonly error: TokenErrorClass;
+  readonly signal?: AbortSignal;
 }
 
 export interface SessionClientOptions {
@@ -383,7 +434,7 @@ export interface SessionClientOptions {
   readonly maxResponseBytes?: number;
 }
 
-/** Start and renew signed-out PAP sessions over an OAuth token endpoint. */
+/** Start and renew signed-out PAP Sessions, each named by its own key (§4.2, §4.3). */
 export class SessionClient {
   readonly #reactor: ReactorPlatformView;
   readonly #fetch: typeof globalThis.fetch;
@@ -401,175 +452,230 @@ export class SessionClient {
     this.#maxResponseBytes = maxResponseBytes;
   }
 
+  /**
+   * Start a new signed-out Session with a new Session Key (§4.2).
+   *
+   * `resource` asks for a token for one service, such as an MCP server that supports
+   * DPoP (§4.3).
+   */
   start(options: SessionRequestOptions): Promise<SessionToken> {
     return traced(
       this.#reactor,
       "pap.session.start",
       byIssuer(options.issuer),
-      () => this.#start(options),
+      async () => {
+        const sessionKey = await this.#prover().newSessionKey({
+          tenantId: options.tenantId,
+          issuer: options.issuer,
+        });
+        return this.#assert({ ...options, sessionKey });
+      },
       sessionResult,
     );
   }
 
-  #start(options: SessionRequestOptions): Promise<SessionToken> {
-    return this.#request(options);
-  }
-
+  /**
+   * Renew a signed-out Session: fresh assertions, a proof from its own key (§4.2).
+   *
+   * `agentId` is the one the Session started with, or none. `invalid_grant` means the
+   * Session has ended: its key is discarded, never used again, and the caller starts a
+   * new Session.
+   */
   renew(options: SessionRenewOptions): Promise<SessionToken> {
     return traced(
       this.#reactor,
       "pap.session.renew",
       byIssuer(options.issuer),
-      () => this.#renew(options),
+      () => this.#assert(options),
       sessionResult,
     );
   }
 
-  #renew(options: SessionRenewOptions): Promise<SessionToken> {
-    return this.#request(options, options.sessionId);
-  }
-
   /**
-   * A signed-out Session Token for one MCP server (§4.3).
+   * A Bearer Session Token for one MCP server without DPoP, by Token Exchange (§4.3).
    *
-   * The request that starts the Session (no `sessionId`) or renews its token, with
-   * `resource` set to the MCP server's `url` from poppy.json. `dpop` says whether the
-   * server supports DPoP, as its protected resource metadata lists
-   * `dpop_signing_alg_values_supported` (`McpServerMetadata.supportsDpop`): then the
-   * request carries a proof and the token is a DPoP one; otherwise no proof is sent and
-   * the token is a Bearer one, which works only at that server (`McpBearerAuth`). A
-   * token of the other type is refused.
+   * `subjectToken` is a current DPoP Session Token of the Session `sessionKey` names; the
+   * answer is a Bearer token for the same Session, working only at the MCP server whose
+   * `url` is `resource`, with the subject token's scopes or the fewer `scope` asks for.
+   * For a server that supports DPoP, start or renew with `resource` instead: a DPoP
+   * token, used with proofs.
    */
   async tokenForMcp(options: McpTokenOptions): Promise<SessionToken> {
-    return this.#request(options, options.sessionId, mcpResource(options.resource), options.dpop);
+    const form: Record<string, string> = {
+      grant_type: TOKEN_EXCHANGE_GRANT,
+      subject_token: options.subjectToken.reveal(),
+      subject_token_type: ACCESS_TOKEN_TYPE,
+      resource: mcpResource(options.resource),
+      ...(options.scope === undefined ? {} : { scope: options.scope }),
+    };
+    const response = await this.tokenRequest({
+      clientId: options.clientId,
+      issuer: options.issuer,
+      tokenEndpoint: options.tokenEndpoint,
+      tenantId: options.tenantId,
+      sessionKey: options.sessionKey,
+      form: () => form,
+      error: SessionError,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    if (response.tokenType !== "Bearer" || response.issuedTokenType !== ACCESS_TOKEN_TYPE) {
+      throw new SessionError(
+        "unexpected_token_type",
+        "Token Exchange answered with another token type",
+      );
+    }
+    return sessionTokenFromResponse(response, {
+      sessionKey: options.sessionKey,
+      signedIn: response.scope !== undefined,
+    });
   }
 
-  async #request(
-    options: SessionRequestOptions,
-    sessionId?: string,
-    resource?: string,
-    useDpop = true,
-  ): Promise<SessionToken> {
-    const clock = firstContribution(this.#reactor, Clocks, "clock");
-    const random = firstContribution(this.#reactor, RandomSources, "random source");
+  async #assert(options: SessionRenewOptions): Promise<SessionToken> {
     const signer = firstContribution(this.#reactor, Signers, "signer");
-    const dpop = firstContribution(
-      this.#reactor,
-      DpopProofProviders,
-      "DPoP proof provider",
-    );
-    let nonce: string | undefined;
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const now = clock.now();
-      const clientId = httpsUrl(options.clientId, "clientId");
-      const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint");
-      const issuer = httpsUrl(options.issuer, "issuer");
-      const sessionClaims = buildSessionAssertionClaims({
+    const random = firstContribution(this.#reactor, RandomSources, "random source");
+    const clientId = httpsUrl(options.clientId, "clientId");
+    const issuer = httpsUrl(options.issuer, "issuer");
+    const resource = options.resource === undefined ? undefined : mcpResource(options.resource);
+    const form = async (): Promise<Record<string, string>> => {
+      const claims = buildSessionAssertionClaims({
         clientId,
         pairwiseUserId: options.pairwiseUserId,
         issuer,
-        now,
+        now: firstContribution(this.#reactor, Clocks, "clock").now(),
         randomBytes: (length) => random.bytes(length),
+        ...(options.agentId === undefined ? {} : { agentId: options.agentId }),
       });
+      const assertion = await signer.sign({ ...claims }, { purpose: "session_assertion" });
+      return {
+        grant_type: JWT_BEARER_GRANT,
+        assertion: assertion.reveal(),
+        ...(resource === undefined ? {} : { resource }),
+      };
+    };
+    let response: TokenResponse;
+    try {
+      response = await this.tokenRequest({
+        clientId,
+        issuer,
+        tokenEndpoint: options.tokenEndpoint,
+        tenantId: options.tenantId,
+        sessionKey: options.sessionKey,
+        form,
+        error: SessionError,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+    } catch (error) {
+      if (error instanceof SessionError && error.code === "invalid_grant") {
+        // The Session has ended or isn't this User's: never this key again (§4.2).
+        await this.#prover().discardSessionKey({
+          tenantId: options.tenantId,
+          issuer,
+          sessionKey: options.sessionKey,
+        });
+      }
+      throw error;
+    }
+    if (response.tokenType !== "DPoP") {
+      // Bearer Session Tokens come from Token Exchange alone (§4.3).
+      throw new SessionError(
+        "unexpected_token_type",
+        "The Session request returned another token type",
+      );
+    }
+    // The JWT bearer grant always answers signed out (§4.2).
+    return sessionTokenFromResponse(response, { sessionKey: options.sessionKey, signedIn: false });
+  }
+
+  /**
+   * POST one grant to the token endpoint with the Session Key's proof (§4.2–§4.8).
+   *
+   * `form` gives the grant's own fields, made again for a `use_dpop_nonce` retry so no
+   * assertion is sent twice; the client assertion and a fresh proof signed with
+   * `sessionKey`, the Session's name, go with every attempt. Throws `error` with the
+   * company's OAuth error code.
+   */
+  async tokenRequest(options: TokenRequestOptions): Promise<TokenResponse> {
+    const Failure = options.error;
+    const random = firstContribution(this.#reactor, RandomSources, "random source");
+    const signer = firstContribution(this.#reactor, Signers, "signer");
+    const prover = this.#prover();
+    const clientId = httpsUrl(options.clientId, "clientId");
+    const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint");
+    const issuer = httpsUrl(options.issuer, "issuer");
+    let nonce: string | undefined;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const fields = await options.form();
       const clientClaims = buildClientAssertionClaims({
         clientId,
         issuer,
-        now,
+        now: firstContribution(this.#reactor, Clocks, "clock").now(),
         randomBytes: (length) => random.bytes(length),
-      });
-      const assertion = await signer.sign({ ...sessionClaims }, {
-        purpose: "session_assertion",
       });
       const clientAssertion = await signer.sign({ ...clientClaims }, {
         purpose: "client_assertion",
       });
-      const headers: Record<string, string> = { Accept: "application/json" };
-      if (useDpop) {
-        const proof = await dpop.create({
-          method: "POST",
-          url: tokenEndpoint,
-          tenantId: options.tenantId,
-          subject: options.pairwiseUserId,
-          issuer,
-          ...(nonce === undefined ? {} : { nonce }),
-        });
-        headers.DPoP = proof.reveal();
-      }
-      const grant = new SessionGrant({
-        assertion: assertion.reveal(),
-        clientId,
-        clientAssertion: clientAssertion.reveal(),
-        ...(sessionId === undefined ? {} : { sessionId }),
-        ...(resource === undefined ? {} : { resource }),
+      const proof = await prover.create({
+        method: "POST",
+        url: tokenEndpoint,
+        tenantId: options.tenantId,
+        issuer,
+        sessionKey: options.sessionKey,
+        ...(nonce === undefined ? {} : { nonce }),
+      });
+      const body = new URLSearchParams({
+        ...fields,
+        client_id: clientId,
+        client_assertion_type: JWT_CLIENT_ASSERTION,
+        client_assertion: clientAssertion.reveal(),
       });
 
       let response: Response;
       try {
         response = await this.#fetch(tokenEndpoint, {
           method: "POST",
-          headers,
-          body: grant.toForm(),
+          headers: { Accept: "application/json", DPoP: proof.reveal() },
+          body,
           credentials: "omit",
           redirect: "manual",
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         });
       } catch (cause) {
-        throw new SessionError("request_failed", "Session token request failed", { cause });
+        throw new Failure("request_failed", "Token request failed", { cause });
       }
-      await refuseRedirect(response, SessionError);
+      await refuseRedirect(response, Failure);
 
       const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
       if (contentType !== "application/json") {
-        throw new SessionError(
-          "invalid_content_type",
-          "Session token endpoint must return JSON",
-          { statusCode: response.status },
-        );
+        throw new Failure("invalid_content_type", "Token endpoint must return JSON", {
+          statusCode: response.status,
+        });
       }
-      const body = await readLimitedText(response, this.#maxResponseBytes);
-      if (new TextEncoder().encode(body).byteLength > this.#maxResponseBytes) {
-        throw new SessionError(
-          "response_too_large",
-          "Session token response exceeds size limit",
-          { statusCode: response.status },
-        );
+      const text = await readLimitedText(response, this.#maxResponseBytes);
+      if (new TextEncoder().encode(text).byteLength > this.#maxResponseBytes) {
+        throw new Failure("response_too_large", "Token response exceeds size limit", {
+          statusCode: response.status,
+        });
       }
       let payload: unknown;
       try {
-        payload = parseJsonStrict(body);
+        payload = parseJsonStrict(text);
       } catch (cause) {
-        throw new SessionError("invalid_json", "Session token endpoint returned invalid JSON", {
+        throw new Failure("invalid_json", "Token endpoint returned invalid JSON", {
           statusCode: response.status,
           cause,
         });
       }
 
       if (response.ok) {
-        let token: SessionToken;
         try {
-          token = parseSessionToken(payload);
+          return parseTokenResponse(payload);
         } catch (cause) {
-          throw new SessionError(
-            "invalid_token_response",
-            "Session token response is malformed",
-            { statusCode: response.status, cause },
-          );
+          throw new Failure("invalid_token_response", "Token response is malformed", {
+            statusCode: response.status,
+            cause,
+          });
         }
-        // The scheme `token_type` names is the one used (§4.3). A request with a proof
-        // for an MCP server may get a Bearer token (a server without DPoP); one without a
-        // proof never gets a DPoP token, nor anything else a Bearer.
-        if (
-          !tokenTypes({ dpop: useDpop, resource }).has(token.tokenType) ||
-          (sessionId !== undefined && token.sessionId !== sessionId)
-        ) {
-          throw new SessionError(
-            "unexpected_token_type",
-            "The Session request returned another token type or Session",
-            { statusCode: response.status },
-          );
-        }
-        return token;
       }
 
       const source = typeof payload === "object" && payload !== null ? payload : {};
@@ -578,7 +684,7 @@ export class SessionClient {
       if (code === "use_dpop_nonce" && attempt === 0) {
         nonce = response.headers.get("dpop-nonce") ?? undefined;
         if (!nonce) {
-          throw new SessionError(
+          throw new Failure(
             "missing_dpop_nonce",
             "Company requested a DPoP nonce but did not send one",
             { statusCode: response.status },
@@ -587,11 +693,15 @@ export class SessionClient {
         continue;
       }
       const details = refusalDetails(response, payload);
-      throw new SessionError(code, "Company refused the session token request", {
+      throw new Failure(code, "Company refused the token request", {
         statusCode: response.status,
         ...(Object.keys(details).length > 0 ? { details } : {}),
       });
     }
-    throw new SessionError("use_dpop_nonce", "Company rejected the refreshed DPoP proof");
+    throw new Failure("use_dpop_nonce", "Company rejected the refreshed DPoP proof");
+  }
+
+  #prover() {
+    return firstContribution(this.#reactor, DpopProofProviders, "DPoP proof provider");
   }
 }

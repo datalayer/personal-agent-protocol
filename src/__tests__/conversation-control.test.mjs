@@ -21,10 +21,10 @@ const token = (secret = "session-secret") => ({
   tokenType: "DPoP",
   expiresIn: 300,
   scopes: [],
-  sessionId: "ses_example",
+  sessionKey: "K".repeat(43),
   signedIn: false,
 });
-const who = { tenantId: "tenant", pairwiseUserId: "usr_example", issuer: "https://auth.example" };
+const who = { tenantId: "tenant", issuer: "https://auth.example" };
 
 function arrange(company) {
   const seen = [];
@@ -54,7 +54,7 @@ test("stream yields deltas as non-actionable and stops at closed", async () => {
     sse(
       ": keep-alive\n\n",
       frame({ message_id: "msg_r1", text: "Your order" }, "text-delta"),
-      frame(event("evt_1", { type: "message", message: { id: "msg_r1", sender: "agent", role: "company", text: "Your order shipped." } })),
+      frame(event("evt_1", { type: "message", message: { id: "msg_r1", author: { type: "agent" }, role: "company", text: "Your order shipped." } })),
       frame(event("evt_2", { type: "state", status: "closed", responder: "agent" })),
     ),
   );
@@ -114,19 +114,19 @@ test("a Direct Conversation names its parent; the parent points to it", async ()
       ? json(409, { error: "direct_conversation_open", conversation_id: "cnv_direct" })
       : json(201, { conversation_id: "cnv_direct", status: "idle", responder: "agent" }),
   );
-  const opened = await client.startDirect(endpoint, "cnv_1", { id: "msg_d1", sender: "human", text: "It's me" }, { token: token(), ...who });
+  const opened = await client.startDirect(endpoint, "cnv_1", { id: "msg_d1", author: { type: "human" }, text: "It's me" }, { token: token(), ...who });
   assert.equal(JSON.parse(seen[0].init.body).parent_conversation_id, "cnv_1");
   assert.equal(opened.conversation_id, "cnv_direct");
   await assert.rejects(
-    client.send(endpoint, "cnv_1", { id: "msg_p2", sender: "agent", text: "Still there?" }, { token: token(), ...who }),
+    client.send(endpoint, "cnv_1", { id: "msg_p2", author: { type: "agent" }, text: "Still there?" }, { token: token(), ...who }),
     (error) => error.code === "direct_conversation_open" && error.details.conversation_id === "cnv_direct",
   );
 });
 
 test("signing in mid-conversation keeps its ID", async () => {
   const { client, seen } = arrange(() => json(202, { conversation_id: "cnv_1", status: "working", responder: "agent" }));
-  const first = await client.send(endpoint, "cnv_1", { id: "msg_1", sender: "agent", text: "Show my order" }, { token: token(), ...who });
-  const second = await client.send(endpoint, "cnv_1", { id: "msg_2", sender: "agent", text: "Signed in" }, { token: token("signed-in"), ...who });
+  const first = await client.send(endpoint, "cnv_1", { id: "msg_1", author: { type: "agent" }, text: "Show my order" }, { token: token(), ...who });
+  const second = await client.send(endpoint, "cnv_1", { id: "msg_2", author: { type: "agent" }, text: "Signed in" }, { token: token("signed-in"), ...who });
   assert.equal(first.conversation_id, second.conversation_id);
   assert.deepEqual(seen.map((s) => s.init.headers.Authorization), ["DPoP session-secret", "DPoP signed-in"]);
 });

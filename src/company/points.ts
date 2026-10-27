@@ -57,7 +57,7 @@ export interface Authenticated {
 /** Who a Mediated Sign-In attempt comes from: the agent and its Session. */
 export interface SignInContext {
   readonly clientId: string;
-  readonly sessionId: string;
+  readonly sessionKey: string;
 }
 
 /**
@@ -90,7 +90,8 @@ export interface Turn {
   readonly conversationId: string;
   readonly text?: string;
   readonly data?: Readonly<Record<string, unknown>>;
-  readonly sender: "agent" | "human";
+  /** Who wrote the message: the personal agent or its user (`author.type`, §7.4, §7.8). */
+  readonly author: "agent" | "human";
   readonly accountId?: string;
   readonly scopes: readonly string[];
   readonly clientId: string;
@@ -126,8 +127,10 @@ export interface Reply {
   readonly text?: string;
   readonly data?: Readonly<Record<string, unknown>>;
   readonly operation?: ProposedOperation;
-  readonly authorization?: readonly ["sign_in_required" | "insufficient_scope", string];
+  readonly authorization?: readonly ["insufficient_scope", string];
   readonly userRequested?: string;
+  /** The AI persona writing, when the company names one: `id`, `name`, `image` (§7.4). */
+  readonly persona?: Readonly<{ id?: string; name?: string; image?: string }>;
 }
 
 /** Answer one turn of a conversation. */
@@ -281,9 +284,6 @@ export interface ApiResult {
 }
 
 export const ApiResults = {
-  signInRequired(scope: string): ApiResult {
-    return { status: 403, body: { error: "sign_in_required", scope } };
-  },
   insufficientScope(scope: string): ApiResult {
     return { status: 403, body: { error: "insufficient_scope", scope } };
   },
@@ -303,7 +303,7 @@ export interface CompanyApi {
  * An MCP tool's answer: text and structured content, or an operation to propose.
  *
  * `refusal` is `[status, error, scope]` for a token error the server returns
- * over HTTP with a Bearer challenge (`sign_in_required`, `insufficient_scope`).
+ * over HTTP with a Bearer challenge (`insufficient_scope`, naming the scopes needed).
  */
 export interface ToolResult {
   readonly text?: string;
@@ -314,9 +314,6 @@ export interface ToolResult {
 }
 
 export const ToolResults = {
-  signInRequired(scope: string): ToolResult {
-    return { refusal: [403, "sign_in_required", scope] };
-  },
   insufficientScope(scope: string): ToolResult {
     return { refusal: [403, "insufficient_scope", scope] };
   },

@@ -6,7 +6,7 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { AuthorizationError, TransportError } from "./errors.js";
+import { AuthorizationError, ProtocolValidationError, TransportError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import {
   AuthorizationStateStores,
@@ -17,7 +17,7 @@ import {
   type ProtectedInputRequest,
 } from "./reactor.js";
 import type { SecretValue } from "./secret.js";
-import { parseSessionToken, type SessionToken } from "./sessions.js";
+import { parseTokenResponse, sessionTokenFromResponse, type SessionToken } from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
 import { DpopFetchClient } from "./transport.js";
 import { readLimitedText } from "./limits.js";
@@ -62,14 +62,12 @@ export interface MediatedSignInOptions {
   readonly scopes: readonly string[];
   readonly token: SessionToken;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
   readonly signal?: AbortSignal;
 }
 
 export interface MediatedCodeOptions {
   readonly token: SessionToken;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
   readonly issuer: string;
   readonly signal?: AbortSignal;
 }
@@ -84,7 +82,7 @@ interface PendingCode {
   readonly kind: "pap.mediated-sign-in.v1";
   readonly endpoint: string;
   readonly signInId: string;
-  readonly sessionId: string;
+  readonly sessionKey: string;
   readonly scopes: readonly string[];
   readonly companyName: string;
   readonly companyDomain: string;
@@ -170,7 +168,7 @@ export class MediatedSignInClient {
       kind: "pap.mediated-sign-in.v1",
       endpoint,
       signInId: "",
-      sessionId: options.token.sessionId,
+      sessionKey: options.token.sessionKey,
       scopes: requested,
       companyName: options.organization.name,
       companyDomain: options.organization.domain,
@@ -197,7 +195,7 @@ export class MediatedSignInClient {
         "Mediated Sign-In is unknown, expired, or already complete",
       );
     }
-    if (options.token.sessionId !== pending.sessionId) {
+    if (options.token.sessionKey !== pending.sessionKey) {
       await store.put(reference, pending, { expiresAt: pending.expiresAt });
       throw new AuthorizationError(
         "session_mismatch",
@@ -284,19 +282,24 @@ export class MediatedSignInClient {
     const { status: _status, ...fields } = source;
     let token: SessionToken;
     try {
-      token = parseSessionToken(fields);
+      const response = parseTokenResponse(fields);
+      if (response.tokenType !== "DPoP") {
+        throw new ProtocolValidationError(
+          "invalid_token_response",
+          "Mediated Sign-In must return a DPoP Session Token",
+        );
+      }
+      // `scope` as at the token endpoint: left out only when exactly as requested (§4.7).
+      token = sessionTokenFromResponse(response, {
+        sessionKey: pending.sessionKey,
+        signedIn: true,
+        requestedScopes: pending.scopes,
+      });
     } catch (cause) {
       throw new AuthorizationError("invalid_token_response", "Mediated Sign-In token response is malformed", {
         statusCode: status,
         cause,
       });
-    }
-    if (token.tokenType !== "DPoP" || !token.signedIn || token.sessionId !== pending.sessionId) {
-      throw new AuthorizationError(
-        "invalid_token_response",
-        "Mediated Sign-In must sign in the same proof-bound Session",
-        { statusCode: status },
-      );
     }
     if (token.scopes.some((scope) => !pending.scopes.includes(scope))) {
       throw new AuthorizationError("scope_escalation", "Company returned an unrequested scope", { statusCode: status });
@@ -338,13 +341,12 @@ export class MediatedSignInClient {
   async #post(
     url: string,
     body: string,
-    options: Pick<MediatedSignInOptions, "token" | "tenantId" | "pairwiseUserId" | "issuer" | "signal">,
+    options: Pick<MediatedSignInOptions, "token" | "tenantId" | "issuer" | "signal">,
   ): Promise<Response> {
     try {
       return await this.#transport.request("POST", url, {
         token: options.token,
         tenantId: options.tenantId,
-        pairwiseUserId: options.pairwiseUserId,
         issuer: options.issuer,
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body,
@@ -381,7 +383,7 @@ export class MediatedSignInClient {
 
 /**
  * Credentials go only to the company: an endpoint on its domain (or a subdomain), or on
- * its `auth.issuer`'s host, which its OAuth metadata ties to it (`poppy_domains`).
+ * its `auth.issuer`'s host, which its OAuth metadata ties to it (`protected_resources`).
  */
 function endpointOnCompanyDomain(endpoint: string, domain: string, issuer: string): string {
   let url: URL;

@@ -193,7 +193,7 @@ const session = {
   tokenType: "DPoP",
   expiresIn: 300,
   scopes: ["orders:read"],
-  sessionId: "ses_example",
+  sessionKey: "K".repeat(43),
   signedIn: true,
 };
 const who = { token: session, tenantId: "t", pairwiseUserId: "usr_example", issuer: "https://shop.example" };

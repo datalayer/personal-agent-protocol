@@ -44,7 +44,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
   let page;
   let proposal;
   const endpoint = () => discovered.document.agent.protocols[0].endpoint;
-  const message = (text) => ({ id: conversations.generateMessageId(), sender: "human", text });
+  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
 
   for (const step of scenario.steps) {
     log(step.step);
@@ -53,7 +53,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
       discovered = await discoverCompany(domain, { reactor });
       assert.equal(discovered.document.organization.name, expect.organization);
       assert.equal(Boolean(discovered.document.extensions?.operations), expect.operations);
-      who = { tenantId: agent.tenant_id, pairwiseUserId: agent.pairwise_user_id, issuer: discovered.oauthMetadata.issuer };
+      who = { tenantId: agent.tenant_id, issuer: discovered.oauthMetadata.issuer };
     } else if (step.step === "session") {
       session = await new SessionClient({ reactor, fetch }).start({
         clientId: identity.clientId,
@@ -80,8 +80,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
         redirectUri: `https://${agent.domain}${agent.redirect_path}`,
         scopes: step.scopes,
         tenantId: agent.tenant_id,
-        pairwiseUserId: agent.pairwise_user_id,
-        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
       });
       const consent = browser.pages.at(-1);
       for (const text of expect.consent_page) assert.ok(consent.includes(text), `consent page names ${text}`);
@@ -89,7 +88,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
       const result = await client.complete({ callbackUrl });
       signedIn = result.token;
       assert.equal(signedIn.signedIn, expect.signed_in);
-      assert.equal(signedIn.sessionId, session.sessionId);
+      assert.equal(signedIn.sessionKey, session.sessionKey);
       assert.deepEqual([...result.grantedScopes], expect.granted);
     } else if (step.step === "api_read") {
       const response = await transport.request(step.method, `https://${domain}${step.path}`, {

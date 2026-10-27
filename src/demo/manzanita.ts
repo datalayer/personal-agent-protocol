@@ -85,7 +85,18 @@ export const CONFIG_OPTIONS: CompanyConfigOptions = {
     ["email", "Email", false],
     ["password", "Password", true],
   ],
-  customScopes: { "orders:read": "See your orders", "orders:write": "Exchange and return items" },
+  scopeDescriptions: {
+    "orders:read": "See your orders, returns and exchanges",
+    "orders:write": "Exchange or return items in your orders",
+  },
+  scopeHints: { "orders:read": ["none", true], "orders:write": ["reversible", true] },
+  excludedTasks: [{ task: "Change the size of an item after it has shipped" }],
+  feedbackAnswers: {
+    "Pay with a gift card": {
+      instructions: "Gift cards are applied on the checkout page, before paying.",
+      references: [{ type: "web", url: "https://manzanita.example/checkout" }],
+    },
+  },
   web: true,
 };
 export const CONFIG = new CompanyConfig(CONFIG_OPTIONS);
@@ -162,7 +173,7 @@ export class ManzanitaAgent implements CompanyAgent {
       if (text.includes("order") || text.includes("jacket") || text.includes("exchange")) {
         return [
           { text: "I can look that up once you sign in to your Manzanita account." },
-          { authorization: ["sign_in_required", "orders:read orders:write"] },
+          { authorization: ["insufficient_scope", "orders:read orders:write"] },
         ];
       }
       return [{ text: "Hello from Manzanita Outfitters. Ask me about an order." }];
@@ -224,7 +235,7 @@ export class ManzanitaApi implements CompanyApi {
 
   async handle(call: ApiCall): Promise<ApiResult> {
     if (call.method === "GET" && call.path === "/orders") {
-      if (call.accountId === undefined) return ApiResults.signInRequired("orders:read");
+      if (call.accountId === undefined) return ApiResults.insufficientScope("orders:read");
       if (!call.scopes.includes("orders:read")) return ApiResults.insufficientScope("orders:read");
       return { body: { orders: [{ ...ORDER }] } };
     }
@@ -232,7 +243,7 @@ export class ManzanitaApi implements CompanyApi {
     if (call.method === "POST" && call.path.startsWith(prefix)) {
       const proposal = PROPOSALS[call.path.slice(prefix.length)];
       if (proposal === undefined) return ApiResults.notFound();
-      if (call.accountId === undefined) return ApiResults.signInRequired("orders:write");
+      if (call.accountId === undefined) return ApiResults.insufficientScope("orders:write");
       if (!call.scopes.includes("orders:write")) {
         return ApiResults.insufficientScope("orders:write");
       }
@@ -263,7 +274,7 @@ export class ManzanitaMcp implements CompanyMcp {
 
   async call(name: string, _args: Readonly<Record<string, unknown>>, call: ApiCall): Promise<ToolResult> {
     if (name === "list_orders") {
-      if (call.accountId === undefined) return ToolResults.signInRequired("orders:read");
+      if (call.accountId === undefined) return ToolResults.insufficientScope("orders:read");
       if (!call.scopes.includes("orders:read")) return ToolResults.insufficientScope("orders:read");
       return {
         text: "Order ord_7Hk2: Ridge Jacket, size M, delivered.",
@@ -271,7 +282,7 @@ export class ManzanitaMcp implements CompanyMcp {
       };
     }
     if (name === "exchange_jacket") {
-      if (call.accountId === undefined) return ToolResults.signInRequired("orders:write");
+      if (call.accountId === undefined) return ToolResults.insufficientScope("orders:write");
       if (!call.scopes.includes("orders:write")) return ToolResults.insufficientScope("orders:write");
       return { operation: EXCHANGE };
     }

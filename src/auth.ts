@@ -6,29 +6,26 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { AuthorizationError } from "./errors.js";
-import { parseJsonStrict } from "./json.js";
+import { AuthorizationError, ProtocolValidationError } from "./errors.js";
+import { isLoopbackRedirect } from "./models.js";
 import { SecretValue } from "./secret.js";
-import { refusalDetails, refuseRedirect } from "./refusals.js";
 import {
-  JWT_CLIENT_ASSERTION,
-  buildClientAssertionClaims,
-  parseSessionToken,
+  SESSION_KEY,
+  SessionClient,
+  sessionTokenFromResponse,
   type RandomBytes,
   type SessionToken,
+  type TokenResponse,
 } from "./sessions.js";
 import {
   AuthorizationStateStores,
   BrowserHandoffs,
   Clocks,
-  DpopProofProviders,
   RandomSources,
-  Signers,
   TokenStores,
   firstContribution,
 } from "./reactor.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
-import { readLimitedText } from "./limits.js";
 
 function defaultRandomBytes(length: number): Uint8Array {
   if (!globalThis.crypto) {
@@ -80,6 +77,11 @@ function httpsUrl(value: string, label: string): URL {
   return parsed;
 }
 
+/** A redirect URI: HTTPS, or a loopback URI for an app on the User's computer (§4.1). */
+function redirectUrl(value: string, label: string): URL {
+  return isLoopbackRedirect(value) ? new URL(value) : httpsUrl(value, label);
+}
+
 function validScopes(values: readonly string[]): readonly string[] {
   const scopes = [...new Set(values)];
   const token = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
@@ -95,6 +97,11 @@ export interface DirectSignInOptions {
   readonly clientId: string;
   readonly redirectUri: string;
   readonly scopes: readonly string[];
+  /**
+   * The Session Key's thumbprint, sent as `dpop_jkt`: the company binds the code to it, so
+   * the code signs in that Session and no other key can redeem it (§4.5, RFC 9449 §10).
+   */
+  readonly sessionKey: string;
   readonly randomBytes?: RandomBytes;
 }
 
@@ -106,6 +113,7 @@ export interface DirectSignInRequest {
   readonly scopes: readonly string[];
   readonly state: SecretValue;
   readonly codeVerifier: SecretValue;
+  readonly sessionKey: string;
 }
 
 export async function buildDirectSignInRequest(
@@ -124,7 +132,10 @@ export async function buildDirectSignInRequest(
   const endpoint = httpsUrl(options.authorizationEndpoint, "authorizationEndpoint");
   const scopes = validScopes(options.scopes);
   const clientId = httpsUrl(options.clientId, "clientId").toString();
-  const redirectUri = httpsUrl(options.redirectUri, "redirectUri").toString();
+  const redirectUri = redirectUrl(options.redirectUri, "redirectUri").toString();
+  if (!SESSION_KEY.test(options.sessionKey)) {
+    throw new AuthorizationError("invalid_session_key", "sessionKey must be a JWK SHA-256 thumbprint");
+  }
   // Kept exactly as written: the callback's `iss` is compared character for character (§3.2).
   httpsUrl(options.issuer, "issuer");
   const issuer = options.issuer;
@@ -135,6 +146,7 @@ export async function buildDirectSignInRequest(
   endpoint.searchParams.set("state", state);
   endpoint.searchParams.set("code_challenge", challenge);
   endpoint.searchParams.set("code_challenge_method", "S256");
+  endpoint.searchParams.set("dpop_jkt", options.sessionKey);
   endpoint.hash = "";
   return {
     authorizationUrl: new SecretValue(endpoint.toString()),
@@ -144,6 +156,7 @@ export async function buildDirectSignInRequest(
     scopes,
     state: new SecretValue(state),
     codeVerifier: new SecretValue(verifier),
+    sessionKey: options.sessionKey,
   };
 }
 
@@ -165,12 +178,15 @@ export function validateDirectSignInCallback(
   request: DirectSignInRequest,
   callbackUrl: string,
 ): DirectSignInCallback {
-  const expected = httpsUrl(request.redirectUri, "redirectUri");
-  const callback = httpsUrl(callbackUrl, "callbackUrl");
+  const expected = redirectUrl(request.redirectUri, "redirectUri");
+  const callback = redirectUrl(callbackUrl, "callbackUrl");
   if (callback.hash) {
     throw new AuthorizationError("invalid_callback", "Authorization callback has a fragment");
   }
-  if (callback.origin !== expected.origin || callback.pathname !== expected.pathname) {
+  // A loopback redirect URI matches with any port (RFC 8252 §7.3, §4.5).
+  const loopback = isLoopbackRedirect(request.redirectUri);
+  const place = (url: URL) => (loopback ? `${url.protocol}//${url.hostname}` : url.origin);
+  if (place(callback) !== place(expected) || callback.pathname !== expected.pathname) {
     throw new AuthorizationError("redirect_mismatch", "Callback does not match redirect URI");
   }
   for (const [key, value] of expected.searchParams) {
@@ -205,69 +221,11 @@ export function validateDirectSignInCallback(
   return { code: new SecretValue(code), issuer: request.issuer };
 }
 
-export interface AuthorizationCodeGrantOptions {
-  readonly code: string;
-  readonly redirectUri: string;
-  readonly codeVerifier: string;
-  readonly sessionId: string;
-  readonly clientId: string;
-  readonly clientAssertion: string;
-}
-
-export class AuthorizationCodeGrant {
-  readonly code: SecretValue;
-  readonly redirectUri: string;
-  readonly codeVerifier: SecretValue;
-  readonly sessionId: string;
-  readonly clientId: string;
-  readonly clientAssertion: SecretValue;
-
-  constructor(options: AuthorizationCodeGrantOptions) {
-    this.code = new SecretValue(options.code);
-    this.redirectUri = httpsUrl(options.redirectUri, "redirectUri").toString();
-    this.codeVerifier = new SecretValue(options.codeVerifier);
-    if (!/^[A-Za-z0-9_-]{1,256}$/.test(options.sessionId)) {
-      throw new AuthorizationError("invalid_session_id", "Invalid PAP session ID");
-    }
-    this.sessionId = options.sessionId;
-    this.clientId = httpsUrl(options.clientId, "clientId").toString();
-    this.clientAssertion = new SecretValue(options.clientAssertion);
-  }
-
-  toForm(): URLSearchParams {
-    return new URLSearchParams({
-      grant_type: "authorization_code",
-      code: this.code.reveal(),
-      redirect_uri: this.redirectUri,
-      code_verifier: this.codeVerifier.reveal(),
-      session_id: this.sessionId,
-      client_id: this.clientId,
-      client_assertion_type: JWT_CLIENT_ASSERTION,
-      client_assertion: this.clientAssertion.reveal(),
-    });
-  }
-
-  toJSON(): Record<string, unknown> {
-    return {
-      grant_type: "authorization_code",
-      code: this.code,
-      redirect_uri: this.redirectUri,
-      code_verifier: this.codeVerifier,
-      session_id: this.sessionId,
-      client_id: this.clientId,
-      client_assertion_type: JWT_CLIENT_ASSERTION,
-      client_assertion: this.clientAssertion,
-    };
-  }
-}
-
 interface PendingDirectSignIn {
   readonly kind: "pap.direct-sign-in.v1";
   readonly request: DirectSignInRequest;
   readonly tokenEndpoint: string;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
-  readonly sessionId: string;
   readonly expiresAt: Date;
 }
 
@@ -289,11 +247,10 @@ export interface DirectSignInResult {
   readonly accountTokenReference?: string;
 }
 
+/** `sessionKey` names the Session the sign-in is for: the code is bound to it. */
 export interface DirectSignInBeginOptions extends DirectSignInOptions {
   readonly tokenEndpoint: string;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
-  readonly sessionId: string;
   readonly lifetimeSeconds?: number;
 }
 
@@ -324,7 +281,7 @@ async function stateReference(state: string): Promise<string> {
 }
 
 function callbackState(callbackUrl: string): string {
-  const callback = httpsUrl(callbackUrl, "callbackUrl");
+  const callback = redirectUrl(callbackUrl, "callbackUrl");
   if (callback.hash) {
     throw new AuthorizationError("invalid_callback", "Authorization callback has a fragment");
   }
@@ -345,8 +302,6 @@ function isPendingDirectSignIn(value: unknown): value is PendingDirectSignIn {
     pending.kind === "pap.direct-sign-in.v1" &&
     typeof pending.tokenEndpoint === "string" &&
     typeof pending.tenantId === "string" &&
-    typeof pending.pairwiseUserId === "string" &&
-    typeof pending.sessionId === "string" &&
     pending.expiresAt instanceof Date &&
     typeof pending.request === "object" &&
     pending.request !== null
@@ -356,8 +311,7 @@ function isPendingDirectSignIn(value: unknown): value is PendingDirectSignIn {
 /** Orchestrate one-use browser authorization and proof-bound code exchange. */
 export class DirectSignInClient {
   readonly #reactor: ReactorPlatformView;
-  readonly #fetch: typeof globalThis.fetch;
-  readonly #maxResponseBytes: number;
+  readonly #sessions: SessionClient;
 
   constructor(options: DirectSignInClientOptions) {
     const fetcher = options.fetch ?? globalThis.fetch;
@@ -369,8 +323,11 @@ export class DirectSignInClient {
       throw new RangeError("maxResponseBytes must be a positive integer");
     }
     this.#reactor = options.reactor;
-    this.#fetch = fetcher;
-    this.#maxResponseBytes = maxResponseBytes;
+    this.#sessions = new SessionClient({
+      reactor: options.reactor,
+      fetch: fetcher,
+      maxResponseBytes,
+    });
   }
 
   begin(options: DirectSignInBeginOptions): Promise<DirectSignInStart> {
@@ -391,14 +348,11 @@ export class DirectSignInClient {
     if (!options.tenantId || options.tenantId.length > 256) {
       throw new RangeError("tenantId must contain between 1 and 256 characters");
     }
-    if (!/^[A-Za-z0-9_-]{1,256}$/.test(options.pairwiseUserId)) {
+    if (!SESSION_KEY.test(options.sessionKey)) {
       throw new AuthorizationError(
-        "invalid_user_id",
-        "Pairwise user ID must be an opaque URL-safe identifier",
+        "invalid_session_key",
+        "sessionKey must be a JWK SHA-256 thumbprint",
       );
-    }
-    if (!/^[A-Za-z0-9_-]{1,256}$/.test(options.sessionId)) {
-      throw new AuthorizationError("invalid_session_id", "Invalid PAP session ID");
     }
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     const random = firstContribution(this.#reactor, RandomSources, "random source");
@@ -414,6 +368,7 @@ export class DirectSignInClient {
       clientId: options.clientId,
       redirectUri: options.redirectUri,
       scopes: options.scopes,
+      sessionKey: options.sessionKey,
       randomBytes: (length) => random.bytes(length),
     });
     const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint").toString();
@@ -424,8 +379,6 @@ export class DirectSignInClient {
       request,
       tokenEndpoint,
       tenantId: options.tenantId,
-      pairwiseUserId: options.pairwiseUserId,
-      sessionId: options.sessionId,
       expiresAt,
     };
     await store.put(reference, pending, { expiresAt });
@@ -475,147 +428,50 @@ export class DirectSignInClient {
     callback: DirectSignInCallback,
     signal?: AbortSignal,
   ): Promise<DirectSignInResult> {
-    const clock = firstContribution(this.#reactor, Clocks, "clock");
-    const random = firstContribution(this.#reactor, RandomSources, "random source");
-    const signer = firstContribution(this.#reactor, Signers, "signer");
-    const dpop = firstContribution(
-      this.#reactor,
-      DpopProofProviders,
-      "DPoP proof provider",
-    );
-    let nonce: string | undefined;
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      // `aud` is the issuer, never the token endpoint (§4.1).
-      const claims = buildClientAssertionClaims({
-        clientId: pending.request.clientId,
-        issuer: pending.request.issuer,
-        now: clock.now(),
-        randomBytes: (length) => entropy(length, (size) => random.bytes(size)),
-      });
-      const clientAssertion = await signer.sign({ ...claims }, { purpose: "client_assertion" });
-      const proof = await dpop.create({
-        method: "POST",
-        url: pending.tokenEndpoint,
-        tenantId: pending.tenantId,
-        subject: pending.pairwiseUserId,
-        issuer: pending.request.issuer,
-        ...(nonce === undefined ? {} : { nonce }),
-      });
-      const grant = new AuthorizationCodeGrant({
-        code: callback.code.reveal(),
-        redirectUri: pending.request.redirectUri,
-        codeVerifier: pending.request.codeVerifier.reveal(),
-        sessionId: pending.sessionId,
-        clientId: pending.request.clientId,
-        clientAssertion: clientAssertion.reveal(),
-      });
-      let response: Response;
-      try {
-        response = await this.#fetch(pending.tokenEndpoint, {
-          method: "POST",
-          headers: { Accept: "application/json", DPoP: proof.reveal() },
-          body: grant.toForm(),
-          credentials: "omit",
-          redirect: "manual",
-          ...(signal === undefined ? {} : { signal }),
-        });
-      } catch (cause) {
-        throw new AuthorizationError(
-          "request_failed",
-          "Direct Sign-In token exchange failed",
-          { cause },
-        );
-      }
-      await refuseRedirect(response, AuthorizationError);
-      const payload = await this.#decode(response);
-      if (response.ok) return await this.#result(response, payload, pending);
-
-      const source = typeof payload === "object" && payload !== null ? payload : {};
-      const remoteCode = "error" in source ? (source as { error?: unknown }).error : undefined;
-      const code = typeof remoteCode === "string" ? remoteCode : "http_error";
-      if (code === "use_dpop_nonce" && attempt === 0) {
-        nonce = response.headers.get("dpop-nonce") ?? undefined;
-        if (!nonce) {
-          throw new AuthorizationError(
-            "missing_dpop_nonce",
-            "Company requested a DPoP nonce but did not send one",
-            { statusCode: response.status },
-          );
-        }
-        continue;
-      }
-      const details = refusalDetails(response, payload);
-      throw new AuthorizationError(code, "Company refused the Direct Sign-In token exchange", {
-        statusCode: response.status,
-        ...(Object.keys(details).length > 0 ? { details } : {}),
-      });
-    }
-    throw new AuthorizationError("use_dpop_nonce", "Company rejected the refreshed DPoP proof");
+    const request = pending.request;
+    const form = {
+      grant_type: "authorization_code",
+      code: callback.code.reveal(),
+      redirect_uri: request.redirectUri,
+      code_verifier: request.codeVerifier.reveal(),
+    };
+    // The proof is signed with the key the code is bound to, the Session's (§4.5).
+    const response = await this.#sessions.tokenRequest({
+      clientId: request.clientId,
+      issuer: request.issuer,
+      tokenEndpoint: pending.tokenEndpoint,
+      tenantId: pending.tenantId,
+      sessionKey: request.sessionKey,
+      form: () => form,
+      error: AuthorizationError,
+      ...(signal === undefined ? {} : { signal }),
+    });
+    return this.#result(response, pending);
   }
 
-  async #decode(response: Response): Promise<unknown> {
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
-    if (contentType !== "application/json") {
+  async #result(response: TokenResponse, pending: PendingDirectSignIn): Promise<DirectSignInResult> {
+    const requested = pending.request.scopes;
+    if (response.tokenType !== "DPoP") {
       throw new AuthorizationError(
-        "invalid_content_type",
-        "Direct Sign-In token endpoint must return JSON",
-        { statusCode: response.status },
+        "invalid_token_response",
+        "Direct Sign-In must return a DPoP Session Token",
       );
     }
-    const body = await readLimitedText(response, this.#maxResponseBytes);
-    if (new TextEncoder().encode(body).byteLength > this.#maxResponseBytes) {
-      throw new AuthorizationError(
-        "response_too_large",
-        "Direct Sign-In response exceeds size limit",
-        { statusCode: response.status },
-      );
-    }
-    try {
-      return parseJsonStrict(body);
-    } catch (cause) {
-      throw new AuthorizationError(
-        "invalid_json",
-        "Direct Sign-In token endpoint returned invalid JSON",
-        { statusCode: response.status, cause },
-      );
-    }
-  }
-
-  async #result(
-    response: Response,
-    payload: unknown,
-    pending: PendingDirectSignIn,
-  ): Promise<DirectSignInResult> {
     let token: SessionToken;
     try {
-      token = parseSessionToken(payload);
+      token = sessionTokenFromResponse(response, {
+        sessionKey: pending.request.sessionKey,
+        signedIn: true,
+        requestedScopes: requested,
+      });
     } catch (cause) {
-      throw new AuthorizationError(
-        "invalid_token_response",
-        "Direct Sign-In token response is malformed",
-        { statusCode: response.status, cause },
-      );
+      if (!(cause instanceof ProtocolValidationError)) throw cause;
+      throw new AuthorizationError("invalid_token_response", cause.message, { cause });
     }
-    if (token.tokenType !== "DPoP" || !token.signedIn) {
-      throw new AuthorizationError(
-        "invalid_token_response",
-        "Direct Sign-In must return a signed-in DPoP Session Token",
-        { statusCode: response.status },
-      );
-    }
-    if (token.sessionId !== pending.sessionId) {
-      throw new AuthorizationError(
-        "session_mismatch",
-        "Direct Sign-In response changed the existing Session",
-        { statusCode: response.status },
-      );
-    }
-    if (token.scopes.some((scope) => !pending.request.scopes.includes(scope))) {
+    if (token.scopes.some((scope) => !requested.includes(scope))) {
       throw new AuthorizationError(
         "scope_escalation",
         "Company returned a scope that was not requested",
-        { statusCode: response.status },
       );
     }
     let accountTokenReference: string | undefined;
@@ -632,7 +488,7 @@ export class DirectSignInClient {
     return {
       token: publicToken,
       grantedScopes: publicToken.scopes,
-      missingScopes: pending.request.scopes.filter((scope) => !publicToken.scopes.includes(scope)),
+      missingScopes: requested.filter((scope) => !publicToken.scopes.includes(scope)),
       ...(accountTokenReference === undefined ? {} : { accountTokenReference }),
     };
   }

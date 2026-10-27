@@ -20,7 +20,7 @@ const token = {
   tokenType: "DPoP",
   expiresIn: 300,
   scopes: ["poppy:read"],
-  sessionId: "ses_example",
+  sessionKey: "K".repeat(43),
   signedIn: true,
 };
 
@@ -67,7 +67,6 @@ test("uses a fresh proof for nonce retry, and a redirect gets nothing", async ()
   const options = {
     token,
     tenantId: "tenant",
-    pairwiseUserId: "usr_example",
     issuer: "https://auth.example",
   };
   const response = await client.request("GET", "https://api.example/orders", options);
@@ -113,7 +112,6 @@ test("never forwards PAP credentials across origins", async () => {
     client.request("GET", "https://api.example/orders", {
       token,
       tenantId: "tenant",
-      pairwiseUserId: "usr_example",
       issuer: "https://auth.example",
     }),
     (error) =>

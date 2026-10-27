@@ -6,7 +6,7 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { AuthorizationError } from "./errors.js";
+import { AuthorizationError, ProtocolValidationError, SessionError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import {
   AccountTokenLocks,
@@ -16,15 +16,16 @@ import {
   Signers,
   TokenStores,
   firstContribution,
+  type TokenStore,
 } from "./reactor.js";
 import { refusalDetails, refuseRedirect } from "./refusals.js";
 import {
   JWT_CLIENT_ASSERTION,
+  SessionClient,
   buildClientAssertionClaims,
-  mcpResource,
-  parseSessionToken,
-  tokenTypes,
+  sessionTokenFromResponse,
   type SessionToken,
+  type TokenResponse,
 } from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
 import { readLimitedText } from "./limits.js";
@@ -32,16 +33,20 @@ import { readLimitedText } from "./limits.js";
 /**
  * PAP Account Tokens: refresh, rotation, narrowing, and revocation (§4.8, §4.9).
  *
- * The Account Token stays behind an opaque reference in the Reactor
- * `TokenStore`; it is sent only to the company's `token_endpoint` and
- * `revocation_endpoint`. Uses of one token are serialized through the
- * `pap.accountTokenLock` contribution, so a rotated token replaces the old one
- * before anyone can use either again.
+ * The Account Token stays behind an opaque reference in the Reactor `TokenStore`; it is
+ * sent only to the company's `token_endpoint` and `revocation_endpoint`. Uses of one
+ * token are serialized through the `pap.accountTokenLock` contribution, so a rotated token
+ * replaces the old one before anyone can use either again.
+ *
+ * - **Refresh** signs a Session in: `grant_type=refresh_token`, a fresh client assertion,
+ *   and a fresh DPoP proof signed with the Session's key, which names it; a new key
+ *   starts a new Session already signed in.
+ * - **`invalid_grant`** means the Account Token or the Session ended; renewing the
+ *   Session with its assertion tells which (`signed_out` or `session_ended`).
  */
 
 export const REFRESH_TOKEN_GRANT = "refresh_token";
 
-const opaque = /^[A-Za-z0-9_-]{1,256}$/;
 const scopeToken = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
 
 function httpsUrl(value: string, label: string): string {
@@ -68,31 +73,30 @@ export interface AccountTokenContext {
 
 export interface AccountRefreshOptions {
   readonly context: AccountTokenContext;
-  readonly sessionId: string;
+  /**
+   * The Session to sign in, by its Session Key; omitted, a new Session Key starts a new
+   * Session already signed in (§4.8).
+   */
+  readonly sessionKey?: string;
   /** Narrower scopes; omitted, the company grants what the token holds. */
   readonly scopes?: readonly string[];
-  /** An RFC 8707 resource indicator narrowing the DPoP token (for MCP, `tokenForMcp`). */
+  /**
+   * A token for one service, such as an MCP server that supports DPoP; one without DPoP
+   * takes Token Exchange (`SessionClient.tokenForMcp`).
+   */
   readonly resource?: string;
   readonly signal?: AbortSignal;
 }
 
-export interface AccountMcpTokenOptions {
-  readonly context: AccountTokenContext;
-  readonly sessionId: string;
-  /** The MCP server's `url` from poppy.json: the only place the token works. */
-  readonly resource: string;
-  /**
-   * Whether the server supports DPoP, from its protected resource metadata
-   * (`McpServerMetadata.supportsDpop`): a DPoP token with a proof, else a Bearer one.
-   */
-  readonly dpop: boolean;
-  /** Narrower scopes; omitted, the company grants what the token holds. */
-  readonly scopes?: readonly string[];
-  readonly signal?: AbortSignal;
-}
-
+/**
+ * What a refresh did, without the Account Token itself.
+ *
+ * `session_ended` means the Session the refresh named has ended while the Account Token
+ * still works: start a new Session with it (§4.8). On `signed_out` after a refused
+ * Account Token, `token` is the Session renewed signed out, when there was one.
+ */
 export interface AccountRefreshResult {
-  readonly status: "signed_in" | "signed_out" | "re_consent_required";
+  readonly status: "signed_in" | "signed_out" | "session_ended" | "re_consent_required";
   readonly token?: SessionToken;
   readonly rotated: boolean;
   readonly grantedScopes: readonly string[];
@@ -110,11 +114,25 @@ export interface AccountTokenClientOptions {
   readonly maxResponseBytes?: number;
 }
 
+function outcome(
+  status: AccountRefreshResult["status"],
+  token?: SessionToken,
+): AccountRefreshResult {
+  return {
+    status,
+    ...(token === undefined ? {} : { token }),
+    rotated: false,
+    grantedScopes: [],
+    missingScopes: [],
+  };
+}
+
 /** Use a stored Account Token without ever handing it to a caller. */
 export class AccountTokenClient {
   readonly #reactor: ReactorPlatformView;
   readonly #fetch: typeof globalThis.fetch;
   readonly #maxResponseBytes: number;
+  readonly #sessions: SessionClient;
 
   constructor(options: AccountTokenClientOptions) {
     const fetcher = options.fetch ?? globalThis.fetch;
@@ -124,133 +142,96 @@ export class AccountTokenClient {
     this.#reactor = options.reactor;
     this.#fetch = fetcher;
     this.#maxResponseBytes = limit;
+    this.#sessions = new SessionClient({
+      reactor: options.reactor,
+      fetch: fetcher,
+      maxResponseBytes: limit,
+    });
   }
 
   /**
-   * Sign `sessionId` in again with the Account Token behind `reference`.
+   * A signed-in Session Token from the Account Token behind `reference` (§4.8).
    *
-   * `scopes` narrows the request; omitted, the company grants what the token holds.
-   * A `resource` is an RFC 8707 indicator narrowing the DPoP token to one service (for
-   * an MCP server, use `tokenForMcp`).
+   * With `sessionKey`, for that Session, signing it in if it was signed out; without, a
+   * new Session Key starts a new Session already signed in. `scopes` narrows the
+   * request; omitted, the company grants what the token holds.
    */
   refresh(reference: string, options: AccountRefreshOptions): Promise<AccountRefreshResult> {
     return traced(
       this.#reactor,
       "pap.sign_in.account_token.refresh",
       byIssuer(options.context.issuer, "account_token"),
-      () => this.#refreshAccount(reference, options),
+      () => this.#refresh(reference, options),
       signInResult,
     );
   }
 
-  async #refreshAccount(reference: string, options: AccountRefreshOptions): Promise<AccountRefreshResult> {
-    const resource = options.resource === undefined ? undefined : httpsUrl(options.resource, "resource");
-    return this.#refresh(reference, options, resource, true, false);
-  }
-
-  /**
-   * A signed-in Session Token for one MCP server (§4.3).
-   *
-   * The Account Token request of the Session with `resource` set to the MCP server's
-   * `url` from poppy.json. For a server that supports DPoP (`dpop`, from its protected
-   * resource metadata) the request carries a proof and the token is a DPoP one;
-   * otherwise it carries none and the token is a Bearer one, which works only at that
-   * server (`McpBearerAuth`). A rotated Account Token is stored as with `refresh`.
-   */
-  async tokenForMcp(reference: string, options: AccountMcpTokenOptions): Promise<AccountRefreshResult> {
-    let resource: string;
-    try {
-      resource = mcpResource(options.resource);
-    } catch (cause) {
-      throw new AuthorizationError("invalid_url", "an MCP resource must be an HTTPS URL without a fragment", { cause });
-    }
-    return this.#refresh(reference, options, resource, options.dpop, true);
-  }
-
-  async #refresh(
-    reference: string,
-    options: Omit<AccountRefreshOptions, "resource">,
-    resource: string | undefined,
-    dpop: boolean,
-    mcp: boolean,
-  ): Promise<AccountRefreshResult> {
-    if (!opaque.test(options.sessionId)) {
-      throw new AuthorizationError("invalid_context", "sessionId must be an opaque identifier");
-    }
+  async #refresh(reference: string, options: AccountRefreshOptions): Promise<AccountRefreshResult> {
     const requested = options.scopes === undefined ? undefined : [...new Set(options.scopes)];
     if (requested && (requested.length === 0 || requested.some((scope) => !scopeToken.test(scope)))) {
       throw new AuthorizationError("invalid_scope", "At least one valid OAuth scope is required");
     }
-    const tokenEndpoint = httpsUrl(options.context.tokenEndpoint, "tokenEndpoint");
+    const resource = options.resource === undefined ? undefined : httpsUrl(options.resource, "resource");
+    const context = options.context;
+    const tokenEndpoint = httpsUrl(context.tokenEndpoint, "tokenEndpoint");
+    const newSession = options.sessionKey === undefined;
+    const key =
+      options.sessionKey ??
+      (await this.#prover().newSessionKey({ tenantId: context.tenantId, issuer: context.issuer }));
     const lock = firstContribution(this.#reactor, AccountTokenLocks, "Account Token lock");
     const store = firstContribution(this.#reactor, TokenStores, "token store");
     return lock.hold(reference, async () => {
       const accountToken = await store.get(reference);
-      if (accountToken === undefined) {
-        return { status: "signed_out", rotated: false, grantedScopes: [], missingScopes: [] };
-      }
-      const { response, payload } = await this.#post(
-        tokenEndpoint,
-        options.context,
-        (assertion) => {
-          const form = new URLSearchParams({
-            grant_type: REFRESH_TOKEN_GRANT,
-            refresh_token: accountToken.reveal(),
-            session_id: options.sessionId,
-            client_id: options.context.clientId,
-            client_assertion_type: JWT_CLIENT_ASSERTION,
-            client_assertion: assertion,
-          });
-          if (requested) form.set("scope", requested.join(" "));
-          if (resource) form.set("resource", resource);
-          return form;
-        },
-        dpop,
-        options.signal,
-      );
-      if (!response.ok) {
-        const error = remoteCode(payload);
-        if (error === "invalid_grant") {
-          await store.delete(reference);
-          return { status: "signed_out", rotated: false, grantedScopes: [], missingScopes: [] };
-        }
-        if (error === "invalid_scope") {
-          return { status: "re_consent_required", rotated: false, grantedScopes: [], missingScopes: [] };
-        }
-        const details = refusalDetails(response, payload);
-        throw new AuthorizationError(error ?? "http_error", "Company refused the Account Token", {
-          statusCode: response.status,
-          ...(Object.keys(details).length > 0 ? { details } : {}),
+      if (accountToken === undefined) return outcome("signed_out");
+      const form: Record<string, string> = {
+        grant_type: REFRESH_TOKEN_GRANT,
+        refresh_token: accountToken.reveal(),
+        ...(requested ? { scope: requested.join(" ") } : {}),
+        ...(resource === undefined ? {} : { resource }),
+      };
+      let response: TokenResponse;
+      try {
+        response = await this.#sessions.tokenRequest({
+          clientId: context.clientId,
+          issuer: context.issuer,
+          tokenEndpoint,
+          tenantId: context.tenantId,
+          sessionKey: key,
+          form: () => form,
+          error: AuthorizationError,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
         });
+      } catch (error) {
+        if (!(error instanceof AuthorizationError)) throw error;
+        if (error.code === "invalid_scope") return outcome("re_consent_required");
+        if (error.code !== "invalid_grant") throw error;
+        return this.#invalidGrant(reference, context, key, newSession, store);
+      }
+      if (response.tokenType !== "DPoP") {
+        throw new AuthorizationError(
+          "invalid_token_response",
+          "An Account Token request answers with a DPoP Session Token",
+        );
       }
       let token: SessionToken;
       try {
-        token = parseSessionToken(payload);
-      } catch (cause) {
-        throw new AuthorizationError("invalid_token_response", "Account Token response is malformed", {
-          statusCode: response.status,
-          cause,
+        token = sessionTokenFromResponse(response, {
+          sessionKey: key,
+          signedIn: true,
+          requestedScopes: requested ?? [],
         });
-      }
-      // Only a request for an MCP server may be answered with a Bearer token.
-      const types = tokenTypes({ dpop, resource: mcp ? resource : undefined });
-      if (
-        !types.has(token.tokenType) ||
-        !token.signedIn ||
-        token.sessionId !== options.sessionId
-      ) {
-        throw new AuthorizationError(
-          "invalid_token_response",
-          "A refresh must sign in the same Session with the token type asked for",
-          { statusCode: response.status },
-        );
+      } catch (cause) {
+        if (!(cause instanceof ProtocolValidationError)) throw cause;
+        throw new AuthorizationError("invalid_token_response", cause.message, { cause });
       }
       if (requested && token.scopes.some((scope) => !requested.includes(scope))) {
-        throw new AuthorizationError("scope_escalation", "Company returned an unrequested scope", {
-          statusCode: response.status,
-        });
+        throw new AuthorizationError(
+          "scope_escalation",
+          "Company returned a scope that was not requested",
+        );
       }
       const rotated = token.accountToken !== undefined;
+      // The new token replaces the old before anyone can use either again.
       if (token.accountToken !== undefined) await store.put(reference, token.accountToken);
       const { accountToken: _rotated, ...publicToken } = token;
       return {
@@ -261,6 +242,55 @@ export class AccountTokenClient {
         missingScopes: (requested ?? []).filter((scope) => !publicToken.scopes.includes(scope)),
       };
     });
+  }
+
+  /**
+   * Tell an ended Account Token from an ended Session (§4.8).
+   *
+   * With a new key only the Account Token can be at fault. With an existing Session's
+   * key, renewing that Session with its assertion tells them apart: refused there, the
+   * Session has ended (its key is discarded); accepted, the Account Token is what ended,
+   * and the Session carries on signed out.
+   */
+  async #invalidGrant(
+    reference: string,
+    context: AccountTokenContext,
+    key: string,
+    newSession: boolean,
+    store: TokenStore,
+  ): Promise<AccountRefreshResult> {
+    if (!newSession) {
+      let renewed: SessionToken;
+      try {
+        renewed = await this.#sessions.renew({
+          clientId: context.clientId,
+          pairwiseUserId: context.pairwiseUserId,
+          issuer: context.issuer,
+          tokenEndpoint: context.tokenEndpoint,
+          tenantId: context.tenantId,
+          sessionKey: key,
+        });
+      } catch (error) {
+        if (error instanceof SessionError && error.code === "invalid_grant") {
+          return outcome("session_ended");
+        }
+        throw error;
+      }
+      await store.delete(reference);
+      return outcome("signed_out", renewed);
+    }
+    await this.#prover().discardSessionKey({
+      tenantId: context.tenantId,
+      issuer: context.issuer,
+      sessionKey: key,
+    });
+    // Expired or revoked: the stored copy is useless and must go.
+    await store.delete(reference);
+    return outcome("signed_out");
+  }
+
+  #prover() {
+    return firstContribution(this.#reactor, DpopProofProviders, "DPoP proof provider");
   }
 
   revoke(
@@ -276,6 +306,7 @@ export class AccountTokenClient {
     );
   }
 
+  /** Revoke the Account Token (RFC 7009), then forget it: no proof goes with it (§4.3). */
   async #revoke(
     reference: string,
     options: { readonly context: AccountTokenContext; readonly signal?: AbortSignal },
@@ -283,49 +314,16 @@ export class AccountTokenClient {
     if (options.context.revocationEndpoint === undefined) {
       throw new RangeError("Revocation needs the company's revocationEndpoint");
     }
-    const endpoint = httpsUrl(options.context.revocationEndpoint, "revocationEndpoint");
+    const context = options.context;
+    const endpoint = httpsUrl(context.revocationEndpoint!, "revocationEndpoint");
     const lock = firstContribution(this.#reactor, AccountTokenLocks, "Account Token lock");
     const store = firstContribution(this.#reactor, TokenStores, "token store");
     return lock.hold(reference, async () => {
       const accountToken = await store.get(reference);
       if (accountToken === undefined) return { revoked: false, deletedLocally: false };
-      const { response } = await this.#post(
-        endpoint,
-        options.context,
-        (assertion) =>
-          new URLSearchParams({
-            token: accountToken.reveal(),
-            token_type_hint: REFRESH_TOKEN_GRANT,
-            client_id: options.context.clientId,
-            client_assertion_type: JWT_CLIENT_ASSERTION,
-            client_assertion: assertion,
-          }),
-        false,
-        options.signal,
-      );
-      if (!response.ok) {
-        // Kept so the host can retry: a token it believes revoked must be.
-        throw new AuthorizationError("revocation_failed", "Company refused the revocation", {
-          statusCode: response.status,
-        });
-      }
-      await store.delete(reference);
-      return { revoked: true, deletedLocally: true };
-    });
-  }
-
-  async #post(
-    url: string,
-    context: AccountTokenContext,
-    form: (assertion: string) => URLSearchParams,
-    dpop: boolean,
-    signal?: AbortSignal,
-  ): Promise<{ response: Response; payload: unknown }> {
-    const clock = firstContribution(this.#reactor, Clocks, "clock");
-    const random = firstContribution(this.#reactor, RandomSources, "random source");
-    const signer = firstContribution(this.#reactor, Signers, "signer");
-    let nonce: string | undefined;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const clock = firstContribution(this.#reactor, Clocks, "clock");
+      const random = firstContribution(this.#reactor, RandomSources, "random source");
+      const signer = firstContribution(this.#reactor, Signers, "signer");
       // `aud` is the issuer, whichever endpoint the assertion goes to (§4.1).
       const claims = buildClientAssertionClaims({
         clientId: context.clientId,
@@ -334,46 +332,38 @@ export class AccountTokenClient {
         randomBytes: (length) => random.bytes(length),
       });
       const assertion = await signer.sign({ ...claims }, { purpose: "client_assertion" });
-      const headers: Record<string, string> = { Accept: "application/json" };
-      if (dpop) {
-        const provider = firstContribution(this.#reactor, DpopProofProviders, "DPoP proof provider");
-        const proof = await provider.create({
-          method: "POST",
-          url,
-          tenantId: context.tenantId,
-          subject: context.pairwiseUserId,
-          issuer: context.issuer,
-          ...(nonce === undefined ? {} : { nonce }),
-        });
-        headers.DPoP = proof.reveal();
-      }
       let response: Response;
       try {
-        response = await this.#fetch(url, {
+        response = await this.#fetch(endpoint, {
           method: "POST",
-          headers,
-          body: form(assertion.reveal()),
+          headers: { Accept: "application/json" },
+          body: new URLSearchParams({
+            token: accountToken.reveal(),
+            token_type_hint: REFRESH_TOKEN_GRANT,
+            client_id: context.clientId,
+            client_assertion_type: JWT_CLIENT_ASSERTION,
+            client_assertion: assertion.reveal(),
+          }),
           credentials: "omit",
           redirect: "manual",
-          ...(signal === undefined ? {} : { signal }),
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
         });
       } catch (cause) {
         throw new AuthorizationError("request_failed", "Account Token request failed", { cause });
       }
       await refuseRedirect(response, AuthorizationError);
       const payload = await this.#decode(response);
-      if (dpop && attempt === 0 && remoteCode(payload) === "use_dpop_nonce") {
-        nonce = response.headers.get("dpop-nonce") ?? undefined;
-        if (!nonce) {
-          throw new AuthorizationError("missing_dpop_nonce", "Company requested a DPoP nonce but sent none", {
-            statusCode: response.status,
-          });
-        }
-        continue;
+      if (!response.ok) {
+        // Kept so the host can retry: a token it believes revoked must be.
+        const details = refusalDetails(response, payload);
+        throw new AuthorizationError("revocation_failed", "Company refused the revocation", {
+          statusCode: response.status,
+          ...(Object.keys(details).length > 0 ? { details } : {}),
+        });
       }
-      return { response, payload };
-    }
-    throw new AuthorizationError("use_dpop_nonce", "Company rejected the refreshed DPoP proof");
+      await store.delete(reference);
+      return { revoked: true, deletedLocally: true };
+    });
   }
 
   async #decode(response: Response): Promise<unknown> {
@@ -399,10 +389,4 @@ export class AccountTokenClient {
       });
     }
   }
-}
-
-function remoteCode(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
-  const error = (payload as Record<string, unknown>).error;
-  return typeof error === "string" ? error : undefined;
 }

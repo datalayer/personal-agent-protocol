@@ -80,22 +80,50 @@ export interface BrowserHandoff {
   open(authorizationUrl: SecretValue): Promise<void>;
 }
 
-export interface BrowserFormPost {
-  post(endpoint: URL, fields: Readonly<Record<string, SecretValue>>): Promise<void>;
+/**
+ * The personal agent's own browser, joining a Session through the company's form (§5).
+ *
+ * `loadJoinForm` opens the endpoint with a GET, as a top-level navigation, and returns
+ * the form's one-time `code`, read from that page only; `submitJoinForm` puts the proof
+ * in the form's `proof` field and submits it from the same browser, whose cookie ties the
+ * code to it.
+ */
+export interface BrowserJoin {
+  loadJoinForm(endpoint: URL): Promise<SecretValue>;
+  submitJoinForm(proof: SecretValue): Promise<void>;
 }
 
+/**
+ * Inputs for one fresh proof-of-possession JWT.
+ *
+ * `sessionKey` is the Session Key's JWK thumbprint (RFC 7638), which names the Session
+ * at the company (§4.3): the provider signs with that key, and no other.
+ */
 export interface DpopProofRequest {
   readonly method: string;
   readonly url: string;
   readonly tenantId: string;
-  readonly subject: string;
   readonly issuer: string;
+  readonly sessionKey: string;
   readonly accessToken?: SecretValue;
   readonly nonce?: string;
 }
 
+/**
+ * Create fresh DPoP proofs with Session Keys whose private halves it keeps (§4.3).
+ *
+ * Each Session has its own key: `newSessionKey` makes one and returns its JWK
+ * thumbprint, which names the Session; `create` signs with the key a thumbprint names;
+ * `discardSessionKey` forgets one whose Session has ended, never to be used again (§4.2).
+ */
 export interface DpopProofProvider {
+  newSessionKey(options: { readonly tenantId: string; readonly issuer: string }): Promise<string>;
   create(request: DpopProofRequest): Promise<SecretValue>;
+  discardSessionKey(options: {
+    readonly tenantId: string;
+    readonly issuer: string;
+    readonly sessionKey: string;
+  }): Promise<void>;
 }
 
 /** Serialize every use of one Account Token: rotation invalidates the one replaced (PAP §4.8). */
@@ -175,9 +203,7 @@ export const Caches = defineContributionPoint<ProtocolCache>("pap.cache");
 export const BrowserHandoffs = defineContributionPoint<BrowserHandoff>(
   "pap.browserHandoff",
 );
-export const BrowserFormPosts = defineContributionPoint<BrowserFormPost>(
-  "pap.browserFormPost",
-);
+export const BrowserJoins = defineContributionPoint<BrowserJoin>("pap.browserJoin");
 export const DpopProofProviders = defineContributionPoint<DpopProofProvider>(
   "pap.dpopProofProvider",
 );
@@ -258,7 +284,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       AuthorizationStateStores,
       Caches,
       BrowserHandoffs,
-      BrowserFormPosts,
+      BrowserJoins,
       DpopProofProviders,
       AccountTokenLocks,
       ProtectedInputs,

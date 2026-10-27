@@ -132,8 +132,8 @@ test("the Python SDK's replies are one, each with who wrote it, word for word", 
   assert.ok(isPapReplies(replies));
   assert.equal(papRepliesText(replies.data), replies.text);
   assert.deepEqual(
-    replies.data.replies.map((reply) => reply.sender),
-    ["agent", "human"],
+    replies.data.replies.map((reply) => [reply.author, reply.name]),
+    [["agent", null], ["human", "Rosa"]],
   );
   assert.deepEqual(papRepliesDisplay(replies.id, replies.data), replies);
 });
@@ -141,8 +141,9 @@ test("the Python SDK's replies are one, each with who wrote it, word for word", 
 test("replies that say less or other are not one", () => {
   const changed = (data) => ({ ...replies, data: { ...replies.data, ...data } });
   assert.equal(isPapReplies({ ...replies, type: PAP_OUTCOME_TYPE }), false);
-  // Version 1 named no conversation: refused, not read as 2.
+  // Version 1 named no conversation, 2 said `sender`: refused, not read as 3.
   assert.equal(isPapReplies({ ...replies, version: 1 }), false);
+  assert.equal(isPapReplies({ ...replies, version: 2 }), false);
   assert.equal(replies.data.conversation, "conv_4Kp9");
   for (const data of [
     { company: " " },
@@ -150,9 +151,12 @@ test("replies that say less or other are not one", () => {
     { conversation: "has space" },
     { conversation: undefined },
     { replies: [] },
-    { replies: [{ sender: "model", text: "Hello" }] },
-    { replies: [{ sender: "agent", text: " " }] },
-    { replies: [{ sender: "agent", text: "Hello", token: "secret" }] },
+    { replies: [{ author: "model", name: null, text: "Hello" }] },
+    { replies: [{ sender: "agent", text: "Hello" }] },
+    { replies: [{ author: "agent", text: "Hello" }] },
+    { replies: [{ author: "agent", name: " ", text: "Hello" }] },
+    { replies: [{ author: "agent", name: null, text: " " }] },
+    { replies: [{ author: "agent", name: null, text: "Hello", token: "secret" }] },
     { status: "waiting" },
     { responder: "company" },
     { token: "secret" },

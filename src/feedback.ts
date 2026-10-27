@@ -33,7 +33,7 @@
 import { PersonalAgentProtocolError, ProtocolValidationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { readLimited } from "./limits.js";
-import type { DiscoveryDocument } from "./models.js";
+import { parseAlternative, type Alternative, type DiscoveryDocument } from "./models.js";
 import { challengeParameters, refusalDetails } from "./refusals.js";
 import type { SessionToken } from "./sessions.js";
 import type { DpopFetchClient } from "./transport.js";
@@ -109,7 +109,6 @@ export interface FeedbackClientOptions {
 export interface FeedbackReportOptions {
   readonly token: SessionToken;
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
   readonly issuer: string;
   readonly signal?: AbortSignal;
 }
@@ -127,7 +126,12 @@ export class FeedbackClient {
   }
 
   /**
-   * `POST {feedback.endpoint}`: accepted (`202`, no body), or a `FeedbackError`.
+   * `POST {feedback.endpoint}`: accepted, or answered with a way to do it (§8.3).
+   *
+   * `202` with no body returns `undefined`; `200` with an alternative (§8.2) returns it,
+   * as content from the company, its references for the caller to filter with
+   * `usableReferences`. Anything else is a `FeedbackError`. Don't report a task the
+   * company lists as excluded (§8.1).
    *
    * A refusal is never retried here: a 429 carries its `Retry-After` in
    * `details.retry_after`, and the caller waits at least that long (§4.3).
@@ -136,12 +140,11 @@ export class FeedbackClient {
     endpoint: string,
     report: { readonly kind?: string; readonly task: string; readonly description: string },
     options: FeedbackReportOptions,
-  ): Promise<void> {
+  ): Promise<Alternative | undefined> {
     const checked = parseFeedbackReport(report);
     const response = await this.#transport.request("POST", endpoint, {
       token: options.token,
       tenantId: options.tenantId,
-      pairwiseUserId: options.pairwiseUserId,
       issuer: options.issuer,
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(checked),
@@ -149,9 +152,20 @@ export class FeedbackClient {
     });
     if (response.status === 202) {
       await response.body?.cancel().catch(() => undefined);
-      return;
+      return undefined;
     }
     const payload = await this.#payload(response);
+    if (response.status === 200) {
+      try {
+        return parseAlternative(payload);
+      } catch (cause) {
+        throw new FeedbackError(
+          "invalid_alternative",
+          "the company answered with a malformed alternative",
+          { statusCode: 200, cause },
+        );
+      }
+    }
     let code =
       typeof payload === "object" && payload !== null && !Array.isArray(payload)
         ? (payload as Record<string, unknown>).error

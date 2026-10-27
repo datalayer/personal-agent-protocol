@@ -58,10 +58,9 @@ export function mcpApi(document: DiscoveryDocument): ApiDescriptor | undefined {
   return (document.apis ?? []).find((api) => api.type === "mcp");
 }
 
-/** Whose Session a request is for: the user and company a DPoP proof is signed for. */
+/** Whose Session a request is for: the tenant and the company a DPoP proof is signed for. */
 export interface McpWho {
   readonly tenantId: string;
-  readonly pairwiseUserId: string;
   readonly issuer: string;
 }
 
@@ -310,7 +309,7 @@ export class McpDpopAuth {
         method,
         url,
         tenantId: this.#who.tenantId,
-        subject: this.#who.pairwiseUserId,
+        sessionKey: this.#token.sessionKey,
         issuer: this.#who.issuer,
         accessToken: this.#token.accessToken,
         ...(nonce === undefined ? {} : { nonce }),

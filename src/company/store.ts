@@ -221,6 +221,8 @@ export const RecordKinds = {
   operation: "operation",
   proposal: "proposal",
   browserCookie: "browser_cookie",
+  /** A browser-session join code (§5), by digest: the browser it was given to. */
+  joinCode: "join_code",
   /** An assertion, proof, or browser-assertion ID seen once (the default replay cache). */
   replay: "replay",
   /** Failed sign-in attempts by one key, and until when it is locked out (§4.7). */
@@ -239,7 +241,8 @@ export type RecordKind = (typeof RecordKinds)[keyof typeof RecordKinds];
 
 /** One token of a Session, as issued; the token is bound to a DPoP key. */
 export interface IssuedSession {
-  readonly sessionId: string;
+  /** The Session Key's thumbprint, which names the Session (§4.3). */
+  readonly sessionKey: string;
   readonly clientId: string;
   readonly pairwiseUserId: string;
   readonly keyThumbprint: string;
@@ -251,21 +254,26 @@ export interface IssuedSession {
   readonly resource?: string;
   /** `Bearer` for a token issued to the MCP server (§4.3); a DPoP token otherwise. */
   readonly tokenType?: "Bearer";
+  /** The Agent ID the Session started with, kept for its life (§4.2). */
+  readonly agentId?: string;
 }
 
 /**
- * A Session by its ID: each live token's state by digest, and the latest issued.
+ * A Session by its key's thumbprint: each live token's state by digest, the latest.
  *
  * `accountId` is the account the Session was ever signed in to: kept after it signs out,
- * so it is never signed in to another (§4.4, §4.8).
+ * so it is never signed in to another (§4.4, §4.8). `endsAt` is when the Session ends;
+ * its record is kept a while after, so its key is refused (`invalid_grant`) rather than
+ * starting a new Session (§4.2).
  */
 export interface StoredSession {
-  readonly sessionId: string;
+  readonly sessionKey: string;
   readonly clientId: string;
   readonly pairwiseUserId: string;
   readonly tokens: Readonly<Record<string, IssuedSession>>;
   readonly latest: string;
   readonly accountId?: string;
+  readonly endsAt?: string;
 }
 
 /** What an Account Token is: one account, one agent, one user, some scopes. */
@@ -321,6 +329,8 @@ export interface PendingDevice {
   readonly accountId?: string;
   readonly granted: readonly string[];
   readonly denied: boolean;
+  /** The Session Key of the first poll: the device code is bound to it (§4.6). */
+  readonly sessionKey?: string;
 }
 
 /** The device sign-in a user code stands for (by device-code digest). */
@@ -335,6 +345,8 @@ export interface PendingAuthorization {
   readonly scopes: readonly string[];
   readonly state: string;
   readonly codeChallenge: string;
+  /** The Session Key the code will be bound to (§4.5, RFC 9449 §10). */
+  readonly dpopJkt: string;
   readonly expiresAt: string;
   /** The agent's `client_name`, for a hosted consent page (`authorizationRequest`). */
   readonly clientName?: string;
@@ -350,13 +362,17 @@ export interface IssuedCode {
   readonly clientId: string;
   readonly redirectUri: string;
   readonly codeChallenge: string;
+  /** The Session Key the code is bound to: only a proof with it redeems the code. */
+  readonly dpopJkt: string;
+  /** The scopes the request asked for: the response leaves `scope` out when all granted. */
+  readonly requested: readonly string[];
   readonly accountId: string;
   readonly scopes: readonly string[];
   readonly expiresAt: string;
 }
 
 export interface PendingMediated {
-  readonly sessionId: string;
+  readonly sessionKey: string;
   readonly accountId: string;
   readonly scopes: readonly string[];
   readonly codeReference: string;
@@ -462,5 +478,10 @@ export interface OperationProposal {
 
 /** The Session a token stands for. */
 export interface SessionPointer {
-  readonly sessionId: string;
+  readonly sessionKey: string;
+}
+
+/** A browser-session join code (§5): the digest of the cookie that ties it to a browser. */
+export interface JoinCode {
+  readonly browser: string;
 }

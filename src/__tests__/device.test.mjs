@@ -95,12 +95,11 @@ const options = {
   tokenEndpoint: "https://auth.example.com/oauth/token",
   issuer: "https://auth.example.com",
   clientId: "https://agent.example/agent.json",
-  scopes: ["poppy:read", "poppy:write"],
+  scopes: ["orders:read", "orders:write"],
   tenantId: "application-one",
-  pairwiseUserId: "usr_AAECAwQFBgcICQoLDA0ODw",
-  sessionId: "ses_existing",
+  sessionKey: "K".repeat(43),
   organization: { name: "Company", domain: "company.example" },
-  poppyDomains: ["company.example"],
+  protectedResources: ["https://company.example"],
 };
 
 test("Device Sign-In paces polling and stores the Account Token", async () => {
@@ -130,9 +129,7 @@ test("Device Sign-In paces polling and stores the Account Token", async () => {
       access_token: "signed-in-session-token",
       token_type: "DPoP",
       expires_in: 300,
-      scope: "poppy:read",
-      session_id: "ses_existing",
-      signed_in: true,
+      scope: "orders:read",
       refresh_token: "private-account-token",
     });
   };
@@ -156,8 +153,11 @@ test("Device Sign-In paces polling and stores the Account Token", async () => {
   reactor.stop();
 
   assert.equal(complete.status, "complete");
-  assert.deepEqual(complete.grantedScopes, ["poppy:read"]);
-  assert.deepEqual(complete.missingScopes, ["poppy:write"]);
+  assert.deepEqual(complete.grantedScopes, ["orders:read"]);
+  assert.deepEqual(complete.missingScopes, ["orders:write"]);
+  assert.equal(complete.token.sessionKey, "K".repeat(43));
+  // Every poll's proof is signed with the Session's key: the company binds the code to it.
+  assert.deepEqual([...new Set(extension.proofs.map((proof) => proof.sessionKey))], ["K".repeat(43)]);
   assert.equal(complete.token.accountToken, undefined);
   assert.equal(extension.tokens.get(complete.accountTokenReference).reveal(), "private-account-token");
   assert.equal(forms[1].get("device_code"), "private-device-code");
@@ -176,8 +176,9 @@ const LINKS = [
 
 for (const [link, allowed] of LINKS) {
   test(`a device link is shown only on the issuer or its domains: ${link} ${allowed ? "shown" : "refused"}`, async () => {
-    // Its host is the issuer's, a domain in poppy_domains, or a subdomain of either (§4.6).
-    assert.equal(verificationHostAllowed(link, { issuer: options.issuer, poppyDomains: options.poppyDomains }), allowed);
+    // Its host is the issuer's, the host of a URL in protected_resources, or a subdomain of
+    // either (§4.6).
+    assert.equal(verificationHostAllowed(link, { issuer: options.issuer, protectedResources: options.protectedResources }), allowed);
     const extension = devicePlugin();
     const fetch = async () =>
       Response.json({

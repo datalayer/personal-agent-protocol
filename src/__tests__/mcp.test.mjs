@@ -25,8 +25,8 @@ import {
   PersonalAgentProtocolError,
   SessionClient,
   TransportError,
+  DpopProofProviders,
   approve,
-  buildBrowserAssertionClaims,
   discoverCompany,
   fetchMcpServerMetadata,
   mcpApi,
@@ -55,7 +55,7 @@ async function world({ extensions, config } = {}) {
   const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const request = {
     clientId: identity.clientId,
@@ -87,10 +87,9 @@ async function signedIn(w) {
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
-    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-    poppyDomains: w.metadata.poppy_domains,
+    sessionKey: session.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -99,10 +98,32 @@ async function signedIn(w) {
   return { token: done.token, reference: done.accountTokenReference };
 }
 
+/**
+ * A signed-in token for the MCP server (§4.3).
+ *
+ * A server that supports DPoP: the Account Token request, with `resource`, gives a DPoP
+ * token. One that doesn't: the signed-in DPoP Session Token is exchanged for a Bearer one,
+ * for that server alone.
+ */
 async function mcpToken(w, token, reference, dpop) {
-  const result = await w.accounts.tokenForMcp(reference, { context: w.context, sessionId: token.sessionId, resource: MCP, dpop });
-  assert.equal(result.status, "signed_in");
-  return result.token;
+  if (dpop) {
+    const result = await w.accounts.refresh(reference, { context: w.context, sessionKey: token.sessionKey, resource: MCP });
+    assert.equal(result.status, "signed_in");
+    return result.token;
+  }
+  return exchanged(w, token);
+}
+
+function exchanged(w, token, resource = MCP) {
+  return w.sessions.tokenForMcp({
+    clientId: w.identity.clientId,
+    issuer: w.metadata.issuer,
+    tokenEndpoint: w.metadata.token_endpoint,
+    tenantId: TENANT,
+    sessionKey: token.sessionKey,
+    subjectToken: token.accessToken,
+    resource,
+  });
 }
 
 function mcpClient(w, token) {
@@ -155,8 +176,13 @@ for (const dpop of [true, false]) {
     // The scheme the server takes: DPoP with proofs, or a Bearer token for its url (§4.3).
     assert.equal(issued.tokenType, dpop ? "DPoP" : "Bearer");
     assert.equal(issued.signedIn, true);
-    assert.equal(issued.accountToken, undefined); // rotated, stored, never returned
-    assert.notEqual(w.host.tokens.get(reference).reveal(), before);
+    assert.equal(issued.accountToken, undefined);
+    if (dpop) {
+      assert.notEqual(w.host.tokens.get(reference).reveal(), before); // rotated, stored, never returned
+    } else {
+      // Token Exchange uses the Session Token: the Account Token is not touched (§4.3).
+      assert.equal(w.host.tokens.get(reference).reveal(), before);
+    }
 
     const mcp = mcpClient(w, issued);
     assert.deepEqual((await mcp.listTools()).map((tool) => tool.name), ["list_orders", "exchange_jacket"]);
@@ -254,69 +280,73 @@ for (const dpop of [true, false]) {
     const mcp = mcpClient(w, await mcpToken(w, token, reference, dpop));
     assert.ok((await mcp.callTool("list_orders")).structuredContent);
     await w.accounts.revoke(reference, { context: w.context });
-    assert.equal((await refusal(mcp.callTool("list_orders"))).code, "sign_in_required");
+    assert.equal((await refusal(mcp.callTool("list_orders"))).code, "insufficient_scope");
   });
 
   test(`a Session started for the MCP server gets its own token too (DPoP: ${dpop})`, async () => {
     // A Session can hold a token for each MCP server and one for its other APIs (§4.3).
     const w = await world({ config: { mcpDpop: dpop } });
     await w.sessions.start(w.request);
-    const forMcp = await w.sessions.tokenForMcp({ ...w.request, resource: MCP, dpop });
-    const own = await w.sessions.renew({ ...w.request, sessionId: forMcp.sessionId });
-    assert.equal(own.sessionId, forMcp.sessionId);
+    // With DPoP, the request that starts a Session, for the MCP server alone.
+    const forMcp = dpop
+      ? await w.sessions.start({ ...w.request, resource: MCP })
+      : await exchanged(w, await w.sessions.start(w.request));
+    const own = await w.sessions.renew({ ...w.request, sessionKey: forMcp.sessionKey });
+    assert.equal(own.sessionKey, forMcp.sessionKey);
     assert.equal(own.tokenType, "DPoP");
     const needsSignIn = await refusal(new ApiClient({ transport: w.transport }).call("GET", ORDERS, { ...w.who, token: own }));
-    assert.equal(needsSignIn.code, "sign_in_required");
+    assert.equal(needsSignIn.code, "insufficient_scope");
     // The token for the MCP server still works there.
     const signedOut = await refusal(mcpClient(w, forMcp).callTool("list_orders"));
-    assert.equal(signedOut.code, "sign_in_required");
+    assert.equal(signedOut.code, "insufficient_scope");
   });
 }
 
 test("the token type is chosen by the MCP server", async () => {
-  // DPoP server: a request without a proof is refused, never answered with Bearer. Server
-  // without DPoP: a Bearer token for its url even when the request has a proof (§4.3).
+  // A DPoP server: a DPoP token from the request that renews the Session, with `resource`.
+  // A server without DPoP: a Bearer token by Token Exchange alone. Each other way is
+  // `invalid_target` (§4.3).
   for (const dpop of [true, false]) {
     const w = await world({ config: { mcpDpop: dpop } });
     const session = await w.sessions.start(w.request);
-    const elsewhere = await refusal(
-      w.sessions.tokenForMcp({ ...w.request, sessionId: session.sessionId, resource: "https://manzanita.example/api", dpop: false }),
-    );
-    assert.equal(elsewhere.code, "invalid_dpop_proof"); // DPoP is required everywhere else
-    const http = await refusal(w.sessions.tokenForMcp({ ...w.request, sessionId: session.sessionId, resource: "http://manzanita.example/mcp", dpop }));
+    const renew = (resource) => w.sessions.renew({ ...w.request, sessionKey: session.sessionKey, resource });
+    const http = await refusal(renew("http://manzanita.example/mcp"));
     assert.equal(http.code, "invalid_url");
-    const fragment = await refusal(w.sessions.tokenForMcp({ ...w.request, sessionId: session.sessionId, resource: `${MCP}#tools`, dpop }));
+    const fragment = await refusal(renew(`${MCP}#tools`));
     assert.equal(fragment.code, "invalid_url");
-    const withProof = await w.sessions.tokenForMcp({ ...w.request, sessionId: session.sessionId, resource: MCP, dpop: true });
-    assert.equal(withProof.tokenType, dpop ? "DPoP" : "Bearer");
+    // Token Exchange is only for an MCP server without DPoP.
+    const elsewhere = await refusal(exchanged(w, session, "https://manzanita.example/"));
+    assert.equal(elsewhere.code, "invalid_target");
+    let signedOut;
     if (dpop) {
-      const noProof = await refusal(w.sessions.tokenForMcp({ ...w.request, sessionId: session.sessionId, resource: MCP, dpop: false }));
-      assert.equal(noProof.code, "invalid_dpop_proof");
+      const wrong = await refusal(exchanged(w, session));
+      assert.equal(wrong.code, "invalid_target");
+      signedOut = await renew(MCP);
+      assert.equal(signedOut.tokenType, "DPoP");
+    } else {
+      // Its tokens come from Token Exchange, never from another grant.
+      const wrong = await refusal(renew(MCP));
+      assert.equal(wrong.code, "invalid_target");
+      signedOut = await exchanged(w, session);
+      assert.equal(signedOut.tokenType, "Bearer");
     }
-    // A new Session can start for the MCP server alone (§4.3: the request that starts one).
-    const started = await w.sessions.tokenForMcp({ ...w.request, resource: MCP, dpop });
-    assert.notEqual(started.sessionId, session.sessionId);
-    assert.equal(started.signedIn, false);
-
-    const signedOut = await w.sessions.tokenForMcp({ ...w.request, sessionId: session.sessionId, resource: MCP, dpop });
-    assert.equal(signedOut.tokenType, dpop ? "DPoP" : "Bearer");
     assert.equal(signedOut.signedIn, false);
-    assert.equal(signedOut.sessionId, session.sessionId);
+    assert.equal(signedOut.sessionKey, session.sessionKey);
     const refused = await refusal(mcpClient(w, signedOut).callTool("list_orders"));
     assert.ok(refused instanceof McpError);
-    assert.equal(refused.code, "sign_in_required");
+    assert.equal(refused.code, "insufficient_scope");
     assert.equal(refused.statusCode, 403);
     assert.deepEqual(refused.details, { scope: "orders:read" });
     // The Session's own token is untouched by the request for the MCP server.
     const still = await refusal(new ApiClient({ transport: w.transport }).call("GET", ORDERS, { ...w.who, token: session }));
-    assert.equal(still.code, "sign_in_required");
+    assert.equal(still.code, "insufficient_scope");
   }
 });
 
 test("a DPoP MCP server retries once with its nonce", async () => {
   const w = await world({ config: { mcpDpop: true, dpopNonce: true } });
   const session = await w.sessions.start(w.request);
-  const token = await w.sessions.tokenForMcp({ ...w.request, sessionId: session.sessionId, resource: MCP, dpop: true });
+  const token = await w.sessions.renew({ ...w.request, sessionKey: session.sessionKey, resource: MCP });
   const tools = await mcpClient(w, token).listTools();
   assert.deepEqual(tools.map((tool) => tool.name), ["list_orders", "exchange_jacket"]);
 });
@@ -324,11 +354,11 @@ test("a DPoP MCP server retries once with its nonce", async () => {
 test("a DPoP token for MCP needs the host's reactor and who", async () => {
   const w = await world();
   const session = await w.sessions.start(w.request);
-  const token = await w.sessions.tokenForMcp({ ...w.request, sessionId: session.sessionId, resource: MCP, dpop: true });
+  const token = await w.sessions.renew({ ...w.request, sessionKey: session.sessionKey, resource: MCP });
   assert.throws(() => new McpClient({ token, url: MCP, fetch: w.fetch }), (error) => error.code === "dpop_unavailable");
 });
 
-test("a signed-in MCP token needs the MCP url: the Account Token is never sent for another", async () => {
+test("an Account Token request for a resource needs an HTTPS URL: nothing is sent for another", async () => {
   const w = await world();
   const { token, reference } = await signedIn(w);
   let sent = 0;
@@ -339,8 +369,8 @@ test("a signed-in MCP token needs the MCP url: the Account Token is never sent f
       return w.fetch(input, init);
     },
   });
-  for (const resource of ["http://manzanita.example/mcp", `${MCP}#x`, "https://user:pw@manzanita.example/mcp", "not a url"]) {
-    const error = await refusal(accounts.tokenForMcp(reference, { context: w.context, sessionId: token.sessionId, resource, dpop: true }));
+  for (const resource of ["http://manzanita.example/mcp", "https://user:pw@manzanita.example/mcp", "not a url"]) {
+    const error = await refusal(accounts.refresh(reference, { context: w.context, sessionKey: token.sessionKey, resource }));
     assert.equal(error.code, "invalid_url");
   }
   assert.equal(sent, 0);
@@ -360,7 +390,7 @@ test("an agent without operations gets a tool error through MCP", async () => {
 });
 
 test("an MCP answer over SSE, a JSON-RPC error and a malformed operation", async () => {
-  const issued = { accessToken: { reveal: () => "sat_test" }, tokenType: "Bearer", expiresIn: 60, scopes: [], sessionId: "ses_1", signedIn: true };
+  const issued = { accessToken: { reveal: () => "sat_test" }, tokenType: "Bearer", expiresIn: 60, scopes: [], sessionKey: "K".repeat(43), signedIn: true };
   const answers = [];
   const fetch = async (_url, init) => {
     const message = JSON.parse(init.body);
@@ -387,7 +417,7 @@ test("an MCP answer over SSE, a JSON-RPC error and a malformed operation", async
 
 test("an MCP 429 is rate_limited with its Retry-After, and says when to retry", async () => {
   // As the API and conversation clients do (PAP_DATALAYER release gates, decided 2026-10-14).
-  const issued = { accessToken: { reveal: () => "sat_test" }, tokenType: "Bearer", expiresIn: 60, scopes: [], sessionId: "ses_1", signedIn: true };
+  const issued = { accessToken: { reveal: () => "sat_test" }, tokenType: "Bearer", expiresIn: 60, scopes: [], sessionKey: "K".repeat(43), signedIn: true };
   const refusals = [];
   const fetch = async (_url, init) => {
     const message = JSON.parse(init.body);
@@ -426,15 +456,39 @@ test("an MCP 429 is rate_limited with its Retry-After, and says when to retry", 
 
 // The website (§5, Operations §4.4) -------------------------------------------------------
 
-async function join(w, sessionId, returnTo) {
-  return new BrowserSessionClient({ reactor: w.host.reactor }).join({
-    clientId: w.identity.clientId,
-    pairwiseUserId: PAIRWISE,
+const JOIN = "https://manzanita.example/poppy/browser-session";
+
+/** Join the agent's browser to the Session (§5), then open `page` in it. */
+async function join(w, sessionKey, page) {
+  await new BrowserSessionClient({ reactor: w.host.reactor }).join({
     browserSessionEndpoint: w.company.document.web.browser_session_endpoint,
-    sessionId,
-    returnTo,
-    companyDomain: "manzanita.example",
+    tenantId: TENANT,
+    issuer: w.metadata.issuer,
+    sessionKey,
   });
+  const joined = w.browser.page;
+  await w.browser.get(page);
+  return joined;
+}
+
+function setCookies(headers) {
+  return typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [headers.get("set-cookie")].filter(Boolean);
+}
+
+async function joinForm(w) {
+  const browser = new ControlledBrowser(w.fetch);
+  const page = await browser.get(JOIN);
+  return { browser, code: /name="code" value="([^"]+)"/.exec(page.text)[1] };
+}
+
+function provider(w) {
+  return w.host.reactor.getContributions(DpopProofProviders)[0].value;
+}
+
+async function proof(w, sessionKey, code) {
+  return (
+    await provider(w).create({ method: "POST", url: JOIN, tenantId: TENANT, issuer: w.metadata.issuer, sessionKey, nonce: code })
+  ).reveal();
 }
 
 test("the company lists its browser-session endpoint", async () => {
@@ -450,15 +504,13 @@ test("the operation confirmed on the website is the same operation, once", async
   const pageUrl = operationPage(operation, w.company.document.organization.domain);
   assert.equal(pageUrl, `https://manzanita.example/operations/${operation.operation_id}`);
 
-  await join(w, token.sessionId, pageUrl);
+  const joined = await join(w, token.sessionKey, pageUrl);
   const page = w.browser.page;
   assert.equal(page.status, 200);
   assert.equal(page.url, pageUrl);
   assert.ok(page.text.includes(operation.summary) && page.text.includes('data-state="proposed"'));
-  const cookie = page.history[0].headers.get("set-cookie");
-  assert.equal(page.history[0].status, 303);
-  assert.ok(cookie.includes("Secure") && cookie.includes("HttpOnly") && cookie.includes("SameSite=Lax"));
-  assert.ok(!cookie.includes("Max-Age") && !cookie.includes("Expires"));
+  assert.equal(joined.history[0].status, 303);
+  assert.ok(w.browser.cookies.get("manzanita.example").get("__Host-poppy_session"));
   assert.equal(page.headers.get("x-frame-options"), "DENY");
 
   const confirmed = await w.browser.submit(pageUrl, { action: "confirm", revision: String(operation.revision), approved_by: "user" });
@@ -478,7 +530,7 @@ test("a form from another site, or without the page's token, decides nothing", a
   const w = await world();
   const { token } = await signedIn(w);
   const { operation } = await new ApiClient({ transport: w.transport }).call("POST", `${ORDERS}/ord_7Hk2/exchanges`, { ...w.who, token, body: {} });
-  await join(w, token.sessionId, operation.url);
+  await join(w, token.sessionKey, operation.url);
   const jar = [...w.browser.cookies.get("manzanita.example")].map(([name, value]) => `${name}=${value}`).join("; ");
   const post = (headers, form) =>
     w.fetch(operation.url, {
@@ -496,62 +548,66 @@ test("a form from another site, or without the page's token, decides nothing", a
   assert.equal((await w.fetch(operation.url)).status, 401);
 });
 
-test("the website follows the Session and refuses bad assertions", async () => {
+test("the website follows the Session", async () => {
   const w = await world();
   const { token, reference } = await signedIn(w);
   const { operation } = await new ApiClient({ transport: w.transport }).call("POST", `${ORDERS}/ord_7Hk2/gift-wrap`, { ...w.who, token, body: {} });
   assert.ok(operation.url);
-  await join(w, token.sessionId, operation.url);
+  await join(w, token.sessionKey, operation.url);
   assert.equal(w.browser.page.status, 200);
 
   // Signing out reaches the website on its next request: the account's operation is gone.
   await w.accounts.revoke(reference, { context: w.context });
   assert.equal((await w.browser.get(operation.url)).status, 404);
 
-  // A browser assertion is refused off the company's domain, replayed, or as a Session one.
-  assert.equal((await refusal(join(w, token.sessionId, "https://evil.example/"))).code, "invalid_return_to");
-  const endpoint = "https://manzanita.example/poppy/browser-session";
+});
+
+test("the join page is one-time, tied to its browser, and never framed", async () => {
+  // Step 1 of §5: a form with a one-time code, a `__Host-` cookie that ties the code to
+  // this browser, no caching, no framing, no opener.
+  const w = await world();
+  const page = await w.fetch(JOIN, { method: "GET" });
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get("cache-control"), "no-store");
+  assert.equal(page.headers.get("content-security-policy"), "frame-ancestors 'none'");
+  assert.equal(page.headers.get("cross-origin-opener-policy"), "same-origin");
+  const cookie = page.headers.get("set-cookie");
+  for (const part of ["__Host-poppy_join=", "Secure", "HttpOnly", "SameSite=Strict", "Max-Age=60"]) assert.ok(cookie.includes(part), part);
+  const text = await page.text();
+  const code = /name="code" value="([^"]+)"/.exec(text)[1];
+  assert.ok(code.length >= 22 && text.includes('name="proof"'));
+});
+
+test("a join needs its own browser, its code once, and a live Session's key", async () => {
+  // Step 3 of §5 and both attacks of §9.6: a code submitted from another browser, a code
+  // used twice, a proof over another code, a key that names no Session.
+  const w = await world();
   const session = await w.sessions.start(w.request);
-  const claims = buildBrowserAssertionClaims({
-    clientId: w.identity.clientId,
-    pairwiseUserId: PAIRWISE,
-    browserSessionEndpoint: endpoint,
-    sessionId: session.sessionId,
-    returnTo: "https://manzanita.example/",
-    companyDomain: "manzanita.example",
-    now: w.clock.now(),
-  });
-  const assertion = (await w.identity.signer.sign({ ...claims }, { purpose: "browser_assertion" })).reveal();
-  const post = (value) =>
-    w.fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ assertion: value }).toString(),
-      redirect: "manual",
-    });
-  const first = await post(assertion);
-  assert.equal(first.status, 303);
-  assert.ok(first.headers.get("set-cookie"));
-  const replayed = await post(assertion);
-  assert.equal(replayed.status, 400);
-  assert.equal(replayed.headers.get("set-cookie"), null);
-  const iat = Math.floor(w.clock.now().getTime() / 1000);
-  const sessionAssertion = await w.identity.signer.sign(
-    {
-      iss: w.identity.clientId,
-      sub: PAIRWISE,
-      aud: endpoint,
-      session_id: session.sessionId,
-      return_to: "https://manzanita.example/",
-      iat,
-      exp: iat + 60,
-      jti: "J".repeat(22),
-    },
-    { purpose: "session_assertion" },
-  );
-  const typed = await post(sessionAssertion.reveal());
-  assert.equal(typed.status, 400);
-  assert.equal(typed.headers.get("set-cookie"), null);
+  const joinedNone = (response) => !setCookies(response.headers).some((c) => c.startsWith("__Host-poppy_session="));
+
+  let { browser, code } = await joinForm(w);
+  const signed = await proof(w, session.sessionKey, code);
+  // Another browser (no join cookie): an attacker's code can't make it join (§9.6).
+  const stolen = await new ControlledBrowser(w.fetch).postForm(JOIN, { code, proof: signed });
+  assert.ok(stolen.status === 400 && joinedNone(stolen));
+  // The code was used by that first request, whatever the result: gone.
+  assert.equal((await browser.postForm(JOIN, { code, proof: signed })).status, 400);
+
+  ({ browser, code } = await joinForm(w));
+  const other = await proof(w, session.sessionKey, `bc_${"x".repeat(22)}`);
+  assert.equal((await browser.postForm(JOIN, { code, proof: other })).status, 400);
+
+  ({ browser, code } = await joinForm(w));
+  const unknown = await provider(w).newSessionKey({ tenantId: TENANT, issuer: w.metadata.issuer });
+  // A key the company doesn't know is an error here, never a new Session.
+  assert.equal((await browser.postForm(JOIN, { code, proof: await proof(w, unknown, code) })).status, 400);
+
+  ({ browser, code } = await joinForm(w));
+  const joined = await browser.postForm(JOIN, { code, proof: await proof(w, session.sessionKey, code) });
+  assert.equal(joined.status, 303);
+  const cookies = setCookies(joined.headers);
+  assert.ok(cookies.some((c) => c.startsWith("__Host-poppy_session=") && c.includes("SameSite=Strict")));
+  assert.ok(cookies.some((c) => c.startsWith("__Host-poppy_join=;") && c.includes("Max-Age=0")));
 });
 
 test("an operation page off the company's domain is refused", () => {

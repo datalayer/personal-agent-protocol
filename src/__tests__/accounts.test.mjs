@@ -25,9 +25,13 @@ const context = {
   pairwiseUserId: "usr_pairwise",
 };
 
+const KEY = "K".repeat(43);
+
 function arrange(company) {
   const tokens = new Map([["account_ref", new SecretValue("account-token-1")]]);
   const proofs = [];
+  const made = [];
+  const discarded = [];
   const reactor = buildPapReactor({}, [
     {
       name: "@tests/pap-accounts",
@@ -44,14 +48,21 @@ function arrange(company) {
         { point: Signers, value: { async sign() { return new SecretValue("assertion"); } }, options: { id: "signer" } },
         {
           point: DpopProofProviders,
-          value: { async create(request) { proofs.push(request); return new SecretValue("proof"); } },
+          value: {
+            async newSessionKey() {
+              made.push(`${"n".repeat(42)}${made.length}`);
+              return made.at(-1);
+            },
+            async create(request) { proofs.push(request); return new SecretValue("proof"); },
+            async discardSessionKey({ sessionKey }) { discarded.push(sessionKey); },
+          },
           options: { id: "dpop" },
         },
       ],
     },
   ]);
   const fetch = async (url, init) => company(String(url), Object.fromEntries(new URLSearchParams(init.body)), init);
-  return { client: new AccountTokenClient({ reactor, fetch }), tokens, proofs };
+  return { client: new AccountTokenClient({ reactor, fetch }), tokens, proofs, made, discarded };
 }
 
 function json(status, body, headers = {}) {
@@ -63,8 +74,6 @@ const signedIn = (extra = {}) => ({
   token_type: "DPoP",
   expires_in: 300,
   scope: "orders:read",
-  session_id: "ses_1",
-  signed_in: true,
   ...extra,
 });
 
@@ -74,14 +83,16 @@ test("refresh signs the Session in and rotates the stored token", async () => {
     seen.push(form);
     return json(200, signedIn({ refresh_token: "account-token-2" }));
   });
-  const result = await client.refresh("account_ref", { context, sessionId: "ses_1" });
+  const result = await client.refresh("account_ref", { context, sessionKey: KEY });
   assert.equal(result.status, "signed_in");
   assert.equal(result.rotated, true);
   assert.equal(result.token.accountToken, undefined);
   assert.equal(tokens.get("account_ref").reveal(), "account-token-2");
   assert.equal(seen[0].grant_type, "refresh_token");
-  assert.equal(seen[0].session_id, "ses_1");
-  assert.equal(proofs.length, 1);
+  // The proof's key names the Session; no parameter does (§4.3).
+  assert.equal("session_key" in seen[0] || "session_id" in seen[0], false);
+  assert.deepEqual(proofs.map((proof) => proof.sessionKey), [KEY]);
+  assert.equal("scope" in seen[0], false);
 });
 
 test("a narrower refresh reports what was left out; a wider one is re-consent", async () => {
@@ -91,18 +102,46 @@ test("a narrower refresh reports what was left out; a wider one is re-consent", 
       : json(200, signedIn()),
   );
   const narrowed = await client.refresh("account_ref", {
-    context, sessionId: "ses_1", scopes: ["orders:read", "orders:return"],
+    context, sessionKey: KEY, scopes: ["orders:read", "orders:return"],
   });
   assert.deepEqual(narrowed.missingScopes, ["orders:return"]);
-  const wider = await client.refresh("account_ref", { context, sessionId: "ses_1", scopes: ["orders:admin"] });
+  const wider = await client.refresh("account_ref", { context, sessionKey: KEY, scopes: ["orders:admin"] });
   assert.equal(wider.status, "re_consent_required");
 });
 
-test("invalid_grant deletes the token and leaves the Session signed out", async () => {
-  const { client, tokens } = arrange(() => json(400, { error: "invalid_grant" }));
-  const result = await client.refresh("account_ref", { context, sessionId: "ses_1" });
+test("invalid_grant, then a renewal that works: the Account Token ended", async () => {
+  const answers = [
+    json(400, { error: "invalid_grant" }),
+    json(200, { access_token: "t", token_type: "DPoP", expires_in: 60 }),
+  ];
+  const { client, tokens } = arrange(() => answers.shift());
+  const result = await client.refresh("account_ref", { context, sessionKey: KEY });
+  // Renewing with the assertion worked: the Session lives on signed out (§4.8).
   assert.equal(result.status, "signed_out");
+  assert.equal(result.token.signedIn, false);
   assert.equal(tokens.has("account_ref"), false);
+});
+
+test("invalid_grant on both: the Session ended", async () => {
+  const { client, tokens, discarded } = arrange(() => json(400, { error: "invalid_grant" }));
+  const result = await client.refresh("account_ref", { context, sessionKey: KEY });
+  // The renewal is refused too: the Session ended, the Account Token still works (§4.8).
+  assert.equal(result.status, "session_ended");
+  assert.equal(tokens.has("account_ref"), true);
+  assert.deepEqual(discarded, [KEY]);
+});
+
+test("without a Session Key a new Session starts signed in", async () => {
+  const { client, made } = arrange(() => json(200, signedIn()));
+  const result = await client.refresh("account_ref", { context });
+  assert.equal(result.status, "signed_in");
+  assert.equal(result.token.sessionKey, made[0]);
+});
+
+test("a Bearer answer to a refresh is refused", async () => {
+  // Bearer Session Tokens come from Token Exchange alone (§4.3).
+  const { client } = arrange(() => json(200, signedIn({ token_type: "Bearer" })));
+  await assert.rejects(client.refresh("account_ref", { context, sessionKey: KEY }), { code: "invalid_token_response" });
 });
 
 test("concurrent refreshes rotate one after the other", async () => {
@@ -114,8 +153,8 @@ test("concurrent refreshes rotate one after the other", async () => {
     return json(200, signedIn({ refresh_token: `account-token-${next}` }));
   });
   await Promise.all([
-    client.refresh("account_ref", { context, sessionId: "ses_1" }),
-    client.refresh("account_ref", { context, sessionId: "ses_1" }),
+    client.refresh("account_ref", { context, sessionKey: KEY }),
+    client.refresh("account_ref", { context, sessionKey: KEY }),
   ]);
   assert.deepEqual(used, ["account-token-1", "account-token-2"]);
   assert.equal(tokens.get("account_ref").reveal(), "account-token-3");
@@ -127,7 +166,7 @@ test("one DPoP nonce retry with a fresh proof", async () => {
     calls += 1;
     return calls === 1 ? json(400, { error: "use_dpop_nonce" }, { "dpop-nonce": "n-1" }) : json(200, signedIn());
   });
-  await client.refresh("account_ref", { context, sessionId: "ses_1" });
+  await client.refresh("account_ref", { context, sessionKey: KEY });
   assert.deepEqual(proofs.map((p) => p.nonce), [undefined, "n-1"]);
 });
 

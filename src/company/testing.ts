@@ -36,6 +36,7 @@ import {
   type IdempotencyRecord,
   type IssuedCode,
   type IssuedNonce,
+  type JoinCode,
   type IssuedSession,
   type JsonObject,
   type KnownClient,
@@ -87,7 +88,7 @@ function same(a: unknown, b: unknown): boolean {
 export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
   const later = new Date(now.getTime() + 5 * 60 * 1000).toISOString();
   const signedIn: IssuedSession = {
-    sessionId: "ses_1",
+    sessionKey: "ses_1",
     clientId: "https://atlas.example",
     pairwiseUserId: "usr_1",
     keyThumbprint: "thumb",
@@ -96,6 +97,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
     scopes: ["orders:read", "orders:write"],
     accountToken: "digest_1",
     resource: "https://shop.example/mcp",
+    agentId: "agt_1",
   };
   const operation = {
     operation_id: "op_1",
@@ -111,14 +113,15 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
   } as unknown as Operation;
   const records: Record<string, object> = {
     [RecordKinds.session]: {
-      sessionId: "ses_1",
+      sessionKey: "ses_1",
       clientId: "https://atlas.example",
       pairwiseUserId: "usr_1",
       tokens: { tok_1: signedIn },
       latest: "tok_1",
       accountId: "acct_1",
+      endsAt: later,
     } satisfies StoredSession,
-    [RecordKinds.sessionToken]: { sessionId: "ses_1" } satisfies SessionPointer,
+    [RecordKinds.sessionToken]: { sessionKey: "ses_1" } satisfies SessionPointer,
     [RecordKinds.accountToken]: {
       family: "fam_1",
       accountId: "acct_1",
@@ -147,6 +150,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       accountId: "acct_1",
       granted: ["a"],
       denied: true,
+      sessionKey: "jkt",
     } satisfies PendingDevice,
     [RecordKinds.userCode]: { device: "dev_digest" } satisfies UserCode,
     [RecordKinds.authorization]: {
@@ -155,6 +159,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       scopes: ["a"],
       state: "st",
       codeChallenge: "chal",
+      dpopJkt: "jkt",
       expiresAt: later,
       clientName: "Atlas",
       browserBinding: "bind",
@@ -163,12 +168,14 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       clientId: "c",
       redirectUri: "https://atlas.example/cb",
       codeChallenge: "chal",
+      dpopJkt: "jkt",
+      requested: ["a"],
       accountId: "acct_1",
       scopes: ["a"],
       expiresAt: later,
     } satisfies IssuedCode,
     [RecordKinds.mediated]: {
-      sessionId: "ses_1",
+      sessionKey: "ses_1",
       accountId: "acct_1",
       scopes: ["a"],
       codeReference: "ref",
@@ -198,7 +205,8 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       performed: true,
     } satisfies StoredOperation,
     [RecordKinds.proposal]: { operationId: "op_1" } satisfies OperationProposal,
-    [RecordKinds.browserCookie]: { sessionId: "ses_1" } satisfies SessionPointer,
+    [RecordKinds.browserCookie]: { sessionKey: "ses_1" } satisfies SessionPointer,
+    [RecordKinds.joinCode]: { browser: "browser_digest" } satisfies JoinCode,
     [RecordKinds.replay]: {} satisfies ReplayMark,
     [RecordKinds.signInAttempts]: { failures: 3, lockedUntil: later } satisfies SignInAttempts,
     [RecordKinds.feedback]: {

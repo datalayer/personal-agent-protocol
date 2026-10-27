@@ -19,7 +19,7 @@
     {
       "step": "ask",
       "text": "Where is my jacket order?",
-      "expect": { "events": ["message", "state", "message", "authorization", "state"], "error": "sign_in_required" }
+      "expect": { "events": ["message", "state", "message", "authorization", "state"], "error": "insufficient_scope" }
     },
     {
       "step": "sign_in",

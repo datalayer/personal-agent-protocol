@@ -21,7 +21,7 @@ const token = {
   tokenType: "DPoP",
   expiresIn: 300,
   scopes: [],
-  sessionId: "ses_example",
+  sessionKey: "K".repeat(43),
   signedIn: false,
 };
 
@@ -49,7 +49,6 @@ function setup(fetch) {
 const request = {
   token,
   tenantId: "tenant",
-  pairwiseUserId: "usr_example",
   issuer: "https://auth.example",
 };
 
@@ -69,7 +68,7 @@ test("starts and continues with distinct user-global message IDs", async () => {
   const { reactor, client } = setup(fetch);
   const first = {
     id: client.generateMessageId(),
-    sender: "agent",
+    author: { type: "agent" },
     text: "Return the jacket",
   };
   const started = await client.start(
@@ -79,7 +78,7 @@ test("starts and continues with distinct user-global message IDs", async () => {
   );
   const followUp = {
     id: client.generateMessageId(),
-    sender: "agent",
+    author: { type: "agent" },
     context: { user_available: false },
   };
   const continued = await client.send(
@@ -105,7 +104,7 @@ test("surfaces message ID conflicts without response body details", async () => 
   await assert.rejects(
     client.start(
       "https://api.example/conversations",
-      { id: "msg_same", sender: "agent", text: "different content" },
+      { id: "msg_same", author: { type: "agent" }, text: "different content" },
       request,
     ),
     (error) =>
@@ -125,7 +124,7 @@ test("recovers an expired cursor, drains pages, and suppresses duplicates", asyn
     created_at: "2026-10-10T12:00:00Z",
     message: {
       id: `msg_${id}`,
-      sender: "agent",
+      author: { type: "agent" },
       role: "company",
       text,
     },

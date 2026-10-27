@@ -47,11 +47,11 @@ async function world({ answers = [], extensions, config, plugins } = {}) {
   const conversations = new ConversationClient({ reactor: host.reactor, transport });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const start = (pairwiseUserId = PAIRWISE) =>
     sessions.start({ clientId: identity.clientId, pairwiseUserId, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT });
-  const message = (text) => ({ id: conversations.generateMessageId(), sender: "human", text });
+  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
   const endpoint = company.document.agent.protocols[0].endpoint;
   return { clock, fetch, identity, shop, plugin, host, transport, conversations, company, metadata, who, start, message, endpoint, sites };
 }
@@ -66,8 +66,7 @@ async function directSignIn(w, session, scopes = ["orders:read", "orders:write"]
     redirectUri: "https://atlas.example/oauth/callback",
     scopes,
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
   });
   const callbackUrl = await w.shop.approveAuthorization(w.host.browser.requestId, { accountId: "acct_ada", ...(grant ? { scopes: grant } : {}) });
   return { client, callbackUrl, result: await client.complete({ callbackUrl }) };
@@ -98,7 +97,11 @@ test("the shared journey: TypeScript agent and TypeScript company in one process
 test("discovery and OAuth metadata publish one issuer on the company's domain", async () => {
   const w = await world();
   assert.equal(w.metadata.issuer, "https://manzanita.example");
-  assert.deepEqual(w.metadata.poppy_domains, ["manzanita.example"]);
+  assert.deepEqual(w.metadata.protected_resources, ["https://manzanita.example", "https://manzanita.example/mcp"]);
+  assert.deepEqual(w.company.document.auth.scopes, {
+    "orders:read": "See your orders, returns and exchanges",
+    "orders:write": "Exchange or return items in your orders",
+  });
   assert.equal(w.company.document.auth.mediated.endpoint, "https://manzanita.example/poppy/sign-in");
   assert.equal(w.company.document.apis[0].url, "https://manzanita.example/api/openapi.json");
   assert.deepEqual(w.company.document.extensions.operations, { version: "1", endpoint: "https://manzanita.example/poppy/operations" });
@@ -119,7 +122,7 @@ test("an alias publishes the company's discovery, its issuer listing it, and ans
   // Every document naming the issuer has the same auth, which describes it (§3.2).
   assert.deepEqual(discovery.body.auth, own.body.auth);
   const metadata = await at("manzanita.example", "/.well-known/oauth-authorization-server");
-  assert.deepEqual(metadata.body.poppy_domains, ["manzanita.example", "shop.example"]);
+  assert.deepEqual(metadata.body.protected_resources.slice(0, 2), ["https://manzanita.example", "https://shop.example"]);
   assert.equal((await at("shop.example", "/.well-known/oauth-authorization-server")).status, 404);
   assert.equal((await at("shop.example", "/oauth/token", "POST")).status, 404);
   assert.throws(() => service.discoveryDocument("elsewhere.example"), /not one of this company's domains/);
@@ -137,10 +140,9 @@ test("Device Sign-In paces polling, then signs the Session in; Account Tokens ro
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
-    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-    poppyDomains: w.metadata.poppy_domains,
+    sessionKey: session.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    protectedResources: w.metadata.protected_resources,
   });
   assert.match(started.userCode, /^[A-Z0-9XY]{4}-[A-Z0-9XY]{4}$/);
   w.clock.advance(started.pollInterval);
@@ -150,7 +152,7 @@ test("Device Sign-In paces polling, then signs the Session in; Account Tokens ro
   const done = await device.poll(started.reference);
   assert.equal(done.status, "complete");
   assert.equal(done.token.signedIn, true);
-  assert.equal(done.token.sessionId, session.sessionId);
+  assert.equal(done.token.sessionKey, session.sessionKey);
 
   const accounts = new AccountTokenClient({ reactor: w.host.reactor, fetch: w.fetch });
   const context = {
@@ -161,15 +163,15 @@ test("Device Sign-In paces polling, then signs the Session in; Account Tokens ro
     tenantId: TENANT,
     pairwiseUserId: PAIRWISE,
   };
-  const narrowed = await accounts.refresh(done.accountTokenReference, { context, sessionId: session.sessionId, scopes: ["orders:read"] });
+  const narrowed = await accounts.refresh(done.accountTokenReference, { context, sessionKey: session.sessionKey, scopes: ["orders:read"] });
   assert.equal(narrowed.status, "signed_in");
   assert.equal(narrowed.rotated, true);
   assert.deepEqual([...narrowed.grantedScopes], ["orders:read"]);
-  const wider = await accounts.refresh(done.accountTokenReference, { context, sessionId: session.sessionId, scopes: ["orders:read", "orders:admin"] });
+  const wider = await accounts.refresh(done.accountTokenReference, { context, sessionKey: session.sessionKey, scopes: ["orders:read", "orders:admin"] });
   assert.equal(wider.status, "re_consent_required");
   const revoked = await accounts.revoke(done.accountTokenReference, { context });
   assert.equal(revoked.revoked, true);
-  const after = await accounts.refresh(done.accountTokenReference, { context, sessionId: session.sessionId });
+  const after = await accounts.refresh(done.accountTokenReference, { context, sessionKey: session.sessionKey });
   assert.equal(after.status, "signed_out");
 });
 
@@ -185,10 +187,9 @@ test("a scope no longer offered ends the Sessions holding it; the Account Token 
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
-    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-    poppyDomains: w.metadata.poppy_domains,
+    sessionKey: session.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -217,9 +218,9 @@ test("a scope no longer offered ends the Sessions holding it; the Account Token 
     pairwiseUserId: PAIRWISE,
   };
   const fresh = await w.start();
-  const all = await accounts.refresh(done.accountTokenReference, { context, sessionId: fresh.sessionId });
+  const all = await accounts.refresh(done.accountTokenReference, { context, sessionKey: fresh.sessionKey });
   assert.equal(all.status, "re_consent_required");
-  const within = await accounts.refresh(done.accountTokenReference, { context, sessionId: fresh.sessionId, scopes: ["orders:read"] });
+  const within = await accounts.refresh(done.accountTokenReference, { context, sessionKey: fresh.sessionKey, scopes: ["orders:read"] });
   assert.equal(within.status, "signed_in");
   await w.conversations.start(w.endpoint, w.message("hi"), { ...w.who, token: within.token, wait: 0 });
 });
@@ -246,10 +247,9 @@ test("a password reset ends the sign-ins from before it; signing in again works"
       clientId: w.identity.clientId,
       scopes: ["orders:read"],
       tenantId: TENANT,
-      pairwiseUserId: PAIRWISE,
-      sessionId: session.sessionId,
-      organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-      poppyDomains: w.metadata.poppy_domains,
+      sessionKey: session.sessionKey,
+      organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+      protectedResources: w.metadata.protected_resources,
     });
     await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
     w.clock.advance(started.pollInterval);
@@ -277,7 +277,7 @@ test("a password reset ends the sign-ins from before it; signing in again works"
     pairwiseUserId: PAIRWISE,
   };
   const fresh = await w.start();
-  const refreshed = await accounts.refresh(done.accountTokenReference, { context, sessionId: fresh.sessionId });
+  const refreshed = await accounts.refresh(done.accountTokenReference, { context, sessionKey: fresh.sessionKey });
   assert.equal(refreshed.status, "signed_out");
 
   w.clock.advance(1);
@@ -296,10 +296,9 @@ test("a denied device code is access_denied", async () => {
     clientId: w.identity.clientId,
     scopes: ["orders:read"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
-    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-    poppyDomains: w.metadata.poppy_domains,
+    sessionKey: session.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    protectedResources: w.metadata.protected_resources,
   });
   const started = await begin();
   await w.shop.denyDevice(started.userCode);
@@ -359,7 +358,7 @@ test("Direct Sign-In: partial consent, a denial, a code used once, and the conse
   await client.begin({
     authorizationEndpoint: w.metadata.authorization_endpoint, tokenEndpoint: w.metadata.token_endpoint,
     issuer: w.metadata.issuer, clientId: w.identity.clientId, redirectUri: "https://atlas.example/oauth/callback",
-    scopes: ["orders:read"], tenantId: TENANT, pairwiseUserId: PAIRWISE, sessionId: session.sessionId,
+    scopes: ["orders:read"], tenantId: TENANT, sessionKey: session.sessionKey,
   });
   const denied = await w.shop.denyAuthorization(w.host.browser.requestId);
   assert.match(denied, /error=access_denied/);
@@ -367,7 +366,7 @@ test("Direct Sign-In: partial consent, a denial, a code used once, and the conse
 
   const base = "https://manzanita.example/oauth/authorize";
   const good = `?response_type=code&client_id=${w.identity.clientId}&scope=orders:read&state=s1&code_challenge=c` +
-    "&code_challenge_method=S256&redirect_uri=https://atlas.example/oauth/callback";
+    `&code_challenge_method=S256&dpop_jkt=${session.sessionKey}&redirect_uri=https://atlas.example/oauth/callback`;
   const page = await w.fetch(base + good, { method: "GET" });
   assert.equal(page.headers.get("x-frame-options"), "DENY");
   assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/);
@@ -385,7 +384,7 @@ test("the API: signed out says which scope, the OpenAPI description, and a 202 o
   const read = (token) => w.transport.request("GET", "https://manzanita.example/api/orders", { ...w.who, token, headers: { Accept: "application/json" } });
   const out = await read(session);
   assert.equal(out.status, 403);
-  assert.deepEqual(await out.json(), { error: "sign_in_required", scope: "orders:read" });
+  assert.deepEqual(await out.json(), { error: "insufficient_scope", scope: "orders:read" });
   const openapi = await w.fetch("https://manzanita.example/api/openapi.json", { method: "GET" });
   assert.equal((await openapi.json()).openapi, "3.1.0");
   const { result } = await directSignIn(w, session);
@@ -512,7 +511,7 @@ test("taken down: open operations settled as cancelled, saying so; every sign-in
   assert.equal(await w.shop.endSignIns(), 1);
   assert.deepEqual(await w.shop.openWork(), { operations: [], signIns: [] });
   const out = await w.transport.request("GET", "https://manzanita.example/api/orders", { ...w.who, token });
-  assert.deepEqual(await out.json(), { error: "sign_in_required", scope: "orders:read" });
+  assert.deepEqual(await out.json(), { error: "insufficient_scope", scope: "orders:read" });
 
   assert.equal(await w.shop.cancelOpenOperations(reason), 0);
   assert.equal(await w.shop.endSignIns(), 0);
@@ -600,7 +599,9 @@ test("one of the company's people answers over what they read", async () => {
   read = await w.shop.conversationRecord(id);
   assert.equal(read.responder, "human");
   const took = await w.shop.staffReply(id, { after: read.events.at(-1).id, text: "Marta here." });
-  assert.deepEqual([took.message.sender, took.message.role], ["human", "company"]);
+  assert.deepEqual([took.message.author.type, took.message.role], ["human", "company"]);
+  const named = await w.shop.staffReply(id, { after: took.id, text: "Rosa here too.", authorName: "Rosa", authorId: "staff_rosa" });
+  assert.deepEqual(named.message.author, { type: "human", id: "staff_rosa", name: "Rosa" });
 
   // The person writes while Marta answers from what she read before: hers is refused.
   await w.conversations.send(w.endpoint, id, w.message("Is it shipped?"), { ...w.who, token: session });
@@ -609,8 +610,8 @@ test("one of the company's people answers over what they read", async () => {
   const answered = await w.shop.staffReply(id, { after: read.events.at(-1).id, text: "It is.", data: { order_id: "ord_7Hk2" } });
 
   const seen = await w.conversations.readEvents(w.endpoint, id, { ...w.who, token: session });
-  const written = seen.events.filter((e) => e.type === "message").map((e) => [e.message.sender, e.message.role, e.message.text]);
-  assert.deepEqual(written.slice(-3), [["human", "company", "Marta here."], ["human", "user", "Is it shipped?"], ["human", "company", "It is."]]);
+  const written = seen.events.filter((e) => e.type === "message").map((e) => [e.message.author.type, e.message.role, e.message.text]);
+  assert.deepEqual(written.slice(-3), [["human", "company", "Rosa here too."], ["human", "user", "Is it shipped?"], ["human", "company", "It is."]]);
   assert.equal(seen.events.at(-1).id, answered.id);
   assert.deepEqual([seen.status, seen.responder], ["idle", "human"]);
 
@@ -638,7 +639,7 @@ test("refusals: no DPoP proof, a replayed proof, a Bearer token, a bad client as
   const w = await world();
   const session = await w.start();
   const dpop = firstContribution(w.host.reactor, DpopProofProviders, "DPoP");
-  const proof = await dpop.create({ method: "GET", url: "https://manzanita.example/api/orders", tenantId: TENANT, subject: PAIRWISE, issuer: w.who.issuer, accessToken: session.accessToken });
+  const proof = await dpop.create({ method: "GET", url: "https://manzanita.example/api/orders", tenantId: TENANT, issuer: w.who.issuer, sessionKey: session.sessionKey, accessToken: session.accessToken });
   const headers = { Authorization: `DPoP ${session.accessToken.reveal()}`, DPoP: proof.reveal() };
   const once = await w.fetch("https://manzanita.example/api/orders", { method: "GET", headers });
   assert.equal(once.status, 403);
@@ -668,10 +669,10 @@ test("a conversation that used the account stays with it; disconnecting signs Se
   assert.equal(await w.shop.disconnect(w.identity.clientId, "acct_ada"), 1);
   const out = await w.transport.request("GET", `${w.endpoint}/${page.conversation_id}/events`, { ...w.who, token: result.token });
   assert.equal(out.status, 403);
-  assert.deepEqual(await out.json(), { error: "sign_in_required" });
-  assert.equal(out.headers.get("www-authenticate"), 'DPoP error="sign_in_required"');
+  assert.deepEqual(await out.json(), { error: "insufficient_scope", scope: "orders:read" });
+  assert.equal(out.headers.get("www-authenticate"), 'DPoP error="insufficient_scope", scope="orders:read"');
   const orders = await w.transport.request("GET", "https://manzanita.example/api/orders", { ...w.who, token: result.token });
-  assert.deepEqual(await orders.json(), { error: "sign_in_required", scope: "orders:read" });
+  assert.deepEqual(await orders.json(), { error: "insufficient_scope", scope: "orders:read" });
 });
 
 const DEVICE_PAGE = "https://pap.manzanita.example/device?slug=orders-helper";
@@ -696,10 +697,9 @@ test("Device Sign-In points at the hosted device page", async () => {
     clientId: w.identity.clientId,
     scopes: ["orders:read"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
-    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-    poppyDomains: w.metadata.poppy_domains,
+    sessionKey: session.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    protectedResources: w.metadata.protected_resources,
   });
   assert.equal(started.verificationUri, DEVICE_PAGE);
   assert.equal(started.verificationUriComplete, `${DEVICE_PAGE}&${new URLSearchParams({ code: started.userCode })}`);
@@ -721,8 +721,7 @@ test("authorize redirects to the hosted consent page, which reads the request ba
     redirectUri: "https://atlas.example/oauth/callback",
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
   });
   assert.equal(handed[0].status, 303);
   assert.equal(handed[0].headers.get("cache-control"), "no-store");
@@ -735,8 +734,8 @@ test("authorize redirects to the hosted consent page, which reads the request ba
   assert.equal(summary.client_name, "Atlas");
   assert.equal(summary.client_domain, "atlas.example");
   assert.deepEqual(summary.scopes, [
-    { scope: "orders:read", description: "See your orders" },
-    { scope: "orders:write", description: "Exchange and return items" },
+    { scope: "orders:read", description: "See your orders, returns and exchanges" },
+    { scope: "orders:write", description: "Exchange or return items in your orders" },
   ]);
   assert.match(summary.expires_at, /Z$/);
   assert.deepEqual(Object.keys(summary).sort(), ["client_domain", "client_name", "expires_at", "request_id", "scopes"]);

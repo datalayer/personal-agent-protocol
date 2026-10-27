@@ -183,7 +183,6 @@ class _Journey:
         assert ("operations" in self.company.document.extensions) is expect["operations"]
         self.who = {
             "tenant_id": agent["tenant_id"],
-            "pairwise_user_id": agent["pairwise_user_id"],
             "issuer": self.company.oauth_metadata.issuer,
         }
 

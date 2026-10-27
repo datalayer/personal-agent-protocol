@@ -29,7 +29,12 @@ import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./suppor
 
 const ROOT = new URL("../../", import.meta.url);
 const TENANT = "application-42";
-const SCOPES = ["orders:read", "orders:write", "orders:return", "poppy:read"];
+const SCOPES = ["orders:read", "orders:write", "orders:return"];
+const SCOPE_DESCRIPTIONS = {
+  "orders:read": "See your orders",
+  "orders:write": "Exchange or return items in your orders",
+  "orders:return": "Return items",
+};
 const COMPANIES = {
   "example.com": "Example Company",
   "shop.example": "Example Shop",
@@ -68,7 +73,7 @@ async function docsWorld() {
   sites["agent.example"] = identity.documents;
   const companies = {};
   for (const [domain, name] of Object.entries(COMPANIES)) {
-    const { service } = manzanita({ fetch, clock, config: { name, domain, scopes: SCOPES, writeScopes: ["orders:write"] } });
+    const { service } = manzanita({ fetch, clock, config: { name, domain, scopes: SCOPES, scopeDescriptions: SCOPE_DESCRIPTIONS, writeScopes: ["orders:write"] } });
     sites[domain] = companies[domain] = service;
   }
   const host = await agentHost({ identity, fetch, clock, answers: [{ ...ADA }, { code: ADA_CODE }] });
@@ -133,10 +138,9 @@ async function docsWorld() {
       clientId: identity.clientId,
       scopes,
       tenantId: TENANT,
-      pairwiseUserId,
-      sessionId: session.sessionId,
-      organization: { name: "Manzanita", domain: metadata.poppy_domains[0] },
-      poppyDomains: metadata.poppy_domains,
+      sessionKey: session.sessionKey,
+      organization: { name: "Manzanita", domain: new URL(metadata.protected_resources[0]).hostname },
+      protectedResources: metadata.protected_resources,
     });
     await companies[domain].approveDevice(started.userCode, { accountId: "acct_ada" });
     clock.advance(started.pollInterval);
@@ -200,13 +204,12 @@ example("docs/docs/sdk/typescript.mdx#3", async (w) => {
     access_token: "sat_docs",
     token_type: "DPoP",
     expires_in: 3600,
-    scope: "",
-    session_id: "ses_docs",
-    signed_in: false,
   }));
-  return [{ reactor: w.reactor, response }, async (values, out) => {
+  const sessionKey = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
+  return [{ reactor: w.reactor, response, sessionKey }, async (values, out) => {
     assert.equal(values.claims.iss, "https://agent.example/agent.json");
-    assert.ok(out.some((line) => line.includes("ses_docs")));
+    assert.equal(values.token.signedIn, false);
+    assert.ok(out.some((line) => line.includes(sessionKey)));
   }];
 });
 
@@ -221,7 +224,7 @@ example("docs/docs/guides/sessions.mdx#0", async (w) => [
   { reactor: w.reactor, abortController: new AbortController() },
   async (values) => {
     assert.equal(values.token.signedIn, false);
-    assert.equal(values.renewed.sessionId, values.token.sessionId);
+    assert.equal(values.renewed.sessionKey, values.token.sessionKey);
   },
 ]);
 
@@ -236,7 +239,7 @@ example("docs/docs/guides/direct-sign-in.mdx#0", async (w) => {
       request: { signal: new AbortController().signal },
     },
     async (values) => {
-      assert.deepEqual(values.result.grantedScopes, ["poppy:read"]);
+      assert.deepEqual(values.result.grantedScopes, ["orders:read"]);
       assert.ok(values.accountReference.startsWith("account_"));
     },
   ];
@@ -321,7 +324,7 @@ example("docs/docs/guides/conversations.mdx#0", async (w) => {
   const token = await w.signedOut("shop.example");
   const endpoint = company.document.agent.protocols[0].endpoint;
   const conversations = new portable.ConversationClient({ reactor: w.reactor, transport: w.transport });
-  const message = { id: conversations.generateMessageId(), sender: "human", text: "Hello" };
+  const message = { id: conversations.generateMessageId(), author: { type: "human" }, text: "Hello" };
   const page = await conversations.start(endpoint, message, { token, wait: 0, ...who });
   await conversations.close(endpoint, page.conversation_id, { token, ...who });
   const handled = [];
@@ -410,8 +413,8 @@ example("docs/docs/sdk/typescript.mdx#6", async (w) => {
     async (values) => {
       assert.equal(values.mcpUrl, "https://shop.example/mcp");
       assert.equal(values.served.supportsDpop, true);
-      assert.equal(values.signedIn.status, "signed_in");
-      assert.equal(values.signedIn.token.tokenType, "DPoP");
+      assert.equal(values.token.signedIn, true);
+      assert.equal(values.token.tokenType, "DPoP");
       assert.deepEqual(values.tools.map((tool) => tool.name), ["list_orders", "exchange_jacket"]);
       assert.equal(values.result.operation.state, "proposed");
     },
@@ -432,10 +435,10 @@ example("docs/docs/examples/browser-session.mdx#0", async (w) => {
   const browser = new ControlledBrowser(w.fetch);
   await w.reactor.install({
     name: "docs-controlled-browser",
-    contributes: [{ point: portable.BrowserFormPosts, value: browser, options: { id: "controlled-browser" } }],
+    contributes: [{ point: portable.BrowserJoins, value: browser, options: { id: "controlled-browser" } }],
   });
   return [
-    { reactor: w.reactor, company, operation, session: token, clientId: w.identity.clientId, pairwiseUserId: who.pairwiseUserId },
+    { reactor: w.reactor, company, operation, session: token, browser, tenantId: who.tenantId, issuer: who.issuer },
     async (values, out) => {
       assert.equal(values.page, operation.url);
       assert.deepEqual(out, [operation.url]);

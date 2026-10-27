@@ -47,7 +47,7 @@ async function world(config) {
   const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const who = { tenantId: TENANT, issuer: metadata.issuer };
   return { clock, fetch, identity, shop, plugin, host, transport, metadata, who };
 }
 
@@ -70,10 +70,9 @@ async function signIn(w, signedOut) {
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: signedOut.sessionId,
-    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-    poppyDomains: w.metadata.poppy_domains,
+    sessionKey: signedOut.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -109,7 +108,7 @@ async function scripted(answer) {
 test("every write carries a random UUID v4, and a read none", async () => {
   assert.match(newIdempotencyKey(), UUID_V4);
   assert.equal(
-    new CompanyConfig({ name: "x", domain: "x.example", scopes: ["a"], operations: false }).idempotencyLifetimeSeconds,
+    new CompanyConfig({ name: "x", domain: "x.example", scopes: ["a"], scopeDescriptions: { a: "A" }, operations: false }).idempotencyLifetimeSeconds,
     FIXTURE.default_lifetime_seconds,
   );
   const s = await scripted(() => Response.json({ ok: true }));
@@ -158,7 +157,7 @@ test("the reference company keeps each key per Session for its lifetime", async 
   const w = await world({ idempotencyLifetimeSeconds: FIXTURE.lifetime_seconds });
   const tokens = {};
   for (const name of ["first", "second"]) tokens[name] = await signIn(w, await session(w));
-  assert.notEqual(tokens.first.sessionId, tokens.second.sessionId);
+  assert.notEqual(tokens.first.sessionKey, tokens.second.sessionKey);
   const api = new ApiClient({ transport: w.transport });
   const answers = {};
   for (const step of FIXTURE.steps) {
@@ -223,7 +222,7 @@ test("a bad key is invalid_request, and a refusal is not remembered", async () =
   const refused = await refusal(
     api.call("POST", exchanges, { ...w.who, token: signedOut, body: {}, idempotencyKey: key }),
   );
-  assert.equal(refused.code, "sign_in_required");
+  assert.equal(refused.code, "insufficient_scope");
   // Signed in, the same key is a new request: the refusal was not kept.
   const token = await signIn(w, signedOut);
   const answer = await api.call("POST", exchanges, { ...w.who, token, body: {}, idempotencyKey: key });

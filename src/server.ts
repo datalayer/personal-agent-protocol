@@ -15,12 +15,6 @@ export {
   type VerifiedDpopProof,
   type VerifyDpopProofOptions,
 } from "./crypto.js";
-export {
-  verifyBrowserAssertion,
-  type BrowserAssertionReplayCache,
-  type VerifiedBrowserAssertion,
-  type VerifyBrowserAssertionOptions,
-} from "./browser-server.js";
 export * from "./company/index.js";
 
 export { isGlobalAddress } from "./addresses.js";

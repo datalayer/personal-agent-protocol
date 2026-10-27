@@ -28,8 +28,8 @@ const fixtures = new URL("../../protocol/fixtures/", import.meta.url);
 const fixture = (name) => JSON.parse(readFileSync(new URL(name, fixtures), "utf8"));
 const endpoint = "https://api.shop.example/poppy/operations";
 const now = new Date("2026-10-10T12:00:00Z");
-const token = { accessToken: new SecretValue("s"), tokenType: "DPoP", expiresIn: 300, scopes: [], sessionId: "ses_1", signedIn: true };
-const who = { token, tenantId: "t", pairwiseUserId: "usr_1", issuer: "https://auth.shop.example" };
+const token = { accessToken: new SecretValue("s"), tokenType: "DPoP", expiresIn: 300, scopes: [], sessionKey: "K".repeat(43), signedIn: true };
+const who = { token, tenantId: "t", issuer: "https://auth.shop.example" };
 const standing = ["https://auth.shop.example", "usr_1", "orders.exchange"];
 
 const proposed = (changes = {}) => parseOperation({ ...fixture("operation-valid.json"), ...changes });

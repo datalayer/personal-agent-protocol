@@ -52,14 +52,14 @@ async function world({ answers = [], extensions, config } = {}) {
   const conversations = new ConversationClient({ reactor: host.reactor, transport });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const request = { clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT };
   const context = { ...request, revocationEndpoint: metadata.revocation_endpoint };
   delete context.tokenEndpoint;
   const accountContext = { tokenEndpoint: metadata.token_endpoint, ...context };
   const accounts = new AccountTokenClient({ reactor: host.reactor, fetch });
-  const message = (text) => ({ id: conversations.generateMessageId(), sender: "human", text });
+  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
   const endpoint = company.document.agent.protocols[0].endpoint;
   const postJson = (token, url, body) =>
     transport.request("POST", url, { token, ...who, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -67,7 +67,7 @@ async function world({ answers = [], extensions, config } = {}) {
     clock, fetch, identity, shop, host, transport, conversations, company, metadata, who, sessions, request,
     context: accountContext, accounts, message, endpoint, postJson,
     start: () => sessions.start(request),
-    renew: (sessionId) => sessions.renew({ ...request, sessionId }),
+    renew: (sessionKey) => sessions.renew({ ...request, sessionKey }),
   };
 }
 
@@ -81,10 +81,9 @@ async function deviceSignIn(w, session, accountId) {
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
     organization: w.company.document.organization,
-    poppyDomains: w.metadata.poppy_domains,
+    protectedResources: w.metadata.protected_resources,
   });
   assert.deepEqual([started.organizationName, started.organizationDomain], ["Manzanita Outfitters", "manzanita.example"]);
   await w.shop.approveDevice(started.userCode, { accountId });
@@ -115,7 +114,7 @@ test("a signed-out Session is never signed in to another account", async () => {
   const [token, reference] = await deviceSignIn(w, session, "acct_ada");
   assert.ok(token && reference);
   await w.accounts.revoke(reference, { context: w.context });
-  const renewed = await w.renew(session.sessionId);
+  const renewed = await w.renew(session.sessionKey);
   assert.equal(renewed.signedIn, false); // it continues signed out (§4.9)
 
   // Signed out since, it is still tied to acct_ada: the device poll issues nothing.
@@ -129,13 +128,13 @@ test("a signed-out Session is never signed in to another account", async () => {
   const fresh = await w.start();
   const [bob, bobReference] = await deviceSignIn(w, fresh, "acct_bob");
   assert.ok(bob && bobReference);
-  const mismatch = await refusal(w.accounts.refresh(bobReference, { context: w.context, sessionId: session.sessionId }));
+  const mismatch = await refusal(w.accounts.refresh(bobReference, { context: w.context, sessionKey: session.sessionKey }));
   assert.equal(mismatch.code, "account_mismatch");
 
   // The same account is welcome back.
   const [back, , none] = await deviceSignIn(w, renewed, "acct_ada");
   assert.equal(none, undefined);
-  assert.equal(back.sessionId, session.sessionId);
+  assert.equal(back.sessionKey, session.sessionKey);
 });
 
 test("Mediated Sign-In of a Session tied to another account is account_mismatch", async () => {
@@ -143,7 +142,7 @@ test("Mediated Sign-In of a Session tied to another account is account_mismatch"
   let session = await w.start();
   const [, reference] = await deviceSignIn(w, session, "acct_bob");
   await w.accounts.revoke(reference, { context: w.context });
-  session = await w.renew(session.sessionId);
+  session = await w.renew(session.sessionKey);
   const auth = w.company.document.auth;
   const raised = await refusal(
     new MediatedSignInClient({ reactor: w.host.reactor, fetch: w.fetch }).signIn({
@@ -173,18 +172,18 @@ test("after sign-out what used the account stays and asks for sign-in", async ()
   const proposed = await new ApiClient({ transport: w.transport }).call("POST", EXCHANGE, { token, body: {}, ...w.who });
   assert.ok(proposed.operation);
   await w.accounts.revoke(reference, { context: w.context });
-  const signedOut = await w.renew(session.sessionId);
-  // The conversation stays open, and a signed-out token on it gets sign_in_required.
+  const signedOut = await w.renew(session.sessionKey);
+  // The conversation stays open, and a signed-out token on it gets insufficient_scope.
   assert.notEqual((await w.shop.conversationRecord(page.conversation_id)).status, "closed");
   const read = await refusal(w.conversations.readEvents(w.endpoint, page.conversation_id, { token: signedOut, ...w.who }));
   assert.ok(read instanceof ConversationError);
-  assert.deepEqual([read.code, read.statusCode], ["sign_in_required", 403]);
+  assert.deepEqual([read.code, read.statusCode], ["insufficient_scope", 403]);
   // The operation belongs to the account: signed out, the same Session is asked to sign in.
   const operations = new OperationsClient({ reactor: w.host.reactor, transport: w.transport });
   const ops = w.shop.config.operationsEndpoint;
   const op = await refusal(operations.read(ops, proposed.operation.operation_id, { token: signedOut, ...w.who }));
   assert.ok(op instanceof OperationError);
-  assert.deepEqual([op.code, op.statusCode], ["sign_in_required", 403]);
+  assert.deepEqual([op.code, op.statusCode], ["insufficient_scope", 403]);
   // Signed in again to the same account, the Session continues both.
   const [back] = await deviceSignIn(w, signedOut, "acct_ada");
   const again = await w.conversations.readEvents(w.endpoint, page.conversation_id, { token: back, ...w.who });
@@ -274,7 +273,7 @@ test("wait is a whole number of seconds, and a larger one is capped", async () =
   const capped = await w.conversations.readEvents(w.endpoint, page.conversation_id, { token: session, wait: 86_400, ...w.who });
   assert.equal(capped.conversation_id, page.conversation_id);
   // A malformed message on the POSTs: none of text, data, context.
-  const bad = await w.postJson(session, `${w.endpoint}/${page.conversation_id}/messages`, { message: { id: "msg_x", sender: "agent" } });
+  const bad = await w.postJson(session, `${w.endpoint}/${page.conversation_id}/messages`, { message: { id: "msg_x", author: { type: "agent" } } });
   assert.deepEqual([bad.status, await bad.json()], [400, { error: "invalid_request" }]);
   // An ID with characters not allowed is malformed, not unknown (§7.2).
   const odd = await w.transport.request("GET", `${w.endpoint}/cnv.bad/events`, { token: session, ...w.who });
@@ -287,7 +286,7 @@ test("a message is recorded as sent, and its role is the company's to set", asyn
   const started = await w.postJson(session, `${w.endpoint}?wait=0`, {
     message: {
       id: "msg_role_sent",
-      sender: "agent",
+      author: { type: "agent" },
       role: "company",
       text: "Hi",
       data: { order: "ord_1" },
@@ -305,7 +304,7 @@ test("a message is recorded as sent, and its role is the company's to set", asyn
   const answer = await w.conversations.send(
     w.endpoint,
     page.conversation_id,
-    { id: "msg_only_ctx", sender: "agent", context: { user_available: true } },
+    { id: "msg_only_ctx", author: { type: "agent" }, context: { user_available: true } },
     { token: session, cursor: page.cursor, wait: 0, ...w.who },
   );
   const recorded = answer.events.filter((event) => event.type === "message").map((event) => event.message);
@@ -314,7 +313,7 @@ test("a message is recorded as sent, and its role is the company's to set", asyn
   assert.equal(recorded[0].role, "user");
   // The personal agent never sends a role.
   await assert.rejects(
-    w.conversations.send(w.endpoint, page.conversation_id, { id: "msg_with_role", sender: "agent", role: "user", text: "x" }, { token: session, ...w.who }),
+    w.conversations.send(w.endpoint, page.conversation_id, { id: "msg_with_role", author: { type: "agent" }, role: "user", text: "x" }, { token: session, ...w.who }),
     /role/,
   );
 });
@@ -388,7 +387,7 @@ test("a company requiring nonces, and the personal agent retrying with them", as
   // At an API: HTTP 401 with the DPoP challenge and DPoP-Nonce; one retry.
   const raised = await refusal(new ApiClient({ transport: w.transport }).call("GET", ORDERS, { token: session, ...w.who }));
   assert.ok(raised instanceof ApiError);
-  assert.equal(raised.code, "sign_in_required");
+  assert.equal(raised.code, "insufficient_scope");
   const api = captured.filter((item) => item.path === "/api/orders").map((item) => item.answer);
   assert.deepEqual(api.map((answer) => answer.status), [401, 403]);
   assert.equal(api[0].headers["WWW-Authenticate"], 'DPoP error="use_dpop_nonce"');

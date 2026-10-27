@@ -54,11 +54,11 @@ async function world({ plugins, config } = {}) {
   const conversations = new ConversationClient({ reactor: host.reactor, transport });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const start = () =>
     sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT });
-  const message = (text) => ({ id: conversations.generateMessageId(), sender: "human", text });
+  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
   const endpoint = company.document.agent.protocols[0].endpoint;
   const postJson = (token, url, body) =>
     transport.request("POST", url, { token, ...who, headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) });
@@ -74,10 +74,9 @@ async function deviceSignIn(w, session, { bearerFirst = false } = {}) {
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
-    organization: { name: "Manzanita", domain: w.metadata.poppy_domains[0] },
-    poppyDomains: w.metadata.poppy_domains,
+    sessionKey: session.sessionKey,
+    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    protectedResources: w.metadata.protected_resources,
   });
   if (bearerFirst) await bearer(w, session);
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
@@ -88,22 +87,18 @@ async function deviceSignIn(w, session, { bearerFirst = false } = {}) {
 /** The Session's token for the MCP server: DPoP (the default server), or Bearer (`mcpDpop: false`). */
 async function bearer(w, session) {
   const dpop = w.shop.config.mcpDpop;
-  const token = await w.sessions.tokenForMcp({
-    clientId: w.identity.clientId,
-    pairwiseUserId: PAIRWISE,
-    issuer: w.metadata.issuer,
-    tokenEndpoint: w.metadata.token_endpoint,
-    tenantId: TENANT,
-    sessionId: session.sessionId,
-    resource: "https://manzanita.example/mcp",
-    dpop,
-  });
+  const resource = "https://manzanita.example/mcp";
+  const common = { clientId: w.identity.clientId, issuer: w.metadata.issuer, tokenEndpoint: w.metadata.token_endpoint, tenantId: TENANT, sessionKey: session.sessionKey };
+  // A DPoP MCP server: the Session's renewal with `resource`; one without: Token Exchange (§4.3).
+  const token = dpop
+    ? await w.sessions.renew({ ...common, pairwiseUserId: PAIRWISE, resource })
+    : await w.sessions.tokenForMcp({ ...common, subjectToken: session.accessToken, resource });
   assert.equal(token.tokenType, dpop ? "DPoP" : "Bearer");
   return token;
 }
 
-async function assertSignedInDpop(w, sessionId, accessToken) {
-  const stored = (await w.shop.store.get("session", sessionId)).value;
+async function assertSignedInDpop(w, sessionKey, accessToken) {
+  const stored = (await w.shop.store.get("session", sessionKey)).value;
   const kinds = Object.values(stored.tokens)
     .map((t) => `${t.tokenType ?? "DPoP"}:${t.accountId !== undefined}:${t.resource ?? "-"}`)
     .sort();
@@ -137,7 +132,7 @@ test("finding 1: a device sign-in after an MCP Bearer token stays DPoP", async (
   const done = await deviceSignIn(w, session, { bearerFirst: true });
   assert.equal(done.status, "complete");
   assert.equal(done.token.tokenType, "DPoP");
-  await assertSignedInDpop(w, session.sessionId, bodies.at(-1).access_token);
+  await assertSignedInDpop(w, session.sessionKey, bodies.at(-1).access_token);
 });
 
 test("finding 1: a mediated sign-in after an MCP Bearer token stays DPoP", async () => {
@@ -148,7 +143,7 @@ test("finding 1: a mediated sign-in after an MCP Bearer token stays DPoP", async
   const done = await (await w.postJson(session, `${MEDIATED}/${started.sign_in_id}`, { code: ADA_CODE })).json();
   assert.equal(done.status, "complete");
   assert.equal(done.token_type, "DPoP");
-  await assertSignedInDpop(w, session.sessionId, done.access_token);
+  await assertSignedInDpop(w, session.sessionKey, done.access_token);
 });
 
 test("finding 3: a retried start answers only who may read the conversation", async () => {
@@ -159,16 +154,19 @@ test("finding 3: a retried start answers only who may read the conversation", as
   const signedOut = await w.start();
   const retried = await w.postJson(signedOut, `${w.endpoint}?wait=0`, { message });
   assert.equal(retried.status, 403);
-  assert.deepEqual(await retried.json(), { error: "sign_in_required" });
+  assert.deepEqual(await retried.json(), { error: "insufficient_scope", scope: "orders:read" });
 });
 
 test("finding 5: operations without a write scope is a configuration error", () => {
-  assert.throws(() => new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["orders:read"] }), /writeScopes/);
   assert.throws(
-    () => new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["a:read"], writeScopes: ["a:write"] }),
+    () => new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["orders:read"], scopeDescriptions: { "orders:read": "See orders" } }),
+    /writeScopes/,
+  );
+  assert.throws(
+    () => new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["a:read"], writeScopes: ["a:write"], scopeDescriptions: { "a:read": "Read" } }),
     /among scopes/,
   );
-  new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["orders:read"], operations: false });
+  new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["orders:read"], scopeDescriptions: { "orders:read": "See orders" }, operations: false });
 });
 
 test("finding 5: an operation records and requires its scopes", async () => {
@@ -188,7 +186,7 @@ test("finding 5: an operation records and requires its scopes", async () => {
       tenantId: TENANT,
       pairwiseUserId: PAIRWISE,
     },
-    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
     scopes: ["orders:read"],
   });
   const operations = new OperationsClient({ reactor: w.host.reactor, transport: w.transport });
@@ -243,7 +241,7 @@ test("finding 10: a repeated dpop header is an invalid proof", async () => {
   const url = "https://manzanita.example/poppy/conversations";
   const provider = firstContribution(w.host.reactor, DpopProofProviders, "DPoP");
   const proof = async () =>
-    (await provider.create({ method: "POST", url, tenantId: TENANT, subject: PAIRWISE, issuer: w.who.issuer, accessToken: session.accessToken })).reveal();
+    (await provider.create({ method: "POST", url, tenantId: TENANT, issuer: w.who.issuer, sessionKey: session.sessionKey, accessToken: session.accessToken })).reveal();
   const raw = await rawRequest(
     w,
     "POST /poppy/conversations HTTP/1.1\r\nHost: manzanita.example\r\n" +
@@ -365,7 +363,7 @@ test("finding 2: wrong passwords lock the account out, with backoff", async () =
   const right = await post(session, MEDIATED, { credentials: ADA, scope: "orders:read" });
   assert.equal(right.status, 429);
   assert.equal(seen.length, 5);
-  assert.deepEqual(seen[0], { clientId: w.identity.clientId, sessionId: session.sessionId });
+  assert.deepEqual(seen[0], { clientId: w.identity.clientId, sessionKey: session.sessionKey });
   // Once the lockout ends, the next failure locks the account out twice as long.
   w.clock.advance(15 * 60);
   assert.equal((await post(session, MEDIATED, { credentials: wrong, scope: "orders:read" })).status, 200);
@@ -420,9 +418,9 @@ test("finding 4: a proof replayed at another replica over the same store is refu
   };
   const transport = new DpopFetchClient({ reactor: host.reactor, fetch: spying });
   const conversations = new ConversationClient({ reactor: host.reactor, transport });
-  const who = { tenantId: TENANT, pairwiseUserId: PAIRWISE, issuer: metadata.issuer };
+  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const endpoint = company.document.agent.protocols[0].endpoint;
-  const page = await conversations.start(endpoint, { id: conversations.generateMessageId(), sender: "human", text: "hello" }, { token: session, wait: 0, ...who });
+  const page = await conversations.start(endpoint, { id: conversations.generateMessageId(), author: { type: "human" }, text: "hello" }, { token: session, wait: 0, ...who });
   await conversations.readEvents(endpoint, page.conversation_id, { token: session, ...who });
   const read = captured.find((request) => (request.init.method ?? "GET") === "GET");
   // Another replica over the same store, with the default replay cache.
@@ -449,7 +447,7 @@ test("finding 4: the memory store forgets expired records; the store replay cach
 
 test("finding 9: the demo agent reads no order without orders:read", async () => {
   const { ManzanitaAgent } = await import("../../lib/demo/manzanita.js");
-  const turn = (scopes) => ({ conversationId: "cnv_1", text: "Where is my order?", sender: "human", accountId: "acct_ada", scopes, clientId: "https://atlas.example/agent.json", isDirect: false, supportsOperations: true });
+  const turn = (scopes) => ({ conversationId: "cnv_1", text: "Where is my order?", author: "human", accountId: "acct_ada", scopes, clientId: "https://atlas.example/agent.json", isDirect: false, supportsOperations: true });
   assert.deepEqual(await new ManzanitaAgent().respond(turn(["orders:write"])), [{ authorization: ["insufficient_scope", "orders:read"] }]);
   assert.ok((await new ManzanitaAgent().respond(turn(["orders:read"])))[0].data);
 });
@@ -522,7 +520,7 @@ test("finding 12: the Node company fetches over the resolving transport by defau
   const { hostname } = await import("node:os");
   const { DiscoveryTransports } = await import("../../lib/index.js");
   const { buildCompany } = await import("../../lib/server.js");
-  const service = buildCompany(new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["a:read"], operations: false }));
+  const service = buildCompany(new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["a:read"], scopeDescriptions: { "a:read": "Read" }, operations: false }));
   const transport = firstContribution(service.reactor, DiscoveryTransports, "transport");
   // This machine's own name resolves (through /etc/hosts) to a loopback or private address.
   await assert.rejects(transport.fetch(new URL(`https://${hostname()}/agent.json`), {}), (error) => ["unsafe_address", "dns_failed"].includes(error.code));
@@ -756,13 +754,16 @@ test("O5: mediated credentials may go to the issuer's host, and nowhere else", a
     },
   });
   w.host.input.answers.push({ email: "a@b.example", password: "x" });
+  // A Session at that issuer: its key is one the host made for it (§4.3).
+  const provider = firstContribution(w.host.reactor, DpopProofProviders, "DPoP");
+  const sessionKey = await provider.newSessionKey({ tenantId: TENANT, issuer: "https://auth.shop-login.example" });
   const options = (endpoint) => ({
     ...w.who,
     mediated: { endpoint, fields: [{ name: "email", label: "Email", secret: false }, { name: "password", label: "Password", secret: true }] },
     organization: { name: "Shop", domain: "shop.example" },
     issuer: "https://auth.shop-login.example",
     scopes: ["orders:read"],
-    token: session,
+    token: { ...session, sessionKey },
   });
   assert.equal((await client.signIn(options("https://auth.shop-login.example/poppy/sign-in"))).status, "failed");
   await assert.rejects(client.signIn(options("https://evil.example/sign-in")), (error) => error.code === "unsafe_mediated_endpoint");
@@ -778,7 +779,7 @@ test("O8: a reply is framed by working and idle state events", async () => {
 test("O9: the demo promises no operation to an agent without Operations", async () => {
   const { ManzanitaAgent } = await import("../../lib/demo/manzanita.js");
   const replies = await new ManzanitaAgent().respond({
-    conversationId: "cnv_1", text: "Exchange it for something warmer", sender: "human", accountId: "acct_ada",
+    conversationId: "cnv_1", text: "Exchange it for something warmer", author: "human", accountId: "acct_ada",
     scopes: ["orders:read", "orders:write"], clientId: "https://atlas.example/agent.json", isDirect: false, supportsOperations: false,
   });
   assert.equal(replies.length, 1);

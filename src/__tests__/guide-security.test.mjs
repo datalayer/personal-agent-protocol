@@ -49,9 +49,9 @@ async function world(maxAge) {
   const host = await agentHost({ identity: atlas, fetch, clock });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  /** A Session started by an agent signing with `identity`'s key. */
-  const start = async (identity) => {
-    const agent = await agentHost({ identity, fetch, clock });
+  /** A Session started by an agent signing with `identity`'s key (on `agent`, else its own host). */
+  const start = async (identity, agent) => {
+    agent ??= await agentHost({ identity, fetch, clock });
     return new SessionClient({ reactor: agent.reactor, fetch }).start({
       clientId: identity.clientId,
       pairwiseUserId: PAIRWISE,
@@ -123,7 +123,8 @@ async function open(shop, url, cookie) {
 
 test("the consent form is bound to the browser that was shown it", async () => {
   const w = await world(600);
-  const session = await w.start(w.atlas);
+  // On the host that signs in: the Session Key is that host's (§4.3).
+  const session = await w.start(w.atlas, w.host);
   const client = new DirectSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
   await client.begin({
     authorizationEndpoint: w.metadata.authorization_endpoint,
@@ -133,8 +134,7 @@ test("the consent form is bound to the browser that was shown it", async () => {
     redirectUri: "https://atlas.example/oauth/callback",
     scopes: ["orders:read"],
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
-    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
   });
   const url = w.host.browser.urls.at(-1);
   const ours = await open(w.shop, url);

@@ -13,9 +13,6 @@ import {
   DiscoveryError,
   ProtocolValidationError,
   UrlSafetyPolicies,
-  JWT_BEARER_GRANT,
-  JWT_CLIENT_ASSERTION,
-  SessionGrant,
   buildPapReactor,
   buildSessionAssertionClaims,
   discoverCompany,
@@ -26,7 +23,8 @@ import {
   parseJsonStrict,
   parseMessage,
   parseOperation,
-  parseSessionToken,
+  parseTokenResponse,
+  sessionTokenFromResponse,
 } from "../../lib/index.js";
 
 const fixture = async (name) =>
@@ -36,10 +34,12 @@ const fixture = async (name) =>
 
 test("parses the shared discovery fixture and preserves extension fields", async () => {
   const document = parseDiscoveryDocument(await fixture("discovery-valid.json"));
-  assert.equal(document.protocol_version, "0.2");
+  assert.equal(document.protocol_version, "0.3");
   assert.equal(document.apis[1].type, "mcp");
   assert.equal(document.auth.mediated.fields[1].secret, true);
-  assert.equal(document.auth.custom_scopes.addresses, "Manage saved shipping addresses");
+  assert.equal(document.auth.scopes.addresses, "See and change your saved shipping addresses");
+  assert.deepEqual(document.auth.scope_hints["orders:write"], { changes: "irreversible", personal_data: true });
+  assert.equal(document.excluded_tasks.url, "https://example.com/poppy/excluded-tasks.json");
   assert.equal(document.extensions.operations.endpoint, "https://api.example.com/poppy/operations");
 });
 
@@ -100,7 +100,7 @@ test("rejects an OAuth issuer that does not authorize the company domain", async
   const discovery = await fixture("discovery-valid.json");
   const metadata = {
     ...(await fixture("oauth-metadata-valid.json")),
-    poppy_domains: ["attacker.example"],
+    protected_resources: ["https://attacker.example"],
   };
   const fetch = async (input) => {
     const body = new URL(input).hostname === "example.com" ? discovery : metadata;
@@ -161,7 +161,7 @@ test("rejects duplicate JSON members at every trust-boundary depth", async () =>
 
   const fetch = async () =>
     new Response(
-      '{"protocol_version":"0.1","protocol_version":"0.2",' +
+      '{"protocol_version":"0.1","protocol_version":"0.3",' +
         '"organization":{"name":"Example","domain":"example.com"},' +
         '"auth":{"issuer":"https://auth.example.com"},' +
         '"apis":[{"type":"openapi","url":"https://example.com/openapi.json",' +
@@ -186,23 +186,19 @@ test("builds redacted PAP session primitives", async () => {
     now: new Date("2026-10-10T00:00:00Z"),
     randomBytes,
   });
-  const grant = new SessionGrant({
-    assertion: "session-assertion",
-    clientId: claims.iss,
-    clientAssertion: "client-assertion",
-    sessionId: "ses_2Lm0",
+  const token = sessionTokenFromResponse(parseTokenResponse(await fixture("session-token-valid.json")), {
+    sessionKey: "K".repeat(43),
+    signedIn: false,
   });
-  const token = parseSessionToken(await fixture("session-token-valid.json"));
 
   assert.equal(userId, "usr_AAECAwQFBgcICQoLDA0ODw");
   assert.equal(claims.exp - claims.iat, 60);
   assert.equal(claims.jti, "jti_AAECAwQFBgcICQoLDA0ODw");
-  assert.equal(grant.toForm().get("grant_type"), JWT_BEARER_GRANT);
-  assert.equal(grant.toForm().get("client_assertion_type"), JWT_CLIENT_ASSERTION);
-  assert.equal(JSON.stringify(grant).includes("session-assertion"), false);
   assert.equal(token.accessToken.reveal(), "opaque-session-token");
   assert.equal(JSON.stringify(token).includes("opaque-session-token"), false);
-  assert.deepEqual(token.scopes, ["poppy:read", "poppy:write"]);
+  // Signed out: no `scope` in the response, and none granted (§4.2).
+  assert.deepEqual(token.scopes, []);
+  assert.equal(token.signedIn, false);
 });
 
 test("parses shared client, conversation, and operation fixtures", async () => {
@@ -221,7 +217,7 @@ test("parses shared client, conversation, and operation fixtures", async () => {
 
 test("validates known conversation shapes while preserving future events", () => {
   assert.throws(
-    () => parseMessage({ id: "msg_empty", sender: "agent" }),
+    () => parseMessage({ id: "msg_empty", author: { type: "agent" } }),
     (error) =>
       error instanceof ProtocolValidationError && error.code === "invalid_message",
   );

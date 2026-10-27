@@ -19,14 +19,11 @@
       "notes": "The assertion identifies the agent, refers to the user only through an identifier made for this one company, names the exact authorization server it is meant for, and expires quickly."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "PAP host", "type": "text", "content": "Builds the claims. The model only asks for a Session." },
-        { "heading": "Pairwise ID store", "type": "text", "content": "Keeps one stable, opaque subject per tenant, local user and company." },
-        { "heading": "Reactor signer", "type": "text", "content": "Signs the claims. The private key never leaves it." }
-      ],
-      "notes": "The host builds the claims, a pairwise store gives it the user's subject for this company, and a Reactor signer turns the claims into a compact assertion. The company's authorization server then verifies it."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>builds the claims\"] -- \"resolve subject\" --> P[(\"Pairwise ID store\")]\n    H -- \"sign the claims\" --> S[\"Reactor signer<br/>holds the private key\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server<br/>verifies, issues Session\"]\n  end\n  HOST -- \"compact assertion\" --> CO\n  HOST -. \"policy, Session ready\" .-> M",
+      "caption": "The subject and the key stay in the host; the model learns the policy and an opaque reference.",
+      "notes": "The model only asks for a Session. Inside your trusted host, the PAP host resolves the user's pairwise subject for this company from the pairwise ID store, builds the claims, and has the Reactor signer sign them without the private key ever leaving it. Only the compact assertion crosses to the company, whose authorization server verifies it and issues a signed-out Session. Off to the side, the model gets the lifetime, the bindings and an opaque Session reference, never the subject, the jti, the claims, the assertion or the key."
     },
     {
       "type": "flow",
@@ -53,11 +50,11 @@
       "notes": "Each claim limits the damage if an assertion escapes. The subject cannot be matched across companies, the audience pins it to one server, the lifetime is short, and the unique identifier lets the company refuse a second use."
     },
     {
-      "type": "two-columns",
-      "title": "What the model sees",
-      "left": { "heading": "Visible", "type": "bullets", "items": ["Lifetime", "Issuer and audience bindings", "Session ready, as an opaque reference"] },
-      "right": { "heading": "Never", "type": "bullets", "items": ["The pairwise subject", "The `jti`", "The claims or the assertion", "The signing key"] },
-      "notes": "Signing goes through a Reactor capability, so private keys and compact assertions never become tool arguments or model output. The model learns the policy, not the values."
+      "type": "mermaid",
+      "title": "How the company checks it",
+      "diagram": "flowchart LR\n  S[\"Signature valid?\"] -- \"yes\" --> U[\"aud is this server?\"]\n  U -- \"yes\" --> T[\"Within iat and exp?\"]\n  T -- \"yes\" --> J[\"jti never seen?\"]\n  J -- \"yes\" --> OK[\"Signed-out Session Token\"]\n  S -- \"no\" --> R[\"Refused\"]\n  U -- \"no\" --> R\n  T -- \"no\" --> R\n  J -- \"no\" --> R",
+      "caption": "Every check must pass; one failure and the assertion is worth nothing.",
+      "notes": "Read it left to right, as the company's authorization server does. First the signature must verify against the agent's key. Then the audience must name this very server, so an assertion meant for another company is useless here. Then the time must fall between iat and exp, which keeps the window short. Last, the jti must be new, so a copied assertion is refused the second time. Only when every answer is yes does the company issue a signed-out Session Token."
     },
     {
       "type": "closing",

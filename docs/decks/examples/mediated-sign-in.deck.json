@@ -19,14 +19,11 @@
       "notes": "In every other mode the company's own page takes the password. Here it passes through the agent's host, so the SDK limits where it can go, how often, and who can see it."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Company", "type": "text", "content": "Declares `auth.mediated.fields` and an endpoint **on its own domain**." },
-        { "heading": "MediatedSignInClient", "type": "text", "content": "Checks the endpoint, sends the values **once**, then drops them." },
-        { "heading": "pap.protectedInput", "type": "text", "content": "The host's trusted surface where the user types. **Never the chat.**" }
-      ],
-      "notes": "The company says which fields it needs and where to send them. The SDK client does the relaying. The user types into a protected input that the host provides, never into the conversation."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph USR[\"User\"]\n    direction TB\n    U[\"User\"]\n  end\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    I[\"pap.protectedInput<br/>never the chat\"] -- \"values\" --> S[\"MediatedSignInClient<br/>sends once, drops\"]\n    S -- \"tokens\" --> V[(\"Reactor stores\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Mediated endpoint<br/>on its own domain\"]\n  end\n  USR -- \"types credentials, code\" --> HOST\n  HOST -- \"one POST with DPoP\" --> CO\n  HOST -. \"labels, domain, masked sent_to\" .-> M",
+      "caption": "The password crosses the host once, to the company's own domain, and never reaches the model.",
+      "notes": "Start with the user, who types the email, the password and later the code into pap.protectedInput, the host's trusted surface, never the chat. The MediatedSignInClient sends those values once, in one POST with a DPoP proof, to the endpoint the company declared on its own domain, then drops them. The tokens that come back go into Reactor stores. Off to the side, the model: it knows the field labels and which are secret, the company's domain, where the code was sent, masked, and the statuses and granted scopes. That is enough to guide the user, and none of it is a value."
     },
     {
       "type": "flow",
@@ -41,17 +38,11 @@
       "notes": "The client checks the endpoint before asking the user anything. It sends the credentials once, with a DPoP proof, follows no redirect, and drops the values. The company asks for a code sent to a masked address; the user types it, the code goes only to that sign-in, and the Session comes back signed in."
     },
     {
-      "type": "bullets",
-      "title": "The refusals",
-      "icon": "arrow",
-      "items": [
-        "Endpoint off the company's domain: `unsafe_mediated_endpoint`, before asking",
-        "Protected input must answer exactly the declared fields, none empty",
-        "Only the Session that started it can finish: `session_mismatch`",
-        "A wrong code: `code_required` again, same reference",
-        "Too many wrong codes: the company answers `failed`"
-      ],
-      "notes": "The walkthrough also shows what is refused. Note that a session mismatch keeps the pending state for the right Session, and the attempt limit belongs to the company."
+      "type": "mermaid",
+      "title": "The sign-in, with its refusals",
+      "diagram": "stateDiagram-v2\n  direction LR\n  state \"Signed out\" as SO\n  state \"Refused\" as RF\n  state \"Code required\" as CR\n  state \"Complete\" as OK\n  state \"Failed\" as FL\n  [*] --> SO\n  SO --> RF : endpoint off domain\n  SO --> CR : credentials sent once\n  CR --> CR : wrong code\n  CR --> OK : right code\n  CR --> FL : attempt limit",
+      "caption": "Every refusal is a state the host can explain; only the right code from the right Session completes.",
+      "notes": "Start signed out. If the declared endpoint is off the company's domain, the client refuses with unsafe_mediated_endpoint before the user is asked anything. Otherwise the credentials go once, and the company answers code_required. A wrong code comes back as code_required again, with the same reference. The right code completes the sign-in. After its own attempt limit, the company answers failed. Two more refusals do not change the state: the protected input must answer exactly the declared fields, none empty, and only the Session that started the sign-in can finish it; any other gets session_mismatch, and the pending state is kept for the right one."
     },
     {
       "type": "two-columns",

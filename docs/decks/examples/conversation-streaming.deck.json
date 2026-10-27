@@ -19,14 +19,11 @@
       "notes": "Streaming lets the user see the company typing. The pieces, called text deltas, are for display only. The complete message event replaces them, and that is the only thing a host shows as final or acts on."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Agent tool", "type": "text", "content": "Iterates the stream and gets messages, deltas and reconnect notices." },
-        { "heading": "ConversationClient.stream()", "type": "text", "content": "Opens the SSE stream with DPoP, reconnects, and suppresses repeats." },
-        { "heading": "Company", "type": "text", "content": "Answers `GET …/events` with `Accept: text/event-stream`." }
-      ],
-      "notes": "The agent tool consumes the stream. The SDK's stream method opens it, reconnects when it ends, and keeps track of what was delivered. The company sends SSE frames with event IDs."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    S[\"ConversationClient.stream<br/>reconnects, drops repeats\"] -- \"messages, deltas,<br/>reconnect notices\" --> T[\"Agent tool\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company API<br/>SSE frames with IDs\"]\n  end\n  HOST -- \"GET events, DPoP,<br/>Last-Event-ID\" --> CO\n  HOST -. \"complete messages, counts\" .-> M",
+      "caption": "Deltas stop at the host's display; the model gets complete messages and counts only.",
+      "notes": "Start on the right: the company answers the events request with Server-Sent Event frames, each with an ID. In the host, the SDK's stream method opens that stream with DPoP, reconnects from the Last-Event-ID when it ends, and drops anything already delivered. It hands the agent tool messages, deltas and reconnect notices. Off to the side, the model: it only ever sees the complete messages and how many deltas and reconnects there were."
     },
     {
       "type": "flow",
@@ -65,10 +62,11 @@
       "notes": "Route deltas to a typing indicator, never to anything that acts. After too many reconnects in a row without a new event, the stream fails with stream_unavailable."
     },
     {
-      "type": "statement",
-      "title": "A company that does not stream",
-      "statement": "It answers JSON, the SDK raises `sse_unsupported`, and the host falls back to `events()`.",
-      "notes": "Streaming is optional for the company. When it is not offered, the host reads the same events with the long-polling iterator from the conversation events example."
+      "type": "mermaid",
+      "title": "When the stream ends",
+      "diagram": "flowchart LR\n  Q1{\"Company streams?\"} -- \"no, JSON\" --> F[\"sse_unsupported<br/>fall back to events\"]\n  Q1 -- \"yes\" --> R[\"Read events\"]\n  R --> Q2{\"Conversation closed?\"}\n  Q2 -- \"yes\" --> E[\"Iterator ends\"]\n  Q2 -- \"no\" --> Q3{\"Too many<br/>reconnects?\"}\n  Q3 -- \"yes\" --> U[\"stream_unavailable\"]\n  Q3 -- \"no\" --> C[\"Reconnect from<br/>Last-Event-ID\"]\n  C --> R",
+      "caption": "Every way out is explicit: closed, unavailable, or a fallback to long polling.",
+      "notes": "Read from the top. A company that does not stream answers JSON, the SDK raises sse_unsupported, and the host falls back to the long-polling events reader from the conversation events example. Otherwise the host reads events until the stream ends. If the conversation is closed, the iterator ends. If not, the SDK reconnects from the Last-Event-ID, unless it has already reconnected max_reconnects times in a row without a new event, in which case the stream fails with stream_unavailable."
     },
     {
       "type": "two-columns",

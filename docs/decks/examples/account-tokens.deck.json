@@ -19,14 +19,11 @@
       "notes": "Session Tokens expire quickly on purpose. The Account Token lets the agent sign the same Session back in, and it is used only at the company's token and revocation endpoints."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "AccountTokenClient", "type": "text", "content": "Refreshes and revokes, with a client assertion and a **DPoP** proof." },
-        { "heading": "Reactor", "type": "text", "content": "`pap.tokenStore` holds the token; `pap.accountTokenLock` serializes its use." },
-        { "heading": "Company", "type": "text", "content": "Its token endpoint rotates the token; its revocation endpoint ends it." }
-      ],
-      "notes": "The SDK client does the calls. Two Reactor contributions matter here: the token store that holds the Account Token, and a lock per token reference. The company's token endpoint rotates the token on every refresh."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    C[\"AccountTokenClient\"] -- \"hold the reference\" --> L[\"pap.accountTokenLock\"]\n    C -- \"read, replace\" --> S[(\"pap.tokenStore<br/>holds the Account Token\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    T[\"Token endpoint<br/>rotates the token\"]\n    R[\"Revocation endpoint<br/>ends the token\"]\n  end\n  HOST -- \"grant, assertion, DPoP\" --> CO\n  HOST -. \"status and scopes only\" .-> M",
+      "caption": "The Account Token stays in the host's store; the model learns a status and scope names.",
+      "notes": "Start inside the host. The AccountTokenClient holds a lock on the token reference, then reads the Account Token from the Reactor token store and later replaces it there. Only the grant, signed with a client assertion and a DPoP proof, crosses to the company, whose token endpoint rotates the token and whose revocation endpoint ends it. Off to the side, the model: it receives only the status and the scope names."
     },
     {
       "type": "flow",
@@ -40,22 +37,17 @@
       "notes": "The client holds the lock, reads the token, and sends a refresh token grant with the same session_id. The company signs the same Session in again and rotates the token. The new one replaces the old in the store before the lock is released and before the call returns."
     },
     {
-      "type": "statement",
+      "type": "mermaid",
       "title": "Two refreshes at once",
-      "statement": "Both succeed. The lock makes the second present the token the first **rotated in**.",
-      "notes": "Without the lock, two refreshes would both present the same token, and the second would use one the company had already revoked. The lock serializes them, so both succeed."
+      "diagram": "sequenceDiagram\n  participant A as Refresh A\n  participant B as Refresh B\n  participant L as Lock\n  participant C as Company\n  A->>L: Hold the reference\n  B->>L: Hold the reference\n  A->>C: Grant with token 1\n  C-->>A: Session Token, token 2\n  A->>L: Store token 2, release\n  B->>C: Grant with token 2\n  C-->>B: Session Token, token 3",
+      "notes": "Two refreshes ask for the same token reference. Refresh A gets the lock first, so B waits for it. Both succeed. A presents token 1, the company rotates it to token 2, and A stores token 2 before releasing the lock. Only then does B go, presenting token 2 rather than the token the company already revoked. Without the lock, both would present token 1 and the second would fail."
     },
     {
-      "type": "comparison",
+      "type": "mermaid",
       "title": "What the company can answer",
-      "columns": ["Request", "Company answers", "What the SDK does"],
-      "rows": [
-        { "label": "Narrower scopes", "values": ["orders:read", "Granted", "signed_in"] },
-        { "label": "Wider scopes", "values": ["orders:admin", "invalid_scope", "re_consent_required"] },
-        { "label": "Expired token", "values": ["91 days later", "invalid_grant", "Delete it; signed_out"] },
-        { "label": "Revocation", "values": ["RFC 7009", "200", "Delete once answered"] }
-      ],
-      "notes": "Narrower scopes are simply granted. Wider scopes come back as re-consent required: a decision for the user, never a retry. An expired token is deleted and the Session carries on signed out. Revocation signs out every Session signed in with that token, and the next question to the company draws an authorization event again."
+      "diagram": "flowchart LR\n  R[\"Refresh\"] --> Q{\"Company answers\"}\n  Q -- \"rotated\" --> S[\"signed_in<br/>new token stored\"]\n  Q -- \"invalid_scope\" --> C[\"re_consent_required<br/>ask the user\"]\n  Q -- \"invalid_grant\" --> D[\"signed_out<br/>token deleted\"]\n  V[\"Revoke\"] -- \"200\" --> X[\"Every Session signed out<br/>token deleted\"]",
+      "caption": "Wider scopes are a decision for the user, never a retry; expiry and revocation delete the token.",
+      "notes": "Follow a refresh to the company's answer. Usually the token is rotated, the new one is stored, and the Session is signed in; narrower scopes take this path too. Wider scopes come back as invalid_scope, which the SDK reports as re-consent required: a decision for the user, never a retry. An expired token, 91 days later in the example, draws invalid_grant: the SDK deletes it and the Session carries on signed out. Below, revocation under RFC 7009: once the company answers 200, every Session signed in with that token is signed out and the stored copy is deleted."
     },
     {
       "type": "two-columns",

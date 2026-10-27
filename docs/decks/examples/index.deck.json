@@ -13,10 +13,11 @@
       "notes": "These pages walk through the protocol behaviour that the runnable Python and Agent Runtimes examples demonstrate. Each one takes a single feature and follows it from what the user wants to what the agent can safely say about it."
     },
     {
-      "type": "statement",
+      "type": "mermaid",
       "title": "What every flow shows",
-      "statement": "Where the data travels, **who owns** the sensitive work, and what may cross into **model context**.",
-      "notes": "Every page answers the same three questions. Which requests go where; which Reactor capability holds the keys, tokens and secrets; and what is left that the model may see. The answer to the last one is always: much less than the host knows."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Host code and Reactor contributions\"]\n    direction TB\n    T[\"PAP client\"] --- K[\"Keys, tokens,<br/>browser, state\"]\n  end\n  CO[\"Company\"]\n  HOST -- \"assertions, proofs, tokens\" --> CO\n  CO -- \"verified answers\" --> HOST\n  HOST -. \"status, scopes, booleans\" .-> M",
+      "caption": "Where the data travels, who owns the sensitive work, and what may reach the model.",
+      "notes": "Every page answers the same three questions. Which requests go where; which Reactor capability holds the keys, tokens and secrets; and what is left that the model may see. The answer to the last one is always: much less than the host knows. In the picture: the secrets cross only between the host and the company; the model, on the dotted line, gets a safe summary."
     },
     {
       "type": "flow",
@@ -30,13 +31,10 @@
       "notes": "The first flows are the building blocks. A personal agent finds out what a company supports, the company checks who the agent is, and the agent learns to make the two signed things every request needs: a Session assertion and a DPoP proof."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Sessions, sign-in and conversations",
-      "columns": [
-        { "heading": "Sessions", "type": "bullets", "items": ["Session lifecycle", "DPoP transport", "Browser Session"] },
-        { "heading": "Signing in", "type": "bullets", "items": ["Direct Sign-In boundary and lifecycle", "Mediated Sign-In", "Account Tokens"] },
-        { "heading": "Conversations", "type": "bullets", "items": ["Messages and events", "Streaming over SSE", "Control and Operations"] }
-      ],
+      "diagram": "flowchart LR\n  S[\"Session<br/>lifecycle, DPoP transport,<br/>browser\"] --> I[\"Signing in<br/>Direct, Device, Mediated\"]\n  I --> A[\"Account Tokens<br/>refresh, narrow, revoke\"]\n  S --> C[\"Conversations<br/>messages, events, streaming\"]\n  A --> C\n  C --> O[\"Control and<br/>Operations\"]",
+      "caption": "Every flow happens in a Session; sign-in and Account Tokens unlock what needs the account.",
       "notes": "The middle of the set builds on those blocks. Sessions start, renew and travel safely; users sign in without the model ever touching OAuth state or tokens; and conversations carry messages, events, streams and the operations a user approves."
     },
     {

@@ -19,14 +19,11 @@
       "notes": "Making a correct DPoP proof is not enough. The transport has to make a new one for each attempt, refuse to follow a redirect with the token attached, and stop callers from swapping in their own credentials."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Agent tool", "type": "text", "content": "Asks for a company resource with an **opaque reference** to the Session Token." },
-        { "heading": "DPoP HTTP client", "type": "text", "content": "`DpopHttpClient` in Python, `DpopFetchClient` in TypeScript. Owns `Authorization` and `DPoP`." },
-        { "heading": "Reactor proof provider", "type": "text", "content": "Makes each proof, bound to the method, target and token hash." }
-      ],
-      "notes": "The agent tool never holds the token, only a reference to it. The HTTP client attaches the token and the proof, and the proof itself comes from a Reactor contribution that holds the key. The company API is on the other side."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    T[\"Agent tool<br/>opaque token reference\"] --> H[\"DPoP HTTP client<br/>owns the headers\"]\n    H -- \"prove this request\" --> P[\"Reactor proof provider<br/>holds the key\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company API\"]\n  end\n  HOST -- \"request, token, proof\" --> CO\n  HOST -. \"API result only\" .-> M",
+      "caption": "The tool holds a reference, the client holds the headers, the provider holds the key; the model gets the result.",
+      "notes": "Read the host from the top. The agent tool asks for a company resource with only an opaque reference to the Session Token. The DPoP HTTP client, DpopHttpClient in Python and DpopFetchClient in TypeScript, owns the Authorization and DPoP headers. It asks the Reactor proof provider for a proof bound to the method, target and token hash, without ever seeing the key. Only the request, the token and the proof cross to the company API. Off to the side, the model: it gets the API result, never a Session Token, proof, nonce or pairwise identity."
     },
     {
       "type": "flow",
@@ -60,11 +57,11 @@
       "notes": "These are the rules the client enforces. Notice the last one: because a retry may resend the body, bodies are values that can be sent twice, not streams that can be read once."
     },
     {
-      "type": "two-columns",
-      "title": "What stays where",
-      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Tokens", "DPoP proofs", "Nonces", "Pairwise identity"] },
-      "right": { "heading": "What the tool sees", "type": "bullets", "items": ["The API result", "redirect_refused, when it happens"] },
-      "notes": "Both clients resolve proofs through Reactor and keep tokens, proofs, nonces and pairwise identity out of anything the model reads or returns."
+      "type": "mermaid",
+      "title": "Each answer, decided",
+      "diagram": "flowchart LR\n  S[\"Send with<br/>a fresh proof\"] --> Q{\"Company answers\"}\n  Q -- \"200\" --> R[\"Result to the tool<br/>no token or proof\"]\n  Q -- \"307 redirect\" --> X[\"redirect_refused<br/>nothing sent on\"]\n  Q -- \"first nonce challenge\" --> F[\"New proof<br/>with the nonce\"]\n  F --> S\n  Q -- \"second challenge\" --> Y[\"No second retry\"]",
+      "caption": "Every attempt gets its own proof, one nonce retry at most, and a redirect is never followed.",
+      "notes": "Start at the left: every attempt goes out with a fresh proof. A 200 goes back to the tool with no token or proof in it. A redirect stops right there with redirect_refused, and nothing is sent to the new URL. A use_dpop_nonce challenge gets exactly one retry, with a new proof carrying the company's nonce; it is never retried a second time. Because a retry may resend the body, request bodies are replayable values, not streams."
     },
     {
       "type": "statement",

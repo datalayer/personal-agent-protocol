@@ -13,14 +13,11 @@
       "notes": "Ada's jacket is not warm enough, and she asks her personal agent, Atlas, to exchange it at Manzanita Outfitters. This example is the whole journey, with every PAP feature it needs, end to end."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Ada", "type": "text", "content": "The user. She signs in on Manzanita's page and approves the exchange." },
-        { "heading": "Atlas", "type": "text", "content": "Her personal agent, with a real **ES256** identity. Its host holds every credential." },
-        { "heading": "Manzanita", "type": "text", "content": "The **reference company**, assembled from Reactor contributions." }
-      ],
-      "notes": "Both sides come from this SDK. Atlas and Manzanita talk real HTTP over ASGI in one process, with no network, and there is no model anywhere in the protocol path."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph ADA[\"Ada's side, trusted\"]\n    direction TB\n    U[\"Ada\"] -- \"asks, approves\" --> A[\"Atlas host<br/>ES256 identity, credentials\"]\n  end\n  subgraph CO[\"Manzanita, reference company\"]\n    direction TB\n    D[\"Device page<br/>Ada signs in here\"] -- \"same Session\" --> API[\"Company API<br/>Reactor contributions\"]\n  end\n  ADA -- \"PAP over HTTP\" --> CO\n  ADA -. \"plain words only\" .-> M",
+      "caption": "Both sides come from this SDK, and no model sits in the protocol path.",
+      "notes": "On the left, Ada's trusted side: Ada asks and approves, and the Atlas host, with its real ES256 identity, holds every credential. On the right, Manzanita, the reference company assembled from Reactor contributions: its company API, and the device page where Ada signs in herself, for the same Session. Atlas and Manzanita talk real HTTP over ASGI in one process, with no network. Off to the side, the model gets the story in plain words and is never in the protocol path."
     },
     {
       "type": "flow",
@@ -55,15 +52,11 @@
       "notes": "The conversation carries on, now signed in. Manzanita proposes an Operation with a revision and terms. Atlas shows the summary and terms, Ada approves that exact revision, and Atlas confirms it with approved_by user."
     },
     {
-      "type": "bullets",
+      "type": "mermaid",
       "title": "Performed once, then signed out",
-      "icon": "check",
-      "items": [
-        "A retried confirm returns **the same record**: performed once",
-        "The Account Token is refreshed, narrowed to `orders:read`",
-        "Sign me out: the host **revokes** the Account Token"
-      ],
-      "notes": "Atlas confirms again, as a network retry would, and gets back the same record: the exchange happened once. Then it narrows the Account Token to reading orders, and when Ada signs out, it revokes the token."
+      "diagram": "stateDiagram-v2\n  state \"Signed-out Session\" as SO\n  state \"Signed in, Account Token\" as SI\n  state \"Narrowed to orders:read\" as N\n  state \"Token revoked\" as R\n  [*] --> SO\n  SO --> SI : Device Sign-In\n  SI --> SI : confirm retried, same record\n  SI --> N : refresh, narrowed\n  N --> R : sign me out",
+      "caption": "Rights come with sign-in, shrink to what is needed, and go at sign-out.",
+      "notes": "Follow what Atlas holds, from the top. After discovery it has a signed-out Session. Ada signs in on Manzanita's page, and the same Session is now signed in, with an Account Token. Look at the loop: Atlas confirms the exchange again, as a network retry would, and gets back the same record, so the exchange happened once. Then it refreshes the Account Token narrowed to orders:read, and when Ada says sign me out, it revokes the token."
     },
     {
       "type": "two-columns",

@@ -19,14 +19,11 @@
       "notes": "At this point the host has not verified anything about the company. Keeping discovery credential-free means a mistake can never forward a token to a host that turns out to be the wrong one."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "PAP host", "type": "text", "content": "Your code. It fetches, validates, and hands the model a summary." },
-        { "heading": "Reactor discovery policy", "type": "text", "content": "Approves only **HTTPS**, public-network destinations." },
-        { "heading": "Company", "type": "text", "content": "Publishes `/.well-known/poppy.json` and its OAuth metadata." }
-      ],
-      "notes": "The host does the work, a Reactor policy decides which destinations are allowed at all, and the company publishes two public documents: its PAP document and its authorization server's metadata."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"approve destination\" --> R[\"Reactor<br/>discovery policy\"]\n  end\n  subgraph CO[\"Company, not yet verified\"]\n    direction TB\n    P[\"/.well-known/poppy.json\"] -- \"advertises\" --> A[\"Authorization server<br/>OAuth metadata\"]\n  end\n  HOST -- \"GET, no credentials\" --> CO\n  HOST -. \"verified summary only\" .-> M",
+      "caption": "Nothing secret crosses: discovery reaches a host not yet verified, so it carries no credential at all.",
+      "notes": "Inside the host, the PAP host asks the Reactor discovery policy first, and only HTTPS, public-network destinations are approved. Across the boundary goes a plain GET with no credentials, because the company is not verified yet. The company publishes two public documents: its PAP document at the well-known path, which advertises its authorization server, and that server's OAuth metadata. Off to the side, the model receives a verified capability summary, never the raw response bodies."
     },
     {
       "type": "flow",
@@ -41,15 +38,11 @@
       "notes": "The policy approves the destination first. The host fetches the PAP document, validates it strictly, then follows the advertised OAuth metadata to find the authorization and token endpoints. Finally it checks the issuer really belongs to the company's domain."
     },
     {
-      "type": "bullets",
+      "type": "mermaid",
       "title": "Checked before it is trusted",
-      "icon": "check",
-      "items": [
-        "Redirects, response sizes and content types",
-        "Duplicate JSON members",
-        "Domains, protocol versions, issuer relationships"
-      ],
-      "notes": "Nothing in the response is trusted until it passes these checks. A duplicate JSON member, for example, could make two parsers disagree about what the document says, so it is refused."
+      "diagram": "flowchart LR\n  R[\"Response\"] --> T{\"Redirects, size,<br/>content type allowed?\"}\n  T -- \"yes\" --> J{\"Strict JSON,<br/>no duplicate members?\"}\n  J -- \"yes\" --> V{\"Version, domain,<br/>issuer belong?\"}\n  V -- \"yes\" --> OK[\"Trusted<br/>capability summary\"]\n  T -- \"no\" --> X[\"Refuse\"]\n  J -- \"no\" --> X\n  V -- \"no\" --> X",
+      "caption": "Nothing in a response is trusted until every check says yes.",
+      "notes": "Read left to right. First the transport: redirects, the response size and its content type must be allowed. Then the parsing: strict JSON with no duplicate members, since a duplicate could make two parsers disagree about what the document says. Then the meaning: a supported protocol version, the company's own domain, and an issuer that belongs to it. Any no ends in a refusal; only after all three does the host build the capability summary."
     },
     {
       "type": "two-columns",

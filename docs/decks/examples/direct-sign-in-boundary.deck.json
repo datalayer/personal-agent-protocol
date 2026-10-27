@@ -19,14 +19,11 @@
       "notes": "The agent can tell the user that it needs access to their orders. But the OAuth request, its state and its secrets are built by host code, and the company's page opens in a trusted browser, never inside the conversation."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Agent and model", "type": "text", "content": "Asks for `orders:read` on the existing Session, then waits." },
-        { "heading": "PAP host", "type": "text", "content": "Generates state and the PKCE verifier, stores them in **Reactor**, opens the browser." },
-        { "heading": "Browser and company", "type": "text", "content": "The user signs in on the **company's** page and sees the exact scopes." }
-      ],
-      "notes": "The model asks for a scope on a Session that already exists. The host does the OAuth work and keeps the pending request in a Reactor state store. The user's trusted browser talks to the company's authorization server."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>state, PKCE verifier\"] -- \"pending request,<br/>hashed state\" --> R[(\"Reactor state store\")]\n  end\n  subgraph USR[\"User's trusted browser\"]\n    direction TB\n    B[\"Browser\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server<br/>sign-in page\"]\n  end\n  M -- \"ask for orders:read\" --> HOST\n  HOST -- \"authorization URL\" --> USR\n  USR -- \"sign in, S256 challenge\" --> CO\n  HOST -. \"waiting, scopes, expiry\" .-> M",
+      "caption": "The model asks and is told it is waiting; the URL, state and verifier never leave the host and the browser.",
+      "notes": "Start with the model: it asks for orders:read on the Session that already exists. Your host does the OAuth work: it makes the state and the PKCE verifier, and keeps the pending request in a Reactor state store, under a hash of the state. It hands the authorization URL only to the user's trusted browser. The browser carries the S256 challenge, never the verifier, to the company's authorization server, where the user signs in and sees the exact scopes. Back to the model, on the dotted line: all it gets is that it is waiting for the user, for which scopes, and until when."
     },
     {
       "type": "flow",
@@ -59,11 +56,11 @@
       "notes": "The URL counts as a secret because it carries the state and the user's intent, so only the browser handoff capability ever receives it. And because the company owns the sign-in page, the agent never sees a password."
     },
     {
-      "type": "two-columns",
-      "title": "What stays where",
-      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["The authorization URL", "State and PKCE verifier", "User credentials", "The authorization code"] },
-      "right": { "heading": "What the model sees", "type": "bullets", "items": ["Waiting for the user", "The requested scopes", "The expiry"] },
-      "notes": "The model gets a status it can explain to the user: waiting, for which scopes, until when. Everything an attacker could use stays with the host."
+      "type": "mermaid",
+      "title": "The pending request",
+      "diagram": "stateDiagram-v2\n  direction LR\n  state \"Pending\" as P\n  state \"Consumed\" as C\n  state \"Expired\" as E\n  [*] --> P : stored by hashed state\n  P --> C : callback, once, atomically\n  P --> E : expiry passes\n  C --> [*]\n  E --> [*]",
+      "caption": "A pending request is used once or not at all: consumed atomically, or it expires.",
+      "notes": "This is the one piece of state the host keeps between the browser handoff and the callback. It is stored as pending, under a hash of the state, with an expiry. Later, the callback consumes it exactly once, atomically, so a second callback with the same state finds nothing. If the user never comes back, it expires. Throughout, the authorization URL, the state, the verifier, the user's credentials and the authorization code stay with the host; the model only ever sees waiting, the scopes and the expiry."
     },
     {
       "type": "closing",

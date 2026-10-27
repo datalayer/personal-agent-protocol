@@ -19,14 +19,11 @@
       "notes": "Networks fail in ambiguous ways: the request may or may not have arrived. PAP message IDs are user-global idempotency keys, so the host can send the exact same message again and the company handles it once."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Agent tool", "type": "text", "content": "Asks to start or continue a conversation. It never holds a credential." },
-        { "heading": "Trusted host", "type": "text", "content": "Generates message IDs, keeps each `Message`, and signs every request with DPoP." },
-        { "heading": "Company agent", "type": "text", "content": "Receives the messages and answers with the conversation's status and responder." }
-      ],
-      "notes": "The agent tool asks; the trusted host does the work, generating IDs and holding the Session Token and DPoP proofs; the company agent answers. Authentication stays in DpopHttpClient and never enters the tool's inputs or results."
+      "diagram": "flowchart LR\n  M[\"Model<br/>through the agent tool\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"Trusted host<br/>generates message IDs\"] -- \"retains\" --> R[(\"Each Message<br/>ID and content\")]\n    H -- \"sends through\" --> D[\"DpopHttpClient<br/>token and DPoP\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company agent<br/>status, responder\"]\n  end\n  M -- \"start or continue\" --> HOST\n  HOST -- \"message, token, proof\" --> CO\n  HOST -. \"conversation status only\" .-> M",
+      "caption": "The tool asks and gets a status back; IDs, tokens and proofs stay in the host.",
+      "notes": "The model, through the agent tool, asks to start or continue a conversation; it never holds a credential. Inside the host, the trusted host generates each message ID and retains the whole Message, so it can be retried exactly. It sends through DpopHttpClient, which holds the Session Token and signs every request with DPoP. Only the message, the token and the proof cross to the company agent, which answers with the conversation's status and responder. Back to the model goes the status alone."
     },
     {
       "type": "flow",
@@ -40,15 +37,11 @@
       "notes": "The host generates a random message ID and posts the first message. The company answers 201 with the conversation ID, its status and who is responding. Every following message gets its own new ID; the company answers 202, or a page of events when the host asked to wait."
     },
     {
-      "type": "comparison",
+      "type": "mermaid",
       "title": "Retrying after a network failure",
-      "columns": ["Same ID", "Same content", "Result"],
-      "rows": [
-        { "label": "Retry the retained Message", "values": [true, true, "Handled once"] },
-        { "label": "Reuse the ID, change the content", "values": [true, false, "message_id_conflict"] },
-        { "label": "New ID for the same text", "values": [false, true, "A second message"] }
-      ],
-      "notes": "After an ambiguous failure, retry the very same Message object you kept. Reusing its ID with different content is refused with message_id_conflict. And a new ID would be a brand new message, so the company could act on it twice."
+      "diagram": "flowchart LR\n  F[\"Ambiguous failure\"] --> Q{\"Retry with\"}\n  Q -- \"same ID, same content\" --> O[\"Handled once\"]\n  Q -- \"same ID, new content\" --> X[\"message_id_conflict\"]\n  Q -- \"new ID, same text\" --> T[\"A second message<br/>could act twice\"]",
+      "caption": "Retry the very Message you kept: same ID, same content.",
+      "notes": "Start from a failure where the request may or may not have arrived. The top path is the right one: retry the very same Message object, with its ID and content, and the company handles it once. The middle path reuses the ID with different content, and the company refuses it with message_id_conflict. The bottom path sends the same text under a new ID: that is a brand new message, so the company could act on it twice."
     },
     {
       "type": "bullets",

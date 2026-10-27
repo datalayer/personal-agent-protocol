@@ -19,14 +19,11 @@
       "notes": "With a plain bearer token, whoever copies it can use it. With DPoP, each request carries a proof signed by a key the host protects, so a copied token without the key is useless."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "PAP host", "type": "text", "content": "Asks for a proof for each request, and sends it with the Session Token." },
-        { "heading": "Reactor key store / signer", "type": "text", "content": "Holds the key and signs a fresh **ES256** proof." },
-        { "heading": "Company API", "type": "text", "content": "Verifies the proof and records its `jti` in a **replay cache**." }
-      ],
-      "notes": "The host asks for a proof covering one request. The Reactor key store signs it without ever giving the key out. The company verifies it, and remembers it so it can never be used twice."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign this request\" --> K[\"Reactor key store<br/>holds the private key\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company API<br/>verifies the proof\"] -- \"record jti\" --> X[(\"Replay cache\")]\n  end\n  HOST -- \"request, token, proof\" --> CO\n  HOST -. \"policy booleans only\" .-> M",
+      "caption": "The key never leaves the key store; the model gets yes-or-no evidence, nothing more.",
+      "notes": "The host asks for a proof covering one request. The Reactor key store signs it without ever giving the key out. The company verifies it, and remembers it so it can never be used twice. Off to the side, the model: all it ever receives from this exchange is yes-or-no evidence about the policy."
     },
     {
       "type": "comparison",

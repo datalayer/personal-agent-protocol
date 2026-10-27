@@ -19,14 +19,11 @@
       "notes": "Sometimes the agent needs a company web page, say to confirm an operation. Instead of signing in again, the browser joins the Session the agent already holds."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Personal agent", "type": "text", "content": "Builds a short-lived **browser assertion**, signed by the **Reactor signer**." },
-        { "heading": "Agent-controlled browser", "type": "text", "content": "POSTs the assertion in a top-level form. **Not** the user's ordinary browser." },
-        { "heading": "Company", "type": "text", "content": "Its `web.browser_session_endpoint` verifies it, accepts its `jti` once, sets a cookie." }
-      ],
-      "notes": "The agent signs the assertion through Reactor. A browser it controls posts it to the endpoint that discovery advertised. The company verifies the assertion, records it in a replay cache, and sets its own Session cookie."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    A[\"Personal agent\"] -- \"sign assertion\" --> S[\"Reactor signer\"]\n    A -- \"form POST instruction\" --> B[\"Agent-controlled browser<br/>not the user's\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    E[\"Browser-session endpoint<br/>verifies, sets a cookie\"] -- \"accept jti once\" --> R[(\"Replay cache\")]\n  end\n  HOST -- \"assertion in the form body\" --> CO\n  HOST -. \"endpoint, expiry, booleans\" .-> M",
+      "caption": "The assertion crosses once, in a form body; the model gets the endpoint, the expiry and yes-or-no evidence.",
+      "notes": "Inside the host, the personal agent has the Reactor signer sign a short-lived browser assertion, then tells a browser it controls, not the user's ordinary browser, to post it. Only that assertion, in the form body, crosses to the company. Its browser-session endpoint, the one discovery advertised, verifies it and accepts its jti once in the replay cache, then answers 303 with its own Session cookie for the browser. Off to the side, the model receives the endpoint, the expiry and yes-or-no policy evidence, never the assertion."
     },
     {
       "type": "flow",
@@ -54,16 +51,10 @@
       "notes": "BrowserSessionClient resolves the clock, randomness, signing and the form POST through Reactor. It returns only the endpoint, the safe return location and the expiry; the compact assertion never leaves the host."
     },
     {
-      "type": "bullets",
-      "title": "Company responsibilities",
-      "icon": "check",
-      "items": [
-        "ES256 or RS256 signature against the agent's verified JWKS",
-        "Exact `poppy-browser+jwt` type and endpoint audience",
-        "Expected client, pairwise User ID, active Session, safe return target",
-        "Atomic one-use acceptance of `(client_id, jti)` until expiry"
-      ],
-      "notes": "verify_browser_assertion in Python and verifyBrowserAssertion in TypeScript's server entry do these checks, including a lifetime of 60 seconds at most. Creating the cookie is left to the company's web framework, on purpose."
+      "type": "mermaid",
+      "title": "Verify once, refuse the replay",
+      "diagram": "sequenceDiagram\n  participant B as Agent's browser\n  participant C as Company endpoint\n  participant R as Replay cache\n  B->>C: POST assertion\n  C->>C: Verify type, signature, audience, owner\n  C->>R: Accept client_id and jti\n  R-->>C: First use\n  C-->>B: 303 and cookie\n  B->>C: Same assertion again\n  C->>R: Accept client_id and jti\n  R-->>C: Already seen\n  C-->>B: Refused",
+      "notes": "Follow the first POST. The company checks the exact poppy-browser+jwt type, an ES256 or RS256 signature against the agent's verified JWKS, its own endpoint as the audience, a lifetime of 60 seconds at most, and the expected client, pairwise User ID, active Session and company-domain return target. Then it accepts the pair of client_id and jti atomically, until expiry. The first use goes through: 303 with a cookie, and the browser then lands on return_to. Posting the same assertion again finds it already seen, and the company refuses it. verify_browser_assertion in Python and verifyBrowserAssertion in TypeScript's server entry do these checks; creating the cookie is left to the company's web framework, on purpose."
     },
     {
       "type": "statement",

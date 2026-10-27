@@ -19,14 +19,11 @@
       "notes": "There is no registration step. The client_id is itself an HTTPS URL, and what it serves describes the agent: its name, where users may be sent back to, and where its public signing keys live."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Company", "type": "text", "content": "Wants to know who signs the assertions it receives." },
-        { "heading": "PAP host and policy", "type": "text", "content": "Fetches and validates, through the **Reactor discovery policy**." },
-        { "heading": "Agent's domain", "type": "text", "content": "Serves `agent.json` and the JWKS. The private key stays with its custodian." }
-      ],
-      "notes": "The company asks for the client_id to be resolved. The host fetches the metadata and keys through the same discovery policy as company discovery. The agent's domain serves only public documents; its private key never leaves its custodian."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph CO[\"Company\"]\n    C[\"Company API<br/>receives assertions\"]\n  end\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"approve destination\" --> R[\"Reactor<br/>discovery policy\"]\n  end\n  subgraph AD[\"Agent's domain, public\"]\n    direction LR\n    I[\"agent.json<br/>name, redirects, jwks_uri\"] -- \"points to\" --> K[\"JWKS<br/>public keys only\"]\n  end\n  CO -- \"resolve client_id\" --> HOST\n  HOST -- \"GET, no credentials\" --> AD\n  HOST -- \"verified identity\" --> CO\n  HOST -. \"identity and policy only\" .-> M",
+      "caption": "Only public documents cross; the private key stays with its custodian and never appears here.",
+      "notes": "Begin at the company, which wants to know who signs the assertions it receives, so it asks for the client_id URL to be resolved. Inside the host, every fetch is first approved by the Reactor discovery policy. The host then reads the agent's domain without credentials: agent.json, which points to the JWKS holding only public keys. The verified identity goes back to the company. The model, off to the side, sees the identity and its signing policy, never the key coordinates or raw metadata."
     },
     {
       "type": "flow",
@@ -41,16 +38,11 @@
       "notes": "The destination is approved, the metadata fetched without credentials, and its schema checked. The identity it declares must be exactly the URL that was requested. The JWKS must live on the allowed domain, and only then are the public keys fetched."
     },
     {
-      "type": "bullets",
-      "title": "What the example proves",
-      "icon": "check",
-      "items": [
-        "Metadata and JWKS are public, credential-free resources",
-        "The declared identity matches the requested URL",
-        "Redirect URIs are explicit, never inferred from a callback",
-        "JWKS domain policy stops silent delegation to an unrelated key host"
-      ],
-      "notes": "Each check closes a door. A document cannot claim to be a different agent, cannot accept a redirect it never declared, and cannot quietly hand its trust to keys hosted somewhere unrelated."
+      "type": "mermaid",
+      "title": "Trust, or refuse",
+      "diagram": "flowchart LR\n  A[\"agent.json<br/>fetched, no credentials\"] --> S{\"Schema valid?\"}\n  S -- \"yes\" --> I{\"client_id exactly<br/>the requested URL?\"}\n  I -- \"yes\" --> D{\"JWKS on the<br/>allowed domain?\"}\n  D -- \"yes\" --> V[\"Fetch keys<br/>verified identity\"]\n  S -- \"no\" --> X[\"Refuse\"]\n  I -- \"no\" --> X\n  D -- \"no\" --> X",
+      "caption": "Each check closes a door; redirect URIs are read from the document, never inferred from a callback.",
+      "notes": "Read the checks left to right. The metadata must match the schema. The identity it declares must be exactly the URL that was requested, so a document cannot claim to be a different agent. Its JWKS must live on the allowed domain, so it cannot quietly hand its trust to keys hosted somewhere unrelated. Any no ends in a refusal. Only after all three are the public keys fetched and the identity verified. The redirect URIs come from the document too, explicit, never inferred from an incoming callback."
     },
     {
       "type": "two-columns",

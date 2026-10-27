@@ -19,14 +19,11 @@
       "notes": "The cursor marks how far the host has read. The host never interprets it. It moves the cursor forward only once a page has been handled, so a crash in between replays events rather than losing them."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Agent or product UI", "type": "text", "content": "Follows the conversation and receives only the event fields it needs." },
-        { "heading": "Trusted PAP host", "type": "text", "content": "Long polls with DPoP, keeps the cursor, and remembers which events it delivered." },
-        { "heading": "Company agent", "type": "text", "content": "Serves pages of events with a cursor and a `has_more` flag." }
-      ],
-      "notes": "The agent or the product's interface follows the conversation. The trusted host does the reading, with the Session Token and DPoP proofs. The company serves the events in order."
+      "diagram": "flowchart LR\n  M[\"Model or product UI\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>long polls\"] -- \"keeps\" --> K[(\"Saved cursor<br/>delivered event IDs\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company agent<br/>serves pages\"] -- \"reads\" --> L[(\"Ordered event log\")]\n  end\n  HOST -- \"GET events, token, DPoP\" --> CO\n  HOST -. \"event fields only\" .-> M",
+      "caption": "The host does the reading and keeps the cursor; the model or UI receives only the event fields it needs.",
+      "notes": "Start inside the host. The PAP host long polls the company, and keeps two things to itself: the saved cursor and the IDs of the events it has already delivered. Each request crosses with the Session Token and a DPoP proof. On the company's side, its agent serves pages from an ordered event log, each with a cursor and a has_more flag. Off to the side, the model or the product's interface follows the conversation and receives only the event fields it needs, never the token, the proofs, the pairwise identity or the cursor."
     },
     {
       "type": "mermaid",
@@ -35,17 +32,11 @@
       "notes": "The saved cursor has expired, so the host tells the person and reads once from the beginning. The page has more behind it, so the host drains the next page at once. The company repeats evt_2 after the reconnect; the host drops it and delivers only evt_3."
     },
     {
-      "type": "bullets",
+      "type": "mermaid",
       "title": "What the iterator does",
-      "icon": "check",
-      "items": [
-        "Long polls for a chosen time, normally 30 seconds",
-        "Drains the next page at once while `has_more` is true",
-        "Keeps the company's order; cursors stay opaque strings",
-        "Suppresses repeated event IDs, in a bounded set that fails closed",
-        "Stops after a closed page with no backlog"
-      ],
-      "notes": "Python's events() and TypeScript's events() are async iterators over the same rules. read_events and readEvents read a single page when you want to drive it yourself."
+      "diagram": "flowchart LR\n  P[\"Read a page\"] --> E{\"cursor_expired?\"}\n  E -- \"yes\" --> G[\"Tell the person<br/>read from the start\"]\n  G --> P\n  E -- \"no\" --> D[\"Deliver unseen events<br/>drop repeated IDs\"]\n  D --> H{\"has_more?\"}\n  H -- \"yes, at once\" --> P\n  H -- \"no\" --> C{\"Closed?\"}\n  C -- \"no, long poll\" --> P\n  C -- \"yes\" --> S[\"Stop\"]",
+      "caption": "Every event delivered once, in the company's order.",
+      "notes": "Follow one page around the loop. An expired cursor makes the iterator call the host's cursor-expiry callback, so the person can be told, and then read once from the beginning. Otherwise it delivers the events it has not seen, in the company's order, and drops repeated IDs; the set it remembers is bounded and fails closed at the limit. While has_more is true it reads the next page at once. With no backlog, a closed conversation stops the loop, and an open one is long polled again, normally for 30 seconds. Python's events() and TypeScript's events() follow these rules; read_events and readEvents read a single page."
     },
     {
       "type": "statement",

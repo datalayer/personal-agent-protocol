@@ -53,10 +53,99 @@ table combine several features; each other page showcases one. Production hosts 
 fixtures through Reactor contributions for egress, state, browsers, signing,
 DPoP, key custody, and token storage.
 
-:::tip Two implementations, one boundary
+## Two implementations, one boundary
 
 The PAP repository contains plain Pydantic AI examples. Agent Runtimes contains
-matching Loop applications and interactive Reactor views. The protocol and
-secret-handling rules are the same in both.
+matching Loop applications and interactive Reactor views, one per flow, at
+[`examples/personal-agent-protocol`](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol).
+The protocol and secret-handling rules are the same in both.
 
-:::
+```mermaid
+flowchart LR
+  M["Model"]
+  subgraph HOST["Host code and Reactor contributions"]
+    direction TB
+    T["PAP capability<br/>DiscoveryClient, SessionClient, ..."]
+    S["Signer, DPoP provider,<br/>token store, browser"]
+    T --- S
+  end
+  CO["Company"]
+  HOST -- "assertions, proofs, tokens" --> CO
+  CO -- "verified responses" --> HOST
+  HOST -. "summary: status, scopes, booleans" .-> M
+```
+
+### What reaches the model
+
+Agent Runtimes depends on PAP in both Python and TypeScript. Its
+`PapPersonalAgentCapability` uses `DiscoveryClient` and `AgentIdentityClient`
+(and their TypeScript counterparts) to return aligned public summaries. For
+company discovery the tool validates the document and supported protocol
+version, follows verified OAuth metadata, and binds the issuer to the requested
+company domain. Its result contains only:
+
+- the verified organization and domain;
+- the PAP version and issuer;
+- advertised sign-in methods and interfaces; and
+- extension names.
+
+Raw response bodies, authorization URLs, callback parameters, assertions,
+DPoP proofs, Session Tokens, and Account Tokens never enter model context.
+
+### What the Loop applications show
+
+- **`dpop-proof`** creates and verifies a real ES256 proof in host code and
+  demonstrates one-use replay rejection. Its Reactor gallery view creates fresh
+  device-side proofs with non-exportable Web Crypto keys but keeps only boolean
+  policy evidence in React state. Server-side signature and replay verification
+  stays behind PAP's `./server` entry and is never bundled into the browser view.
+- **`session-lifecycle`** drives the real `SessionClient` against a
+  deterministic local company. Nonce retry creates fresh assertions and proofs,
+  and renewal is bound to the existing Session ID. Only status, scopes, and
+  boolean evidence reach the agent or React state.
+- **`direct-sign-in-lifecycle`** drives the real `DirectSignInClient` through
+  both sides of the browser pause: atomic state consumption, exact callback
+  validation, a proof-bound nonce retry, partial consent, and continuation of
+  the original Session. Browser and credential material stays with Reactor
+  contributions and the host transport.
+- **PAP Guided Journey**, a separate gallery example, advances the user,
+  company, and wire views together across discovery, a signed-out conversation,
+  Direct Sign-In, the company's offer, and an exact user-authorized result. The
+  TypeScript SDK validates its fixtures at runtime, and the inspector shows
+  host-only placeholders for every generated credential.
+
+### Run an Agent Runtimes example
+
+From the Agent Runtimes repository root:
+
+```bash
+python -m pip install -e .
+loop apps run examples/personal-agent-protocol/company-discovery/app.py
+```
+
+To validate the application definitions without starting an agent runtime:
+
+```bash
+python scripts/validate_pap_examples.py
+```
+
+Ask the company-discovery application to inspect a domain that publishes
+`/.well-known/poppy.json`. The SDK applies HTTPS, public-network,
+response-size, redirect, schema, version, domain, and issuer checks. Production
+services must also pin the approved DNS result to the connection or route
+requests through an enforcing egress proxy.
+
+### In Datalayer Studio
+
+The metadata examples perform discovery in process to keep the integration
+readable. In Datalayer Studio, the agent tool calls the same typed Agent
+Runtimes capability, backed by a metadata gateway with opaque tenant and
+application context. That gateway owns DNS pinning, egress policy, caching,
+rate limits, observability, and audit, and returns the same credential-free
+summary.
+
+Direct Sign-In is a separate authorization-gateway workflow. Studio starts it
+through a trusted Preview browser handoff, keeps PKCE and one-use state in host
+storage, and returns only status or an opaque connection reference to the
+application. Browser callbacks, proofs, credentials, and tokens are never agent
+tool arguments or results.

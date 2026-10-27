@@ -19,14 +19,11 @@
       "notes": "A signed-out Session gives the company a stable, pairwise context: the same user ID every time this agent comes back for this user, and a different one at every other company. Public questions and a conversation can start here, and continue later through sign-in."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "PAP host", "type": "text", "content": "Your code. It asks for the Session and keeps every credential out of the model's reach." },
-        { "heading": "Reactor contributions", "type": "text", "content": "The **signer** makes assertions; the **DPoP provider** makes proofs. Both are replaceable." },
-        { "heading": "Company", "type": "text", "content": "Its authorization server issues the Session Token, and may demand a fresh **nonce**." }
-      ],
-      "notes": "Three parties: the host, which is your application; the Reactor contributions that hold the keys, a signer for assertions and a DPoP provider for proofs; and the company's authorization server."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign assertions\" --> S[\"Reactor signer\"]\n    H -- \"make proofs\" --> D[\"Reactor DPoP provider\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server<br/>issues, may demand a nonce\"]\n  end\n  HOST -- \"assertions, proof\" --> CO\n  CO -- \"Session Token or nonce\" --> HOST\n  HOST -. \"status and scopes only\" .-> M",
+      "caption": "The keys live in replaceable Reactor contributions; the model sees the Session's status, never its token.",
+      "notes": "Inside your trusted host, the PAP host asks two Reactor contributions for help: the signer makes the assertions, the DPoP provider makes the proofs, and both are replaceable. Assertions and a proof cross to the company's authorization server, which answers with a Session Token, or first with a nonce it wants in the next proof. Off to the side, the model receives the lifecycle status and the granted scopes, nothing it could leak."
     },
     {
       "type": "flow",
@@ -56,16 +53,11 @@
       "notes": "Here is the whole exchange at once: the challenge, the retry, and later the renewal of the same Session before its token expires."
     },
     {
-      "type": "bullets",
+      "type": "mermaid",
       "title": "Renewing, not restarting",
-      "icon": "check",
-      "items": [
-        "Before expiry, the host renews **the same Session**",
-        "Fresh assertions and a fresh proof, every time",
-        "The conversation and its context carry on",
-        "A Session that has ended answers an error: start a new one"
-      ],
-      "notes": "Renewal keeps the same Session, so the conversational state the company holds carries on. Every renewal still signs fresh assertions and a fresh proof."
+      "diagram": "stateDiagram-v2\n  state \"Signed out\" as SO\n  state \"Signed in\" as SI\n  state \"Ended\" as E\n  [*] --> SO : start, one nonce retry\n  SO --> SO : renew same session_id\n  SO --> SI : sign-in, later\n  SO --> E : ended\n  E --> [*] : start a new one",
+      "caption": "Renewal loops back to the same Session, so the conversation carries on.",
+      "notes": "Start at the dot. The host starts the Session signed out, after its one nonce retry. Look at the loop: before the token expires, the host renews the same session_id, with fresh assertions and a fresh proof every time, so the conversation and its context carry on. Later the same Session can move on to signed in, through one of the sign-in examples. A Session that has ended answers an error, and the only way forward is to start a new one."
     },
     {
       "type": "two-columns",

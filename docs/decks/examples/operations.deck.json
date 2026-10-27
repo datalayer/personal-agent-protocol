@@ -19,14 +19,11 @@
       "notes": "Money moves only on an explicit confirmation of one revision of the terms. The user approves in the host's own interface, and the company performs a confirmed operation once, even when answers get lost."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Ada and the Atlas host", "type": "text", "content": "Ada approves in the host's interface; the host confirms with `OperationsClient`." },
-        { "heading": "Standing permission store", "type": "text", "content": "The Reactor `pap.standingPermissionStore` checks a permission term by term." },
-        { "heading": "Northwind Bank", "type": "text", "content": "Proposes payments and performs them once confirmed." }
-      ],
-      "notes": "Ada is the user and Atlas her personal agent's host. A Reactor contribution holds standing permissions. Northwind Bank proposes the payments; it marks them as not requiring the user's own approval, so a standing permission may confirm them too."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Ada's side, trusted\"]\n    direction TB\n    U[\"Ada\"] -- \"approves\" --> H[\"Atlas host<br/>OperationsClient\"]\n    H -- \"reserve a use\" --> S[\"Standing permission store\"]\n  end\n  subgraph CO[\"Northwind Bank\"]\n    direction TB\n    B[\"Operations endpoint<br/>proposes, then performs\"]\n  end\n  CO -- \"proposal, revision, terms\" --> HOST\n  HOST -- \"confirm one revision\" --> CO\n  HOST -. \"states and summaries only\" .-> M",
+      "caption": "Only Ada, or a permission she set, approves; the model can explain an operation but never confirm it.",
+      "notes": "Start on the right: Northwind Bank proposes a payment, with a revision and its terms. On the left, inside Ada's trusted side, the Atlas host shows it to Ada, and she approves in the host's own interface. For payments the bank marks as not needing Ada herself, the host may instead reserve a use from the Reactor standing permission store. Either way the host confirms one exact revision back at the bank. Off to the side, the model receives states and summaries only, never the power to approve."
     },
     {
       "type": "flow",
@@ -51,16 +48,11 @@
       "notes": "The host shows Ada which terms changed and she approves revision 2. The bank performs the payment but the answer is lost. The SDK reads the same operation back: it is never re-proposed or assumed failed, and a retried confirm returns the same record."
     },
     {
-      "type": "bullets",
-      "title": "Exact approval",
-      "icon": "check",
-      "items": [
-        "`approve()` records the revision and a digest of its summary and terms",
-        "A confirm for any other revision is refused locally: `approval_mismatch`",
-        "`terms_changed` returns the new revision and the changed term paths",
-        "An agent without the extension gets `extension_required`"
-      ],
-      "notes": "Approval is tied to one revision. If the terms move, the old approval no longer fits, and the host refuses it before anything is sent."
+      "type": "mermaid",
+      "title": "The life of an operation",
+      "diagram": "stateDiagram-v2\n  [*] --> proposed\n  proposed --> proposed : terms changed, new revision\n  proposed --> in_progress : confirm latest revision\n  proposed --> cancelled : cancel\n  proposed --> expired\n  in_progress --> succeeded\n  in_progress --> failed\n  succeeded --> [*]\n  failed --> [*]\n  cancelled --> [*]\n  expired --> [*]",
+      "caption": "Only the latest revision can be confirmed; a lost answer is read back, never re-proposed.",
+      "notes": "Follow an operation from the top. It starts proposed. If the company changes the terms, it stays proposed with a new revision, and the old approval no longer fits: the host refuses it locally with approval_mismatch, and the company answers terms_changed. Confirming the latest revision moves it on, possibly through in progress, to succeeded or failed, each with the company's result summary. A proposal can also be cancelled or expire. If a confirm's answer is lost, the host reads the operation back: still proposed means the confirm never arrived and may be retried."
     },
     {
       "type": "flow",

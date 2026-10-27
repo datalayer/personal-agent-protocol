@@ -19,14 +19,11 @@
       "notes": "There is no special protocol between companies. Ledgerly is a company to Ada's personal agent, and, separately, a personal agent at Northwind for the same Ada, with its own client_id and keys on its own domain."
     },
     {
-      "type": "three-columns",
+      "type": "mermaid",
       "title": "Who takes part",
-      "columns": [
-        { "heading": "Atlas", "type": "text", "content": "Ada's personal agent. To it, Ledgerly is **a company** like any other." },
-        { "heading": "Ledgerly", "type": "text", "content": "A company to Atlas, and **a personal agent** at Northwind, with its own keys." },
-        { "heading": "Northwind Bank", "type": "text", "content": "Sees a personal agent called Ledgerly, signed in by Ada on its own page." }
-      ],
-      "notes": "Three parties, two relationships. Atlas talks to Ledgerly. Ledgerly talks to Northwind. Ada connects Ledgerly to Northwind herself, by approving Ledgerly's code on Northwind's page."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph ADA[\"Ada's side\"]\n    direction TB\n    U[\"Ada\"] -- \"approves\" --> A[\"Atlas<br/>her personal agent\"]\n  end\n  subgraph LED[\"Ledgerly\"]\n    direction TB\n    LC[\"Company to Atlas\"] -- \"relays\" --> LA[\"Agent at Northwind<br/>own client_id, keys\"]\n  end\n  subgraph NW[\"Northwind Bank\"]\n    direction TB\n    N[\"Bank API<br/>proposes payments\"]\n  end\n  ADA -- \"PAP, as to any company\" --> LED\n  LED -- \"PAP, as any agent\" --> NW\n  ADA -. \"summaries, who approved\" .-> M",
+      "caption": "Two ordinary PAP relationships meet in Ledgerly; there is no company-to-company protocol.",
+      "notes": "Read left to right. On Ada's side, Atlas is her personal agent, and to Atlas, Ledgerly is a company like any other. Inside Ledgerly there are two roles: the company Atlas talks to, and a personal agent at Northwind Bank, with its own client_id and keys on its own domain. Northwind only ever sees a personal agent called Ledgerly, which Ada connected herself by approving its code on Northwind's own page. Off to the side, the model receives the companies' summaries and who approved each payment, never a token, code or proof of any party."
     },
     {
       "type": "mermaid",
@@ -52,14 +49,11 @@
       "notes": "Ada approves a standing permission with term-by-term bounds. The next payment fits, so Ledgerly confirms it at Northwind with approved_by standing_permission and tells Ada what was done. The one after that is too large, so Ada is asked again."
     },
     {
-      "type": "three-columns",
-      "title": "What each party enforces",
-      "columns": [
-        { "heading": "Northwind", "type": "text", "content": "Records who approved each payment: `user`, then `standing_permission`." },
-        { "heading": "Ledgerly", "type": "text", "content": "Confirms only the **exact revision** Ada approved, and relays `result.summary` as written." },
-        { "heading": "Atlas", "type": "text", "content": "Shows each Operation's summary and terms, and confirms only what Ada approved." }
-      ],
-      "notes": "Each party keeps its own guarantees. Northwind keeps the record of who approved. Ledgerly never confirms anything other than what Ada saw. Atlas treats Ledgerly exactly as it would any company."
+      "type": "mermaid",
+      "title": "How Ledgerly confirms",
+      "diagram": "flowchart LR\n  N[\"Northwind proposes\"] --> S[\"Within standing<br/>bounds?\"]\n  S -- \"yes\" --> C1[\"Confirm itself<br/>standing_permission\"]\n  S -- \"no\" --> O[\"Operation for Ada\"]\n  O -- \"Ada approves\" --> U[\"Revision and terms<br/>unchanged?\"]\n  U -- \"yes\" --> C2[\"Confirm<br/>approved_by user\"]",
+      "caption": "Ledgerly confirms only what Ada approved, exactly or through bounds she approved.",
+      "notes": "Follow one Northwind proposal. Ledgerly first asks whether a standing permission covers it, term by term. If it does, Ledgerly confirms itself, approved_by standing_permission, and tells Ada what was done. If not, it proposes an Operation for Ada, which Atlas shows with its summary and terms, as it would for any company. When Ada approves, Ledgerly checks that Northwind's revision and terms have not changed, and only then confirms, approved_by user. Northwind records who approved each payment, and Ledgerly relays its result summary as written."
     },
     {
       "type": "two-columns",

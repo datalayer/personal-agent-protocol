@@ -13,6 +13,7 @@ from typing import Any
 from pydantic_ai import Agent
 
 from personal_agent_protocol import (
+    Author,
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
@@ -38,7 +39,7 @@ PAIRWISE = "usr_ada_at_manzanita_000000"
 agent = Agent(
     instructions=(
         "Use explain_account_tokens to explain PAP Account Tokens. Never ask for or "
-        "expose an Account Token, Session Token, assertion, or DPoP proof."
+        "expose an Account Token, Session Token, Session Key, assertion, or DPoP proof."
     ),
 )
 
@@ -61,7 +62,7 @@ async def explain_account_tokens() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     sessions = SessionClient(reactor=reactor, http_client=http)
     device = DeviceSignInClient(reactor=reactor, http_client=http)
 
@@ -82,10 +83,9 @@ async def explain_account_tokens() -> dict[str, Any]:
             client_id=atlas.client_id,
             scopes=("orders:read", "orders:write"),
             tenant_id=TENANT,
-            pairwise_user_id=PAIRWISE,
-            session_id=session.session_id,
+            session_key=session.session_key,
             organization=company.document.organization,
-            poppy_domains=metadata.poppy_domains,
+            protected_resources=metadata.protected_resources,
         )
         await shop.approve_device(started.user_code, account_id="acct_ada")
         clock.advance(started.poll_interval)
@@ -104,35 +104,40 @@ async def explain_account_tokens() -> dict[str, Any]:
         pairwise_user_id=PAIRWISE,
     )
 
-    # 1. Refresh signs the same Session in again; the company rotates the Account Token.
+    # 1. Refresh with the Session Key signs that same Session in again; the company
+    #    rotates the Account Token.
     token, reference = await signed_in_session()
     stored_before = host.vault.values[reference]
-    refreshed = await accounts.refresh(reference, context=context, session_id=token.session_id)
+    refreshed = await accounts.refresh(reference, context=context, session_key=token.session_key)
     rotated_in_place = host.vault.values[reference] is not stored_before
-    same_session = refreshed.token is not None and refreshed.token.session_id == token.session_id
+    same_session = refreshed.token is not None and refreshed.token.session_key == token.session_key
 
     # 2. Two refreshes at once: the Reactor `pap.accountTokenLock` serializes them, so the
     #    second presents the token the first rotated in, never the one it revoked.
     racing = await asyncio.gather(
-        accounts.refresh(reference, context=context, session_id=token.session_id),
-        accounts.refresh(reference, context=context, session_id=token.session_id),
+        accounts.refresh(reference, context=context, session_key=token.session_key),
+        accounts.refresh(reference, context=context, session_key=token.session_key),
     )
 
     # 3. Narrower is allowed; wider is the user's decision, not a retry.
     narrowed = await accounts.refresh(
-        reference, context=context, session_id=token.session_id, scopes=("orders:read",)
+        reference, context=context, session_key=token.session_key, scopes=("orders:read",)
     )
     wider = await accounts.refresh(
         reference,
         context=context,
-        session_id=token.session_id,
+        session_key=token.session_key,
         scopes=("orders:read", "orders:admin"),
     )
 
-    # 4. Ninety-one days later the company answers `invalid_grant`: the stored copy is
-    #    deleted and the Session continues signed out.
+    # 4. Ninety-one days later the Session has ended too: its Session Key is refused and
+    #    discarded (`session_ended`). Without a key, the Account Token would start a new
+    #    Session; the company answers `invalid_grant`, so the stored copy is deleted.
     clock.advance(91 * 24 * 3600)
-    expired = await accounts.refresh(reference, context=context, session_id=token.session_id)
+    session_ended = await accounts.refresh(
+        reference, context=context, session_key=token.session_key
+    )
+    expired = await accounts.refresh(reference, context=context)
     expired_deleted = reference not in host.vault.values
 
     # 5. Revocation (RFC 7009) signs out every Session signed in with the token.
@@ -142,13 +147,15 @@ async def explain_account_tokens() -> dict[str, Any]:
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     page = await conversations.start(
         endpoint,
-        Message(id=generate_message_id(reactor), sender="human", text="Where is my order?"),
+        Message(
+            id=generate_message_id(reactor), author=Author(type="human"), text="Where is my order?"
+        ),
         token=token,
         wait=0,
         **who,
     )
     after_revocation = await accounts.refresh(
-        reference, context=context, session_id=token.session_id
+        reference, context=context, session_key=token.session_key
     )
     await http.aclose()
 
@@ -160,6 +167,7 @@ async def explain_account_tokens() -> dict[str, Any]:
         "concurrent_refreshes_serialized": [result.status for result in racing],
         "narrowed_granted_scopes": narrowed.granted_scopes,
         "wider_request": wider.status,
+        "old_session_after_91_days": session_ended.status,
         "expired_token": expired.status,
         "expired_token_deleted_locally": expired_deleted,
         "revoked_at_company": revoked.revoked,

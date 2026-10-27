@@ -967,7 +967,7 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3-07"
+        "PAP-3-11"
       ],
       "check": "discovery",
       "input": {
@@ -1002,7 +1002,7 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3-07"
+        "PAP-3-11"
       ],
       "check": "discovery",
       "input": {
@@ -1194,7 +1194,8 @@
       "role": "company",
       "requirements": [
         "PAP-8-01",
-        "PAP-8-06"
+        "PAP-8-06",
+        "PAP-8.3-01"
       ],
       "description": "A feedback report with a Session Token and no scope is accepted with 202, a kind the company doesn't recognize too; a task over 200 characters is invalid_request; without a token it is 401."
     }

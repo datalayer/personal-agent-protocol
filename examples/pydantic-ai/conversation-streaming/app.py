@@ -14,6 +14,7 @@ import httpx
 from pydantic_ai import Agent
 
 from personal_agent_protocol import (
+    Author,
     ConversationClient,
     DiscoveryClient,
     DpopHttpClient,
@@ -91,7 +92,7 @@ async def explain_conversation_streaming() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
@@ -103,7 +104,7 @@ async def explain_conversation_streaming() -> dict[str, Any]:
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     receipt = await conversations.start(
         endpoint,
-        Message(id=generate_message_id(reactor), sender="human", text="Hello"),
+        Message(id=generate_message_id(reactor), author=Author(type="human"), text="Hello"),
         token=session,
         **who,
     )

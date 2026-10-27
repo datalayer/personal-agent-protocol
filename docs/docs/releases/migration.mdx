@@ -10,6 +10,37 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.26 → 0.27
+
+0.27.0 implements [PAP draft 0.3](https://personalagentprotocol.org/docs/0.3/spec)
+as of upstream commit `a95b757` (revision 2026-10-26) in place of draft 0.2. A
+0.27 personal agent uses only `poppy.json` documents with `protocol_version`
+`0.3`, and a 0.27 company publishes `0.3`: upgrade personal agents and the
+companies they talk to together. The protocol changes are listed in the
+upstream [changelog](https://personalagentprotocol.org/docs/changelog); in the SDKs:
+
+| Change | Python | TypeScript |
+| --- | --- | --- |
+| Each Session has its own DPoP key, the Session Key; its thumbprint names the Session and `session_id` is gone from every request and response | `SessionToken.session_key` (was `session_id`); `renew(..., session_key=)`, `AccountTokenClient.refresh(..., session_key=None)` (none: a new Session, signed in) | `SessionToken.sessionKey`; `renew({ ..., sessionKey })`, `refresh(ref, { sessionKey })` |
+| A DPoP proof provider makes a key per Session | `DpopProofProvider.new_session_key` / `create` / `discard_session_key`; `DpopProofRequest(..., session_key=)` (no `subject=`); `JoseDpopProofProvider(keys)` with a `SessionKeyCustody` such as `InMemorySessionKeys` | `newSessionKey` / `create` / `discardSessionKey`; `DpopProofRequest.sessionKey` |
+| Resource calls no longer name the User ID: the token's key does | `ApiClient`, `ConversationClient`, `OperationsClient`, `FeedbackClient`, `MediatedSignInClient`, `DpopHttpClient`: no `pairwise_user_id=`; `Who` is `tenant_id` and `issuer` | no `pairwiseUserId` |
+| `signed_in` is gone from token responses; the grant says it, and `scope` follows RFC 6749 | `TokenResponse` (wire) and `SessionToken.from_response(...)`; `SessionToken.signed_in` is the SDK's | `TokenResponse`, `SessionToken.signedIn` |
+| `invalid_session` is `invalid_grant`; an ended Session's key is discarded and never used again | `SessionError("invalid_grant")`; `AccountRefreshResult.status == "session_ended"` | the same codes |
+| Codes are bound to the Session Key | `DirectSignInClient.begin(..., session_key=)` puts `dpop_jkt` in the URL; `DeviceSignInClient.begin(..., session_key=, protected_resources=)` | `begin({ ..., sessionKey })`; `protectedResources` |
+| A Bearer token for an MCP server without DPoP comes from Token Exchange; a DPoP one from the Session's own request with `resource` | `SessionClient.token_for_mcp(..., session_key=, subject_token=, resource=)` (no `dpop=`); `renew(..., resource=)` or `AccountTokenClient.refresh(..., resource=)` for a DPoP server; `AccountTokenClient.token_for_mcp` removed | `tokenForMcp({ ..., sessionKey, subjectToken, resource })` |
+| `sign_in_required` is `insufficient_scope`, naming the scopes in `scope`; the `authorization` event always has `scope` | `ApiResult.insufficient_scope(scope)`, `ToolResult.insufficient_scope(scope)`, `Reply(authorization=("insufficient_scope", scope))` | `insufficientScope(scope)` |
+| The issuer's metadata says the sign-in types and scopes: `grant_types_supported`, `scopes_supported`; `protected_resources` replaces `poppy_domains`; `auth.direct` and `auth.device` are gone, `auth.scopes` replaces `auth.custom_scopes`; `auth.scope_hints` | `OAuthServerMetadata.offers_direct` / `offers_device` / `offers_token_exchange` / `lists_resource`; `AuthCapabilities.scopes` / `scope_hints`; `CompanyConfig(scope_descriptions=, scope_hints=)` (no `custom_scopes`) | `offersDirect`, `offersDevice`, `protectedResources`, `scopeDescriptions`, `scopeHints` |
+| Discovery redirects must end at `/.well-known/poppy.json` with no query | `DiscoveryError("invalid_discovery_location")` | the same code |
+| The browser joins a Session through a form with a one-time code, proven with the Session Key; the browser assertion is gone | `BrowserSessionClient.join(browser_session_endpoint=, tenant_id=, issuer=, session_key=)`; contribution `BROWSER_JOINS` / `BrowserJoin.load_join_form` and `submit_join_form` (was `BROWSER_FORM_POSTS`); `build_browser_assertion_claims` and `verify_browser_assertion` removed | `BrowserJoins`, `loadJoinForm`, `submitJoinForm` |
+| `author` replaces `sender` | `Message(author=Author(type="agent"))`; `staff_reply(..., author_id=, author_name=, author_image=)`; `PapReplies` version 3 (`author`, `name`) | `author: { type }`; `PapReplies` version 3 |
+| New: Agent IDs, excluded tasks, alternatives, feedback answered with one, loopback redirect URIs | `start(..., agent_id=)`; `DiscoveryClient.excluded_tasks(company)`; `Alternative.usable_references`; `FeedbackClient.report` returns an `Alternative` or `None`; `CompanyConfig(excluded_tasks=, feedback_answers=)` | `agentId`; `excludedTasks`; `usableReferences` |
+
+A custom company store sees a new record kind (`join_code`), `StoredSession`
+keyed by the Session Key with `ends_at`, `IssuedSession.agent_id`, and codes
+that carry `dpop_jkt`. Companies list scopes the protocol does not define: the
+reference companies use `orders:read`, `orders:write` and the like, never
+`poppy:read`.
+
 ## 0.24 → 0.25
 
 0.25.0 implements [PAP draft 0.2](https://personalagentprotocol.org/docs/0.2/spec)

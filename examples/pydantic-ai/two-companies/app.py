@@ -3,7 +3,7 @@
 
 """A Pydantic AI agent showing two companies working together over PAP, by composition.
 
-Draft 0.1 defines no company-to-company protocol. Ledgerly, an accounting firm, is
+Draft 0.3 defines no company-to-company protocol. Ledgerly, an accounting firm, is
 a PAP company to Ada's personal agent (Atlas) and, for the same Ada, a PAP personal
 agent at Northwind Bank. Every approval is an Operation, and a standing permission
 is itself an Operation Ada approves.
@@ -19,6 +19,7 @@ from typing import Any
 from pydantic_ai import Agent
 
 from personal_agent_protocol import (
+    Author,
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
@@ -74,7 +75,7 @@ async def run_two_companies() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
@@ -90,10 +91,9 @@ async def run_two_companies() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("books:read", "payments:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
     clock.advance(started.poll_interval)
@@ -105,7 +105,7 @@ async def run_two_companies() -> dict[str, Any]:
     cursor: dict[str, Any] = {}
 
     async def say(text: str):  # type: ignore[no-untyped-def]
-        message = Message(id=generate_message_id(reactor), sender="human", text=text)
+        message = Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
         if not cursor:
             page = await conversations.start(chat, message, token=token, wait=0, **who)
         else:

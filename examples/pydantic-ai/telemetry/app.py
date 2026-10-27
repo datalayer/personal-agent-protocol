@@ -25,6 +25,7 @@ from reactor import PluginManifest
 
 from personal_agent_protocol import (
     TELEMETRY_SINKS,
+    Author,
     ClientMetadata,
     ConversationClient,
     DeviceSignInClient,
@@ -90,7 +91,7 @@ async def read_pap_telemetry() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
@@ -101,7 +102,7 @@ async def read_pap_telemetry() -> dict[str, Any]:
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     def say(text: str) -> Message:
-        return Message(id=generate_message_id(reactor), sender="human", text=text)
+        return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
 
     page = await conversations.start(
         endpoint, say("Where is my jacket order?"), token=session, wait=0, **who
@@ -114,10 +115,9 @@ async def read_pap_telemetry() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await shop.approve_device(started.user_code, account_id="acct_ada")
     clock.advance(started.poll_interval)

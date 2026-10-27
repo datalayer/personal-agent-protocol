@@ -16,6 +16,7 @@ import httpx
 from pydantic_ai import Agent
 
 from personal_agent_protocol import (
+    Author,
     ClientMetadata,
     ConversationClient,
     DeviceSignInClient,
@@ -108,7 +109,6 @@ async def without_the_extension(
                 operation.operation_id,
                 token=session,
                 tenant_id=TENANT,
-                pairwise_user_id=PAIRWISE,
                 issuer=metadata.issuer,
             )
         except OperationError as error:
@@ -144,7 +144,7 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
 
     # Ada signs Atlas in at Northwind (Device Sign-In on the bank's own page).
     session = await SessionClient(reactor=reactor, http_client=http).start(
@@ -162,10 +162,9 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
         client_id=atlas.client_id,
         scopes=("accounts:read", "payments:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await bank.approve_device(started.user_code, account_id=ACCOUNT)
     clock.advance(started.poll_interval)
@@ -186,7 +185,7 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
     async def propose(text: str) -> Operation:
         page = await conversations.start(
             chat,
-            Message(id=generate_message_id(reactor), sender="agent", text=text),
+            Message(id=generate_message_id(reactor), author=Author(type="agent"), text=text),
             token=token,
             wait=0,
             **who,

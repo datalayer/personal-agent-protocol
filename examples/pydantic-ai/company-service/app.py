@@ -8,7 +8,7 @@ a `CompanyConfig`, a company store that passes `check_store`, a company agent th
 proposes renewing a loan, and the operation executor that performs it. The service
 is served over ASGI with `company_app` on an in-process network, and Atlas, Ada's
 personal agent from the same SDK, talks to it end to end: discovery, a signed-out
-Session, a conversation that asks her to sign in, Device Sign-In on the library's
+Session, a conversation answered with `insufficient_scope`, Device Sign-In on the library's
 page, the renewal proposed, Ada's approval of that exact revision, and the renewal
 performed once however often the confirmation is sent.
 
@@ -28,6 +28,7 @@ from pydantic_ai import Agent
 from reactor import PluginManifest
 
 from personal_agent_protocol import (
+    Author,
     ClientMetadata,
     ConversationClient,
     DeviceSignInClient,
@@ -71,7 +72,11 @@ CONFIG = CompanyConfig(
     domain=DOMAIN,
     scopes=("loans:read", "loans:write"),
     write_scopes=("loans:write",),
-    custom_scopes={"loans:read": "See your loans", "loans:write": "Renew your loans"},
+    # The library's own scopes, each described in words a user and a model understand
+    # (`auth.scopes`), with what its most consequential operation changes and whether it
+    # touches personal data (`auth.scope_hints`). Scope names are the company's to choose.
+    scope_descriptions={"loans:read": "See your loans", "loans:write": "Renew your loans"},
+    scope_hints={"loans:read": ("none", True), "loans:write": ("reversible", True)},
 )
 
 RENEWAL = ProposedOperation(
@@ -89,7 +94,9 @@ class JuniperAgent:
         if turn.account_id is None:
             return [
                 Reply(text="I can look at your loans once you sign in to Juniper Library."),
-                Reply(authorization=("sign_in_required", "loans:read loans:write")),
+                # An `authorization` event: the scope this request needs, which only a
+                # signed-in Session can have.
+                Reply(authorization=("insufficient_scope", "loans:read loans:write")),
             ]
         if "renew" in (turn.text or "").lower():
             return [Reply(text="That loan can be renewed once more.", operation=RENEWAL)]
@@ -174,7 +181,7 @@ async def run_company_service() -> dict[str, Any]:
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
     steps.append(f"discovered {company.document.organization.name}")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
@@ -182,17 +189,17 @@ async def run_company_service() -> dict[str, Any]:
         token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
-    steps.append("started a signed-out Session")
+    steps.append("started a signed-out Session, named by a new Session Key")
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     def say(text: str) -> Message:
-        return Message(id=generate_message_id(reactor), sender="human", text=text)
+        return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
 
     page = await conversations.start(
         endpoint, say("When is my book due?"), token=session, wait=0, **who
     )
     asked = [e for e in page.events if e.type != "state"][-1]
-    steps.append(f"the library asked to sign in ({asked.type}: {asked.error})")
+    steps.append(f"the library asked for more scope ({asked.type}: {asked.error} {asked.scope})")
 
     device = DeviceSignInClient(reactor=reactor, http_client=http)
     started = await device.begin(
@@ -202,10 +209,9 @@ async def run_company_service() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("loans:read", "loans:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await library.approve_device(started.user_code, account_id="acct_ada")
     clock.advance(started.poll_interval)
@@ -241,7 +247,11 @@ async def run_company_service() -> dict[str, Any]:
 
     return {
         "steps": steps,
-        "advertised_scopes": company.document.auth.custom_scopes,
+        "advertised_scopes": company.document.auth.scopes,
+        "scope_hints": {
+            name: hint.model_dump(exclude_none=True)
+            for name, hint in company.document.auth.scope_hints.items()
+        },
         "proposal": {
             "summary": proposal.summary,
             "revision": proposal.revision,

@@ -1215,7 +1215,7 @@ class CompanyService:
             scopes=(),
             account_token=None,
         )
-        response = await self._issue(session, replacing={self._kind(session)})
+        response = await self._issue(session)
         self._report_session(session, renewed=True, for_mcp=resource is not None)
         return response
 
@@ -1296,7 +1296,6 @@ class CompanyService:
         response = await self._issue(
             signed_in,
             refresh_token=rotated,
-            replacing={self._kind(signed_in)},
             # A refresh naming no scope gets them in the response: the agent can't know.
             requested=requested,
             account_token_expires_at=grant.expires_at,
@@ -1343,7 +1342,7 @@ class CompanyService:
             expires_at=min(subject.expires_at, self._now() + self.config.session_lifetime),
         )
         response = await self._issue(
-            bearer, replacing={self._kind(bearer)}, requested=requested, exchanged=True
+            bearer, requested=requested, exchanged=True
         )
         self._report_session(bearer, renewed=False, for_mcp=True)
         return response
@@ -1646,7 +1645,7 @@ class CompanyService:
             client_id=session.client_id,
             pairwise_user_id=session.pairwise_user_id,
             key_thumbprint=thumbprint,
-            expires_at=session.expires_at,
+            expires_at=self._now() + self.config.session_lifetime,
             account_id=account_id,
             scopes=scopes,
             account_token=family,
@@ -1657,7 +1656,6 @@ class CompanyService:
         return await self._issue(
             signed_in,
             refresh_token=account_token,
-            replacing={self._kind(signed_in)},
             requested=requested,
             account_token_expires_at=expires_at,
         )
@@ -1693,12 +1691,11 @@ class CompanyService:
         session: IssuedSession,
         *,
         refresh_token: str | None = None,
-        replacing: Collection[str] = (),
         requested: tuple[str, ...] = (),
         account_token_expires_at: datetime | None = None,
         exchanged: bool = False,
     ) -> CompanyResponse:
-        """Issue a token for the Session; it replaces the Session's tokens of `replacing` kinds.
+        """Issue a token for the Session, beside the ones it already holds.
 
         The response names no Session: its key does (§4.3). `scope` follows RFC 6749:
         left out of a signed-out token's response, and of a signed-in one granting
@@ -1707,7 +1704,7 @@ class CompanyService:
 
         access_token = self._id("sat")
         digest = _digest(access_token)
-        await self._record_token(session, digest, replacing)
+        await self._record_token(session, digest)
         await self.store.put(
             SESSION_TOKEN,
             digest,
@@ -1732,14 +1729,13 @@ class CompanyService:
                 )
         return CompanyResponse(200, body, {"Cache-Control": "no-store"})
 
-    async def _record_token(
-        self, session: IssuedSession, digest: str, replacing: Collection[str]
-    ) -> None:
-        """One write: the new token joins the Session, the ones it replaces leave it.
+    async def _record_token(self, session: IssuedSession, digest: str) -> None:
+        """One write: the new token joins the Session; expired ones leave it.
 
-        `replacing` names token kinds (`_kind`): the Session's own token, or its
-        token for one resource. A signed-in token records the account the
-        Session is tied to from then on, signed out or not (§4.4).
+        Earlier tokens keep working until they expire, each as the Session was when
+        it was issued: several tasks can share one Session, and one may still hold a
+        signed-out token after another signed in (§4.4). A signed-in token records
+        the account the Session is tied to from then on, signed out or not.
         """
 
         for _ in range(_CAS_ATTEMPTS):
@@ -1768,11 +1764,8 @@ class CompanyService:
                 session.account_id,
             ):
                 raise _RefusedError(400, "account_mismatch")
-            tokens = {
-                key: token
-                for key, token in current.tokens.items()
-                if self._kind(token) not in replacing
-            }
+            now = self._now()
+            tokens = {key: token for key, token in current.tokens.items() if token.expires_at > now}
             stored = replace(
                 current,
                 tokens={**tokens, digest: session},
@@ -3600,13 +3593,15 @@ class CompanyService:
 
         stored = await self._read(SESSION, session_key, StoredSession.from_json)
         now = self._now()
+        # The Session as its most recent own token says, in the order they were issued.
         live = [
             session
             for session in (stored.tokens.values() if stored is not None else ())
             if session.token_type == "DPoP"  # noqa: S105 - OAuth token type
+            and self._kind(session) == "own"
             and now < session.expires_at
         ]
-        latest = max(live, key=lambda session: session.expires_at) if live else None
+        latest = live[-1] if live else None
         if latest is not None and await self._signed_in_before_its_end(latest):
             return None
         return latest

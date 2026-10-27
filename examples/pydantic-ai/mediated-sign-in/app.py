@@ -56,7 +56,7 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
     auth = company.document.auth
     if not (auth is not None and auth.mediated is not None and company.oauth_metadata):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": auth.issuer}
+    who = {"tenant_id": TENANT, "issuer": auth.issuer}
     sessions = SessionClient(reactor=reactor, http_client=http)
 
     async def signed_out_session():  # type: ignore[no-untyped-def]
@@ -83,7 +83,6 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
             scopes=("orders:read",),
             token=session,
             tenant_id=TENANT,
-            pairwise_user_id=PAIRWISE,
         )
         off_domain_refused = "not refused"
     except AuthorizationError as error:
@@ -98,12 +97,12 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
         scopes=("orders:read", "orders:write"),
         token=session,
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
     )
     if not (started.reference is not None):
         raise RuntimeError("the example world is incomplete")
 
-    # Only the Session that started the sign-in may finish it.
+    # Only the Session that started the sign-in may finish it: another Session Key is
+    # another Session.
     stranger = await signed_out_session()
     try:
         await mediated.submit_code(started.reference, token=stranger, **who)
@@ -129,7 +128,7 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
         "final_status": done.status,
         "same_session_signed_in": done.token is not None
         and done.token.signed_in
-        and done.token.session_id == session.session_id,
+        and done.token.session_key == session.session_key,
         "granted_scopes": done.granted_scopes,
         "account_token_stored_by_reference": done.account_token_reference in host.vault.values,
         "protected_input_purposes": [request.purpose for request in typed.asked],

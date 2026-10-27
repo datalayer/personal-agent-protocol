@@ -29,13 +29,15 @@ async def discover_pap_company(domain: str) -> dict[str, Any]:
     async with DiscoveryClient() as client:
         company = await client.discover(domain)
     document = company.document
+    metadata = company.oauth_metadata
+    # Direct and Device Sign-In are offered by the OAuth server's metadata (its grant
+    # types and endpoints); Mediated Sign-In by `auth.mediated` in poppy.json.
     sign_in = []
-    if document.auth is not None:
-        sign_in = [
-            name
-            for name in ("direct", "device", "mediated")
-            if getattr(document.auth, name) is not None
-        ]
+    if metadata is not None:
+        sign_in += ["direct"] if metadata.offers_direct else []
+        sign_in += ["device"] if metadata.offers_device else []
+    if document.auth is not None and document.auth.mediated is not None:
+        sign_in.append("mediated")
     interfaces = []
     if document.agent is not None:
         interfaces.extend(f"agent:{protocol.type}" for protocol in document.agent.protocols)
@@ -48,6 +50,12 @@ async def discover_pap_company(domain: str) -> dict[str, Any]:
         "protocol_version": document.protocol_version,
         "issuer": document.auth.issuer if document.auth is not None else None,
         "sign_in": sign_in,
+        # The company's own scopes, in its own words (`auth.scopes`).
+        "scopes": dict(document.auth.scopes) if document.auth is not None else {},
+        # The resources the issuer's tokens are for (its `protected_resources`).
+        "protected_resources": list(metadata.protected_resources) if metadata else [],
+        # Bearer tokens for MCP servers without DPoP come by Token Exchange.
+        "token_exchange": bool(metadata and metadata.offers_token_exchange),
         "interfaces": interfaces,
         "extensions": {
             name: descriptor.version for name, descriptor in document.extensions.items()

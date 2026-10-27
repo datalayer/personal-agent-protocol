@@ -1,27 +1,34 @@
 # Upstream protocol snapshot
 
 - Protocol: Personal Agent Protocol (Poppy)
-- Profile implemented: draft 0.2
-- Upstream page revision: 2026-10-18
-- Upstream source: commit 39b35bd of https://github.com/personal-agent-protocol/personal-agent-protocol
-- Last reviewed by this repository: 2026-10-22
-- Specification: https://personalagentprotocol.org/docs/0.2/spec
-- Guides: https://personalagentprotocol.org/docs/0.2/guides
+- Profile implemented: draft 0.3
+- Upstream page revision: 2026-10-26
+- Upstream source: commit a95b757 of https://github.com/personal-agent-protocol/personal-agent-protocol
+- Last reviewed by this repository: 2026-10-27
+- Specification: https://personalagentprotocol.org/docs/0.3/spec
+- Guides: https://personalagentprotocol.org/docs/0.3/guides
 - Operations extension: version 1
-- Operations extension page: https://personalagentprotocol.org/docs/0.2/extensions/operations
+- Operations extension page: https://personalagentprotocol.org/docs/0.3/extensions/operations
 
-Since 30c4764 (implemented in 0.25.0), upstream changed the website only
-(692db3c, 93071fb) and clarified the examples and guides to match the spec
-(39b35bd, #71) with no new wire behavior: DPoP proofs only on token-endpoint
-requests and requests carrying a Session Token, a browser assertion's `aud`
-and `typ`, ES256, no token or proof sent to a redirect target, Mediated
-credentials discarded when a sign-in ends, `iss` required on a Direct
-Sign-In redirect, a reused `jti` rejected at the token endpoint, and
-`Idempotency-Key` on API writes in the examples. The upstream page revision
-stays 2026-10-18.
+Draft 0.3 is still being written upstream, at /docs/spec; this repository
+implements it as of commit a95b757, reviewed on 2026-10-27, and every later
+upstream commit is reviewed before a release names it. The changes from 0.2,
+each in the CHANGELOG and the 0.2 → 0.3 migration page: Session Keys name
+Sessions (no `session_id`), authorization and device codes are bound to them,
+`invalid_grant` for an ended Session's key; `signed_in` removed, `scope` as in
+RFC 6749; `insufficient_scope` replaces `sign_in_required`; Bearer tokens for
+MCP servers without DPoP by Token Exchange; `grant_types_supported` says the
+sign-in types, `scopes_supported` and `auth.scopes` the company's own scopes,
+`auth.scope_hints` what they allow; `protected_resources` replaces
+`poppy_domains`; discovery redirects end at the well-known path; loopback
+redirect URIs; Agent IDs; the browser joins a Session through a form with a
+one-time code (no browser assertion); `author` replaces `sender`; excluded
+tasks, alternatives, and feedback answered with one; more secrets kept out of
+model context.
 
 Upstream is a draft. Changes are reviewed and released as explicit protocol
 profiles; generated code must never change from an unattended documentation
 fetch. Draft 0.1 stays readable, frozen, at
-https://personalagentprotocol.org/docs/0.1/spec; this repository implements
-0.2 only and uses no 0.1 document.
+https://personalagentprotocol.org/docs/0.1/spec; draft 0.2 is frozen at
+https://personalagentprotocol.org/docs/0.2/spec. This repository implements
+0.3 only and uses no earlier document.

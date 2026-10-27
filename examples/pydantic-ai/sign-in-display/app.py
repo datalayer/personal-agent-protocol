@@ -82,10 +82,9 @@ async def read_sign_in_display() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
 
     # A sign-in tool's answer, and the display a page draws for it.

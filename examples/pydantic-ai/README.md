@@ -9,17 +9,17 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | [`company-discovery`](./company-discovery/)               | HTTPS company discovery and validation                          | Public capability summary         |
 | [`agent-identity`](./agent-identity/)                     | Client metadata and same-domain JWKS                            | Identity and signing policy       |
 | [`session-assertion`](./session-assertion/)               | Pairwise subject and short-lived claims                         | Policy only; identifiers withheld |
-| [`direct-sign-in-boundary`](./direct-sign-in-boundary/)   | OAuth state and S256 PKCE                                       | Security properties only          |
+| [`direct-sign-in-boundary`](./direct-sign-in-boundary/)   | OAuth state, S256 PKCE, code bound by `dpop_jkt`                | Security properties only          |
 | [`direct-sign-in-lifecycle`](./direct-sign-in-lifecycle/) | Complete Session upgrade and consent                            | Lifecycle evidence only           |
 | [`device-sign-in`](./device-sign-in/)                     | Device code, paced polling and token custody                    | Lifecycle evidence only           |
-| [`dpop-proof`](./dpop-proof/)                             | Request binding and replay rejection                            | Verified policy; secrets withheld |
-| [`session-lifecycle`](./session-lifecycle/)               | Start, nonce retry, and renewal over HTTP                       | Lifecycle evidence only           |
-| [`browser-session`](./browser-session/)                   | Controlled form POST and one-use assertion                      | Browser policy only               |
+| [`dpop-proof`](./dpop-proof/)                             | Session Keys, request binding, replay rejection                 | Verified policy; secrets withheld |
+| [`session-lifecycle`](./session-lifecycle/)               | Start, nonce retry, renewal, end; one key per Session           | Lifecycle evidence only           |
+| [`browser-session`](./browser-session/)                   | Join form: one-time code proved with the Session Key            | Browser policy only               |
 | [`dpop-transport`](./dpop-transport/)                     | Nonce retry and safe redirect proofs                            | Transport policy only             |
 | [`conversation-messages`](./conversation-messages/)       | Start and continue with idempotent IDs                          | Conversation state only           |
 | [`conversation-events`](./conversation-events/)           | Long poll, drain, recover, de-duplicate                         | Safe event content only           |
 | [`conversation-streaming`](./conversation-streaming/)     | SSE, `Last-Event-ID`, display-only deltas                       | Counts and complete messages      |
-| [`conversation-control`](./conversation-control/)         | Sign-in mid-conversation, Direct, handoff, close                | Statuses and event types          |
+| [`conversation-control`](./conversation-control/)         | `insufficient_scope`, Direct, handoff, close                    | Statuses and event types          |
 | [`account-tokens`](./account-tokens/)                     | Refresh, rotation, narrowing, expiry, revocation                | Statuses and scopes only          |
 | [`mediated-sign-in`](./mediated-sign-in/)                 | Protected input, one endpoint, one-time code                    | Labels and statuses only          |
 | [`operations`](./operations/)                             | Exact approval, `terms_changed`, recovery, standing permissions | States and company summaries      |
@@ -27,7 +27,7 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | [`two-companies`](./two-companies/)                       | Ledgerly at Northwind for Ada (composition)                     | Summaries and approvers           |
 | [`live-session-actions`](./live-session-actions/)         | Actions by ID, as Studio, a REPL and `pap commands run` invoke  | Answers and refusal codes         |
 | [`telemetry`](./telemetry/)                               | One allowlisted event per protocol stage, OpenTelemetry-ready   | Stage events only                 |
-| [`company-apis`](./company-apis/)                         | OpenAPI with DPoP and MCP with a URL-bound Bearer               | Orders, statuses, summaries       |
+| [`company-apis`](./company-apis/)                         | OpenAPI with DPoP; MCP with DPoP or Token Exchange              | Orders, statuses, summaries       |
 | [`company-service`](./company-service/)                   | A company built with the SDK, used end to end                   | Steps and a count                 |
 | [`sign-in-display`](./sign-in-display/)                   | `PapSignIn`: the page's display vs `model_view()`               | Model view; page shape only       |
 
@@ -44,11 +44,11 @@ Set `PAP_EXAMPLE_MODEL` to use another Pydantic AI model string. The default is
 
 The `account-tokens`, `mediated-sign-in`, `conversation-*`, `operations`,
 `user-with-a-company`, `two-companies`, `live-session-actions`, `telemetry`,
-`company-apis`, and `sign-in-display` examples run against the reference
-company in `personal_agent_protocol.demo`: real keys and real HTTP over ASGI,
-in one process, with no network and no model in the tool. `company-service`
-builds its own company with `personal_agent_protocol.company` and runs the same
-way.
+`company-apis`, `browser-session`, and `sign-in-display` examples run against
+the reference company in `personal_agent_protocol.demo`: real keys and real
+HTTP over ASGI, in one process, with no network and no model in the tool.
+`company-service` builds its own company with
+`personal_agent_protocol.company` and runs the same way.
 
 Validate all example definitions without calling a model:
 

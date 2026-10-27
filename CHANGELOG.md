@@ -6,6 +6,46 @@
 
 # Changelog
 
+## 0.27.0 (unreleased)
+
+PAP draft 0.3, as of upstream `a95b757` (reviewed 27 October 2026), in both SDKs
+and both reference companies, with no 0.2 compatibility: see the
+[0.26 → 0.27 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#026--027).
+
+- **Session Keys:** a new DPoP key for each Session, whose thumbprint names it;
+  `session_id` is gone from every request and response. Authorization codes
+  are bound to the key with `dpop_jkt`, device codes to the key of the first
+  poll. A company remembers ended Sessions' keys and answers `invalid_grant`;
+  the agent discards such a key for good.
+- **Token responses:** no `signed_in` (the grant says it), `scope` as RFC 6749
+  has it, `refresh_token_expires_in`; a sign-in approving no scope is a decline.
+- **`insufficient_scope`** replaces `sign_in_required`, naming the scopes in
+  `scope`, at APIs, the `authorization` event (which always has `scope`) and
+  Operations.
+- **Token Exchange:** a Bearer Session Token for an MCP server without DPoP
+  comes only from exchanging a DPoP Session Token; every token request carries
+  a proof; the wrong token type is `invalid_target`.
+- **Discovery:** `grant_types_supported` (required, with the JWT bearer and
+  refresh grants) says whether Direct and Device Sign-In are offered;
+  `scopes_supported` and `auth.scopes` are the company's own described scopes,
+  `poppy:` names reserved; `auth.scope_hints`; `protected_resources` replaces
+  `poppy_domains`; a redirect must end at `/.well-known/poppy.json` with no query.
+- **Agent identity:** loopback redirect URIs (RFC 8252 §7.3), matched with any
+  port; an optional `agent_id`, kept for a Session's life.
+- **Web browsing:** the browser joins a Session through a form with a one-time
+  code tied to it by a `__Host-` `SameSite=Strict` cookie, and a DPoP proof over
+  the code with the Session Key; the browser assertion is removed, and both
+  attacks of §9.6 are refused.
+- **Conversations:** `author` (`type`, and for a company's people or personas
+  `id`, `name`, `image`) replaces `sender`; `PapReplies` version 3.
+- **Tasks a company doesn't offer:** excluded tasks with alternatives, read with
+  `DiscoveryClient.excluded_tasks`; feedback answered with 200 and an
+  alternative.
+- **Device Sign-In:** opening the link never approves by itself (upstream
+  `8300b10`).
+- **Ledger:** `protocol/requirements.yaml` covers draft 0.3 at `a95b757`;
+  coverage pages regenerated; conformance cases for the new rules.
+
 ## 0.26.0 (2026-10-22)
 
 Reviewed against upstream `39b35bd` (22 October 2026): since `30c4764`,

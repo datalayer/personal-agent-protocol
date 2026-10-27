@@ -11,14 +11,12 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-import jwt
-from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import SecretStr
 from pydantic_ai import Agent
 
 from personal_agent_protocol import (
-    DpopKeyMaterial,
     DpopProofRequest,
+    InMemorySessionKeys,
     JoseDpopProofProvider,
     ProofError,
     verify_dpop_proof,
@@ -43,7 +41,7 @@ agent = Agent(
     instructions=(
         "Use explain_dpop_proof to explain proof-of-possession safety. Never "
         "ask for or expose a private key, access token, proof, JWK, jti, nonce, "
-        "or key thumbprint."
+        "or Session Key."
     ),
 )
 
@@ -52,20 +50,19 @@ agent = Agent(
 async def explain_dpop_proof(method: str, url: str) -> dict[str, Any]:
     """Create and verify a real proof, then return only its safety properties."""
 
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
-
-    async def resolve_key(_: DpopProofRequest) -> DpopKeyMaterial:
-        return DpopKeyMaterial(private_key=private_key, public_jwk=public_jwk)
-
-    provider = JoseDpopProofProvider(resolve_key)
+    # Each Session has its own Session Key, kept by the host's key custody. Starting a
+    # Session makes one; its JWK thumbprint (RFC 7638) names the Session (§4.3).
+    provider = JoseDpopProofProvider(InMemorySessionKeys())
+    issuer = "https://company.example"
+    session_key = await provider.new_session_key(tenant_id="example-tenant", issuer=issuer)
+    other_session = await provider.new_session_key(tenant_id="example-tenant", issuer=issuer)
     access_token = SecretStr("host-only-example-token")
     request = DpopProofRequest(
         method=method,
         url=url,
         tenant_id="example-tenant",
-        subject="host-only-pairwise-subject",
-        issuer="https://company.example",
+        issuer=issuer,
+        session_key=session_key,
         access_token=access_token,
         nonce="host-only-company-nonce",
     )
@@ -94,6 +91,16 @@ async def explain_dpop_proof(method: str, url: str) -> dict[str, Any]:
     except ProofError as error:
         replay_rejected = error.code == "invalid_dpop_proof"
 
+    # A Session that has ended has its key discarded: it is never used again.
+    await provider.discard_session_key(
+        tenant_id="example-tenant", issuer=issuer, session_key=session_key
+    )
+    try:
+        await provider.create(request)
+        discarded_key_refused = False
+    except ProofError as error:
+        discarded_key_refused = error.code == "unknown_session_key"
+
     return {
         "algorithm": "ES256",
         "method_bound": True,
@@ -101,7 +108,10 @@ async def explain_dpop_proof(method: str, url: str) -> dict[str, Any]:
         "access_token_bound": True,
         "nonce_checked": True,
         "signature_verified": bool(verified.key_thumbprint),
+        "proof_key_names_the_session": verified.key_thumbprint == session_key,
+        "one_key_per_session": other_session != session_key,
         "replay_rejected": replay_rejected,
+        "discarded_session_key_refused": discarded_key_refused,
         "proof_withheld": True,
         "access_token_withheld": True,
         "key_material_withheld": True,

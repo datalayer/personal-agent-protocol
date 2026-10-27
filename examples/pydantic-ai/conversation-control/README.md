@@ -1,10 +1,12 @@
 # Conversation control
 
 This example drives one Manzanita conversation through every control in PAP
-draft 0.1 §7.9 to §7.12 with the real Python SDK: an `authorization` event
-answered by signing in mid-conversation (the conversation keeps its ID), a
+draft 0.3 §7.9 to §7.12 with the real Python SDK: an `authorization` event
+(`insufficient_scope`, with the scope the request needs) answered by signing
+the same Session in mid-conversation (the conversation keeps its ID), a
 Direct Conversation that locks its parent (`direct_conversation_open` names
-it), a handoff to a person at the company, and closing.
+it), a handoff to a person at the company, whose reply names its `author`
+(`type: human`, with the person's `id` and `name`), and closing.
 
 The tool returns statuses, event types, and the company's answers. Tokens,
 user codes, and proofs stay in the host.

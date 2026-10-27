@@ -293,7 +293,7 @@ async def test_one_of_the_companys_people_answers_over_what_they_read() -> None:
         endpoint, conversation_id, token=session, **world.who
     )
     written = [
-        (event.message.sender, event.message.role, event.message.text)
+        (event.message.author.type, event.message.role, event.message.text)
         for event in seen.events
         if event.type == "message" and event.message is not None
     ]

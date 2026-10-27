@@ -30,7 +30,7 @@
       "requirements": [
         "PAP-4.3-15"
       ],
-      "description": "Renewing with a proof from the same Session Key returns a new token for the same Session; the agent uses it from then on and the old one stops working."
+      "description": "Renewing with a proof from the same Session Key returns a new token for the same Session; the agent uses it from then on; the earlier token reflects the Session as it was when issued (§4.4)."
     },
     {
       "id": "lifecycle.renew-for-another-user",
@@ -241,7 +241,9 @@
       "role": "company",
       "requirements": [
         "PAP-4.3-23",
-        "PAP-4.3-11"
+        "PAP-4.3-11",
+        "PAP-4.3-30",
+        "PAP-3.2-21"
       ],
       "description": "For an MCP server that supports DPoP, a token request without a proof is invalid_dpop_proof and one with a proof gets a DPoP token; for one that doesn't, a request with a proof still gets a Bearer token."
     },
@@ -264,7 +266,10 @@
         "PAP-5-03",
         "PAP-5-12",
         "PAP-5-10",
-        "PAP-5-11"
+        "PAP-5-11",
+        "PAP-5-02",
+        "PAP-5-04",
+        "PAP-5-05"
       ],
       "description": "The agent's own browser posts a browser assertion and gets a Secure, HttpOnly, SameSite=Lax cookie with no lifetime of its own; the website follows the Session's sign-out on the next request."
     },
@@ -277,7 +282,8 @@
         "PAP-5-06",
         "PAP-5-07",
         "PAP-5-08",
-        "PAP-5-09"
+        "PAP-5-09",
+        "PAP-5-03"
       ],
       "description": "A join code submitted from another browser, a code used twice, a proof over another code, or a key that names no Session sets no Session cookie (HTTP 400), the two attacks of §9.6 among them."
     }

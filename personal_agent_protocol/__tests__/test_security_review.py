@@ -78,10 +78,11 @@ async def _assert_signed_in_dpop(world: World, session_key: str, access_token: s
     stored = StoredSession.from_json(
         (await world.shop.store.get(SESSION, session_key)).value  # type: ignore[union-attr]
     )
-    kinds = sorted((t.token_type, t.signed_in, t.resource) for t in stored.tokens.values())
+    kinds = {(t.token_type, t.signed_in, t.resource or "") for t in stored.tokens.values()}
     # The signed-in token is the Session's own, for no resource; its token for the MCP server
-    # is kept, signed out.
-    assert kinds == [("DPoP", False, "https://manzanita.example/mcp"), ("DPoP", True, None)]
+    # is kept, signed out, as are earlier tokens until they expire (§4.4).
+    assert ("DPoP", True, "") in kinds and ("DPoP", False, "https://manzanita.example/mcp") in kinds
+    assert all(token_type == "DPoP" for token_type, _, _ in kinds)
     used = await world.http.post(
         "https://manzanita.example/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},

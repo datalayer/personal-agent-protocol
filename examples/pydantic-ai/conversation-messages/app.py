@@ -13,6 +13,7 @@ from reactor import PluginManifest
 
 from personal_agent_protocol import (
     DPOP_PROOF_PROVIDERS,
+    Author,
     ConversationClient,
     DpopHttpClient,
     Message,
@@ -61,22 +62,27 @@ async def demonstrate_conversation() -> dict[str, object]:
             access_token=SecretStr("host-only-token"),
             token_type="DPoP",  # noqa: S106 - OAuth token type
             expires_in=300,
-            session_id="ses_demo",
+            # The Session Key's JWK thumbprint names the Session; it stays in the host.
+            session_key="NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
             signed_in=False,
         )
+        # The personal agent writes this message itself: its `author` is `agent`.
         first = Message(
-            id=generate_message_id(reactor), sender="agent", text="Can this order be returned?"
+            id=generate_message_id(reactor),
+            author=Author(type="agent"),
+            text="Can this order be returned?",
         )
         started = await client.start(
             "https://api.shop.example/poppy/conversations",
             first,
             token=token,
             tenant_id="demo",
-            pairwise_user_id="usr_host_only",
             issuer="https://auth.shop.example",
         )
         follow_up = Message(
-            id=generate_message_id(reactor), sender="agent", context={"user_available": False}
+            id=generate_message_id(reactor),
+            author=Author(type="agent"),
+            context={"user_available": False},
         )
         continued = await client.send(
             "https://api.shop.example/poppy/conversations",
@@ -84,7 +90,6 @@ async def demonstrate_conversation() -> dict[str, object]:
             follow_up,
             token=token,
             tenant_id="demo",
-            pairwise_user_id="usr_host_only",
             issuer="https://auth.shop.example",
         )
         reactor.stop()

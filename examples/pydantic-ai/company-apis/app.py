@@ -5,11 +5,17 @@
 
 Atlas, Ada's personal agent, discovers Manzanita Outfitters, which lists two APIs
 in its `poppy.json`: an OpenAPI API, called with the Session's DPoP-bound token,
-and an MCP server, called with a Bearer token issued for that server's URL alone.
-Signed out, the API names the scope signing in would give; once Ada signs in on
-Manzanita's page, Atlas reads her orders through both and proposes the same
-exchange through both — a `202` with an operation from the API, an `operation`
-from the MCP tool, one record. Nothing is done until Ada confirms it.
+and an MCP server, called with a token issued for that server's URL alone.
+Signed out, the API answers `insufficient_scope` with the scope it needs; once Ada
+signs in on Manzanita's page, Atlas reads her orders through both and proposes
+the same exchange through both — a `202` with an operation from the API, an
+`operation` from the MCP tool, one record. Nothing is done until Ada confirms it.
+
+The MCP token depends on the server (§4.3). One that supports DPoP gets a DPoP
+token for its URL: an Account Token request with `resource`. One without DPoP
+gets a Bearer token by Token Exchange: the Session's DPoP token is the
+`subject_token`, the server's URL the `resource`. The journey runs against both:
+Manzanita as published (DPoP) and Manzanita with an MCP server without DPoP.
 
 The tool hands the model statuses, scopes, tool names, the orders, and the
 company's summaries; the tokens, the device code, and every proof stay in the
@@ -21,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from dataclasses import replace
 from typing import Any
 
 from pydantic_ai import Agent
@@ -40,7 +47,7 @@ from personal_agent_protocol.demo.kit import (
     PersonalAgentHost,
     personal_agent_reactor,
 )
-from personal_agent_protocol.demo.manzanita import DOMAIN, manzanita
+from personal_agent_protocol.demo.manzanita import CONFIG, DOMAIN, manzanita
 from personal_agent_protocol.errors import TransportError
 from personal_agent_protocol.mcp import McpClient, fetch_mcp_server_metadata, mcp_api
 
@@ -60,11 +67,19 @@ agent = Agent(
 async def run_company_apis() -> dict[str, Any]:
     """Read and propose through Manzanita's API and MCP server; return safe evidence."""
 
+    return {
+        "mcp_server_with_dpop": await _journey(mcp_dpop=True),
+        "mcp_server_without_dpop": await _journey(mcp_dpop=False),
+        "tokens_codes_and_proofs_withheld": True,
+    }
+
+
+async def _journey(*, mcp_dpop: bool) -> dict[str, Any]:
     clock = MutableClock()
     network = InProcessNetwork()
     atlas = AgentIdentity(domain="atlas.example", name="Atlas")
     network.add(atlas.domain, atlas.website())
-    shop, _ = manzanita(network, clock)
+    shop, _ = manzanita(network, clock, config=replace(CONFIG, mcp_dpop=mcp_dpop))
     http = network.client()
     reactor = personal_agent_reactor(
         PersonalAgentHost(atlas, clock), network=network, http_client=http
@@ -83,12 +98,13 @@ async def run_company_apis() -> dict[str, Any]:
         and description is not None
     ):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     base = description.removesuffix("/openapi.json")
     orders_url = f"{base}/orders"
     exchange_url = f"{base}/orders/ord_7Hk2/exchanges"
 
-    # Signed out: the API refuses and says which scope signing in would give.
+    # A new Session Key names a new, signed-out Session. Signed out, the API answers
+    # `insufficient_scope` and names the scope it needs.
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
@@ -111,10 +127,9 @@ async def run_company_apis() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await shop.approve_device(started.user_code, account_id="acct_ada")
     clock.advance(started.poll_interval)
@@ -129,29 +144,42 @@ async def run_company_apis() -> dict[str, Any]:
     if proposed.operation is None:
         raise RuntimeError("the example world is incomplete")
 
-    # The MCP server, with a token issued for its URL alone: DPoP when its protected
-    # resource metadata says it supports DPoP, Bearer otherwise (the Account Token
-    # rotated and stored in the host, never returned).
+    # The MCP server, with a token issued for its URL alone (§4.3). Its protected
+    # resource metadata says whether it supports DPoP.
     served = await fetch_mcp_server_metadata(http, mcp_server.url, issuer=metadata.issuer)
-    bearer = await AccountTokenClient(reactor=reactor, http_client=http).token_for_mcp(
-        done.account_token_reference,
-        context=AccountTokenContext(
-            token_endpoint=metadata.token_endpoint,
-            issuer=metadata.issuer,
+    if served.supports_dpop:
+        # A DPoP token for the server's URL, from the Account Token (rotated and stored
+        # in the host, never returned), for the same Session.
+        refreshed = await AccountTokenClient(reactor=reactor, http_client=http).refresh(
+            done.account_token_reference,
+            context=AccountTokenContext(
+                token_endpoint=metadata.token_endpoint,
+                issuer=metadata.issuer,
+                client_id=atlas.client_id,
+                tenant_id=TENANT,
+                pairwise_user_id=PAIRWISE,
+                revocation_endpoint=metadata.revocation_endpoint,
+            ),
+            session_key=signed_in.session_key,
+            resource=mcp_server.url,
+        )
+        if refreshed.token is None:
+            raise RuntimeError("the example world is incomplete")
+        mcp_token, how = refreshed.token, "account token request with resource"
+    else:
+        # No DPoP at the server: Token Exchange. The Session's DPoP token is the subject
+        # token; the answer is a Bearer token for the same Session, at that server only.
+        mcp_token = await SessionClient(reactor=reactor, http_client=http).token_for_mcp(
             client_id=atlas.client_id,
+            issuer=metadata.issuer,
+            token_endpoint=metadata.token_endpoint,
             tenant_id=TENANT,
-            pairwise_user_id=PAIRWISE,
-            revocation_endpoint=metadata.revocation_endpoint,
-        ),
-        session_id=signed_in.session_id,
-        resource=mcp_server.url,
-        dpop=served.supports_dpop,
-    )
-    if bearer.token is None:
-        raise RuntimeError("the example world is incomplete")
-    mcp = McpClient(
-        http_client=http, token=bearer.token, url=mcp_server.url, reactor=reactor, who=who
-    )
+            session_key=signed_in.session_key,
+            subject_token=signed_in.access_token,
+            resource=mcp_server.url,
+        )
+        how = "token exchange"
+    mcp = McpClient(http_client=http, token=mcp_token, url=mcp_server.url, reactor=reactor, who=who)
     tools = [tool["name"] for tool in await mcp.list_tools()]
     listed = await mcp.call_tool("list_orders")
     through_mcp = await mcp.call_tool("exchange_jacket")
@@ -161,10 +189,10 @@ async def run_company_apis() -> dict[str, Any]:
     # The token is for the MCP server only: the SDK never sends a Bearer token to the API,
     # and the company refuses a DPoP one issued for the MCP server there (§4.3).
     try:
-        await api.call("GET", orders_url, token=bearer.token, **who)
-        bearer_at_the_api = "sent"
+        await api.call("GET", orders_url, token=mcp_token, **who)
+        at_the_api = "sent"
     except (TransportError, ApiError) as error:
-        bearer_at_the_api = error.code
+        at_the_api = error.code
     await http.aclose()
 
     return {
@@ -186,16 +214,18 @@ async def run_company_apis() -> dict[str, Any]:
             },
         },
         "mcp": {
-            "bearer_status": bearer.status,
-            "bearer_token_type": bearer.token.token_type,
+            "supports_dpop": served.supports_dpop,
+            "company_offers_token_exchange": metadata.offers_token_exchange,
+            "token_from": how,
+            "token_type": mcp_token.token_type,
+            "same_session": mcp_token.session_key == signed_in.session_key,
             "tools": tools,
             "list_orders": listed.text,
             "exchange_jacket": through_mcp.text,
             "proposal_state": through_mcp.operation.state,
         },
         "one_operation_across_channels": through_mcp.operation == proposed.operation,
-        "bearer_refused_at_the_api": bearer_at_the_api,
-        "tokens_codes_and_proofs_withheld": True,
+        "mcp_token_refused_at_the_api": at_the_api,
     }
 
 

@@ -69,7 +69,7 @@ async def test_reports_as_json_and_junit_and_a_failure_does_not_stop_the_suite()
     assert outcomes["lifecycle.sign-out-takes-effect"] == "passed"
 
     payload = report.to_json()
-    assert payload["schema_version"] == 1 and payload["profile"] == "0.2"
+    assert payload["schema_version"] == 1 and payload["profile"] == "0.3"
     assert payload["summary"] == {"passed": 4, "failed": 2, "skipped": 0}
     text = json.dumps(payload)
     assert "acct_" not in text.replace("acct_ada", "")  # no Account Token in the report

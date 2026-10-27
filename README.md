@@ -10,7 +10,7 @@
 
 Python and TypeScript SDKs for the
 [Personal Agent Protocol](https://personalagentprotocol.org): both implement
-[draft 0.2](https://personalagentprotocol.org/docs/0.2/spec) (2026-10-18) and its
+[draft 0.3](https://personalagentprotocol.org/docs/0.3/spec) (2026-10-26) and its
 Operations extension v1. See
 [Compatibility](https://personal-agent-protocol.datalayer.tech/releases/compatibility/),
 [Migration](https://personal-agent-protocol.datalayer.tech/releases/migration/),
@@ -200,7 +200,7 @@ Duplicate JSON members are rejected at Python and TypeScript trust boundaries.
 
 ## What is not implemented yet
 
-Every flow of draft 0.2 and Operations v1 is implemented in both SDKs and
+Every flow of draft 0.3 and Operations v1 is implemented in both SDKs and
 both reference companies: discovery, Sessions, Direct, Device and Mediated
 Sign-In, Account Tokens, OpenAPI and MCP (DPoP or resource-bound Bearer),
 conversations with SSE, handoff and close, browser sessions, feedback, and
@@ -304,9 +304,9 @@ The shared fixtures are in `fixtures/`. Documentation is a Docusaurus site in
 
 - [Documentation](https://personalagentprotocol.org/docs)
 - [Overview](https://personalagentprotocol.org/docs/introduction)
-- [Specification](https://personalagentprotocol.org/docs/0.2/spec)
-- [Implementation guides](https://personalagentprotocol.org/docs/0.2/guides)
-- [Extensions](https://personalagentprotocol.org/docs/0.2/extensions)
+- [Specification](https://personalagentprotocol.org/docs/0.3/spec)
+- [Implementation guides](https://personalagentprotocol.org/docs/0.3/guides)
+- [Extensions](https://personalagentprotocol.org/docs/0.3/extensions)
 - [Open topics](https://personalagentprotocol.org/docs/path-to-1#open-topics)
 - [Datalayer Reactor](https://github.com/datalayer/reactor)
 - [Datalayer Agent Runtimes](https://github.com/datalayer/agent-runtimes)

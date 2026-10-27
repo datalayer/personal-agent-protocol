@@ -4,7 +4,7 @@
 
 """Generate the protocol coverage reference from the requirement ledger.
 
-`protocol/requirements.yaml` has one entry per normative statement of PAP draft 0.2
+`protocol/requirements.yaml` has one entry per normative statement of PAP draft 0.3
 and Operations v1, and the Guides' recommendations apart. This script writes one
 page per area under `docs/docs/protocol/coverage/` — every entry with its upstream
 section, normative level, SDK symbols, test IDs and status — and the summary table
@@ -34,7 +34,7 @@ END = "{/* coverage:end */}"
 REPOSITORY = "https://github.com/datalayer/personal-agent-protocol/blob/main"
 STATUSES = ("implemented", "partial", "open", "not-applicable")
 #: The upstream pages of the draft this SDK implements, versioned (/docs/0.2/...).
-UPSTREAM = "https://personalagentprotocol.org/docs/0.2"
+UPSTREAM = "https://personalagentprotocol.org/docs/0.3"
 SPEC = f"{UPSTREAM}/spec"
 
 

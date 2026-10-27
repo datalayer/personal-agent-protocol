@@ -18,6 +18,7 @@ from pydantic_ai import Agent
 from reactor import PluginManifest
 
 from personal_agent_protocol import (
+    Author,
     ConversationClient,
     ConversationError,
     DeviceSignInClient,
@@ -77,7 +78,7 @@ async def explain_conversation_control() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
@@ -88,18 +89,23 @@ async def explain_conversation_control() -> dict[str, Any]:
     conversations = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
-    def say(text: str, sender: str = "agent") -> Message:
-        return Message(id=generate_message_id(reactor), sender=sender, text=text)  # type: ignore[arg-type]
+    def say(text: str, author: str = "agent") -> Message:
+        return Message(
+            id=generate_message_id(reactor),
+            author=Author(type=author),  # type: ignore[arg-type]
+            text=text,
+        )
 
-    # 1. Signed out, the company answers with an `authorization` event instead.
+    # 1. Signed out, the company answers with an `authorization` event instead:
+    #    `insufficient_scope`, with the scope the request needs.
     page = await conversations.start(
         endpoint, say("Where is my jacket order?"), token=session, wait=0, **who
     )
     parent = page.conversation_id
     asked = [e for e in page.events if e.type != "state"][-1]
 
-    # 2. The host signs Ada in (Device Sign-In on Manzanita's page); the same
-    #    conversation continues with the signed-in token.
+    # 2. The host signs Ada in (Device Sign-In on Manzanita's page) for that scope; the
+    #    same Session (same Session Key) and conversation continue signed in.
     device = DeviceSignInClient(reactor=reactor, http_client=http)
     started = await device.begin(
         device_authorization_endpoint=metadata.device_authorization_endpoint,
@@ -108,10 +114,9 @@ async def explain_conversation_control() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=tuple((asked.scope or "").split()),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await shop.approve_device(started.user_code, account_id="acct_ada")
     clock.advance(started.poll_interval)
@@ -147,7 +152,7 @@ async def explain_conversation_control() -> dict[str, Any]:
             ) == direct.conversation_id
     direct_closed = await conversations.close(endpoint, direct.conversation_id, token=token, **who)
 
-    # 4. Handoff to a person at the company; their replies come as `human`.
+    # 4. Handoff to a person at the company; their replies' author is `human`.
     handed = await conversations.handoff(endpoint, parent, token=token, **who)
     page = await conversations.send(
         endpoint, parent, say("Thank you"), token=token, cursor=page.cursor, wait=0, **who
@@ -155,6 +160,19 @@ async def explain_conversation_control() -> dict[str, Any]:
     after_handoff = [
         f"{event.type}:{event.status}" if event.status else event.type for event in page.events
     ]
+    # A person at Manzanita answers; their message names its `author`: `human`, and who.
+    await shop.staff_reply(
+        parent,
+        after=page.events[-1].id,
+        text="Hi Ada, Sam here. Happy to help with the sizing.",
+        author_id="staff_sam",
+        author_name="Sam",
+    )
+    page = await conversations.read_events(
+        endpoint, parent, token=token, cursor=page.cursor, wait=0, **who
+    )
+    replies = [event.message for event in page.events if event.message is not None]
+    person = replies[-1].author.model_dump(exclude_none=True) if replies else None
 
     # 5. Closing ends the conversation; what it started is not cancelled.
     closed = await conversations.close(endpoint, parent, token=token, **who)
@@ -175,6 +193,7 @@ async def explain_conversation_control() -> dict[str, Any]:
         "handoff_status": handed.status,
         "handoff_responder": handed.responder,
         "events_after_handoff": after_handoff,
+        "person_reply_author": person,
         "closed": closed.status,
         "message_after_close": after_close,
         "tokens_and_codes_withheld": True,

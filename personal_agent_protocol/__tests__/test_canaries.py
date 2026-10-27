@@ -35,8 +35,9 @@ may appear in:
   both opened by the user's browser, never requested by an agent — checked
   below);
 - what a model reads: every response body but the token and device
-  endpoints' (conversation replies, API and MCP results, operation
-  summaries, mediated sign-in answers), each `PapSignIn.model_view()`, each
+  endpoints' and the browser join page's (conversation replies, API and MCP
+  results, operation summaries, mediated sign-in answers, the website's
+  pages), each `PapSignIn.model_view()`, each
   `PapConfirm.model_view()` naming a Session by its reference, and the
   examples' tool results.
 """
@@ -88,6 +89,9 @@ SHORTEST = 8
 EXAMPLE_ARGUMENTS = {"explain_dpop_proof": ("POST", "https://manzanita.example/oauth/token")}
 #: Response bodies that carry credentials by design, to the agent's code alone.
 CREDENTIAL_ENDPOINTS = ("/oauth/token", "/oauth/device")
+#: The browser join page (§5): its one-time code is read by the host's code from the
+#: agent's own browser, never by a model (§9.2). The code is harvested when submitted.
+JOIN_PAGE = "/poppy/browser-session"
 
 
 class CanaryRandom:
@@ -155,6 +159,8 @@ class Harvest:
         for name, value in _cookies(response.headers.get("set-cookie", "")):
             self.secret(f"cookie {name}", value)
         if not response.headers.get("content-type", "").startswith("application/json"):
+            if request.url.path == JOIN_PAGE:
+                return
             if response.headers.get("content-type", "").startswith(("text/", "application/")):
                 self.model_texts.append((f"{request.method} {request.url.path}", response.text))
             return

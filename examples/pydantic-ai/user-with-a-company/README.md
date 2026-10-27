@@ -2,8 +2,10 @@
 
 The whole journey of one user with one company, both sides from this SDK:
 Ada asks Atlas, her personal agent, to exchange a jacket at Manzanita
-Outfitters. Discovery, a signed-out Session, an `authorization` event, Device
-Sign-In on Manzanita's page, the same conversation continuing signed in, the
+Outfitters. Discovery, a signed-out Session named by its Session Key, an
+`authorization` event with `insufficient_scope` and the scope it needs, Device
+Sign-In on Manzanita's page, the same Session (same Session Key) and
+conversation continuing signed in, the
 proposed exchange approved exactly and performed once, and finally a narrowed
 Account Token and its revocation.
 

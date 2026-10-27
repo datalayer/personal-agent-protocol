@@ -29,6 +29,10 @@ from personal_agent_protocol import (
     build_pap_reactor,
 )
 
+#: The existing Session's Session Key (its JWK thumbprint, RFC 7638): it names the
+#: Session. The private half stays with the host's proof provider.
+SESSION_KEY = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+
 
 class OneUseStateStore:
     """Keep authorization state host-side and delete it when read."""
@@ -117,7 +121,7 @@ agent = Agent(
     instructions=(
         "Use explain_direct_sign_in_lifecycle to explain PAP Direct Sign-In. "
         "Never ask for or expose an authorization URL, callback, code, state, "
-        "verifier, assertion, proof, account token, or Session Token."
+        "verifier, assertion, proof, Session Key, account token, or Session Token."
     ),
 )
 
@@ -145,9 +149,9 @@ async def explain_direct_sign_in_lifecycle() -> dict[str, Any]:
                 "access_token": "host-only-session-token",
                 "token_type": "DPoP",
                 "expires_in": 300,
+                # No Session ID and no `signed_in` on the wire: the proof's key names
+                # the Session, and the grant (an authorization code) says it is signed in.
                 "scope": "orders:read",
-                "session_id": "ses_existing",
-                "signed_in": True,
                 "refresh_token": "host-only-account-token",
             },
         )
@@ -172,11 +176,12 @@ async def explain_direct_sign_in_lifecycle() -> dict[str, Any]:
             redirect_uri="https://assistant.example/oauth/callback",
             scopes=["orders:read", "orders:return"],
             tenant_id="example-tenant",
-            pairwise_user_id="usr_host_only_example",
-            session_id="ses_existing",
+            session_key=SESSION_KEY,
         )
         authorization = urlsplit(browser.urls[0].get_secret_value())
         state = parse_qs(authorization.query)["state"][0]
+        # `dpop_jkt`: the company binds the code to the Session Key.
+        code_bound = parse_qs(authorization.query).get("dpop_jkt") == [SESSION_KEY]
         callback_url = "https://assistant.example/oauth/callback?" + urlencode(
             {
                 "code": "host-only-one-use-code",
@@ -198,7 +203,11 @@ async def explain_direct_sign_in_lifecycle() -> dict[str, Any]:
         "requested_scopes": started.requested_scopes,
         "granted_scopes": result.granted_scopes,
         "missing_scopes": result.missing_scopes,
-        "same_session": result.token.session_id == "ses_existing",
+        "same_session": result.token.session_key == SESSION_KEY and result.token.signed_in,
+        "code_bound_to_the_session_key": code_bound,
+        "every_proof_signed_with_the_session_key": all(
+            request.session_key == SESSION_KEY for request in dpop.requests
+        ),
         "pkce_method": "S256",
         "trusted_browser_handoff": len(browser.urls) == 1,
         "state_reuse_rejected": state_reuse_rejected,

@@ -18,6 +18,7 @@ from typing import Any
 from pydantic_ai import Agent
 
 from personal_agent_protocol import (
+    Author,
     ClientMetadata,
     ConversationClient,
     DeviceSignInClient,
@@ -68,14 +69,15 @@ async def run_manzanita_journey() -> dict[str, Any]:
     conversations = ConversationClient(transport=transport)
 
     def say(text: str) -> Message:
-        return Message(id=generate_message_id(reactor), sender="human", text=text)
+        return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
 
     # Discovery and a signed-out Session.
     company = await DiscoveryClient(reactor=reactor, http_client=http).discover(DOMAIN)
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    # Resource calls name the tenant and issuer; the Session Key in the proof names the Session.
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
@@ -83,7 +85,8 @@ async def run_manzanita_journey() -> dict[str, Any]:
         token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
-    steps.append(f"discovered {company.document.organization.name}; signed-out Session")
+    name = company.document.organization.name
+    steps.append(f"discovered {name}; signed-out Session under a new Session Key")
 
     # A question only a signed-in user can have answered.
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
@@ -92,7 +95,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
     )
     asked = [e for e in page.events if e.type != "state"][-1]
     conversation_id = page.conversation_id
-    steps.append(f"company asked to sign in: {asked.error} ({asked.scope})")
+    steps.append(f"company asked for more scope: {asked.error} ({asked.scope})")
 
     # Device Sign-In: Ada approves on Manzanita's own page.
     device = DeviceSignInClient(reactor=reactor, http_client=http)
@@ -103,10 +106,9 @@ async def run_manzanita_journey() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     steps.append(f"Ada opened {started.verification_uri} and entered the code")
     await shop.approve_device(started.user_code, account_id="acct_ada")
@@ -161,7 +163,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
     narrowed = await accounts.refresh(
         done.account_token_reference,
         context=context,
-        session_id=session.session_id,
+        session_key=session.session_key,
         scopes=("orders:read",),
     )
     revoked = await accounts.revoke(done.account_token_reference, context=context)

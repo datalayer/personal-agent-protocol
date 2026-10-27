@@ -70,7 +70,10 @@ async def run_live_session_actions() -> dict[str, Any]:
             "pap.requirements.show", {"requirement_id": "OPS-6-02"}
         )
         try:
-            await platform.execute_command("pap.sessions.end", {"session_id": "ses_example"})
+            # A Session is named by its Session Key (the thumbprint `pap sessions show` lists).
+            await platform.execute_command(
+                "pap.sessions.end", {"session": "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"}
+            )
             refusal = "none"
         except PersonalAgentProtocolError as refused:
             refusal = refused.code

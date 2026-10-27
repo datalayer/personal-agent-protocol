@@ -11,13 +11,14 @@ import hashlib
 import hmac
 import json
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Protocol, TypeAlias
 from urllib.parse import urlsplit, urlunsplit
 
 import jwt
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from pydantic import SecretStr
@@ -27,7 +28,6 @@ from .reactor import DpopProofRequest
 
 JoseAlgorithm = Literal["ES256", "RS256"]
 SigningKey: TypeAlias = EllipticCurvePrivateKey | RSAPrivateKey | jwt.PyJWK | str | bytes
-KeyResolver = Callable[[DpopProofRequest], Awaitable["DpopKeyMaterial"]]
 
 _ALLOWED_ALGORITHMS = frozenset({"ES256", "RS256"})
 _PRIVATE_JWK_MEMBERS = frozenset({"d", "p", "q", "dp", "dq", "qi", "oth", "k"})
@@ -101,9 +101,7 @@ class JoseSigner:
     async def sign(self, claims: dict[str, object], *, purpose: str) -> SecretStr:
         """Return a compact JWT without exposing the supplied private key."""
 
-        headers: dict[str, str] = {
-            "typ": "poppy-browser+jwt" if purpose == "browser_assertion" else "JWT"
-        }
+        headers: dict[str, str] = {"typ": "JWT"}
         if self.key_id:
             headers["kid"] = self.key_id
         try:
@@ -118,22 +116,69 @@ class JoseSigner:
         return SecretStr(encoded)
 
 
+class SessionKeyCustody(Protocol):
+    """Where Session Keys live: made one per Session, found by thumbprint, then forgotten.
+
+    A host keeps them in its KMS or HSM; `InMemorySessionKeys` is for one process.
+    """
+
+    async def generate(self, *, tenant_id: str, issuer: str) -> DpopKeyMaterial: ...
+
+    async def get(
+        self, *, tenant_id: str, issuer: str, thumbprint: str
+    ) -> DpopKeyMaterial | None: ...
+
+    async def discard(self, *, tenant_id: str, issuer: str, thumbprint: str) -> None: ...
+
+
+class InMemorySessionKeys:
+    """Session Keys in this process's memory: a new P-256 key for each Session (§4.3)."""
+
+    def __init__(self) -> None:
+        self._keys: dict[tuple[str, str, str], DpopKeyMaterial] = {}
+
+    async def generate(self, *, tenant_id: str, issuer: str) -> DpopKeyMaterial:
+        private = ec.generate_private_key(ec.SECP256R1())
+        public = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(private.public_key()))
+        material = DpopKeyMaterial(private_key=private, public_jwk=public)
+        self._keys[(tenant_id, issuer, jwk_thumbprint(material.public_jwk))] = material
+        return material
+
+    async def get(self, *, tenant_id: str, issuer: str, thumbprint: str) -> DpopKeyMaterial | None:
+        return self._keys.get((tenant_id, issuer, thumbprint))
+
+    async def discard(self, *, tenant_id: str, issuer: str, thumbprint: str) -> None:
+        self._keys.pop((tenant_id, issuer, thumbprint), None)
+
+
 class JoseDpopProofProvider:
-    """Create fresh RFC 9449 proofs using per-user/company key material."""
+    """Create fresh RFC 9449 proofs, each with the key of its own Session (§4.3)."""
 
     def __init__(
         self,
-        key_resolver: KeyResolver,
+        keys: SessionKeyCustody,
         *,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         random_bytes: Callable[[int], bytes] = secrets.token_bytes,
     ) -> None:
-        self.key_resolver = key_resolver
+        self.keys = keys
         self.now = now
         self.random_bytes = random_bytes
 
+    async def new_session_key(self, *, tenant_id: str, issuer: str) -> str:
+        material = await self.keys.generate(tenant_id=tenant_id, issuer=issuer)
+        return jwk_thumbprint(material.public_jwk)
+
+    async def discard_session_key(self, *, tenant_id: str, issuer: str, session_key: str) -> None:
+        await self.keys.discard(tenant_id=tenant_id, issuer=issuer, thumbprint=session_key)
+
     async def create(self, request: DpopProofRequest) -> SecretStr:
-        material = await self.key_resolver(request)
+        material = await self.keys.get(
+            tenant_id=request.tenant_id, issuer=request.issuer, thumbprint=request.session_key
+        )
+        if material is None:
+            # A key this provider never made, or one it discarded: never a stand-in (§4.2).
+            raise ProofError("unknown_session_key", "No Session Key with that thumbprint")
         algorithm = _algorithm(material.algorithm)
         issued_at = self.now()
         if issued_at.tzinfo is None:
@@ -178,6 +223,12 @@ class VerifiedDpopProof:
     key_thumbprint: str
     #: The `nonce` the proof carried, for a company that requires ones it issued (§4.3).
     nonce: str | None = None
+
+
+def jwk_thumbprint(jwk_value: dict[str, Any]) -> str:
+    """A public JWK's RFC 7638 SHA-256 thumbprint: a Session Key's name (§4.3)."""
+
+    return _thumbprint(jwk_value)
 
 
 def _thumbprint(jwk_value: dict[str, Any]) -> str:

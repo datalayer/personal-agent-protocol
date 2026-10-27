@@ -54,7 +54,7 @@ async def test_discovers_and_authenticates_company() -> None:
 @pytest.mark.asyncio
 async def test_rejects_issuer_that_does_not_authorize_domain() -> None:
     metadata = fixture("oauth-metadata-valid.json")
-    metadata["poppy_domains"] = ["attacker.example"]
+    metadata["protected_resources"] = ["https://attacker.example"]
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = fixture("discovery-valid.json") if request.url.host == "example.com" else metadata
@@ -196,7 +196,10 @@ async def test_an_alias_publishes_the_companys_discovery_and_its_issuer_lists_it
     assert company.document.organization.domain == "shop.example"
     assert company.oauth_metadata is not None
     assert company.oauth_metadata.issuer == f"https://{config.domain}"
-    assert company.oauth_metadata.poppy_domains == [config.domain, "shop.example"]
+    assert company.oauth_metadata.protected_resources[:2] == [
+        f"https://{config.domain}",
+        "https://shop.example",
+    ]
     # Every endpoint is the issuer's: the alias is the same company, never a second identity.
     assert (
         company.document.auth is not None

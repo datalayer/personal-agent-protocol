@@ -43,9 +43,9 @@ def token() -> SessionToken:
         access_token=SecretStr("session-secret"),
         token_type="DPoP",  # noqa: S106 - OAuth token type, not a password
         expires_in=300,
-        session_id="ses_example",
+        session_key="K" * 43,
         signed_in=True,
-        scope="poppy:read",
+        scope="orders:read",
     )
 
 
@@ -82,7 +82,6 @@ async def test_nonce_retry_uses_a_fresh_proof_and_a_redirect_gets_nothing() -> N
             "https://api.example/orders",
             token=token(),
             tenant_id="tenant",
-            pairwise_user_id="usr_example",
             issuer="https://auth.example",
         )
         with pytest.raises(TransportError) as refused:
@@ -91,7 +90,6 @@ async def test_nonce_retry_uses_a_fresh_proof_and_a_redirect_gets_nothing() -> N
                 "https://api.example/orders",
                 token=token(),
                 tenant_id="tenant",
-                pairwise_user_id="usr_example",
                 issuer="https://auth.example",
             )
         reactor.stop()
@@ -128,7 +126,6 @@ async def test_refuses_cross_origin_redirect_and_protected_headers() -> None:
                 "https://api.example/orders",
                 token=token(),
                 tenant_id="tenant",
-                pairwise_user_id="usr_example",
                 issuer="https://auth.example",
             )
         with pytest.raises(TransportError, match="host-owned"):
@@ -137,7 +134,6 @@ async def test_refuses_cross_origin_redirect_and_protected_headers() -> None:
                 "https://api.example/orders",
                 token=token(),
                 tenant_id="tenant",
-                pairwise_user_id="usr_example",
                 issuer="https://auth.example",
                 headers={"Authorization": "Bearer attacker-controlled"},
             )

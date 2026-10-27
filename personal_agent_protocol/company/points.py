@@ -35,7 +35,7 @@ without touching the service:
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -88,7 +88,7 @@ class SignInContext:
     """Who a Mediated Sign-In attempt comes from: the agent and its Session."""
 
     client_id: str
-    session_id: str
+    session_key: str
 
 
 @runtime_checkable
@@ -130,7 +130,8 @@ class Turn:
     conversation_id: str
     text: str | None
     data: dict[str, Any] | None
-    sender: Literal["agent", "human"]
+    #: Who wrote the message: the personal agent or its user (`author.type`, §7.4, §7.8).
+    author: Literal["agent", "human"]
     account_id: str | None
     scopes: tuple[str, ...]
     client_id: str
@@ -167,8 +168,10 @@ class Reply:
     text: str | None = None
     data: dict[str, Any] | None = None
     operation: ProposedOperation | None = None
-    authorization: tuple[Literal["sign_in_required", "insufficient_scope"], str] | None = None
+    authorization: tuple[Literal["insufficient_scope"], str] | None = None
     user_requested: str | None = None
+    #: The AI persona writing, when the company names one: `id`, `name`, `image` (§7.4).
+    persona: Mapping[str, str] | None = None
 
 
 @runtime_checkable
@@ -331,10 +334,6 @@ class ApiResult:
     operation: ProposedOperation | None = None
 
     @staticmethod
-    def sign_in_required(scope: str) -> ApiResult:
-        return ApiResult(403, {"error": "sign_in_required", "scope": scope})
-
-    @staticmethod
     def insufficient_scope(scope: str) -> ApiResult:
         return ApiResult(403, {"error": "insufficient_scope", "scope": scope})
 
@@ -359,7 +358,7 @@ class ToolResult:
     """An MCP tool's answer: text and structured content, or an operation to propose.
 
     `refusal` is `(status, error, scope)` for a token error the server returns
-    over HTTP with a Bearer challenge (`sign_in_required`, `insufficient_scope`).
+    over HTTP with a Bearer challenge (`insufficient_scope`, naming the scopes needed).
     """
 
     text: str | None = None
@@ -367,10 +366,6 @@ class ToolResult:
     operation: ProposedOperation | None = None
     is_error: bool = False
     refusal: tuple[int, str, str | None] | None = None
-
-    @staticmethod
-    def sign_in_required(scope: str) -> ToolResult:
-        return ToolResult(refusal=(403, "sign_in_required", scope))
 
     @staticmethod
     def insufficient_scope(scope: str) -> ToolResult:

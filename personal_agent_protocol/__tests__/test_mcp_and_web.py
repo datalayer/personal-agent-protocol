@@ -17,8 +17,8 @@ import pytest
 
 from personal_agent_protocol import (
     BrowserSessionClient,
+    DpopProofRequest,
     SessionClient,
-    build_browser_assertion_claims,
 )
 from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
 from personal_agent_protocol.apis import ApiClient
@@ -40,6 +40,7 @@ from personal_agent_protocol.operations import (
     operation_page,
 )
 from personal_agent_protocol.sessions import SessionToken
+from personal_agent_protocol.reactor import DPOP_PROOF_PROVIDERS, first_contribution
 from personal_agent_protocol.transport import DpopHttpClient
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
@@ -86,11 +87,44 @@ def mcp_world(dpop: bool) -> World:
 
 
 async def mcp_token(world: World, token: SessionToken, reference: str, dpop: bool) -> SessionToken:
-    result = await AccountTokenClient(reactor=world.reactor, http_client=world.http).token_for_mcp(
-        reference, context=context(world), session_id=token.session_id, resource=MCP, dpop=dpop
+    """A signed-in token for the MCP server (§4.3).
+
+    A server that supports DPoP: the Account Token request, with `resource`, gives a DPoP
+    token. One that doesn't: the signed-in DPoP Session Token is exchanged for a Bearer
+    one, for that server alone.
+    """
+
+    if dpop:
+        result = await AccountTokenClient(reactor=world.reactor, http_client=world.http).refresh(
+            reference, context=context(world), session_key=token.session_key, resource=MCP
+        )
+        assert result.status == "signed_in" and result.token is not None
+        return result.token
+    return await exchanged(world, token)
+
+
+async def exchanged(world: World, token: SessionToken, resource: str = MCP) -> SessionToken:
+    metadata = world.company.oauth_metadata
+    return await SessionClient(reactor=world.reactor, http_client=world.http).token_for_mcp(
+        client_id=world.atlas.client_id,
+        issuer=metadata.issuer,  # type: ignore[union-attr]
+        token_endpoint=metadata.token_endpoint,  # type: ignore[union-attr]
+        tenant_id=TENANT,
+        session_key=token.session_key,
+        subject_token=token.access_token,
+        resource=resource,
     )
-    assert result.status == "signed_in" and result.token is not None
-    return result.token
+
+
+def session_who(world: World) -> dict[str, str]:
+    metadata = world.company.oauth_metadata
+    return {
+        "client_id": world.atlas.client_id,
+        "pairwise_user_id": PAIRWISE,
+        "issuer": metadata.issuer,  # type: ignore[union-attr]
+        "token_endpoint": metadata.token_endpoint,  # type: ignore[union-attr]
+        "tenant_id": TENANT,
+    }
 
 
 def mcp_client(world: World, token: SessionToken) -> McpClient:
@@ -139,7 +173,11 @@ async def test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation(dpop:
     mcp_session = await mcp_token(world, token, reference, dpop)
     # The scheme the server takes: DPoP with proofs, or a Bearer token for its url (§4.3).
     assert mcp_session.token_type == ("DPoP" if dpop else "Bearer") and mcp_session.signed_in
-    assert world.host.vault.values[reference] != before  # rotated, stored, never returned
+    if dpop:
+        assert world.host.vault.values[reference] != before  # rotated, stored, never returned
+    else:
+        # Token Exchange uses the Session Token: the Account Token is not touched (§4.3).
+        assert world.host.vault.values[reference] == before
 
     mcp = mcp_client(world, mcp_session)
     names = [tool["name"] for tool in await mcp.list_tools()]
@@ -235,64 +273,47 @@ async def test_an_mcp_token_is_refused_everywhere_but_its_mcp_server(dpop: bool)
 
 @pytest.mark.asyncio
 async def test_the_token_type_is_chosen_by_the_mcp_server() -> None:
-    """DPoP server: a request without a proof is refused, never answered with Bearer. Server
-    without DPoP: a Bearer token for its url even when the request has a proof (§4.3)."""
+    """A DPoP server: a DPoP token from the request that renews the Session, with
+    `resource`. A server without DPoP: a Bearer token by Token Exchange alone. Each other
+    way is `invalid_target` (§4.3)."""
 
     for dpop in (True, False):
         world = mcp_world(dpop)
         session = await world.signed_out_session()
-        metadata = world.company.oauth_metadata
         sessions = SessionClient(reactor=world.reactor, http_client=world.http)
-        who = {
-            "client_id": world.atlas.client_id,
-            "pairwise_user_id": PAIRWISE,
-            "issuer": metadata.issuer,  # type: ignore[union-attr]
-            "token_endpoint": metadata.token_endpoint,  # type: ignore[union-attr]
-            "tenant_id": TENANT,
-        }
-        with pytest.raises(PersonalAgentProtocolError) as raised:
-            await sessions.token_for_mcp(
-                **who,
-                session_id=session.session_id,
-                resource="https://manzanita.example/api",
-                dpop=False,
-            )
-        assert raised.value.code == "invalid_dpop_proof"  # DPoP is required everywhere else
+        who = session_who(world)
         with pytest.raises(ValueError):
-            await sessions.token_for_mcp(
-                **who,
-                session_id=session.session_id,
-                resource="http://manzanita.example/mcp",
-                dpop=dpop,
+            await sessions.renew(
+                **who, session_key=session.session_key, resource="http://manzanita.example/mcp"
             )
-        with_proof = await sessions.token_for_mcp(
-            **who, session_id=session.session_id, resource=MCP, dpop=True
-        )
-        assert with_proof.token_type == ("DPoP" if dpop else "Bearer")
+        # Token Exchange is only for an MCP server without DPoP.
+        with pytest.raises(PersonalAgentProtocolError) as elsewhere:
+            await exchanged(world, session, "https://manzanita.example/")
+        assert elsewhere.value.code == "invalid_target"
         if dpop:
-            with pytest.raises(PersonalAgentProtocolError) as no_proof:
-                await sessions.token_for_mcp(
-                    **who, session_id=session.session_id, resource=MCP, dpop=False
-                )
-            assert no_proof.value.code == "invalid_dpop_proof"
-        # A new Session can start for the MCP server alone (§4.3: the request that starts one).
-        started = await sessions.token_for_mcp(**who, resource=MCP, dpop=dpop)
-        assert started.session_id != session.session_id and not started.signed_in
-
-        signed_out = await sessions.token_for_mcp(
-            **who, session_id=session.session_id, resource=MCP, dpop=dpop
-        )
-        assert signed_out.token_type == ("DPoP" if dpop else "Bearer") and not signed_out.signed_in
+            with pytest.raises(PersonalAgentProtocolError) as wrong:
+                await exchanged(world, session)
+            assert wrong.value.code == "invalid_target"
+            signed_out = await sessions.renew(**who, session_key=session.session_key, resource=MCP)
+            assert signed_out.token_type == "DPoP"
+        else:
+            # Its tokens come from Token Exchange, never from another grant.
+            with pytest.raises(PersonalAgentProtocolError) as wrong:
+                await sessions.renew(**who, session_key=session.session_key, resource=MCP)
+            assert wrong.value.code == "invalid_target"
+            signed_out = await exchanged(world, session)
+            assert signed_out.token_type == "Bearer"
+        assert not signed_out.signed_in and signed_out.session_key == session.session_key
         with pytest.raises(McpError) as refused:
             await mcp_client(world, signed_out).call_tool("list_orders")
-        assert (refused.value.code, refused.value.status_code) == ("sign_in_required", 403)
+        assert (refused.value.code, refused.value.status_code) == ("insufficient_scope", 403)
         assert refused.value.details == {"scope": "orders:read"}
         # The Session's own token is untouched by the request for the MCP server.
         with pytest.raises(PersonalAgentProtocolError) as still:
             await ApiClient(transport=world.transport).call(
                 "GET", "https://manzanita.example/api/orders", token=session, **world.who
             )
-        assert still.value.code == "sign_in_required"
+        assert still.value.code == "insufficient_scope"
 
 
 @pytest.mark.asyncio
@@ -300,16 +321,8 @@ async def test_a_dpop_mcp_server_retries_once_with_its_nonce() -> None:
     world = mcp_world(True)
     world.shop.config = dataclasses.replace(world.shop.config, dpop_nonce=True)
     session = await world.signed_out_session()
-    metadata = world.company.oauth_metadata
-    token = await SessionClient(reactor=world.reactor, http_client=world.http).token_for_mcp(
-        client_id=world.atlas.client_id,
-        pairwise_user_id=PAIRWISE,
-        issuer=metadata.issuer,  # type: ignore[union-attr]
-        token_endpoint=metadata.token_endpoint,  # type: ignore[union-attr]
-        tenant_id=TENANT,
-        session_id=session.session_id,
-        resource=MCP,
-        dpop=True,
+    token = await SessionClient(reactor=world.reactor, http_client=world.http).renew(
+        **session_who(world), session_key=session.session_key, resource=MCP
     )
     tools = await mcp_client(world, token).list_tools()
     assert [tool["name"] for tool in tools] == ["list_orders", "exchange_jacket"]
@@ -326,7 +339,7 @@ async def test_signing_out_reaches_the_mcp_server_at_once(dpop: bool) -> None:
     await accounts.revoke(reference, context=context(world))
     with pytest.raises(McpError) as raised:
         await mcp.call_tool("list_orders")
-    assert raised.value.code == "sign_in_required"
+    assert raised.value.code == "insufficient_scope"
 
 
 @pytest.mark.asyncio
@@ -348,15 +361,16 @@ async def test_an_agent_without_operations_gets_a_tool_error_through_mcp() -> No
 # The website (§5, Operations §4.4) -------------------------------------------------------
 
 
-async def join(world: World, browser: ControlledBrowser, session_id: str, return_to: str) -> None:
+async def join(world: World, browser: ControlledBrowser, session_key: str, page: str) -> None:
+    """Join the agent's browser to the Session (§5), then open `page` in it."""
+
     await BrowserSessionClient(reactor=world.reactor).join(
-        client_id=world.atlas.client_id,
-        pairwise_user_id=PAIRWISE,
         browser_session_endpoint=world.company.document.web.browser_session_endpoint,  # type: ignore[union-attr,arg-type]
-        session_id=session_id,
-        return_to=return_to,
-        company_domain="manzanita.example",
+        tenant_id=TENANT,
+        issuer=world.company.oauth_metadata.issuer,  # type: ignore[union-attr]
+        session_key=session_key,
     )
+    await browser.get(page)
 
 
 @pytest.mark.asyncio
@@ -375,13 +389,12 @@ async def test_the_operation_confirmed_on_the_website_is_the_same_operation_once
     page_url = operation_page(operation, world.company.document.organization.domain)
     assert page_url == f"https://manzanita.example/operations/{operation.operation_id}"
 
-    await join(world, browser, token.session_id, page_url)
+    await join(world, browser, token.session_key, page_url)
     page = browser.page
     assert page is not None and page.status_code == 200 and str(page.url) == page_url
     assert operation.summary in page.text and 'data-state="proposed"' in page.text
-    cookie = page.history[0].headers["set-cookie"]
-    assert "Secure" in cookie and "HttpOnly" in cookie and "SameSite=Lax" in cookie
-    assert "Max-Age" not in cookie and "Expires" not in cookie
+    session_cookie = browser.http.cookies.get("__Host-poppy_session")
+    assert session_cookie is not None
     assert page.headers["x-frame-options"] == "DENY"
 
     confirmed = await browser.submit(
@@ -414,7 +427,7 @@ async def test_the_website_follows_the_session_and_refuses_bad_assertions() -> N
     )
     operation = proposed.operation
     assert operation is not None and operation.url is not None
-    await join(world, browser, token.session_id, operation.url)
+    await join(world, browser, token.session_key, operation.url)
     assert browser.page is not None and browser.page.status_code == 200
 
     # Signing out reaches the website on its next request: the account's operation is gone.
@@ -423,45 +436,97 @@ async def test_the_website_follows_the_session_and_refuses_bad_assertions() -> N
     )
     assert (await browser.get(operation.url)).status_code == 404
 
-    # A browser assertion is refused off the company's domain, replayed, or as a Session one.
-    with pytest.raises(ValueError):
-        await join(world, browser, token.session_id, "https://evil.example/")
+
+
+@pytest.mark.asyncio
+async def test_the_join_page_is_one_time_tied_to_its_browser_and_never_framed() -> None:
+    """Step 1 of §5: a form with a one-time code, a `__Host-` cookie that ties the code to
+    this browser, no caching, no framing, no opener."""
+
+    world, _ = web_world()
     endpoint = "https://manzanita.example/poppy/browser-session"
+    browser = httpx.AsyncClient(transport=world.http._transport)  # type: ignore[attr-defined]
+    page = await browser.get(endpoint)
+    assert page.status_code == 200
+    assert page.headers["cache-control"] == "no-store"
+    assert page.headers["content-security-policy"] == "frame-ancestors 'none'"
+    assert page.headers["cross-origin-opener-policy"] == "same-origin"
+    cookie = page.headers["set-cookie"]
+    for part in ("__Host-poppy_join=", "Secure", "HttpOnly", "SameSite=Strict", "Max-Age=60"):
+        assert part in cookie
+    code = re.search(r'name="code" value="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+    assert len(code) >= 22 and 'name="proof"' in page.text
+    await browser.aclose()
+
+
+async def _join_form(world: World) -> tuple[httpx.AsyncClient, str]:
+    browser = httpx.AsyncClient(transport=world.http._transport)  # type: ignore[attr-defined]
+    page = await browser.get("https://manzanita.example/poppy/browser-session")
+    code = re.search(r'name="code" value="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+    return browser, code
+
+
+def _provider(world: World):  # type: ignore[no-untyped-def]
+    return first_contribution(world.reactor, DPOP_PROOF_PROVIDERS, "DPoP proof provider")
+
+
+async def _proof(world: World, session_key: str, code: str) -> str:
+    proof = await _provider(world).create(
+        DpopProofRequest(
+            method="POST",
+            url="https://manzanita.example/poppy/browser-session",
+            tenant_id=TENANT,
+            issuer="https://manzanita.example",
+            session_key=session_key,
+            nonce=code,
+        )
+    )
+    return proof.get_secret_value()
+
+
+@pytest.mark.asyncio
+async def test_a_join_needs_its_own_browser_its_code_once_and_a_live_sessions_key() -> None:
+    """Step 3 of §5 and both attacks of §9.6: a code submitted from another browser, a
+    code used twice, a proof over another code, a key that names no Session."""
+
+    world, _ = web_world()
     session = await world.signed_out_session()
-    claims = build_browser_assertion_claims(
-        client_id=world.atlas.client_id,
-        pairwise_user_id=PAIRWISE,
-        browser_session_endpoint=endpoint,
-        session_id=session.session_id,
-        return_to="https://manzanita.example/",
-        company_domain="manzanita.example",
-        now=world.clock.now(),
+    endpoint = "https://manzanita.example/poppy/browser-session"
+
+    browser, code = await _join_form(world)
+    proof = await _proof(world, session.session_key, code)
+    # Another browser (no join cookie): an attacker's code can't make it join (§9.6).
+    victim = httpx.AsyncClient(transport=world.http._transport)  # type: ignore[attr-defined]
+    stolen = await victim.post(endpoint, data={"code": code, "proof": proof})
+    assert stolen.status_code == 400 and "__Host-poppy_session" not in stolen.headers.get(
+        "set-cookie", ""
     )
-    signer = world.atlas.signer()
-    assertion = (
-        await signer.sign(claims.model_dump(), purpose="browser_assertion")
-    ).get_secret_value()
-    fresh = httpx.AsyncClient(transport=world.http._transport)  # type: ignore[attr-defined]
-    first = await fresh.post(endpoint, data={"assertion": assertion})
-    assert first.status_code == 303 and "set-cookie" in first.headers
-    replayed = await fresh.post(endpoint, data={"assertion": assertion})
-    assert replayed.status_code == 400 and "set-cookie" not in replayed.headers
-    session_assertion = await signer.sign(
-        {
-            "iss": world.atlas.client_id,
-            "sub": PAIRWISE,
-            "aud": endpoint,
-            "session_id": session.session_id,
-            "return_to": "https://manzanita.example/",
-            "iat": int(world.clock.now().timestamp()),
-            "exp": int(world.clock.now().timestamp()) + 60,
-            "jti": "J" * 22,
-        },
-        purpose="session_assertion",
+    # The code was used by that first request, whatever the result: gone.
+    used = await browser.post(endpoint, data={"code": code, "proof": proof})
+    assert used.status_code == 400
+
+    browser, code = await _join_form(world)
+    other = await _proof(world, session.session_key, "bc_" + "x" * 22)
+    assert (await browser.post(endpoint, data={"code": code, "proof": other})).status_code == 400
+
+    browser, code = await _join_form(world)
+    unknown = await _provider(world).new_session_key(
+        tenant_id=TENANT, issuer="https://manzanita.example"
     )
-    typed = await fresh.post(endpoint, data={"assertion": session_assertion.get_secret_value()})
-    assert typed.status_code == 400 and "set-cookie" not in typed.headers
-    await fresh.aclose()
+    stray = await _proof(world, unknown, code)
+    # A key the company doesn't know is an error here, never a new Session.
+    assert (await browser.post(endpoint, data={"code": code, "proof": stray})).status_code == 400
+
+    browser, code = await _join_form(world)
+    joined = await browser.post(
+        endpoint, data={"code": code, "proof": await _proof(world, session.session_key, code)}
+    )
+    assert joined.status_code == 303
+    cookies = joined.headers.get_list("set-cookie")
+    assert any(c.startswith("__Host-poppy_session=") and "SameSite=Strict" in c for c in cookies)
+    assert any(c.startswith("__Host-poppy_join=;") and "Max-Age=0" in c for c in cookies)
+    for client in (browser, victim):
+        await client.aclose()
 
 
 def test_an_operation_page_off_the_company_domain_is_refused() -> None:
@@ -505,7 +570,7 @@ async def test_an_mcp_429_is_rate_limited_with_its_retry_after() -> None:
         access_token="sat_test",  # noqa: S106
         token_type="Bearer",  # noqa: S106
         expires_in=60,
-        session_id="ses_1",
+        session_key="K" * 43,
         signed_in=True,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
@@ -548,24 +613,21 @@ async def test_a_session_started_for_the_mcp_server_gets_its_own_token_too(dpop:
 
     world = mcp_world(dpop)
     await world.signed_out_session()
-    metadata = world.company.oauth_metadata
     sessions = SessionClient(reactor=world.reactor, http_client=world.http)
-    who = {
-        "client_id": world.atlas.client_id,
-        "pairwise_user_id": PAIRWISE,
-        "issuer": metadata.issuer,  # type: ignore[union-attr]
-        "token_endpoint": metadata.token_endpoint,  # type: ignore[union-attr]
-        "tenant_id": TENANT,
-    }
-    for_mcp = await sessions.token_for_mcp(**who, resource=MCP, dpop=dpop)
-    own = await sessions.renew(**who, session_id=for_mcp.session_id)
-    assert own.session_id == for_mcp.session_id and own.token_type == "DPoP"
+    who = session_who(world)
+    if dpop:
+        # The request that starts a Session, for the MCP server alone.
+        for_mcp = await sessions.start(**who, resource=MCP)
+    else:
+        for_mcp = await exchanged(world, await sessions.start(**who))
+    own = await sessions.renew(**who, session_key=for_mcp.session_key)
+    assert own.session_key == for_mcp.session_key and own.token_type == "DPoP"
     with pytest.raises(PersonalAgentProtocolError) as needs_sign_in:
         await ApiClient(transport=world.transport).call(
             "GET", "https://manzanita.example/api/orders", token=own, **world.who
         )
-    assert needs_sign_in.value.code == "sign_in_required"
+    assert needs_sign_in.value.code == "insufficient_scope"
     # The token for the MCP server still works there.
     with pytest.raises(McpError) as signed_out:
         await mcp_client(world, for_mcp).call_tool("list_orders")
-    assert signed_out.value.code == "sign_in_required"
+    assert signed_out.value.code == "insufficient_scope"

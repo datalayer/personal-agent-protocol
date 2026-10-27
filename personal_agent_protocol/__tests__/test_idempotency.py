@@ -37,7 +37,7 @@ FIXTURE = json.loads(
 )
 UUID_V4 = re.compile(FIXTURE["uuid_v4"])
 URL = "https://api.shop.example/orders"
-WHO = {"tenant_id": "tenant", "pairwise_user_id": "usr_1", "issuer": "https://auth.shop.example"}
+WHO = {"tenant_id": "tenant", "issuer": "https://auth.shop.example"}
 
 
 def scripted(answer: httpx.Response) -> tuple[ApiClient, list[httpx.Request]]:
@@ -115,7 +115,7 @@ async def test_the_reference_company_keeps_each_key_per_session_for_its_lifetime
         client = await begin(world, browser, session, ("orders:read", "orders:write"))
         callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
         tokens[name] = (await client.complete(callback)).token
-    assert tokens["first"].session_id != tokens["second"].session_id
+    assert tokens["first"].session_key != tokens["second"].session_key
     api = ApiClient(transport=world.transport)
     answers: dict[str, Any] = {}
     for step in FIXTURE["steps"]:
@@ -184,7 +184,7 @@ async def test_a_bad_key_is_invalid_request_and_a_refusal_is_not_remembered() ->
     key = new_idempotency_key()
     with pytest.raises(ApiError) as raised:
         await api.call("POST", exchanges, token=session, body={}, idempotency_key=key, **world.who)
-    assert raised.value.code == "sign_in_required"
+    assert raised.value.code == "insufficient_scope"
     # Signed in, the same key is a new request: the refusal was not kept.
     client = await begin(world, browser, session, ("orders:read", "orders:write"))
     callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]

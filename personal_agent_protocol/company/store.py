@@ -51,6 +51,7 @@ MESSAGE_ID = "message_id"
 OPERATION = "operation"
 PROPOSAL = "proposal"
 BROWSER_COOKIE = "browser_cookie"
+JOIN_CODE = "join_code"
 #: An assertion, proof, or browser-assertion ID seen once (the default replay cache).
 REPLAY = "replay"
 #: Failed sign-in attempts by one key, and until when it is locked out (§4.7).
@@ -79,6 +80,7 @@ RECORD_KINDS = (
     OPERATION,
     PROPOSAL,
     BROWSER_COOKIE,
+    JOIN_CODE,
     REPLAY,
     SIGN_IN_ATTEMPTS,
     FEEDBACK,
@@ -265,7 +267,7 @@ def _maybe_parse(value: str | None) -> datetime | None:
 class IssuedSession:
     """One token of a Session, as issued; the token is bound to a DPoP key (or Bearer)."""
 
-    session_id: str
+    session_key: str
     client_id: str
     pairwise_user_id: str
     key_thumbprint: str
@@ -275,6 +277,8 @@ class IssuedSession:
     account_token: str | None = None
     token_type: Literal["DPoP", "Bearer"] = DPOP
     resource: str | None = None
+    #: The Agent ID the Session started with, kept for its life (§4.2).
+    agent_id: str | None = None
 
     @property
     def signed_in(self) -> bool:
@@ -282,7 +286,7 @@ class IssuedSession:
 
     def to_json(self) -> JsonObject:
         return {
-            "session_id": self.session_id,
+            "session_key": self.session_key,
             "client_id": self.client_id,
             "pairwise_user_id": self.pairwise_user_id,
             "key_thumbprint": self.key_thumbprint,
@@ -292,12 +296,13 @@ class IssuedSession:
             "account_token": self.account_token,
             "token_type": self.token_type,
             "resource": self.resource,
+            "agent_id": self.agent_id,
         }
 
     @classmethod
     def from_json(cls, value: JsonObject) -> IssuedSession:
         return cls(
-            session_id=value["session_id"],
+            session_key=value["session_key"],
             client_id=value["client_id"],
             pairwise_user_id=value["pairwise_user_id"],
             key_thumbprint=value["key_thumbprint"],
@@ -307,23 +312,27 @@ class IssuedSession:
             account_token=value["account_token"],
             token_type=value["token_type"],
             resource=value["resource"],
+            agent_id=value["agent_id"],
         )
 
 
 @dataclass(frozen=True)
 class StoredSession:
-    """A Session by its ID: each live token's state by digest, and the latest issued.
+    """A Session by its key's thumbprint: each live token's state by digest, the latest.
 
     `account_id` is the account the Session was ever signed in to: kept after
-    it signs out, so it is never signed in to another (§4.4, §4.8).
+    it signs out, so it is never signed in to another (§4.4, §4.8). `ends_at` is
+    when the Session ends; its record is kept a while after, so its key is refused
+    (`invalid_grant`) rather than starting a new Session (§4.2).
     """
 
-    session_id: str
+    session_key: str
     client_id: str
     pairwise_user_id: str
     tokens: dict[str, IssuedSession]
     latest: str
     account_id: str | None = None
+    ends_at: datetime | None = None
 
     @property
     def current(self) -> IssuedSession:
@@ -331,18 +340,19 @@ class StoredSession:
 
     def to_json(self) -> JsonObject:
         return {
-            "session_id": self.session_id,
+            "session_key": self.session_key,
             "client_id": self.client_id,
             "pairwise_user_id": self.pairwise_user_id,
             "tokens": {digest: token.to_json() for digest, token in self.tokens.items()},
             "latest": self.latest,
             "account_id": self.account_id,
+            "ends_at": None if self.ends_at is None else _time(self.ends_at),
         }
 
     @classmethod
     def from_json(cls, value: JsonObject) -> StoredSession:
         return cls(
-            session_id=value["session_id"],
+            session_key=value["session_key"],
             client_id=value["client_id"],
             pairwise_user_id=value["pairwise_user_id"],
             tokens={
@@ -350,6 +360,7 @@ class StoredSession:
             },
             latest=value["latest"],
             account_id=value["account_id"],
+            ends_at=None if value["ends_at"] is None else _parse(value["ends_at"]),
         )
 
 
@@ -472,11 +483,14 @@ class PendingDevice:
     account_id: str | None = None
     granted: tuple[str, ...] = ()
     denied: bool = False
+    #: The Session Key of the first poll: the device code is bound to it (§4.6).
+    session_key: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
             "client_id": self.client_id,
             "scopes": list(self.scopes),
+            "session_key": self.session_key,
             "user_code": self.user_code,
             "expires_at": _time(self.expires_at),
             "interval": self.interval,
@@ -498,6 +512,7 @@ class PendingDevice:
             account_id=value["account_id"],
             granted=tuple(value["granted"]),
             denied=value["denied"],
+            session_key=value["session_key"],
         )
 
 
@@ -524,6 +539,7 @@ class PendingAuthorization:
     scopes: tuple[str, ...]
     state: str
     code_challenge: str
+    dpop_jkt: str
     expires_at: datetime
     client_name: str = ""
     #: The digest of the consent cookie of the browser the company's own page was
@@ -532,6 +548,7 @@ class PendingAuthorization:
 
     def to_json(self) -> JsonObject:
         return {
+            "dpop_jkt": self.dpop_jkt,
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "scopes": list(self.scopes),
@@ -545,6 +562,7 @@ class PendingAuthorization:
     @classmethod
     def from_json(cls, value: JsonObject) -> PendingAuthorization:
         return cls(
+            dpop_jkt=value["dpop_jkt"],
             client_id=value["client_id"],
             redirect_uri=value["redirect_uri"],
             scopes=tuple(value["scopes"]),
@@ -563,12 +581,16 @@ class IssuedCode:
     client_id: str
     redirect_uri: str
     code_challenge: str
+    dpop_jkt: str
+    requested: tuple[str, ...]
     account_id: str
     scopes: tuple[str, ...]
     expires_at: datetime
 
     def to_json(self) -> JsonObject:
         return {
+            "requested": list(self.requested),
+            "dpop_jkt": self.dpop_jkt,
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "code_challenge": self.code_challenge,
@@ -580,6 +602,8 @@ class IssuedCode:
     @classmethod
     def from_json(cls, value: JsonObject) -> IssuedCode:
         return cls(
+            requested=tuple(value["requested"]),
+            dpop_jkt=value["dpop_jkt"],
             client_id=value["client_id"],
             redirect_uri=value["redirect_uri"],
             code_challenge=value["code_challenge"],
@@ -591,7 +615,7 @@ class IssuedCode:
 
 @dataclass(frozen=True)
 class PendingMediated:
-    session_id: str
+    session_key: str
     account_id: str
     scopes: tuple[str, ...]
     code_reference: str
@@ -605,7 +629,7 @@ class PendingMediated:
 
     def to_json(self) -> JsonObject:
         return {
-            "session_id": self.session_id,
+            "session_key": self.session_key,
             "account_id": self.account_id,
             "scopes": list(self.scopes),
             "code_reference": self.code_reference,
@@ -618,7 +642,7 @@ class PendingMediated:
     @classmethod
     def from_json(cls, value: JsonObject) -> PendingMediated:
         return cls(
-            session_id=value["session_id"],
+            session_key=value["session_key"],
             account_id=value["account_id"],
             scopes=tuple(value["scopes"]),
             code_reference=value["code_reference"],
@@ -751,14 +775,28 @@ class OperationProposal:
 class SessionPointer:
     """The Session a token or a browser cookie stands for (by digest)."""
 
-    session_id: str
+    session_key: str
 
     def to_json(self) -> JsonObject:
-        return {"session_id": self.session_id}
+        return {"session_key": self.session_key}
 
     @classmethod
     def from_json(cls, value: JsonObject) -> SessionPointer:
-        return cls(session_id=value["session_id"])
+        return cls(session_key=value["session_key"])
+
+
+@dataclass(frozen=True)
+class JoinCode:
+    """A browser-session join code (§5): the digest of the cookie that ties it to a browser."""
+
+    browser: str
+
+    def to_json(self) -> JsonObject:
+        return {"browser": self.browser}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> JoinCode:
+        return cls(browser=value["browser"])
 
 
 @dataclass(frozen=True)
@@ -887,6 +925,7 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     OPERATION: StoredOperation.from_json,
     PROPOSAL: OperationProposal.from_json,
     BROWSER_COOKIE: SessionPointer.from_json,
+    JOIN_CODE: JoinCode.from_json,
     REPLAY: ReplayMark.from_json,
     SIGN_IN_ATTEMPTS: SignInAttempts.from_json,
     FEEDBACK: StoredFeedback.from_json,

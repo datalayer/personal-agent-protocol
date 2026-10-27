@@ -1774,7 +1774,7 @@ caseFor("lifecycle.browser-joins-session")(async (ctx) => {
   check([401, 403, 404].includes(after.status), "signed out, the website shows it no more");
 });
 
-caseFor("lifecycle.browser-assertion-refused")(async (ctx) => {
+caseFor("lifecycle.browser-join-refused")(async (ctx) => {
   const { endpoint } = await browserOf(ctx);
   const domain = (await ctx.company()).document.organization.domain;
   const user = ctx.newUser();

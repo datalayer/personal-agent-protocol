@@ -35,7 +35,14 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from reactor.ui import (  # type: ignore[import-untyped]
     DISPLAY_META_KEY,
     Display,
@@ -403,7 +410,10 @@ class PapReply(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    sender: Literal["agent", "human"]
+    #: Its agent or one of its people (`author.type`, §7.4, §7.8).
+    author: Literal["agent", "human"]
+    #: The writer's display name, when the company gives one (`author.name`, §7.4).
+    name: str | None = Field(default=None, min_length=1)
     #: The company's words, verbatim.
     text: str = Field(min_length=1)
 
@@ -415,12 +425,13 @@ class PapReply(BaseModel):
         return value
 
 
-@display_type(PAP_REPLIES_TYPE, version=2)
+@display_type(PAP_REPLIES_TYPE, version=3)
 class PapReplies(Display):
     """What a company answered in a conversation, each reply with who wrote it (§7.8).
 
     A company's message is written by its agent or by one of its people
-    (``sender``), whoever answers the conversation now (``responder``) and
+    (``author``, with the writer's ``name`` when the company gives one,
+    version 3), whoever answers the conversation now (``responder``) and
     wherever it stands (``status``: ``working``, ``idle``, ``queued`` while a
     person is found, ``closed``); the page tells them apart, as PAP-7.8-01
     asks of the personal agent's own words. Each reply is the company's text,
@@ -472,14 +483,19 @@ class PapReplies(Display):
             id=f"{conversation_id}-{written[0].id}-replies",
             company=company,
             conversation=conversation_id,
-            replies=[PapReply(sender=message.sender, text=message.text) for message in written],
+            replies=[
+                PapReply(author=message.author.type, name=message.author.name, text=message.text)
+                for message in written
+            ],
             status=status,
             responder=responder,
         )
 
     def text(self) -> str:
         return "\n".join(
-            f"{self.company}, {_WROTE[reply.sender]}: {reply.text}" for reply in self.replies
+            f"{self.company}, {_WROTE[reply.author]}"
+            f"{f' ({reply.name})' if reply.name else ''}: {reply.text}"
+            for reply in self.replies
         )
 
     def tool_meta(self) -> dict[str, Any]:

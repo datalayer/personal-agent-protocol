@@ -60,16 +60,33 @@ def test_rejects_symmetric_and_none_algorithms() -> None:
         JoseSigner(None, algorithm="none")  # type: ignore[arg-type]
 
 
+class FixedKey:
+    """One Session Key, already made: a custody holding exactly it."""
+
+    def __init__(self, material: DpopKeyMaterial) -> None:
+        from personal_agent_protocol import jwk_thumbprint
+
+        self.material = material
+        self.thumbprint = jwk_thumbprint(material.public_jwk)
+
+    async def generate(self, *, tenant_id: str, issuer: str) -> DpopKeyMaterial:
+        return self.material
+
+    async def get(self, *, tenant_id: str, issuer: str, thumbprint: str) -> DpopKeyMaterial | None:
+        return self.material if thumbprint == self.thumbprint else None
+
+    async def discard(self, *, tenant_id: str, issuer: str, thumbprint: str) -> None:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_creates_and_verifies_bound_dpop_proof_once() -> None:
     private_key = ec.generate_private_key(ec.SECP256R1())
     public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
 
-    async def resolve(_: DpopProofRequest) -> DpopKeyMaterial:
-        return DpopKeyMaterial(private_key, public_jwk)
-
+    keys = FixedKey(DpopKeyMaterial(private_key, public_jwk))
     provider = JoseDpopProofProvider(
-        resolve,
+        keys,
         now=lambda: NOW,
         random_bytes=lambda length: bytes(range(length)),
     )
@@ -79,8 +96,8 @@ async def test_creates_and_verifies_bound_dpop_proof_once() -> None:
             method="post",
             url="https://api.example/orders?tracking=secret#fragment",
             tenant_id="tenant-one",
-            subject="usr_one",
             issuer="https://auth.example",
+            session_key=keys.thumbprint,
             access_token=access_token,
             nonce="company-nonce",
         )
@@ -117,16 +134,14 @@ async def test_rejects_dpop_request_or_token_mismatch() -> None:
     private_key = ec.generate_private_key(ec.SECP256R1())
     public_jwk = jwt.algorithms.ECAlgorithm.to_jwk(private_key.public_key(), as_dict=True)
 
-    async def resolve(_: DpopProofRequest) -> DpopKeyMaterial:
-        return DpopKeyMaterial(private_key, public_jwk)
-
-    proof = await JoseDpopProofProvider(resolve, now=lambda: NOW).create(
+    keys = FixedKey(DpopKeyMaterial(private_key, public_jwk))
+    proof = await JoseDpopProofProvider(keys, now=lambda: NOW).create(
         DpopProofRequest(
             method="GET",
             url="https://api.example/orders",
             tenant_id="tenant-one",
-            subject="usr_one",
             issuer="https://auth.example",
+            session_key=keys.thumbprint,
             access_token=SecretStr("right-token"),
         )
     )
@@ -160,30 +175,34 @@ def test_rejects_private_dpop_jwk_in_protected_header() -> None:
 
 
 @pytest.mark.asyncio
-async def test_each_user_id_at_each_issuer_has_its_own_dpop_key() -> None:
-    """A different key pair for each User ID (§4.3), keyed by the full issuer (Guides)."""
+async def test_each_session_has_a_key_of_its_own_until_it_is_discarded() -> None:
+    """A new key pair for each Session, named by its thumbprint (§4.3); a discarded key is
+    never used again (§4.2)."""
 
-    from personal_agent_protocol.demo.kit import DpopKeys
+    from personal_agent_protocol import InMemorySessionKeys, jwk_thumbprint
     from personal_agent_protocol.reactor import DpopProofRequest
 
-    keys = DpopKeys()
-
-    async def key(subject: str, issuer: str) -> object:
-        material = await keys(
-            DpopProofRequest(
-                method="POST",
-                url="https://auth.provider.example/oauth/token",
-                tenant_id="tenant",
-                subject=subject,
-                issuer=issuer,
-            )
-        )
-        return material.public_jwk["x"]
-
-    shop_a = "https://auth.provider.example/shop-a"
-    shop_b = "https://auth.provider.example/shop-b"
-    assert await key("usr_1", shop_a) == await key("usr_1", shop_a)
-    assert (
-        len({await key("usr_1", shop_a), await key("usr_2", shop_a), await key("usr_1", shop_b)})
-        == 3
+    keys = InMemorySessionKeys()
+    provider = JoseDpopProofProvider(keys, now=lambda: NOW)
+    shop = "https://auth.provider.example/shop-a"
+    first = await provider.new_session_key(tenant_id="tenant", issuer=shop)
+    second = await provider.new_session_key(tenant_id="tenant", issuer=shop)
+    assert first != second and len(first) == 43
+    material = await keys.get(tenant_id="tenant", issuer=shop, thumbprint=first)
+    assert material is not None and jwk_thumbprint(material.public_jwk) == first
+    request = DpopProofRequest(
+        method="POST",
+        url="https://auth.provider.example/oauth/token",
+        tenant_id="tenant",
+        issuer=shop,
+        session_key=first,
     )
+    header = jwt.get_unverified_header((await provider.create(request)).get_secret_value())
+    assert jwk_thumbprint(header["jwk"]) == first
+    # Another issuer, or another tenant, is another key's name space.
+    assert (
+        await keys.get(tenant_id="tenant", issuer="https://other.example", thumbprint=first) is None
+    )
+    await provider.discard_session_key(tenant_id="tenant", issuer=shop, session_key=first)
+    with pytest.raises(ProofError, match="Session Key"):
+        await provider.create(request)

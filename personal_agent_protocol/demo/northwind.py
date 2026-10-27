@@ -43,7 +43,20 @@ CONFIG = CompanyConfig(
     domain=DOMAIN,
     scopes=("accounts:read", "payments:write"),
     write_scopes=("payments:write",),
-    custom_scopes={"accounts:read": "See balances", "payments:write": "Make payments"},
+    scope_descriptions={
+        "accounts:read": "See your accounts, balances and transactions",
+        "payments:write": "Make payments from your accounts",
+    },
+    scope_hints={"accounts:read": ("none", True), "payments:write": ("irreversible", True)},
+    excluded_tasks=(
+        {
+            "task": "Open a new account",
+            "alternative": {
+                "instructions": "Opening an account needs an identity check at a branch.",
+                "references": [{"type": "web", "url": "https://northwind.example/branches"}],
+            },
+        },
+    ),
 )
 
 _PAY = re.compile(
@@ -70,7 +83,7 @@ class NorthwindAgent:
 
     async def respond(self, turn: Turn) -> Sequence[Reply]:
         if turn.account_id is None:
-            return [Reply(authorization=("sign_in_required", "accounts:read payments:write"))]
+            return [Reply(authorization=("insufficient_scope", "accounts:read payments:write"))]
         match = _PAY.match((turn.text or "").strip())
         if match is None:
             if "accounts:read" not in turn.scopes:

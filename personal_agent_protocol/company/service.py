@@ -16,7 +16,7 @@ What it implements of draft 0.2 and Operations v1:
   (`/.well-known/oauth-authorization-server`), one issuer on the company's
   own domain.
 - Sessions (§4.2): the JWT-bearer grant with a verified client assertion and
-  Session assertion, DPoP-bound tokens, renewal by `session_id`.
+  Session assertion, DPoP-bound tokens, renewal by `session_key`.
 - Device Sign-In (§4.6) with `authorization_pending` and `slow_down`, and the
   company's own approval page as `approve_device` (the user's action).
 - Mediated Sign-In (§4.7) with a one-time code, attempt limits, and uniform
@@ -73,7 +73,6 @@ from pydantic import SecretStr, ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from ..apis import IDEMPOTENCY_KEY, WRITE_METHODS
-from ..browser import verify_browser_assertion
 from ..crypto import verify_dpop_proof
 from ..errors import (
     PersonalAgentProtocolError,
@@ -82,7 +81,19 @@ from ..errors import (
     SessionError,
 )
 from ..json import loads_strict
-from ..models import ConversationEvent, Message, Operation, OperationConfirmation, OperationResult
+from ..models import (
+    AUTHORIZATION_CODE_GRANT,
+    DEVICE_CODE_GRANT,
+    REFRESH_TOKEN_GRANT,
+    TOKEN_EXCHANGE_GRANT,
+    Author,
+    ConversationEvent,
+    Message,
+    Operation,
+    OperationConfirmation,
+    OperationResult,
+    redirect_uri_matches,
+)
 from ..operations import OPERATIONS_VERSION
 from ..profile import PROTOCOL_PROFILE
 from ..reactor import (
@@ -93,7 +104,7 @@ from ..reactor import (
     first_contribution,
     optional_contribution,
 )
-from ..sessions import JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION, _opaque_id
+from ..sessions import ACCESS_TOKEN_TYPE, JWT_BEARER_GRANT, JWT_CLIENT_ASSERTION, _opaque_id
 from ..telemetry import emit, telemetry_sink
 from .points import (
     CLIENT_POLICIES,
@@ -138,6 +149,7 @@ from .store import (
     DPOP_NONCE,
     FEEDBACK,
     IDEMPOTENCY,
+    JOIN_CODE,
     MEDIATED,
     MESSAGE_ID,
     OPERATION,
@@ -154,6 +166,7 @@ from .store import (
     IssuedCode,
     IssuedNonce,
     IssuedSession,
+    JoinCode,
     JsonObject,
     KnownClient,
     MessageReceipt,
@@ -172,7 +185,6 @@ from .store import (
 )
 from .verify import verify_assertion
 
-DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - OAuth grant type
 _PAGE = 50
 #: How often a compare-and-set is retried against concurrent writers before giving up.
@@ -195,6 +207,10 @@ class _Record(Protocol):
 _R = TypeVar("_R", bound=_Record)
 
 
+_OPAQUE_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+_THUMBPRINT = re.compile(r"^[A-Za-z0-9_-]{43}$")
+
+
 def _key_id(compact: str) -> str | None:
     """The `kid` a compact JWT's header names, if any (never trusted beyond key lookup)."""
 
@@ -210,6 +226,10 @@ CONSENT_COOKIE = "__Host-poppy_consent"
 #: The website's cookie, standing for the agent's Session in its own browser (§5): `__Host-`
 #: (Secure, Path=/, no Domain), so no other host or path can set or shadow it.
 WEB_COOKIE = "__Host-poppy_session"
+#: Ties a join code to the browser that loaded the join page (§5).
+JOIN_COOKIE = "__Host-poppy_join"
+#: A join code lives at most this long (§5: no more than 60 seconds).
+_JOIN_LIFETIME = timedelta(seconds=60)
 
 
 def _bound(secret: str, purpose: str) -> str:
@@ -289,7 +309,18 @@ class CompanyConfig:
     #: How long the first lockout lasts; each failure past the limit doubles it (at most a
     #: day), and the count is forgotten once a key has failed nothing for this long.
     sign_in_lockout: timedelta = timedelta(minutes=15)
-    custom_scopes: Mapping[str, str] = field(default_factory=dict)
+    #: What each scope allows, in words a user and a model understand, published as
+    #: `auth.scopes` (§3.1, §4.4): every scope in `scopes` needs one.
+    scope_descriptions: Mapping[str, str] = field(default_factory=dict)
+    #: `auth.scope_hints` (§4.4): per scope, its most consequential operation's
+    #: `changes` (none, reversible, irreversible) and whether it touches personal data.
+    scope_hints: Mapping[str, tuple[str, bool]] = field(default_factory=dict)
+    #: The tasks the company chose not to offer through the protocol, published at
+    #: `/poppy/excluded-tasks.json` (§8.1): each a `task` and an optional `alternative`.
+    excluded_tasks: tuple[Mapping[str, Any], ...] = ()
+    #: Tasks a feedback report may name that can be done after all: the alternative
+    #: (§8.2) the company answers with, HTTP 200, keyed by task, compared ignoring case.
+    feedback_answers: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     web: bool = False
     #: A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it.
     device_page: str | None = None
@@ -297,7 +328,7 @@ class CompanyConfig:
     consent_page: str | None = None
     #: Other domains that are this company (§3): each publishes its discovery document,
     #: naming itself as the organization's domain, and the issuer's metadata lists it in
-    #: `poppy_domains`. Everything else stays on `domain`, the issuer's: an alias is never
+    #: `protected_resources`. Everything else stays on `domain`, the issuer's: an alias is never
     #: a second identity, and answers nothing but its discovery document.
     aliases: tuple[str, ...] = ()
     #: The MCP server supports DPoP (§4.3; new MCP servers SHOULD): its protected resource
@@ -310,6 +341,8 @@ class CompanyConfig:
     dpop_nonce: bool = False
     #: How long an issued DPoP nonce is accepted.
     dpop_nonce_lifetime: timedelta = timedelta(minutes=5)
+    #: How long an ended Session's key is remembered and refused (§4.2: a Company SHOULD).
+    ended_session_memory: timedelta = timedelta(days=30)
     #: How long an API write's `Idempotency-Key` is remembered in its Session, with the
     #: original response a repeated key gets again (guides, *Retries*: a set time, a day).
     idempotency_lifetime: timedelta = timedelta(days=1)
@@ -328,11 +361,21 @@ class CompanyConfig:
         if self.device_page is not None:
             host = (urlsplit(self.device_page).hostname or "").lower()
             if not any(host == d or host.endswith(f".{d}") for d in (self.domain, *self.aliases)):
-                # A personal agent shows the link only on the issuer's host or one of its
-                # poppy_domains, or a subdomain of either (§4.6).
+                # A personal agent shows the link only on the issuer's host or the host of
+                # one of its protected_resources, or a subdomain of either (§4.6).
                 raise ValueError("device_page must be on the company's domain or a subdomain")
         if any(scope not in self.scopes for scope in self.write_scopes):
             raise ValueError("write_scopes must be among scopes")
+        if any(scope.startswith("poppy:") for scope in self.scopes):
+            raise ValueError("scope names starting with poppy: are reserved (§4.4)")
+        if set(self.scope_descriptions) != set(self.scopes) or not all(
+            self.scope_descriptions.values()
+        ):
+            # Every scope in scopes_supported is described (§4.4).
+            raise ValueError("scope_descriptions must describe every scope, and only those")
+        for name, (changes, _personal) in self.scope_hints.items():
+            if name not in self.scopes or changes not in ("none", "reversible", "irreversible"):
+                raise ValueError("scope_hints name a scope and its changes")
         if self.max_sign_in_failures < 1 or self.sign_in_lockout <= timedelta(0):
             raise ValueError("sign-in attempts need a positive limit and lockout")
         if self.operations and not self.write_scopes:
@@ -395,6 +438,10 @@ class CompanyConfig:
     @property
     def browser_session_endpoint(self) -> str:
         return f"{self.base}/poppy/browser-session"
+
+    @property
+    def excluded_tasks_url(self) -> str:
+        return f"{self.base}/poppy/excluded-tasks.json"
 
     @property
     def feedback_endpoint(self) -> str:
@@ -466,6 +513,16 @@ class _RefusedError(Exception):
         self.extra = extra
 
 
+def _insufficient_scope(scopes: Sequence[str]) -> _RefusedError:
+    """`insufficient_scope` (RFC 6750), naming the scopes the request needs (§4.4, §6).
+
+    What a signed-out token gets for anything that needs the account: it has no
+    scopes, so the error fits, and the agent signs in or uses an Account Token.
+    """
+
+    return _RefusedError(403, "insufficient_scope", scope=" ".join(scopes))
+
+
 class _RateLimitedError(_RefusedError):
     """The host's rate limit refused the request: `429` and when to ask again."""
 
@@ -477,7 +534,6 @@ class _RateLimitedError(_RefusedError):
 _CHALLENGED = frozenset(
     {
         "invalid_token",
-        "sign_in_required",
         "insufficient_scope",
         "invalid_dpop_proof",
         "use_dpop_nonce",
@@ -727,10 +783,10 @@ class CompanyService:
             },
         )
 
-    def _report_session(self, session: IssuedSession, *, renewed: bool, bearer: bool) -> None:
-        """A Session started or renewed; a Bearer token for the MCP server moves it there."""
+    def _report_session(self, session: IssuedSession, *, renewed: bool, for_mcp: bool) -> None:
+        """A Session started or renewed; a token for the MCP server moves it there."""
 
-        if bearer:
+        if for_mcp:
             self._report(
                 "pap.company.interface.switch",
                 "ok",
@@ -785,8 +841,12 @@ class CompanyService:
                 return CompanyResponse(200, self.protected_resource_metadata())
             if path == "/mcp" and self._mcp() is not None:
                 return await self._mcp_route(request)
+            if method == "GET" and path == "/poppy/browser-session" and self.config.web:
+                return await self._join_page()
             if method == "POST" and path == "/poppy/browser-session" and self.config.web:
                 return await self._browser_session(request)
+            if method == "GET" and path == "/poppy/excluded-tasks.json" and self.config.excluded_tasks:
+                return CompanyResponse(200, {"tasks": [dict(task) for task in self.config.excluded_tasks]})
             if path.startswith("/operations/") and self.config.web and self.config.operations:
                 return await self._operation_page(request, method, path.split("/")[2])
             if method == "POST" and path == "/oauth/token":
@@ -828,7 +888,7 @@ class CompanyService:
 
     # Discovery ---------------------------------------------------------------------
 
-    def discovery_document(  # noqa: C901 - one branch per optional member
+    def discovery_document(
         self, domain: str | None = None
     ) -> dict[str, Any]:
         """The discovery document published at `domain`: the company's own, or one of its
@@ -838,11 +898,8 @@ class CompanyService:
         """
         config = self.config
         organization = config.organization_domain(domain)
+        # Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
         auth: dict[str, Any] = {"issuer": config.base}
-        if config.direct:
-            auth["direct"] = {"scopes": list(config.scopes)}
-        if config.device:
-            auth["device"] = {"scopes": list(config.scopes)}
         if config.mediated_fields:
             auth["mediated"] = {
                 "endpoint": config.mediated_endpoint,
@@ -852,8 +909,12 @@ class CompanyService:
                 ],
                 "scopes": list(config.scopes),
             }
-        if config.custom_scopes:
-            auth["custom_scopes"] = dict(config.custom_scopes)
+        auth["scopes"] = {scope: config.scope_descriptions[scope] for scope in config.scopes}
+        if config.scope_hints:
+            auth["scope_hints"] = {
+                scope: {"changes": changes, "personal_data": personal}
+                for scope, (changes, personal) in config.scope_hints.items()
+            }
         document: dict[str, Any] = {
             "protocol_version": PROTOCOL_PROFILE,
             "organization": {"name": config.name, "domain": organization},
@@ -875,6 +936,8 @@ class CompanyService:
             document["web"] = {"browser_session_endpoint": config.browser_session_endpoint}
         if config.feedback:
             document["feedback"] = {"endpoint": config.feedback_endpoint}
+        if config.excluded_tasks:
+            document["excluded_tasks"] = {"url": config.excluded_tasks_url}
         if config.operations:
             document["extensions"] = {
                 "operations": {
@@ -900,18 +963,32 @@ class CompanyService:
 
     def oauth_metadata(self) -> dict[str, Any]:
         config = self.config
-        metadata = {
+        grants = [JWT_BEARER_GRANT, REFRESH_TOKEN_GRANT]
+        metadata: dict[str, Any] = {
             "issuer": config.base,
             "token_endpoint": config.token_endpoint,
             "revocation_endpoint": config.revocation_endpoint,
-            "poppy_domains": [config.domain, *config.aliases],
+            "grant_types_supported": grants,
+            "scopes_supported": list(config.scopes),
+            # `https://{domain}` for each domain whose poppy.json names the issuer, then
+            # the MCP server: exact strings (§3.2, RFC 9728 §4).
+            "protected_resources": [
+                f"https://{domain}" for domain in (config.domain, *config.aliases)
+            ],
             "dpop_signing_alg_values_supported": list(DPOP_ALGORITHMS),
         }
-        if config.device:
-            metadata["device_authorization_endpoint"] = config.device_endpoint
+        if self._mcp() is not None:
+            metadata["protected_resources"].append(config.mcp_url)
+            if not config.mcp_dpop:
+                # Bearer tokens for it come from Token Exchange alone (§4.3).
+                grants.append(TOKEN_EXCHANGE_GRANT)
         if config.direct:
+            grants.append(AUTHORIZATION_CODE_GRANT)
             metadata["authorization_endpoint"] = config.authorization_endpoint
             metadata["code_challenge_methods_supported"] = ["S256"]
+        if config.device:
+            grants.append(DEVICE_CODE_GRANT)
+            metadata["device_authorization_endpoint"] = config.device_endpoint
         return metadata
 
     # OAuth -------------------------------------------------------------------------
@@ -1020,31 +1097,37 @@ class CompanyService:
         return nonce is not None and await self.store.get(DPOP_NONCE, nonce) is not None
 
     async def _token(self, request: CompanyRequest) -> CompanyResponse:
+        """The token endpoint: every grant carries a proof, whose key names the Session (§4.3).
+
+        The JWT bearer grant starts a Session with a new key or renews the one a known
+        key names; the refresh grant signs in the key's Session, or starts one signed in
+        with a new key; the code and device grants sign in the Session their code is
+        bound to; Token Exchange turns a DPoP Session Token into a Bearer one for an MCP
+        server without DPoP, and nothing else issues a Bearer token.
+        """
+
         form = dict(parse_qsl(request.body.decode()))
         grant = form.get("grant_type")
         client_id = await self._client(form)
-        if self._bearer_mcp_request(form):
-            # An MCP server without DPoP: a Bearer token for its url alone, even when the
-            # request has a proof, and never a DPoP one (§4.3).
-            if grant not in {JWT_BEARER_GRANT, REFRESH_TOKEN_GRANT}:
-                raise _RefusedError(400, "invalid_request")
-            if grant == JWT_BEARER_GRANT:
-                return await self._session_grant(form, client_id, "", bearer=True)
-            return await self._refresh_grant(form, client_id, "", bearer=True)
-        # Everywhere else, a DPoP MCP server included, a proof is required (§4.3).
         thumbprint = await self._dpop(request)
+        if grant == TOKEN_EXCHANGE_GRANT and self._bearer_mcp_resource(form):
+            return await self._exchange_grant(form, client_id, thumbprint)
+        if grant == TOKEN_EXCHANGE_GRANT or self._bearer_mcp_resource(form):
+            # Token Exchange only for an MCP server without DPoP, and such a server's
+            # tokens only by Token Exchange (§4.3).
+            raise _RefusedError(400, "invalid_target")
         if grant == JWT_BEARER_GRANT:
             return await self._session_grant(form, client_id, thumbprint)
         if grant == REFRESH_TOKEN_GRANT:
             return await self._refresh_grant(form, client_id, thumbprint)
-        if grant == "authorization_code" and self.config.direct:
+        if grant == AUTHORIZATION_CODE_GRANT and self.config.direct:
             return await self._code_grant(form, client_id, thumbprint)
         if grant == DEVICE_CODE_GRANT and self.config.device:
             return await self._device_grant(form, client_id, thumbprint)
         raise _RefusedError(400, "unsupported_grant_type")
 
-    def _bearer_mcp_request(self, form: Mapping[str, str]) -> bool:
-        """A token request for an MCP server that doesn't support DPoP (`resource` = its url)."""
+    def _bearer_mcp_resource(self, form: Mapping[str, str]) -> bool:
+        """Whether `resource` names the MCP server that doesn't support DPoP (§4.3)."""
 
         return (
             self._mcp() is not None
@@ -1052,11 +1135,19 @@ class CompanyService:
             and form.get("resource") == self.config.mcp_url
         )
 
-    @staticmethod
-    def _resource(form: Mapping[str, str]) -> str | None:
-        """The `resource` a token is issued for (RFC 8707), as the request named it."""
+    def _resource(self, form: Mapping[str, str]) -> str | None:
+        """The `resource` a token is issued for (RFC 8707): one this company serves."""
 
-        return form.get("resource")
+        resource = form.get("resource")
+        if resource is not None and resource not in {self.config.mcp_url, self.config.base}:
+            raise _RefusedError(400, "invalid_target")
+        return resource
+
+    def _account_scopes(self) -> tuple[str, ...]:
+        """The scopes that read the account: the company's scopes that change nothing."""
+
+        read = tuple(scope for scope in self.config.scopes if scope not in self.config.write_scopes)
+        return read or self.config.scopes
 
     def _kind(self, session: IssuedSession) -> str:
         """Which of a Session's tokens this is: its own, or its token for the MCP server.
@@ -1069,8 +1160,10 @@ class CompanyService:
         return "own"
 
     async def _session_grant(
-        self, form: Mapping[str, str], client_id: str, thumbprint: str, *, bearer: bool = False
+        self, form: Mapping[str, str], client_id: str, thumbprint: str
     ) -> CompanyResponse:
+        """Start a Session with a new key, or renew the signed-out one a known key names (§4.2)."""
+
         resolver = cast(
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
         )
@@ -1085,44 +1178,52 @@ class CompanyService:
             error="invalid_grant",
         )
         pairwise = str(claims["sub"])
-        session_id = form.get("session_id")
+        agent_id = claims.get("agent_id")
+        if agent_id is not None and (
+            not isinstance(agent_id, str) or not _OPAQUE_ID.fullmatch(agent_id)
+        ):
+            raise _RefusedError(400, "invalid_grant")
         resource = self._resource(form)
-        token_type: Literal["DPoP", "Bearer"] = "Bearer" if bearer else "DPoP"
-        if session_id is None:
+        known = await self._session_by_key(thumbprint)
+        if known is None:
             session = IssuedSession(
-                session_id=self._id("ses"),
+                session_key=thumbprint,
                 client_id=client_id,
                 pairwise_user_id=pairwise,
                 key_thumbprint=thumbprint,
                 expires_at=self._now() + self.config.session_lifetime,
-                token_type=token_type,
                 resource=resource,
+                agent_id=agent_id,
             )
             response = await self._issue(session)
-            self._report_session(session, renewed=False, bearer=resource is not None)
+            self._report_session(session, renewed=False, for_mcp=resource is not None)
             return response
-        known = await self._session_by_id(session_id)
-        if known is None or (known.client_id, known.pairwise_user_id) != (client_id, pairwise):
-            raise _RefusedError(400, "invalid_session")
+        if (known.client_id, known.pairwise_user_id) != (client_id, pairwise):
+            # The key names another agent's or user's Session (§4.2).
+            raise _RefusedError(400, "invalid_grant")
+        if known.agent_id != agent_id:
+            # A Session keeps the Agent ID it started with, or none (§4.2).
+            raise _RefusedError(400, "invalid_grant")
         # Renewal with the assertion gives a signed-out token; a signed-in Session is
         # renewed with its Account Token instead (§4.2, §4.8).
         session = replace(
             known,
-            key_thumbprint=thumbprint,
             expires_at=self._now() + self.config.session_lifetime,
-            token_type=token_type,
+            token_type="DPoP",
             resource=resource,
             account_id=None,
             scopes=(),
             account_token=None,
         )
         response = await self._issue(session, replacing={self._kind(session)})
-        self._report_session(session, renewed=True, bearer=resource is not None)
+        self._report_session(session, renewed=True, for_mcp=resource is not None)
         return response
 
     async def _refresh_grant(
-        self, form: Mapping[str, str], client_id: str, thumbprint: str, *, bearer: bool = False
+        self, form: Mapping[str, str], client_id: str, thumbprint: str
     ) -> CompanyResponse:
+        """Sign in the key's Session with an Account Token, or start one signed in (§4.8)."""
+
         resource = self._resource(form)
         presented = _digest(form.get("refresh_token", ""))
         entry = await self.store.get(ACCOUNT_TOKEN, presented)
@@ -1138,13 +1239,23 @@ class CompanyService:
             raise _RefusedError(400, "invalid_grant")
         if await self._sign_in_ended(grant):
             raise _RefusedError(400, "invalid_grant")
-        session = await self._session_by_id(form.get("session_id", ""))
-        if session is None or (session.client_id, session.pairwise_user_id) != (
+        session = await self._session_by_key(thumbprint)
+        if session is None:
+            # A new key: a new Session, already signed in, with no Agent ID (§4.2, §4.8).
+            session = IssuedSession(
+                session_key=thumbprint,
+                client_id=client_id,
+                pairwise_user_id=grant.pairwise_user_id,
+                key_thumbprint=thumbprint,
+                expires_at=now + self.config.session_lifetime,
+            )
+        elif (session.client_id, session.pairwise_user_id) != (
             client_id,
             grant.pairwise_user_id,
         ):
-            raise _RefusedError(400, "invalid_session")
-        await self._check_account(session.session_id, grant.account_id)
+            raise _RefusedError(400, "invalid_grant")
+        else:
+            await self._check_account(session.session_key, grant.account_id)
         requested = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
         if requested and any(scope not in grant.scopes for scope in requested):
             raise _RefusedError(400, "invalid_scope")
@@ -1169,30 +1280,72 @@ class CompanyService:
             replace(grant, revoked=False).to_json(),
             expires_at=grant.expires_at,
         )
-        if not await self._join_family(grant.family, _digest(rotated), session.session_id):
+        if not await self._join_family(grant.family, _digest(rotated), session.session_key):
             # The sign-in was revoked meanwhile: its new token is too.
             await self._revoke_grants((_digest(rotated),))
             raise _RefusedError(400, "invalid_grant")
-        token_type: Literal["DPoP", "Bearer"] = "Bearer" if bearer else "DPoP"
         signed_in = replace(
             session,
-            key_thumbprint=thumbprint,
             account_id=grant.account_id,
             scopes=requested or grant.scopes,
             account_token=_digest(rotated),
             expires_at=now + self.config.session_lifetime,
             resource=resource,
-            token_type=token_type,
+            token_type="DPoP",
         )
         response = await self._issue(
-            signed_in, refresh_token=rotated, replacing={self._kind(signed_in)}
+            signed_in,
+            refresh_token=rotated,
+            replacing={self._kind(signed_in)},
+            # A refresh naming no scope gets them in the response: the agent can't know.
+            requested=requested,
+            account_token_expires_at=grant.expires_at,
         )
         family = await self._read(ACCOUNT_FAMILY, grant.family, AccountFamily.from_json)
         if family is None or family.revoked:
             # Revoked while this token was issued: the Session continues signed out (§4.9).
-            await self._sign_out_session(session.session_id, {_digest(rotated)})
+            await self._sign_out_session(session.session_key, {_digest(rotated)})
             raise _RefusedError(400, "invalid_grant")
-        self._report_session(signed_in, renewed=True, bearer=resource is not None)
+        self._report_session(signed_in, renewed=True, for_mcp=resource is not None)
+        return response
+
+    async def _exchange_grant(
+        self, form: Mapping[str, str], client_id: str, thumbprint: str
+    ) -> CompanyResponse:
+        """A Bearer Session Token for the MCP server without DPoP, by Token Exchange (§4.3).
+
+        The subject token is a current DPoP Session Token of the same agent, bound to
+        the proof's key; the answer belongs to the same Session, with its scopes or the
+        fewer `scope` asks for, and works only at that server.
+        """
+
+        if form.get("subject_token_type") != ACCESS_TOKEN_TYPE:
+            raise _RefusedError(400, "invalid_request")
+        subject = await self._token_session(form.get("subject_token", ""))
+        if (
+            subject is None
+            or subject.token_type != "DPoP"
+            or subject.client_id != client_id
+            or subject.key_thumbprint != thumbprint
+            or subject.expires_at <= self._now()
+            or self._kind(subject) != "own"
+        ):
+            raise _RefusedError(400, "invalid_grant")
+        requested = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
+        if any(scope not in subject.scopes for scope in requested):
+            raise _RefusedError(400, "invalid_scope")
+        bearer = replace(
+            subject,
+            token_type="Bearer",
+            key_thumbprint="",
+            resource=self.config.mcp_url,
+            scopes=requested or subject.scopes,
+            expires_at=min(subject.expires_at, self._now() + self.config.session_lifetime),
+        )
+        response = await self._issue(
+            bearer, replacing={self._kind(bearer)}, requested=requested, exchanged=True
+        )
+        self._report_session(bearer, renewed=False, for_mcp=True)
         return response
 
     async def _device(self, request: CompanyRequest) -> CompanyResponse:
@@ -1296,6 +1449,11 @@ class CompanyService:
             now = self._now()
             if entry is None or pending is None or pending.client_id != client_id:
                 raise _RefusedError(400, "invalid_grant")
+            if pending.session_key not in (None, thumbprint):
+                # Bound to the key of its first poll: any other key is refused (§4.6).
+                raise _RefusedError(400, "invalid_grant")
+            if pending.session_key is None:
+                pending = replace(pending, session_key=thumbprint)
             if now >= pending.expires_at:
                 await self._forget_device(key, pending)
                 raise _RefusedError(400, "expired_token")
@@ -1318,16 +1476,19 @@ class CompanyService:
                 raise _RefusedError(400, refusal)
         else:
             raise _RefusedError(503, "temporarily_unavailable")
-        session = await self._session_by_id(form.get("session_id", ""))
+        # Approved: the Session the bound key names is signed in (§4.6).
+        session = await self._session_by_key(thumbprint)
         if session is None or session.client_id != client_id:
-            raise _RefusedError(400, "invalid_session")
+            raise _RefusedError(400, "invalid_grant")
         # Consumed once: of concurrent polls, only the one that takes it signs in.
         taken = await self.store.take(DEVICE, key)
         approved = None if taken is None else PendingDevice.from_json(taken)
         if approved is None or approved.account_id is None:
             raise _RefusedError(400, "invalid_grant")
         await self.store.delete(USER_CODE, approved.user_code)
-        return await self._sign_in(session, approved.account_id, approved.granted, thumbprint)
+        return await self._sign_in(
+            session, approved.account_id, approved.granted, thumbprint, requested=approved.scopes
+        )
 
     async def _forget_device(self, key: str, pending: PendingDevice) -> None:
         await self.store.delete(DEVICE, key)
@@ -1366,8 +1527,8 @@ class CompanyService:
                 # A whole sign-in ended: by its agent, a password reset, or its host.
                 self._report("pap.company.sign_out", "ok", {"pap.session.signed_in": False})
             revoked += await self._revoke_grants(family.tokens)
-            for session_id in family.sessions:
-                await self._sign_out_session(session_id, set(family.tokens))
+            for session_key in family.sessions:
+                await self._sign_out_session(session_key, set(family.tokens))
         return revoked
 
     async def _revoke_grants(self, tokens: Collection[str]) -> int:
@@ -1382,7 +1543,7 @@ class CompanyService:
             revoked += changed is not None and not changed[0].revoked
         return revoked
 
-    async def _sign_out_session(self, session_id: str, account_tokens: Collection[str]) -> None:
+    async def _sign_out_session(self, session_key: str, account_tokens: Collection[str]) -> None:
         """Each token of the Session signed in with one of `account_tokens` continues signed out."""
 
         def sign_out(stored: StoredSession) -> StoredSession:
@@ -1396,9 +1557,9 @@ class CompanyService:
                 return stored
             return replace(stored, tokens=tokens)
 
-        await self._change(SESSION, session_id, StoredSession.from_json, sign_out)
+        await self._change(SESSION, session_key, StoredSession.from_json, sign_out)
 
-    async def _join_family(self, family_id: str, token: str | None, session_id: str) -> bool:
+    async def _join_family(self, family_id: str, token: str | None, session_key: str) -> bool:
         """Add a token and a Session to a sign-in; `False` once it is revoked."""
 
         changed = await self._change(
@@ -1411,7 +1572,7 @@ class CompanyService:
                 else replace(
                     family,
                     tokens=_with(family.tokens, token),
-                    sessions=_with(family.sessions, session_id),
+                    sessions=_with(family.sessions, session_key),
                 )
             ),
         )
@@ -1434,11 +1595,20 @@ class CompanyService:
         account_id: str,
         scopes: tuple[str, ...],
         thumbprint: str,
+        *,
+        requested: tuple[str, ...],
     ) -> CompanyResponse:
-        """Sign the Session in: `session` is its DPoP record, `thumbprint` the proven key."""
+        """Sign the Session in: `session` is its DPoP record, `thumbprint` the proven key.
 
+        `scopes` are the ones the user approved of those `requested`; the response
+        leaves `scope` out when they are the same (§4.4, RFC 6749 §5.1).
+        """
+
+        if not scopes:
+            # A sign-in grants at least one scope: approving none is a decline (§4.4).
+            raise _RefusedError(400, "access_denied")
         # Checked before anything is issued: a mismatch issues no tokens (§4.4).
-        await self._check_account(session.session_id, account_id)
+        await self._check_account(session.session_key, account_id)
         account_token = self._id("acct")
         family = _digest(account_token)
         expires_at = self._now() + self.config.account_token_lifetime
@@ -1463,7 +1633,7 @@ class CompanyService:
                 client_id=session.client_id,
                 account_id=account_id,
                 tokens=(family,),
-                sessions=(session.session_id,),
+                sessions=(session.session_key,),
             ).to_json(),
             expires_at=expires_at,
         )
@@ -1472,7 +1642,7 @@ class CompanyService:
         # possession, for no single resource. It replaces only that token; a token for the
         # MCP server is renewed with the Account Token (§4.3, §4.8).
         signed_in = IssuedSession(
-            session_id=session.session_id,
+            session_key=session.session_key,
             client_id=session.client_id,
             pairwise_user_id=session.pairwise_user_id,
             key_thumbprint=thumbprint,
@@ -1482,19 +1652,24 @@ class CompanyService:
             account_token=family,
             token_type=DPOP,
             resource=None,
+            agent_id=session.agent_id,
         )
         return await self._issue(
-            signed_in, refresh_token=account_token, replacing={self._kind(signed_in)}
+            signed_in,
+            refresh_token=account_token,
+            replacing={self._kind(signed_in)},
+            requested=requested,
+            account_token_expires_at=expires_at,
         )
 
-    async def _check_account(self, session_id: str, account_id: str) -> None:
+    async def _check_account(self, session_key: str, account_id: str) -> None:
         """A Session that was ever signed in to another account is `account_mismatch` (§4.4).
 
         Even signed out since (§4.9): the code exchange, the device poll,
         Mediated Sign-In, and an Account Token all refuse, and issue nothing.
         """
 
-        stored = await self._read(SESSION, session_id, StoredSession.from_json)
+        stored = await self._read(SESSION, session_key, StoredSession.from_json)
         if stored is not None and stored.account_id not in (None, account_id):
             raise _RefusedError(400, "account_mismatch")
 
@@ -1519,8 +1694,16 @@ class CompanyService:
         *,
         refresh_token: str | None = None,
         replacing: Collection[str] = (),
+        requested: tuple[str, ...] = (),
+        account_token_expires_at: datetime | None = None,
+        exchanged: bool = False,
     ) -> CompanyResponse:
-        """Issue a token for the Session; it replaces the Session's tokens of `replacing` kinds."""
+        """Issue a token for the Session; it replaces the Session's tokens of `replacing` kinds.
+
+        The response names no Session: its key does (§4.3). `scope` follows RFC 6749:
+        left out of a signed-out token's response, and of a signed-in one granting
+        exactly the scopes `requested` (§4.2, §4.4).
+        """
 
         access_token = self._id("sat")
         digest = _digest(access_token)
@@ -1528,19 +1711,25 @@ class CompanyService:
         await self.store.put(
             SESSION_TOKEN,
             digest,
-            SessionPointer(session.session_id).to_json(),
+            SessionPointer(session.session_key).to_json(),
             expires_at=session.expires_at,
         )
         body: dict[str, object] = {
             "access_token": access_token,
             "token_type": session.token_type,
             "expires_in": int((session.expires_at - self._now()).total_seconds()),
-            "scope": " ".join(session.scopes),
-            "session_id": session.session_id,
-            "signed_in": session.signed_in,
         }
+        if session.scopes and set(session.scopes) != set(requested):
+            body["scope"] = " ".join(session.scopes)
+        if exchanged:
+            body["issued_token_type"] = ACCESS_TOKEN_TYPE
         if refresh_token is not None:
             body["refresh_token"] = refresh_token
+            if account_token_expires_at is not None:
+                # So the agent tells an expired Account Token from a revoked one (guides).
+                body["refresh_token_expires_in"] = int(
+                    (account_token_expires_at - self._now()).total_seconds()
+                )
         return CompanyResponse(200, body, {"Cache-Control": "no-store"})
 
     async def _record_token(
@@ -1554,19 +1743,20 @@ class CompanyService:
         """
 
         for _ in range(_CAS_ATTEMPTS):
-            entry = await self.store.get(SESSION, session.session_id)
+            entry = await self.store.get(SESSION, session.session_key)
             if entry is None:
                 stored = StoredSession(
-                    session_id=session.session_id,
+                    session_key=session.session_key,
                     client_id=session.client_id,
                     pairwise_user_id=session.pairwise_user_id,
                     tokens={digest: session},
                     latest=digest,
                     account_id=session.account_id,
                 )
+                stored = replace(stored, ends_at=self._session_end(stored))
                 if await self.store.create(
                     SESSION,
-                    session.session_id,
+                    session.session_key,
                     stored.to_json(),
                     expires_at=self._session_expiry(stored),
                 ):
@@ -1589,9 +1779,10 @@ class CompanyService:
                 latest=digest,
                 account_id=current.account_id or session.account_id,
             )
+            stored = replace(stored, ends_at=self._session_end(stored))
             if await self.store.replace(
                 SESSION,
-                session.session_id,
+                session.session_key,
                 entry.version,
                 stored.to_json(),
                 expires_at=self._session_expiry(stored),
@@ -1599,14 +1790,31 @@ class CompanyService:
                 return
         raise _RefusedError(503, "temporarily_unavailable")
 
-    def _session_expiry(self, stored: StoredSession) -> datetime:
-        """A Session is forgotten once no Account Token could renew it any more."""
+    def _session_end(self, stored: StoredSession) -> datetime:
+        """A Session ends once no Account Token could renew it any more."""
 
         latest = max(token.expires_at for token in stored.tokens.values())
         return latest + self.config.account_token_lifetime
 
-    async def _session_by_id(self, session_id: str) -> IssuedSession | None:
-        """The Session by its ID: its own latest token's record, else its token for MCP.
+    def _session_expiry(self, stored: StoredSession) -> datetime:
+        """How long the record is kept: past its end, so its key is refused, not reused (§4.2)."""
+
+        return (stored.ends_at or self._session_end(stored)) + self.config.ended_session_memory
+
+    async def _session_by_key(self, session_key: str) -> IssuedSession | None:
+        """The Session a key's thumbprint names, or `None` for a key never seen (§4.3).
+
+        A key whose Session has ended is refused, `invalid_grant`, rather than starting
+        a new Session the agent would not know of (§4.2).
+        """
+
+        stored = await self._read(SESSION, session_key, StoredSession.from_json)
+        if stored is not None and stored.ends_at is not None and stored.ends_at <= self._now():
+            raise _RefusedError(400, "invalid_grant")
+        return await self._session_record(session_key)
+
+    async def _session_record(self, session_key: str) -> IssuedSession | None:
+        """The Session by its key: its own latest token's record, else its token for MCP.
 
         A token for the MCP server stands for the Session only there (§4.3): a
         grant naming the Session builds on the record of its own token, and on
@@ -1615,7 +1823,7 @@ class CompanyService:
         resource, account, and lifetime); only the Session's identity is read.
         """
 
-        stored = await self._read(SESSION, session_id, StoredSession.from_json)
+        stored = await self._read(SESSION, session_key, StoredSession.from_json)
         if stored is None:
             return None
         latest = stored.tokens.get(stored.latest)
@@ -1636,7 +1844,7 @@ class CompanyService:
         pointer = await self._read(SESSION_TOKEN, digest, SessionPointer.from_json)
         if pointer is None:
             return None
-        stored = await self._read(SESSION, pointer.session_id, StoredSession.from_json)
+        stored = await self._read(SESSION, pointer.session_key, StoredSession.from_json)
         session = None if stored is None else stored.tokens.get(digest)
         if session is not None and await self._signed_in_before_its_end(session):
             return None
@@ -1690,13 +1898,18 @@ class CompanyService:
         except (PersonalAgentProtocolError, ValueError):
             return self._page(400, "This agent could not be verified.")
         # An unknown client or redirect is never redirected to: that would be an open redirector.
-        if redirect_uri not in metadata.redirect_uris:
+        # Exactly, but a loopback redirect URI matches with any port (§4.5, RFC 8252 §7.3).
+        if not any(redirect_uri_matches(entry, redirect_uri) for entry in metadata.redirect_uris):
             return self._page(400, "This sign-in request is not valid.")
         state = query.get("state", "")
         scopes = tuple(scope for scope in query.get("scope", "").split(" ") if scope)
         if query.get("response_type") != "code":
             return self._redirect(redirect_uri, error="unsupported_response_type", state=state)
         if query.get("code_challenge_method") != "S256" or not query.get("code_challenge"):
+            return self._redirect(redirect_uri, error="invalid_request", state=state)
+        if not _THUMBPRINT.fullmatch(query.get("dpop_jkt", "")):
+            # The code is bound to the Session Key: without one it could sign in no Session
+            # (§4.5, RFC 9449 §10).
             return self._redirect(redirect_uri, error="invalid_request", state=state)
         if not scopes or any(scope not in self.config.scopes for scope in scopes):
             return self._redirect(redirect_uri, error="invalid_scope", state=state)
@@ -1715,6 +1928,7 @@ class CompanyService:
                 scopes=scopes,
                 state=state,
                 code_challenge=query["code_challenge"],
+                dpop_jkt=query["dpop_jkt"],
                 expires_at=expires_at,
                 client_name=metadata.client_name,
                 browser_binding=None if hosted is not None else _digest(browser),
@@ -1734,7 +1948,7 @@ class CompanyService:
         agent = html.escape(metadata.client_name)
         agent_domain = html.escape(urlsplit(client_id).hostname or "")
         described = "".join(
-            f"<li>{html.escape(self.config.custom_scopes.get(scope, scope))}</li>"
+            f"<li>{html.escape(self.config.scope_descriptions.get(scope, scope))}</li>"
             for scope in scopes
         )
         return self._page(
@@ -1799,7 +2013,7 @@ class CompanyService:
             "client_name": pending.client_name,
             "client_domain": urlsplit(pending.client_id).hostname or "",
             "scopes": [
-                {"scope": scope, "description": self.config.custom_scopes.get(scope, scope)}
+                {"scope": scope, "description": self.config.scope_descriptions.get(scope, scope)}
                 for scope in pending.scopes
             ],
             "expires_at": pending.expires_at.isoformat().replace("+00:00", "Z"),
@@ -1824,6 +2038,8 @@ class CompanyService:
                 client_id=pending.client_id,
                 redirect_uri=pending.redirect_uri,
                 code_challenge=pending.code_challenge,
+                dpop_jkt=pending.dpop_jkt,
+                requested=pending.scopes,
                 account_id=account_id,
                 scopes=granted,
                 expires_at=expires_at,
@@ -1857,7 +2073,9 @@ class CompanyService:
             or self._now() >= issued.expires_at
             or issued.client_id != client_id
             or issued.redirect_uri != form.get("redirect_uri")
+            or issued.dpop_jkt != thumbprint
         ):
+            # Expired, reused, or redeemed with another key than the one it is bound to.
             raise _RefusedError(400, "invalid_grant")
         verifier = form.get("code_verifier", "")
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(
@@ -1865,10 +2083,12 @@ class CompanyService:
         )
         if not hmac.compare_digest(challenge.decode(), issued.code_challenge):
             raise _RefusedError(400, "invalid_grant")
-        session = await self._session_by_id(form.get("session_id", ""))
+        session = await self._session_by_key(thumbprint)
         if session is None or session.client_id != client_id:
-            raise _RefusedError(400, "invalid_session")
-        return await self._sign_in(session, issued.account_id, issued.scopes, thumbprint)
+            raise _RefusedError(400, "invalid_grant")
+        return await self._sign_in(
+            session, issued.account_id, issued.scopes, thumbprint, requested=issued.requested
+        )
 
     def _redirect_url(self, redirect_uri: str, **values: str) -> str:
         parts = urlsplit(redirect_uri)
@@ -1915,7 +2135,7 @@ class CompanyService:
         # `idempotency_lifetime`, a repeat answered with the original response.
         if not IDEMPOTENCY_KEY.fullmatch(key):
             raise _RefusedError(400, "invalid_request")
-        record = _composite(session.session_id, key)
+        record = _composite(session.session_key, key)
         request_digest = _composite(
             method,
             path,
@@ -1988,7 +2208,7 @@ class CompanyService:
         if result.operation is None:
             return CompanyResponse(result.status, result.body)
         if session.account_id is None:
-            raise _RefusedError(403, "sign_in_required")
+            raise _insufficient_scope(self.config.write_scopes)
         if not await self._supports_operations(session.client_id):
             # At an API, in the WWW-Authenticate challenge with its `extension` (§3.3, §6).
             raise _RefusedError(
@@ -2053,7 +2273,7 @@ class CompanyService:
 
         keys = [
             _composite("user", session.client_id, session.pairwise_user_id),
-            _composite("session", session.session_id),
+            _composite("session", session.session_key),
         ]
         named = [
             str(credentials.get(name, "")).strip().casefold()
@@ -2147,14 +2367,14 @@ class CompanyService:
         secrets = {name: SecretStr(str(value)) for name, value in credentials.items()}
         credentials.clear()
         authenticated = await accounts.authenticate(
-            secrets, SignInContext(client_id=session.client_id, session_id=session.session_id)
+            secrets, SignInContext(client_id=session.client_id, session_key=session.session_key)
         )
         secrets.clear()
         if authenticated is None:
             await self._attempt_failed(keys)
             return CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
         # Tied to another account, even signed out since: refused before any code is sent.
-        await self._check_account(session.session_id, authenticated.account_id)
+        await self._check_account(session.session_key, authenticated.account_id)
         code_key = self._code_key(authenticated.account_id)
         if authenticated.code_reference is None:
             await self._attempts_cleared(keys)
@@ -2169,7 +2389,7 @@ class CompanyService:
             MEDIATED,
             sign_in_id,
             PendingMediated(
-                session_id=session.session_id,
+                session_key=session.session_key,
                 account_id=authenticated.account_id,
                 scopes=granted,
                 code_reference=authenticated.code_reference,
@@ -2192,7 +2412,7 @@ class CompanyService:
     async def _mediated_code(self, request: CompanyRequest, sign_in_id: str) -> CompanyResponse:
         _, session = await self._caller(request)
         pending = await self._read(MEDIATED, sign_in_id, PendingMediated.from_json)
-        if pending is None or pending.session_id != session.session_id:
+        if pending is None or pending.session_key != session.session_key:
             # Unknown, or another Session's: the same error for both (§4.7).
             raise _RefusedError(404, "sign_in_not_found")
         if pending.status != "code_required":
@@ -2260,7 +2480,11 @@ class CompanyService:
     async def _signed_in_body(
         self, session: IssuedSession, account_id: str, scopes: tuple[str, ...]
     ) -> CompanyResponse:
-        response = await self._sign_in(session, account_id, scopes, session.key_thumbprint)
+        # Every requested scope is granted here, so `scope` is left out, as at the token
+        # endpoint (§4.4, §4.7).
+        response = await self._sign_in(
+            session, account_id, scopes, session.key_thumbprint, requested=scopes
+        )
         return replace(response, body={"status": "complete", **cast(dict, response.body)})
 
     # Conversations -------------------------------------------------------------------
@@ -2281,7 +2505,7 @@ class CompanyService:
         if conversation.account_id is not None and session.account_id != conversation.account_id:
             # Once it used the account, it belongs to that account (§7.2, §7.11).
             if session.account_id is None:
-                raise _RefusedError(403, "sign_in_required")
+                raise _insufficient_scope(self._account_scopes())
             raise _RefusedError(404, "conversation_not_found")
         return conversation
 
@@ -2501,7 +2725,7 @@ class CompanyService:
                 conversation_id=conversation_id,
                 text=message.text,
                 data=message.data,
-                sender=message.sender,
+                author=message.author.type,
                 account_id=session.account_id,
                 scopes=session.scopes,
                 client_id=session.client_id,
@@ -2532,7 +2756,8 @@ class CompanyService:
             return self._event(type="authorization", error=error, scope=scope)
         if reply.user_requested is not None:
             return self._event(type="user_requested", reason=reply.user_requested)
-        message: dict[str, object] = {"id": self._id("msg"), "sender": "agent", "role": "company"}
+        author: dict[str, object] = {"type": "agent", **(reply.persona or {})}
+        message: dict[str, object] = {"id": self._id("msg"), "author": author, "role": "company"}
         if reply.text is not None:
             message["text"] = reply.text
         if reply.data is not None:
@@ -2698,6 +2923,11 @@ class CompanyService:
             received_at=self._now(),
         )
         await self.store.put(FEEDBACK, report.report_id, report.to_json())
+        answers = {key.casefold(): value for key, value in self.config.feedback_answers.items()}
+        alternative = answers.get(task.casefold())
+        if alternative is not None:
+            # The task can be done after all: here is how (§8.3).
+            return CompanyResponse(200, dict(alternative), {"Cache-Control": "no-store"})
         return CompanyResponse(202, None, {"Cache-Control": "no-store"})
 
     async def feedback_reports(self) -> tuple[StoredFeedback, ...]:
@@ -2846,6 +3076,9 @@ class CompanyService:
         after: str,
         text: str | None = None,
         data: dict[str, Any] | None = None,
+        author_id: str | None = None,
+        author_name: str | None = None,
+        author_image: str | None = None,
     ) -> ConversationEvent:
         """One of the company's people answers in a conversation handed to them (§7.9).
 
@@ -2853,7 +3086,8 @@ class CompanyService:
         answer written over anything they have not read is refused
         (`StaleConversationError`) and they read the conversation again. Their
         message is the company's (`role: company`) and written by a person
-        (`sender: human`); a conversation not handed to people, closed, or
+        (`author.type: human`, with the person's `id`, display `name`, and
+        `image` when given, §7.4); a conversation not handed to people, closed, or
         with a Direct Conversation open takes none (`ValueError`). The event
         written is returned: its ID is their next `after`.
         """
@@ -2862,7 +3096,7 @@ class CompanyService:
             raise ValueError("a reply says something: text, data, or both")
         message = Message(
             id=self._id("msg"),
-            sender="human",
+            author=Author(type="human", id=author_id, name=author_name, image=author_image),
             role="company",
             text=text,
             data=data,
@@ -3008,7 +3242,7 @@ class CompanyService:
         One proposed signed in belongs to the account: any Session of the same
         personal agent and user may use it while signed in to that account,
         checked at each request. Signed out, that Session gets
-        `sign_in_required`; anyone else `operation_not_found`.
+        `insufficient_scope` (Operations 3.2); anyone else `operation_not_found`.
         """
 
         stored = await self._read(OPERATION, operation_id, StoredOperation.from_json)
@@ -3016,7 +3250,7 @@ class CompanyService:
             raise _RefusedError(404, "operation_not_found")
         if stored.account_id != session.account_id:
             if session.account_id is None:
-                raise _RefusedError(403, "sign_in_required")
+                raise _insufficient_scope(self.config.write_scopes)
             raise _RefusedError(404, "operation_not_found")
         current = await self._current_operation(operation_id)
         if current is None:
@@ -3325,7 +3559,9 @@ class CompanyService:
             return self._mcp_refusal(status, error, scope)
         if answer.operation is not None:
             if session.account_id is None:
-                return self._mcp_refusal(403, "sign_in_required")
+                return self._mcp_refusal(
+                    403, "insufficient_scope", " ".join(self.config.write_scopes)
+                )
             if not await self._supports_operations(session.client_id):
                 # A tool can't be refused with `extension_required`, which refuses the
                 # personal agent entirely: an ordinary tool error (Operations §2, §6).
@@ -3359,10 +3595,10 @@ class CompanyService:
 
     # Web browsing (§5, Operations §4.4) --------------------------------------------------
 
-    async def _live_session(self, session_id: str) -> IssuedSession | None:
+    async def _live_session(self, session_key: str) -> IssuedSession | None:
         """The Session as it is now: its latest unexpired DPoP token's record."""
 
-        stored = await self._read(SESSION, session_id, StoredSession.from_json)
+        stored = await self._read(SESSION, session_key, StoredSession.from_json)
         now = self._now()
         live = [
             session
@@ -3375,66 +3611,88 @@ class CompanyService:
             return None
         return latest
 
+    async def _join_page(self) -> CompanyResponse:
+        """Step 1 of joining a browser (§5): a form with a one-time code, tied to this browser.
+
+        Loading it starts, ends or changes no Session and no other cookie. The page is
+        never cached, framed, or kept by the page that opened it.
+        """
+
+        code = self._id("bc")
+        browser = self._id("join")
+        await self.store.put(
+            JOIN_CODE,
+            _digest(code),
+            JoinCode(_digest(browser)).to_json(),
+            expires_at=self._now() + _JOIN_LIFETIME,
+        )
+        body = (
+            "<!doctype html><meta charset=utf-8><title>Connecting</title>"
+            f'<form method="post" action="/poppy/browser-session">'
+            f'<input type="hidden" name="code" value="{html.escape(code)}">'
+            '<input type="text" name="proof"></form>'
+        )
+        return CompanyResponse(
+            200,
+            body,
+            {
+                "Content-Type": "text/html; charset=utf-8",
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": "frame-ancestors 'none'",
+                "Cross-Origin-Opener-Policy": "same-origin",
+                "Set-Cookie": (
+                    f"{JOIN_COOKIE}={browser}; Path=/; Max-Age=60; Secure; HttpOnly; "
+                    "SameSite=Strict"
+                ),
+            },
+        )
+
     async def _browser_session(self, request: CompanyRequest) -> CompanyResponse:
-        refused = self._page(400, "This browser could not join the session.")
-        assertion = dict(parse_qsl(request.body.decode())).get("assertion", "")
+        """Step 3 (§5): the cookie, the code, and a proof over it from an active Session's key.
+
+        A code is used by the first request that sends it, whatever the result. A key
+        the company doesn't know is an error here, never a new Session.
+        """
+
+        refused = replace(
+            self._page(400, "This browser could not join the session."),
+            headers={
+                **self._page(400, "").headers,
+                "Set-Cookie": f"{JOIN_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict",
+            },
+        )
+        form = dict(parse_qsl(request.body.decode()))
+        code, proof, browser = form.get("code", ""), form.get("proof", ""), _cookie(request, JOIN_COOKIE)
+        taken = await self.store.take(JOIN_CODE, _digest(code)) if code else None
+        issued = None if taken is None else JoinCode.from_json(taken)
+        if issued is None or browser is None or not hmac.compare_digest(
+            issued.browser, _digest(browser)
+        ):
+            return refused
         try:
-            claims = jwt.decode(assertion, options={"verify_signature": False})
-            header = jwt.get_unverified_header(assertion)
-            client_id = str(claims["iss"])
-            if not await self._allowed(client_id):
-                return refused
-            resolver = cast(
-                ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
+            verified = await verify_dpop_proof(
+                proof,
+                method="POST",
+                url=self.config.browser_session_endpoint,
+                replay_cache=self._replay(),
+                nonce=code,
+                now=self._now(),
             )
-            _, keys = await resolver.resolve(client_id, kid=_key_id(assertion))
-        except (KeyError, TypeError, ValueError, jwt.PyJWTError, PersonalAgentProtocolError):
+        except ProofError:
             return refused
-        algorithm = str(header.get("alg", ""))
-        verified = None
-        for key in keys.keys:
-            if header.get("kid") not in {None, key.kid} or key.alg not in {None, algorithm}:
-                continue
-            try:
-                public = jwt.PyJWK.from_dict(
-                    json.loads(key.model_dump_json(exclude_none=True)), algorithm=algorithm
-                ).key
-                verified = await verify_browser_assertion(
-                    assertion,
-                    public_key=public,
-                    expected_endpoint=self.config.browser_session_endpoint,
-                    company_domain=self.config.domain,
-                    expected_client_id=client_id,
-                    expected_pairwise_user_id=str(claims.get("sub", "")),
-                    expected_session_id=str(claims.get("session_id", "")),
-                    replay_cache=self._replay(),
-                    now=self._now(),
-                )
-                break
-            except (PersonalAgentProtocolError, jwt.PyJWTError, ValueError, TypeError):
-                continue
-        if verified is None:
-            return refused
-        if verified.expires_at - timedelta(seconds=60) > datetime.fromtimestamp(
-            int(claims["iat"]), verified.expires_at.tzinfo
-        ):
-            return refused  # exp is at most 60 seconds after iat
-        session = await self._live_session(verified.session_id)
-        if session is None or (session.client_id, session.pairwise_user_id) != (
-            verified.client_id,
-            verified.pairwise_user_id,
-        ):
+        session = await self._live_session(verified.key_thumbprint)
+        if session is None or not await self._allowed(session.client_id):
             return refused
         cookie = self._id("web")
         await self.store.put(
             BROWSER_COOKIE,
             _digest(cookie),
-            SessionPointer(session.session_id).to_json(),
+            SessionPointer(session.session_key).to_json(),
             expires_at=session.expires_at + self.config.account_token_lifetime,
         )
         exchange = _EXCHANGE.get()
         if exchange is not None:
-            exchange.client_id = verified.client_id
+            exchange.client_id = session.client_id
         self._report(
             "pap.company.interface.switch",
             "ok",
@@ -3444,9 +3702,13 @@ class CompanyService:
             303,
             None,
             {
-                "Location": verified.return_to,
-                # The company's own cookie: no Max-Age, and only as alive as its Session.
-                "Set-Cookie": f"{WEB_COOKIE}={cookie}; Path=/; Secure; HttpOnly; SameSite=Lax",
+                "Location": f"{self.config.base}/",
+                # The company's own cookie, `__Host-`: no Max-Age, only as alive as its
+                # Session (§5). The join cookie is cleared.
+                "Set-Cookie": (
+                    f"{WEB_COOKIE}={cookie}; Path=/; Secure; HttpOnly; SameSite=Strict\n"
+                    f"{JOIN_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict"
+                ),
                 "Cache-Control": "no-store",
             },
         )
@@ -3459,7 +3721,7 @@ class CompanyService:
         pointer = await self._read(BROWSER_COOKIE, _digest(cookie), SessionPointer.from_json)
         if pointer is None:
             return None
-        session = await self._live_session(pointer.session_id)
+        session = await self._live_session(pointer.session_key)
         if session is None:
             # The cookie does not outlive the Session.
             await self.store.delete(BROWSER_COOKIE, _digest(cookie))

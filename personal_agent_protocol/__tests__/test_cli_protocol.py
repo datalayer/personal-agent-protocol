@@ -40,6 +40,7 @@ def _is_group(command: object) -> bool:
     return isinstance(getattr(command, "commands", None), dict)
 
 
+SCOPES = ("--scope", "orders:read", "--scope", "orders:write")
 #: Plain help and output, as a user's pipe sees it, even where CI forces colour.
 PLAIN = {"NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200", "FORCE_COLOR": None}
 
@@ -180,13 +181,13 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
     assert key["key_reference"] == "key:key-1" and key["alg"] == "ES256"
 
     started = pap("sessions", "start", "--json")["session"]
-    session = started["session_id"]
+    session = started["session_key"]
     assert started["signed_in"] is False and started["token_reference"] == f"session:{session}"
     assert "pairwise_user_id" not in started
 
     # Mediated Sign-In: credentials and the one-time code from stdin, never as options.
     lines = f"{ADA['email']}\n{ADA['password']}\n{ADA_CODE}\n"
-    signed = pap("auth", "mediated", session, "--stdin", "--json", input=lines)["session"]
+    signed = pap("auth", "mediated", session, *SCOPES, "--stdin", "--json", input=lines)["session"]
     assert signed["signed_in"] and signed["scope"] == "orders:read orders:write"
     assert signed["account_reference"].startswith("account")
 
@@ -239,7 +240,7 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
     current = pap("operations", "show", session, operation, "--json")["operation"]
     # The right digest of the right revision: only the binding to the token store is missing.
     real = approve(Operation.model_validate(current)).model_dump(mode="json")
-    forged = {**real, "session_id": session, "mac": "forged"}
+    forged = {**real, "session_key": session, "mac": "forged"}
     state["approvals"] = {operation: forged}
     (pap.state / "state.json").write_text(json.dumps(state))
     pap("operations", "confirm", session, operation, "--revision", "1", code=6)
@@ -265,7 +266,7 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
         "conversations", "send", session, conversation, "Where is my order?", "--human",
         "--wait", "0", "--json",
     )  # fmt: skip
-    assert any(e["message"]["sender"] == "human" for e in page["events"] if e.get("message"))
+    assert any(e["message"]["author"]["type"] == "human" for e in page["events"] if e.get("message"))
     events = pap("conversations", "events", session, conversation, "--json")
     assert events["status"] == "idle" and events["has_more"] is False
     followed = pap("conversations", "follow", session, conversation, "--max-events", "2", "--json")
@@ -283,7 +284,7 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
     assert pap("sessions", "renew", session, "--json")["session"]["signed_in"] is False
     pap("api", "openapi", session, "GET", "/api/orders", code=1)
     listed = pap("sessions", "show", "--json")["sessions"]
-    assert [item["session_id"] for item in listed] == [session]
+    assert [item["session_key"] for item in listed] == [session]
     pap("sessions", "end", session, "--json")
     pap("sessions", "show", session, code=3)
 
@@ -299,15 +300,15 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
 def test_device_sign_in_waits_for_the_user_and_times_out(tmp_path: Path) -> None:
     pap = Pap(tmp_path)
     pap.set_up()
-    session = pap("sessions", "start", "--json")["session"]["session_id"]
+    session = pap("sessions", "start", "--json")["session"]["session_key"]
     signed = pap("auth", "device", session, "--scope", "orders:read", "--json")["session"]
     assert signed["signed_in"] and signed["scope"] == "orders:read"
     assert pap("sessions", "renew", session, "--json")["session"]["signed_in"] is True
 
     waiting = Pap(tmp_path / "other", approve_on_wait=False)
     waiting.set_up()
-    other = waiting("sessions", "start", "--json")["session"]["session_id"]
-    result = waiting("auth", "device", other, "--timeout", "12", code=5)
+    other = waiting("sessions", "start", "--json")["session"]["session_key"]
+    result = waiting("auth", "device", other, *SCOPES, "--timeout", "12", code=5)
     assert "authorization_pending" in result.output
 
 
@@ -320,12 +321,12 @@ def test_exit_codes_for_setup_input_refusals_and_usage(tmp_path: Path) -> None:
     pap("agent", "key", "import", code=4)  # the PEM is never prompted for or an option
     pap("agent", "key", "import", "--stdin", input="not a key\n", code=1)
     pap("agent", "key", "import", "--stdin", input=pap.pem())
-    session = pap("sessions", "start", "manzanita.example", "--json")["session"]["session_id"]
-    pap("auth", "mediated", session, "--no-input", code=4)
-    pap("auth", "direct", session, "--no-input", code=4)
+    session = pap("sessions", "start", "manzanita.example", "--json")["session"]["session_key"]
+    pap("auth", "mediated", session, *SCOPES, "--no-input", code=4)
+    pap("auth", "direct", session, *SCOPES, "--no-input", code=4)
     wrong = f"{ADA['email']}\nnot the password\n"
     assert (
-        "sign_in_failed" in pap("auth", "mediated", session, "--stdin", input=wrong, code=1).output
+        "sign_in_failed" in pap("auth", "mediated", session, *SCOPES, "--stdin", input=wrong, code=1).output
     )
     pap("api", "openapi", session, "GET", "/api/nothing-here", code=1)
     pap("sessions", "renew", "ses_unknown", code=3)
@@ -339,7 +340,7 @@ def test_direct_sign_in_reads_the_callback_from_a_file_descriptor(tmp_path: Path
 
     pap = Pap(tmp_path)
     pap.set_up()
-    session = pap("sessions", "start", "--json")["session"]["session_id"]
+    session = pap("sessions", "start", "--json")["session"]["session_key"]
     shop = pap.shop
 
     # The user signs in on Manzanita's page in their own browser; their browser
@@ -430,27 +431,27 @@ def test_every_command_sees_only_its_tenants_sessions(tmp_path: Path, monkeypatc
     second = pap("sessions", "start", "--json")["session"]
     assert second["tenant_id"] == "shop-b"
     listed = pap("sessions", "show", "--json")["sessions"]
-    assert [item["session_id"] for item in listed] == [second["session_id"]]
+    assert [item["session_key"] for item in listed] == [second["session_key"]]
     # Another tenant's Session looks unknown to every command, not forbidden.
     for arguments in (
-        ("sessions", "show", first["session_id"]),
-        ("sessions", "renew", first["session_id"]),
-        ("sessions", "end", first["session_id"]),
-        ("auth", "disconnect", first["session_id"]),
-        ("api", "openapi", first["session_id"], "GET", "/api/orders"),
+        ("sessions", "show", first["session_key"]),
+        ("sessions", "renew", first["session_key"]),
+        ("sessions", "end", first["session_key"]),
+        ("auth", "disconnect", first["session_key"]),
+        ("api", "openapi", first["session_key"], "GET", "/api/orders"),
     ):
         pap(*arguments, code=ExitCode.NOT_CONFIGURED)  # unknown_session, as for no Session
     state = json.loads((pap.state / "state.json").read_text())["sessions"]
     assert (
-        state[first["session_id"]]["pairwise_user_id"]
-        != state[second["session_id"]]["pairwise_user_id"]
+        state[first["session_key"]]["pairwise_user_id"]
+        != state[second["session_key"]]["pairwise_user_id"]
     )
 
     # PAP_TENANT overrides the profile; the first tenant sees its Session again.
     monkeypatch.setenv("PAP_TENANT", "pap-cli")
     listed = pap("sessions", "show", "--json")["sessions"]
-    assert [item["session_id"] for item in listed] == [first["session_id"]]
-    pap("sessions", "show", second["session_id"], code=ExitCode.NOT_CONFIGURED)
+    assert [item["session_key"] for item in listed] == [first["session_key"]]
+    pap("sessions", "show", second["session_key"], code=ExitCode.NOT_CONFIGURED)
 
     # A tenant is a plain name.
     monkeypatch.setenv("PAP_TENANT", "../other")

@@ -114,15 +114,16 @@
       "tenant": null
     },
     {
-      "id": "pap.browserFormPost",
+      "id": "pap.browserJoin",
       "role": "personal-agent",
-      "python": "BROWSER_FORM_POSTS",
-      "typescript": "BrowserFormPosts",
-      "contract": "BrowserFormPost",
-      "members": ["post"],
+      "python": "BROWSER_JOINS",
+      "typescript": "BrowserJoins",
+      "contract": "BrowserJoin",
+      "members": ["load_join_form", "submit_join_form"],
       "default": null,
       "resolution": "single",
-      "tenant": null
+      "tenant": null,
+      "note": "The personal agent's own browser (§5): load_join_form opens the browser-session endpoint and returns the one-time code from that page only; submit_join_form submits the proof from the same browser, whose SameSite=Strict cookie ties the code to it."
     },
     {
       "id": "pap.dpopProofProvider",
@@ -130,10 +131,11 @@
       "python": "DPOP_PROOF_PROVIDERS",
       "typescript": "DpopProofProviders",
       "contract": "DpopProofProvider",
-      "members": ["create"],
+      "members": ["new_session_key", "create", "discard_session_key"],
       "default": null,
       "resolution": "single",
-      "tenant": "DpopProofRequest.tenant_id"
+      "tenant": "DpopProofRequest.tenant_id",
+      "note": "A Session Key per Session (§4.3): new_session_key makes one and returns its RFC 7638 thumbprint, which names the Session; create signs with the key a DpopProofRequest's session_key names; discard_session_key forgets one whose Session ended, never to be used again (§4.2)."
     },
     {
       "id": "pap.accountTokenLock",

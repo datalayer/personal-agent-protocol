@@ -52,6 +52,7 @@ def test_hosted_page_templates_are_checked() -> None:
         "name": "Shop",
         "domain": "shop.example",
         "scopes": ("orders:read",),
+        "scope_descriptions": {"orders:read": "See orders"},
         "operations": False,
     }
     with pytest.raises(ValueError, match="consent_page"):
@@ -78,10 +79,9 @@ async def test_device_sign_in_points_at_the_hosted_device_page() -> None:
         client_id=world.atlas.client_id,
         scopes=("orders:read",),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     assert started.verification_uri == DEVICE_PAGE
     assert started.verification_uri_complete == (
@@ -114,8 +114,8 @@ async def test_authorize_redirects_to_the_hosted_consent_page_which_reads_the_re
     assert summary["client_name"] == "Atlas"
     assert summary["client_domain"] == "atlas.example"
     assert summary["scopes"] == [
-        {"scope": "orders:read", "description": "See your orders"},
-        {"scope": "orders:write", "description": "Exchange and return items"},
+        {"scope": "orders:read", "description": "See your orders, returns and exchanges"},
+        {"scope": "orders:write", "description": "Exchange or return items in your orders"},
     ]
     assert summary["expires_at"].endswith("Z")
     assert set(summary) == {"request_id", "client_name", "client_domain", "scopes", "expires_at"}

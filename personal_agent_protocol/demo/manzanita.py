@@ -62,7 +62,18 @@ CONFIG = CompanyConfig(
     scopes=("orders:read", "orders:write"),
     write_scopes=("orders:write",),
     mediated_fields=(("email", "Email", False), ("password", "Password", True)),
-    custom_scopes={"orders:read": "See your orders", "orders:write": "Exchange and return items"},
+    scope_descriptions={
+        "orders:read": "See your orders, returns and exchanges",
+        "orders:write": "Exchange or return items in your orders",
+    },
+    scope_hints={"orders:read": ("none", True), "orders:write": ("reversible", True)},
+    excluded_tasks=({"task": "Change the size of an item after it has shipped"},),
+    feedback_answers={
+        "Pay with a gift card": {
+            "instructions": "Gift cards are applied on the checkout page, before paying.",
+            "references": [{"type": "web", "url": "https://manzanita.example/checkout"}],
+        }
+    },
     web=True,
 )
 
@@ -101,7 +112,7 @@ class ManzanitaAgent:
             if "order" in text or "jacket" in text or "exchange" in text:
                 return [
                     Reply(text="I can look that up once you sign in to your Manzanita account."),
-                    Reply(authorization=("sign_in_required", "orders:read orders:write")),
+                    Reply(authorization=("insufficient_scope", "orders:read orders:write")),
                 ]
             return [Reply(text="Hello from Manzanita Outfitters. Ask me about an order.")]
         if "exchange" in text or "warmer" in text:
@@ -156,7 +167,7 @@ class ManzanitaApi:
     async def handle(self, call: ApiCall) -> ApiResult:
         if call.method == "GET" and call.path == "/orders":
             if call.account_id is None:
-                return ApiResult.sign_in_required("orders:read")
+                return ApiResult.insufficient_scope("orders:read")
             if "orders:read" not in call.scopes:
                 return ApiResult.insufficient_scope("orders:read")
             return ApiResult(body={"orders": [ORDER]})
@@ -166,7 +177,7 @@ class ManzanitaApi:
             if proposal is None:
                 return ApiResult.not_found()
             if call.account_id is None:
-                return ApiResult.sign_in_required("orders:write")
+                return ApiResult.insufficient_scope("orders:write")
             if "orders:write" not in call.scopes:
                 return ApiResult.insufficient_scope("orders:write")
             return ApiResult(operation=proposal)
@@ -300,7 +311,7 @@ class ManzanitaMcp:
     async def call(self, name: str, arguments: dict[str, object], call: ApiCall) -> ToolResult:
         if name == "list_orders":
             if call.account_id is None:
-                return ToolResult.sign_in_required("orders:read")
+                return ToolResult.insufficient_scope("orders:read")
             if "orders:read" not in call.scopes:
                 return ToolResult.insufficient_scope("orders:read")
             return ToolResult(
@@ -309,7 +320,7 @@ class ManzanitaMcp:
             )
         if name == "exchange_jacket":
             if call.account_id is None:
-                return ToolResult.sign_in_required("orders:write")
+                return ToolResult.insufficient_scope("orders:write")
             if "orders:write" not in call.scopes:
                 return ToolResult.insufficient_scope("orders:write")
             return ToolResult(operation=EXCHANGE)

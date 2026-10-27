@@ -12,7 +12,7 @@ import httpx
 import pytest
 from reactor import PluginManifest
 
-from personal_agent_protocol import ConversationError, Message, SessionError
+from personal_agent_protocol import Author, ConversationError, Message, SessionError
 from personal_agent_protocol.company import CLIENT_POLICIES
 from personal_agent_protocol.company.store import DEVICE, PendingDevice
 from personal_agent_protocol.operations import OperationError, OperationsClient, approve
@@ -35,10 +35,9 @@ async def signed_in(world: World):  # type: ignore[no-untyped-def]
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -73,14 +72,14 @@ async def test_a_session_token_with_another_key_is_refused() -> None:
     world = World()
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
-    # Another user's DPoP key (a different subject) signs the proof for Ada's token.
+    # Another Session's key signs the proof for this Session's token.
+    other = await world.signed_out_session()
     with pytest.raises(ConversationError) as raised:
         await world.conversations.start(
             endpoint,
             world.message("hi"),
-            token=session,
+            token=session.model_copy(update={"session_key": other.session_key}),
             tenant_id=TENANT,
-            pairwise_user_id="usr_someone_else_0000000",
             issuer=world.who["issuer"],
         )
     assert raised.value.status_code == 401
@@ -102,10 +101,9 @@ async def test_polling_too_fast_is_slow_down() -> None:
         client_id=world.atlas.client_id,
         scopes=("orders:read",),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     store = world.shop.store
     (key,) = store.keys(DEVICE)
@@ -126,7 +124,7 @@ async def test_a_reused_message_id_with_new_text_conflicts_and_a_retry_replays()
     world = World()
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
-    first = Message(id="msg_fixed_id_0000000000", sender="human", text="Hello")
+    first = Message(id="msg_fixed_id_0000000000", author=Author(type="human"), text="Hello")
     started = await world.conversations.start(endpoint, first, token=session, **world.who)
     replayed = await world.conversations.start(endpoint, first, token=session, **world.who)
     assert replayed.conversation_id == started.conversation_id
@@ -273,10 +271,9 @@ async def test_a_scope_no_longer_offered_ends_the_sessions_holding_it() -> None:
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -292,6 +289,10 @@ async def test_a_scope_no_longer_offered_ends_the_sessions_holding_it() -> None:
     world.shop.config = replace(
         config,
         scopes=tuple(s for s in config.scopes if s != "orders:write"),
+        scope_descriptions={
+            s: d for s, d in config.scope_descriptions.items() if s != "orders:write"
+        },
+        scope_hints={s: h for s, h in config.scope_hints.items() if s != "orders:write"},
         write_scopes=(),
         operations=False,
     )
@@ -312,10 +313,10 @@ async def test_a_scope_no_longer_offered_ends_the_sessions_holding_it() -> None:
     )
     fresh = await world.signed_out_session()
     reference = done.account_token_reference
-    asked_all = await accounts.refresh(reference, context=context, session_id=fresh.session_id)
+    asked_all = await accounts.refresh(reference, context=context, session_key=fresh.session_key)
     assert asked_all.status == "re_consent_required"
     within = await accounts.refresh(
-        reference, context=context, session_id=fresh.session_id, scopes=("orders:read",)
+        reference, context=context, session_key=fresh.session_key, scopes=("orders:read",)
     )
     assert within.status == "signed_in" and within.token is not None
     await world.conversations.start(
@@ -374,10 +375,9 @@ async def test_a_password_reset_ends_the_sign_ins_from_before_it() -> None:
         client_id=world.atlas.client_id,
         scopes=("orders:read",),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -413,9 +413,11 @@ async def test_a_password_reset_ends_the_sign_ins_from_before_it() -> None:
     )
     fresh = await world.signed_out_session()
     refreshed = await accounts.refresh(
-        done.account_token_reference, context=context, session_id=fresh.session_id
+        done.account_token_reference, context=context, session_key=fresh.session_key
     )
-    assert refreshed.status == "signed_out" and refreshed.token is None
+    # The Account Token ended; the Session it named renews signed out (§4.8).
+    assert refreshed.status == "signed_out"
+    assert refreshed.token is not None and not refreshed.token.signed_in
     # Ended whole: its Session goes on signed out, even once nothing is said ended any more.
     directory.before.clear()
     kept = await world.shop._token_session(done.token.access_token.get_secret_value())

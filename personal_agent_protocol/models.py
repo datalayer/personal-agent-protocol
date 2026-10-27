@@ -2,12 +2,13 @@
 #
 # BSD 3-Clause License
 
-"""Wire models for Personal Agent Protocol draft 0.2."""
+"""Wire models for Personal Agent Protocol draft 0.3."""
 
 from __future__ import annotations
 
 import re
 from datetime import datetime
+from ipaddress import ip_address
 from typing import Any, Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -25,10 +26,25 @@ from pydantic import (
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
 #: The `protocol_version` values this SDK uses a document of (§3.1): before 1.0 every
 #: version can break the one before, so only its own `major.minor`.
-SUPPORTED_PROTOCOL_VERSIONS = frozenset({"0.2"})
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({"0.3"})
 #: The DPoP algorithm every company accepts (§3.2): a list a company publishes includes it.
 DPOP_REQUIRED_ALGORITHM = "ES256"
 _EXTENSION_VERSION = re.compile(r"^(0|[1-9][0-9]*)$")
+#: OAuth scope syntax (RFC 6749 §3.3): one scope token.
+_SCOPE = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]+$")
+#: Scope names starting with this are reserved for the protocol, which defines none (§4.4).
+RESERVED_SCOPE_PREFIX = "poppy:"
+#: The grants a Company's token endpoint MUST accept (§3.2): starting and renewing Sessions,
+#: and Account Tokens.
+JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+REFRESH_TOKEN_GRANT = "refresh_token"
+#: The grants that say the Company offers Direct and Device Sign-In (§3.2, §4.4).
+AUTHORIZATION_CODE_GRANT = "authorization_code"
+DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+#: The grant for a Bearer token at an MCP server that doesn't support DPoP (§4.3).
+TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
+#: `changes` values a scope hint may give (§4.4); any other is read as `irreversible`.
+SCOPE_CHANGES = ("none", "reversible", "irreversible")
 _DOMAIN = re.compile(
     r"^(?=.{1,253}\.?$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?$",
@@ -53,6 +69,43 @@ def _https_url(value: str, label: str) -> str:
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError(f"{label} must be an HTTPS URL without user information")
     return value
+
+
+def _scope(value: str) -> str:
+    if not _SCOPE.fullmatch(value):
+        raise ValueError("a scope must follow OAuth scope syntax")
+    return value
+
+
+def is_loopback_redirect(value: str) -> bool:
+    """A loopback redirect URI (RFC 8252 §7.3): `http` to a loopback IP literal, any port.
+
+    An app on the User's computer receives Direct Sign-In's answer there (§4.1).
+    """
+
+    parsed = urlsplit(value)
+    if parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password:
+        return False
+    if parsed.fragment:
+        return False
+    try:
+        return ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def redirect_uri_matches(registered: str, given: str) -> bool:
+    """Whether `given` is the redirect URI `registered` names (§4.1, §4.5).
+
+    Exactly, except that a loopback redirect URI matches with any port (RFC 8252 §7.3).
+    """
+
+    if registered == given:
+        return True
+    if not (is_loopback_redirect(registered) and is_loopback_redirect(given)):
+        return False
+    one, other = urlsplit(registered), urlsplit(given)
+    return (one.hostname, one.path, one.query) == (other.hostname, other.path, other.query)
 
 
 def _domain(value: str) -> str:
@@ -86,8 +139,12 @@ class MediatedField(ProtocolModel):
 
 
 class MediatedSignIn(ScopeOption):
+    """Mediated Sign-In, transitional (§4.7): the only sign-in type with its own scopes."""
+
     endpoint: str
     fields: list[MediatedField] = Field(min_length=1)
+
+    _scopes = field_validator("scopes")(lambda value: [_scope(item) for item in value])
 
     @field_validator("endpoint")
     @classmethod
@@ -95,18 +152,59 @@ class MediatedSignIn(ScopeOption):
         return _https_url(value, "mediated sign-in endpoint")
 
 
+class ScopeHint(ProtocolModel):
+    """What a scope allows, its most consequential operation (§4.4): a Company's claim."""
+
+    changes: str = Field(min_length=1)
+    personal_data: bool
+
+    @property
+    def effective_changes(self) -> Literal["none", "reversible", "irreversible"]:
+        """`changes`, with a value this SDK doesn't know read as `irreversible` (§4.4)."""
+
+        if self.changes == "none":
+            return "none"
+        if self.changes == "reversible":
+            return "reversible"
+        return "irreversible"
+
+
 class AuthCapabilities(ProtocolModel):
+    """`auth` (§3.1): the issuer, Mediated Sign-In, and the Company's scopes.
+
+    Direct and Device Sign-In are not here: the issuer's `grant_types_supported` says
+    whether the Company offers them (§3.2, §4.4).
+    """
+
     issuer: str
-    direct: ScopeOption | None = None
-    device: ScopeOption | None = None
     mediated: MediatedSignIn | None = None
-    custom_scopes: dict[str, str] = Field(default_factory=dict)
+    scopes: dict[str, str] = Field(default_factory=dict)
+    scope_hints: dict[str, ScopeHint] = Field(default_factory=dict)
 
     @field_validator("issuer")
     @classmethod
     def validate_issuer(cls, value: str) -> str:
         # Kept exactly as written: the issuer is compared character for character (§3.2).
         return _https_url(value, "auth issuer")
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: dict[str, str]) -> dict[str, str]:
+        for name, description in value.items():
+            _scope(name)
+            if name.startswith(RESERVED_SCOPE_PREFIX):
+                # The protocol defines no scope; `poppy:` names are its own (§4.4).
+                raise ValueError("scope names starting with poppy: are reserved")
+            if not description:
+                raise ValueError("each scope needs a description")
+        return value
+
+    @field_validator("scope_hints")
+    @classmethod
+    def validate_hint_names(cls, value: dict[str, ScopeHint]) -> dict[str, ScopeHint]:
+        for name in value:
+            _scope(name)
+        return value
 
 
 class AgentProtocol(ProtocolModel):
@@ -156,6 +254,17 @@ class FeedbackDescriptor(ProtocolModel):
         return _https_url(value, "feedback endpoint")
 
 
+class ExcludedTasksDescriptor(ProtocolModel):
+    """Where the tasks the Company chose not to offer through the protocol are listed (§8.1)."""
+
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        return _https_url(value, "excluded tasks URL")
+
+
 class ExtensionDescriptor(ProtocolModel):
     version: str
 
@@ -175,6 +284,7 @@ class DiscoveryDocument(ProtocolModel):
     web: WebDescriptor | None = None
     apis: list[ApiDescriptor] = Field(default_factory=list)
     feedback: FeedbackDescriptor | None = None
+    excluded_tasks: ExcludedTasksDescriptor | None = None
     extensions: dict[str, ExtensionDescriptor] = Field(default_factory=dict)
 
     @field_validator("protocol_version")
@@ -200,13 +310,80 @@ class DiscoveryDocument(ProtocolModel):
 
 
 class OAuthServerMetadata(ProtocolModel):
+    """The issuer's RFC 8414 metadata, with the fields this protocol requires (§3.2)."""
+
     issuer: str
     token_endpoint: str
     revocation_endpoint: str
+    grant_types_supported: list[str]
+    #: RFC 9728 §4: `https://{domain}` for every domain whose `poppy.json` names the issuer,
+    #: exactly as written, compared as a string (§3.2).
+    protected_resources: list[str] = Field(min_length=1)
     authorization_endpoint: str | None = None
     device_authorization_endpoint: str | None = None
-    poppy_domains: list[str] = Field(min_length=1)
+    pushed_authorization_request_endpoint: str | None = None
+    scopes_supported: list[str] | None = None
     dpop_signing_alg_values_supported: list[str] | None = None
+
+    @field_validator("grant_types_supported")
+    @classmethod
+    def validate_grants(cls, value: list[str]) -> list[str]:
+        missing = {JWT_BEARER_GRANT, REFRESH_TOKEN_GRANT} - set(value)
+        if missing:
+            raise ValueError("grant_types_supported must include the JWT bearer and refresh grants")
+        return value
+
+    @field_validator("scopes_supported")
+    @classmethod
+    def validate_scopes(cls, value: list[str] | None) -> list[str] | None:
+        return [_scope(item) for item in value] if value is not None else None
+
+    @field_validator("protected_resources")
+    @classmethod
+    def validate_resources(cls, value: list[str]) -> list[str]:
+        return [_https_url(item, "protected resource") for item in value]
+
+    @model_validator(mode="after")
+    def validate_sign_in_endpoints(self) -> OAuthServerMetadata:
+        if self.offers_direct and self.authorization_endpoint is None:
+            raise ValueError("authorization_code needs authorization_endpoint")
+        if self.offers_device and self.device_authorization_endpoint is None:
+            raise ValueError("the device grant needs device_authorization_endpoint")
+        return self
+
+    @property
+    def offers_direct(self) -> bool:
+        """Whether the Company offers Direct Sign-In (§3.2, §4.4)."""
+
+        return AUTHORIZATION_CODE_GRANT in self.grant_types_supported
+
+    @property
+    def offers_device(self) -> bool:
+        """Whether the Company offers Device Sign-In (§3.2, §4.4)."""
+
+        return DEVICE_CODE_GRANT in self.grant_types_supported
+
+    @property
+    def offers_token_exchange(self) -> bool:
+        """Whether Bearer tokens for MCP servers without DPoP can be had (§4.3)."""
+
+        return TOKEN_EXCHANGE_GRANT in self.grant_types_supported
+
+    def lists_resource(self, domain: str) -> bool:
+        """Whether `protected_resources` names `https://{domain}` (§3.2).
+
+        Exactly, except that the host compares ignoring case: an entry with a path, a
+        port or a trailing slash does not match.
+        """
+
+        wanted = domain.lower().rstrip(".")
+        for entry in self.protected_resources:
+            if not entry.startswith("https://"):
+                continue
+            host = entry[len("https://") :]
+            if host and not any(char in host for char in "/?#:@") and host.lower() == wanted:
+                return True
+        return False
 
     @field_validator("issuer")
     @classmethod
@@ -226,15 +403,11 @@ class OAuthServerMetadata(ProtocolModel):
         "revocation_endpoint",
         "authorization_endpoint",
         "device_authorization_endpoint",
+        "pushed_authorization_request_endpoint",
     )
     @classmethod
     def validate_urls(cls, value: str | None, info: Any) -> str | None:
         return _https_url(value, info.field_name).rstrip("/") if value is not None else None
-
-    @field_validator("poppy_domains")
-    @classmethod
-    def normalize_domains(cls, value: list[str]) -> list[str]:
-        return [_domain(item) for item in value]
 
 
 class ClientMetadata(ProtocolModel):
@@ -254,14 +427,21 @@ class ClientMetadata(ProtocolModel):
     @field_validator("redirect_uris")
     @classmethod
     def validate_redirects(cls, value: list[str]) -> list[str]:
-        return [_https_url(item, "redirect URI") for item in value]
+        # An HTTPS URL, or a loopback redirect URI for an app on the User's computer (§4.1).
+        return [
+            item if is_loopback_redirect(item) else _https_url(item, "redirect URI")
+            for item in value
+        ]
 
     @model_validator(mode="after")
     def validate_same_domain_urls(self) -> ClientMetadata:
         domain = urlsplit(self.client_id).hostname
-        urls = [self.jwks_uri, *self.redirect_uris]
+        urls = [
+            self.jwks_uri,
+            *(uri for uri in self.redirect_uris if not is_loopback_redirect(uri)),
+        ]
         if any(urlsplit(url).hostname != domain for url in urls):
-            raise ValueError("jwks_uri and redirect_uris must use the client_id domain")
+            raise ValueError("jwks_uri and HTTPS redirect_uris must use the client_id domain")
         return self
 
 
@@ -385,11 +565,36 @@ class Operation(ProtocolModel):
         return self
 
 
+class Author(ProtocolModel):
+    """Who wrote a message (§7.4): `agent` or `human`, and for a Company message, who.
+
+    `id`, `name` and `image` name the Company's person or AI persona; each is optional,
+    and the Personal Agent never sends them.
+    """
+
+    type: Literal["agent", "human"]
+    id: str | None = None
+    name: str | None = Field(default=None, min_length=1)
+    image: str | None = None
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str | None) -> str | None:
+        if value is not None and not _IDENTIFIER.fullmatch(value):
+            raise ValueError("an author ID must use the URL-safe base64 alphabet")
+        return value
+
+    @field_validator("image")
+    @classmethod
+    def validate_image(cls, value: str | None) -> str | None:
+        return None if value is None else _https_url(value, "author image")
+
+
 class Message(ProtocolModel):
     """Message sent by either side or returned in a conversation event."""
 
     id: str
-    sender: Literal["agent", "human"]
+    author: Author
     role: Literal["user", "company"] | None = None
     text: str | None = None
     data: dict[str, Any] | None = None
@@ -428,7 +633,7 @@ class Message(ProtocolModel):
         return self
 
 
-#: Event types draft 0.2 defines (§7.5); a personal agent skips any other type.
+#: Event types draft 0.3 defines (§7.5); a personal agent skips any other type.
 KNOWN_EVENT_TYPES = frozenset(
     {"message", "state", "authorization", "user_requested", "direct_opened", "direct_closed"}
 )
@@ -443,7 +648,7 @@ class ConversationEvent(ProtocolModel):
     message: Message | None = None
     status: Literal["working", "idle", "queued", "closed"] | None = None
     responder: Literal["agent", "human"] | None = None
-    error: Literal["sign_in_required", "insufficient_scope"] | None = None
+    error: Literal["insufficient_scope"] | None = None
     scope: str | None = None
     reason: str | None = None
     conversation_id: str | None = None
@@ -475,10 +680,9 @@ class ConversationEvent(ProtocolModel):
         if self.type == "state" and (self.status is None or self.responder is None):
             raise ValueError("a state event requires status and responder")
         if self.type == "authorization":
-            if self.error is None:
-                raise ValueError("an authorization event requires error")
-            if self.error == "insufficient_scope" and not self.scope:
-                raise ValueError("insufficient_scope requires scope")
+            # Always both: the error, and the scopes the request needs (§7.11).
+            if self.error is None or not self.scope:
+                raise ValueError("an authorization event requires error and scope")
         if self.type == "user_requested" and not self.reason:
             raise ValueError("a user_requested event requires reason")
         if self.type in {"direct_opened", "direct_closed"} and self.conversation_id is None:
@@ -502,6 +706,73 @@ class ConversationEventPage(ProtocolModel):
         if not _IDENTIFIER.fullmatch(value):
             raise ValueError("conversation IDs and cursors must use the URL-safe base64 alphabet")
         return value
+
+
+class AlternativeReference(ProtocolModel):
+    """Where an alternative points (§8.2): an OpenAPI operation, an MCP tool, or a page."""
+
+    type: str = Field(min_length=1)
+    url: str | None = None
+    operation_id: str | None = Field(default=None, min_length=1)
+    tool: str | None = Field(default=None, min_length=1)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        return None if value is None else _https_url(value, "reference URL")
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> AlternativeReference:
+        needed = {"openapi": ("url", "operation_id"), "mcp": ("url", "tool"), "web": ("url",)}
+        if any(getattr(self, name) is None for name in needed.get(self.type, ())):
+            raise ValueError(f"a {self.type} reference lacks a required field")
+        return self
+
+
+class Alternative(ProtocolModel):
+    """Another way to do a task (§8.2): `instructions`, `references`, or both.
+
+    Content from the company (§9.1): a description of its interfaces, never
+    instructions the agent has to follow.
+    """
+
+    instructions: str | None = Field(default=None, min_length=1, max_length=2000)
+    references: list[AlternativeReference] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> Alternative:
+        if self.instructions is None and not self.references:
+            raise ValueError("an alternative needs instructions or references")
+        return self
+
+    def usable_references(self, document: DiscoveryDocument) -> list[AlternativeReference]:
+        """The references an agent may follow (§8.2).
+
+        Types it knows only, and an `openapi` or `mcp` reference only when its `url`
+        is an API of that type the company's poppy.json lists: never another
+        company's server.
+        """
+
+        listed = {(api.type, api.url) for api in document.apis}
+        return [
+            reference
+            for reference in self.references
+            if reference.type == "web"
+            or (reference.type in {"openapi", "mcp"} and (reference.type, reference.url) in listed)
+        ]
+
+
+class ExcludedTask(ProtocolModel):
+    """A task the company chose not to offer through the protocol (§8.1)."""
+
+    task: str = Field(min_length=1, max_length=200)
+    alternative: Alternative | None = None
+
+
+class ExcludedTasks(ProtocolModel):
+    """The document at `excluded_tasks.url` (§8.1): the same for every user."""
+
+    tasks: list[ExcludedTask]
 
 
 class DiscoveredCompany(ProtocolModel):

@@ -258,13 +258,13 @@ def session() -> SessionToken:
         access_token=SecretStr("session-secret"),
         token_type="DPoP",  # noqa: S106 - the OAuth token type
         expires_in=300,
-        session_id="ses_example",
+        session_key="K" * 43,
         signed_in=True,
         scope="orders:read",
     )
 
 
-WHO = {"tenant_id": "t", "pairwise_user_id": "usr_example", "issuer": "https://shop.example"}
+WHO = {"tenant_id": "t", "issuer": "https://shop.example"}
 
 
 @pytest.mark.asyncio

@@ -146,30 +146,54 @@ class BrowserHandoff(Protocol):
 
 
 @runtime_checkable
-class BrowserFormPost(Protocol):
-    """Submit protected fields as a controlled top-level browser navigation."""
+class BrowserJoin(Protocol):
+    """The personal agent's own browser, joining a Session through the company's form (§5).
 
-    async def post(self, endpoint: str, fields: dict[str, SecretStr]) -> None: ...
+    `load_join_form` opens the endpoint with a GET, as a top-level navigation, and
+    returns the form's one-time `code`, read from that page only; `submit_join_form`
+    puts the proof in the form's `proof` field and submits it from the same browser,
+    whose cookie ties the code to it.
+    """
+
+    async def load_join_form(self, endpoint: str) -> SecretStr: ...
+
+    async def submit_join_form(self, proof: SecretStr) -> None: ...
 
 
 @dataclass(frozen=True)
 class DpopProofRequest:
-    """Inputs for one fresh proof-of-possession JWT."""
+    """Inputs for one fresh proof-of-possession JWT.
+
+    `session_key` is the Session Key's JWK thumbprint (RFC 7638), which names the
+    Session at the company (§4.3): the provider signs with that key, and no other.
+    """
 
     method: str
     url: str
     tenant_id: str
-    subject: str
     issuer: str
+    session_key: str
     access_token: SecretStr | None = None
     nonce: str | None = None
 
 
 @runtime_checkable
 class DpopProofProvider(Protocol):
-    """Create a fresh DPoP proof while keeping its private key protected."""
+    """Create fresh DPoP proofs with Session Keys whose private halves it keeps (§4.3).
+
+    Each Session has its own key: `new_session_key` makes one and returns its JWK
+    thumbprint, which names the Session; `create` signs with the key a thumbprint
+    names; `discard_session_key` forgets one whose Session has ended, never to be
+    used again (§4.2).
+    """
+
+    async def new_session_key(self, *, tenant_id: str, issuer: str) -> str: ...
 
     async def create(self, request: DpopProofRequest) -> SecretStr: ...
+
+    async def discard_session_key(
+        self, *, tenant_id: str, issuer: str, session_key: str
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -483,7 +507,7 @@ PAIRWISE_USER_ID_STORES = define_contribution_point("pap.pairwiseUserIdStore")
 AUTHORIZATION_STATE_STORES = define_contribution_point("pap.authorizationStateStore")
 CACHES = define_contribution_point("pap.cache")
 BROWSER_HANDOFFS = define_contribution_point("pap.browserHandoff")
-BROWSER_FORM_POSTS = define_contribution_point("pap.browserFormPost")
+BROWSER_JOINS = define_contribution_point("pap.browserJoin")
 DPOP_PROOF_PROVIDERS = define_contribution_point("pap.dpopProofProvider")
 ACCOUNT_TOKEN_LOCKS = define_contribution_point("pap.accountTokenLock")
 PROTECTED_INPUTS = define_contribution_point("pap.protectedInput")
@@ -967,7 +991,7 @@ def build_pap_reactor(
                 AUTHORIZATION_STATE_STORES.id,
                 CACHES.id,
                 BROWSER_HANDOFFS.id,
-                BROWSER_FORM_POSTS.id,
+                BROWSER_JOINS.id,
                 DPOP_PROOF_PROVIDERS.id,
                 ACCOUNT_TOKEN_LOCKS.id,
                 PROTECTED_INPUTS.id,

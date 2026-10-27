@@ -68,7 +68,6 @@ from .reactor import (
     TOKEN_STORES,
     AddressResolver,
     Clock,
-    DpopProofRequest,
     ProtectedInputRequest,
     build_pap_reactor,
     first_contribution,
@@ -243,24 +242,36 @@ class FileKeyStore:
             self._private(signing["pem"]), algorithm=signing["alg"], key_id=signing["kid"]
         )
 
-    async def dpop_key(self, request: DpopProofRequest) -> DpopKeyMaterial:
-        """One P-256 key per tenant, user, and company, created on first use."""
+    # `SessionKeyCustody` (crypto.py): a new P-256 Session Key for each Session (§4.3),
+    # kept in the key file under tenant, issuer and thumbprint until it is discarded.
 
-        name = f"{request.tenant_id}|{request.subject}|{request.issuer}"
+    async def generate(self, *, tenant_id: str, issuer: str) -> DpopKeyMaterial:
+        private = ec.generate_private_key(ec.SECP256R1())
+        public = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(private.public_key()))
+        name = f"{tenant_id}|{issuer}|{_thumbprint(public)}"
         with _locked(self.path):
             document = _read(self.path)
-            keys = document.setdefault("dpop", {})
-            if name not in keys:
-                private = ec.generate_private_key(ec.SECP256R1())
-                keys[name] = private.private_bytes(
-                    serialization.Encoding.PEM,
-                    serialization.PrivateFormat.PKCS8,
-                    serialization.NoEncryption(),
-                ).decode()
-                _write_private(self.path, document)
-        private = cast(ec.EllipticCurvePrivateKey, self._private(keys[name]))
+            document.setdefault("dpop", {})[name] = private.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ).decode()
+            _write_private(self.path, document)
+        return DpopKeyMaterial(private_key=private, public_jwk=public)
+
+    async def get(self, *, tenant_id: str, issuer: str, thumbprint: str) -> DpopKeyMaterial | None:
+        pem = _read(self.path).get("dpop", {}).get(f"{tenant_id}|{issuer}|{thumbprint}")
+        if pem is None:
+            return None
+        private = cast(ec.EllipticCurvePrivateKey, self._private(pem))
         public = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(private.public_key()))
         return DpopKeyMaterial(private_key=private, public_jwk=public)
+
+    async def discard(self, *, tenant_id: str, issuer: str, thumbprint: str) -> None:
+        with _locked(self.path):
+            document = _read(self.path)
+            if document.get("dpop", {}).pop(f"{tenant_id}|{issuer}|{thumbprint}", None) is not None:
+                _write_private(self.path, document)
 
     @staticmethod
     def _private(pem: str) -> Any:
@@ -347,7 +358,7 @@ class UserBrowser:
 class SessionRecord:
     """A Session the CLI holds: everything but its tokens, which are in the token store."""
 
-    session_id: str
+    session_key: str
     domain: str
     company: str
     issuer: str
@@ -381,7 +392,7 @@ def approval_mac(key: SecretStr, approval: dict[str, Any]) -> str:
     """
 
     covered = json.dumps(
-        [approval.get(name) for name in ("operation_id", "revision", "digest", "session_id")],
+        [approval.get(name) for name in ("operation_id", "revision", "digest", "session_key")],
         separators=(",", ":"),
     )
     mac = hmac.new(key.get_secret_value().encode(), covered.encode(), hashlib.sha256).digest()
@@ -428,8 +439,8 @@ class CliState:
                 },
             )
 
-    def session(self, session_id: str) -> SessionRecord:
-        record = self.sessions.get(session_id)
+    def session(self, session_key: str) -> SessionRecord:
+        record = self.sessions.get(session_key)
         if record is None:
             raise NotConfiguredError("unknown_session", "No such Session: run `pap sessions start`")
         return record
@@ -453,10 +464,10 @@ class CliRuntime:
     def expires_at(self, expires_in: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
-    def session(self, session_id: str) -> SessionRecord:
+    def session(self, session_key: str) -> SessionRecord:
         """A Session of this runtime's tenant; another tenant's looks unknown."""
 
-        record = self.state.sessions.get(session_id)
+        record = self.state.sessions.get(session_key)
         if record is None or record.tenant_id != self.tenant_id:
             raise NotConfiguredError("unknown_session", "No such Session: run `pap sessions start`")
         return record
@@ -488,7 +499,7 @@ class CliHostPlugin:
         )
         contribute(
             DPOP_PROOF_PROVIDERS,
-            JoseDpopProofProvider(runtime.keys.dpop_key, now=now),
+            JoseDpopProofProvider(runtime.keys, now=now),
             contribution_id="file",
             order=100,
         )

@@ -111,12 +111,11 @@ class ApiClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
         body: Any = None,
         idempotency_key: str | None = None,
     ) -> ApiResponse:
-        """One call; `sign_in_required` and `insufficient_scope` carry the scope asked for.
+        """One call; `insufficient_scope` carries the scopes the request needs (§6).
 
         A write sends `idempotency_key`, or a new random one; pass the key of an
         earlier attempt to retry the same request. A read takes none.
@@ -141,7 +140,6 @@ class ApiClient:
             url,
             token=token,
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
             issuer=issuer,
             headers=headers,
             content=content,

@@ -32,10 +32,9 @@ async def _signed_in(world: World):  # type: ignore[no-untyped-def]
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -122,7 +121,7 @@ async def test_taking_a_company_down_settles_its_operations_and_ends_its_sign_in
         pairwise_user_id=PAIRWISE,
     )
     refreshed = await accounts.refresh(
-        done.account_token_reference, context=context, session_id=session.session_id
+        done.account_token_reference, context=context, session_key=session.session_key
     )
     assert refreshed.status == "signed_out"
 

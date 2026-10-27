@@ -8,7 +8,7 @@
       "message": {
         "id": "msg_r2Kq",
         "role": "company",
-        "sender": "agent",
+        "author": {"type": "agent"},
         "text": "I can propose that exchange.",
         "data": {"replacement_sku": "stormline-insulated-m"},
         "operation": {

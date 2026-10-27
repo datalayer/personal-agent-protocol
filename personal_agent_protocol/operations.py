@@ -313,11 +313,10 @@ class OperationsClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> Operation:
         response = await self._request(
-            "GET", endpoint, operation_id, None, token, tenant_id, pairwise_user_id, issuer
+            "GET", endpoint, operation_id, None, token, tenant_id, issuer
         )
         payload = self._payload(response)
         if response.status_code != 200:
@@ -334,7 +333,6 @@ class OperationsClient:
         standing: tuple[str, str, str] | None = None,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> ConfirmOutcome:
         """Confirm the revision the user approved, or one a standing permission covers.
@@ -356,7 +354,6 @@ class OperationsClient:
                 body,
                 token,
                 tenant_id,
-                pairwise_user_id,
                 issuer,
             )
         except TransportError:
@@ -366,7 +363,6 @@ class OperationsClient:
                 operation.operation_id,
                 token=token,
                 tenant_id=tenant_id,
-                pairwise_user_id=pairwise_user_id,
                 issuer=issuer,
             )
             await _settle(held, spent=current.state != "proposed")
@@ -461,7 +457,6 @@ class OperationsClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> Operation:
         """Cancel: a proposal becomes `cancelled`; one in progress stops if it can."""
@@ -473,7 +468,6 @@ class OperationsClient:
             b"{}",
             token,
             tenant_id,
-            pairwise_user_id,
             issuer,
         )
         payload = self._payload(response)
@@ -489,7 +483,6 @@ class OperationsClient:
         body: bytes | None,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> httpx.Response:
         if not _IDENTIFIER.fullmatch(path.split("/", 1)[0]):
@@ -502,7 +495,6 @@ class OperationsClient:
             f"{endpoint.rstrip('/')}/{path}",
             token=token,
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
             issuer=issuer,
             headers=headers,
             content=body,

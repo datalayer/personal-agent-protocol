@@ -15,6 +15,7 @@ from reactor import PluginManifest
 
 from personal_agent_protocol import (
     DPOP_PROOF_PROVIDERS,
+    Author,
     ConversationClient,
     ConversationError,
     DpopHttpClient,
@@ -26,7 +27,7 @@ from personal_agent_protocol import (
 from personal_agent_protocol.conversations import StreamReconnected, TextDelta
 
 ENDPOINT = "https://api.example/conversations"
-WHO = {"tenant_id": "tenant", "pairwise_user_id": "usr_example", "issuer": "https://auth.example"}
+WHO = {"tenant_id": "tenant", "issuer": "https://auth.example"}
 
 
 class Proofs:
@@ -44,7 +45,7 @@ def token(signed_in: bool = False) -> SessionToken:
         access_token=SecretStr("session-secret"),
         token_type="DPoP",  # noqa: S106 - OAuth token type
         expires_in=300,
-        session_id="ses_example",
+        session_key="K" * 43,
         signed_in=signed_in,
     )
 
@@ -80,7 +81,7 @@ def frame(data: dict[str, object], *, name: str | None = None, with_id: bool = T
 
 @pytest.mark.asyncio
 async def test_stream_yields_events_and_deltas_and_stops_at_closed() -> None:
-    reply = {"id": "msg_r1", "sender": "agent", "role": "company", "text": "Your order shipped."}
+    reply = {"id": "msg_r1", "author": {"type": "agent"}, "role": "company", "text": "Your order shipped."}
 
     def company(request: httpx.Request) -> httpx.Response:
         assert request.headers["accept"] == "text/event-stream"
@@ -205,7 +206,7 @@ async def test_a_direct_conversation_names_its_parent_and_the_parent_points_to_i
         opened = await client.start_direct(
             ENDPOINT,
             "cnv_1",
-            Message(id="msg_d1", sender="human", text="I'll take it from here"),
+            Message(id="msg_d1", author=Author(type="human"), text="I'll take it from here"),
             token=token(),
             **WHO,
         )
@@ -213,7 +214,7 @@ async def test_a_direct_conversation_names_its_parent_and_the_parent_points_to_i
             await client.send(
                 ENDPOINT,
                 "cnv_1",
-                Message(id="msg_p2", sender="agent", text="Still there?"),
+                Message(id="msg_p2", author=Author(type="agent"), text="Still there?"),
                 token=token(),
                 **WHO,
             )
@@ -243,14 +244,14 @@ async def test_signing_in_mid_conversation_keeps_its_id() -> None:
         first = await client.send(
             ENDPOINT,
             "cnv_1",
-            Message(id="msg_1", sender="agent", text="Show my order"),
+            Message(id="msg_1", author=Author(type="agent"), text="Show my order"),
             token=token(),
             **WHO,
         )
         second = await client.send(
             ENDPOINT,
             "cnv_1",
-            Message(id="msg_2", sender="agent", text="Signed in now"),
+            Message(id="msg_2", author=Author(type="agent"), text="Signed in now"),
             token=signed_in,
             **WHO,
         )

@@ -1,124 +1,58 @@
 # Copyright (c) 2025-2026 Datalayer, Inc.
 # BSD 3-Clause License
 
-"""PAP browser-session assertions and controlled form-post handoff."""
+"""Joining the personal agent's own browser to a PAP Session (§5, §9.6).
+
+The browser loads `web.browser_session_endpoint` with a GET and gets a form
+holding a one-time `code`, tied to that browser by a `SameSite=Strict` cookie.
+The personal agent signs a DPoP proof with the Session Key, the code as its
+`nonce`, and the browser submits code and proof; the company answers with the
+Session's cookie. The code is read from the agent's own browser only, by host
+code the model cannot read (§9.2): never from a message or another page.
+"""
 
 from __future__ import annotations
 
-import secrets
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Protocol, cast
+from datetime import datetime
+from typing import cast
 from urllib.parse import urlsplit
 
-import jwt
-from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import SecretStr
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .crypto import JoseAlgorithm, _algorithm
 from .errors import BrowserSessionError
 from .models import ProtocolModel
 from .reactor import (
-    BROWSER_FORM_POSTS,
+    BROWSER_JOINS,
     CLOCKS,
-    RANDOM_SOURCES,
-    SIGNERS,
-    BrowserFormPost,
+    DPOP_PROOF_PROVIDERS,
+    BrowserJoin,
     Clock,
-    RandomSource,
-    Signer,
+    DpopProofProvider,
+    DpopProofRequest,
     first_contribution,
 )
-from .sessions import RandomBytes, _opaque_id
 
-BROWSER_ASSERTION_TYPE = "poppy-browser+jwt"
-VerificationKey = EllipticCurvePublicKey | RSAPublicKey | jwt.PyJWK | str | bytes
+#: A join code carries at least 128 random bits (§5): 22 base64url characters or more.
+_MIN_CODE_LENGTH = 22
 
 
 def _https_url(value: str, label: str) -> str:
     parsed = urlsplit(value)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError(f"{label} must be an HTTPS URL")
+        raise BrowserSessionError("invalid_url", f"{label} must be an HTTPS URL")
     return value
-
-
-def _company_return_to(value: str, company_domain: str) -> str:
-    value = _https_url(value, "return_to")
-    host = (urlsplit(value).hostname or "").lower().rstrip(".")
-    domain = company_domain.lower().rstrip(".")
-    if not domain or (host != domain and not host.endswith(f".{domain}")):
-        raise ValueError("return_to must be on the company domain or a subdomain")
-    return value
-
-
-class BrowserAssertionClaims(ProtocolModel):
-    """Claims that bind a controlled browser to one PAP Session."""
-
-    iss: str
-    sub: str = Field(pattern=r"^[A-Za-z0-9_-]{1,256}$")
-    aud: str
-    session_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,256}$")
-    return_to: str
-    iat: int = Field(ge=0)
-    exp: int = Field(gt=0)
-    jti: str = Field(pattern=r"^[A-Za-z0-9_-]{22,256}$")
-
-    @field_validator("iss", "aud", "return_to")
-    @classmethod
-    def validate_urls(cls, value: str, info: object) -> str:
-        return _https_url(value, str(getattr(info, "field_name", "URL")))
-
-    @model_validator(mode="after")
-    def validate_lifetime(self) -> BrowserAssertionClaims:
-        if self.exp <= self.iat or self.exp - self.iat > 60:
-            raise ValueError("browser assertion lifetime must be between 1 and 60 seconds")
-        return self
-
-
-def build_browser_assertion_claims(
-    *,
-    client_id: str,
-    pairwise_user_id: str,
-    browser_session_endpoint: str,
-    session_id: str,
-    return_to: str,
-    company_domain: str,
-    now: datetime | None = None,
-    lifetime_seconds: int = 60,
-    random_bytes: RandomBytes = secrets.token_bytes,
-) -> BrowserAssertionClaims:
-    """Build unsigned PAP section 5 claims for protected signing."""
-
-    if not 0 < lifetime_seconds <= 60:
-        raise ValueError("browser assertion lifetime must be between 1 and 60 seconds")
-    issued_at = now or datetime.now(timezone.utc)
-    if issued_at.tzinfo is None:
-        raise ValueError("browser assertion time must include a timezone")
-    iat = int(issued_at.timestamp())
-    return BrowserAssertionClaims(
-        iss=_https_url(client_id, "client_id"),
-        sub=pairwise_user_id,
-        aud=_https_url(browser_session_endpoint, "browser_session_endpoint"),
-        session_id=session_id,
-        return_to=_company_return_to(return_to, company_domain),
-        iat=iat,
-        exp=iat + lifetime_seconds,
-        jti=_opaque_id("jti", random_bytes),
-    )
 
 
 class BrowserSessionStart(ProtocolModel):
-    """Safe status after a controlled form POST has started."""
+    """Safe status once the browser has submitted the join form."""
 
     endpoint: str
-    return_to: str
-    expires_at: datetime
+    joined_at: datetime
 
 
 class BrowserSessionClient:
-    """Sign and POST a browser assertion without putting it in a URL."""
+    """Join the agent's own browser to a Session with a proof over a one-time code."""
 
     def __init__(self, *, reactor: PluginPlatform) -> None:
         self.reactor = reactor
@@ -126,138 +60,44 @@ class BrowserSessionClient:
     async def join(
         self,
         *,
-        client_id: str,
-        pairwise_user_id: str,
         browser_session_endpoint: str,
-        session_id: str,
-        return_to: str,
-        company_domain: str,
-        lifetime_seconds: int = 60,
+        tenant_id: str,
+        issuer: str,
+        session_key: str,
     ) -> BrowserSessionStart:
+        """Load the join form, sign its code with the Session Key, submit it (§5).
+
+        `session_key` is the Session the browser joins, signed in or out. The proof's
+        `htm` is POST, its `htu` the endpoint, its `nonce` the code; it has no `ath`.
+        """
+
+        endpoint = _https_url(browser_session_endpoint, "browser_session_endpoint")
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
-        random = cast(
-            RandomSource, first_contribution(self.reactor, RANDOM_SOURCES, "random source")
+        browser = cast(BrowserJoin, first_contribution(self.reactor, BROWSER_JOINS, "browser join"))
+        prover = cast(
+            DpopProofProvider,
+            first_contribution(self.reactor, DPOP_PROOF_PROVIDERS, "DPoP proof provider"),
         )
-        signer = cast(Signer, first_contribution(self.reactor, SIGNERS, "signer"))
-        browser = cast(
-            BrowserFormPost,
-            first_contribution(
-                self.reactor,
-                BROWSER_FORM_POSTS,
-                "browser form POST",
-            ),
-        )
-        now = clock.now()
-        claims = build_browser_assertion_claims(
-            client_id=client_id,
-            pairwise_user_id=pairwise_user_id,
-            browser_session_endpoint=browser_session_endpoint,
-            session_id=session_id,
-            return_to=return_to,
-            company_domain=company_domain,
-            now=now,
-            lifetime_seconds=lifetime_seconds,
-            random_bytes=random.bytes,
-        )
-        assertion = await signer.sign(claims.model_dump(), purpose="browser_assertion")
-        await browser.post(claims.aud, {"assertion": assertion})
-        return BrowserSessionStart(
-            endpoint=claims.aud,
-            return_to=claims.return_to,
-            expires_at=datetime.fromtimestamp(claims.exp, timezone.utc),
-        )
-
-
-class BrowserAssertionReplayCache(Protocol):
-    async def mark_once(self, key: str, *, expires_at: datetime) -> bool: ...
-
-
-@dataclass(frozen=True)
-class VerifiedBrowserAssertion:
-    client_id: str
-    pairwise_user_id: str
-    session_id: str
-    return_to: str
-    expires_at: datetime
-
-
-async def verify_browser_assertion(
-    assertion: SecretStr | str,
-    *,
-    public_key: VerificationKey,
-    expected_endpoint: str,
-    company_domain: str,
-    expected_client_id: str,
-    expected_pairwise_user_id: str,
-    expected_session_id: str,
-    replay_cache: BrowserAssertionReplayCache,
-    now: datetime | None = None,
-) -> VerifiedBrowserAssertion:
-    """Verify type, signature, bindings, lifetime, return target, and replay."""
-
-    compact = assertion.get_secret_value() if isinstance(assertion, SecretStr) else assertion
-    current = now or datetime.now(timezone.utc)
-    if current.tzinfo is None:
-        raise ValueError("verification time must include a timezone")
-    try:
-        header = jwt.get_unverified_header(compact)
-        algorithm: JoseAlgorithm = _algorithm(str(header.get("alg", "")))
-        if header.get("typ") != BROWSER_ASSERTION_TYPE:
+        code = await browser.load_join_form(endpoint)
+        if len(code.get_secret_value()) < _MIN_CODE_LENGTH:
             raise BrowserSessionError(
-                "invalid_browser_assertion", "Browser assertion type is invalid"
+                "invalid_join_code", "The join page's code is too short to be one-time"
             )
-        claims: dict[str, Any] = jwt.decode(
-            compact,
-            public_key,
-            algorithms=[algorithm],
-            options={
-                "require": ["iss", "sub", "aud", "session_id", "return_to", "iat", "exp", "jti"],
-                "verify_aud": False,
-                "verify_iat": False,
-                "verify_exp": False,
-            },
+        proof = await prover.create(
+            DpopProofRequest(
+                method="POST",
+                url=endpoint,
+                tenant_id=tenant_id,
+                issuer=issuer,
+                session_key=session_key,
+                nonce=code.get_secret_value(),
+            )
         )
-    except BrowserSessionError:
-        raise
-    except (TypeError, ValueError, jwt.PyJWTError) as exc:
-        raise BrowserSessionError(
-            "invalid_browser_assertion", "Browser assertion signature or claims are invalid"
-        ) from exc
-    try:
-        parsed = BrowserAssertionClaims.model_validate(claims)
-        _company_return_to(parsed.return_to, company_domain)
-    except ValueError as exc:
-        raise BrowserSessionError(
-            "invalid_browser_assertion", "Browser assertion claims are invalid"
-        ) from exc
-    now_seconds = int(current.timestamp())
-    if parsed.iat > now_seconds or parsed.exp <= now_seconds:
-        raise BrowserSessionError(
-            "invalid_browser_assertion", "Browser assertion has expired or is not active"
-        )
-    if parsed.aud != _https_url(expected_endpoint, "expected_endpoint"):
-        raise BrowserSessionError(
-            "invalid_browser_assertion", "Browser assertion audience is invalid"
-        )
-    if (parsed.iss, parsed.sub, parsed.session_id) != (
-        expected_client_id,
-        expected_pairwise_user_id,
-        expected_session_id,
-    ):
-        raise BrowserSessionError(
-            "invalid_browser_assertion", "Browser assertion Session owner is invalid"
-        )
-    if not await replay_cache.mark_once(
-        f"browser:{parsed.iss}:{parsed.jti}",
-        expires_at=datetime.fromtimestamp(parsed.exp, timezone.utc),
-    ):
-        raise BrowserSessionError(
-            "invalid_browser_assertion", "Browser assertion has already been used"
-        )
-    return VerifiedBrowserAssertion(
-        parsed.iss,
-        parsed.sub,
-        parsed.session_id,
-        parsed.return_to,
-        datetime.fromtimestamp(parsed.exp, timezone.utc),
-    )
+        await browser.submit_join_form(proof)
+        return BrowserSessionStart(endpoint=endpoint, joined_at=clock.now())
+
+
+def join_proof_nonce(code: SecretStr | str) -> str:
+    """The `nonce` a join proof carries: the code itself (§5, RFC 9449 §8)."""
+
+    return code.get_secret_value() if isinstance(code, SecretStr) else code

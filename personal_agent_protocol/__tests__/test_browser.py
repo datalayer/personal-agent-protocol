@@ -5,23 +5,25 @@ from datetime import datetime, timezone
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import SecretStr
 from reactor import PluginManifest
 
 from personal_agent_protocol import (
-    BROWSER_ASSERTION_TYPE,
-    BROWSER_FORM_POSTS,
-    SIGNERS,
+    BROWSER_JOINS,
+    CLOCKS,
+    DPOP_PROOF_PROVIDERS,
     BrowserSessionClient,
     BrowserSessionError,
-    JoseSigner,
-    build_browser_assertion_claims,
+    InMemorySessionKeys,
+    JoseDpopProofProvider,
     build_pap_reactor,
-    verify_browser_assertion,
+    verify_dpop_proof,
 )
 
 NOW = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
+ENDPOINT = "https://shop.example/poppy/browser-session"
+ISSUER = "https://shop.example"
+CODE = "bc_Vn3qT8xLw2Rk9mZ4yHc1Ad"
 
 
 class Clock:
@@ -30,11 +32,19 @@ class Clock:
 
 
 class Browser:
-    def __init__(self) -> None:
-        self.posts: list[tuple[str, dict[str, SecretStr]]] = []
+    """The agent's own browser: the page it loaded holds the code; it submits the proof."""
 
-    async def post(self, endpoint: str, fields: dict[str, SecretStr]) -> None:
-        self.posts.append((endpoint, fields))
+    def __init__(self, code: str = CODE) -> None:
+        self.code = code
+        self.loaded: list[str] = []
+        self.submitted: list[SecretStr] = []
+
+    async def load_join_form(self, endpoint: str) -> SecretStr:
+        self.loaded.append(endpoint)
+        return SecretStr(self.code)
+
+    async def submit_join_form(self, proof: SecretStr) -> None:
+        self.submitted.append(proof)
 
 
 class ReplayCache:
@@ -42,120 +52,74 @@ class ReplayCache:
         self.keys: set[str] = set()
 
     async def mark_once(self, key: str, *, expires_at: datetime) -> bool:
-        assert expires_at > NOW
         if key in self.keys:
             return False
         self.keys.add(key)
         return True
 
 
-class BrowserPlugin:
-    def __init__(self, signer: JoseSigner, browser: Browser) -> None:
-        self.signer = signer
+class Plugin:
+    def __init__(self, browser: Browser, provider: JoseDpopProofProvider) -> None:
         self.browser = browser
+        self.provider = provider
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
-        contribute(SIGNERS, self.signer, contribution_id="signer")
-        contribute(BROWSER_FORM_POSTS, self.browser, contribution_id="browser")
+        contribute(BROWSER_JOINS, self.browser, contribution_id="browser")
+        contribute(DPOP_PROOF_PROVIDERS, self.provider, contribution_id="keys")
+        contribute(CLOCKS, Clock(), contribution_id="fixed", order=0)
 
 
-def options() -> dict[str, str]:
-    return {
-        "client_id": "https://agent.example/agent.json",
-        "pairwise_user_id": "usr_example",
-        "browser_session_endpoint": "https://shop.example/poppy/browser-session",
-        "session_id": "ses_example",
-        "return_to": "https://orders.shop.example/current",
-        "company_domain": "shop.example",
-    }
-
-
-def test_builds_short_lived_company_bound_claims() -> None:
-    claims = build_browser_assertion_claims(
-        **options(), now=NOW, random_bytes=lambda length: bytes(range(length))
-    )
-    assert claims.exp - claims.iat == 60
-    assert claims.jti == "jti_AAECAwQFBgcICQoLDA0ODw"
-    with pytest.raises(ValueError, match="company domain"):
-        build_browser_assertion_claims(
-            **{**options(), "return_to": "https://attacker.example/steal"}, now=NOW
-        )
-    with pytest.raises(ValueError, match="between 1 and 60"):
-        build_browser_assertion_claims(**options(), now=NOW, lifetime_seconds=61)
-
-
-@pytest.mark.asyncio
-async def test_posts_and_verifies_browser_assertion_once() -> None:
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    browser = Browser()
+async def joined(browser: Browser) -> tuple[str, Browser]:
+    provider = JoseDpopProofProvider(InMemorySessionKeys(), now=lambda: NOW)
     reactor, owned_http = build_pap_reactor()
     reactor.register_plugin(
-        PluginManifest(name="browser-test", version="1"),
-        BrowserPlugin(JoseSigner(private_key, key_id="agent-key"), browser),
+        PluginManifest(name="browser-test", version="1"), Plugin(browser, provider)
     )
-    # Replace the system clock at a higher priority for deterministic claims.
-    from personal_agent_protocol import CLOCKS
+    session_key = await provider.new_session_key(tenant_id="t", issuer=ISSUER)
+    try:
+        await BrowserSessionClient(reactor=reactor).join(
+            browser_session_endpoint=ENDPOINT, tenant_id="t", issuer=ISSUER, session_key=session_key
+        )
+    finally:
+        reactor.stop()
+        assert owned_http is not None
+        await owned_http.aclose()
+    return session_key, browser
 
-    class ClockPlugin:
-        def provide_contributions(self, contributions: object) -> None:
-            contributions.contribute(CLOCKS, Clock(), contribution_id="fixed", order=0)  # type: ignore[attr-defined]
 
-    reactor.register_plugin(PluginManifest(name="clock-test", version="1"), ClockPlugin())
-    started = await BrowserSessionClient(reactor=reactor).join(**options())
-    reactor.stop()
-    assert owned_http is not None
-    await owned_http.aclose()
-
-    assert started.return_to == options()["return_to"]
-    assert len(browser.posts) == 1
-    endpoint, fields = browser.posts[0]
-    assertion = fields["assertion"]
-    assert endpoint == options()["browser_session_endpoint"]
-    assert jwt.get_unverified_header(assertion.get_secret_value())["typ"] == BROWSER_ASSERTION_TYPE
-    assert "assertion=" not in endpoint
-
-    cache = ReplayCache()
-    verified = await verify_browser_assertion(
-        assertion,
-        public_key=private_key.public_key(),
-        expected_endpoint=options()["browser_session_endpoint"],
-        company_domain=options()["company_domain"],
-        expected_client_id=options()["client_id"],
-        expected_pairwise_user_id=options()["pairwise_user_id"],
-        expected_session_id=options()["session_id"],
-        replay_cache=cache,
-        now=NOW,
+@pytest.mark.asyncio
+async def test_signs_the_pages_code_with_the_session_key_and_submits_it() -> None:
+    session_key, browser = await joined(Browser())
+    assert browser.loaded == [ENDPOINT] and len(browser.submitted) == 1
+    proof = browser.submitted[0]
+    payload = jwt.decode(proof.get_secret_value(), options={"verify_signature": False})
+    # POST to the endpoint, the code as its nonce, no `ath`: no Session Token (§5).
+    assert (payload["htm"], payload["htu"], payload["nonce"]) == ("POST", ENDPOINT, CODE)
+    assert "ath" not in payload
+    verified = await verify_dpop_proof(
+        proof, method="POST", url=ENDPOINT, replay_cache=ReplayCache(), nonce=CODE, now=NOW
     )
-    assert verified.session_id == "ses_example"
-    with pytest.raises(BrowserSessionError, match="already been used"):
-        await verify_browser_assertion(
-            assertion,
-            public_key=private_key.public_key(),
-            expected_endpoint=options()["browser_session_endpoint"],
-            company_domain=options()["company_domain"],
-            expected_client_id=options()["client_id"],
-            expected_pairwise_user_id=options()["pairwise_user_id"],
-            expected_session_id=options()["session_id"],
-            replay_cache=cache,
+    # Signed with the Session's own key, which names it (§4.3).
+    assert verified.key_thumbprint == session_key
+
+
+@pytest.mark.asyncio
+async def test_a_proof_over_another_code_is_refused() -> None:
+    _, browser = await joined(Browser())
+    with pytest.raises(Exception, match="nonce"):
+        await verify_dpop_proof(
+            browser.submitted[0],
+            method="POST",
+            url=ENDPOINT,
+            replay_cache=ReplayCache(),
+            nonce="bc_someone_elses_code_000000",
             now=NOW,
         )
 
 
 @pytest.mark.asyncio
-async def test_rejects_wrong_type_owner_and_expiry() -> None:
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    claims = build_browser_assertion_claims(**options(), now=NOW)
-    ordinary = await JoseSigner(private_key).sign(claims.model_dump(), purpose="session_assertion")
-    with pytest.raises(BrowserSessionError, match="type is invalid"):
-        await verify_browser_assertion(
-            ordinary,
-            public_key=private_key.public_key(),
-            expected_endpoint=options()["browser_session_endpoint"],
-            company_domain=options()["company_domain"],
-            expected_client_id=options()["client_id"],
-            expected_pairwise_user_id=options()["pairwise_user_id"],
-            expected_session_id=options()["session_id"],
-            replay_cache=ReplayCache(),
-            now=NOW,
-        )
+async def test_a_code_too_short_to_be_one_time_is_never_signed() -> None:
+    with pytest.raises(BrowserSessionError) as refused:
+        await joined(Browser(code="short"))
+    assert refused.value.code == "invalid_join_code"

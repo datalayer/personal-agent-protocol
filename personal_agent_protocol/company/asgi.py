@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from typing import Any
 
 from .service import CompanyRequest, CompanyService
@@ -35,6 +35,16 @@ async def _send_json(send: Send, status: int, payload: bytes) -> None:
         }
     )
     await send({"type": "http.response.body", "body": payload})
+
+
+def _encoded(headers: Mapping[str, str]) -> list[tuple[bytes, bytes]]:
+    """Response headers; a `Set-Cookie` holding several cookies, one per line, is one each."""
+
+    return [
+        (name.encode(), line.encode())
+        for name, value in headers.items()
+        for line in (value.split("\n") if name.lower() == "set-cookie" else (value,))
+    ]
 
 
 def _headers(raw: list[tuple[bytes, bytes]]) -> dict[str, str]:
@@ -85,7 +95,7 @@ def company_app(service: CompanyService) -> Callable[[Scope, Receive, Send], Awa
                 {
                     "type": "http.response.start",
                     "status": response.status,
-                    "headers": [(k.encode(), v.encode()) for k, v in response.headers.items()],
+                    "headers": _encoded(response.headers),
                 }
             )
             async for chunk in response.stream:
@@ -103,7 +113,7 @@ def company_app(service: CompanyService) -> Callable[[Scope, Receive, Send], Awa
             {
                 "type": "http.response.start",
                 "status": response.status,
-                "headers": [(k.encode(), v.encode()) for k, v in headers_out.items()],
+                "headers": _encoded(headers_out),
             }
         )
         await send({"type": "http.response.body", "body": payload})

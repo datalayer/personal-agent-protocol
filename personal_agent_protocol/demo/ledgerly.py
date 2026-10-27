@@ -57,7 +57,7 @@ from ..company import (
 from ..conversations import ConversationClient, generate_message_id
 from ..device import DeviceSignInClient
 from ..discovery import DiscoveryClient
-from ..models import ClientMetadata, DiscoveredCompany, Message, Operation, OperationResult
+from ..models import Author, ClientMetadata, DiscoveredCompany, Message, Operation, OperationResult
 from ..operations import (
     InMemoryStandingPermissionStore,
     OperationError,
@@ -93,7 +93,11 @@ CONFIG = CompanyConfig(
     domain=DOMAIN,
     scopes=("books:read", "payments:write"),
     write_scopes=("payments:write",),
-    custom_scopes={"books:read": "See your books", "payments:write": "Pay bills for you"},
+    scope_descriptions={
+        "books:read": "See your books: invoices, bills and payments",
+        "payments:write": "Pay your bills, once you approve each payment",
+    },
+    scope_hints={"books:read": ("none", True), "payments:write": ("irreversible", True)},
 )
 
 _INVOICE = re.compile(r"\bINV-\d{4}\b")
@@ -138,7 +142,6 @@ class LedgerlyAsPersonalAgent:
     def who(self, link: NorthwindLink, company: DiscoveredCompany) -> Who:
         return {
             "tenant_id": TENANT,
-            "pairwise_user_id": link.pairwise_user_id,
             "issuer": company.oauth_metadata.issuer,  # type: ignore[union-attr]
         }
 
@@ -147,8 +150,9 @@ class LedgerlyAsPersonalAgent:
 
         company = await self.bank()
         metadata = company.oauth_metadata
-        if metadata is None or metadata.device_authorization_endpoint is None:
+        if metadata is None or not metadata.offers_device:
             raise RuntimeError("Northwind does not offer Device Sign-In")
+        assert metadata.device_authorization_endpoint is not None
         link = self.links.setdefault(
             account_id, NorthwindLink(pairwise_user_id=generate_pairwise_user_id())
         )
@@ -169,10 +173,9 @@ class LedgerlyAsPersonalAgent:
                 client_id=self.identity.client_id,
                 scopes=("accounts:read", "payments:write"),
                 tenant_id=TENANT,
-                pairwise_user_id=link.pairwise_user_id,
-                session_id=link.session.session_id,
+                session_key=link.session.session_key,
                 organization=company.document.organization,
-                poppy_domains=metadata.poppy_domains,
+                protected_resources=metadata.protected_resources,
             )
             link.device_reference, link.user_code = started.reference, started.user_code
             return link
@@ -194,7 +197,7 @@ class LedgerlyAsPersonalAgent:
             endpoint,
             Message(
                 id=generate_message_id(self.reactor),
-                sender="agent",
+                author=Author(type="agent"),
                 text=f"Pay {reference}: {currency} {amount} to {payee}",
             ),
             token=link.session,  # type: ignore[arg-type]
@@ -236,7 +239,7 @@ class LedgerlyAgent:
 
     async def respond(self, turn: Turn) -> Sequence[Reply]:
         if turn.account_id is None:
-            return [Reply(authorization=("sign_in_required", "books:read payments:write"))]
+            return [Reply(authorization=("insufficient_scope", "books:read payments:write"))]
         text = turn.text or ""
         link = await self.at.connect(turn.account_id)
         if link.account_token_reference is None:

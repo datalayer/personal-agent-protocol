@@ -95,10 +95,9 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     world.clock.advance(started.poll_interval)
     assert (await device.poll(started.reference)).status == "pending"
@@ -110,7 +109,7 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
     world.clock.advance(started.poll_interval)
     done = await device.poll(started.reference)
     assert done.status == "complete" and done.token is not None
-    assert done.token.session_id == session.session_id
+    assert done.token.session_key == session.session_key
     reference = done.account_token_reference
     assert reference is not None
 
@@ -128,7 +127,7 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
     assert isinstance(tokens, TokenStore)
     before = await tokens.get(reference)
     assert before is not None
-    refreshed = await accounts.refresh(reference, context=context, session_id=session.session_id)
+    refreshed = await accounts.refresh(reference, context=context, session_key=session.session_key)
     assert refreshed.status == "signed_in" and refreshed.rotated
     rotated = await tokens.get(reference)
     assert rotated is not None and rotated.get_secret_value() != before.get_secret_value()
@@ -154,10 +153,10 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
     assert old is not None and AccountGrant.from_json(old.value).revoked
     await tokens.put(reference, before)
     assert (
-        await accounts.refresh(reference, context=context, session_id=session.session_id)
+        await accounts.refresh(reference, context=context, session_key=session.session_key)
     ).status == "signed_out"
     await tokens.put(reference, rotated)
-    again = await accounts.refresh(reference, context=context, session_id=session.session_id)
+    again = await accounts.refresh(reference, context=context, session_key=session.session_key)
     assert again.status == "signed_in" and again.token is not None
 
     # The operation proposed before the restart is confirmed once after it.

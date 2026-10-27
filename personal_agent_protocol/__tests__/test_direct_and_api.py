@@ -40,8 +40,7 @@ async def begin(world: World, browser: ScriptedBrowser, session, scopes=("orders
         redirect_uri=f"https://{world.atlas.domain}/oauth/callback",
         scopes=scopes,
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
     )
     return client
 
@@ -59,7 +58,7 @@ async def test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchang
     with pytest.raises(ApiError) as raised:
         await api.call("GET", orders, token=session, **world.who)
     assert (raised.value.code, raised.value.details) == (
-        "sign_in_required",
+        "insufficient_scope",
         {"scope": "orders:read"},
     )
 
@@ -69,7 +68,7 @@ async def test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchang
     assert "Atlas" in page and "atlas.example" in page and "See your orders" in page
     callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
     result = await client.complete(callback)
-    assert result.token.signed_in and result.token.session_id == session.session_id
+    assert result.token.signed_in and result.token.session_key == session.session_key
     signed_in = result.token
 
     read = await api.call("GET", orders, token=signed_in, **world.who)
@@ -135,6 +134,7 @@ async def test_the_consent_page_is_never_framed_and_bad_redirects_are_not_follow
     good = (
         f"?response_type=code&client_id={world.atlas.client_id}&scope=orders:read"
         "&state=s1&code_challenge=c&code_challenge_method=S256"
+        f"&dpop_jkt={'K' * 43}"
         f"&redirect_uri=https://{world.atlas.domain}/oauth/callback"
     )
     page = await world.http.get(base + good)

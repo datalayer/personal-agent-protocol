@@ -1,6 +1,6 @@
 {
   "suite": "protocol",
-  "profile": "0.2",
+  "profile": "0.3",
   "description": "Protocol versions, unknown fields and types, extensions, and extension_required.",
   "cases": [
     {
@@ -43,7 +43,7 @@
           "issuer": "https://auth.example.com",
           "passkey": {
             "scopes": [
-              "poppy:read"
+              "orders:read"
             ]
           }
         },
@@ -71,7 +71,7 @@
       ],
       "check": "discovery_document",
       "input": {
-        "protocol_version": "0.2",
+        "protocol_version": "0.3",
         "organization": {
           "name": "Example",
           "domain": "example.com",
@@ -81,7 +81,7 @@
           "issuer": "https://auth.example.com",
           "passkey": {
             "scopes": [
-              "poppy:read"
+              "orders:read"
             ]
           }
         },
@@ -116,7 +116,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.1",
+              "protocol_version": "0.2",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -160,7 +160,7 @@
       ],
       "check": "discovery_document",
       "input": {
-        "protocol_version": "0.2",
+        "protocol_version": "0.3",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -197,7 +197,7 @@
       ],
       "check": "discovery_document",
       "input": {
-        "protocol_version": "0.2",
+        "protocol_version": "0.3",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -381,9 +381,11 @@
             "message": {
               "id": "msg_r2Kq",
               "role": "company",
-              "sender": "agent",
               "text": "Hi.",
-              "mood": "calm"
+              "mood": "calm",
+              "author": {
+                "type": "agent"
+              }
             }
           }
         ],
@@ -484,7 +486,7 @@
           "https://example.co.uk/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Example UK",
                 "domain": "example.co.uk"
@@ -501,9 +503,13 @@
               "issuer": "https://auth.example.com",
               "token_endpoint": "https://auth.example.com/oauth/token",
               "revocation_endpoint": "https://auth.example.com/oauth/revoke",
-              "poppy_domains": [
-                "example.com",
-                "example.co.uk"
+              "protected_resources": [
+                "https://example.com",
+                "https://example.co.uk"
+              ],
+              "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
               ]
             }
           }
@@ -527,7 +533,7 @@
           "https://example.fr/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Example FR",
                 "domain": "example.fr"
@@ -544,8 +550,12 @@
               "issuer": "https://auth.example.com",
               "token_endpoint": "https://auth.example.com/oauth/token",
               "revocation_endpoint": "https://auth.example.com/oauth/revoke",
-              "poppy_domains": [
-                "example.com"
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
               ]
             }
           }
@@ -554,6 +564,147 @@
       "expect": {
         "error": "domain_not_authorized"
       }
+    },
+    {
+      "id": "protocol.protected-resource-trailing-slash",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-04"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "example.fr",
+        "responses": {
+          "https://example.fr/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example FR",
+                "domain": "example.fr"
+              },
+              "auth": {
+                "issuer": "https://auth.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "protected_resources": [
+                "https://example.fr/"
+              ],
+              "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "domain_not_authorized"
+      },
+      "description": "An entry with a trailing slash does not match: resources compare as exact strings (§3.2, RFC 9728 §3.3)."
+    },
+    {
+      "id": "protocol.protected-resource-with-a-path",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-04"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "example.fr",
+        "responses": {
+          "https://example.fr/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example FR",
+                "domain": "example.fr"
+              },
+              "auth": {
+                "issuer": "https://auth.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "protected_resources": [
+                "https://example.fr/poppy"
+              ],
+              "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "domain_not_authorized"
+      },
+      "description": "An entry with a path does not match `https://{domain}` (§3.2)."
+    },
+    {
+      "id": "protocol.protected-resource-host-case",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-04"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "example.fr",
+        "responses": {
+          "https://example.fr/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example FR",
+                "domain": "example.fr"
+              },
+              "auth": {
+                "issuer": "https://auth.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "protected_resources": [
+                "https://EXAMPLE.fr"
+              ],
+              "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "organization_domain": "example.fr"
+      },
+      "description": "The host compares ignoring case, and nothing else does (§3.2)."
     },
     {
       "id": "protocol.issuer-mismatch",
@@ -569,7 +720,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -586,8 +737,12 @@
               "issuer": "https://login.example.com",
               "token_endpoint": "https://auth.example.com/oauth/token",
               "revocation_endpoint": "https://auth.example.com/oauth/revoke",
-              "poppy_domains": [
-                "example.com"
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
               ]
             }
           }
@@ -612,7 +767,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -629,8 +784,12 @@
               "issuer": "https://auth.example.com/",
               "token_endpoint": "https://auth.example.com/oauth/token",
               "revocation_endpoint": "https://auth.example.com/oauth/revoke",
-              "poppy_domains": [
-                "example.com"
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
               ]
             }
           }
@@ -656,7 +815,7 @@
           "https://shop-a.example/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Shop A",
                 "domain": "shop-a.example"
@@ -673,8 +832,12 @@
               "issuer": "https://auth.provider.example/shop-a",
               "token_endpoint": "https://auth.provider.example/oauth/token",
               "revocation_endpoint": "https://auth.provider.example/oauth/revoke",
-              "poppy_domains": [
-                "Shop-A.example"
+              "protected_resources": [
+                "https://Shop-A.example"
+              ],
+              "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
               ]
             }
           }
@@ -699,7 +862,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -716,11 +879,15 @@
               "issuer": "https://auth.example.com",
               "token_endpoint": "https://auth.example.com/oauth/token",
               "revocation_endpoint": "https://auth.example.com/oauth/revoke",
-              "poppy_domains": [
-                "example.com"
-              ],
               "dpop_signing_alg_values_supported": [
                 "RS256"
+              ],
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
               ]
             }
           }
@@ -744,7 +911,7 @@
           "https://www.example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -774,13 +941,13 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 302,
             "headers": {
-              "location": "https://host.provider.example/example.json"
+              "location": "https://host.provider.example/.well-known/poppy.json"
             }
           },
-          "https://host.provider.example/example.json": {
+          "https://host.provider.example/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -794,6 +961,76 @@
         "error": "organization_domain_mismatch"
       },
       "description": "A document speaks for the host that serves it after redirects: one served by a provider's host can't name the company's domain (§3, §3.1)."
+    },
+    {
+      "id": "protocol.redirect-ends-off-the-well-known-path",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3-07"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 302,
+            "headers": {
+              "location": "https://example.com/uploads/poppy.json"
+            }
+          },
+          "https://example.com/uploads/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {}
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "invalid_discovery_location"
+      },
+      "description": "A redirect may change host, but only a document at /.well-known/poppy.json, with no query, speaks for a domain: an upload elsewhere on it does not (§3, §9.3)."
+    },
+    {
+      "id": "protocol.redirect-ends-with-a-query",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3-07"
+      ],
+      "check": "discovery",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 302,
+            "headers": {
+              "location": "https://example.com/.well-known/poppy.json?v=2"
+            }
+          },
+          "https://example.com/.well-known/poppy.json?v=2": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {}
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "invalid_discovery_location"
+      },
+      "description": "The last URL has the well-known path and no query (§3)."
     },
     {
       "id": "protocol.organization-domain-redirect-www",
@@ -817,7 +1054,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -847,7 +1084,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.2",
+              "protocol_version": "0.3",
               "organization": {
                 "name": "Example",
                 "domain": "Example.COM"
@@ -881,7 +1118,7 @@
       "check": "discovery_document",
       "description": "auth is required when feedback is present (§3.1).",
       "input": {
-        "protocol_version": "0.2",
+        "protocol_version": "0.3",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -906,7 +1143,7 @@
       "check": "discovery_document",
       "description": "Every URL the protocol defines is HTTPS, the feedback endpoint included (§3, §3.1).",
       "input": {
-        "protocol_version": "0.2",
+        "protocol_version": "0.3",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -933,7 +1170,7 @@
       "check": "discovery_document",
       "description": "A company that wants feedback lists feedback.endpoint (§8).",
       "input": {
-        "protocol_version": "0.2",
+        "protocol_version": "0.3",
         "organization": {
           "name": "Example",
           "domain": "example.com"

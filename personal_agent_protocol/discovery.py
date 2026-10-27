@@ -19,6 +19,7 @@ from .models import (
     SUPPORTED_PROTOCOL_VERSIONS,
     DiscoveredCompany,
     DiscoveryDocument,
+    ExcludedTasks,
     OAuthServerMetadata,
 )
 from .reactor import (
@@ -96,6 +97,13 @@ class DiscoveryClient:
         requested_domain = self._normalize_domain(domain)
         discovery_url = f"https://{requested_domain}/.well-known/poppy.json"
         document_data, final_url = await self._get_json(discovery_url)
+        # A redirect may change host, but only a document at the well-known path itself,
+        # with no query, speaks for a domain: not an upload elsewhere on it (§3, §9.3).
+        if final_url.path != "/.well-known/poppy.json" or final_url.query:
+            raise DiscoveryError(
+                "invalid_discovery_location",
+                "Discovery redirects must end at /.well-known/poppy.json with no query",
+            )
         version = document_data.get("protocol_version") if isinstance(document_data, dict) else None
         if isinstance(version, str) and version not in SUPPORTED_PROTOCOL_VERSIONS:
             # Before 1.0 each version can break the last: only a supported major.minor (§3.1).
@@ -133,8 +141,8 @@ class DiscoveryClient:
                 raise DiscoveryError(
                     "issuer_mismatch", "OAuth metadata issuer does not match auth.issuer"
                 )
-            # Both lower-cased by their models: domains compare ignoring case (§3.2).
-            if document.organization.domain not in metadata.poppy_domains:
+            # `https://{domain}` exactly, the host ignoring case (§3.2, RFC 9728 §3.3).
+            if not metadata.lists_resource(document.organization.domain):
                 raise DiscoveryError(
                     "domain_not_authorized",
                     "OAuth metadata does not authorize the discovered company domain",
@@ -145,6 +153,25 @@ class DiscoveryClient:
             document=document,
             oauth_metadata=metadata,
         )
+
+    async def excluded_tasks(self, company: DiscoveredCompany) -> ExcludedTasks | None:
+        """The tasks the company chose not to offer through the protocol (§8.1).
+
+        A public document: a GET with no token, cached as its headers allow. `None`
+        when the company lists none. Read it before starting on a task there; whether
+        a user's task is one of them is the agent's judgment.
+        """
+
+        descriptor = company.document.excluded_tasks
+        if descriptor is None:
+            return None
+        data, _ = await self._get_json(descriptor.url)
+        try:
+            return ExcludedTasks.model_validate(data)
+        except ValidationError as exc:
+            raise ProtocolValidationError(
+                "invalid_excluded_tasks", "The excluded tasks document failed validation"
+            ) from exc
 
     @staticmethod
     def _normalize_domain(domain: str) -> str:

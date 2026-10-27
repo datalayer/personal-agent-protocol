@@ -1,6 +1,6 @@
 {
   "suite": "conversations",
-  "profile": "0.2",
+  "profile": "0.3",
   "description": "Message IDs, cursors, has_more, SSE, text-delta, attribution, handoff, Direct Conversations, closure, and errors.",
   "cases": [
     {
@@ -13,7 +13,7 @@
         "PAP-7.5-03",
         "PAP-4.3-01"
       ],
-      "description": "Starting a conversation returns 201 with status and responder; every read has cursor, has_more, status, responder; company messages have sender."
+      "description": "Starting a conversation returns 201 with status and responder; every read has cursor, has_more, status, responder; company messages have author."
     },
     {
       "id": "conversations.retry-replays",
@@ -104,7 +104,7 @@
         "PAP-7.8-01",
         "PAP-7.7-02"
       ],
-      "description": "The user's own words go as sender human and come back with role user; company messages carry role company and a sender."
+      "description": "The user's own words go as author human and come back with role user; company messages carry role company and an author."
     },
     {
       "id": "conversations.handoff",
@@ -167,7 +167,7 @@
       "requirements": [
         "PAP-7.2-01"
       ],
-      "description": "Once a conversation used the account, a signed-out token for the same user gets sign_in_required."
+      "description": "Once a conversation used the account, a signed-out token for the same user gets insufficient_scope."
     }
   ]
 }

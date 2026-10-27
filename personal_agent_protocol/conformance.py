@@ -34,6 +34,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
@@ -60,7 +61,7 @@ from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError, TransportError
 from .feedback import feedback_endpoint
 from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
-from .models import ConversationEvent, DiscoveredCompany, Message, Operation
+from .models import Author, ConversationEvent, DiscoveredCompany, Message, Operation
 from .operations import (
     STANDING_PERMISSION_STORES,
     InMemoryStandingPermissionStore,
@@ -345,6 +346,14 @@ class ConformanceContext:
         #: Where API paths resolve: the origin of the company's OpenAPI API, once discovered.
         self._api_base: str | None = None
 
+    def new_browser(self) -> httpx.AsyncClient:
+        """Another browser, with a cookie jar of its own, on the runner's browser network."""
+
+        if self.agent.browser is None:
+            raise SkipCase("the runner was given no browser of its own")
+        # The same transport (and so the same network and TLS trust), new cookies.
+        return httpx.AsyncClient(transport=self.agent.browser.http._transport)
+
     # The company -------------------------------------------------------------------
 
     async def company(self) -> DiscoveredCompany:
@@ -420,7 +429,7 @@ class ConformanceContext:
 
     async def who(self, user: str) -> Who:
         metadata = await self.metadata()
-        return {"tenant_id": self.tenant_id, "pairwise_user_id": user, "issuer": metadata.issuer}
+        return {"tenant_id": self.tenant_id, "issuer": metadata.issuer}
 
     async def session(self, user: str, agent: Agent | None = None) -> SessionToken:
         metadata = await self.metadata()
@@ -447,26 +456,22 @@ class ConformanceContext:
 
         metadata = await self.metadata()
         actor = agent or self.agent
-        if metadata.device_authorization_endpoint is None:
-            if (
-                "direct_sign_in" in self.driver.capabilities
-                and metadata.authorization_endpoint is not None
-            ):
+        if not metadata.offers_device:
+            if "direct_sign_in" in self.driver.capabilities and metadata.offers_direct:
                 return await self._direct_sign_in(
                     actor, user, session, scopes=scopes, granted=granted, account=account
                 )
             raise SkipCase("the company offers no Device Sign-In")
         started = await actor.device.begin(
-            device_authorization_endpoint=metadata.device_authorization_endpoint,
+            device_authorization_endpoint=cast(str, metadata.device_authorization_endpoint),
             token_endpoint=metadata.token_endpoint,
             issuer=metadata.issuer,
             client_id=actor.identity.client_id,
             scopes=tuple(scopes or self.scenario.scopes),
             tenant_id=self.tenant_id,
-            pairwise_user_id=user,
-            session_id=session.session_id,
+            session_key=session.session_key,
             organization=(await self.company()).document.organization,
-            poppy_domains=metadata.poppy_domains,
+            protected_resources=metadata.protected_resources,
         )
         await self.driver.approve_device(
             started.user_code, account=account or self.driver.accounts[0], scopes=granted
@@ -502,8 +507,7 @@ class ConformanceContext:
             redirect_uri=str(actor.identity.metadata["redirect_uris"][0]),
             scopes=tuple(scopes or self.scenario.scopes),
             tenant_id=self.tenant_id,
-            pairwise_user_id=user,
-            session_id=session.session_id,
+            session_key=session.session_key,
         )
         callback = await self.driver.approve_authorization(
             actor.user_browser.urls[-1],
@@ -553,20 +557,34 @@ class ConformanceContext:
         url: str,
         *,
         token: SessionToken | SecretStr | None = None,
+        session_key: str | None = None,
         agent: Agent | None = None,
         shift: float = 0,
+        nonce: str | None = None,
     ) -> str:
-        """A DPoP proof from the user's key, optionally made `shift` seconds off."""
+        """A DPoP proof, optionally made `shift` seconds off.
 
+        Signed with `session_key`, else the key of `token`'s Session, else a new
+        Session Key: a proof from a key the company has never seen starts a Session
+        at the token endpoint (§4.3).
+        """
+
+        del user  # a proof names a Session by its key, not the user (§4.3)
         metadata = await self.metadata()
         provider = first_contribution(
             (agent or self.agent).reactor, DPOP_PROOF_PROVIDERS, "DPoP proof provider"
         )
+        if session_key is None and isinstance(token, SessionToken):
+            session_key = token.session_key
+        if session_key is None:
+            session_key = await provider.new_session_key(  # type: ignore[attr-defined]
+                tenant_id=self.tenant_id, issuer=metadata.issuer
+            )
         if shift:
             if not isinstance(provider, JoseDpopProofProvider):
                 raise SkipCase("the DPoP provider cannot make a proof at another time")
             provider = JoseDpopProofProvider(
-                provider.key_resolver, now=lambda: self.now() + timedelta(seconds=shift)
+                provider.keys, now=lambda: self.now() + timedelta(seconds=shift)
             )
         access = token.access_token if isinstance(token, SessionToken) else token
         proof = await provider.create(  # type: ignore[attr-defined]
@@ -574,9 +592,10 @@ class ConformanceContext:
                 method=method,
                 url=url,
                 tenant_id=self.tenant_id,
-                subject=user,
                 issuer=metadata.issuer,
+                session_key=session_key,
                 access_token=access,
+                nonce=nonce,
             )
         )
         return cast(SecretStr, proof).get_secret_value()
@@ -817,7 +836,10 @@ async def _session_assertion(ctx: ConformanceContext, fixture: FixtureCase) -> N
         response = await send()
     if fixture.expect["status"] == 200:
         check(response.status_code == 200, f"{fixture.id}: expected 200")
-        check(response.json().get("signed_in") is False, "a new Session starts signed out")
+        body = response.json()
+        # Signed out: the grant says so, and there is no `scope` (§4.2); no Session is named.
+        check("scope" not in body and "signed_in" not in body, "a new Session starts signed out")
+        check("session_id" not in body, "the response names no Session: its key does")
         return
     expect_refusal(response, fixture.expect["status"], fixture.expect["error"], fixture.id)
 
@@ -886,7 +908,8 @@ async def _resource_dpop(  # noqa: C901 - one branch per proof mutation
         first, second = await valid(), await valid()
         headers["DPoP"] = ".".join([*first.split(".")[:2], second.split(".")[2]])
     elif mutation.get("key") == "other":
-        headers["DPoP"] = await ctx.proof(ctx.new_user(), "GET", url, token=session)
+        # Another key than the one the token is bound to: a fresh Session Key.
+        headers["DPoP"] = await ctx.proof(user, "GET", url, token=session.access_token)
     elif "htm" in mutation:
         headers["DPoP"] = await ctx.proof(user, mutation["htm"], url, token=session)
     elif "htu" in mutation:
@@ -938,7 +961,7 @@ async def _no_cookies(ctx: ConformanceContext, _: FixtureCase) -> None:
     session = await ctx.session(user)
     endpoint = await ctx.conversations_endpoint()
     body = json.dumps(
-        {"message": {"id": _message_id(), "sender": "agent", "text": ctx.scenario.greeting}}
+        {"message": {"id": _message_id(), "author": {"type": "agent"}, "text": ctx.scenario.greeting}}
     ).encode()
     response = await ctx.send(
         "POST",
@@ -997,7 +1020,6 @@ async def _no_disclosure(ctx: ConformanceContext, _: FixtureCase) -> None:
     form = {
         "grant_type": "refresh_token",
         "refresh_token": account_token,
-        "session_id": session.session_id,
         **(await ctx.client_form()),
     }
     form["client_assertion"] = ctx.assertion(
@@ -1052,7 +1074,7 @@ async def _signed_out(ctx: ConformanceContext, _: FixtureCase) -> None:
 async def _parallel(ctx: ConformanceContext, _: FixtureCase) -> None:
     user = ctx.new_user()
     first, second = await asyncio.gather(ctx.session(user), ctx.session(user))
-    check(first.session_id != second.session_id, "parallel Sessions are distinct")
+    check(first.session_key != second.session_key, "parallel Sessions are distinct")
     endpoint = await ctx.conversations_endpoint()
     for session in (first, second):
         receipt = await ctx.agent.conversations.start(
@@ -1072,9 +1094,9 @@ async def _renew(ctx: ConformanceContext, _: FixtureCase) -> None:
         issuer=metadata.issuer,
         token_endpoint=metadata.token_endpoint,
         tenant_id=ctx.tenant_id,
-        session_id=old.session_id,
+        session_key=old.session_key,
     )
-    check(new.session_id == old.session_id, "renewal keeps the Session")
+    check(new.session_key == old.session_key, "renewal keeps the Session")
     check(await _probe(ctx, user, new) == 403, "the new token is served (signed out)")
     # Whether the replaced token stops at once is the company's choice (no MUST in §4.2):
     # it is not checked here.
@@ -1091,9 +1113,10 @@ async def _renew_other(ctx: ConformanceContext, _: FixtureCase) -> None:
             issuer=metadata.issuer,
             token_endpoint=metadata.token_endpoint,
             tenant_id=ctx.tenant_id,
-            session_id=owner.session_id,
+            session_key=owner.session_key,
         )
-    check(raised.value.code == "invalid_session", f"got {raised.value.code}")
+    # A key naming another user's Session is `invalid_grant` (§4.2).
+    check(raised.value.code == "invalid_grant", f"got {raised.value.code}")
 
 
 @case("lifecycle.sign-in-scopes")
@@ -1103,7 +1126,7 @@ async def _sign_in_scopes(ctx: ConformanceContext, _: FixtureCase) -> None:
     granted = (ctx.scenario.read_scope,)
     signed = await ctx.sign_in(user, session, granted=granted)
     check(signed.token.signed_in, "the Session is signed in")
-    check(signed.token.session_id == session.session_id, "the same Session is signed in")
+    check(signed.token.session_key == session.session_key, "the same Session is signed in")
     check(signed.token.scopes == granted, "only what the user approved is granted")
 
 
@@ -1122,10 +1145,9 @@ async def _unknown_scope(ctx: ConformanceContext, _: FixtureCase) -> None:
             client_id=ctx.agent.identity.client_id,
             scopes=("conformance:not-a-scope",),
             tenant_id=ctx.tenant_id,
-            pairwise_user_id=user,
-            session_id=session.session_id,
+            session_key=session.session_key,
             organization=(await ctx.company()).document.organization,
-            poppy_domains=metadata.poppy_domains,
+            protected_resources=metadata.protected_resources,
         )
     check(raised.value.code == "invalid_scope", f"got {raised.value.code}")
 
@@ -1136,7 +1158,7 @@ async def _new_session(ctx: ConformanceContext, _: FixtureCase) -> None:
     signed = await ctx.sign_in(user, await ctx.session(user))
     fresh = await ctx.session(user)
     result = await ctx.agent.accounts.refresh(
-        signed.reference, context=await ctx.account_context(user), session_id=fresh.session_id
+        signed.reference, context=await ctx.account_context(user), session_key=fresh.session_key
     )
     check(result.status == "signed_in" and result.token is not None, "the Session signs in")
     check(await _probe(ctx, user, cast(SessionToken, result.token)) == 200, "it reads")
@@ -1149,20 +1171,21 @@ async def _rotated(ctx: ConformanceContext, _: FixtureCase) -> None:
     signed = await ctx.sign_in(user, session)
     before = await ctx.account_token(signed.reference)
     result = await ctx.agent.accounts.refresh(
-        signed.reference, context=await ctx.account_context(user), session_id=session.session_id
+        signed.reference, context=await ctx.account_context(user), session_key=session.session_key
     )
     if not result.rotated:
         raise SkipCase("the company does not rotate Account Tokens")
     form = {
         "grant_type": "refresh_token",
         "refresh_token": before.get_secret_value(),
-        "session_id": session.session_id,
         **(await ctx.client_form()),
     }
-    old = await ctx.token_request(user, form)
+    metadata = await ctx.metadata()
+    proof = await ctx.proof(user, "POST", metadata.token_endpoint, session_key=session.session_key)
+    old = await ctx.token_request(user, form, dpop=proof)
     expect_refusal(old, 400, "invalid_grant", "a rotated-away Account Token")
     again = await ctx.agent.accounts.refresh(
-        signed.reference, context=await ctx.account_context(user), session_id=session.session_id
+        signed.reference, context=await ctx.account_context(user), session_key=session.session_key
     )
     check(again.status == "signed_in", "the stored, rotated token keeps working")
 
@@ -1175,7 +1198,7 @@ async def _narrower(ctx: ConformanceContext, _: FixtureCase) -> None:
     result = await ctx.agent.accounts.refresh(
         signed.reference,
         context=await ctx.account_context(user),
-        session_id=session.session_id,
+        session_key=session.session_key,
         scopes=(ctx.scenario.read_scope,),
     )
     check(result.status == "signed_in", "a narrower refresh signs in")
@@ -1190,7 +1213,7 @@ async def _wider(ctx: ConformanceContext, _: FixtureCase) -> None:
     result = await ctx.agent.accounts.refresh(
         signed.reference,
         context=await ctx.account_context(user),
-        session_id=session.session_id,
+        session_key=session.session_key,
         scopes=ctx.scenario.scopes,
     )
     check(result.status == "re_consent_required", f"got {result.status}")
@@ -1206,11 +1229,12 @@ async def _other_client(ctx: ConformanceContext, _: FixtureCase) -> None:
     form = {
         "grant_type": "refresh_token",
         "refresh_token": (await ctx.account_token(signed.reference)).get_secret_value(),
-        "session_id": other_session.session_id,
         **(await ctx.client_form(other.identity)),
     }
     metadata = await ctx.metadata()
-    proof = await ctx.proof(user, "POST", metadata.token_endpoint, agent=other)
+    proof = await ctx.proof(
+        user, "POST", metadata.token_endpoint, agent=other, session_key=other_session.session_key
+    )
     response = await ctx.token_request(user, form, dpop=proof)
     expect_refusal(response, 400, "invalid_grant", "another client's Account Token")
 
@@ -1243,7 +1267,7 @@ async def _mismatch(ctx: ConformanceContext, _: FixtureCase) -> None:
         await ctx.agent.accounts.refresh(
             signed.reference,
             context=await ctx.account_context(user),
-            session_id=other_session.session_id,
+            session_key=other_session.session_key,
         )
     check(raised.value.code == "account_mismatch", f"got {raised.value.code}")
 
@@ -1253,13 +1277,16 @@ async def _another_users_session(ctx: ConformanceContext, _: FixtureCase) -> Non
     user = ctx.new_user()
     signed = await ctx.sign_in(user, await ctx.session(user))
     stranger = await ctx.session(ctx.new_user())
-    with _raises(PersonalAgentProtocolError) as raised:
-        await ctx.agent.accounts.refresh(
-            signed.reference,
-            context=await ctx.account_context(user),
-            session_id=stranger.session_id,
-        )
-    check(raised.value.code == "invalid_session", f"got {raised.value.code}")
+    metadata = await ctx.metadata()
+    form = {
+        "grant_type": "refresh_token",
+        "refresh_token": (await ctx.account_token(signed.reference)).get_secret_value(),
+        **(await ctx.client_form()),
+    }
+    proof = await ctx.proof(user, "POST", metadata.token_endpoint, session_key=stranger.session_key)
+    # The key names another user's Session: refused, no token issued (§4.8).
+    response = await ctx.token_request(user, form, dpop=proof)
+    expect_refusal(response, 400, "invalid_grant", "an Account Token for another user's Session")
 
 
 @case("lifecycle.sign-out-takes-effect")
@@ -1291,16 +1318,18 @@ async def _sign_out_continues(ctx: ConformanceContext, _: FixtureCase) -> None:
         issuer=metadata.issuer,
         token_endpoint=metadata.token_endpoint,
         tenant_id=ctx.tenant_id,
-        session_id=session.session_id,
+        session_key=session.session_key,
     )
     check(not renewed.signed_in, "the Session continues signed out")
     form = {
         "grant_type": "refresh_token",
         "refresh_token": secret.get_secret_value(),
-        "session_id": session.session_id,
         **(await ctx.client_form()),
     }
-    expect_refusal(await ctx.token_request(user, form), 400, "invalid_grant", "a revoked token")
+    proof = await ctx.proof(user, "POST", metadata.token_endpoint, session_key=session.session_key)
+    expect_refusal(
+        await ctx.token_request(user, form, dpop=proof), 400, "invalid_grant", "a revoked token"
+    )
 
 
 @case("lifecycle.sign-out-every-session")
@@ -1311,7 +1340,7 @@ async def _sign_out_every_session(ctx: ConformanceContext, _: FixtureCase) -> No
     signed = await ctx.sign_in(user, first)
     second = await ctx.session(user)
     rotated = await ctx.agent.accounts.refresh(
-        signed.reference, context=await ctx.account_context(user), session_id=second.session_id
+        signed.reference, context=await ctx.account_context(user), session_key=second.session_key
     )
     check(rotated.status == "signed_in" and rotated.token is not None, "a second Session signs in")
     await ctx.agent.accounts.revoke(signed.reference, context=await ctx.account_context(user))
@@ -1323,7 +1352,7 @@ async def _sign_out_every_session(ctx: ConformanceContext, _: FixtureCase) -> No
         issuer=metadata.issuer,
         token_endpoint=metadata.token_endpoint,
         tenant_id=ctx.tenant_id,
-        session_id=first.session_id,
+        session_key=first.session_key,
     )
     check(not renewed.signed_in, "renewing with the assertion gives a signed-out token")
 
@@ -1337,7 +1366,7 @@ async def _disconnect(ctx: ConformanceContext, _: FixtureCase) -> None:
     await ctx.driver.disconnect(ctx.agent.identity.client_id, ctx.driver.accounts[0])
     check(await _probe(ctx, user, signed.token) == 403, "its Sessions are signed out")
     result = await ctx.agent.accounts.refresh(
-        signed.reference, context=await ctx.account_context(user), session_id=session.session_id
+        signed.reference, context=await ctx.account_context(user), session_key=session.session_key
     )
     check(result.status == "signed_out", "the agent finds out from invalid_grant")
     check(await ctx.agent.vault.get(signed.reference) is None, "and forgets the token")
@@ -1350,8 +1379,8 @@ def _message_id() -> str:
     return "msg_" + base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
 
 
-def _message(text: str, sender: Literal["agent", "human"] = "agent") -> Message:
-    return Message(id=_message_id(), sender=sender, text=text)
+def _message(text: str, author: Literal["agent", "human"] = "agent") -> Message:
+    return Message(id=_message_id(), author=Author(type=author), text=text)
 
 
 @case("conversations.start-and-reply")
@@ -1382,7 +1411,10 @@ async def _start_and_reply(ctx: ConformanceContext, _: FixtureCase) -> None:
         if e.get("type") == "message" and e["message"].get("role") == "company"
     ]
     check(company, "the company replies")
-    check(all(m.get("sender") in {"agent", "human"} for m in company), "replies carry sender")
+    check(
+        all((m.get("author") or {}).get("type") in {"agent", "human"} for m in company),
+        "replies carry author",
+    )
 
 
 @case("conversations.retry-replays")
@@ -1635,7 +1667,7 @@ async def _attribution(ctx: ConformanceContext, _: FixtureCase) -> None:
     session = await ctx.session(user)
     endpoint = await ctx.conversations_endpoint()
     who = await ctx.who(user)
-    words = _message("These are the user's own words.", sender="human")
+    words = _message("These are the user's own words.", author="human")
     receipt = await ctx.agent.conversations.start(endpoint, words, token=session, **who)
     page = await ctx.agent.conversations.read_events(
         endpoint, receipt.conversation_id, token=session, **who
@@ -1643,9 +1675,11 @@ async def _attribution(ctx: ConformanceContext, _: FixtureCase) -> None:
     messages = [event.message for event in page.events if event.message is not None]
     mine = [m for m in messages if m.id == words.id]
     check(mine and mine[0].role == "user", "the user's message comes back with role user")
-    check(mine and mine[0].sender == "human", "and keeps sender human")
+    check(mine and mine[0].author.type == "human", "and keeps author human")
     theirs = [m for m in messages if m.role == "company"]
-    check(theirs and all(m.sender in {"agent", "human"} for m in theirs), "replies have sender")
+    check(
+        theirs and all(m.author.type in {"agent", "human"} for m in theirs), "replies have author"
+    )
 
 
 @case("conversations.handoff")
@@ -1672,7 +1706,7 @@ async def _direct(ctx: ConformanceContext, _: FixtureCase) -> None:
     who = await ctx.who(user)
     parent = await _conversation(ctx, user, session)
     direct = await ctx.agent.conversations.start_direct(
-        endpoint, parent, _message("I'd like to ask myself.", sender="human"), token=session, **who
+        endpoint, parent, _message("I'd like to ask myself.", author="human"), token=session, **who
     )
     page = await ctx.agent.conversations.read_events(endpoint, parent, token=session, **who)
     opened = [e for e in page.events if e.type == "direct_opened"]
@@ -1702,11 +1736,11 @@ async def _direct_of_direct(ctx: ConformanceContext, _: FixtureCase) -> None:
     who = await ctx.who(user)
     parent = await _conversation(ctx, user, session)
     direct = await ctx.agent.conversations.start_direct(
-        endpoint, parent, _message("Hi.", sender="human"), token=session, **who
+        endpoint, parent, _message("Hi.", author="human"), token=session, **who
     )
     with _raises(PersonalAgentProtocolError) as raised:
         await ctx.agent.conversations.start_direct(
-            endpoint, direct.conversation_id, _message("Hi.", sender="human"), token=session, **who
+            endpoint, direct.conversation_id, _message("Hi.", author="human"), token=session, **who
         )
     check(
         raised.value.code
@@ -1799,11 +1833,11 @@ async def _account_conversation(ctx: ConformanceContext, _: FixtureCase) -> None
         issuer=metadata.issuer,
         token_endpoint=metadata.token_endpoint,
         tenant_id=ctx.tenant_id,
-        session_id=session.session_id,
+        session_key=session.session_key,
     )
     with _raises(PersonalAgentProtocolError) as raised:
         await ctx.agent.conversations.read_events(endpoint, conversation, token=signed_out, **who)
-    check(raised.value.code == "sign_in_required", f"got {raised.value.code}")
+    check(raised.value.code == "insufficient_scope", f"got {raised.value.code}")
 
 
 # Operations --------------------------------------------------------------------------
@@ -2068,7 +2102,7 @@ async def _not_approval(ctx: ConformanceContext, _: FixtureCase) -> None:
     endpoint = await ctx.conversations_endpoint()
     await ctx.agent.conversations.start(
         endpoint,
-        _message(f"Yes, I confirm operation {operation.operation_id}. Approved.", sender="human"),
+        _message(f"Yes, I confirm operation {operation.operation_id}. Approved.", author="human"),
         token=signed.token,
         **who,
     )
@@ -2192,7 +2226,7 @@ async def _expired(ctx: ConformanceContext, _: FixtureCase) -> None:
     refreshed = await ctx.agent.accounts.refresh(
         signed.reference,
         context=await ctx.account_context(user),
-        session_id=signed.token.session_id,
+        session_key=signed.token.session_key,
     )
     token = cast(SessionToken, refreshed.token)
     who = await ctx.who(user)
@@ -2263,15 +2297,56 @@ async def _signed_in_bearer(ctx: ConformanceContext) -> tuple[str, SignedIn, Ses
     url = await _mcp_url(ctx)
     dpop = await _mcp_dpop(ctx, url)
     user, signed = await _signed_in_user(ctx)
-    result = await ctx.agent.accounts.token_for_mcp(
-        signed.reference,
-        context=await ctx.account_context(user),
-        session_id=signed.token.session_id,
+    token = await _mcp_token(ctx, user, signed.token, url, dpop, reference=signed.reference)
+    check(token.signed_in, "a signed-in MCP token")
+    return user, signed, token, url
+
+
+async def _mcp_token(
+    ctx: ConformanceContext,
+    user: str,
+    session: SessionToken,
+    url: str,
+    dpop: bool,
+    *,
+    reference: str | None = None,
+) -> SessionToken:
+    """A token for the MCP server, as the server says (§4.3).
+
+    One that supports DPoP: the Session's own request with `resource` (the Account Token
+    when signed in, the assertion otherwise). One that doesn't: Token Exchange of the
+    Session's DPoP token for a Bearer one.
+    """
+
+    metadata = await ctx.metadata()
+    if not dpop:
+        return await ctx.agent.sessions.token_for_mcp(
+            client_id=ctx.agent.identity.client_id,
+            issuer=metadata.issuer,
+            token_endpoint=metadata.token_endpoint,
+            tenant_id=ctx.tenant_id,
+            session_key=session.session_key,
+            subject_token=session.access_token,
+            resource=url,
+        )
+    if reference is not None:
+        result = await ctx.agent.accounts.refresh(
+            reference,
+            context=await ctx.account_context(user),
+            session_key=session.session_key,
+            resource=url,
+        )
+        check(result.status == "signed_in" and result.token is not None, "a signed-in token")
+        return cast(SessionToken, result.token)
+    return await ctx.agent.sessions.renew(
+        client_id=ctx.agent.identity.client_id,
+        pairwise_user_id=user,
+        issuer=metadata.issuer,
+        token_endpoint=metadata.token_endpoint,
+        tenant_id=ctx.tenant_id,
+        session_key=session.session_key,
         resource=url,
-        dpop=dpop,
     )
-    check(result.status == "signed_in" and result.token is not None, "a signed-in MCP token")
-    return user, signed, cast(SessionToken, result.token), url
 
 
 @case("lifecycle.mcp-protected-resource-metadata")
@@ -2314,27 +2389,17 @@ async def _mcp_bearer(ctx: ConformanceContext, _: FixtureCase) -> None:
     dpop = await _mcp_dpop(ctx, url)
     expected = "DPoP" if dpop else "Bearer"
     check(bearer.token_type == expected, f"a {expected} token, as the server supports")
-    check(bearer.session_id == signed.token.session_id, "for the same Session")
+    check(bearer.session_key == signed.token.session_key, "for the same Session")
     answer = await (await _mcp_client(ctx, user, bearer, url)).call_tool(read_tool)
     check(not answer.is_error, "the MCP server accepts it")
-    metadata = await ctx.metadata()
     other = ctx.new_user()
     session = await ctx.session(other)
-    signed_out = await ctx.agent.sessions.token_for_mcp(
-        client_id=ctx.agent.identity.client_id,
-        pairwise_user_id=other,
-        issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
-        tenant_id=ctx.tenant_id,
-        session_id=session.session_id,
-        resource=url,
-        dpop=dpop,
-    )
+    signed_out = await _mcp_token(ctx, other, session, url, dpop)
     check(not signed_out.signed_in, "a signed-out Session gets a signed-out MCP token")
     with _raises(McpError) as raised:
         await (await _mcp_client(ctx, other, signed_out, url)).call_tool(read_tool)
     check(
-        raised.value.code in {"sign_in_required", "insufficient_scope"},
+        raised.value.code in {"insufficient_scope"},
         f"the MCP server enforces scopes, got {raised.value.code}",
     )
     del user
@@ -2367,15 +2432,20 @@ async def _mcp_only(ctx: ConformanceContext, _: FixtureCase) -> None:
         content=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
     )
     check(dpop_at_mcp.status_code == 401, "the MCP server refuses a DPoP Session Token")
+    # Token Exchange for anything but an MCP server without DPoP: `invalid_target` (§4.3).
+    metadata = await ctx.metadata()
     form = {
-        "grant_type": "refresh_token",
-        "refresh_token": (await ctx.account_token(signed.reference)).get_secret_value(),
-        "session_id": signed.token.session_id,
+        "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+        "subject_token": signed.token.access_token.get_secret_value(),
+        "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
         "resource": ctx.url(ctx.scenario.read_path),
         **(await ctx.client_form()),
     }
-    elsewhere = await ctx.token_request(user, form, dpop=None)
-    check(elsewhere.status_code == 400, "no Bearer token is issued for another resource")
+    proof = await ctx.proof(
+        user, "POST", metadata.token_endpoint, session_key=signed.token.session_key
+    )
+    elsewhere = await ctx.token_request(user, form, dpop=proof)
+    expect_refusal(elsewhere, 400, "invalid_target", "a Bearer token for another resource")
 
 
 @case("lifecycle.mcp-sign-out-takes-effect")
@@ -2387,7 +2457,7 @@ async def _mcp_sign_out(ctx: ConformanceContext, _: FixtureCase) -> None:
     await ctx.agent.accounts.revoke(signed.reference, context=await ctx.account_context(user))
     with _raises(McpError) as raised:
         await client.call_tool(read_tool)
-    check(raised.value.code == "sign_in_required", f"got {raised.value.code}")
+    check(raised.value.code == "insufficient_scope", f"got {raised.value.code}")
 
 
 @case("operations.cross-channel-mcp")
@@ -2454,49 +2524,69 @@ async def _mismatch_after_sign_out(ctx: ConformanceContext, _: FixtureCase) -> N
         issuer=metadata.issuer,
         token_endpoint=metadata.token_endpoint,
         tenant_id=ctx.tenant_id,
-        session_id=session.session_id,
+        session_key=session.session_key,
     )
     check(not renewed.signed_in, "after sign-out the Session continues signed out")
     with _raises(PersonalAgentProtocolError) as raised:
         await ctx.agent.accounts.refresh(
             other.reference,
             context=await ctx.account_context(user),
-            session_id=session.session_id,
+            session_key=session.session_key,
         )
     check(raised.value.code == "account_mismatch", f"got {raised.value.code}")
 
 
 @case("lifecycle.mcp-token-type-by-server")
 async def _mcp_token_type(ctx: ConformanceContext, _: FixtureCase) -> None:
-    """The company chooses the token type by the MCP server in `resource` (§4.3)."""
+    """The token type follows the MCP server in `resource`; each wrong way is
+    `invalid_target`, and every token request carries a proof (§4.3)."""
 
     url = await _mcp_url(ctx)
     dpop = await _mcp_dpop(ctx, url)
-    issuer = (await ctx.metadata()).issuer
+    metadata = await ctx.metadata()
     user = ctx.new_user()
     session = await ctx.session(user)
 
-    async def form() -> dict[str, str]:
+    def proof() -> Any:
+        return ctx.proof(user, "POST", metadata.token_endpoint, session_key=session.session_key)
+
+    async def renewal() -> dict[str, str]:
+        # Fresh assertions each time: a `jti` is never sent twice (§4.1, §4.2).
         return {
             "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            "assertion": ctx.assertion(ctx.claims(subject=user, audience=issuer)),
-            "session_id": session.session_id,
+            "assertion": ctx.assertion(ctx.claims(subject=user, audience=metadata.issuer)),
             "resource": url,
             **(await ctx.client_form()),
         }
 
+    async def exchange() -> dict[str, str]:
+        return {
+            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+            "subject_token": session.access_token.get_secret_value(),
+            "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "resource": url,
+            **(await ctx.client_form()),
+        }
+
+    unproven = await ctx.token_request(user, await renewal(), dpop=None)
+    expect_refusal(unproven, 400, "invalid_dpop_proof", "a token request without a proof")
     if dpop:
-        # Never a Bearer token to a personal agent for a DPoP server: no proof is refused.
-        refused = await ctx.token_request(user, await form(), dpop=None)
-        expect_refusal(refused, 400, "invalid_dpop_proof", "a DPoP MCP server without a proof")
-        issued = await ctx.token_request(user, await form())
+        refused = await ctx.token_request(user, await exchange(), dpop=await proof())
+        expect_refusal(refused, 400, "invalid_target", "Token Exchange for a DPoP MCP server")
+        issued = await ctx.token_request(user, await renewal(), dpop=await proof())
         check(issued.status_code == 200, "with a proof, a token is issued")
         check(issued.json().get("token_type") == "DPoP", "a DPoP token for a DPoP MCP server")
     else:
-        # A Bearer token even when the request has a proof, never a DPoP one.
-        issued = await ctx.token_request(user, await form())
-        check(issued.status_code == 200, "a token is issued")
-        check(issued.json().get("token_type") == "Bearer", "a Bearer token for this MCP server")
+        refused = await ctx.token_request(user, await renewal(), dpop=await proof())
+        expect_refusal(refused, 400, "invalid_target", "a Bearer server's token by another grant")
+        issued = await ctx.token_request(user, await exchange(), dpop=await proof())
+        check(issued.status_code == 200, "Token Exchange issues a token")
+        body = issued.json()
+        check(body.get("token_type") == "Bearer", "a Bearer token for this MCP server")
+        check(
+            body.get("issued_token_type") == "urn:ietf:params:oauth:token-type:access_token",
+            "issued_token_type names an access token",
+        )
 
 
 @case("protocol.feedback-report")
@@ -2523,9 +2613,13 @@ async def _feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
 
     report = {"kind": "missing", "task": "Conformance task", "description": "Not offered."}
     accepted = await post(report)
-    check(accepted.status_code == 202, f"a report is accepted with 202, got {accepted.status_code}")
+    # 202, or 200 with an alternative when the task can be done after all (§8.3).
+    check(
+        accepted.status_code in {200, 202},
+        f"a report is accepted with 202 or 200, got {accepted.status_code}",
+    )
     unknown = await post({**report, "kind": "conformance-later-kind"})
-    check(unknown.status_code == 202, "a kind it doesn't recognize is accepted")
+    check(unknown.status_code in {200, 202}, "a kind it doesn't recognize is accepted")
     expect_refusal(await post({**report, "task": "x" * 201}), 400, "invalid_request", "too long")
     bare = await ctx.send(
         "POST", endpoint, headers={"Content-Type": "application/json"}, content=b"{}"
@@ -2580,77 +2674,110 @@ async def _browser(ctx: ConformanceContext) -> tuple[ControlledBrowser, str]:
     return ctx.agent.browser, web.browser_session_endpoint
 
 
-async def _join(ctx: ConformanceContext, user: str, session_id: str, return_to: str) -> None:
-    _, endpoint = await _browser(ctx)
+async def _join(
+    ctx: ConformanceContext, user: str, session_key: str, page: str
+) -> list[httpx.Response]:
+    """Join the runner's own browser to the Session (§5), then open `page` in it.
+
+    Returns the join's responses: the 303 that set the Session's cookie first.
+    """
+
+    browser, endpoint = await _browser(ctx)
     await BrowserSessionClient(reactor=ctx.agent.reactor).join(
-        client_id=ctx.agent.identity.client_id,
-        pairwise_user_id=user,
         browser_session_endpoint=endpoint,
-        session_id=session_id,
-        return_to=return_to,
-        company_domain=(await ctx.company()).document.organization.domain,
+        tenant_id=ctx.tenant_id,
+        issuer=(await ctx.metadata()).issuer,
+        session_key=session_key,
     )
+    joined = cast(httpx.Response, browser.page)
+    check(joined.history and joined.history[0].status_code == 303, "joined with 303 See Other")
+    await browser.get(page)
+    del user
+    return list(joined.history)
 
 
 @case("lifecycle.browser-joins-session")
 async def _browser_joins(ctx: ConformanceContext, _: FixtureCase) -> None:
-    browser, _endpoint = await _browser(ctx)
+    browser, endpoint = await _browser(ctx)
+    loaded = await ctx.send("GET", endpoint)
+    check(loaded.status_code == 200, "the join page loads with a GET")
+    for name, value in (
+        ("cache-control", "no-store"),
+        ("content-security-policy", "frame-ancestors 'none'"),
+        ("cross-origin-opener-policy", "same-origin"),
+    ):
+        check(value in loaded.headers.get(name, ""), f"the join page sends {name}: {value}")
+    join_cookie = loaded.headers.get("set-cookie", "")
+    for flag in ("__Host-", "Secure", "HttpOnly", "SameSite=Strict"):
+        check(flag.lower() in join_cookie.lower(), f"the join cookie has {flag}")
     user, signed = await _signed_in_user(ctx)
     operation = await _propose(ctx, user, signed, "standing")
     page = operation_page(operation, (await ctx.company()).document.organization.domain)
-    await _join(ctx, user, signed.token.session_id, page)
-    landed = cast(httpx.Response, browser.page)
-    check(landed.history and landed.history[0].status_code == 303, "joined with 303 See Other")
-    cookie = landed.history[0].headers.get("set-cookie", "")
+    joined = await _join(ctx, user, signed.token.session_key, page)
+    cookies = [
+        value
+        for response in joined
+        for value in response.headers.get_list("set-cookie")
+        if "max-age=0" not in value.lower()
+    ]
+    session_cookie = next((c for c in cookies if "secure" in c.lower()), "")
     for flag in ("Secure", "HttpOnly"):
-        check(flag in cookie, f"the cookie is {flag}")
-    check("samesite=strict" not in cookie.lower(), "the cookie is not SameSite=Strict")
-    check("max-age" not in cookie.lower(), "the cookie has no lifetime of its own")
+        check(flag.lower() in session_cookie.lower(), f"the Session's cookie is {flag}")
+    check("max-age" not in session_cookie.lower(), "the cookie has no lifetime of its own")
+    landed = cast(httpx.Response, browser.page)
     check(landed.status_code == 200, "the operation's page shows in the Session")
     await ctx.agent.accounts.revoke(signed.reference, context=await ctx.account_context(user))
     after = await browser.get(page)
     check(after.status_code in {401, 403, 404}, "signed out, the website shows it no more")
 
 
-@case("lifecycle.browser-assertion-refused")
+@case("lifecycle.browser-join-refused")
 async def _browser_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """Step 3 of §5 and the attacks of §9.6: each wrong join sets no Session cookie."""
+
     _browser_unused, endpoint = await _browser(ctx)
-    domain = (await ctx.company()).document.organization.domain
+    metadata = await ctx.metadata()
     user = ctx.new_user()
     session = await ctx.session(user)
+    code_field = re.compile(r'name="code" value="([^"]+)"')
 
-    def claims(**changes: Any) -> dict[str, Any]:
-        value = ctx.claims(subject=user, audience=endpoint, lifetime=changes.pop("lifetime", 60))
-        return {**value, "session_id": session.session_id, "return_to": f"https://{domain}/"} | (
-            changes
+    async def form() -> tuple[httpx.AsyncClient, str]:
+        browser = ctx.new_browser()
+        page = await browser.get(endpoint)
+        found = code_field.search(page.text)
+        check(found is not None, "the join page holds a code")
+        return browser, cast(re.Match[str], found).group(1)
+
+    async def proof(code: str, session_key: str | None = session.session_key) -> str:
+        return await ctx.proof(user, "POST", endpoint, session_key=session_key, nonce=code)
+
+    async def submit(browser: httpx.AsyncClient, code: str, signed: str) -> httpx.Response:
+        return await browser.post(endpoint, data={"code": code, "proof": signed})
+
+    def joined(response: httpx.Response) -> bool:
+        return any(
+            "max-age=0" not in value.lower()
+            for value in response.headers.get_list("set-cookie")
         )
 
-    browser_typ = {"typ": "poppy-browser+jwt"}
-    cases = {
-        "a foreign return_to": ctx.assertion(
-            claims(return_to="https://evil.example/"), headers=browser_typ
-        ),
-        "a Session assertion": ctx.assertion(claims()),
-        "another user's Session": ctx.assertion(claims(sub=ctx.new_user()), headers=browser_typ),
-        "a long-lived assertion": ctx.assertion(claims(lifetime=600), headers=browser_typ),
-        "another audience": ctx.assertion(claims(aud=ctx.url("/elsewhere")), headers=browser_typ),
-    }
-    replayed = ctx.assertion(claims(), headers=browser_typ)
-
-    async def post(assertion: str) -> httpx.Response:
-        return await ctx.send(
-            "POST",
-            endpoint,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            content=urlencode({"assertion": assertion}).encode(),
-        )
-
-    check((await post(replayed)).status_code == 303, "a valid browser assertion joins")
-    cases["a replayed assertion"] = replayed
-    for what, assertion in cases.items():
-        response = await post(assertion)
-        check(response.status_code == 400, f"{what} is refused")
-        check("set-cookie" not in response.headers, f"{what} sets no cookie")
+    browser, code = await form()
+    signed = await proof(code)
+    victim = ctx.new_browser()
+    stolen = await submit(victim, code, signed)
+    check(stolen.status_code == 400 and not joined(stolen), "a code from another browser joins none")
+    used = await submit(browser, code, signed)
+    check(used.status_code == 400 and not joined(used), "a code is used once, whatever the result")
+    browser, code = await form()
+    other = await submit(browser, code, await proof("bc_conformance_" + "x" * 16))
+    check(other.status_code == 400 and not joined(other), "a proof over another code joins none")
+    browser, code = await form()
+    stray_key = await ctx.proof(user, "POST", endpoint, nonce=code)
+    stray = await submit(browser, code, stray_key)
+    check(stray.status_code == 400 and not joined(stray), "a key naming no Session joins none")
+    browser, code = await form()
+    valid = await submit(browser, code, await proof(code))
+    check(valid.status_code == 303 and joined(valid), "a valid join sets the Session's cookie")
+    del metadata
 
 
 @case("operations.web-confirm-at-most-once")
@@ -2664,7 +2791,7 @@ async def _web_confirm(ctx: ConformanceContext, _: FixtureCase) -> None:
     who = await ctx.who(user)
     operation = await _propose(ctx, user, signed, "user")
     page = operation_page(operation, (await ctx.company()).document.organization.domain)
-    await _join(ctx, user, signed.token.session_id, page)
+    await _join(ctx, user, signed.token.session_key, page)
     fields = {name: value.format(revision=operation.revision) for name, value in form.items()}
     await browser.submit(page, fields)
     read = await ctx.agent.operations.read(

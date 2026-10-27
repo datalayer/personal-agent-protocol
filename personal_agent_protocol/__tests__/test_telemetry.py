@@ -48,7 +48,7 @@ FORBIDDEN = (
     "credential",
     "mediated",
     "key",
-    "session_id",
+    "session_key",
     "user_id",
     "pairwise",
     "url",
@@ -169,14 +169,15 @@ async def test_a_company_reports_what_it_did_and_refused(
     sessions = SessionClient(reactor=world.reactor, http_client=world.http)
     who = {
         "client_id": world.atlas.client_id,
-        "pairwise_user_id": PAIRWISE,
         "issuer": metadata.issuer,
         "token_endpoint": metadata.token_endpoint,
         "tenant_id": TENANT,
-        "session_id": session.session_id,
+        "session_key": session.session_key,
     }
-    await sessions.renew(**who)
-    await sessions.token_for_mcp(**who, resource="https://manzanita.example/mcp", dpop=True)
+    await sessions.renew(**who, pairwise_user_id=PAIRWISE)
+    await sessions.renew(
+        **who, pairwise_user_id=PAIRWISE, resource="https://manzanita.example/mcp"
+    )
     company = [e for e in recorded.events if e.stage == "company"]
     by_name = {e.name: e for e in company}
     agent = world.atlas.client_id
@@ -293,7 +294,7 @@ async def test_a_failing_sink_never_fails_the_protocol(
     contribute_to_every_reactor(monkeypatch, Broken())
     with caplog.at_level(logging.WARNING, logger="personal_agent_protocol.telemetry"):
         session = await World().signed_out_session()
-    assert session.session_id
+    assert session.session_key
     assert caplog.messages and set(caplog.messages) == {"The telemetry sink failed: RuntimeError"}
 
 

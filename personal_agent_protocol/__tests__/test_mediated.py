@@ -42,7 +42,7 @@ SIGNED_OUT = SessionToken(
     access_token=SecretStr("session-token"),
     token_type="DPoP",  # noqa: S106
     expires_in=300,
-    session_id="ses_1",
+    session_key="K" * 43,
     signed_in=False,
 )
 
@@ -111,8 +111,6 @@ def complete(**extra: object) -> dict[str, object]:
         "token_type": "DPoP",
         "expires_in": 300,
         "scope": "orders:read",
-        "session_id": "ses_1",
-        "signed_in": True,
         "refresh_token": "account-token",
         **extra,
     }
@@ -127,7 +125,6 @@ def sign_in(client: MediatedSignInClient):  # type: ignore[no-untyped-def]
             scopes=("orders:read", "orders:return"),
             token=SIGNED_OUT,
             tenant_id="tenant",
-            pairwise_user_id="usr_1",
         )
     )
 
@@ -187,7 +184,6 @@ def test_a_one_time_code_continues_without_the_credentials() -> None:
             started.reference,
             token=SIGNED_OUT,
             tenant_id="tenant",
-            pairwise_user_id="usr_1",
             issuer="https://auth.shop.example",
         )
     )
@@ -228,7 +224,6 @@ def test_a_wrong_code_asks_again_and_failed_ends_it() -> None:
             started.reference,
             token=SIGNED_OUT,
             tenant_id="t",
-            pairwise_user_id="usr_1",
             issuer="https://auth.shop.example",
         )
     )
@@ -238,7 +233,6 @@ def test_a_wrong_code_asks_again_and_failed_ends_it() -> None:
             started.reference,
             token=SIGNED_OUT,
             tenant_id="t",
-            pairwise_user_id="usr_1",
             issuer="https://auth.shop.example",
         )
     )
@@ -260,14 +254,13 @@ def test_only_the_session_that_started_it_can_finish_it() -> None:
         CREDENTIALS,
     )
     started = sign_in(client)
-    other = SIGNED_OUT.model_copy(update={"session_id": "ses_2"})
+    other = SIGNED_OUT.model_copy(update={"session_key": "ses_2"})
     with pytest.raises(AuthorizationError) as raised:
         asyncio.run(
             client.submit_code(
                 started.reference,
                 token=other,
                 tenant_id="t",
-                pairwise_user_id="usr_1",
                 issuer="https://auth.shop.example",
             )
         )
@@ -299,7 +292,6 @@ def test_an_endpoint_off_the_company_domain_is_refused_before_asking() -> None:
                 scopes=("orders:read",),
                 token=SIGNED_OUT,
                 tenant_id="t",
-                pairwise_user_id="usr_1",
             )
         )
     assert raised.value.code == "unsafe_mediated_endpoint"
@@ -327,9 +319,9 @@ def test_rate_limited_is_reported_with_retry_after_and_no_credential() -> None:
     assert "correct horse" not in repr(raised.value.__dict__)
 
 
-def test_a_session_other_than_the_one_signing_in_is_refused() -> None:
+def test_a_bearer_answer_to_a_mediated_sign_in_is_refused() -> None:
     client, _ = arrange(
-        lambda _: httpx.Response(200, json=complete(session_id="ses_9")), CREDENTIALS
+        lambda _: httpx.Response(200, json=complete(token_type="Bearer")), CREDENTIALS
     )
     with pytest.raises(AuthorizationError) as raised:
         sign_in(client)

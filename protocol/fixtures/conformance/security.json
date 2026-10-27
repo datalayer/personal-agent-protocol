@@ -1,6 +1,6 @@
 {
   "suite": "security",
-  "profile": "0.2",
+  "profile": "0.3",
   "description": "Duplicate JSON members, SSRF, redirects, oversized metadata, JOSE algorithm confusion, audiences, clock skew, replay, and DPoP mismatches.",
   "cases": [
     {
@@ -116,7 +116,7 @@
         "responses": {
           "https://www.example.com/.well-known/poppy.json": {"status": 302, "headers": {"location": "https://example.com/.well-known/poppy.json"}},
           "https://example.com/.well-known/poppy.json": {"status": 200, "json": {
-            "protocol_version": "0.2",
+            "protocol_version": "0.3",
             "organization": {"name": "Example", "domain": "example.com"},
             "web": {}
           }}
@@ -152,7 +152,7 @@
         "domain": "example.com",
         "responses": {
           "https://example.com/.well-known/poppy.json": {"status": 200, "padding_bytes": 102401, "json": {
-            "protocol_version": "0.2",
+            "protocol_version": "0.3",
             "organization": {"name": "Example", "domain": "example.com"},
             "web": {}
           }}
@@ -172,7 +172,7 @@
         "timeout_seconds": 0.3,
         "responses": {
           "https://example.com/.well-known/poppy.json": {"status": 200, "trickle": {"chunk_bytes": 8, "interval_seconds": 0.05}, "json": {
-            "protocol_version": "0.2",
+            "protocol_version": "0.3",
             "organization": {"name": "Example", "domain": "example.com"},
             "web": {}
           }}

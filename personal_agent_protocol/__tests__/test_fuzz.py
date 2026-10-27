@@ -268,7 +268,7 @@ async def test_random_operation_histories_keep_the_state_machine() -> None:  # n
                 refreshed = await ctx.agent.accounts.refresh(
                     signed.reference,
                     context=await ctx.account_context(user),
-                    session_id=signed.token.session_id,
+                    session_key=signed.token.session_key,
                 )
                 if refreshed.token is not None:
                     signed.token = refreshed.token

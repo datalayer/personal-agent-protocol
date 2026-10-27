@@ -22,7 +22,7 @@ from personal_agent_protocol import (
 )
 from personal_agent_protocol.company import COMPANY_RATE_LIMITS
 
-from .test_company_end_to_end import World
+from .test_company_end_to_end import PAIRWISE, World
 from .test_company_refusals import signed_in
 
 FEEDBACK = "https://manzanita.example/poppy/feedback"
@@ -62,7 +62,10 @@ async def test_a_signed_out_and_a_signed_in_session_report_with_no_scope() -> No
     endpoint = feedback_endpoint(world.company.document)
     assert endpoint == FEEDBACK
     client = FeedbackClient(transport=world.transport)
-    assert await client.report(endpoint, GIFT_CARD, token=session, **world.who) is None
+    # The task can be done after all: 200 and an alternative, content from the company (§8.3).
+    alternative = await client.report(endpoint, GIFT_CARD, token=session, **world.who)
+    assert alternative is not None and alternative.instructions
+    assert [r.type for r in alternative.usable_references(world.company.document)] == ["web"]
     token = await signed_in(world)
     await client.report(
         endpoint,
@@ -77,7 +80,7 @@ async def test_a_signed_out_and_a_signed_in_session_report_with_no_scope() -> No
     ]
     # The Session says which personal agent and which user sent it; the report doesn't.
     assert {report.client_id for report in reports} == {world.atlas.client_id}
-    assert {report.pairwise_user_id for report in reports} == {world.who["pairwise_user_id"]}
+    assert {report.pairwise_user_id for report in reports} == {PAIRWISE}
 
 
 @pytest.mark.asyncio

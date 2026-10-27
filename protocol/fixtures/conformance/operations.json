@@ -1,6 +1,6 @@
 {
   "suite": "operations",
-  "profile": "0.2",
+  "profile": "0.3",
   "extension": {
     "operations": "1"
   },

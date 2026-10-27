@@ -31,19 +31,18 @@ from pydantic import SecretStr
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 
 from ..company.points import COMPANY_STORES, CompanyStore
-from ..crypto import DpopKeyMaterial, JoseDpopProofProvider, JoseSigner
-from ..errors import DiscoveryError
+from ..crypto import InMemorySessionKeys, JoseDpopProofProvider, JoseSigner
+from ..errors import BrowserSessionError, DiscoveryError
 from ..operations import STANDING_PERMISSION_STORES, InMemoryStandingPermissionStore
 from ..reactor import (
     AUTHORIZATION_STATE_STORES,
-    BROWSER_FORM_POSTS,
     BROWSER_HANDOFFS,
+    BROWSER_JOINS,
     CLOCKS,
     DPOP_PROOF_PROVIDERS,
     PROTECTED_INPUTS,
     SIGNERS,
     TOKEN_STORES,
-    DpopProofRequest,
     ProtectedInputRequest,
     build_pap_reactor,
 )
@@ -218,20 +217,35 @@ class ScriptedBrowser:
 
 
 class ControlledBrowser:
-    """The personal agent's own browser (`pap.browserFormPost`), never the user's (§5).
+    """The personal agent's own browser (`pap.browserJoin`), never the user's (§5).
 
-    It has its own cookie jar, posts the browser assertion as a form, follows
-    the company's redirect, and remembers the page it landed on.
+    It has its own cookie jar: it loads the join form, reads the one-time code from
+    that page alone, submits the code with the agent's proof, follows the company's
+    redirect, and remembers the page it landed on.
     """
 
     def __init__(self, http: httpx.AsyncClient) -> None:
         self.http = http  # its own client: its own cookie jar
         self.page: httpx.Response | None = None
+        self._join: tuple[str, str] | None = None
 
-    async def post(self, url: str, form: dict[str, SecretStr]) -> None:
+    async def load_join_form(self, endpoint: str) -> SecretStr:
+        self.page = await self.http.get(endpoint, follow_redirects=False)
+        fields = dict(_HIDDEN.findall(self.page.text))
+        code = fields.get("code")
+        if self.page.status_code != 200 or not code:
+            raise BrowserSessionError("invalid_join_form", "The join page holds no code")
+        self._join = (endpoint, code)
+        return SecretStr(code)
+
+    async def submit_join_form(self, proof: SecretStr) -> None:
+        if self._join is None:
+            raise BrowserSessionError("invalid_join_form", "No join form was loaded")
+        endpoint, code = self._join
+        self._join = None
         self.page = await self.http.post(
-            url,
-            data={name: value.get_secret_value() for name, value in form.items()},
+            endpoint,
+            data={"code": code, "proof": proof.get_secret_value()},
             follow_redirects=True,
         )
 
@@ -257,21 +271,6 @@ class ControlledBrowser:
         return self.page
 
 
-class DpopKeys:
-    """One EC key per (tenant, user, company): the Session's proof-of-possession key."""
-
-    def __init__(self) -> None:
-        self.keys: dict[tuple[str, str, str], DpopKeyMaterial] = {}
-
-    async def __call__(self, request: DpopProofRequest) -> DpopKeyMaterial:
-        key = (request.tenant_id, request.subject, request.issuer)
-        if key not in self.keys:
-            private = ec.generate_private_key(ec.SECP256R1())
-            public = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(private.public_key()))
-            self.keys[key] = DpopKeyMaterial(private_key=private, public_jwk=public)
-        return self.keys[key]
-
-
 @dataclass(eq=False)
 class PersonalAgentHost:
     """The contributions a personal agent's host makes, for its Reactor."""
@@ -285,6 +284,8 @@ class PersonalAgentHost:
     )
     browser: ScriptedBrowser | None = None
     controlled_browser: ControlledBrowser | None = None
+    #: The Session Keys: the host's, so a Reactor built again keeps them (§4.3).
+    session_keys: InMemorySessionKeys = field(default_factory=InMemorySessionKeys)
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
@@ -292,7 +293,7 @@ class PersonalAgentHost:
         contribute(SIGNERS, self.identity.signer(), contribution_id="agent-key")
         contribute(
             DPOP_PROOF_PROVIDERS,
-            JoseDpopProofProvider(DpopKeys(), now=self.clock.now),
+            JoseDpopProofProvider(self.session_keys, now=self.clock.now),
             contribution_id="dpop-keys",
         )
         contribute(TOKEN_STORES, self.vault, contribution_id="vault")
@@ -302,7 +303,7 @@ class PersonalAgentHost:
         if self.browser is not None:
             contribute(BROWSER_HANDOFFS, self.browser, contribution_id="browser")
         if self.controlled_browser is not None:
-            contribute(BROWSER_FORM_POSTS, self.controlled_browser, contribution_id="own-browser")
+            contribute(BROWSER_JOINS, self.controlled_browser, contribution_id="own-browser")
 
 
 def personal_agent_reactor(

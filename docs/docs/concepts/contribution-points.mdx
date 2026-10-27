@@ -48,8 +48,8 @@ registers.
 | `pap.authorizationStateStore` | `AUTHORIZATION_STATE_STORES` | `AuthorizationStateStores` | Expiring one-use sign-in state (put, take) | — (host contributes) |  |
 | `pap.cache` | `CACHES` | `Caches` | Bounded cache of public metadata | `memory` |  |
 | `pap.browserHandoff` | `BROWSER_HANDOFFS` | `BrowserHandoffs` | Opens a sign-in page on a trusted surface | — (host contributes) |  |
-| `pap.browserFormPost` | `BROWSER_FORM_POSTS` | `BrowserFormPosts` | Posts a browser-session assertion from the user's browser | — (host contributes) |  |
-| `pap.dpopProofProvider` | `DPOP_PROOF_PROVIDERS` | `DpopProofProviders` | Fresh DPoP proofs, private keys kept in custody | — (host contributes) | yes |
+| `pap.browserJoin` | `BROWSER_JOINS` | `BrowserJoins` | The agent's own browser: loads the join form's one-time code and submits the proof over it | — (host contributes) |  |
+| `pap.dpopProofProvider` | `DPOP_PROOF_PROVIDERS` | `DpopProofProviders` | A new Session Key for each Session, fresh DPoP proofs with it, private keys kept in custody | — (host contributes) | yes |
 | `pap.accountTokenLock` | `ACCOUNT_TOKEN_LOCKS` | `AccountTokenLocks` | Serializes Account Token rotation | `in-process` |  |
 | `pap.protectedInput` | `PROTECTED_INPUTS` | `ProtectedInputs` | Collects credentials and codes outside the model | — (host contributes) |  |
 | `pap.retryPolicy` | `RETRY_POLICIES` | `RetryPolicies` | When a refused request is retried | `default` |  |

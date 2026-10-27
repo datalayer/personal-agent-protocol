@@ -55,7 +55,7 @@ from personal_agent_protocol.demo.sockets import (
     _DialLocal,
     served_over_tls,
 )
-from personal_agent_protocol.models import ClientMetadata
+from personal_agent_protocol.models import Author, ClientMetadata
 from personal_agent_protocol.operations import (
     OperationsClient,
     approve,
@@ -172,7 +172,7 @@ class _Journey:
         self.seen: dict[str, Any] = {}
 
     def message(self, text: str) -> Message:
-        return Message(id=generate_message_id(self.reactor), sender="human", text=text)
+        return Message(id=generate_message_id(self.reactor), author=Author(type="human"), text=text)
 
     async def discover(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
         agent = self.agent
@@ -220,8 +220,7 @@ class _Journey:
             redirect_uri=f"https://{agent['domain']}{agent['redirect_path']}",
             scopes=tuple(step["scopes"]),
             tenant_id=agent["tenant_id"],
-            pairwise_user_id=agent["pairwise_user_id"],
-            session_id=self.session.session_id,
+            session_key=self.session.session_key,
         )
         for text in expect["consent_page"]:
             assert text in self.browser.pages[-1]
@@ -232,7 +231,7 @@ class _Journey:
         result = await client.complete(callback)
         self.signed_in = result.token
         assert self.signed_in.signed_in is expect["signed_in"]
-        assert self.signed_in.session_id == self.session.session_id
+        assert self.signed_in.session_key == self.session.session_key
         assert list(result.granted_scopes) == expect["granted"]
 
     async def api_read(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
@@ -372,7 +371,7 @@ async def test_typescript_agent_with_the_python_company(tmp_path: Path) -> None:
         finally:
             await node.stop()
     assert result["steps"] == [step["step"] for step in SCENARIO["steps"]]
-    assert result["authorization"] == "sign_in_required"
+    assert result["authorization"] == "insufficient_scope"
     assert plugin.executor.performed == [result["operation"]["operation_id"]]
 
 

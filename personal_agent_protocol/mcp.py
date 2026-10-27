@@ -260,8 +260,8 @@ class McpDpopAuth(httpx.Auth):
                 method=request.method,
                 url=str(request.url),
                 tenant_id=self.who["tenant_id"],
-                subject=self.who["pairwise_user_id"],
                 issuer=self.who["issuer"],
+                session_key=self._token.session_key,
                 access_token=self._token.access_token,
                 nonce=nonce,
             )

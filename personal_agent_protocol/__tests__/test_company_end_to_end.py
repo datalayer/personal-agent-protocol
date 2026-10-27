@@ -33,7 +33,7 @@ from personal_agent_protocol.demo.kit import (
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
 from personal_agent_protocol.mediated import MediatedSignInClient
-from personal_agent_protocol.models import ClientMetadata
+from personal_agent_protocol.models import Author, ClientMetadata
 from personal_agent_protocol.operations import OperationsClient, approve, operations_endpoint
 
 TENANT = "atlas-demo"
@@ -65,11 +65,7 @@ class World:
         )
         assert company.oauth_metadata is not None
         self.company = company
-        self.who = {
-            "tenant_id": TENANT,
-            "pairwise_user_id": PAIRWISE,
-            "issuer": company.oauth_metadata.issuer,
-        }
+        self.who = {"tenant_id": TENANT, "issuer": company.oauth_metadata.issuer}
         return await SessionClient(reactor=self.reactor, http_client=self.http).start(
             client_id=self.atlas.client_id,
             pairwise_user_id=PAIRWISE,
@@ -84,7 +80,7 @@ class World:
         self.shop, self.plugin = manzanita(self.network, self.clock, store=self.store)
 
     def message(self, text: str) -> Message:
-        return Message(id=generate_message_id(self.reactor), sender="human", text=text)
+        return Message(id=generate_message_id(self.reactor), author=Author(type="human"), text=text)
 
 
 @pytest.mark.asyncio
@@ -100,7 +96,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
     )
     kinds = [event.type for event in page.events]
     assert kinds == ["message", "state", "message", "authorization", "state"]
-    assert [e for e in page.events if e.type != "state"][-1].error == "sign_in_required"
+    assert [e for e in page.events if e.type != "state"][-1].error == "insufficient_scope"
 
     # Device Sign-In: the user approves on Manzanita's own page.
     device = DeviceSignInClient(reactor=world.reactor, http_client=world.http)
@@ -112,10 +108,9 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     world.clock.advance(started.poll_interval)
     assert (await device.poll(started.reference)).status == "pending"
@@ -124,7 +119,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
     done = await device.poll(started.reference)
     assert done.status == "complete" and done.token is not None
     signed_in = done.token
-    assert signed_in.signed_in and signed_in.session_id == session.session_id
+    assert signed_in.signed_in and signed_in.session_key == session.session_key
 
     # The same conversation continues, signed in.
     page = await world.conversations.send(
@@ -169,7 +164,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
     narrowed = await accounts.refresh(
         done.account_token_reference,
         context=context,  # type: ignore[arg-type]
-        session_id=session.session_id,
+        session_key=session.session_key,
         scopes=("orders:read",),
     )
     assert narrowed.status == "signed_in" and narrowed.rotated
@@ -177,7 +172,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
     wider = await accounts.refresh(
         done.account_token_reference,
         context=context,  # type: ignore[arg-type]
-        session_id=session.session_id,
+        session_key=session.session_key,
         scopes=("orders:read", "orders:admin"),
     )
     assert wider.status == "re_consent_required"
@@ -186,7 +181,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
     after = await accounts.refresh(
         done.account_token_reference,
         context=context,
-        session_id=session.session_id,  # type: ignore[arg-type]
+        session_key=session.session_key,  # type: ignore[arg-type]
     )
     assert after.status == "signed_out"
 
@@ -204,7 +199,6 @@ async def test_mediated_sign_in_with_a_one_time_code() -> None:
         scopes=("orders:read",),
         token=session,
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
     )
     assert started.status == "code_required" and started.sent_to == "a•••@example.com"
     wrong = await mediated.submit_code(started.reference, token=session, **world.who)  # type: ignore[arg-type]
@@ -251,7 +245,6 @@ async def test_the_conversation_streams_and_a_stranger_cannot_read_it() -> None:
             page.conversation_id,
             token=other,
             tenant_id=TENANT,
-            pairwise_user_id="usr_somebody_else_000000",
             issuer=world.who["issuer"],
         )
     assert raised.value.code == "conversation_not_found"
@@ -283,7 +276,7 @@ async def test_one_of_the_companys_people_answers_over_what_they_read() -> None:
         conversation_id, after=read.events[-1].id, text="Marta here."
     )
     assert took.message is not None
-    assert (took.message.sender, took.message.role) == ("human", "company")
+    assert (took.message.author.type, took.message.role) == ("human", "company")
 
     # The person writes while Marta answers from what she read before: hers is refused.
     await world.conversations.send(

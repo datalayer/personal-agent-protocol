@@ -378,11 +378,15 @@ async def test_the_core_plugin_declares_the_outcome_type() -> None:
 REPLIES_FIXTURE = Path(__file__).parents[2] / "protocol" / "fixtures" / "pap-replies-display.json"
 
 
-def _message(id_: str, sender: str, text: str | None, role: str = "company") -> Any:
-    from personal_agent_protocol.models import Message
+def _message(
+    id_: str, author: str, text: str | None, role: str = "company", name: str | None = None
+) -> Any:
+    from personal_agent_protocol.models import Author, Message
 
     data = None if text else {"order": "1043"}
-    return Message(id=id_, sender=sender, role=role, text=text, data=data)
+    return Message(
+        id=id_, author=Author(type=author, name=name), role=role, text=text, data=data
+    )
 
 
 def _replies() -> PapReplies:
@@ -391,7 +395,7 @@ def _replies() -> PapReplies:
         "conv_4Kp9",
         [
             _message("msg_1", "agent", "Your Ridge Jacket shipped on Tuesday."),
-            _message("msg_2", "human", "This is Rosa from the store: I can exchange it for you."),
+            _message("msg_2", "human", "I can exchange it for you.", name="Rosa"),
         ],
         status="idle",
         responder="human",
@@ -404,15 +408,16 @@ def test_replies_are_the_committed_display_each_with_who_wrote_it() -> None:
     # The TypeScript SDK reads the same file (src/__tests__/ui.test.mjs).
     wire = _replies().wire().model_dump(mode="json")
     assert wire == json.loads(REPLIES_FIXTURE.read_text())
-    assert wire["type"] == PAP_REPLIES_TYPE and wire["version"] == 2
+    assert wire["type"] == PAP_REPLIES_TYPE and wire["version"] == 3
     assert wire["id"] == "conv_4Kp9-msg_1-replies"
     # The conversation the replies are in: where the person's own words open a Direct Conversation.
     assert wire["data"]["conversation"] == "conv_4Kp9"
-    assert [reply["sender"] for reply in wire["data"]["replies"]] == ["agent", "human"]
+    assert [reply["author"] for reply in wire["data"]["replies"]] == ["agent", "human"]
+    # A person the company names is named on the page (§7.4).
+    assert wire["data"]["replies"][1]["name"] == "Rosa"
     assert wire["text"] == (
         "manzanita.example, its agent: Your Ridge Jacket shipped on Tuesday.\n"
-        "manzanita.example, one of its people: "
-        "This is Rosa from the store: I can exchange it for you."
+        "manzanita.example, one of its people (Rosa): I can exchange it for you."
     )
 
 
@@ -438,9 +443,9 @@ def test_only_the_companys_own_words_are_replies() -> None:
         {"conversation": ""},
         {"conversation": "has space"},
         {"replies": []},
-        {"replies": [{"sender": "model", "text": "Hello"}]},
-        {"replies": [{"sender": "agent", "text": " "}]},
-        {"replies": [{"sender": "agent", "text": "Hello", "token": "secret"}]},
+        {"replies": [{"author": "model", "text": "Hello"}]},
+        {"replies": [{"author": {"type": "agent"}, "text": " "}]},
+        {"replies": [{"author": {"type": "agent"}, "text": "Hello", "token": "secret"}]},
         {"status": "waiting"},
         {"responder": "company"},
         {"token": "secret"},
@@ -457,7 +462,7 @@ async def test_the_core_plugin_declares_the_replies_type() -> None:
     platform, http = build_pap_reactor()
     try:
         registry = platform.display_types()
-        assert registry.get(PAP_REPLIES_TYPE, 2) is PapReplies
+        assert registry.get(PAP_REPLIES_TYPE, 3) is PapReplies
         shown = registry.parse(json.loads(REPLIES_FIXTURE.read_text()))
         assert shown.tool_meta()["reactor.ui/display"]["data"]["responder"] == "human"
     finally:

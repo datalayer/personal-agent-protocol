@@ -42,6 +42,7 @@ import pytest
 
 from personal_agent_protocol import (
     DeviceSignInClient,
+    InMemorySessionKeys,
     Message,
     SessionClient,
     generate_message_id,
@@ -52,14 +53,14 @@ from personal_agent_protocol.company.testing import check_replay_cache, check_st
 from personal_agent_protocol.company.verify import verify_assertion
 from personal_agent_protocol.conversations import StreamReconnected, TextDelta
 from personal_agent_protocol.crypto import JoseDpopProofProvider, verify_dpop_proof
-from personal_agent_protocol.demo.kit import DpopKeys, MutableClock
+from personal_agent_protocol.demo.kit import MutableClock
 from personal_agent_protocol.errors import (
     PersonalAgentProtocolError,
     ProofError,
     SessionError,
     TransportError,
 )
-from personal_agent_protocol.models import JsonWebKeySet
+from personal_agent_protocol.models import Author, JsonWebKeySet
 from personal_agent_protocol.reactor import DpopProofRequest, SharedRateLimitBudget
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
@@ -91,10 +92,11 @@ async def test_concurrent_replays_of_one_proof_and_one_assertion_accept_exactly_
     now = clock.now()
 
     # One DPoP proof, verified by SIZE callers at once.
-    provider = JoseDpopProofProvider(DpopKeys(), now=clock.now)
+    provider = JoseDpopProofProvider(InMemorySessionKeys(), now=clock.now)
+    key = await provider.new_session_key(tenant_id=TENANT, issuer="https://m")
     proof = await provider.create(
         DpopProofRequest(
-            method="POST", url=TOKEN, tenant_id=TENANT, subject=PAIRWISE, issuer="https://m"
+            method="POST", url=TOKEN, tenant_id=TENANT, issuer="https://m", session_key=key
         )
     )
     cache = MemoryReplayCache(clock)
@@ -352,10 +354,9 @@ async def test_many_device_pollers_respect_interval_and_slow_down() -> None:
             client_id=world.atlas.client_id,
             scopes=("orders:read",),
             tenant_id=TENANT,
-            pairwise_user_id=user,
-            session_id=session.session_id,
+            session_key=session.session_key,
             organization=world.company.document.organization,
-            poppy_domains=metadata.poppy_domains,
+            protected_resources=metadata.protected_resources,
         )
 
     started = await asyncio.gather(*(begin(user) for user in users))
@@ -434,7 +435,7 @@ async def test_one_conversation_fans_out_to_many_subscribers_from_their_cursors(
     conversations = world.conversations
 
     def message(text: str) -> Message:
-        return Message(id=generate_message_id(world.reactor), sender="human", text=text)
+        return Message(id=generate_message_id(world.reactor), author=Author(type="human"), text=text)
 
     page = await conversations.start(endpoint, message("Hello"), token=session, wait=0, **world.who)
     conversation_id = page.conversation_id

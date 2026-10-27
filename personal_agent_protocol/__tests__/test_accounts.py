@@ -47,18 +47,30 @@ class MemoryTokens:
 
 
 class Signer:
+    def __init__(self) -> None:
+        self.purposes: list[str] = []
+
     async def sign(self, _: dict[str, object], *, purpose: str) -> SecretStr:
-        assert purpose == "client_assertion"
-        return SecretStr("client-assertion")
+        self.purposes.append(purpose)
+        return SecretStr(purpose)
 
 
 class Dpop:
     def __init__(self) -> None:
         self.requests: list[DpopProofRequest] = []
+        self.made: list[str] = []
+        self.discarded: list[str] = []
+
+    async def new_session_key(self, *, tenant_id: str, issuer: str) -> str:
+        self.made.append(f"{'n' * 42}{len(self.made)}")
+        return self.made[-1]
 
     async def create(self, request: DpopProofRequest) -> SecretStr:
         self.requests.append(request)
         return SecretStr("proof")
+
+    async def discard_session_key(self, *, tenant_id: str, issuer: str, session_key: str) -> None:
+        self.discarded.append(session_key)
 
 
 class Security:
@@ -79,8 +91,6 @@ def signed_in(**extra: object) -> dict[str, object]:
         "token_type": "DPoP",
         "expires_in": 300,
         "scope": "orders:read",
-        "session_id": "ses_1",
-        "signed_in": True,
         **extra,
     }
 
@@ -105,16 +115,17 @@ def test_refresh_signs_the_session_in_and_rotates_the_stored_token() -> None:
         return httpx.Response(200, json=signed_in(refresh_token="account-token-2"))  # noqa: S106
 
     client, security = arrange(company)
-    result = asyncio.run(client.refresh("account_ref", context=CONTEXT, session_id="ses_1"))
+    result = asyncio.run(client.refresh("account_ref", context=CONTEXT, session_key="K" * 43))
 
     assert result.status == "signed_in"
     assert result.rotated
     assert result.token is not None and result.token.refresh_token is None
     assert security.tokens.values["account_ref"].get_secret_value() == "account-token-2"
     assert seen[0]["grant_type"] == "refresh_token"
-    assert seen[0]["session_id"] == "ses_1"
+    # The proof's key names the Session; no parameter does (§4.3).
+    assert "session_key" not in seen[0] and "session_id" not in seen[0]
+    assert [request.session_key for request in security.dpop.requests] == ["K" * 43]
     assert "scope" not in seen[0]
-    assert len(security.dpop.requests) == 1
 
 
 def test_a_narrower_refresh_reports_what_was_left_out() -> None:
@@ -128,7 +139,7 @@ def test_a_narrower_refresh_reports_what_was_left_out() -> None:
         client.refresh(
             "account_ref",
             context=CONTEXT,
-            session_id="ses_1",
+            session_key="K" * 43,
             scopes=("orders:read", "orders:return"),
             resource="https://api.shop.example/",
         )
@@ -141,17 +152,39 @@ def test_a_narrower_refresh_reports_what_was_left_out() -> None:
 def test_a_wider_scope_is_re_consent_not_a_retry() -> None:
     client, security = arrange(lambda _: httpx.Response(400, json={"error": "invalid_scope"}))
     result = asyncio.run(
-        client.refresh("account_ref", context=CONTEXT, session_id="ses_1", scopes=("orders:write",))
+        client.refresh("account_ref", context=CONTEXT, session_key="K" * 43, scopes=("orders:write",))
     )
     assert result.status == "re_consent_required"
     assert "account_ref" in security.tokens.values
 
 
-def test_invalid_grant_deletes_the_token_and_leaves_the_session_signed_out() -> None:
-    client, security = arrange(lambda _: httpx.Response(400, json={"error": "invalid_grant"}))
-    result = asyncio.run(client.refresh("account_ref", context=CONTEXT, session_id="ses_1"))
-    assert result.status == "signed_out"
+def test_invalid_grant_then_a_renewal_that_works_means_the_account_token_ended() -> None:
+    answers = [
+        httpx.Response(400, json={"error": "invalid_grant"}),
+        httpx.Response(200, json={"access_token": "t", "token_type": "DPoP", "expires_in": 60}),
+    ]
+    client, security = arrange(lambda _: answers.pop(0))
+    result = asyncio.run(client.refresh("account_ref", context=CONTEXT, session_key="K" * 43))
+    # Renewing with the assertion worked: the Session lives on signed out (§4.8).
+    assert result.status == "signed_out" and result.token is not None
+    assert not result.token.signed_in
     assert "account_ref" not in security.tokens.values
+
+
+def test_invalid_grant_on_both_means_the_session_ended() -> None:
+    client, security = arrange(lambda _: httpx.Response(400, json={"error": "invalid_grant"}))
+    result = asyncio.run(client.refresh("account_ref", context=CONTEXT, session_key="K" * 43))
+    # The renewal is refused too: the Session ended, the Account Token still works (§4.8).
+    assert result.status == "session_ended"
+    assert "account_ref" in security.tokens.values
+    assert security.dpop.discarded == ["K" * 43]
+
+
+def test_without_a_session_key_a_new_session_starts_signed_in() -> None:
+    client, security = arrange(lambda _: httpx.Response(200, json=signed_in()))
+    result = asyncio.run(client.refresh("account_ref", context=CONTEXT))
+    assert result.status == "signed_in" and result.token is not None
+    assert result.token.session_key == security.dpop.made[0]
 
 
 def test_a_scope_the_company_was_not_asked_for_is_refused() -> None:
@@ -161,16 +194,17 @@ def test_a_scope_the_company_was_not_asked_for_is_refused() -> None:
     with pytest.raises(AuthorizationError) as raised:
         asyncio.run(
             client.refresh(
-                "account_ref", context=CONTEXT, session_id="ses_1", scopes=("orders:read",)
+                "account_ref", context=CONTEXT, session_key="K" * 43, scopes=("orders:read",)
             )
         )
     assert raised.value.code == "scope_escalation"
 
 
-def test_a_refresh_for_another_session_is_refused() -> None:
-    client, _ = arrange(lambda _: httpx.Response(200, json=signed_in(session_id="ses_2")))
+def test_a_bearer_answer_to_a_refresh_is_refused() -> None:
+    # Bearer Session Tokens come from Token Exchange alone (§4.3).
+    client, _ = arrange(lambda _: httpx.Response(200, json=signed_in(token_type="Bearer")))
     with pytest.raises(AuthorizationError) as raised:
-        asyncio.run(client.refresh("account_ref", context=CONTEXT, session_id="ses_1"))
+        asyncio.run(client.refresh("account_ref", context=CONTEXT, session_key="K" * 43))
     assert raised.value.code == "invalid_token_response"
 
 
@@ -187,7 +221,7 @@ def test_one_dpop_nonce_retry_with_a_fresh_proof() -> None:
         return httpx.Response(200, json=signed_in())
 
     client, security = arrange(company)
-    asyncio.run(client.refresh("account_ref", context=CONTEXT, session_id="ses_1"))
+    asyncio.run(client.refresh("account_ref", context=CONTEXT, session_key="K" * 43))
     assert [request.nonce for request in security.dpop.requests] == [None, "n-1"]
 
 
@@ -205,8 +239,8 @@ def test_concurrent_refreshes_rotate_one_after_the_other() -> None:
 
     async def both() -> None:
         await asyncio.gather(
-            client.refresh("account_ref", context=CONTEXT, session_id="ses_1"),
-            client.refresh("account_ref", context=CONTEXT, session_id="ses_1"),
+            client.refresh("account_ref", context=CONTEXT, session_key="K" * 43),
+            client.refresh("account_ref", context=CONTEXT, session_key="K" * 43),
         )
 
     asyncio.run(both())
@@ -242,6 +276,6 @@ def test_no_error_carries_the_account_token() -> None:
         lambda _: httpx.Response(400, json={"error": "server_error", "echo": "account-token-1"})
     )
     with pytest.raises(AuthorizationError) as raised:
-        asyncio.run(client.refresh("account_ref", context=CONTEXT, session_id="ses_1"))
+        asyncio.run(client.refresh("account_ref", context=CONTEXT, session_key="K" * 43))
     assert "account-token-1" not in repr(raised.value)
     assert "account-token-1" not in str(raised.value)

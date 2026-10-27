@@ -24,6 +24,8 @@ import pytest
 from reactor import PluginManifest  # type: ignore[import-untyped]
 
 from personal_agent_protocol import (
+    ProofError,
+    Author,
     AuthorizationError,
     ConversationError,
     DeviceSignInClient,
@@ -124,10 +126,9 @@ async def device_sign_in(world: World, session: SessionToken) -> tuple[SessionTo
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -225,13 +226,13 @@ async def test_cross_tenant_access_is_refused() -> None:
     )
     assert await probe(world, token) == 200
 
-    # Another tenant of Atlas presents the token: its proofs are signed with that
-    # tenant's own DPoP key, which the token is not bound to.
+    # Another tenant of Atlas presents the token: its key custody holds no Session Key
+    # of Ada's, so it cannot even make the proof the token needs (§4.3).
     other = {**world.who, "tenant_id": "another-tenant"}
-    assert await probe(world, token, **other) == 401
-    with pytest.raises(ConversationError) as refused:
+    with pytest.raises(ProofError):
+        await probe(world, token, **other)
+    with pytest.raises(ProofError):
         await world.conversations.read_events(endpoint, page.conversation_id, token=token, **other)
-    assert refused.value.status_code == 401
     # Another user of the same tenant gets a Session of their own, which sees nothing of Ada's.
     stranger = "usr_somebody_else_000000"
     metadata = world.company.oauth_metadata
@@ -249,7 +250,6 @@ async def test_cross_tenant_access_is_refused() -> None:
             page.conversation_id,
             token=strangers,
             tenant_id=TENANT,
-            pairwise_user_id=stranger,
             issuer=metadata.issuer,
         )
     assert hidden.value.code == "conversation_not_found"
@@ -305,7 +305,7 @@ async def test_retries_are_safe() -> None:
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     # The same message ID, sent twice: one conversation, one message.
-    message = Message(id="msg_retry_demo_0000000001", sender="human", text="Hello")
+    message = Message(id="msg_retry_demo_0000000001", author=Author(type="human"), text="Hello")
     first = await world.conversations.start(endpoint, message, token=token, **world.who)
     again = await world.conversations.start(endpoint, message, token=token, **world.who)
     assert again.conversation_id == first.conversation_id
@@ -379,7 +379,7 @@ async def test_rollback_is_safe() -> None:
     assert isinstance(tokens, TokenStore)
     before = await tokens.get(reference)
     refreshed = await accounts.refresh(
-        reference, context=context(world), session_id=session.session_id
+        reference, context=context(world), session_key=session.session_key
     )
     assert refreshed.rotated and refreshed.token is not None
     rotated = await tokens.get(reference)
@@ -411,11 +411,11 @@ async def test_rollback_is_safe() -> None:
     # The rotated-away Account Token stays refused; the current one works.
     assert before is not None and rotated is not None
     await tokens.put(reference, before)
-    stale = await accounts.refresh(reference, context=context(world), session_id=session.session_id)
+    stale = await accounts.refresh(reference, context=context(world), session_key=session.session_key)
     assert stale.status == "signed_out"
     await tokens.put(reference, rotated)
     current = await accounts.refresh(
-        reference, context=context(world), session_id=session.session_id
+        reference, context=context(world), session_key=session.session_key
     )
     assert current.status == "signed_in" and current.token is not None
     # The confirmed operation is not performed again by the earlier release.
@@ -439,7 +439,7 @@ async def test_revocation_is_safe() -> None:
     assert await probe(world, token) == 200
     accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
     second = await world.signed_out_session()
-    other = await accounts.refresh(reference, context=context(world), session_id=second.session_id)
+    other = await accounts.refresh(reference, context=context(world), session_key=second.session_key)
     assert other.status == "signed_in" and other.token is not None
 
     revoked = await accounts.revoke(reference, context=context(world))
@@ -448,7 +448,7 @@ async def test_revocation_is_safe() -> None:
     assert await probe(world, token) == 403
     assert await probe(world, other.token) == 403
     # The Account Token is gone locally and refused at the company; Sessions continue signed out.
-    after = await accounts.refresh(reference, context=context(world), session_id=session.session_id)
+    after = await accounts.refresh(reference, context=context(world), session_key=session.session_key)
     assert after.status == "signed_out"
     metadata = world.company.oauth_metadata
     assert metadata is not None
@@ -458,7 +458,7 @@ async def test_revocation_is_safe() -> None:
         issuer=metadata.issuer,
         token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
-        session_id=session.session_id,
+        session_key=session.session_key,
     )
     assert renewed.signed_in is False and await probe(world, renewed) == 403
 
@@ -479,8 +479,8 @@ async def test_rotation_is_safe() -> None:
 
     # Two refreshes at once: serialized, each rotating; the last token is the live one.
     results = await asyncio.gather(
-        accounts.refresh(reference, context=context(world), session_id=session.session_id),
-        accounts.refresh(reference, context=context(world), session_id=session.session_id),
+        accounts.refresh(reference, context=context(world), session_key=session.session_key),
+        accounts.refresh(reference, context=context(world), session_key=session.session_key),
     )
     assert [r.status for r in results] == ["signed_in", "signed_in"]
     assert all(r.rotated for r in results)
@@ -490,12 +490,12 @@ async def test_rotation_is_safe() -> None:
     # The first token, rotated away, is refused; the live one works.
     await tokens.put(reference, first)
     refused = await accounts.refresh(
-        reference, context=context(world), session_id=session.session_id
+        reference, context=context(world), session_key=session.session_key
     )
     assert refused.status == "signed_out"
     await tokens.put(reference, live)
     assert (
-        await accounts.refresh(reference, context=context(world), session_id=session.session_id)
+        await accounts.refresh(reference, context=context(world), session_key=session.session_key)
     ).status == "signed_in"
 
     # The agent's signing key: both keys published during the overlap, then the old retired.

@@ -25,7 +25,7 @@ def test_discovery_fixture_round_trips_and_preserves_extensions() -> None:
     source = json.loads((FIXTURES / "discovery-valid.json").read_text())
     document = DiscoveryDocument.model_validate(source)
 
-    assert document.protocol_version == "0.2"
+    assert document.protocol_version == "0.3"
     assert document.apis[1].type == "mcp"
     assert document.extensions["operations"].model_extra == {
         "endpoint": "https://api.example.com/poppy/operations"
@@ -36,7 +36,7 @@ def test_discovery_requires_auth_for_an_api() -> None:
     with pytest.raises(ValidationError, match="auth is required"):
         DiscoveryDocument.model_validate(
             {
-                "protocol_version": "0.2",
+                "protocol_version": "0.3",
                 "organization": {"name": "Example", "domain": "example.com"},
                 "apis": [
                     {
@@ -91,7 +91,7 @@ def test_shared_client_conversation_and_operation_fixtures() -> None:
 
 def test_message_requires_content() -> None:
     with pytest.raises(ValidationError, match="requires text, data, context, or operation"):
-        Message.model_validate({"id": "msg_empty", "sender": "agent"})
+        Message.model_validate({"id": "msg_empty", "author": {"type": "agent"}})
 
 
 def test_known_conversation_event_requires_its_fields() -> None:

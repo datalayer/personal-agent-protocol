@@ -127,8 +127,8 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
                     "access_token": "signed-in-session-token",
                     "token_type": "DPoP",
                     "expires_in": 300,
-                    "scope": "poppy:read",
-                    "session_id": "ses_existing",
+                    "scope": "orders:read",
+                    "session_key": "ses_existing",
                     "signed_in": True,
                     "refresh_token": "private-account-token",
                 },
@@ -144,12 +144,11 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
                 token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
                 issuer="https://auth.example.com",
                 client_id="https://agent.example/agent.json",
-                scopes=("poppy:read", "poppy:write"),
+                scopes=("orders:read", "orders:write"),
                 tenant_id="application-one",
-                pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-                session_id="ses_existing",
+                session_key="K" * 43,
                 organization=Organization(name="Company", domain="company.example"),
-                poppy_domains=("company.example",),
+                protected_resources=("https://company.example",),
             )
             assert started.user_code == "WDJB-MJHT"
             assert "private-device-code" not in started.model_dump_json()
@@ -169,13 +168,13 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
             reactor.stop()
 
         assert complete.status == "complete"
-        assert complete.granted_scopes == ("poppy:read",)
-        assert complete.missing_scopes == ("poppy:write",)
+        assert complete.granted_scopes == ("orders:read",)
+        assert complete.missing_scopes == ("orders:write",)
         assert complete.token is not None and complete.token.refresh_token is None
         assert complete.account_token_reference is not None
         stored = plugin.tokens.values[complete.account_token_reference]
         assert stored.get_secret_value() == "private-account-token"
-        assert forms[0]["scope"] == "poppy:read poppy:write"
+        assert forms[0]["scope"] == "orders:read orders:write"
         assert all(form.get("device_code") == "private-device-code" for form in forms[1:])
         assert len(plugin.dpop.requests) == 3
 
@@ -213,12 +212,11 @@ def test_device_sign_in_denial_is_terminal() -> None:
                 token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
                 issuer="https://auth.example.com",
                 client_id="https://agent.example/agent.json",
-                scopes=("poppy:read",),
+                scopes=("orders:read",),
                 tenant_id="application-one",
-                pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-                session_id="ses_existing",
+                session_key="K" * 43,
                 organization=Organization(name="Company", domain="company.example"),
-                poppy_domains=("company.example",),
+                protected_resources=("https://company.example",),
             )
             plugin.clock.advance(1)
             with pytest.raises(AuthorizationError) as caught:
@@ -248,7 +246,7 @@ def test_device_sign_in_denial_is_terminal() -> None:
     ],
 )
 def test_a_device_link_is_shown_only_on_the_issuer_or_its_domains(link: str, allowed: bool) -> None:
-    """Its host is the issuer's, a domain in poppy_domains, or a subdomain of either (§4.6)."""
+    """Its host is the issuer's, the host of a URL in protected_resources, or a subdomain of either (§4.6)."""
 
     async def scenario() -> None:
         def handler(_: httpx.Request) -> httpx.Response:
@@ -272,12 +270,11 @@ def test_a_device_link_is_shown_only_on_the_issuer_or_its_domains(link: str, all
                 token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
                 issuer="https://auth.example.com",
                 client_id="https://agent.example/agent.json",
-                scopes=("poppy:read",),
+                scopes=("orders:read",),
                 tenant_id="application-one",
-                pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-                session_id="ses_existing",
+                session_key="K" * 43,
                 organization=Organization(name="Company", domain="company.example"),
-                poppy_domains=("company.example",),
+                protected_resources=("https://company.example",),
             )
             if allowed:
                 started = await begin
@@ -329,12 +326,11 @@ def test_the_device_poll_retries_once_with_the_token_endpoints_nonce() -> None:
                 token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
                 issuer="https://auth.example.com",
                 client_id="https://agent.example/agent.json",
-                scopes=("poppy:read",),
+                scopes=("orders:read",),
                 tenant_id="application-one",
-                pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-                session_id="ses_existing",
+                session_key="K" * 43,
                 organization=Organization(name="Company", domain="company.example"),
-                poppy_domains=("company.example",),
+                protected_resources=("https://company.example",),
             )
             plugin.clock.advance(5)
             polled = await client.poll(started.reference)

@@ -30,7 +30,7 @@ from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenCon
 from personal_agent_protocol.apis import ApiClient, ApiError
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE
 from personal_agent_protocol.mediated import MediatedSignInClient
-from personal_agent_protocol.models import ConversationEventPage
+from personal_agent_protocol.models import Author, ConversationEventPage
 from personal_agent_protocol.operations import OperationError, OperationsClient
 from personal_agent_protocol.sessions import SessionToken
 
@@ -69,10 +69,9 @@ async def device_sign_in(
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=world.company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     assert (started.organization_name, started.organization_domain) == (
         "Manzanita Outfitters",
@@ -115,7 +114,7 @@ async def test_a_signed_out_session_is_never_signed_in_to_another_account() -> N
         issuer=world.who["issuer"],
         token_endpoint=world.company.oauth_metadata.token_endpoint,  # type: ignore[union-attr]
         tenant_id=TENANT,
-        session_id=session.session_id,
+        session_key=session.session_key,
     )
     assert not renewed.signed_in  # it continues signed out (§4.9)
 
@@ -130,12 +129,12 @@ async def test_a_signed_out_session_is_never_signed_in_to_another_account() -> N
     bob, bob_reference, _ = await device_sign_in(world, fresh, "acct_bob")
     assert bob is not None and bob_reference is not None
     with pytest.raises(AuthorizationError) as mismatch:
-        await accounts.refresh(bob_reference, context=context(world), session_id=session.session_id)
+        await accounts.refresh(bob_reference, context=context(world), session_key=session.session_key)
     assert mismatch.value.code == "account_mismatch"
 
     # The same account is welcome back.
     back, _, none = await device_sign_in(world, renewed, "acct_ada")
-    assert none is None and back is not None and back.session_id == session.session_id
+    assert none is None and back is not None and back.session_key == session.session_key
 
 
 @pytest.mark.asyncio
@@ -153,7 +152,7 @@ async def test_mediated_sign_in_of_a_session_tied_to_another_account_is_account_
         issuer=world.who["issuer"],
         token_endpoint=world.company.oauth_metadata.token_endpoint,  # type: ignore[union-attr]
         tenant_id=TENANT,
-        session_id=session.session_id,
+        session_key=session.session_key,
     )
     auth = world.company.document.auth
     assert auth is not None and auth.mediated is not None
@@ -165,7 +164,6 @@ async def test_mediated_sign_in_of_a_session_tied_to_another_account_is_account_
             scopes=("orders:read",),
             token=session,
             tenant_id=TENANT,
-            pairwise_user_id=PAIRWISE,
         )
     assert (raised.value.code, raised.value.status_code) == ("account_mismatch", 400)
     # The host asked for the credentials naming the company and its issuer (§4.7).
@@ -203,7 +201,7 @@ async def test_after_sign_out_what_used_the_account_stays_and_asks_for_sign_in()
         issuer=world.who["issuer"],
         token_endpoint=world.company.oauth_metadata.token_endpoint,  # type: ignore[union-attr]
         tenant_id=TENANT,
-        session_id=session.session_id,
+        session_key=session.session_key,
     )
     # The conversation stays open, and a signed-out token on it gets sign_in_required.
     record = await world.shop.conversation_record(page.conversation_id)
@@ -212,7 +210,7 @@ async def test_after_sign_out_what_used_the_account_stays_and_asks_for_sign_in()
         await world.conversations.read_events(
             endpoint, page.conversation_id, token=signed_out, **world.who
         )
-    assert (read.value.code, read.value.status_code) == ("sign_in_required", 403)
+    assert (read.value.code, read.value.status_code) == ("insufficient_scope", 403)
     # The operation belongs to the account: signed out, the same Session is asked to sign in.
     operations = OperationsClient(transport=world.transport)
     with pytest.raises(OperationError) as op:
@@ -222,7 +220,7 @@ async def test_after_sign_out_what_used_the_account_stays_and_asks_for_sign_in()
             token=signed_out,
             **world.who,
         )
-    assert (op.value.code, op.value.status_code) == ("sign_in_required", 403)
+    assert (op.value.code, op.value.status_code) == ("insufficient_scope", 403)
     # Signed in again to the same account, the Session continues both.
     back, _, _ = await device_sign_in(world, signed_out, "acct_ada")
     assert back is not None
@@ -320,7 +318,7 @@ async def test_wait_is_a_whole_number_of_seconds_and_a_larger_one_is_capped() ->
         world,
         session,
         f"{endpoint}/{page.conversation_id}/messages",
-        {"message": {"id": "msg_x", "sender": "agent"}},
+        {"message": {"id": "msg_x", "author": {"type": "agent"}}},
     )
     assert (bad.status_code, bad.json()) == (400, {"error": "invalid_request"})
     # An ID with characters not allowed is malformed, not unknown (§7.2).
@@ -342,7 +340,7 @@ async def test_a_message_is_recorded_as_sent_and_its_role_is_the_companys_to_set
         {
             "message": {
                 "id": "msg_role_sent",
-                "sender": "agent",
+                "author": {"type": "agent"},
                 "role": "company",
                 "text": "Hi",
                 "data": {"order": "ord_1"},
@@ -357,7 +355,7 @@ async def test_a_message_is_recorded_as_sent_and_its_role_is_the_companys_to_set
     assert first.text == "Hi" and first.data == {"order": "ord_1"}
     assert first.context == {"locale": "en-US"}
     # A message with only context is recorded too.
-    only_context = Message(id="msg_only_ctx", sender="agent", context={"user_available": True})
+    only_context = Message(id="msg_only_ctx", author=Author(type="agent"), context={"user_available": True})
     answer = await world.conversations.send(
         endpoint,
         page.conversation_id,
@@ -376,7 +374,7 @@ async def test_a_message_is_recorded_as_sent_and_its_role_is_the_companys_to_set
         await world.conversations.send(
             endpoint,
             page.conversation_id,
-            Message(id="msg_with_role", sender="agent", role="user", text="x"),
+            Message(id="msg_with_role", author=Author(type="agent"), role="user", text="x"),
             token=session,
             **world.who,
         )
@@ -479,7 +477,7 @@ async def test_a_company_requiring_nonces_and_the_personal_agent_retrying_with_t
     # At an API: HTTP 401 with the DPoP challenge and DPoP-Nonce; one retry.
     with pytest.raises(ApiError) as raised:
         await ApiClient(transport=world.transport).call("GET", ORDERS, token=session, **world.who)
-    assert raised.value.code == "sign_in_required"
+    assert raised.value.code == "insufficient_scope"
     api = [r for r in captured if r.request.url.path == "/api/orders"]
     assert [r.status_code for r in api] == [401, 403]
     assert api[0].headers["www-authenticate"] == 'DPoP error="use_dpop_nonce"'

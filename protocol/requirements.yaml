@@ -1534,7 +1534,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - lifecycle.browser-assertion-refused
+  - lifecycle.browser-join-refused
   - security.browser-assertion-at-token-endpoint
 - id: PAP-5-06
   section: '5'
@@ -1552,7 +1552,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - lifecycle.browser-assertion-refused
+  - lifecycle.browser-join-refused
 - id: PAP-5-07
   section: '5'
   level: MUST
@@ -1568,7 +1568,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - lifecycle.browser-assertion-refused
+  - lifecycle.browser-join-refused
 - id: PAP-5-08
   section: '5'
   level: MUST
@@ -1584,7 +1584,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - lifecycle.browser-assertion-refused
+  - lifecycle.browser-join-refused
 - id: PAP-5-09
   section: '5'
   level: MUST
@@ -1600,7 +1600,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - lifecycle.browser-assertion-refused
+  - lifecycle.browser-join-refused
 - id: PAP-5-10
   section: '5'
   level: MUST

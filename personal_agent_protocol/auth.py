@@ -18,38 +18,25 @@ from typing import cast
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
-from pydantic import Field, SecretStr, field_validator
+from pydantic import SecretStr, field_validator
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import AuthorizationError, ProtocolValidationError
-from .json import loads_strict
-from .models import ProtocolModel
+from .models import ProtocolModel, is_loopback_redirect
 from .reactor import (
     AUTHORIZATION_STATE_STORES,
     BROWSER_HANDOFFS,
     CLOCKS,
-    DPOP_PROOF_PROVIDERS,
     RANDOM_SOURCES,
-    SIGNERS,
     TOKEN_STORES,
     AuthorizationStateStore,
     BrowserHandoff,
     Clock,
-    DpopProofProvider,
-    DpopProofRequest,
     RandomSource,
-    Signer,
     TokenStore,
     first_contribution,
-    send_bounded,
 )
-from .refusals import refusal_details, refuse_redirect
-from .sessions import (
-    JWT_CLIENT_ASSERTION,
-    SessionToken,
-    _opaque_id,
-    build_client_assertion_claims,
-)
+from .sessions import SessionClient, SessionToken, TokenResponse, _opaque_id
 from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
 RandomBytes = Callable[[int], bytes]
@@ -62,6 +49,7 @@ _AUTHORIZATION_PARAMETERS = {
     "state",
     "code_challenge",
     "code_challenge_method",
+    "dpop_jkt",
 }
 
 
@@ -83,6 +71,12 @@ def _https_url(value: str, label: str) -> str:
     return value
 
 
+def _redirect_url(value: str, label: str) -> str:
+    """A redirect URI: HTTPS, or a loopback URI for an app on the User's computer (§4.1)."""
+
+    return value if is_loopback_redirect(value) else _https_url(value, label)
+
+
 def _scopes(values: Iterable[str]) -> tuple[str, ...]:
     scopes = tuple(dict.fromkeys(values))
     if not scopes or any(not _SCOPE_TOKEN.fullmatch(scope) for scope in scopes):
@@ -100,12 +94,18 @@ class DirectSignInRequest(ProtocolModel):
     scopes: tuple[str, ...]
     state: SecretStr
     code_verifier: SecretStr
+    session_key: str
 
-    @field_validator("issuer", "client_id", "redirect_uri")
+    @field_validator("issuer", "client_id")
     @classmethod
     def validate_urls(cls, value: str, info: object) -> str:
         field_name = getattr(info, "field_name", "URL")
         return _https_url(value, str(field_name))
+
+    @field_validator("redirect_uri")
+    @classmethod
+    def validate_redirect(cls, value: str) -> str:
+        return _redirect_url(value, "redirect_uri")
 
 
 def build_direct_sign_in_request(
@@ -115,9 +115,14 @@ def build_direct_sign_in_request(
     client_id: str,
     redirect_uri: str,
     scopes: Iterable[str],
+    session_key: str,
     random_bytes: RandomBytes = secrets.token_bytes,
 ) -> DirectSignInRequest:
-    """Build a user-browser authorization URL with random state and S256 PKCE."""
+    """Build a user-browser authorization URL with random state and S256 PKCE.
+
+    `dpop_jkt` is the Session Key's thumbprint: the company binds the code to it, so
+    the code signs in that Session and no other key can redeem it (§4.5, RFC 9449 §10).
+    """
 
     endpoint = _https_url(authorization_endpoint, "authorization endpoint")
     validated_scopes = _scopes(scopes)
@@ -134,11 +139,12 @@ def build_direct_sign_in_request(
         [
             ("response_type", "code"),
             ("client_id", _https_url(client_id, "client ID")),
-            ("redirect_uri", _https_url(redirect_uri, "redirect URI")),
+            ("redirect_uri", _redirect_url(redirect_uri, "redirect URI")),
             ("scope", " ".join(validated_scopes)),
             ("state", state),
             ("code_challenge", challenge),
             ("code_challenge_method", "S256"),
+            ("dpop_jkt", session_key),
         ]
     )
     authorization_url = urlunsplit(
@@ -152,6 +158,7 @@ def build_direct_sign_in_request(
         scopes=validated_scopes,
         state=SecretStr(state),
         code_verifier=SecretStr(verifier),
+        session_key=session_key,
     )
 
 
@@ -169,12 +176,14 @@ def validate_direct_sign_in_callback(
     """Validate redirect location, state, and issuer before exposing the code."""
 
     expected = urlsplit(request.redirect_uri)
-    callback = urlsplit(_https_url(callback_url, "callback URL"))
+    callback = urlsplit(_redirect_url(callback_url, "callback URL"))
     if callback.fragment:
         raise AuthorizationError("invalid_callback", "authorization callback has a fragment")
-    if (callback.scheme, callback.netloc, callback.path) != (
+    # A loopback redirect URI matches with any port (RFC 8252 §7.3, §4.5).
+    loopback = is_loopback_redirect(request.redirect_uri)
+    if (callback.scheme, callback.hostname if loopback else callback.netloc, callback.path) != (
         expected.scheme,
-        expected.netloc,
+        expected.hostname if loopback else expected.netloc,
         expected.path,
     ):
         raise AuthorizationError("redirect_mismatch", "callback does not match redirect URI")
@@ -198,37 +207,6 @@ def validate_direct_sign_in_callback(
     if not code:
         raise AuthorizationError("invalid_callback", "authorization callback has no code")
     return DirectSignInCallback(code=SecretStr(code), issuer=request.issuer)
-
-
-class AuthorizationCodeGrant(ProtocolModel):
-    """Redacted PAP authorization-code exchange values."""
-
-    code: SecretStr
-    redirect_uri: str
-    code_verifier: SecretStr
-    session_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,256}$")
-    client_id: str
-    client_assertion: SecretStr
-
-    @field_validator("redirect_uri", "client_id")
-    @classmethod
-    def validate_urls(cls, value: str, info: object) -> str:
-        field_name = getattr(info, "field_name", "URL")
-        return _https_url(value, str(field_name))
-
-    def as_form(self) -> dict[str, str]:
-        """Reveal secrets only at the final token-request boundary."""
-
-        return {
-            "grant_type": "authorization_code",
-            "code": self.code.get_secret_value(),
-            "redirect_uri": self.redirect_uri,
-            "code_verifier": self.code_verifier.get_secret_value(),
-            "session_id": self.session_id,
-            "client_id": self.client_id,
-            "client_assertion_type": JWT_CLIENT_ASSERTION,
-            "client_assertion": self.client_assertion.get_secret_value(),
-        }
 
 
 class DirectSignInStart(ProtocolModel):
@@ -256,8 +234,6 @@ class _PendingDirectSignIn:
     request: DirectSignInRequest
     token_endpoint: str
     tenant_id: str
-    pairwise_user_id: str
-    session_id: str
     expires_at: datetime
 
 
@@ -270,7 +246,7 @@ def _state_reference(state: str) -> str:
 
 
 def _callback_state(callback_url: str) -> str:
-    callback = urlsplit(_https_url(callback_url, "callback URL"))
+    callback = urlsplit(_redirect_url(callback_url, "callback URL"))
     if callback.fragment:
         raise AuthorizationError("invalid_callback", "authorization callback has a fragment")
     pairs = parse_qsl(callback.query, keep_blank_values=True)
@@ -297,6 +273,9 @@ class DirectSignInClient:
         self.reactor = reactor
         self.http = http_client
         self.max_response_bytes = max_response_bytes
+        self.sessions = SessionClient(
+            reactor=reactor, http_client=http_client, max_response_bytes=max_response_bytes
+        )
 
     @traced("pap.sign_in.direct.begin", before=signed_in_as("direct"), after=sign_in_result)
     async def begin(
@@ -309,20 +288,20 @@ class DirectSignInClient:
         redirect_uri: str,
         scopes: Iterable[str],
         tenant_id: str,
-        pairwise_user_id: str,
-        session_id: str,
+        session_key: str,
         lifetime_seconds: int = 600,
     ) -> DirectSignInStart:
-        """Store one-use state, then open the authorization URL for the user."""
+        """Store one-use state, then open the authorization URL for the user.
+
+        `session_key` names the Session the sign-in is for: the code is bound to it.
+        """
 
         if not 0 < lifetime_seconds <= 900:
             raise ValueError("Direct Sign-In state lifetime must be between 1 and 900 seconds")
         if not tenant_id or len(tenant_id) > 256:
             raise ValueError("tenant_id must contain between 1 and 256 characters")
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", pairwise_user_id):
-            raise ValueError("pairwise_user_id must be an opaque URL-safe identifier")
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", session_id):
-            raise ValueError("session_id must be an opaque URL-safe identifier")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", session_key):
+            raise ValueError("session_key must be a JWK SHA-256 thumbprint")
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
         random_source = cast(
             RandomSource,
@@ -346,6 +325,7 @@ class DirectSignInClient:
             client_id=client_id,
             redirect_uri=redirect_uri,
             scopes=scopes,
+            session_key=session_key,
             random_bytes=random_source.bytes,
         )
         expires_at = clock.now() + timedelta(seconds=lifetime_seconds)
@@ -354,8 +334,6 @@ class DirectSignInClient:
             request=request,
             token_endpoint=_https_url(token_endpoint, "token endpoint"),
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
-            session_id=session_id,
             expires_at=expires_at,
         )
         await store.put(reference, pending, expires_at=expires_at)
@@ -399,144 +377,48 @@ class DirectSignInClient:
         pending: _PendingDirectSignIn,
         callback: DirectSignInCallback,
     ) -> DirectSignInResult:
-        clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
-        random_source = cast(
-            RandomSource,
-            first_contribution(self.reactor, RANDOM_SOURCES, "random source"),
+        request = pending.request
+        form = {
+            "grant_type": "authorization_code",
+            "code": callback.code.get_secret_value(),
+            "redirect_uri": request.redirect_uri,
+            "code_verifier": request.code_verifier.get_secret_value(),
+        }
+        # The proof is signed with the key the code is bound to, the Session's (§4.5).
+        response = await self.sessions.token_request(
+            client_id=request.client_id,
+            issuer=request.issuer,
+            token_endpoint=pending.token_endpoint,
+            tenant_id=pending.tenant_id,
+            session_key=request.session_key,
+            form=lambda: form,
+            error=AuthorizationError,
         )
-        signer = cast(Signer, first_contribution(self.reactor, SIGNERS, "signer"))
-        dpop = cast(
-            DpopProofProvider,
-            first_contribution(
-                self.reactor,
-                DPOP_PROOF_PROVIDERS,
-                "DPoP proof provider",
-            ),
-        )
-        nonce: str | None = None
-        for attempt in range(2):
-            claims = build_client_assertion_claims(
-                client_id=pending.request.client_id,
-                issuer=pending.request.issuer,
-                now=clock.now(),
-                random_bytes=random_source.bytes,
-            )
-            assertion = await signer.sign(
-                claims.model_dump(),
-                purpose="client_assertion",
-            )
-            proof = await dpop.create(
-                DpopProofRequest(
-                    method="POST",
-                    url=pending.token_endpoint,
-                    tenant_id=pending.tenant_id,
-                    subject=pending.pairwise_user_id,
-                    issuer=pending.request.issuer,
-                    nonce=nonce,
-                )
-            )
-            grant = AuthorizationCodeGrant(
-                code=callback.code,
-                redirect_uri=pending.request.redirect_uri,
-                code_verifier=pending.request.code_verifier,
-                session_id=pending.session_id,
-                client_id=pending.request.client_id,
-                client_assertion=assertion,
-            )
-            try:
-                response = await send_bounded(
-                    self.http,
-                    self.http.build_request(
-                        "POST",
-                        pending.token_endpoint,
-                        data=grant.as_form(),
-                        headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
-                    ),
-                    max_bytes=self.max_response_bytes,
-                )
-            except httpx.HTTPError as exc:
-                raise AuthorizationError(
-                    "request_failed", "Direct Sign-In token exchange failed"
-                ) from exc
-            refuse_redirect(response, AuthorizationError)
-            payload = self._decode(response)
-            if response.is_success:
-                return await self._result(response, payload, pending)
-            error_code = payload.get("error") if isinstance(payload, dict) else None
-            safe_code = error_code if isinstance(error_code, str) else "http_error"
-            if safe_code == "use_dpop_nonce" and attempt == 0:
-                nonce = response.headers.get("dpop-nonce")
-                if not nonce:
-                    raise AuthorizationError(
-                        "missing_dpop_nonce",
-                        "Company requested a DPoP nonce but did not send one",
-                        status_code=response.status_code,
-                    )
-                continue
-            raise AuthorizationError(
-                safe_code,
-                "Company refused the Direct Sign-In token exchange",
-                status_code=response.status_code,
-                details=refusal_details(response, payload) or None,
-            )
-        raise AuthorizationError("use_dpop_nonce", "Company rejected the refreshed DPoP proof")
-
-    def _decode(self, response: httpx.Response) -> object:
-        if len(response.content) > self.max_response_bytes:
-            raise AuthorizationError(
-                "response_too_large",
-                "Direct Sign-In response exceeds size limit",
-                status_code=response.status_code,
-            )
-        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
-        if content_type != "application/json":
-            raise AuthorizationError(
-                "invalid_content_type",
-                "Direct Sign-In token endpoint must return JSON",
-                status_code=response.status_code,
-            )
-        try:
-            return loads_strict(response.content)
-        except ProtocolValidationError as exc:
-            raise AuthorizationError(
-                "invalid_json",
-                "Direct Sign-In token endpoint returned invalid JSON",
-                status_code=response.status_code,
-            ) from exc
+        return await self._result(response, pending)
 
     async def _result(
         self,
-        response: httpx.Response,
-        payload: object,
+        response: TokenResponse,
         pending: _PendingDirectSignIn,
     ) -> DirectSignInResult:
-        try:
-            token = SessionToken.model_validate(payload)
-        except (ValueError, ProtocolValidationError) as exc:
-            raise AuthorizationError(
-                "invalid_token_response",
-                "Direct Sign-In token response is malformed",
-                status_code=response.status_code,
-            ) from exc
-        if token.token_type != "DPoP" or not token.signed_in:  # noqa: S105 - token type
-            raise AuthorizationError(
-                "invalid_token_response",
-                "Direct Sign-In must return a signed-in DPoP Session Token",
-                status_code=response.status_code,
-            )
-        if token.session_id != pending.session_id:
-            raise AuthorizationError(
-                "session_mismatch",
-                "Direct Sign-In response changed the existing Session",
-                status_code=response.status_code,
-            )
         requested = pending.request.scopes
+        if response.token_type != "DPoP":  # noqa: S105 - token type
+            raise AuthorizationError(
+                "invalid_token_response", "Direct Sign-In must return a DPoP Session Token"
+            )
+        try:
+            token = SessionToken.from_response(
+                response,
+                session_key=pending.request.session_key,
+                signed_in=True,
+                requested_scopes=requested,
+            )
+        except ProtocolValidationError as exc:
+            raise AuthorizationError("invalid_token_response", exc.message) from exc
         granted = token.scopes
         if any(scope not in requested for scope in granted):
             raise AuthorizationError(
-                "scope_escalation",
-                "Company returned a scope that was not requested",
-                status_code=response.status_code,
+                "scope_escalation", "Company returned a scope that was not requested"
             )
         account_reference: str | None = None
         if token.refresh_token is not None:

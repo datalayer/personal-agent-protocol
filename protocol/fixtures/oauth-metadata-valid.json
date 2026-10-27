@@ -4,6 +4,23 @@
   "revocation_endpoint": "https://auth.example.com/oauth/revoke",
   "authorization_endpoint": "https://auth.example.com/oauth/authorize",
   "device_authorization_endpoint": "https://auth.example.com/oauth/device",
-  "dpop_signing_alg_values_supported": ["ES256", "RS256"],
-  "poppy_domains": ["example.com"]
+  "grant_types_supported": [
+    "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    "refresh_token",
+    "authorization_code",
+    "urn:ietf:params:oauth:grant-type:device_code"
+  ],
+  "scopes_supported": [
+    "orders:read",
+    "orders:write",
+    "addresses"
+  ],
+  "dpop_signing_alg_values_supported": [
+    "ES256",
+    "RS256"
+  ],
+  "protected_resources": [
+    "https://example.com",
+    "https://mcp.example.com/mcp"
+  ]
 }

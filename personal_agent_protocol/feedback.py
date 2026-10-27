@@ -37,7 +37,7 @@ from pydantic import ConfigDict, Field
 
 from .errors import PersonalAgentProtocolError
 from .json import loads_strict
-from .models import DiscoveryDocument, ProtocolModel
+from .models import Alternative, DiscoveryDocument, ProtocolModel
 from .refusals import challenge_parameters, refusal_details
 from .sessions import SessionToken
 from .transport import DpopHttpClient
@@ -87,10 +87,14 @@ class FeedbackClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
-    ) -> None:
-        """`POST {feedback.endpoint}`: accepted (`202`, no body), or a `FeedbackError`.
+    ) -> Alternative | None:
+        """`POST {feedback.endpoint}`: accepted, or answered with a way to do it (§8.3).
+
+        `202` with no body returns `None`; `200` with an alternative (§8.2) returns it,
+        as content from the company, its references for the caller to filter with
+        `Alternative.usable_references`. Anything else is a `FeedbackError`. Don't
+        report a task the company lists as excluded (§8.1).
 
         A refusal is never retried here: a 429 carries its `Retry-After` in
         `details["retry_after"]`, and the caller waits at least that long (§4.3).
@@ -101,14 +105,22 @@ class FeedbackClient:
             endpoint,
             token=token,
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
             issuer=issuer,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             content=json.dumps(report.model_dump(mode="json"), separators=(",", ":")).encode(),
         )
         if response.status_code == 202:
-            return
+            return None
         payload = self._payload(response)
+        if response.status_code == 200:
+            try:
+                return Alternative.model_validate(payload)
+            except ValueError as exc:
+                raise FeedbackError(
+                    "invalid_alternative",
+                    "the company answered with a malformed alternative",
+                    status_code=200,
+                ) from exc
         code = payload.get("error") if isinstance(payload, dict) else None
         if not isinstance(code, str):
             # A token error may come only in WWW-Authenticate (§6).

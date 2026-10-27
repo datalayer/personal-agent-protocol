@@ -16,7 +16,6 @@ from personal_agent_protocol import (
     BROWSER_HANDOFFS,
     DPOP_PROOF_PROVIDERS,
     SIGNERS,
-    AuthorizationCodeGrant,
     AuthorizationError,
     DirectSignInClient,
     DirectSignInRequest,
@@ -25,6 +24,9 @@ from personal_agent_protocol import (
     validate_direct_sign_in_callback,
 )
 from personal_agent_protocol.reactor import TOKEN_STORES, build_pap_reactor
+
+
+KEY = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
 
 
 def fixed_random(length: int) -> bytes:
@@ -37,7 +39,8 @@ def request() -> DirectSignInRequest:
         issuer="https://auth.example.com",
         client_id="https://agent.example/agent.json",
         redirect_uri="https://agent.example/oauth/callback",
-        scopes=("poppy:read", "poppy:write"),
+        scopes=("orders:read", "orders:write"),
+        session_key=KEY,
         random_bytes=fixed_random,
     )
 
@@ -58,27 +61,42 @@ def test_builds_direct_sign_in_url_with_s256_pkce() -> None:
     values = parse_qs(urlsplit(sign_in.authorization_url.get_secret_value()).query)
 
     assert values["response_type"] == ["code"]
-    assert values["scope"] == ["poppy:read poppy:write"]
+    assert values["scope"] == ["orders:read orders:write"]
     assert values["code_challenge_method"] == ["S256"]
+    # The code is bound to the Session Key (§4.5, RFC 9449 §10).
+    assert values["dpop_jkt"] == [KEY]
     assert len(sign_in.code_verifier.get_secret_value()) == 43
     assert sign_in.state.get_secret_value() not in repr(sign_in)
 
 
-def test_validates_callback_and_redacts_code_exchange() -> None:
+def test_validates_callback_and_keeps_the_code_secret() -> None:
     sign_in = request()
     callback = validate_direct_sign_in_callback(sign_in, callback_url())
-    grant = AuthorizationCodeGrant(
-        code=callback.code,
-        redirect_uri=sign_in.redirect_uri,
-        code_verifier=sign_in.code_verifier,
-        session_id="ses_2Lm0",
-        client_id=sign_in.client_id,
-        client_assertion=SecretStr("signed-client-assertion"),
-    )
 
-    assert grant.as_form()["code"] == "one-time-code"
-    assert "one-time-code" not in repr(grant)
-    assert "signed-client-assertion" not in grant.model_dump_json()
+    assert callback.code.get_secret_value() == "one-time-code"
+    assert "one-time-code" not in repr(callback)
+
+
+def test_a_loopback_redirect_matches_with_any_port() -> None:
+    sign_in = build_direct_sign_in_request(
+        authorization_endpoint="https://auth.example.com/oauth/authorize",
+        issuer="https://auth.example.com",
+        client_id="https://agent.example/agent.json",
+        redirect_uri="http://127.0.0.1/callback",
+        scopes=("orders:read",),
+        session_key=KEY,
+        random_bytes=fixed_random,
+    )
+    values = {"code": "c", "state": sign_in.state.get_secret_value(), "iss": sign_in.issuer}
+    # An app on the user's computer listens on a port it picks (RFC 8252 §7.3, §4.5).
+    callback = validate_direct_sign_in_callback(
+        sign_in, f"http://127.0.0.1:53111/callback?{urlencode(values)}"
+    )
+    assert callback.code.get_secret_value() == "c"
+    with pytest.raises(AuthorizationError):
+        validate_direct_sign_in_callback(
+            sign_in, f"http://127.0.0.1:53111/other?{urlencode(values)}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -104,7 +122,8 @@ def test_rejects_weak_entropy() -> None:
             issuer="https://auth.example.com",
             client_id="https://agent.example/agent.json",
             redirect_uri="https://agent.example/oauth/callback",
-            scopes=("poppy:read",),
+            scopes=("orders:read",),
+            session_key=KEY,
             random_bytes=lambda _: b"short",
         )
 
@@ -220,13 +239,12 @@ async def begin_direct_sign_in(
         issuer="https://auth.example.com",
         client_id="https://agent.example/agent.json",
         redirect_uri="https://agent.example/oauth/callback",
-        scopes=("poppy:read", "poppy:write"),
+        scopes=("orders:read", "orders:write"),
         tenant_id="application-one",
-        pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-        session_id="ses_existing",
+        session_key=KEY,
     )
     assert started.expires_at > datetime.now(timezone.utc)
-    assert started.requested_scopes == ("poppy:read", "poppy:write")
+    assert started.requested_scopes == ("orders:read", "orders:write")
     assert len(plugin.browser.urls) == 1
     return callback_from_browser(plugin.browser)
 
@@ -253,9 +271,7 @@ def test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes() -> 
                     "access_token": "signed-in-session-token",
                     "token_type": "DPoP",
                     "expires_in": 300,
-                    "scope": "poppy:read",
-                    "session_id": "ses_existing",
-                    "signed_in": True,
+                    "scope": "orders:read",
                     "refresh_token": "account-token",
                 },
             )
@@ -277,8 +293,8 @@ def test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes() -> 
 
         assert reused.value.code == "invalid_or_expired_state"
         assert result.token.access_token.get_secret_value() == "signed-in-session-token"
-        assert result.granted_scopes == ("poppy:read",)
-        assert result.missing_scopes == ("poppy:write",)
+        assert result.granted_scopes == ("orders:read",)
+        assert result.missing_scopes == ("orders:write",)
         # The Account Token never stays in the result (§4.8): only its opaque reference.
         assert result.token.refresh_token is None
         assert result.account_token_reference is not None
@@ -287,7 +303,10 @@ def test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes() -> 
         stored = plugin.tokens.values[result.account_token_reference]
         assert stored.get_secret_value() == "account-token"
         assert [item.nonce for item in plugin.dpop.requests] == [None, "company-nonce"]
-        assert forms[0]["session_id"] == forms[1]["session_id"] == "ses_existing"
+        # Both attempts are signed with the key the code is bound to; no Session is named.
+        assert [item.session_key for item in plugin.dpop.requests] == [KEY, KEY]
+        assert all("session_id" not in form for form in forms)
+        assert result.token.session_key == KEY and result.token.signed_in
         assert forms[0]["code_verifier"] == forms[1]["code_verifier"]
         assert forms[0]["client_assertion"] != forms[1]["client_assertion"]
 

@@ -1,6 +1,6 @@
 {
   "suite": "lifecycle",
-  "profile": "0.2",
+  "profile": "0.3",
   "description": "Parallel Sessions, renewal, account binding, rotation, narrowing, and sign-out.",
   "cases": [
     {
@@ -12,7 +12,7 @@
         "PAP-4.2-04",
         "PAP-4.2-05"
       ],
-      "description": "A Session starts signed out: a DPoP token with expires_in > 0 (hours, not days), no scope, a session_id."
+      "description": "A Session starts signed out: a DPoP token with expires_in > 0 (hours, not days), no scope, no Session named: its key names it."
     },
     {
       "id": "lifecycle.parallel-sessions",
@@ -21,7 +21,7 @@
       "requirements": [
         "PAP-4.2-01"
       ],
-      "description": "The same user runs two Sessions at once; each has its own session_id and both are served."
+      "description": "The same user runs two Sessions at once; each has its own Session Key and both are served."
     },
     {
       "id": "lifecycle.renew-signed-out",
@@ -30,7 +30,7 @@
       "requirements": [
         "PAP-4.3-15"
       ],
-      "description": "Renewing with session_id returns a new token for the same Session; the agent uses it from then on and the old one stops working."
+      "description": "Renewing with a proof from the same Session Key returns a new token for the same Session; the agent uses it from then on and the old one stops working."
     },
     {
       "id": "lifecycle.renew-for-another-user",
@@ -148,7 +148,7 @@
       "requirements": [
         "PAP-4.9-01"
       ],
-      "description": "After revocation, the Session Token issued before it is handled as signed out on the next request (sign_in_required)."
+      "description": "After revocation, the Session Token issued before it is handled as signed out on the next request (insufficient_scope)."
     },
     {
       "id": "lifecycle.sign-out-session-continues",
@@ -176,7 +176,7 @@
       "requirements": [
         "GUIDE-co-account-01"
       ],
-      "description": "Disconnecting the agent at the company revokes its Account Tokens and signs out its Sessions; the agent finds out from invalid_grant and sign_in_required."
+      "description": "Disconnecting the agent at the company revokes its Account Tokens and signs out its Sessions; the agent finds out from invalid_grant and insufficient_scope."
     },
     {
       "id": "lifecycle.rate-limit-retry-after",
@@ -253,7 +253,7 @@
         "PAP-4.9-01",
         "PAP-6-04"
       ],
-      "description": "After revocation the MCP server handles the Session's token for it as signed out (sign_in_required)."
+      "description": "After revocation the MCP server handles the Session's token for it as signed out (insufficient_scope)."
     },
     {
       "id": "lifecycle.browser-joins-session",
@@ -269,7 +269,7 @@
       "description": "The agent's own browser posts a browser assertion and gets a Secure, HttpOnly, SameSite=Lax cookie with no lifetime of its own; the website follows the Session's sign-out on the next request."
     },
     {
-      "id": "lifecycle.browser-assertion-refused",
+      "id": "lifecycle.browser-join-refused",
       "kind": "negative",
       "role": "company",
       "requirements": [
@@ -279,7 +279,7 @@
         "PAP-5-08",
         "PAP-5-09"
       ],
-      "description": "A replayed, Session-typed, foreign-return_to, other-user's, or long-lived browser assertion sets no cookie (HTTP 400)."
+      "description": "A join code submitted from another browser, a code used twice, a proof over another code, or a key that names no Session sets no Session cookie (HTTP 400), the two attacks of §9.6 among them."
     }
   ]
 }

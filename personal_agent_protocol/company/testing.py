@@ -53,6 +53,7 @@ from .store import (
     DPOP_NONCE,
     FEEDBACK,
     IDEMPOTENCY,
+    JOIN_CODE,
     MEDIATED,
     MESSAGE_ID,
     OPERATION,
@@ -72,6 +73,7 @@ from .store import (
     IssuedCode,
     IssuedNonce,
     IssuedSession,
+    JoinCode,
     KnownClient,
     MessageReceipt,
     OperationProposal,
@@ -106,7 +108,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
 
     later = now + timedelta(minutes=5)
     signed_in = IssuedSession(
-        session_id="ses_1",
+        session_key="ses_1",
         client_id="https://atlas.example",
         pairwise_user_id="usr_1",
         key_thumbprint="thumb",
@@ -131,7 +133,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
     )
     return {
         SESSION: StoredSession(
-            session_id="ses_1",
+            session_key="ses_1",
             client_id="https://atlas.example",
             pairwise_user_id="usr_1",
             tokens={"tok_1": signed_in, "tok_2": IssuedSession("ses_1", "c", "u", "k", now)},
@@ -146,9 +148,11 @@ def record_samples(now: datetime) -> dict[str, Any]:
         DEVICE: PendingDevice("c", ("a",), "ABCD-EFGH", later, 10, now, "acct_1", ("a",), True),
         USER_CODE: UserCode("dev_digest"),
         AUTHORIZATION: PendingAuthorization(
-            "c", "https://atlas.example/cb", ("a",), "st", "chal", later, "Atlas", "bind"
+            "c", "https://atlas.example/cb", ("a",), "st", "chal", "jkt", later, "Atlas", "bind"
         ),
-        CODE: IssuedCode("c", "https://atlas.example/cb", "chal", "acct_1", ("a",), later),
+        CODE: IssuedCode(
+            "c", "https://atlas.example/cb", "chal", "jkt", ("a",), "acct_1", ("a",), later
+        ),
         MEDIATED: PendingMediated(
             "ses_1", "acct_1", ("a",), "ref", later, ("k1", "k2"), 2, "failed"
         ),
@@ -169,6 +173,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
         ),
         PROPOSAL: OperationProposal("op_1"),
         BROWSER_COOKIE: SessionPointer("ses_1"),
+        JOIN_CODE: JoinCode("browser_digest"),
         REPLAY: ReplayMark(),
         SIGN_IN_ATTEMPTS: SignInAttempts(3, later),
         FEEDBACK: StoredFeedback(

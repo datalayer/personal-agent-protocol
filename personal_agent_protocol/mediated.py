@@ -52,7 +52,7 @@ from .reactor import (
     first_contribution,
 )
 from .refusals import refusal_details
-from .sessions import SessionToken, _opaque_id
+from .sessions import SessionToken, TokenResponse, _opaque_id
 from .telemetry import sign_in_result, signed_in_as, traced
 from .transport import DpopHttpClient
 
@@ -91,7 +91,7 @@ class _CodeRequired(ProtocolModel):
 class _PendingCode:
     endpoint: str
     sign_in_id: str
-    session_id: str
+    session_key: str
     scopes: tuple[str, ...]
     company_name: str
     company_domain: str
@@ -130,7 +130,6 @@ class MediatedSignInClient:
         scopes: tuple[str, ...],
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
     ) -> MediatedSignInResult:
         """Collect the declared fields from the user and sign the Session in."""
 
@@ -160,13 +159,13 @@ class MediatedSignInClient:
             )
         finally:
             credentials.clear()
-        response = await self._post(endpoint, body, token, tenant_id, pairwise_user_id, issuer)
+        response = await self._post(endpoint, body, token, tenant_id, issuer)
         return await self._result(
             response,
             pending=_PendingCode(
                 endpoint=endpoint,
                 sign_in_id="",
-                session_id=token.session_id,
+                session_key=token.session_key,
                 scopes=requested,
                 company_name=organization.name,
                 company_domain=organization.domain,
@@ -184,7 +183,6 @@ class MediatedSignInClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> MediatedSignInResult:
         """Continue a `code_required` sign-in with the code the user received."""
@@ -196,7 +194,7 @@ class MediatedSignInClient:
                 "invalid_or_expired_sign_in",
                 "Mediated Sign-In is unknown, expired, or already complete",
             )
-        if token.session_id != pending.session_id:
+        if token.session_key != pending.session_key:
             # Only the Session that started a sign-in can finish it (§4.7).
             await store.put(reference, pending, expires_at=pending.expires_at)
             raise AuthorizationError(
@@ -222,7 +220,6 @@ class MediatedSignInClient:
             body,
             token,
             tenant_id,
-            pairwise_user_id,
             issuer,
         )
         return await self._result(response, pending=pending, reference=reference)
@@ -283,7 +280,7 @@ class MediatedSignInClient:
         continued = _PendingCode(
             endpoint=pending.endpoint,
             sign_in_id=challenge.sign_in_id,
-            session_id=pending.session_id,
+            session_key=pending.session_key,
             scopes=pending.scopes,
             company_name=pending.company_name,
             company_domain=pending.company_domain,
@@ -308,23 +305,24 @@ class MediatedSignInClient:
         fields = dict(payload) if isinstance(payload, dict) else {}
         fields.pop("status", None)
         try:
-            token = SessionToken.model_validate(fields)
-        except ValueError as exc:
+            response_fields = TokenResponse.model_validate(fields)
+            if response_fields.token_type != "DPoP":  # noqa: S105 - OAuth token type
+                raise ProtocolValidationError(
+                    "invalid_token_response", "Mediated Sign-In must return a DPoP Session Token"
+                )
+            # `scope` as at the token endpoint: left out only when exactly as requested (§4.7).
+            token = SessionToken.from_response(
+                response_fields,
+                session_key=pending.session_key,
+                signed_in=True,
+                requested_scopes=pending.scopes,
+            )
+        except (ValueError, ProtocolValidationError) as exc:
             raise AuthorizationError(
                 "invalid_token_response",
                 "Mediated Sign-In token response is malformed",
                 status_code=response.status_code,
             ) from exc
-        if (
-            token.token_type != "DPoP"  # noqa: S105 - OAuth token type, not a credential
-            or not token.signed_in
-            or token.session_id != pending.session_id
-        ):
-            raise AuthorizationError(
-                "invalid_token_response",
-                "Mediated Sign-In must sign in the same proof-bound Session",
-                status_code=response.status_code,
-            )
         if any(scope not in pending.scopes for scope in token.scopes):
             raise AuthorizationError(
                 "scope_escalation",
@@ -372,7 +370,6 @@ class MediatedSignInClient:
         body: bytes,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> httpx.Response:
         try:
@@ -381,7 +378,6 @@ class MediatedSignInClient:
                 url,
                 token=token,
                 tenant_id=tenant_id,
-                pairwise_user_id=pairwise_user_id,
                 issuer=issuer,
                 headers={"Content-Type": "application/json", "Accept": "application/json"},
                 content=body,
@@ -405,7 +401,7 @@ class MediatedSignInClient:
     @staticmethod
     def _endpoint_on_company_domain(endpoint: str, domain: str, issuer: str) -> str:
         """Credentials go only to the company: its domain (or a subdomain), or the host of
-        its `auth.issuer`, which its OAuth metadata ties to it (`poppy_domains`)."""
+        its `auth.issuer`, whose OAuth metadata lists it (`protected_resources`)."""
 
         parsed = urlsplit(endpoint)
         host = (parsed.hostname or "").lower()

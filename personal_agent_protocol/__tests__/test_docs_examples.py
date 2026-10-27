@@ -77,7 +77,7 @@ from personal_agent_protocol.demo.kit import (
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, ManzanitaPlugin
-from personal_agent_protocol.models import ClientMetadata, DiscoveryDocument, Message
+from personal_agent_protocol.models import Author, ClientMetadata, DiscoveryDocument, Message
 from personal_agent_protocol.operations import (
     StandingPermission,
     TermLimit,
@@ -89,7 +89,7 @@ SOURCES = [ROOT / "README.md", *sorted((ROOT / "docs" / "docs").rglob("*.mdx"))]
 FENCE = re.compile(r"^```(?P<language>\w+)[^\n]*\n(?P<code>.*?)^```", re.MULTILINE | re.DOTALL)
 TENANT = "application-42"
 LOCAL_USER = "local-user-42"
-SCOPES = ("orders:read", "orders:write", "orders:return", "poppy:read")
+SCOPES = ("orders:read", "orders:write", "orders:return")
 COMPANIES = {
     "example.com": "Example Company",
     "shop.example": "Example Shop",
@@ -201,6 +201,7 @@ class Docs:
             name=name,
             domain=domain,
             scopes=SCOPES,
+            scope_descriptions={scope: f"The {scope} scope" for scope in SCOPES},
             write_scopes=("orders:write",),
             mediated_fields=(("email", "Email", False), ("password", "Password", True)),
         )
@@ -254,10 +255,9 @@ class Docs:
             client_id=self.agent.client_id,
             scopes=scopes,
             tenant_id=TENANT,
-            pairwise_user_id=who["pairwise_user_id"],
-            session_id=session.session_id,
+            session_key=session.session_key,
             organization=(await self.discovered(domain)).document.organization,
-            poppy_domains=metadata.poppy_domains,
+            protected_resources=metadata.protected_resources,
         )
         account = "acct_ada_northwind" if domain == northwind_demo.DOMAIN else "acct_ada"
         await self.companies[domain].approve_device(started.user_code, account_id=account)
@@ -373,7 +373,7 @@ async def _session_assertion(docs: Docs) -> tuple[dict[str, Any], Check]:
 async def _sessions(docs: Docs) -> tuple[dict[str, Any], Check]:
     async def check(namespace: dict[str, Any], out: str) -> None:
         token, renewed = namespace["token"], namespace["renewed"]
-        assert not token.signed_in and renewed.session_id == token.session_id
+        assert not token.signed_in and renewed.session_key == token.session_key
 
     return {"reactor": docs.reactor}, check
 
@@ -495,7 +495,7 @@ async def _stream(docs: Docs) -> tuple[dict[str, Any], Check]:
     token = await docs.signed_out("shop.example")
     endpoint = company.document.agent.protocols[0].endpoint
     conversations = ConversationClient(transport=docs.transport)
-    message = Message(id=generate_message_id(docs.reactor), sender="human", text="Hello")
+    message = Message(id=generate_message_id(docs.reactor), author=Author(type="human"), text="Hello")
     page = await conversations.start(endpoint, message, token=token, wait=0, **who)
     await conversations.close(endpoint, page.conversation_id, token=token, **who)
     handled: list[Any] = []
@@ -584,7 +584,7 @@ async def _confirm_display(docs: Docs) -> tuple[dict[str, Any], Check]:
         )
         assert "ses_docs" not in json.dumps(namespace["display"].model_view())
 
-    return {"operation": operation, "session_id": "ses_docs"}, check
+    return {"operation": operation, "session_key": "ses_docs"}, check
 
 
 @case("docs/docs/guides/operations.mdx#2")
@@ -596,7 +596,7 @@ async def _standing(docs: Docs) -> tuple[dict[str, Any], Check]:
     conversations = ConversationClient(transport=docs.transport)
     message = Message(
         id=generate_message_id(docs.reactor),
-        sender="human",
+        author=Author(type="human"),
         text="Pay INV-1042: EUR 120.00 to Ledgerly",
     )
     page = await conversations.start(endpoint, message, token=token, wait=0, **who)
@@ -732,7 +732,7 @@ async def _live_session_actions(docs: Docs) -> tuple[dict[str, Any], Check]:
         # Approved by Studio's dialog, then: no such Session.
         with pytest.raises(NotConfiguredError):
             await namespace["platform"].execute_command(
-                "pap.sessions.end", {"session_id": "ses_docs_0000000000000"}
+                "pap.sessions.end", {"session_key": "ses_docs_0000000000000"}
             )
         assert asked == [
             ("End a PAP Session", "End Session ses_docs_0000000000000 and forget its token.")

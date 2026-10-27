@@ -84,7 +84,11 @@ class _Executor:
 def _reactor(entry: dict[str, Any]) -> PluginPlatform:
     if entry["role"] == "company":
         config = CompanyConfig(
-            name="Points", domain="points.example", scopes=("a:read",), operations=False
+            name="Points",
+            domain="points.example",
+            scopes=("a:read",),
+            scope_descriptions={"a:read": "Read"},
+            operations=False,
         )
         return build_company(config, http_client=httpx.AsyncClient()).reactor
     platform, _ = build_pap_reactor(http_client=httpx.AsyncClient())
@@ -233,7 +237,7 @@ async def test_each_dpop_proof_is_asked_for_the_requests_own_tenant() -> None:
 
     class Proofs:
         async def create(self, request: Any) -> SecretStr:
-            asked.append((request.tenant_id, request.subject))
+            asked.append((request.tenant_id, request.session_key))
             return SecretStr(f"proof-for-{request.tenant_id}")
 
     seen: list[str] = []
@@ -258,7 +262,7 @@ async def test_each_dpop_proof_is_asked_for_the_requests_own_tenant() -> None:
                 access_token=SecretStr("sat"),
                 token_type="DPoP",  # noqa: S106 - OAuth token type
                 expires_in=60,
-                session_id="ses_1",
+                session_key="K" * 43,
                 signed_in=False,
             )
             for tenant, user in (("tenant-one", "usr_one"), ("tenant-two", "usr_two")):
@@ -267,12 +271,11 @@ async def test_each_dpop_proof_is_asked_for_the_requests_own_tenant() -> None:
                     "https://shop.example/api/orders",
                     token=token,
                     tenant_id=tenant,
-                    pairwise_user_id=user,
                     issuer="https://shop.example",
                 )
         finally:
             platform.stop()
-    assert asked == [("tenant-one", "usr_one"), ("tenant-two", "usr_two")]
+    assert asked == [("tenant-one", "K" * 43), ("tenant-two", "K" * 43)]
     assert seen == ["proof-for-tenant-one", "proof-for-tenant-two"]
 
 

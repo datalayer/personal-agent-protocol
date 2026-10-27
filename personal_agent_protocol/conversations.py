@@ -92,7 +92,6 @@ class ConversationClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
         parent_conversation_id: str | None = None,
         cursor: str | None = None,
@@ -110,7 +109,6 @@ class ConversationClient:
             expected_status=201,
             token=token,
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
             issuer=issuer,
             cursor=cursor,
             wait=wait,
@@ -125,7 +123,6 @@ class ConversationClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
         cursor: str | None = None,
         wait: int | None = None,
@@ -140,7 +137,6 @@ class ConversationClient:
             expected_status=202,
             token=token,
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
             issuer=issuer,
             cursor=cursor,
             wait=wait,
@@ -154,7 +150,6 @@ class ConversationClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
         cursor: str | None = None,
         wait: int | None = None,
@@ -172,7 +167,6 @@ class ConversationClient:
             target,
             token=token,
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
             issuer=issuer,
             headers={"Accept": "application/json"},
         )
@@ -191,7 +185,6 @@ class ConversationClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
         cursor: str | None = None,
         wait: int = 30,
@@ -219,7 +212,6 @@ class ConversationClient:
                     conversation_id,
                     token=token,
                     tenant_id=tenant_id,
-                    pairwise_user_id=pairwise_user_id,
                     issuer=issuer,
                     cursor=current_cursor,
                     wait=0 if drain_backlog else wait,
@@ -261,7 +253,6 @@ class ConversationClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> ConversationResponse:
         """Open a Direct Conversation under an open parent (§7.10).
@@ -277,7 +268,6 @@ class ConversationClient:
             message,
             token=token,
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
             issuer=issuer,
             parent_conversation_id=parent_conversation_id,
         )
@@ -290,13 +280,12 @@ class ConversationClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> ConversationReceipt:
         """Ask for a person at the company (§7.9): `queued` while one is found."""
 
         return await self._control(
-            endpoint, conversation_id, "handoff", 202, token, tenant_id, pairwise_user_id, issuer
+            endpoint, conversation_id, "handoff", 202, token, tenant_id, issuer
         )
 
     @traced("pap.conversation.close", before=by_endpoint, after=conversation_result)
@@ -307,13 +296,12 @@ class ConversationClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> ConversationReceipt:
         """Close the conversation (§7.12); what it started is not cancelled."""
 
         return await self._control(
-            endpoint, conversation_id, "close", 200, token, tenant_id, pairwise_user_id, issuer
+            endpoint, conversation_id, "close", 200, token, tenant_id, issuer
         )
 
     async def stream(  # noqa: C901 - one SSE reader with its reconnect rules
@@ -323,7 +311,6 @@ class ConversationClient:
         *,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
         last_event_id: str | None = None,
         max_reconnects: int = 5,
@@ -354,7 +341,6 @@ class ConversationClient:
                 url,
                 token=token,
                 tenant_id=tenant_id,
-                pairwise_user_id=pairwise_user_id,
                 issuer=issuer,
                 headers=headers,
             ) as response:
@@ -427,7 +413,6 @@ class ConversationClient:
         expected_status: int,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
     ) -> ConversationReceipt:
         self._identifier(conversation_id, "conversation ID")
@@ -436,7 +421,6 @@ class ConversationClient:
             f"{endpoint.rstrip('/')}/{conversation_id}/{action}",
             token=token,
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
             issuer=issuer,
             headers={"Content-Type": "application/json"},
             content=b"{}",
@@ -479,7 +463,6 @@ class ConversationClient:
         expected_status: int,
         token: SessionToken,
         tenant_id: str,
-        pairwise_user_id: str,
         issuer: str,
         cursor: str | None,
         wait: int | None,
@@ -490,7 +473,6 @@ class ConversationClient:
             target,
             token=token,
             tenant_id=tenant_id,
-            pairwise_user_id=pairwise_user_id,
             issuer=issuer,
             headers={"Content-Type": "application/json"},
             content=json.dumps(body, separators=(",", ":")).encode(),

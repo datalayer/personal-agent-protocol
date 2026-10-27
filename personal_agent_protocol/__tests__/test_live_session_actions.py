@@ -38,6 +38,7 @@ from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE
 
 from .test_cli_protocol import Pap
 
+SCOPES = ("--scope", "orders:read", "--scope", "orders:write")
 SAFE = {
     "pap.company.discover",
     "pap.sessions.show",
@@ -75,9 +76,9 @@ class World:
         self.pap = Pap(tmp_path, plugins=plugins)
         pap = self.pap
         pap.set_up()
-        self.session = pap("sessions", "start", "--json")["session"]["session_id"]
+        self.session = pap("sessions", "start", "--json")["session"]["session_key"]
         lines = f"{ADA['email']}\n{ADA['password']}\n{ADA_CODE}\n"
-        pap("auth", "mediated", self.session, "--stdin", "--json", input=lines)
+        pap("auth", "mediated", self.session, *SCOPES, "--stdin", "--json", input=lines)
         self.operation = pap(
             "api", "openapi", self.session, "POST", "/api/orders/ord_7Hk2/exchanges", "--json"
         )["operation"]["operation_id"]
@@ -126,16 +127,16 @@ def test_each_safe_action_is_one_implementation_on_every_surface(tmp_path: Path)
     session, operation, conversation = world.session, world.operation, world.conversation
 
     shown = _same_everywhere(world, "pap.sessions.show", ["sessions", "show"])
-    assert [item["session_id"] for item in shown["sessions"]] == [session]
+    assert [item["session_key"] for item in shown["sessions"]] == [session]
     one = _same_everywhere(
-        world, "pap.sessions.show", ["sessions", "show", session], session_id=session
+        world, "pap.sessions.show", ["sessions", "show", session], session=session
     )
     assert one["session"]["signed_in"] is True and "pairwise_user_id" not in one["session"]
     proposed = _same_everywhere(
         world,
         "pap.operations.show",
         ["operations", "show", session, operation],
-        session_id=session,
+        session=session,
         operation_id=operation,
     )
     assert proposed["operation"]["state"] == "proposed"
@@ -143,7 +144,7 @@ def test_each_safe_action_is_one_implementation_on_every_surface(tmp_path: Path)
         world,
         "pap.conversations.events",
         ["conversations", "events", session, conversation],
-        session_id=session,
+        session=session,
         conversation_id=conversation,
     )
     assert page["conversation_id"] == conversation and page["events"]
@@ -151,7 +152,7 @@ def test_each_safe_action_is_one_implementation_on_every_surface(tmp_path: Path)
         world,
         "pap.conversations.follow",
         ["conversations", "follow", session, conversation, "--max-events", "2"],
-        session_id=session,
+        session=session,
         conversation_id=conversation,
         max_events="2",
     )
@@ -184,11 +185,11 @@ def test_arguments_by_position_name_json_or_mapping_are_the_same(tmp_path: Path)
     world = World(tmp_path)
     session, operation = world.session, world.operation
     expected = world.studio(
-        "pap.operations.show", {"session_id": session, "operation_id": operation}
+        "pap.operations.show", {"session": session, "operation_id": operation}
     )
     assert world.run("pap.operations.show", session, operation) == expected
     assert world.run("pap.operations.show", f"operation_id={operation}", session) == expected
-    text = json.dumps({"session_id": session, "operation_id": operation})
+    text = json.dumps({"session": session, "operation_id": operation})
     assert world.studio("pap.operations.show", text) == expected
     assert world.repl(f"/pap.operations.show {session} {operation}") == expected
 
@@ -197,12 +198,12 @@ def test_unknown_actions_and_arguments_are_usage_errors(tmp_path: Path) -> None:
     world = World(tmp_path)
     world.run("pap.nothing.here", code=ExitCode.USAGE)
     out = world.run("pap.sessions.show", "token=abc", "x", "y", code=ExitCode.USAGE)
-    assert "takes session_id" in out
+    assert "takes session" in out
     world.run("pap.operations.show", world.session, code=ExitCode.USAGE)  # operation_id missing
     with pytest.raises(ActionUsageError, match="needs requirement_id"):
         world.studio("pap.requirements.show", {})
     with pytest.raises(ActionUsageError, match="is text"):
-        world.studio("pap.sessions.show", {"session_id": ["a"]})
+        world.studio("pap.sessions.show", {"session": ["a"]})
     assert world.repl("/pap.requirements.show PAP-0-00") == (
         "unknown_requirement: No requirement PAP-0-00"
     )
@@ -217,9 +218,9 @@ def test_destructive_actions_are_refused_without_an_approval_surface(tmp_path: P
     world = World(tmp_path)
     session, operation = world.session, world.operation
     arguments = {
-        "pap.operations.cancel": {"session_id": session, "operation_id": operation},
-        "pap.sessions.end": {"session_id": session},
-        "pap.auth.disconnect": {"session_id": session},
+        "pap.operations.cancel": {"session": session, "operation_id": operation},
+        "pap.sessions.end": {"session": session},
+        "pap.auth.disconnect": {"session": session},
     }
     for action_id, values in arguments.items():
         with pytest.raises(ApprovalRequiredError) as refused:
@@ -246,7 +247,7 @@ def test_the_approval_surface_is_shown_the_action_and_only_yes_does_it(tmp_path:
     session, operation = world.session, world.operation
 
     with pytest.raises(ApprovalRequiredError) as declined:
-        world.studio("pap.operations.cancel", {"session_id": session, "operation_id": operation})
+        world.studio("pap.operations.cancel", {"session": session, "operation_id": operation})
     assert declined.value.code == "not_approved"
     out = world.run("pap.operations.cancel", session, operation, code=ExitCode.NOT_APPROVED)
     assert "approval_failed" in out and "crashed" not in out
@@ -256,7 +257,7 @@ def test_the_approval_surface_is_shown_the_action_and_only_yes_does_it(tmp_path:
     )
 
     cancelled = world.studio(
-        "pap.operations.cancel", {"session_id": session, "operation_id": operation}
+        "pap.operations.cancel", {"session": session, "operation_id": operation}
     )
     assert cancelled["operation"]["state"] == "cancelled"
     ended = world.repl(f"/pap.sessions.end {session}")
@@ -266,7 +267,7 @@ def test_the_approval_surface_is_shown_the_action_and_only_yes_does_it(tmp_path:
     request = approvals.asked[0]
     assert request.action_id == "pap.operations.cancel"
     assert request.summary == f"Cancel operation {operation} at the company."
-    assert dict(request.arguments) == {"session_id": session, "operation_id": operation}
+    assert dict(request.arguments) == {"session": session, "operation_id": operation}
     assert request.tenant_id == "pap-cli"
     assert [r.action_id for r in approvals.asked] == [
         "pap.operations.cancel",
@@ -283,7 +284,7 @@ def test_two_approval_surfaces_at_one_order_fail_closed(tmp_path: Path) -> None:
         (PluginManifest(name="approval-b", version="1"), Approvals(True)),
     )
     with pytest.raises(ApprovalRequiredError) as refused:
-        world.studio("pap.sessions.end", {"session_id": world.session})
+        world.studio("pap.sessions.end", {"session": world.session})
     assert refused.value.code == "approval_surface_ambiguous"
     world.pap("sessions", "show", world.session, "--json")
 
@@ -295,7 +296,7 @@ def test_actions_see_only_their_tenants_sessions(tmp_path: Path, monkeypatch: An
     world.run("pap.sessions.show", world.session, code=ExitCode.NOT_CONFIGURED)
     monkeypatch.setenv("PAP_TENANT", "pap-cli")
     shown = world.studio("pap.sessions.show")
-    assert [item["session_id"] for item in shown["sessions"]] == [world.session]
+    assert [item["session_key"] for item in shown["sessions"]] == [world.session]
 
 
 def test_only_safe_and_approval_gated_actions_are_registered(tmp_path: Path) -> None:
@@ -328,11 +329,11 @@ def test_only_safe_and_approval_gated_actions_are_registered(tmp_path: Path) -> 
 
 def test_parse_arguments_refuses_what_an_action_does_not_take() -> None:
     show = ACTIONS["pap.operations.show"]
-    assert parse_arguments(show, "a b") == {"session_id": "a", "operation_id": "b"}
+    assert parse_arguments(show, "a b") == {"session": "a", "operation_id": "b"}
     assert parse_arguments(show, ["operation_id=b", "a"]) == {
-        "session_id": "a",
+        "session": "a",
         "operation_id": "b",
     }
-    for bad in ("a b c", "{not json", "[1]", 42, {"session_id": True, "operation_id": "b"}):
+    for bad in ("a b c", "{not json", "[1]", 42, {"session": True, "operation_id": "b"}):
         with pytest.raises(ActionUsageError):
             parse_arguments(show, bad)

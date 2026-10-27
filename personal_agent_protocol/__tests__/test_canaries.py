@@ -289,14 +289,14 @@ def _record_telemetry(monkeypatch: pytest.MonkeyPatch, found: Harvest) -> None:
 def _record_private_keys(monkeypatch: pytest.MonkeyPatch, found: Harvest) -> None:
     """The DPoP keys and the agents' signing keys."""
 
-    keys = kit.DpopKeys.__call__
+    generate = kit.InMemorySessionKeys.generate
 
-    async def dpop_keys(self: Any, request: Any) -> Any:
-        material = await keys(self, request)
+    async def session_keys(self: Any, **where: Any) -> Any:
+        material = await generate(self, **where)
         found.secret("DPoP private key", _private(material.private_key))
         return material
 
-    monkeypatch.setattr(kit.DpopKeys, "__call__", dpop_keys)
+    monkeypatch.setattr(kit.InMemorySessionKeys, "generate", session_keys)
     signer = kit.AgentIdentity.signer
 
     def identity_signer(self: kit.AgentIdentity) -> Any:

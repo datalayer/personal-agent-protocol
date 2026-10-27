@@ -183,8 +183,7 @@ async def consent_world() -> tuple[World, DirectSignInClient, str]:
         redirect_uri=f"https://{world.atlas.domain}/oauth/callback",
         scopes=("orders:read",),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
     )
     assert handoff.url is not None
     return world, client, handoff.url
@@ -315,7 +314,7 @@ async def test_the_operation_page_refuses_cross_site_and_another_browsers_form()
     operation = proposed.operation
     assert operation is not None
     page_url = operation_page(operation, "manzanita.example")
-    await join(world, browser, token.session_id, page_url)
+    await join(world, browser, token.session_key, page_url)
     assert browser.page is not None
     form = dict(_HIDDEN.findall(browser.page.text))
     assert set(form) == {"revision", "approved_by", "csrf"}
@@ -326,7 +325,7 @@ async def test_the_operation_page_refuses_cross_site_and_another_browsers_form()
     world.reactor = personal_agent_reactor(
         world.host, network=world.network, http_client=world.http
     )
-    await join(world, second, token.session_id, page_url)
+    await join(world, second, token.session_key, page_url)
     assert second.page is not None and second.page.status_code == 200
     second_form = dict(_HIDDEN.findall(second.page.text))
     assert second_form["csrf"] != form["csrf"]

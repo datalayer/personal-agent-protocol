@@ -40,13 +40,18 @@ from personal_agent_protocol.extensions import (
 from personal_agent_protocol.feedback import feedback_endpoint
 from personal_agent_protocol.json import loads_strict
 from personal_agent_protocol.models import (
+    Author,
     ConversationEventPage,
     DiscoveryDocument,
     ExtensionDescriptor,
     Message,
     Operation,
 )
-from personal_agent_protocol.reactor import PublicUrlSafetyPolicy
+from personal_agent_protocol.reactor import (
+    DPOP_PROOF_PROVIDERS,
+    PublicUrlSafetyPolicy,
+    first_contribution,
+)
 
 LOCAL = [case for case in load_fixture_cases() if case.check is not None]
 
@@ -155,10 +160,10 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         assert (page.model_extra or {}) == {"region": "eu"}
     elif case.check == "message_context":
         for context in given["valid"]:
-            assert Message(id="msg_ctx", sender="agent", context=context).context == context
+            assert Message(id="msg_ctx", author=Author(type="agent"), context=context).context == context
         for context in given["invalid"]:
             with pytest.raises(ValueError):
-                Message(id="msg_ctx", sender="agent", context=context)
+                Message(id="msg_ctx", author=Author(type="agent"), context=context)
     elif case.check == "operation":
         operation = Operation.model_validate(given)
         for key, value in expect.get("extra", {}).items():
@@ -244,11 +249,12 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         assert raised.value.code == expect["error"]
         assert raised.value.details == {"retry_after": expect["retry_after"]}
         # An API call is not retried either: the caller is told how long to wait.
+        provider = first_contribution(reactor, DPOP_PROOF_PROVIDERS, "DPoP proof provider")
         token = SessionToken(
             access_token=SecretStr("sat_rate_limited"),
             token_type="DPoP",  # noqa: S106 - the OAuth token type
             expires_in=60,
-            session_id="ses_rate_limited",
+            session_key=await provider.new_session_key(tenant_id="t", issuer="https://shop.example"),
             signed_in=False,
         )
         with pytest.raises(PersonalAgentProtocolError) as refused:
@@ -257,7 +263,6 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
                 "https://shop.example/api/orders",
                 token=token,
                 tenant_id="t",
-                pairwise_user_id="usr_rate_limited_0000000",
                 issuer="https://shop.example",
             )
         await http.aclose()

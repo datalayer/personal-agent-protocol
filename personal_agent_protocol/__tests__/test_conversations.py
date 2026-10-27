@@ -13,6 +13,7 @@ from reactor import PluginManifest
 
 from personal_agent_protocol import (
     DPOP_PROOF_PROVIDERS,
+    Author,
     ConversationClient,
     ConversationError,
     DpopHttpClient,
@@ -41,7 +42,7 @@ def token() -> SessionToken:
         access_token=SecretStr("session-secret"),
         token_type="DPoP",  # noqa: S106 - OAuth token type
         expires_in=300,
-        session_id="ses_example",
+        session_key="K" * 43,
         signed_in=False,
     )
 
@@ -75,18 +76,21 @@ async def test_start_and_continue_preserve_message_ids_and_parse_waited_events()
         reactor, _ = build_pap_reactor(http_client=http)
         reactor.register_plugin(PluginManifest(name="conversations-test", version="1"), Plugin())
         client = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
-        first = Message(id=generate_message_id(reactor), sender="agent", text="Return the jacket")
+        first = Message(
+            id=generate_message_id(reactor), author=Author(type="agent"), text="Return the jacket"
+        )
         page = await client.start(
             "https://api.example/conversations",
             first,
             token=token(),
             tenant_id="tenant",
-            pairwise_user_id="usr_example",
             issuer="https://auth.example",
             wait=10,
         )
         follow_up = Message(
-            id=generate_message_id(reactor), sender="agent", context={"user_available": False}
+            id=generate_message_id(reactor),
+            author=Author(type="agent"),
+            context={"user_available": False},
         )
         receipt = await client.send(
             "https://api.example/conversations",
@@ -94,7 +98,6 @@ async def test_start_and_continue_preserve_message_ids_and_parse_waited_events()
             follow_up,
             token=token(),
             tenant_id="tenant",
-            pairwise_user_id="usr_example",
             issuer="https://auth.example",
             cursor="evt_zero",
             wait=10,
@@ -119,10 +122,9 @@ async def test_surfaces_message_id_conflict_without_response_body() -> None:
         with pytest.raises(ConversationError) as caught:
             await client.start(
                 "https://api.example/conversations",
-                Message(id="msg_same", sender="agent", text="different content"),
+                Message(id="msg_same", author=Author(type="agent"), text="different content"),
                 token=token(),
                 tenant_id="tenant",
-                pairwise_user_id="usr_example",
                 issuer="https://auth.example",
             )
         reactor.stop()
@@ -143,7 +145,7 @@ async def test_events_recover_cursor_drain_backlog_and_suppress_duplicates() -> 
             "created_at": "2026-10-10T12:00:00Z",
             "message": {
                 "id": f"msg_{event_id}",
-                "sender": "agent",
+                "author": {"type": "agent"},
                 "role": "company",
                 "text": text,
             },
@@ -199,7 +201,6 @@ async def test_events_recover_cursor_drain_backlog_and_suppress_duplicates() -> 
                 "cnv_one",
                 token=token(),
                 tenant_id="tenant",
-                pairwise_user_id="usr_example",
                 issuer="https://auth.example",
                 cursor="evt_saved",
                 wait=30,
@@ -247,7 +248,6 @@ async def test_read_events_rejects_conversation_mismatch() -> None:
                 "cnv_one",
                 token=token(),
                 tenant_id="tenant",
-                pairwise_user_id="usr_example",
                 issuer="https://auth.example",
             )
         reactor.stop()

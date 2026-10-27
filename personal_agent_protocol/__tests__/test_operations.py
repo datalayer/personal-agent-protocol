@@ -41,7 +41,7 @@ from personal_agent_protocol.operations import (
 FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
 ENDPOINT = "https://api.shop.example/poppy/operations"
 NOW = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
-WHO = {"tenant_id": "tenant", "pairwise_user_id": "usr_1", "issuer": "https://auth.shop.example"}
+WHO = {"tenant_id": "tenant", "issuer": "https://auth.shop.example"}
 
 
 def proposed(**changes: object) -> Operation:
@@ -90,7 +90,7 @@ def token() -> SessionToken:
         access_token=SecretStr("s"),
         token_type="DPoP",  # noqa: S106 - OAuth token type
         expires_in=300,
-        session_id="ses_1",
+        session_key="K" * 43,
         signed_in=True,
     )
 

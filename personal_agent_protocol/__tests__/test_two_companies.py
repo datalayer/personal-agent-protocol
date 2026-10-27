@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from personal_agent_protocol import (
+    Author,
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
@@ -55,7 +56,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
     company = await DiscoveryClient(reactor=reactor, http_client=http).discover("ledgerly.example")
     metadata = company.oauth_metadata
     assert metadata is not None
-    who = {"tenant_id": TENANT, "pairwise_user_id": PAIRWISE, "issuer": metadata.issuer}
+    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
@@ -71,10 +72,9 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         client_id=atlas.client_id,
         scopes=("books:read", "payments:write"),
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
-        session_id=session.session_id,
+        session_key=session.session_key,
         organization=company.document.organization,
-        poppy_domains=metadata.poppy_domains,
+        protected_resources=metadata.protected_resources,
     )
     await firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
     clock.advance(started.poll_interval)
@@ -85,7 +85,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
     ops = firm.config.operations_endpoint
 
     def say(text: str) -> Message:
-        return Message(id=generate_message_id(reactor), sender="human", text=text)
+        return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
 
     # 1. Ledgerly is not yet connected to Northwind: Ada approves it on Northwind's page.
     page = await conversations.start(endpoint, say("Pay INV-0042"), token=token, wait=0, **who)

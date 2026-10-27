@@ -86,10 +86,15 @@ async def discover_company(
         "organization": document.organization.name,
         "protocol_version": document.protocol_version,
         "issuer": metadata.issuer if metadata else None,
+        # Direct and Device from the issuer's grants, Mediated from poppy.json (§4.4).
         "sign_in": [
             name
-            for name in ("direct", "device", "mediated")
-            if document.auth is not None and getattr(document.auth, name) is not None
+            for name, offered in (
+                ("direct", metadata is not None and metadata.offers_direct),
+                ("device", metadata is not None and metadata.offers_device),
+                ("mediated", document.auth is not None and document.auth.mediated is not None),
+            )
+            if offered
         ],
         "apis": [item.type for item in document.apis],
         "conversation_protocols": (
@@ -107,7 +112,6 @@ async def company_of(runtime: CliRuntime, domain: str) -> DiscoveredCompany:
 def who_of(record: SessionRecord) -> Who:
     return {
         "tenant_id": record.tenant_id,
-        "pairwise_user_id": record.pairwise_user_id,
         "issuer": record.issuer,
     }
 
@@ -121,7 +125,7 @@ async def session_token(runtime: CliRuntime, record: SessionRecord) -> SessionTo
         token_type=cast(Any, record.token_type),
         expires_in=3600,
         scope=record.scope,
-        session_id=record.session_id,
+        session_key=record.session_key,
         signed_in=record.signed_in,
     )
 
@@ -176,29 +180,29 @@ async def operations_client(
 # The implementations: each `pap` command of the same name runs these ----------------------
 
 
-async def show_sessions(runtime: CliRuntime, session_id: str | None = None) -> dict[str, Any]:
+async def show_sessions(runtime: CliRuntime, session_key: str | None = None) -> dict[str, Any]:
     """`pap sessions show`: the tenant's Sessions, opaque references only."""
 
-    if session_id is not None:
-        return session_view(runtime.session(session_id))
+    if session_key is not None:
+        return session_view(runtime.session(session_key))
     return {"sessions": [record.public() for record in runtime.sessions()]}
 
 
-async def end_session(runtime: CliRuntime, session_id: str) -> dict[str, Any]:
+async def end_session(runtime: CliRuntime, session_key: str) -> dict[str, Any]:
     """`pap sessions end`: forget a Session; its Account Token is kept (§4.9)."""
 
-    record = runtime.session(session_id)
+    record = runtime.session(session_key)
     await runtime.secrets.delete(record.token_reference)
-    await runtime.secrets.delete(f"mcp:{session_id}")
-    del runtime.state.sessions[session_id]
+    await runtime.secrets.delete(f"mcp:{session_key}")
+    del runtime.state.sessions[session_key]
     runtime.state.save()
-    return {"ended": session_id, "account_reference": record.account_reference}
+    return {"ended": session_key, "account_reference": record.account_reference}
 
 
-async def disconnect(runtime: CliRuntime, session_id: str) -> dict[str, Any]:
+async def disconnect(runtime: CliRuntime, session_key: str) -> dict[str, Any]:
     """`pap auth disconnect`: revoke the Account Token; Sessions continue signed out."""
 
-    record = runtime.session(session_id)
+    record = runtime.session(session_key)
     if record.account_reference is None:
         raise NotConfiguredError("not_signed_in", "This Session holds no Account Token")
     await AccountTokenClient(reactor=runtime.reactor, http_client=runtime.http).revoke(
@@ -214,11 +218,11 @@ async def disconnect(runtime: CliRuntime, session_id: str) -> dict[str, Any]:
 
 
 async def read_events(
-    runtime: CliRuntime, session_id: str, conversation_id: str, cursor: str | None = None
+    runtime: CliRuntime, session_key: str, conversation_id: str, cursor: str | None = None
 ) -> dict[str, Any]:
     """`pap conversations events`: one page of events (§7.5)."""
 
-    record = runtime.session(session_id)
+    record = runtime.session(session_key)
     client, endpoint = await conversation_client(runtime, record)
     page = await client.read_events(
         endpoint,
@@ -232,7 +236,7 @@ async def read_events(
 
 async def follow_events(
     runtime: CliRuntime,
-    session_id: str,
+    session_key: str,
     conversation_id: str,
     last_event_id: str | None = None,
     max_events: int = 50,
@@ -243,7 +247,7 @@ async def follow_events(
     Text pieces go to `on_text` for display, if given, and are never acted on.
     """
 
-    record = runtime.session(session_id)
+    record = runtime.session(session_key)
     client, endpoint = await conversation_client(runtime, record)
     events: list[dict[str, Any]] = []
     stream = client.stream(
@@ -269,10 +273,10 @@ async def follow_events(
     return {"conversation_id": conversation_id, "events": events}
 
 
-async def show_operation(runtime: CliRuntime, session_id: str, operation_id: str) -> dict[str, Any]:
+async def show_operation(runtime: CliRuntime, session_key: str, operation_id: str) -> dict[str, Any]:
     """`pap operations show`: read an operation by its ID (Operations §6)."""
 
-    record = runtime.session(session_id)
+    record = runtime.session(session_key)
     client, endpoint, _ = await operations_client(runtime, record)
     operation = await client.read(
         endpoint, operation_id, token=await session_token(runtime, record), **who_of(record)
@@ -281,11 +285,11 @@ async def show_operation(runtime: CliRuntime, session_id: str, operation_id: str
 
 
 async def cancel_operation(
-    runtime: CliRuntime, session_id: str, operation_id: str
+    runtime: CliRuntime, session_key: str, operation_id: str
 ) -> dict[str, Any]:
     """`pap operations cancel`: decline a proposal, or ask to stop one (Operations §7)."""
 
-    record = runtime.session(session_id)
+    record = runtime.session(session_key)
     client, endpoint, _ = await operations_client(runtime, record)
     operation = await client.cancel(
         endpoint, operation_id, token=await session_token(runtime, record), **who_of(record)
@@ -373,14 +377,14 @@ async def _follow(runtime: CliRuntime, values: Mapping[str, str]) -> dict[str, A
     limit = _positive(values.get("max_events", "50"), "max_events")
     return await follow_events(
         runtime,
-        values["session_id"],
+        values["session"],
         values["conversation_id"],
         last_event_id=values.get("last_event_id"),
         max_events=min(limit, 500),
     )
 
 
-SESSION = ActionArgument("session_id", "The Session (`pap sessions show` lists them).")
+SESSION = ActionArgument("session", "The Session (`pap sessions show` lists them).")
 CONVERSATION = ActionArgument("conversation_id", "The conversation.")
 OPERATION = ActionArgument("operation_id", "The operation.")
 
@@ -400,8 +404,8 @@ ACTIONS: dict[str, SessionAction] = {
             "pap.sessions.show",
             "Show PAP Sessions",
             "The Sessions this agent holds: opaque references, never tokens.",
-            lambda runtime, values: show_sessions(runtime, values.get("session_id")),
-            (ActionArgument("session_id", "Only this Session.", required=False),),
+            lambda runtime, values: show_sessions(runtime, values.get("session")),
+            (ActionArgument("session", "Only this Session.", required=False),),
             emoji="🪪",
         ),
         SessionAction(
@@ -409,7 +413,7 @@ ACTIONS: dict[str, SessionAction] = {
             "Read conversation events",
             "Read one page of a conversation's events.",
             lambda runtime, values: read_events(
-                runtime, values["session_id"], values["conversation_id"], values.get("cursor")
+                runtime, values["session"], values["conversation_id"], values.get("cursor")
             ),
             (
                 SESSION,
@@ -436,7 +440,7 @@ ACTIONS: dict[str, SessionAction] = {
             "Show an operation",
             "Read an operation by its ID: its state, revision, and summary.",
             lambda runtime, values: show_operation(
-                runtime, values["session_id"], values["operation_id"]
+                runtime, values["session"], values["operation_id"]
             ),
             (SESSION, OPERATION),
             emoji="🧾",
@@ -470,7 +474,7 @@ ACTIONS: dict[str, SessionAction] = {
             "Cancel an operation",
             "Decline a proposal, or ask the company to stop one in progress.",
             lambda runtime, values: cancel_operation(
-                runtime, values["session_id"], values["operation_id"]
+                runtime, values["session"], values["operation_id"]
             ),
             (SESSION, OPERATION),
             needs_approval=True,
@@ -481,20 +485,20 @@ ACTIONS: dict[str, SessionAction] = {
             "pap.sessions.end",
             "End a PAP Session",
             "Stop using a Session and forget its token; its Account Token is kept.",
-            lambda runtime, values: end_session(runtime, values["session_id"]),
+            lambda runtime, values: end_session(runtime, values["session"]),
             (SESSION,),
             needs_approval=True,
-            summary="End Session {session_id} and forget its token.",
+            summary="End Session {session} and forget its token.",
             emoji="🚪",
         ),
         SessionAction(
             "pap.auth.disconnect",
             "Sign out of a company",
             "Revoke the Account Token: every Session using it continues signed out.",
-            lambda runtime, values: disconnect(runtime, values["session_id"]),
+            lambda runtime, values: disconnect(runtime, values["session"]),
             (SESSION,),
             needs_approval=True,
-            summary="Sign out: revoke the Account Token of Session {session_id}.",
+            summary="Sign out: revoke the Account Token of Session {session}.",
             emoji="🔒",
         ),
     )

@@ -103,8 +103,9 @@ async function assertSignedInDpop(w, sessionKey, accessToken) {
     .map((t) => `${t.tokenType ?? "DPoP"}:${t.accountId !== undefined}:${t.resource ?? "-"}`)
     .sort();
   // The signed-in token is the Session's own, for no resource; its token for the MCP server
-  // is kept, signed out.
-  assert.deepEqual(kinds, ["DPoP:false:https://manzanita.example/mcp", "DPoP:true:-"]);
+  // is kept, signed out, as are earlier tokens until they expire (§4.4).
+  assert.ok(kinds.includes("DPoP:true:-") && kinds.includes("DPoP:false:https://manzanita.example/mcp"));
+  assert.ok(kinds.every((kind) => kind.startsWith("DPoP:")));
   const used = await w.fetch("https://manzanita.example/mcp", {
     method: "POST",
     headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },

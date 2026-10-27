@@ -1346,7 +1346,7 @@ export class CompanyService {
       scopes: [],
       ...(resource === undefined ? {} : { resource }),
     };
-    const renewed = await this.#issue(session, { replacing: [this.#kind(session)] });
+    const renewed = await this.#issue(session);
     this.#reportSession(session, true, resource !== undefined);
     return renewed;
   }
@@ -1432,7 +1432,6 @@ export class CompanyService {
     };
     const response = await this.#issue(signedIn, {
       refreshToken: rotated,
-      replacing: [this.#kind(signedIn)],
       // A refresh naming no scope gets them in the response: the agent can't know.
       requested,
       accountTokenExpiresAt: grant.expiresAt,
@@ -1485,7 +1484,6 @@ export class CompanyService {
       expiresAt: new Date(Math.min(Date.parse(subject.expiresAt), lifetime)).toISOString(),
     };
     const response = await this.#issue(bearer, {
-      replacing: [this.#kind(bearer)],
       requested,
       exchanged: true,
     });
@@ -1797,14 +1795,14 @@ export class CompanyService {
     await this.store.put(RecordKinds.accountFamily, family, json(signIn), expiry(expiresAt));
     await this.#rememberFamily(session.clientId, accountId, family);
     // The signed-in token is the Session's own: DPoP, bound to the key that proved
-    // possession, for no single resource. It replaces only that token; a token for the
-    // MCP server is renewed with the Account Token (§4.3, §4.8).
+    // possession, for no single resource; earlier tokens keep working until they expire
+    // (§4.4), and a token for the MCP server is renewed with the Account Token (§4.3, §4.8).
     const signedIn: IssuedSession = {
       sessionKey: session.sessionKey,
       clientId: session.clientId,
       pairwiseUserId: session.pairwiseUserId,
       keyThumbprint: thumbprint,
-      expiresAt: session.expiresAt,
+      expiresAt: this.#later(this.config.sessionLifetimeSeconds).toISOString(),
       accountId,
       scopes,
       accountToken: family,
@@ -1812,7 +1810,6 @@ export class CompanyService {
     };
     return this.#issue(signedIn, {
       refreshToken: accountToken,
-      replacing: [this.#kind(signedIn)],
       requested,
       accountTokenExpiresAt: expiresAt.toISOString(),
     });
@@ -1845,7 +1842,7 @@ export class CompanyService {
   }
 
   /**
-   * Issue a token for the Session; it replaces the Session's tokens of `replacing` kinds.
+   * Issue a token for the Session, beside the ones it already holds.
    *
    * The response names no Session: its key does (§4.3). `scope` follows RFC 6749: left
    * out of a signed-out token's response, and of a signed-in one granting exactly the
@@ -1855,7 +1852,6 @@ export class CompanyService {
     session: IssuedSession,
     options: {
       readonly refreshToken?: string;
-      readonly replacing?: readonly TokenKind[];
       readonly requested?: readonly string[];
       readonly accountTokenExpiresAt?: string;
       readonly exchanged?: boolean;
@@ -1863,7 +1859,7 @@ export class CompanyService {
   ): Promise<CompanyResponse> {
     const accessToken = this.#id("sat");
     const key = digest(accessToken);
-    await this.#recordToken(session, key, options.replacing ?? []);
+    await this.#recordToken(session, key);
     const pointer: SessionPointer = { sessionKey: session.sessionKey };
     await this.store.put(RecordKinds.sessionToken, key, json(pointer), expiry(session.expiresAt));
     const body: Record<string, unknown> = {
@@ -1890,17 +1886,14 @@ export class CompanyService {
   }
 
   /**
-   * One write: the new token joins the Session, the ones it replaces leave it.
+   * One write: the new token joins the Session; expired ones leave it.
    *
-   * `replacing` names token kinds (`#kind`): the Session's own token, or its token for one
-   * resource. A signed-in token records the account the Session is tied to from then on,
-   * signed out or not (§4.4).
+   * Earlier tokens keep working until they expire, each as the Session was when it was
+   * issued: several tasks can share one Session, and one may still hold a signed-out token
+   * after another signed in (§4.4). A signed-in token records the account the Session is
+   * tied to from then on, signed out or not.
    */
-  async #recordToken(
-    session: IssuedSession,
-    key: string,
-    replacing: readonly TokenKind[],
-  ): Promise<void> {
+  async #recordToken(session: IssuedSession, key: string): Promise<void> {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
       const entry = await this.store.get(RecordKinds.session, session.sessionKey);
       const tokens: Record<string, IssuedSession> = {};
@@ -1916,7 +1909,7 @@ export class CompanyService {
         }
         accountId = current.accountId ?? session.accountId;
         for (const [held, token] of Object.entries(current.tokens)) {
-          if (!replacing.includes(this.#kind(token))) tokens[held] = token;
+          if (!this.#passed(token.expiresAt)) tokens[held] = token;
         }
       }
       tokens[key] = session;
@@ -3862,10 +3855,12 @@ export class CompanyService {
   /** The Session as it is now: its latest unexpired DPoP token's record. */
   async #liveSession(sessionKey: string): Promise<IssuedSession | undefined> {
     const stored = await this.#read<StoredSession>(RecordKinds.session, sessionKey);
+    // The Session as its most recent own token says, in the order they were issued.
     let live: IssuedSession | undefined;
     for (const token of Object.values(stored?.tokens ?? {})) {
       if ((token.tokenType ?? "DPoP") !== "DPoP" || this.#passed(token.expiresAt)) continue;
-      if (live === undefined || new Date(token.expiresAt) > new Date(live.expiresAt)) live = token;
+      if (this.#kind(token) !== "own") continue;
+      live = token;
     }
     if (live !== undefined && (await this.#signedInBeforeItsEnd(live))) return undefined;
     return live;

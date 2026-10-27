@@ -356,8 +356,12 @@ class UserBrowser:
 
 @dataclass
 class SessionRecord:
-    """A Session the CLI holds: everything but its tokens, which are in the token store."""
+    """A Session the CLI holds: everything but its tokens, which are in the token store.
 
+    `id` is the CLI's handle for it, `ses_` and the Session Key's thumbprint.
+    """
+
+    id: str
     session_key: str
     domain: str
     company: str
@@ -392,7 +396,7 @@ def approval_mac(key: SecretStr, approval: dict[str, Any]) -> str:
     """
 
     covered = json.dumps(
-        [approval.get(name) for name in ("operation_id", "revision", "digest", "session_key")],
+        [approval.get(name) for name in ("operation_id", "revision", "digest", "session")],
         separators=(",", ":"),
     )
     mac = hmac.new(key.get_secret_value().encode(), covered.encode(), hashlib.sha256).digest()
@@ -439,8 +443,8 @@ class CliState:
                 },
             )
 
-    def session(self, session_key: str) -> SessionRecord:
-        record = self.sessions.get(session_key)
+    def session(self, session: str) -> SessionRecord:
+        record = self.sessions.get(session)
         if record is None:
             raise NotConfiguredError("unknown_session", "No such Session: run `pap sessions start`")
         return record
@@ -464,10 +468,10 @@ class CliRuntime:
     def expires_at(self, expires_in: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
-    def session(self, session_key: str) -> SessionRecord:
-        """A Session of this runtime's tenant; another tenant's looks unknown."""
+    def session(self, session: str) -> SessionRecord:
+        """A Session of this runtime's tenant, by its handle; another tenant's looks unknown."""
 
-        record = self.state.sessions.get(session_key)
+        record = self.state.sessions.get(session)
         if record is None or record.tenant_id != self.tenant_id:
             raise NotConfiguredError("unknown_session", "No such Session: run `pap sessions start`")
         return record

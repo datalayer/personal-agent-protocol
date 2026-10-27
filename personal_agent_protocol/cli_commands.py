@@ -255,14 +255,14 @@ async def _keep(
     record.signed_in = token.signed_in
     record.scope = token.scope
     record.expires_at = runtime.expires_at(token.expires_in)
-    runtime.state.sessions[record.session_key] = record
+    runtime.state.sessions[record.id] = record
     runtime.state.save()
 
 
 def _render_session(payload: dict) -> None:
     session = payload["session"]
     state = "signed in" if session["signed_in"] else "signed out"
-    typer.echo(f"{session['session_key']} at {session['company']} ({session['domain']}): {state}")
+    typer.echo(f"{session['id']} at {session['company']} ({session['domain']}): {state}")
     if session["scope"]:
         typer.echo(f"scope: {session['scope']}")
     typer.echo(f"token: {session['token_reference']}")
@@ -392,6 +392,8 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 tenant_id=runtime.tenant_id,
             )
             record = SessionRecord(
+                # The CLI's handle: the Session Key's thumbprint can start with "-", an option.
+                id=f"ses_{token.session_key}",
                 session_key=token.session_key,
                 domain=company.document.organization.domain,
                 company=company.document.organization.name,
@@ -414,21 +416,21 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @sessions.command("renew")
     def sessions_renew(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         json_output: bool = JSON,
         no_input: bool = NO_INPUT,
     ) -> None:
         """Get a new Session Token: with the Account Token when signed in (§4.2, §4.8)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             if record.account_reference is not None:
                 result = await AccountTokenClient(
                     reactor=runtime.reactor, http_client=runtime.http
                 ).refresh(
                     record.account_reference,
                     context=account_context(record),
-                    session_key=session_key,
+                    session_key=record.session_key,
                 )
                 if result.status == "signed_in" and result.token is not None:
                     await _keep(runtime, record, result.token)
@@ -448,7 +450,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 issuer=record.issuer,
                 token_endpoint=record.token_endpoint,
                 tenant_id=record.tenant_id,
-                session_key=session_key,
+                session_key=record.session_key,
             )
             await _keep(runtime, record, token)
             return session_view(record)
@@ -457,13 +459,13 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @sessions.command("show")
     def sessions_show(
-        session_key: str | None = typer.Argument(None),
+        session: str | None = typer.Argument(None),
         json_output: bool = JSON,
     ) -> None:
         """Show the Sessions this agent holds (opaque references, never tokens)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            return await show_sessions(runtime, session_key)
+            return await show_sessions(runtime, session)
 
         def render(payload: dict) -> None:
             if "session" in payload:
@@ -475,11 +477,11 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         run(work, json_output=json_output, render=render)
 
     @sessions.command("end")
-    def sessions_end(session_key: str = typer.Argument(...), json_output: bool = JSON) -> None:
+    def sessions_end(session: str = typer.Argument(...), json_output: bool = JSON) -> None:
         """Stop using a Session; its Account Token is kept for new ones (§4.9)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            return await end_session(runtime, session_key)
+            return await end_session(runtime, session)
 
         def render(payload: dict) -> None:
             typer.echo(f"Ended {payload['ended']}.")
@@ -492,7 +494,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @auth.command("direct")
     def auth_direct(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         scope: list[str] | None = SCOPE,
         redirect_uri: str | None = typer.Option(None, "--redirect-uri"),
         json_output: bool = JSON,
@@ -507,7 +509,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             company = await company_of(runtime, record.domain)
             metadata = company.oauth_metadata
             if metadata is None or not metadata.offers_direct:
@@ -528,7 +530,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 redirect_uri=target,
                 scopes=_scopes(scope, company, "direct"),
                 tenant_id=record.tenant_id,
-                session_key=session_key,
+                session_key=record.session_key,
             )
             callback = runtime.input.read("Callback URL", secret=True)
             result = await client.complete(callback.get_secret_value())
@@ -548,7 +550,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @auth.command("device")
     def auth_device(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         scope: list[str] | None = SCOPE,
         timeout: float = typer.Option(600.0, "--timeout", help="Seconds to wait for the user."),
         json_output: bool = JSON,
@@ -557,7 +559,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Device Sign-In: show the link and code; the user signs in on any device."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             company = await company_of(runtime, record.domain)
             metadata = company.oauth_metadata
             if metadata is None or not metadata.offers_device:
@@ -570,7 +572,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 client_id=record.client_id,
                 scopes=_scopes(scope, company, "device"),
                 tenant_id=record.tenant_id,
-                session_key=session_key,
+                session_key=record.session_key,
                 organization=company.document.organization,
                 protected_resources=metadata.protected_resources,
             )
@@ -600,7 +602,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @auth.command("mediated")
     def auth_mediated(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         scope: list[str] | None = SCOPE,
         json_output: bool = JSON,
         no_input: bool = NO_INPUT,
@@ -614,7 +616,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             company = await company_of(runtime, record.domain)
             auth_document = company.document.auth
             if auth_document is None or auth_document.mediated is None:
@@ -650,11 +652,11 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         )
 
     @auth.command("disconnect")
-    def auth_disconnect(session_key: str = typer.Argument(...), json_output: bool = JSON) -> None:
+    def auth_disconnect(session: str = typer.Argument(...), json_output: bool = JSON) -> None:
         """Sign out: revoke the Account Token; Sessions continue signed out (§4.9)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            return await disconnect(runtime, session_key)
+            return await disconnect(runtime, session)
 
         run(work, json_output=json_output, render=_render_session)
 
@@ -662,7 +664,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @api.command("openapi")
     def api_openapi(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         method: str = typer.Argument(..., help="GET, POST, …"),
         path: str = typer.Argument(..., help="A path on the company's origin, or its URL."),
         body_file: Path | None = BODY_FILE,
@@ -679,7 +681,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             url = path if path.startswith("https://") else f"https://{record.domain}{path}"
             body: Any = None
             if body_file is not None:
@@ -715,7 +717,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @api.command("mcp")
     def api_mcp(  # noqa: C901 - signed in or out, list or call
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         tool: str | None = typer.Argument(None, help="The tool to call; omitted, list them."),
         arguments: str = typer.Option("{}", "--arguments", help="The tool's JSON arguments."),
         json_output: bool = JSON,
@@ -727,7 +729,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             company = await company_of(runtime, record.domain)
             server = mcp_api(company.document)
             if server is None:
@@ -742,7 +744,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                     issuer=record.issuer,
                     token_endpoint=record.token_endpoint,
                     tenant_id=record.tenant_id,
-                    session_key=session_key,
+                    session_key=record.session_key,
                     subject_token=(await session_token(runtime, record)).access_token,
                     resource=server.url,
                 )
@@ -752,7 +754,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 ).refresh(
                     record.account_reference,
                     context=account_context(record),
-                    session_key=session_key,
+                    session_key=record.session_key,
                     resource=server.url,
                 )
                 token = result.token
@@ -763,10 +765,10 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                     issuer=record.issuer,
                     token_endpoint=record.token_endpoint,
                     tenant_id=record.tenant_id,
-                    session_key=session_key,
+                    session_key=record.session_key,
                     resource=server.url,
                 )
-            await runtime.secrets.put(f"mcp:{session_key}", token.access_token)
+            await runtime.secrets.put(f"mcp:{record.session_key}", token.access_token)
             client = McpClient(
                 http_client=runtime.http,
                 token=token,
@@ -803,7 +805,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @conversations.command("start")
     def conversations_start(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         text: str = typer.Argument(...),
         human: bool = HUMAN,
         wait: int | None = typer.Option(None, "--wait", help="Seconds to wait for a reply."),
@@ -812,7 +814,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Start a conversation with its first message (§7.3)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             client, endpoint = await conversation_client(runtime, record)
             answer = await client.start(
                 endpoint,
@@ -827,7 +829,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @conversations.command("send")
     def conversations_send(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         conversation_id: str = typer.Argument(...),
         text: str = typer.Argument(...),
         human: bool = HUMAN,
@@ -837,7 +839,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Send another message (§7.3); its ID makes a retry safe."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             client, endpoint = await conversation_client(runtime, record)
             answer = await client.send(
                 endpoint,
@@ -853,7 +855,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @conversations.command("events")
     def conversations_events(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         conversation_id: str = typer.Argument(...),
         cursor: str | None = typer.Option(None, "--cursor", help="Read after this event."),
         json_output: bool = JSON,
@@ -861,13 +863,13 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Read one page of events (§7.5)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            return await read_events(runtime, session_key, conversation_id, cursor)
+            return await read_events(runtime, session, conversation_id, cursor)
 
         run(work, json_output=json_output, render=_render_page)
 
     @conversations.command("follow")
     def conversations_follow(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         conversation_id: str = typer.Argument(...),
         last_event_id: str | None = typer.Option(None, "--last-event-id"),
         max_events: int = typer.Option(50, "--max-events", min=1),
@@ -885,7 +887,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             return await follow_events(
                 runtime,
-                session_key,
+                session,
                 conversation_id,
                 last_event_id=last_event_id,
                 max_events=max_events,
@@ -896,14 +898,14 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @conversations.command("handoff")
     def conversations_handoff(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         conversation_id: str = typer.Argument(...),
         json_output: bool = JSON,
     ) -> None:
         """Ask for a person at the company (§7.9)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             client, endpoint = await conversation_client(runtime, record)
             receipt = await client.handoff(
                 endpoint,
@@ -917,7 +919,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @conversations.command("direct")
     def conversations_direct(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         parent_id: str = typer.Argument(..., help="The conversation it continues."),
         text: str = typer.Argument(..., help="The user's own words."),
         json_output: bool = JSON,
@@ -925,7 +927,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Open a Direct Conversation: the user talks with the company (§7.10)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             client, endpoint = await conversation_client(runtime, record)
             answer = await client.start_direct(
                 endpoint,
@@ -940,14 +942,14 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @conversations.command("close")
     def conversations_close(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         conversation_id: str = typer.Argument(...),
         json_output: bool = JSON,
     ) -> None:
         """Close the conversation; what it started is not cancelled (§7.12)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             client, endpoint = await conversation_client(runtime, record)
             receipt = await client.close(
                 endpoint,
@@ -963,20 +965,20 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @operations.command("show")
     def operations_show(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         operation_id: str = typer.Argument(...),
         json_output: bool = JSON,
     ) -> None:
         """Read an operation by its ID (Operations §6)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            return await show_operation(runtime, session_key, operation_id)
+            return await show_operation(runtime, session, operation_id)
 
         run(work, json_output=json_output, render=_render_operation)
 
     @operations.command("approve")
     def operations_approve(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         operation_id: str = typer.Argument(...),
         revision: int = typer.Option(..., "--revision", min=1, help="The exact revision."),
         json_output: bool = JSON,
@@ -989,7 +991,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             client, endpoint, company_name = await operations_client(runtime, record)
             operation = await client.read(
                 endpoint, operation_id, token=await session_token(runtime, record), **who_of(record)
@@ -1028,7 +1030,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 if typed.strip() != operation_id:
                     raise NotApprovedError("not_approved", "The user did not approve")
             approval = approve(operation)
-            stored = {**approval.model_dump(mode="json"), "session_key": session_key}
+            stored = {**approval.model_dump(mode="json"), "session": session}
             store = first_contribution(runtime.reactor, TOKEN_STORES, "token store")
             # Bound to a key in the protected token store: an approval written into
             # state.json by anything else does not verify at confirm.
@@ -1045,7 +1047,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @operations.command("confirm")
     def operations_confirm(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         operation_id: str = typer.Argument(...),
         revision: int = typer.Option(..., "--revision", min=1, help="The exact revision."),
         json_output: bool = JSON,
@@ -1053,7 +1055,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         """Confirm the exact operation ID and revision the user approved (Operations §5.2)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session_key)
+            record = runtime.session(session)
             approved = runtime.state.approvals.get(operation_id)
             if approved is None or approved.get("revision") != revision:
                 raise NotApprovedError(
@@ -1062,7 +1064,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             store = first_contribution(runtime.reactor, TOKEN_STORES, "token store")
             mac = approval_mac(await approval_key(store), approved)
             if (
-                approved.get("session_key") != session_key
+                approved.get("session") != session
                 or not isinstance(approved.get("mac"), str)
                 or not hmac.compare_digest(approved["mac"], mac)
             ):
@@ -1096,14 +1098,14 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @operations.command("cancel")
     def operations_cancel(
-        session_key: str = typer.Argument(...),
+        session: str = typer.Argument(...),
         operation_id: str = typer.Argument(...),
         json_output: bool = JSON,
     ) -> None:
         """Decline a proposal, or ask the company to stop one in progress (Operations §7)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            return await cancel_operation(runtime, session_key, operation_id)
+            return await cancel_operation(runtime, session, operation_id)
 
         run(work, json_output=json_output, render=_render_operation)
 

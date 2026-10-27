@@ -76,7 +76,7 @@ class World:
         self.pap = Pap(tmp_path, plugins=plugins)
         pap = self.pap
         pap.set_up()
-        self.session = pap("sessions", "start", "--json")["session"]["session_key"]
+        self.session = pap("sessions", "start", "--json")["session"]["id"]
         lines = f"{ADA['email']}\n{ADA['password']}\n{ADA_CODE}\n"
         pap("auth", "mediated", self.session, *SCOPES, "--stdin", "--json", input=lines)
         self.operation = pap(
@@ -127,7 +127,7 @@ def test_each_safe_action_is_one_implementation_on_every_surface(tmp_path: Path)
     session, operation, conversation = world.session, world.operation, world.conversation
 
     shown = _same_everywhere(world, "pap.sessions.show", ["sessions", "show"])
-    assert [item["session_key"] for item in shown["sessions"]] == [session]
+    assert [item["id"] for item in shown["sessions"]] == [session]
     one = _same_everywhere(
         world, "pap.sessions.show", ["sessions", "show", session], session=session
     )
@@ -294,7 +294,7 @@ def test_actions_see_only_their_tenants_sessions(tmp_path: Path, monkeypatch: An
     world.run("pap.sessions.show", world.session, code=ExitCode.NOT_CONFIGURED)
     monkeypatch.setenv("PAP_TENANT", "pap-cli")
     shown = world.studio("pap.sessions.show")
-    assert [item["session_key"] for item in shown["sessions"]] == [world.session]
+    assert [item["id"] for item in shown["sessions"]] == [world.session]
 
 
 def test_only_safe_and_approval_gated_actions_are_registered(tmp_path: Path) -> None:

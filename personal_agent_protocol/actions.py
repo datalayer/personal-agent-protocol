@@ -180,29 +180,29 @@ async def operations_client(
 # The implementations: each `pap` command of the same name runs these ----------------------
 
 
-async def show_sessions(runtime: CliRuntime, session_key: str | None = None) -> dict[str, Any]:
+async def show_sessions(runtime: CliRuntime, session: str | None = None) -> dict[str, Any]:
     """`pap sessions show`: the tenant's Sessions, opaque references only."""
 
-    if session_key is not None:
-        return session_view(runtime.session(session_key))
+    if session is not None:
+        return session_view(runtime.session(session))
     return {"sessions": [record.public() for record in runtime.sessions()]}
 
 
-async def end_session(runtime: CliRuntime, session_key: str) -> dict[str, Any]:
+async def end_session(runtime: CliRuntime, session: str) -> dict[str, Any]:
     """`pap sessions end`: forget a Session; its Account Token is kept (§4.9)."""
 
-    record = runtime.session(session_key)
+    record = runtime.session(session)
     await runtime.secrets.delete(record.token_reference)
-    await runtime.secrets.delete(f"mcp:{session_key}")
-    del runtime.state.sessions[session_key]
+    await runtime.secrets.delete(f"mcp:{record.session_key}")
+    del runtime.state.sessions[session]
     runtime.state.save()
-    return {"ended": session_key, "account_reference": record.account_reference}
+    return {"ended": session, "account_reference": record.account_reference}
 
 
-async def disconnect(runtime: CliRuntime, session_key: str) -> dict[str, Any]:
+async def disconnect(runtime: CliRuntime, session: str) -> dict[str, Any]:
     """`pap auth disconnect`: revoke the Account Token; Sessions continue signed out."""
 
-    record = runtime.session(session_key)
+    record = runtime.session(session)
     if record.account_reference is None:
         raise NotConfiguredError("not_signed_in", "This Session holds no Account Token")
     await AccountTokenClient(reactor=runtime.reactor, http_client=runtime.http).revoke(
@@ -218,11 +218,11 @@ async def disconnect(runtime: CliRuntime, session_key: str) -> dict[str, Any]:
 
 
 async def read_events(
-    runtime: CliRuntime, session_key: str, conversation_id: str, cursor: str | None = None
+    runtime: CliRuntime, session: str, conversation_id: str, cursor: str | None = None
 ) -> dict[str, Any]:
     """`pap conversations events`: one page of events (§7.5)."""
 
-    record = runtime.session(session_key)
+    record = runtime.session(session)
     client, endpoint = await conversation_client(runtime, record)
     page = await client.read_events(
         endpoint,
@@ -236,7 +236,7 @@ async def read_events(
 
 async def follow_events(
     runtime: CliRuntime,
-    session_key: str,
+    session: str,
     conversation_id: str,
     last_event_id: str | None = None,
     max_events: int = 50,
@@ -247,7 +247,7 @@ async def follow_events(
     Text pieces go to `on_text` for display, if given, and are never acted on.
     """
 
-    record = runtime.session(session_key)
+    record = runtime.session(session)
     client, endpoint = await conversation_client(runtime, record)
     events: list[dict[str, Any]] = []
     stream = client.stream(
@@ -273,12 +273,10 @@ async def follow_events(
     return {"conversation_id": conversation_id, "events": events}
 
 
-async def show_operation(
-    runtime: CliRuntime, session_key: str, operation_id: str
-) -> dict[str, Any]:
+async def show_operation(runtime: CliRuntime, session: str, operation_id: str) -> dict[str, Any]:
     """`pap operations show`: read an operation by its ID (Operations §6)."""
 
-    record = runtime.session(session_key)
+    record = runtime.session(session)
     client, endpoint, _ = await operations_client(runtime, record)
     operation = await client.read(
         endpoint, operation_id, token=await session_token(runtime, record), **who_of(record)
@@ -286,12 +284,10 @@ async def show_operation(
     return operation_view(operation)
 
 
-async def cancel_operation(
-    runtime: CliRuntime, session_key: str, operation_id: str
-) -> dict[str, Any]:
+async def cancel_operation(runtime: CliRuntime, session: str, operation_id: str) -> dict[str, Any]:
     """`pap operations cancel`: decline a proposal, or ask to stop one (Operations §7)."""
 
-    record = runtime.session(session_key)
+    record = runtime.session(session)
     client, endpoint, _ = await operations_client(runtime, record)
     operation = await client.cancel(
         endpoint, operation_id, token=await session_token(runtime, record), **who_of(record)

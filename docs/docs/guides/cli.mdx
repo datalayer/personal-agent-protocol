@@ -48,18 +48,19 @@ command that needs input stops with exit code 4 instead of asking.
 pap config set client_id https://agent.example/agent.json
 pap agent key import --stdin < agent-signing-key.pem   # printed: key:key-1 and its thumbprint
 pap sessions start example.com --json                 # a new Session Key names the Session
-pap auth device "$SESSION_KEY" --scope orders:read     # the user signs in on any device
-pap auth mediated "$SESSION_KEY" --stdin < credentials.txt  # one field per line, then the code
-pap api openapi "$SESSION_KEY" GET /orders
-pap api mcp "$SESSION_KEY" search_products --arguments '{"q": "jacket"}'
+pap auth device "$SESSION" --scope orders:read     # the user signs in on any device
+pap auth mediated "$SESSION" --stdin < credentials.txt  # one field per line, then the code
+pap api openapi "$SESSION" GET /orders
+pap api mcp "$SESSION" search_products --arguments '{"q": "jacket"}'
 ```
 
 The CLI's personal agent is a Reactor host. Its defaults live under
 `$XDG_STATE_HOME/pap` (or `~/.local/state/pap`), owner-only and written
 atomically: the token store (`secrets.json`, `pap.tokenStore`), the signing
 key and the Session Keys (`keys.json`; a Session Key's thumbprint names its
-Session and is what commands take as `$SESSION_KEY`), pairwise User IDs (`pairwise.sqlite3`), and the
-non-secret Session records and approvals (`state.json`). Plugins installed
+Session), pairwise User IDs (`pairwise.sqlite3`), and the non-secret Session
+records and approvals (`state.json`). Commands name a Session by its handle,
+`ses_` and its key's thumbprint (`$SESSION`), which `pap sessions start` prints. Plugins installed
 under the `personal_agent_protocol.plugins` entry-point group are discovered
 after these defaults and can replace any of them, for example with a system
 keyring. Only opaque references (`session:…`, `account:…`, `key:…`) are
@@ -68,9 +69,9 @@ printed.
 ## Operations: approve, then confirm
 
 ```bash
-pap operations approve "$SESSION_KEY" exc_5Rt2 --revision 1    # shows the company and summary;
+pap operations approve "$SESSION" exc_5Rt2 --revision 1    # shows the company and summary;
                                                        # the user types the operation ID
-pap operations confirm "$SESSION_KEY" exc_5Rt2 --revision 1
+pap operations confirm "$SESSION" exc_5Rt2 --revision 1
 ```
 
 Approval is taken at the CLI's own prompt for one exact operation ID and
@@ -251,9 +252,9 @@ JSON as that command's `--json`.
 ```bash
 pap commands list
 pap commands run pap.sessions.show
-pap commands run pap.operations.show "$SESSION_KEY" exc_5Rt2  # by position
+pap commands run pap.operations.show "$SESSION" exc_5Rt2  # by position
 pap commands run pap.requirements.list level='MUST NOT' role=company
-pap commands run pap.sessions.end "$SESSION_KEY"             # exit code 6: approval_required
+pap commands run pap.sessions.end "$SESSION"             # exit code 6: approval_required
 ```
 
 `session` is a Session Key, the thumbprint `pap sessions show` lists. Arguments

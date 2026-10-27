@@ -22,7 +22,7 @@ SDK version **0.27.0**, PAP profile **0.3** (draft updated 2026-10-26), Operatio
 | Case | Kind | Requirements | Python → Python | Python → TypeScript | TypeScript → Python | TypeScript → TypeScript |
 | --- | --- | --- | --- | --- | --- | --- |
 | `protocol.extension-required-company` | negative | OPS-2-01, PAP-3.3-03 | pass | pass | pass | pass |
-| `protocol.feedback-report` | positive | PAP-8-01, PAP-8-06 | pass | pass | pass | pass |
+| `protocol.feedback-report` | positive | PAP-8-01, PAP-8-06, PAP-8.3-01 | pass | pass | pass | pass |
 
 ## Security
 
@@ -89,10 +89,10 @@ SDK version **0.27.0**, PAP profile **0.3** (draft updated 2026-10-26), Operatio
 | `lifecycle.mcp-protected-resource-metadata` | positive | PAP-6-06, PAP-6-03, PAP-4.3-26 | pass | pass | pass | pass |
 | `lifecycle.mcp-bearer-for-its-url` | positive | PAP-4.3-09, PAP-4.3-24, PAP-6-04, GUIDE-pa-tokens-01 | pass | pass | pass | pass |
 | `lifecycle.mcp-bearer-only-at-mcp` | negative | PAP-4.3-10, PAP-4.3-11, PAP-6-05 | pass | pass | pass | pass |
-| `lifecycle.mcp-token-type-by-server` | negative | PAP-4.3-23, PAP-4.3-11 | pass | pass | pass | pass |
+| `lifecycle.mcp-token-type-by-server` | negative | PAP-4.3-23, PAP-4.3-11, PAP-4.3-30, PAP-3.2-21 | pass | pass | pass | pass |
 | `lifecycle.mcp-sign-out-takes-effect` | positive | PAP-4.9-01, PAP-6-04 | pass | pass | pass | pass |
-| `lifecycle.browser-joins-session` | positive | PAP-5-01, PAP-5-03, PAP-5-12, PAP-5-10, PAP-5-11 | pass | pass | pass | pass |
-| `lifecycle.browser-assertion-refused` | negative | PAP-5-05, PAP-5-06, PAP-5-07, PAP-5-08, PAP-5-09 | pass | pass | pass | pass |
+| `lifecycle.browser-joins-session` | positive | PAP-5-01, PAP-5-03, PAP-5-12, PAP-5-10, PAP-5-11, PAP-5-02, PAP-5-04, PAP-5-05 | pass | pass | pass | pass |
+| `lifecycle.browser-join-refused` | negative | PAP-5-05, PAP-5-06, PAP-5-07, PAP-5-08, PAP-5-09, PAP-5-03 | pass | pass | pass | pass |
 
 ## Conversations
 
@@ -143,7 +143,7 @@ SDK version **0.27.0**, PAP profile **0.3** (draft updated 2026-10-26), Operatio
 
 ## Decided by each SDK alone
 
-44 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
+49 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
 
 | Case | Kind | Check | SDKs |
 | --- | --- | --- | --- |
@@ -164,12 +164,17 @@ SDK version **0.27.0**, PAP profile **0.3** (draft updated 2026-10-26), Operatio
 | `protocol.message-context-fields` | negative | message_context | python, typescript |
 | `protocol.multi-domain-issuer` | positive | discovery | python, typescript |
 | `protocol.issuer-not-claiming-domain` | negative | discovery | python, typescript |
+| `protocol.protected-resource-trailing-slash` | negative | discovery | python, typescript |
+| `protocol.protected-resource-with-a-path` | negative | discovery | python, typescript |
+| `protocol.protected-resource-host-case` | positive | discovery | python, typescript |
 | `protocol.issuer-mismatch` | negative | discovery | python, typescript |
 | `protocol.issuer-compared-exactly` | negative | discovery | python, typescript |
 | `protocol.issuer-with-a-path` | positive | discovery | python, typescript |
 | `protocol.dpop-algorithms-include-es256` | negative | discovery | python, typescript |
 | `protocol.organization-domain-www` | negative | discovery | python, typescript |
 | `protocol.organization-domain-after-redirect` | negative | discovery | python, typescript |
+| `protocol.redirect-ends-off-the-well-known-path` | negative | discovery | python, typescript |
+| `protocol.redirect-ends-with-a-query` | negative | discovery | python, typescript |
 | `protocol.organization-domain-redirect-www` | positive | discovery | python, typescript |
 | `protocol.organization-domain-case-insensitive` | positive | discovery | python, typescript |
 | `protocol.feedback-needs-auth` | negative | discovery_document | python, typescript |

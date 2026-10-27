@@ -14,7 +14,7 @@ from personal_agent_protocol.demo.kit import ScriptedBrowser, personal_agent_rea
 from personal_agent_protocol.operations import OperationsClient, approve
 from personal_agent_protocol.transport import DpopHttpClient
 
-from .test_company_end_to_end import PAIRWISE, TENANT, World
+from .test_company_end_to_end import TENANT, World
 
 
 def direct_world() -> tuple[World, ScriptedBrowser]:

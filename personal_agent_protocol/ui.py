@@ -40,7 +40,6 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
-    model_serializer,
     model_validator,
 )
 from reactor.ui import (  # type: ignore[import-untyped]
@@ -219,11 +218,13 @@ class PapSessionShown(BaseModel):
     signed_in: bool
 
     @classmethod
-    def of(cls, session_id: str, *, signed_in: bool) -> PapSessionShown:
-        """The reference of a Session's ID, and whether the person is signed in there."""
-        if not session_id:
-            raise ValueError("a Session is shown by the reference of its ID, and this one has none")
-        return cls(ref=hashlib.sha256(session_id.encode()).hexdigest()[:12], signed_in=signed_in)
+    def of(cls, session_key: str, *, signed_in: bool) -> PapSessionShown:
+        """The reference of a Session's key, and whether the person is signed in there."""
+        if not session_key:
+            raise ValueError(
+                "a Session is shown by the reference of its key, and this one has none"
+            )
+        return cls(ref=hashlib.sha256(session_key.encode()).hexdigest()[:12], signed_in=signed_in)
 
 
 class PapTermsWas(BaseModel):

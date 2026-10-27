@@ -384,9 +384,7 @@ def _message(
     from personal_agent_protocol.models import Author, Message
 
     data = None if text else {"order": "1043"}
-    return Message(
-        id=id_, author=Author(type=author, name=name), role=role, text=text, data=data
-    )
+    return Message(id=id_, author=Author(type=author, name=name), role=role, text=text, data=data)
 
 
 def _replies() -> PapReplies:

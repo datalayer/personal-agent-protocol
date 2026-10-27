@@ -24,11 +24,11 @@
       "title": "Getting to a conversation",
       "items": [
         { "label": "1", "title": "Discover", "detail": "Manzanita's PAP and OAuth metadata" },
-        { "label": "2", "title": "Signed-out Session", "detail": "Assertion and DPoP proof" },
+        { "label": "2", "title": "Signed-out Session", "detail": "Assertion, proof by a new Session Key" },
         { "label": "3", "title": "Ask", "detail": "Where is my jacket order?" },
-        { "label": "4", "title": "Sign in first", "detail": "An `authorization` event: sign_in_required", "current": true }
+        { "label": "4", "title": "Sign in first", "detail": "An `authorization` event: insufficient_scope", "current": true }
       ],
-      "notes": "Atlas discovers Manzanita and starts a signed-out Session. When Ada asks about her order, Manzanita answers in the conversation with an authorization event: she has to sign in first."
+      "notes": "Atlas discovers Manzanita and starts a signed-out Session, named by a new Session Key. When Ada asks about her order, Manzanita answers in the conversation with an authorization event: insufficient_scope, with the scope the request needs, which only a signed-in Session can have."
     },
     {
       "type": "flow",
@@ -38,7 +38,7 @@
         { "label": "6", "title": "Ada approves", "detail": "On manzanita.example/device, with the code" },
         { "label": "7", "title": "Poll", "detail": "Signed-in Session and an Account Token", "current": true }
       ],
-      "notes": "Atlas asks for Device Sign-In on the same Session and tells Ada where to go. She enters the code and approves on Manzanita's own page. Atlas polls, and the Session is now signed in, with an Account Token."
+      "notes": "Atlas asks for Device Sign-In on the same Session; its first poll is proved with the Session Key, which binds the device code to it. Atlas tells Ada where to go. She enters the code and approves on Manzanita's own page. Atlas polls, and the Session is now signed in, with an Account Token."
     },
     {
       "type": "flow",

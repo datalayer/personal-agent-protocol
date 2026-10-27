@@ -5,8 +5,8 @@ title: Protocol status
 
 # Protocol implementation status
 
-Target: [PAP draft 0.2, updated October 18,
-2026](https://personalagentprotocol.org/docs/0.2/spec), and the Operations
+Target: [PAP draft 0.3, as of October 26,
+2026](https://personalagentprotocol.org/docs/0.3/spec), and the Operations
 extension version 1 (see [Compatibility](/releases/compatibility/)).
 
 | Area                                                                                    | Status                                                                                                                                                     |
@@ -18,20 +18,20 @@ extension version 1 (see [Compatibility](/releases/compatibility/)).
 | Client metadata validation                                                              | Implemented in Python and TypeScript                                                                                                                       |
 | Client metadata and public JWKS retrieval                                               | Implemented in Python and TypeScript with Reactor safety policies                                                                                          |
 | Pairwise user IDs and session wire primitives                                           | Implemented in Python and TypeScript                                                                                                                       |
-| Signed-out session start and renewal over HTTP                                          | Implemented in Python and TypeScript; host signer and DPoP provider required                                                                               |
-| Direct Sign-In state, S256 PKCE, callback validation, and exchange grant                | Implemented in Python and TypeScript                                                                                                                       |
+| Signed-out session start and renewal over HTTP                                          | Implemented in Python and TypeScript: one Session Key per Session, its thumbprint naming it; renewal with the same key; an ended Session's key discarded; host signer and DPoP key custody required |
+| Direct Sign-In state, S256 PKCE, `dpop_jkt`, callback validation, and exchange grant    | Implemented in Python and TypeScript; loopback redirect URIs matched whatever their port                                                                  |
 | Reactor clock, randomness, signer, DPoP proof, token, cache, browser, Account Token lock, protected input, standing permission, and company contracts ([Contribution points](/concepts/contribution-points/)) | Implemented and lifecycle-tested in Python and TypeScript                                                                                                  |
 | ES256/RS256 assertion signing                                                           | Implemented in Python and TypeScript                                                                                                                       |
 | DPoP proof creation and verification                                                    | Implemented in Python and TypeScript; host key resolver and replay cache required                                                                          |
 | DPoP-aware API/conversation HTTP transport                                              | Implemented in Python and TypeScript with nonce retry in both error shapes; every redirect refused                                                             |
 | Conversation creation, continuation, and ordered JSON event reads                       | Implemented in Python and TypeScript with long polling, backlog draining, cursor recovery, and duplicate suppression                                       |
 | Direct Sign-In browser handoff and token exchange                                       | Implemented in Python and TypeScript; host state, browser, signer, and DPoP providers required                                                             |
-| Browser Session assertion, controlled form POST, and verification                       | Implemented in Python and TypeScript; host signer/form-post and company replay cache required                                                              |
-| Device Sign-In | Implemented in Python and TypeScript; host state store, signer, and DPoP provider required; the link shown only on the issuer's host or its `poppy_domains`, with the company's name and domain |
-| Feedback (draft 0.2 §8) | Implemented in Python and TypeScript: `FeedbackClient.report` (`kind` `missing`, bounded `task` and `description`) and the reference companies' `POST /poppy/feedback` |
+| Browser join form: one-time code, DPoP proof by the Session Key                         | Implemented in Python and TypeScript; the host's own browser (`pap.browserJoin`) required; both reference companies serve the form                          |
+| Device Sign-In | Implemented in Python and TypeScript; host state store, signer, and DPoP provider required; the device code bound to the first poll's key; the link shown only on the issuer's host or a host of its `protected_resources`, with the company's name and domain |
+| Excluded tasks and feedback (draft 0.3 §8) | Implemented in Python and TypeScript: `DiscoveryClient.excluded_tasks`, `FeedbackClient.report` (`kind` `missing`, bounded `task` and `description`, answered with an `Alternative` when the task can be done after all) and the reference companies' `/poppy/excluded-tasks.json` and `POST /poppy/feedback` |
 | Mediated Sign-In | Implemented in Python and TypeScript; credentials only through the host's `pap.protectedInput`, one endpoint on the company's domain, no redirects, one-time code from the same Session |
-| Account Token refresh, rotation, narrowing, and revocation | Implemented in Python and TypeScript; rotation serialized by `pap.accountTokenLock`, `invalid_grant` signs out, wider scopes are `re_consent_required` |
-| OpenAPI and MCP clients | Implemented in Python and TypeScript: `ApiClient` (DPoP, `202` operations, scope-carrying refusals, an `Idempotency-Key` on every write, kept per Session by the reference companies) and `McpClient` with a token for its MCP server's exact URL from `token_for_mcp`/`tokenForMcp`: DPoP (`McpDpopAuth`) when the server's protected resource metadata lists `dpop_signing_alg_values_supported`, a Bearer token (`McpBearerAuth`) otherwise |
+| Account Token refresh, rotation, narrowing, and revocation | Implemented in Python and TypeScript; rotation serialized by `pap.accountTokenLock`; a new Session Key starts a signed-in Session; `invalid_grant` signs out or, for an ended Session, is `session_ended`; wider scopes are `re_consent_required` |
+| OpenAPI and MCP clients | Implemented in Python and TypeScript: `ApiClient` (DPoP, `202` operations, `insufficient_scope` with its scope, an `Idempotency-Key` on every write, kept per Session by the reference companies) and `McpClient` with a token for its MCP server's exact URL: DPoP (`McpDpopAuth`, a token asked for with `resource`) when the server's protected resource metadata lists `dpop_signing_alg_values_supported`, a Bearer token by Token Exchange (`token_for_mcp`/`tokenForMcp`, `McpBearerAuth`) otherwise |
 | Conversation SSE streaming, handoff, Direct Conversations, sign-in mid-conversation, and active close | Implemented in Python and TypeScript: `Last-Event-ID` reconnects, display-only text deltas, discarded partial messages, `direct_conversation_open` details |
 | Operations v1 | Client implemented in Python and TypeScript: negotiation, exact approval (revision + digest), `terms_changed`, recovery after a lost confirm, cancel, `extension_required`, and standing permissions through `pap.standingPermissionStore`; company handlers in both reference companies |
 | Extensible `pap` CLI                                                                    | Reactor host/plugin, non-secret profiles, company discovery, agent identity/JWKS inspection, extension diagnostics, and live discovery command implemented |
@@ -63,13 +63,14 @@ page; the [Support](/releases/support/) page says which versions get fixes.
   request. Local JOSE implementations are available, but applications still
   own key selection and custody.
 - Security contribution contracts exist, but the SDK deliberately ships no
-  default signer, DPoP key custody, durable replay cache, token store, browser
-  handoff, or browser form-post surface.
-- Browser Session clients sign the distinct `poppy-browser+jwt` assertion and
-  submit it through `pap.browserFormPost`; company verification enforces the
-  endpoint, Session owner, 60-second lifetime, company-domain return target,
-  and one-use `jti`. Company adapters still own cookie creation and must bind
-  cookie state and lifetime to the underlying PAP Session.
+  default signer, durable Session Key custody, durable replay cache, token
+  store, browser handoff, or browser join surface.
+- Browser Session clients read the join form's one-time code from the agent's
+  own browser (`pap.browserJoin`) and sign a DPoP proof over it with the
+  Session Key; the reference companies check the cookie that ties the code to
+  the browser, the code's single use and 60-second life, and the proof's key.
+  Company adapters outside the reference companies own their cookies and must
+  bind cookie state and lifetime to the underlying PAP Session.
 - DPoP resource clients own authorization headers, create a fresh proof for
   every attempt, retry one nonce challenge, and refuse every redirect. The
   Account Token lifecycle and the resource-bound MCP token (DPoP or Bearer, as

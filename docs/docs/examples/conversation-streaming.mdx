@@ -59,7 +59,7 @@ What the stream guarantees:
 
 The model sees the company's complete messages, how many deltas and
 reconnects there were, and that nothing was delivered twice. The Session
-Token, DPoP proofs, and pairwise identity stay host-only.
+Token, the Session Key, and DPoP proofs stay host-only.
 
 TypeScript: `for await (const item of client.stream(endpoint, id, options))`,
 where `item.kind` is `"text-delta"` or `"reconnected"` for the two

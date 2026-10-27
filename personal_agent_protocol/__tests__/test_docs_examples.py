@@ -223,20 +223,26 @@ class Docs:
         return await DiscoveryClient(reactor=self.reactor, http_client=self.http).discover(domain)
 
     async def who(self, domain: str) -> dict[str, str]:
+        """What a resource request names: the tenant and the issuer (the proof's key names
+        the Session)."""
+
         company = await self.discovered(domain)
-        issuer = company.oauth_metadata.issuer
-        pairwise = await resolve_pairwise_user_id(
+        return {"tenant_id": TENANT, "issuer": company.oauth_metadata.issuer}
+
+    async def pairwise(self, domain: str) -> str:
+        """The User ID at the company, for its Session assertions."""
+
+        issuer = (await self.discovered(domain)).oauth_metadata.issuer
+        return await resolve_pairwise_user_id(
             self.reactor, tenant_id=TENANT, local_user_id=LOCAL_USER, company_issuer=issuer
         )
-        return {"tenant_id": TENANT, "pairwise_user_id": pairwise, "issuer": issuer}
 
     async def signed_out(self, domain: str) -> Any:
         company = await self.discovered(domain)
-        who = await self.who(domain)
         return await SessionClient(reactor=self.reactor, http_client=self.http).start(
             client_id=self.agent.client_id,
-            pairwise_user_id=who["pairwise_user_id"],
-            issuer=who["issuer"],
+            pairwise_user_id=await self.pairwise(domain),
+            issuer=company.oauth_metadata.issuer,
             token_endpoint=company.oauth_metadata.token_endpoint,
             tenant_id=TENANT,
         )
@@ -245,7 +251,6 @@ class Docs:
         """A Session signed in with Device Sign-In: the token and its Account Token reference."""
 
         metadata = (await self.discovered(domain)).oauth_metadata
-        who = await self.who(domain)
         session = await self.signed_out(domain)
         device = DeviceSignInClient(reactor=self.reactor, http_client=self.http)
         started = await device.begin(
@@ -383,15 +388,13 @@ async def _sessions(docs: Docs) -> tuple[dict[str, Any], Check]:
 
 @case("docs/docs/guides/direct-sign-in.mdx#0")
 async def _direct_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
-    who = await docs.who("auth.example.com")
-
     async def check(namespace: dict[str, Any], out: str) -> None:
-        assert "('poppy:read',) ()" in out
+        assert "('orders:read',) ()" in out
         assert namespace["account_reference"].startswith("account_")
 
     return {
         "reactor": docs.reactor,
-        "pairwise_user_id": who["pairwise_user_id"],
+        "pairwise_user_id": await docs.pairwise("auth.example.com"),
         "signed_out_session": await docs.signed_out("auth.example.com"),
     }, check
 
@@ -399,7 +402,6 @@ async def _direct_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
 @case("docs/docs/guides/device-sign-in.mdx#0")
 async def _device_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
     company = await docs.discovered("shop.example")
-    who = await docs.who("shop.example")
     shown: list[str] = []
     scheduled: list[Any] = []
 
@@ -416,7 +418,7 @@ async def _device_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
         "http": docs.http,
         "metadata": company.oauth_metadata,
         "company": company,
-        "pairwise_user_id": who["pairwise_user_id"],
+        "pairwise_user_id": await docs.pairwise("shop.example"),
         "signed_out_session": await docs.signed_out("shop.example"),
         "show_to_user": shown.append,
         "schedule_at": scheduled.append,
@@ -445,7 +447,6 @@ async def _protected_input(docs: Docs) -> tuple[dict[str, Any], Check]:
 @case("docs/docs/guides/mediated-sign-in.mdx#1")
 async def _mediated_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
     company = await docs.discovered("shop.example")
-    who = await docs.who("shop.example")
 
     async def check(namespace: dict[str, Any], out: str) -> None:
         assert namespace["result"].status == "complete"
@@ -456,8 +457,8 @@ async def _mediated_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
         "reactor": docs.reactor,
         "http": docs.http,
         "document": company.document,
-        "issuer": who["issuer"],
-        "pairwise_user_id": who["pairwise_user_id"],
+        "issuer": company.oauth_metadata.issuer,
+        "pairwise_user_id": await docs.pairwise("shop.example"),
         "signed_out_session": await docs.signed_out("shop.example"),
     }, check
 
@@ -465,7 +466,6 @@ async def _mediated_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
 @case("docs/docs/guides/account-tokens.mdx#0")
 async def _account_tokens(docs: Docs) -> tuple[dict[str, Any], Check]:
     company = await docs.discovered("shop.example")
-    who = await docs.who("shop.example")
     session, reference = await docs.signed_in("shop.example", ("orders:read",))
     asked: list[str] = []
 
@@ -477,7 +477,7 @@ async def _account_tokens(docs: Docs) -> tuple[dict[str, Any], Check]:
         "reactor": docs.reactor,
         "http": docs.http,
         "metadata": company.oauth_metadata,
-        "pairwise_user_id": who["pairwise_user_id"],
+        "pairwise_user_id": await docs.pairwise("shop.example"),
         "account_token_reference": reference,
         "session": session,
         "ask_the_user_to_sign_in_again": lambda: asked.append("again"),
@@ -495,7 +495,9 @@ async def _stream(docs: Docs) -> tuple[dict[str, Any], Check]:
     token = await docs.signed_out("shop.example")
     endpoint = company.document.agent.protocols[0].endpoint
     conversations = ConversationClient(transport=docs.transport)
-    message = Message(id=generate_message_id(docs.reactor), author=Author(type="human"), text="Hello")
+    message = Message(
+        id=generate_message_id(docs.reactor), author=Author(type="human"), text="Hello"
+    )
     page = await conversations.start(endpoint, message, token=token, wait=0, **who)
     await conversations.close(endpoint, page.conversation_id, token=token, **who)
     handled: list[Any] = []
@@ -681,10 +683,9 @@ async def _aliases(docs: Docs) -> tuple[dict[str, Any], Check]:
                 service.discovery_document("orders.example.com")["organization"]["domain"]
                 == "orders.example.com"
             )
-            assert service.oauth_metadata()["poppy_domains"] == [
-                config.domain,
-                "orders.example.com",
-            ]
+            resources = service.oauth_metadata()["protected_resources"]
+            assert f"https://{config.domain}" in resources
+            assert "https://orders.example.com" in resources
 
     return {"CompanyConfig": CompanyConfig}, check
 
@@ -732,7 +733,7 @@ async def _live_session_actions(docs: Docs) -> tuple[dict[str, Any], Check]:
         # Approved by Studio's dialog, then: no such Session.
         with pytest.raises(NotConfiguredError):
             await namespace["platform"].execute_command(
-                "pap.sessions.end", {"session_key": "ses_docs_0000000000000"}
+                "pap.sessions.end", {"session": "ses_docs_0000000000000"}
             )
         assert asked == [
             ("End a PAP Session", "End Session ses_docs_0000000000000 and forget its token.")
@@ -815,9 +816,9 @@ def test_the_json_example_is_valid(key: str) -> None:
     else:
         DiscoveryDocument.model_validate(
             {
-                "protocol_version": "0.2",
+                "protocol_version": "0.3",
                 "organization": {"name": "Example", "domain": "example.com"},
-                "auth": {"issuer": "https://example.com", "direct": {"scopes": ["a"]}},
+                "auth": {"issuer": "https://example.com", "scopes": {"a:read": "Read a"}},
                 "agent": {"protocols": [{"type": "poppy", "endpoint": "https://example.com/c"}]},
                 **value,
             }

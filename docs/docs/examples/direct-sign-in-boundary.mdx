@@ -25,6 +25,7 @@ sequenceDiagram
   participant C as Company authorization server
   M->>H: Request orders:read for existing Session
   H->>H: Generate random state and PKCE verifier
+  H->>H: dpop_jkt = the Session Key's thumbprint
   H->>H: Derive S256 code challenge
   H->>R: Store pending request by hashed state, with expiry
   H->>B: Open protected authorization URL
@@ -38,6 +39,9 @@ sequenceDiagram
 
 - State and the verifier come from cryptographically secure randomness.
 - Only the S256 challenge crosses to the authorization endpoint.
+- `dpop_jkt`, the Session Key's thumbprint, binds the code to the Session: the
+  company signs that Session in, and a code taken from the redirect can't be
+  redeemed with any other key.
 - The full authorization URL is a secret because it contains state and user
   intent; it is revealed only to the browser handoff capability.
 - The state store must expire entries and support atomic consumption later.

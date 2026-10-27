@@ -30,8 +30,8 @@ sequenceDiagram
   C-->>H: Organization, issuer, interfaces, extensions
   H->>H: Strict JSON + version + domain validation
   H->>A: GET OAuth metadata (no credentials)
-  A-->>H: Authorization and token endpoints
-  H->>H: Bind issuer to company domain
+  A-->>H: Endpoints, grants, protected_resources
+  H->>H: Bind issuer to company domain (protected_resources)
   H-->>M: Verified public capability summary
 ```
 
@@ -39,7 +39,13 @@ sequenceDiagram
 
 - Only HTTPS, public-network destinations are eligible.
 - Redirects, response sizes, content types, duplicate JSON members, domains,
-  versions, and issuer relationships are checked before data is trusted.
+  versions, and issuer relationships are checked before data is trusted: the
+  final URL's path must be exactly `/.well-known/poppy.json` with no query
+  (`invalid_discovery_location`), and the issuer's metadata must list
+  `https://{domain}` in `protected_resources`.
+- The summary says which sign-in modes the OAuth metadata offers (Direct,
+  Device, Token Exchange), the company's own scopes in its own words
+  (`auth.scopes`), and the interfaces it lists.
 - The tool result contains a capability inventory, not raw response bodies.
 - Discovery is credential-free, which prevents accidental token forwarding to
   an unverified host.

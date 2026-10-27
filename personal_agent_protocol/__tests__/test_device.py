@@ -246,7 +246,7 @@ def test_device_sign_in_denial_is_terminal() -> None:
     ],
 )
 def test_a_device_link_is_shown_only_on_the_issuer_or_its_domains(link: str, allowed: bool) -> None:
-    """Its host is the issuer's, the host of a URL in protected_resources, or a subdomain of either (§4.6)."""
+    """Its host is the issuer's, a protected_resources URL's, or a subdomain of either (§4.6)."""
 
     async def scenario() -> None:
         def handler(_: httpx.Request) -> httpx.Response:

@@ -6,7 +6,7 @@ title: Account Tokens
 
 A Direct, Device, or Mediated Sign-In returns an Account Token: the OAuth
 `refresh_token` that keeps the user signed in after the short-lived Session
-Token expires (PAP draft 0.2 §4.8, §4.9). It is the most valuable credential a
+Token expires (PAP draft 0.3 §4.8, §4.9). It is the most valuable credential a
 personal agent holds for a user, so the SDK never hands it to a caller. It is
 written straight into the Reactor `pap.tokenStore` by the sign-in client and
 used only at the company's `token_endpoint` and `revocation_endpoint`.
@@ -25,13 +25,19 @@ context = AccountTokenContext(
     tenant_id="application-42",
     pairwise_user_id=pairwise_user_id,
 )
+# With a Session Key: a token for that Session, signing it in if it was signed out.
+# Without one, a new Session Key starts a new Session already signed in.
 result = await accounts.refresh(
-    account_token_reference, context=context, session_id=session.session_id
+    account_token_reference, context=context, session_key=session.session_key
 )
 if result.status == "signed_in":
     session = result.token  # signed in again; refresh_token removed
 elif result.status == "re_consent_required":
     ask_the_user_to_sign_in_again()
+elif result.status == "session_ended":
+    # The Session has ended, not the Account Token: start a new Session with it.
+    result = await accounts.refresh(account_token_reference, context=context)
+    session = result.token
 else:  # "signed_out"
     continue_signed_out()
 ```
@@ -40,15 +46,25 @@ else:  # "signed_out"
 const accounts = new AccountTokenClient({ reactor, fetch });
 const result = await accounts.refresh(accountTokenReference, {
   context: { tokenEndpoint, revocationEndpoint, issuer, clientId, tenantId, pairwiseUserId },
-  sessionId: session.sessionId,
+  sessionKey: session.sessionKey,
   scopes: ['orders:read'],
 });
 ```
 
-A refresh is a `refresh_token` grant carrying the Session's `session_id`, a
-fresh client assertion, and a fresh DPoP proof (one nonce retry). The company
-must sign in **the same Session**: a token for another Session, a Bearer
-token, or a signed-out answer is `invalid_token_response`.
+A refresh is a `refresh_token` grant with a fresh client assertion and a fresh
+DPoP proof (one nonce retry). The proof's key says which Session: signed with
+an existing Session's key, the company signs **that Session** in; signed with
+a new Session Key (no `session_key` passed), it starts a new Session already
+signed in. The company doesn't bind the Account Token to a Session Key, so one
+Account Token can start Sessions with different keys (RFC 9449 §5 binds refresh
+tokens only for public clients, and personal agents are confidential clients).
+The Session must belong to the same `client_id` and User ID as the Account
+Token, and must never have been signed in to another account
+(`account_mismatch`). A Bearer token is `invalid_token_response`.
+
+Signing a Session in, or refreshing it, doesn't revoke the Session's earlier
+Session Tokens: each keeps working until it expires, reflecting the Session as
+it was when issued, since several tasks can share one Session (§4.4).
 
 ## Rotation is serialized
 
@@ -70,11 +86,21 @@ and the SDK does not retry.
 
 ## Expiry and revocation
 
-- `invalid_grant` (expired, revoked, or rotated away) deletes the stored copy;
-  the Session continues signed out (`signed_out`).
+- `invalid_grant` with a new Session Key: the Account Token has expired, been
+  revoked, or been rotated away. The stored copy is deleted and the user stays
+  signed out (`signed_out`).
+- `invalid_grant` with an existing Session's key can also mean the Session has
+  ended. The SDK tells them apart by renewing the Session with its assertion:
+  refused there, the Session has ended, its key is discarded, and the result is
+  `session_ended` (the Account Token is kept: refresh without `session_key` to
+  start a new Session); accepted, the Account Token is what ended, its copy is
+  deleted, and the Session continues signed out (`signed_out`, with the renewed
+  signed-out token).
 - `revoke()` sends an RFC 7009 revocation, without DPoP, with
   `token_type_hint=refresh_token`. The company signs out every Session signed
-  in with the token. The local copy is deleted **only after** the company has
+  in with the token and should invalidate the Session Tokens issued under that
+  sign-in, so sign-out takes effect at once (RFC 7009 §2.1); those Sessions
+  usually continue signed out. The local copy is deleted **only after** the company has
   answered; a refused revocation keeps it so the host can retry, because a
   token the user believes revoked must be.
 
@@ -87,4 +113,4 @@ and the SDK does not retry.
 - Sign-out in the product revokes, then deletes.
 
 See the runnable [Account Tokens example](/examples/account-tokens/) and the
-upstream [Account Tokens specification](https://personalagentprotocol.org/docs/0.2/spec#account-tokens).
+upstream [Account Tokens specification](https://personalagentprotocol.org/docs/0.3/spec#account-tokens).

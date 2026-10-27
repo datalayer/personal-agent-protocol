@@ -34,7 +34,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic import SecretStr
@@ -152,7 +152,6 @@ class LedgerlyAsPersonalAgent:
         metadata = company.oauth_metadata
         if metadata is None or not metadata.offers_device:
             raise RuntimeError("Northwind does not offer Device Sign-In")
-        assert metadata.device_authorization_endpoint is not None
         link = self.links.setdefault(
             account_id, NorthwindLink(pairwise_user_id=generate_pairwise_user_id())
         )
@@ -167,7 +166,7 @@ class LedgerlyAsPersonalAgent:
         device = DeviceSignInClient(reactor=self.reactor, http_client=self.http)
         if link.device_reference is None and link.account_token_reference is None:
             started = await device.begin(
-                device_authorization_endpoint=metadata.device_authorization_endpoint,
+                device_authorization_endpoint=cast(str, metadata.device_authorization_endpoint),
                 token_endpoint=metadata.token_endpoint,
                 issuer=metadata.issuer,
                 client_id=self.identity.client_id,

@@ -24,14 +24,14 @@ sequenceDiagram
   participant Atlas as Atlas (personal agent)
   participant M as Manzanita (company)
   Atlas->>M: Discovery + OAuth metadata
-  Atlas->>M: Signed-out Session (assertion + DPoP)
+  Atlas->>M: Signed-out Session (assertion + DPoP by a new Session Key)
   Ada->>Atlas: Where is my jacket order?
   Atlas->>M: Start conversation
-  M-->>Atlas: Sign in first + authorization: sign_in_required
+  M-->>Atlas: Sign in first + authorization: insufficient_scope
   Atlas->>M: Device authorization for the same Session
   Atlas->>Ada: Open manzanita.example/device and enter the code
   Ada->>M: Signs in and approves on Manzanita's page
-  Atlas->>M: Poll → signed-in Session + Account Token
+  Atlas->>M: Poll with the Session Key → same Session signed in + Account Token
   Ada->>Atlas: Exchange it for something warmer
   Atlas->>M: Same conversation, signed in
   M-->>Atlas: Operation op_1 rev 1: USD 70.00 more

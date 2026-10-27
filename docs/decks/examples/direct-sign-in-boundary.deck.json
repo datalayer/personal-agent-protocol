@@ -21,20 +21,20 @@
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>state, PKCE verifier\"] -- \"pending request,<br/>hashed state\" --> R[(\"Reactor state store\")]\n  end\n  subgraph USR[\"User's trusted browser\"]\n    direction TB\n    B[\"Browser\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server<br/>sign-in page\"]\n  end\n  M -- \"ask for orders:read\" --> HOST\n  HOST -- \"authorization URL\" --> USR\n  USR -- \"sign in, S256 challenge\" --> CO\n  HOST -. \"waiting, scopes, expiry\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>state, verifier, Session Key\"] -- \"pending request,<br/>hashed state\" --> R[(\"Reactor state store\")]\n  end\n  subgraph USR[\"User's trusted browser\"]\n    direction TB\n    B[\"Browser\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server<br/>sign-in page\"]\n  end\n  M -- \"ask for orders:read\" --> HOST\n  HOST -- \"authorization URL\" --> USR\n  USR -- \"sign in, S256 challenge\" --> CO\n  HOST -. \"waiting, scopes, expiry\" .-> M",
       "caption": "The model asks and is told it is waiting; the URL, state and verifier never leave the host and the browser.",
-      "notes": "Start with the model: it asks for orders:read on the Session that already exists. Your host does the OAuth work: it makes the state and the PKCE verifier, and keeps the pending request in a Reactor state store, under a hash of the state. It hands the authorization URL only to the user's trusted browser. The browser carries the S256 challenge, never the verifier, to the company's authorization server, where the user signs in and sees the exact scopes. Back to the model, on the dotted line: all it gets is that it is waiting for the user, for which scopes, and until when."
+      "notes": "Start with the model: it asks for orders:read on the Session that already exists. Your host does the OAuth work: it makes the state and the PKCE verifier, and keeps the pending request in a Reactor state store, under a hash of the state. It puts the Session Key's thumbprint in the URL as dpop_jkt, so the company binds the code to that Session, and hands the authorization URL only to the user's trusted browser. The browser carries the S256 challenge, never the verifier, to the company's authorization server, where the user signs in and sees the exact scopes. Back to the model, on the dotted line: all it gets is that it is waiting for the user, for which scopes, and until when."
     },
     {
       "type": "flow",
       "title": "Up to the browser",
       "items": [
         { "label": "1", "title": "Generate", "detail": "Random state and PKCE verifier" },
-        { "label": "2", "title": "Derive", "detail": "The S256 code challenge" },
+        { "label": "2", "title": "Derive", "detail": "The S256 challenge; `dpop_jkt`, the Session Key" },
         { "label": "3", "title": "Store", "detail": "Pending request by hashed state, with expiry" },
         { "label": "4", "title": "Open", "detail": "The authorization URL, in the trusted browser", "current": true }
       ],
-      "notes": "The host makes a random state and a PKCE verifier, derives the S256 challenge, and stores the pending request under a hash of the state, with an expiry. Then it hands the authorization URL to the browser."
+      "notes": "The host makes a random state and a PKCE verifier, derives the S256 challenge, adds dpop_jkt, the thumbprint of the Session's key, and stores the pending request under a hash of the state, with an expiry. Then it hands the authorization URL to the browser."
     },
     {
       "type": "mermaid",
@@ -48,12 +48,12 @@
       "icon": "check",
       "items": [
         "State and verifier come from secure randomness",
-        "Only the **S256 challenge** reaches the authorization endpoint",
+        "Only the **S256 challenge** reaches the authorization endpoint, with `dpop_jkt`",
         "The authorization URL is a secret: only the browser handoff sees it",
         "Pending state expires, and can later be consumed atomically",
         "The company owns the sign-in UI: no password reaches the agent"
       ],
-      "notes": "The URL counts as a secret because it carries the state and the user's intent, so only the browser handoff capability ever receives it. And because the company owns the sign-in page, the agent never sees a password."
+      "notes": "The URL counts as a secret because it carries the state and the user's intent, so only the browser handoff capability ever receives it. Its dpop_jkt binds the code to the Session Key: a code taken from the redirect is useless with any other key, and it signs in this Session and no other. And because the company owns the sign-in page, the agent never sees a password."
     },
     {
       "type": "mermaid",

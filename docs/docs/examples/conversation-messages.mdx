@@ -33,18 +33,21 @@ sequenceDiagram
   H-->>A: Safe conversation result
 ```
 
-Python and TypeScript both expose `ConversationClient`. It validates opaque
-IDs, supports `text`, `data`, and
+Each message names its `author`: `{"type": "agent"}` for what the personal
+agent writes itself, `{"type": "human"}` only for the words a person typed in
+a Direct Conversation. Python and TypeScript both expose `ConversationClient`.
+It validates opaque IDs, supports `text`, `data`, and
 `context`, bounds response bodies, rejects duplicate JSON members, surfaces
 company error codes without including response bodies, and can request replies
 with `cursor` and `wait`. Authentication remains in `DpopHttpClient` and never
 enters model-visible tool inputs or results.
 
 TypeScript additionally propagates caller-owned `AbortSignal` cancellation.
-Ordered JSON event reads are implemented separately in the
-[conversation events flow](./conversation-events). SSE, handoff, Direct
-Conversations, authorization changes, and active close requests remain
-separate milestones.
+Ordered JSON event reads are in the
+[conversation events flow](./conversation-events); SSE, handoff, Direct
+Conversations, sign-in mid-conversation, and closing in the
+[streaming](./conversation-streaming) and
+[control](./conversation-control) flows.
 
 Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/conversation-messages).
-See upstream [Conversations](https://personalagentprotocol.org/docs/0.2/spec#conversations).
+See upstream [Conversations](https://personalagentprotocol.org/docs/0.3/spec#conversations).

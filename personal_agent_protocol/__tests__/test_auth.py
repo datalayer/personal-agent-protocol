@@ -25,7 +25,6 @@ from personal_agent_protocol import (
 )
 from personal_agent_protocol.reactor import TOKEN_STORES, build_pap_reactor
 
-
 KEY = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
 
 

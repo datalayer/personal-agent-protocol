@@ -15,7 +15,7 @@
     {
       "type": "statement",
       "title": "Composition, not a new protocol",
-      "statement": "Draft 0.2 defines **no company-to-company protocol**. Two ordinary PAP relationships, for the same user, are enough.",
+      "statement": "Draft 0.3 defines **no company-to-company protocol**. Two ordinary PAP relationships, for the same user, are enough.",
       "notes": "There is no special protocol between companies. Ledgerly is a company to Ada's personal agent, and, separately, a personal agent at Northwind for the same Ada, with its own client_id and keys on its own domain."
     },
     {

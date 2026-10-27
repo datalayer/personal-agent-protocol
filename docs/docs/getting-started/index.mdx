@@ -6,7 +6,7 @@ title: Getting started
 # Getting started
 
 This quick start discovers a company, validates its declaration and OAuth
-metadata, and prints the interfaces it offers. The SDKs target PAP draft 0.2
+metadata, and prints the interfaces it offers. The SDKs target PAP draft 0.3
 and are preview software.
 
 ## Prerequisites
@@ -69,10 +69,11 @@ When discovery succeeds, the SDK has checked:
 
 - the requested input is a domain rather than an arbitrary URL;
 - discovery and redirect URLs use HTTPS;
-- the document supports protocol major version `0`;
-- `organization.domain` matches the domain requested; and
-- when authorization is advertised, OAuth metadata exactly matches the issuer
-  and authorizes the company domain through `poppy_domains`.
+- the document's `protocol_version` is `0.3`, the `major.minor` version the SDKs speak;
+- the final URL's path is exactly `/.well-known/poppy.json`, with no query;
+- `organization.domain` is the host that served the document; and
+- the issuer's OAuth metadata exactly matches the issuer and lists
+  `https://{domain}` in `protected_resources`.
 
 Success does not mean every advertised endpoint is trusted forever. Retain the
 verified company context, apply URL safety checks to later metadata, and use

@@ -15,14 +15,50 @@ personal-agent side of signed-out session creation and renewal. They send the
 JWT bearer grant to the company's token endpoint and return an opaque,
 proof-bound session token.
 
+## Session Keys name Sessions
+
+Each Session has its own DPoP key, the Session Key. Starting a Session makes a
+new one; its JWK thumbprint ([RFC 7638](https://www.rfc-editor.org/rfc/rfc7638))
+is what names the Session, at the company and in the SDK (`token.session_key`,
+`token.sessionKey`). No Session ID is sent, read, or stored: the company
+recognises the Session by the key that signs each request's DPoP proof.
+
+- **Start** (`start`): a new Session Key, the JWT bearer grant, a signed-out
+  Session.
+- **Renew** (`renew`): a fresh assertion, proved with the same Session Key.
+  The renewed token is for the same Session. Earlier tokens of the Session keep
+  working until they expire; each reflects the Session as it was when issued,
+  since several tasks can share one Session (§4.4).
+- **Ended**: when the company answers `invalid_grant` for a Session Key, the
+  Session has ended. The SDK discards that key and never uses it again; start a
+  new Session, with a new key.
+
+The token response carries no Session ID and no `signed_in`. `SessionToken`
+keeps `session_key` and `signed_in` as local fields, filled from the grant: the
+JWT bearer grant gives a signed-out Session, a sign-in or an Account Token a
+signed-in one. A signed-out response's absent `scope` means no scopes.
+
+A personal agent that acts for a user through several agents MAY name which one
+a Session is for with an Agent ID (`agent_id`, `agentId`). It follows the same
+rules as the User ID: stable, opaque, different for each company, never derived
+from personal information. A Session keeps the Agent ID it started with, so
+`renew` must pass the same one, or none.
+
 The client is intentionally not a key-management system. Before calling it,
 the host must register exactly one active `pap.signer` and
 `pap.dpopProofProvider` contribution in its Reactor platform. Those providers
 must keep private keys in protected custody and return only compact signed
-values. Missing or equal-priority providers fail closed.
+values. The DPoP provider makes Session Keys (`new_session_key`), signs with
+the one a thumbprint names, and forgets a discarded one
+(`discard_session_key`); `JoseDpopProofProvider` over `InMemorySessionKeys` is
+the reference, and a host supplies its own `SessionKeyCustody` for durable,
+protected keys. Missing or equal-priority providers fail closed.
 
-The pairwise user ID is not a profile identifier and must not be regenerated
-per process. Resolve it through the `pap.pairwiseUserIdStore` contribution
+The pairwise user ID is the User ID of §4.2: a pairwise subject identifier, as
+in OpenID Connect Core §8, except that the personal agent assigns it, one for
+each pair of user and company. It is not a profile identifier, must not contain
+or be derived from personal information (not even through a keyed hash), and
+must not be regenerated per process. Resolve it through the `pap.pairwiseUserIdStore` contribution
 using the local tenant/application, local user ID, and the exact verified OAuth
 issuer. Different issuers must receive unlinkable values.
 
@@ -55,7 +91,7 @@ async with httpx.AsyncClient() as http:
         issuer="https://auth.company.example",
         token_endpoint="https://auth.company.example/oauth/token",
         tenant_id="application-42",
-        session_id=token.session_id,
+        session_key=token.session_key,  # the same Session Key: the same Session
     )
 ```
 
@@ -93,7 +129,7 @@ const renewed = await sessions.renew({
   issuer: 'https://auth.company.example',
   tokenEndpoint: 'https://auth.company.example/oauth/token',
   tenantId: 'application-42',
-  sessionId: token.sessionId,
+  sessionKey: token.sessionKey, // the same Session Key: the same Session
 });
 ```
 
@@ -104,12 +140,14 @@ For each attempt, the client:
 - creates fresh session and private-key JWT claims using Reactor time and
   cryptographic randomness;
 - signs both assertions through `pap.signer`;
-- creates a fresh proof through `pap.dpopProofProvider`;
+- creates a fresh proof through `pap.dpopProofProvider`, signed with the
+  Session's own key;
 - sends a form-encoded POST without browser credentials or redirects;
 - accepts only bounded `application/json` responses parsed with duplicate
   member rejection;
 - requires a `DPoP` token from a proof-bound request; and
-- retries `use_dpop_nonce` once with fresh assertions and a fresh proof.
+- retries `use_dpop_nonce` once with fresh assertions and a fresh proof; and
+- on `invalid_grant` for an existing Session, discards its Session Key.
 
 Remote error descriptions and response bodies are not copied into public
 errors. The stable OAuth error code, HTTP status, and optional `Retry-After`
@@ -120,8 +158,8 @@ value remain available for policy and retry decisions.
 The SDK ships JOSE signing plus DPoP creation and verification, but it does not
 ship managed key custody, a durable replay cache, or a company-side token
 service. An application must supply those host capabilities before using real
-credentials. Direct, device, and mediated sign-in happen after this signed-out
-session and remain separate implementation work.
+credentials. Direct, Device, and Mediated Sign-In happen after this signed-out
+Session and sign in that same Session: same Session Key, same conversations.
 
 Python includes `SqlitePairwiseUserIdStore` as a file-backed, atomic reference
 implementation for local deployments and tests. It rejects in-memory SQLite so
@@ -129,6 +167,6 @@ the mapping cannot disappear on restart. Distributed production hosts should
 contribute a transactional database implementation; Datalayer maps `tenant_id`
 to the stable application identity and owns retention and erasure in IAM.
 
-See the upstream [session specification](https://personalagentprotocol.org/docs/0.2/spec)
+See the upstream [session specification](https://personalagentprotocol.org/docs/0.3/spec#starting-sessions)
 and the local [protocol status](/protocol/status/) for the current coverage
 boundary.

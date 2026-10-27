@@ -46,14 +46,14 @@ sequenceDiagram
 - Every attempt receives a fresh proof bound to its method, normalized target,
   and Session Token hash.
 - A `use_dpop_nonce` challenge is retried once with the company's nonce.
-- A redirect is refused (`redirect_refused`): under draft 0.2 §3 no token,
+- A redirect is refused (`redirect_refused`): under draft 0.3 §3 no token,
   proof, assertion or body goes to the URL a protocol endpoint redirects to.
   The underlying HTTP client never follows redirects.
 - Request bodies are replayable values rather than unbounded streams.
 
 Python exposes `DpopHttpClient`; TypeScript exposes `DpopFetchClient`. Both
 resolve proof generation through Reactor and keep Session Tokens, proofs,
-nonces, and pairwise identity outside model-visible inputs and results.
+nonces, and Session Keys outside model-visible inputs and results.
 
 :::note MCP remains a separate milestone
 
@@ -66,4 +66,4 @@ keeps MCP acquisition and enforcement open until that lifecycle exists.
 
 Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/dpop-transport)
 or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/dpop-transport).
-See upstream [Using Session Tokens](https://personalagentprotocol.org/docs/0.2/spec#sending-tokens).
+See upstream [Using Session Tokens](https://personalagentprotocol.org/docs/0.3/spec#sending-tokens).

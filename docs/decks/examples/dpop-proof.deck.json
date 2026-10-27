@@ -10,7 +10,7 @@
       "title": "DPoP proof",
       "subtitle": "Bind a one-use proof to an HTTP request, an access token and a protected key",
       "meta": "Personal Agent Protocol · example",
-      "notes": "Demonstrating Proof of Possession, DPoP for short, is how PAP makes sure a token on its own is never enough. This example makes a real proof, verifies it, and then shows a replay being refused."
+      "notes": "Demonstrating Proof of Possession, DPoP for short, is how PAP makes sure a token on its own is never enough. In PAP the key is the Session Key: each Session has its own, and its thumbprint names the Session. This example makes a Session Key and a real proof, verifies it, and then shows a replay being refused."
     },
     {
       "type": "statement",
@@ -21,9 +21,9 @@
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign this request\" --> K[\"Reactor key store<br/>holds the private key\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company API<br/>verifies the proof\"] -- \"record jti\" --> X[(\"Replay cache\")]\n  end\n  HOST -- \"request, token, proof\" --> CO\n  HOST -. \"policy booleans only\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign this request\" --> K[\"Reactor key store<br/>holds the Session Keys\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company API<br/>verifies the proof\"] -- \"record jti\" --> X[(\"Replay cache\")]\n  end\n  HOST -- \"request, token, proof\" --> CO\n  HOST -. \"policy booleans only\" .-> M",
       "caption": "The key never leaves the key store; the model gets yes-or-no evidence, nothing more.",
-      "notes": "The host asks for a proof covering one request. The Reactor key store signs it without ever giving the key out. The company verifies it, and remembers it so it can never be used twice. Off to the side, the model: all it ever receives from this exchange is yes-or-no evidence about the policy."
+      "notes": "The host asks for a proof covering one request. The Reactor key store signs it with the Session Key, without ever giving the key out. The company reads the key's thumbprint from the proof: that is the Session. The company verifies it, and remembers it so it can never be used twice. Off to the side, the model: all it ever receives from this exchange is yes-or-no evidence about the policy."
     },
     {
       "type": "comparison",
@@ -51,14 +51,14 @@
       "items": [
         "A new proof and `jti` for every attempt, retry and redirect",
         "A nonce challenge means a **fresh** proof, never an edited or replayed one",
-        "Replay protection is the server's job, **atomic** across its fleet"
+        "Replay protection is the server's job, **atomic** across its fleet\",\n        \"One key per Session; an ended Session's key is **discarded**, never reused"
       ],
-      "notes": "Retries and redirects always get a new proof. When a company asks for a nonce, the host signs a new proof with it rather than changing the old one. And the company's replay check must be atomic across every server it runs, or a replay could slip through on another node."
+      "notes": "Retries and redirects always get a new proof. When a company asks for a nonce, the host signs a new proof with it rather than changing the old one. And the company's replay check must be atomic across every server it runs, or a replay could slip through on another node. Each Session has its own key; once a Session ends, its key is discarded and the provider refuses to sign with it again."
     },
     {
       "type": "two-columns",
       "title": "What the model sees",
-      "left": { "heading": "Visible", "type": "bullets", "items": ["Policy booleans: method, URL, token and nonce bound", "Signature verified, replay rejected"] },
+      "left": { "heading": "Visible", "type": "bullets", "items": ["Policy booleans: method, URL, token and nonce bound", "Signature verified, the key names the Session, replay rejected"] },
       "right": { "heading": "Never", "type": "bullets", "items": ["The proof or the token", "The nonce or the `jti`", "The JWK, thumbprint or private key"] },
       "notes": "The tool returns only yes-or-no evidence about the policy. The proof, the token, the nonce, the key and everything that identifies it stay in host code."
     },

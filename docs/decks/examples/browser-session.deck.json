@@ -8,72 +8,72 @@
     {
       "type": "title",
       "title": "Browser Session",
-      "subtitle": "Join a controlled browser to an existing Session with a one-use signed assertion",
+      "subtitle": "Join the agent's own browser to its Session with a one-time code and a proof",
       "meta": "Personal Agent Protocol · example",
-      "notes": "PAP can carry one Session across APIs, conversations and the company's website. This example shows how a browser the agent controls joins the Session the agent already has."
+      "notes": "PAP can carry one Session across APIs, conversations and the company's website. This example shows how the browser the agent controls joins the Session the agent already has: through a form on the company's browser-session page, a one-time code, and a DPoP proof signed with the Session Key."
     },
     {
       "type": "statement",
       "title": "Why a Browser Session",
       "statement": "One Session, on the **API** and on the **website**: the same user, the same sign-in, the same scopes.",
-      "notes": "Sometimes the agent needs a company web page, say to confirm an operation. Instead of signing in again, the browser joins the Session the agent already holds."
+      "notes": "Sometimes the agent needs a company web page, say to confirm an operation. Instead of signing in again, the browser joins the Session the agent already holds, signed in or out."
     },
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    A[\"Personal agent\"] -- \"sign assertion\" --> S[\"Reactor signer\"]\n    A -- \"form POST instruction\" --> B[\"Agent-controlled browser<br/>not the user's\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    E[\"Browser-session endpoint<br/>verifies, sets a cookie\"] -- \"accept jti once\" --> R[(\"Replay cache\")]\n  end\n  HOST -- \"assertion in the form body\" --> CO\n  HOST -. \"endpoint, expiry, booleans\" .-> M",
-      "caption": "The assertion crosses once, in a form body; the model gets the endpoint, the expiry and yes-or-no evidence.",
-      "notes": "Inside the host, the personal agent has the Reactor signer sign a short-lived browser assertion, then tells a browser it controls, not the user's ordinary browser, to post it. Only that assertion, in the form body, crosses to the company. Its browser-session endpoint, the one discovery advertised, verifies it and accepts its jti once in the replay cache, then answers 303 with its own Session cookie for the browser. Off to the side, the model receives the endpoint, the expiry and yes-or-no policy evidence, never the assertion."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    A[\"Personal agent\"] -- \"read the code\" --> B[\"Agent's own browser<br/>not the user's\"]\n    A -- \"sign over the code\" --> D[\"Reactor DPoP provider<br/>holds the Session Key\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    E[\"Browser-session endpoint<br/>form, then cookie\"] -- \"code used once\" --> R[(\"Join codes\")]\n  end\n  HOST -- \"GET, then code and proof\" --> CO\n  HOST -. \"statuses, booleans\" .-> M",
+      "caption": "The code comes from the company's page in the agent's own browser; the model gets statuses and yes-or-no evidence.",
+      "notes": "Inside the host, the personal agent has its own browser, not the user's ordinary browser, load the company's browser-session endpoint, the one discovery advertised. The page holds a one-time code. The host reads it from that page alone and has the Reactor DPoP provider sign a proof over it with the Session Key. The browser posts code and proof back; the company uses the code once, checks the proof, and answers 303 with its own cookie for the Session. Off to the side, the model receives statuses and yes-or-no evidence, never the code, the proof or the cookie."
     },
     {
       "type": "flow",
       "title": "Joining the Session",
       "items": [
-        { "label": "1", "title": "Validate", "detail": "HTTPS endpoint, company-domain return_to" },
-        { "label": "2", "title": "Sign", "detail": "iss, pairwise sub, session_id, jti; typ poppy-browser+jwt" },
-        { "label": "3", "title": "POST", "detail": "The assertion, in the form body" },
-        { "label": "4", "title": "Verify", "detail": "Signature, audience, owner, lifetime, one use" },
-        { "label": "5", "title": "Cookie", "detail": "303, then GET return_to", "current": true }
+        { "label": "1", "title": "Load", "detail": "GET the endpoint: a form with a one-time code" },
+        { "label": "2", "title": "Tie", "detail": "A __Host- SameSite=Strict cookie binds code to browser" },
+        { "label": "3", "title": "Sign", "detail": "DPoP proof with the Session Key; the code as nonce" },
+        { "label": "4", "title": "Submit", "detail": "The browser posts code and proof" },
+        { "label": "5", "title": "Cookie", "detail": "303 and the company's Session cookie", "current": true }
       ],
-      "notes": "The agent checks the endpoint and where it will return to, builds the claims and signs them with the distinct type poppy-browser+jwt. The browser posts it. The company verifies it, accepts the jti once, answers 303 with a cookie, and the browser lands on the requested page."
+      "notes": "The browser loads the endpoint with a GET as a top-level navigation. The page is a form with a hidden code of at least 128 random bits, valid for 60 seconds at most, and an empty proof field; a __Host- cookie, Secure, HttpOnly and SameSite=Strict, ties the code to this browser. The agent signs a DPoP proof with the Session Key: htm POST, htu the endpoint, the code as nonce, no ath. The browser submits the form; the company answers 303 with its own cookie for the Session."
     },
     {
       "type": "bullets",
       "title": "Agent responsibilities",
       "icon": "check",
       "items": [
-        "The advertised HTTPS endpoint is the exact audience",
-        "`return_to` only on the company's domain or a subdomain",
-        "The pairwise User ID and Session ID that belong together",
-        "At most **60 seconds** of life; a `jti` of at least 128 bits",
-        "A top-level form POST: never a query string, never the user's browser"
+        "Join only at the advertised HTTPS `web.browser_session_endpoint`",
+        "Read the code from the page **its own browser** loaded, nowhere else",
+        "Sign with the Session Key of the Session the browser joins",
+        "Proof: `htm` POST, `htu` the endpoint, `nonce` the code, no `ath`",
+        "Read and sign in host code the model cannot read"
       ],
-      "notes": "BrowserSessionClient resolves the clock, randomness, signing and the form POST through Reactor. It returns only the endpoint, the safe return location and the expiry; the compact assertion never leaves the host."
+      "notes": "BrowserSessionClient resolves the clock, the DPoP provider and the browser through Reactor: pap.browserJoin loads the form and submits it. A code from a message, a conversation or another page may come from someone else's browser, which would then join the user's Session; so the code comes only from the page the agent's own browser loaded."
     },
     {
       "type": "mermaid",
-      "title": "Verify once, refuse the replay",
-      "diagram": "sequenceDiagram\n  participant B as Agent's browser\n  participant C as Company endpoint\n  participant R as Replay cache\n  B->>C: POST assertion\n  C->>C: Verify type, signature, audience, owner\n  C->>R: Accept client_id and jti\n  R-->>C: First use\n  C-->>B: 303 and cookie\n  B->>C: Same assertion again\n  C->>R: Accept client_id and jti\n  R-->>C: Already seen\n  C-->>B: Refused",
-      "notes": "Follow the first POST. The company checks the exact poppy-browser+jwt type, an ES256 or RS256 signature against the agent's verified JWKS, its own endpoint as the audience, a lifetime of 60 seconds at most, and the expected client, pairwise User ID, active Session and company-domain return target. Then it accepts the pair of client_id and jti atomically, until expiry. The first use goes through: 303 with a cookie, and the browser then lands on return_to. Posting the same assertion again finds it already seen, and the company refuses it. verify_browser_assertion in Python and verifyBrowserAssertion in TypeScript's server entry do these checks; creating the cookie is left to the company's web framework, on purpose."
+      "title": "Join once, refuse the rest",
+      "diagram": "sequenceDiagram\n  participant B as Agent's browser\n  participant C as Company endpoint\n  participant X as Another browser\n  B->>C: GET the join page\n  C-->>B: Form with code, join cookie\n  B->>C: POST code and proof, with cookie\n  C->>C: Cookie, code, proof, Session Key\n  C-->>B: 303 and Session cookie\n  B->>C: Same code again\n  C-->>B: 400, code already used\n  X->>C: Fresh code, no join cookie\n  C-->>X: 400, and the code is used up",
+      "notes": "Follow the first POST. The company checks that the join cookie matches the code, that the code is one it issued, unexpired and unused, that the proof is valid for this POST with the code as nonce, and that its key is an active Session's key; an unknown key is an error here, never a new Session. The first use goes through: 303 with the company's cookie. The same code again, even with a fresh valid proof, is refused: a code is used by the first request that sends it. A fresh code submitted from another browser, without the join cookie, is refused too, and is used up."
     },
     {
       "type": "statement",
       "title": "The company's cookie",
-      "statement": "`Secure`, `HttpOnly`, `SameSite` Lax or None, and it **never outlives** the PAP Session.",
-      "notes": "The cookie follows later sign-in, sign-out and scope changes. In the reference companies, the __Host-poppy_session cookie has no lifetime of its own, so signing out reaches the website on its next request."
+      "statement": "`Secure`, `HttpOnly`, set only on the join, and it **never outlives** the PAP Session.",
+      "notes": "The cookie follows later sign-in, sign-out and scope changes. In the reference companies, the __Host-poppy_session cookie has no lifetime of its own, so signing out reaches the website on its next request. Joining again replaces it."
     },
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Never in a URL or model context", "type": "bullets", "items": ["The compact assertion", "The signing key", "The company's cookie"] },
-      "right": { "heading": "What the tool returns", "type": "bullets", "items": ["The endpoint", "A safe return location", "The expiry", "Boolean policy evidence"] },
-      "notes": "The assertion travels only in the form body, from the agent's own browser. What the model gets back is the endpoint, where the browser landed, and yes-or-no evidence that each rule held."
+      "left": { "heading": "Never in a URL or model context", "type": "bullets", "items": ["The one-time code", "The proof and the Session Key", "The company's cookies"] },
+      "right": { "heading": "What the tool returns", "type": "bullets", "items": ["Statuses: 200, 303, 400", "The page's headers, checked", "Who was refused, and why", "Boolean policy evidence"] },
+      "notes": "The code and the proof travel only in the form body, from the agent's own browser. What the model gets back is the status of each step and yes-or-no evidence that each rule held."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
-      "cta": "The Pydantic AI and Agent Runtimes examples sign a real ES256 assertion, verify it, then replay it and see it refused",
-      "notes": "Both examples pass a real assertion through a Reactor form POST contribution, verify it, and submit it a second time to show replay rejection. Upstream's Web browsing section has the rules in full."
+      "cta": "The Pydantic AI example joins against the reference company, then replays a code and submits one from another browser, and sees both refused",
+      "notes": "The example runs Manzanita with its website on, in one process. It joins the agent's own browser through a Reactor pap.browserJoin contribution, checks the proof's key and nonce, then tries a replayed code and a code from another browser. Upstream's Web browsing section has the rules in full."
     }
   ]
 }

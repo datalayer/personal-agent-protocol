@@ -39,7 +39,10 @@ sequenceDiagram
 
 - Agent metadata and JWKS are public, credential-free resources.
 - The declared identity must match the URL that was requested.
-- Redirect URIs are explicit rather than inferred from an incoming callback.
+- Redirect URIs are explicit rather than inferred from an incoming callback:
+  HTTPS on the `client_id`'s domain, or loopback (`http://127.0.0.1:{port}`,
+  `http://[::1]:{port}`) for an app on the user's computer, matched whatever
+  the port (RFC 8252 §7.3).
 - JWKS domain policy prevents an identity document from silently delegating
   trust to an unrelated key host.
 - Tool output describes policy; key coordinates and raw metadata remain outside

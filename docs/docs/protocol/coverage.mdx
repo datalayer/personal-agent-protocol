@@ -4,8 +4,8 @@ title: Protocol coverage
 
 # Protocol coverage
 
-The SDKs target **Personal Agent Protocol draft 0.2, as of October 18, 2026**
-(upstream commit `39b35bd`, reviewed October 22, 2026) and the Operations
+The SDKs target **Personal Agent Protocol draft 0.3, as of October 26, 2026**
+(upstream commit `a95b757`, reviewed October 27, 2026) and the Operations
 extension version 1. The
 upstream draft remains authoritative. This page records, requirement by
 requirement, what the implementation and the conformance suite cover.
@@ -16,17 +16,19 @@ The specification is published by the
 [Personal Agent Protocol organization](https://github.com/personal-agent-protocol)
 at [personalagentprotocol.org](https://personalagentprotocol.org), built from
 [personal-agent-protocol/personal-agent-protocol](https://github.com/personal-agent-protocol/personal-agent-protocol).
-Draft 0.2 is in progress there; version 0.1, which SDK 0.24 and earlier
-implement, is frozen at [/docs/0.1/spec](https://personalagentprotocol.org/docs/0.1/spec).
-What changed between them is in the upstream
-[changelog](https://personalagentprotocol.org/docs/changelog#v0-2) and, for the
-SDKs, in [Migration](/releases/migration/#024--025).
+Draft 0.3 is in progress there; version 0.2, which SDK 0.25 and 0.26
+implement, is frozen at [/docs/0.2/spec](https://personalagentprotocol.org/docs/0.2/spec),
+and version 0.1, which SDK 0.24 and earlier implement, at
+[/docs/0.1/spec](https://personalagentprotocol.org/docs/0.1/spec). What changed
+between them is in the upstream
+[changelog](https://personalagentprotocol.org/docs/changelog) and, for the
+SDKs, in [Migration](/releases/migration/#026--027).
 
 - [Overview and principles](https://personalagentprotocol.org/docs/introduction)
-- [Draft specification](https://personalagentprotocol.org/docs/0.2/spec)
-- [Implementation guides](https://personalagentprotocol.org/docs/0.2/guides)
-- [Extensions](https://personalagentprotocol.org/docs/0.2/extensions)
-- [Operations version 1](https://personalagentprotocol.org/docs/0.2/extensions/operations)
+- [Draft specification](https://personalagentprotocol.org/docs/0.3/spec)
+- [Implementation guides](https://personalagentprotocol.org/docs/0.3/guides)
+- [Extensions](https://personalagentprotocol.org/docs/0.3/extensions)
+- [Operations version 1](https://personalagentprotocol.org/docs/0.3/extensions/operations)
 - [Open topics](https://personalagentprotocol.org/docs/path-to-1#open-topics)
 
 The repository records the reviewed upstream revision in
@@ -67,20 +69,20 @@ and SHOULDs.
 
 | Area | Required behavior |
 | --- | --- |
-| Discovery | Fetch `/.well-known/poppy.json`; require the supported `major.minor` version (`0.2`), `organization.domain` equal to the host that served it after HTTPS redirects (case-insensitive), HTTPS for every URL, interfaces, issuer, and extensions; cache within safe bounds. |
-| Company identity | Fetch RFC 8414 metadata (path-aware for an issuer with a path) and bind the issuer, compared character for character, to a `poppy_domains` entry; one issuer per company, the same `auth` on every domain naming it. |
+| Discovery | Fetch `/.well-known/poppy.json`; require the supported `major.minor` version (`0.3`), the final URL's path exactly `/.well-known/poppy.json` with no query, `organization.domain` equal to the host that served it after HTTPS redirects (case-insensitive), HTTPS for every URL, interfaces, issuer, and extensions; cache within safe bounds. |
+| Company identity | Fetch RFC 8414 metadata (path-aware for an issuer with a path) and bind the issuer, compared character for character, to a `protected_resources` entry `https://{domain}`; `grant_types_supported` with the JWT bearer and `refresh_token` grants; one issuer per company, the same `auth` on every domain naming it. |
 | Personal-agent identity | Publish and verify HTTPS client metadata, same-domain JWKS and redirects, and `private_key_jwt` authentication; client and Session assertions name the company's `auth.issuer` in `aud`, live at most five minutes, and a `jti` is refused again per `client_id`. |
-| User identity | Maintain one stable, opaque, non-personal ID per user and company issuer. |
-| Sessions | Start signed out, renew by session ID, preserve parallel sessions, and treat session tokens as opaque. |
-| Proof of possession | A DPoP key pair per User ID; sign ES256 (or a listed algorithm); a new proof per request; nonces; RFC 9449 §4.3 checks at the company, replay refused at the token endpoint; 400 OAuth errors at the token endpoint, 401 challenges elsewhere. |
-| Sign-in | Direct authorization code with PKCE, device authorization (link only on the issuer host or `poppy_domains`, with the company's name and domain), and mediated sign-in (HTTP 200 statuses, `invalid_scope` / `account_mismatch` / `sign_in_not_found`, credentials chosen by issuer and discarded after); a Session stays tied to the account it was ever signed in to. |
-| Account access | Store rotating account tokens as secrets; exchange them only at the token endpoint; narrow scopes/resources and revoke on sign-out. |
-| APIs | DPoP for OpenAPI; for MCP, a token requested with `resource` = the server's URL: DPoP when its protected resource metadata lists `dpop_signing_alg_values_supported`, Bearer otherwise, valid only at that exact URL; no redirect followed outside discovery. |
-| Web | Join an isolated browser context to the session with a short-lived assertion and a validated return location. |
-| Conversations | Create, retry idempotently, read cursor events (`cursor`, `wait` as query parameters; `conversation_id` and `events` on every read), poll or stream (`Last-Event-ID` wins), identify speakers (`role` set by the company), hand off and close idempotently, sign in, stay open after sign-out. |
+| User identity | Maintain one stable, opaque, non-personal ID per user and company issuer (a pairwise subject identifier the agent assigns); optional Agent IDs under the same rules. |
+| Sessions | Start signed out with a new Session Key, whose thumbprint names the Session; renew with the same key; on `invalid_grant`, discard the key and start anew; earlier tokens keep working until they expire; treat session tokens as opaque. |
+| Proof of possession | A DPoP key per Session (the Session Key); sign ES256 (or a listed algorithm); a new proof per request; nonces; RFC 9449 §4.3 checks at the company, replay refused at the token endpoint; 400 OAuth errors at the token endpoint, 401 challenges elsewhere. |
+| Sign-in | Direct authorization code with PKCE and the code bound to the Session Key by `dpop_jkt`, loopback redirect URIs; device authorization (the code bound to the first poll's key; link only on the issuer host or a host of its `protected_resources`, with the company's name and domain); and mediated sign-in (HTTP 200 statuses, `invalid_scope` / `account_mismatch` / `sign_in_not_found`, credentials chosen by issuer and discarded after); a Session stays tied to the account it was ever signed in to. |
+| Account access | Store rotating account tokens as secrets; exchange them only at the token endpoint, for an existing Session's key or a new one; narrow scopes/resources and revoke on sign-out. |
+| APIs | DPoP for OpenAPI, `insufficient_scope` with the needed `scope`; for MCP, a token valid only at the server's exact URL: a DPoP token requested with `resource` when its protected resource metadata lists `dpop_signing_alg_values_supported`, otherwise a Bearer token by Token Exchange (the Session's DPoP token as `subject_token`); no redirect followed outside discovery. |
+| Web | Join the agent's own browser to the Session through the company's form: a one-time code tied to that browser by a `SameSite=Strict` cookie, signed over with a DPoP proof by the Session Key. |
+| Conversations | Create, retry idempotently, read cursor events (`cursor`, `wait` as query parameters; `conversation_id` and `events` on every read), poll or stream (`Last-Event-ID` wins), identify speakers (`role` set by the company, `author` with its `type` and, for a company's person or persona, `id`, `name`, `image`), hand off and close idempotently, sign in, stay open after sign-out. |
 | Extensions | Negotiate named major versions while ignoring unsupported extensions and unknown fields. |
-| Feedback | Report a task the company offers no way to do (`kind` `missing`, `task`, `description`) with a Session Token; the company answers 202. |
-| Operations v1 | Propose immutable revisions, obtain exact approval, confirm at most once, track, recover, and cancel across channels; an account's operation only from a Session signed in to that account (`sign_in_required` otherwise). |
+| Excluded tasks and feedback | Read the tasks a company doesn't offer (`excluded_tasks`, each with an optional alternative); report a missing task (`kind` `missing`, `task`, `description`) with a Session Token; the company answers 202, or 200 with an alternative when the task can be done after all. |
+| Operations v1 | Propose immutable revisions, obtain exact approval, confirm at most once, track, recover, and cancel across channels; an account's operation only from a Session signed in to that account (`insufficient_scope` otherwise). |
 
 ## Coverage expectations
 
@@ -108,17 +110,17 @@ where an operation was proposed.
 | Conversations: messages, events, SSE, handoff, Direct, sign-in, close | Python and TypeScript | Python and TypeScript reference companies | [Streaming](/examples/conversation-streaming/), [control](/examples/conversation-control/) |
 | Operations v1 | Python and TypeScript | Python and TypeScript reference companies | [Operations](/examples/operations/) |
 | Web (Browser Session) | Python and TypeScript | Python and TypeScript reference companies | [Browser Session](/examples/browser-session/) |
-| OpenAPI and MCP | Python and TypeScript (`ApiClient`, `McpClient`, resource-bound DPoP or Bearer token) | Python and TypeScript reference companies | [TypeScript SDK](/sdk/typescript/#openapi-and-mcp) |
+| OpenAPI and MCP | Python and TypeScript (`ApiClient`, `McpClient`, a resource-bound DPoP token or a Bearer token by Token Exchange) | Python and TypeScript reference companies | [TypeScript SDK](/sdk/typescript/#openapi-and-mcp) |
 | Feedback | Python and TypeScript (`FeedbackClient`) | Python and TypeScript reference companies (`POST /poppy/feedback`) | [Feedback coverage](/protocol/coverage/feedback/) |
 
 The end-to-end journeys, [a user with a company](/examples/user-with-a-company/)
-and [two companies](/examples/two-companies/) (composition, not a draft 0.2
+and [two companies](/examples/two-companies/) (composition, not a draft 0.3
 company-to-company feature), run in Python only, on the demo worlds in
 `personal_agent_protocol.demo`.
 
 ## Deliberate boundaries
 
-Draft 0.2 does not define payments, push notifications, or message
+Draft 0.3 does not define payments, push notifications, or message
 attachments. The SDKs preserve unknown extension data but do not invent wire
 formats for those areas. Company registration policy is also outside the
 protocol; implementations may expose allow/block policy without presenting it

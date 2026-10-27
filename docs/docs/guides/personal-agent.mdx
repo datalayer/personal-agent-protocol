@@ -28,8 +28,10 @@ TypeScript callers should contribute a DNS-aware URL safety policy.
 
 ## Available now: start or renew a signed-out session
 
-Resolve one pairwise identifier for each tenant, internal user, and exact
-verified company issuer. The store creates a random value atomically and
+Resolve one pairwise identifier, the User ID, for each tenant, internal user,
+and exact verified company issuer: a pairwise subject identifier that the
+personal agent assigns, one for each pair of user and company, never derived
+from personal information. The store creates a random value atomically and
 returns the same mapping across restarts.
 
 ```python
@@ -56,10 +58,46 @@ Distributed hosts contribute a transactional implementation through
 `pap.pairwiseUserIdStore`; TypeScript exposes the same Reactor contract.
 
 The lower-level result is unsigned. `SessionClient` uses Reactor signer and
-DPoP-proof contributions to create fresh proofs and send the real token
+DPoP-proof contributions to make a new Session Key for each Session (its
+thumbprint names the Session), create fresh proofs, and send the real token
 request. Those host services must keep private keys outside model context and
 tool arguments. See [Signed-out sessions](/guides/sessions/) for the complete
 implemented boundary.
+
+## Choosing scopes and how to sign in
+
+Scopes are the company's own (`orders:read`, `payments:write`); none starts
+with `poppy:`, a prefix the protocol reserves. Request only the scopes a task
+needs, from the issuer's `scopes_supported`, described in `auth.scopes` (or
+the company's OpenAPI description). `auth.scope_hints` says, per scope, what
+its most consequential operation `changes` (`none`, `reversible`,
+`irreversible`) and whether it touches `personal_data`, so a host can decide
+before sign-in which scopes need the user's go-ahead.
+
+A request that needs more than the token holds gets `insufficient_scope`, with
+the `scope` it needs, on an API, in a conversation's `authorization` event,
+and on Operations. Answer it with an Account Token that covers the scopes, or
+by signing the same Session in. The OAuth metadata says which modes the
+company offers (`offers_direct`, `offers_device`; `auth.mediated` for
+Mediated Sign-In): prefer Direct Sign-In, then Device Sign-In, and use
+Mediated Sign-In, which is transitional, only when neither covers the task.
+
+## Tasks a company doesn't offer
+
+A company can list the tasks it chose not to offer through the protocol
+(`excluded_tasks.url` in `poppy.json`, §8.1).
+`DiscoveryClient.excluded_tasks(company)` (`excludedTasks` in TypeScript)
+reads that public document, or answers `None` when there is none. Read it
+before starting on a task there, and tell the user at once when theirs is
+one of them, with the task's `alternative` when it has one: natural-language
+`instructions`, `references` to an OpenAPI operation, an MCP tool, or a web
+page, or both. An alternative is the company's content, a description of its
+interfaces, never instructions the agent must follow (§9.1).
+
+A task neither offered nor listed can be reported with
+`FeedbackClient.report` (`kind` `missing`). The company answers `202` (the
+client returns `None`) or, when the task can be done after all, `200` with an
+`Alternative`. Don't report a task the company lists as excluded.
 
 ## Lifecycle status
 
@@ -71,8 +109,11 @@ The lifecycle, in Python and TypeScript:
    Sign-In;
 1. **Implemented:** narrow scopes or a resource when refreshing with the
    [Account Token](/guides/account-tokens/);
-1. **Implemented:** browse with a Browser Session or open a
-   [conversation](/guides/conversations/); **planned:** OpenAPI and MCP helpers;
+1. **Implemented:** join the agent's own browser to the Session (the
+   [browser join form](/examples/browser-session/)), open a
+   [conversation](/guides/conversations/), or call OpenAPI and MCP APIs (a
+   DPoP token, or a Bearer token by Token Exchange for an MCP server without
+   DPoP);
 1. **Implemented:** confirm exact [operation](/guides/operations/) revisions
    for consequential actions;
 1. **Implemented:** revoke account access when the user signs out.

@@ -72,7 +72,7 @@
       "title": "Shown by an example alone",
       "icon": "arrow",
       "items": [
-        "**Company APIs**: OpenAPI with DPoP, MCP with a Bearer for its URL alone",
+        "**Company APIs**: OpenAPI with DPoP; MCP with DPoP, or a Bearer by Token Exchange",
         "**Company service**: build a company with `personal_agent_protocol.company`",
         "**Sign-in display**: what a page and a model each get of `PapSignIn`",
         "**Telemetry**: one allowlisted event per protocol stage"

@@ -37,12 +37,12 @@ RESERVED_SCOPE_PREFIX = "poppy:"
 #: The grants a Company's token endpoint MUST accept (§3.2): starting and renewing Sessions,
 #: and Account Tokens.
 JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
-REFRESH_TOKEN_GRANT = "refresh_token"
+REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - an OAuth token or grant type, not a credential
 #: The grants that say the Company offers Direct and Device Sign-In (§3.2, §4.4).
 AUTHORIZATION_CODE_GRANT = "authorization_code"
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 #: The grant for a Bearer token at an MCP server that doesn't support DPoP (§4.3).
-TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
+TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"  # noqa: S105 - an OAuth token or grant type, not a credential
 #: `changes` values a scope hint may give (§4.4); any other is read as `irreversible`.
 SCOPE_CHANGES = ("none", "reversible", "irreversible")
 _DOMAIN = re.compile(

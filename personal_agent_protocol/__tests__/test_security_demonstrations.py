@@ -24,13 +24,13 @@ import pytest
 from reactor import PluginManifest  # type: ignore[import-untyped]
 
 from personal_agent_protocol import (
-    ProofError,
     Author,
     AuthorizationError,
     ConversationError,
     DeviceSignInClient,
     Message,
     PersonalAgentProtocolError,
+    ProofError,
     SessionClient,
     SessionToken,
     TokenStore,
@@ -373,7 +373,7 @@ async def test_rollback_is_safe() -> None:
 
     world = World(durable=True)
     session = await world.signed_out_session()
-    token, reference = await device_sign_in(world, session)
+    _, reference = await device_sign_in(world, session)
     accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
     tokens = first_contribution(world.reactor, TOKEN_STORES, "token store")
     assert isinstance(tokens, TokenStore)
@@ -411,7 +411,9 @@ async def test_rollback_is_safe() -> None:
     # The rotated-away Account Token stays refused; the current one works.
     assert before is not None and rotated is not None
     await tokens.put(reference, before)
-    stale = await accounts.refresh(reference, context=context(world), session_key=session.session_key)
+    stale = await accounts.refresh(
+        reference, context=context(world), session_key=session.session_key
+    )
     assert stale.status == "signed_out"
     await tokens.put(reference, rotated)
     current = await accounts.refresh(
@@ -439,7 +441,9 @@ async def test_revocation_is_safe() -> None:
     assert await probe(world, token) == 200
     accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
     second = await world.signed_out_session()
-    other = await accounts.refresh(reference, context=context(world), session_key=second.session_key)
+    other = await accounts.refresh(
+        reference, context=context(world), session_key=second.session_key
+    )
     assert other.status == "signed_in" and other.token is not None
 
     revoked = await accounts.revoke(reference, context=context(world))
@@ -448,7 +452,9 @@ async def test_revocation_is_safe() -> None:
     assert await probe(world, token) == 403
     assert await probe(world, other.token) == 403
     # The Account Token is gone locally and refused at the company; Sessions continue signed out.
-    after = await accounts.refresh(reference, context=context(world), session_key=session.session_key)
+    after = await accounts.refresh(
+        reference, context=context(world), session_key=session.session_key
+    )
     assert after.status == "signed_out"
     metadata = world.company.oauth_metadata
     assert metadata is not None

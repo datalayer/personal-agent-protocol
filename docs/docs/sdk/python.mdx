@@ -31,18 +31,18 @@ python -m pytest -p no:cacheprovider
 | `generate_pairwise_user_id`                             | Implemented primitive | Generate an unlinkable random identifier.                                                       |
 | `SqlitePairwiseUserIdStore`, `resolve_pairwise_user_id` | Implemented           | Atomically persist/resolve stable IDs by tenant, local user, and verified issuer.               |
 | `build_session_assertion_claims`                        | Implemented primitive | Build unsigned, short-lived session claims.                                                     |
-| `SessionGrant`, `SessionToken`                          | Implemented primitive | Redacted request and response value objects.                                                    |
-| `SessionClient`                                         | Implemented           | Start and renew signed-out sessions with host-provided signing and DPoP.                        |
-| `JoseSigner`, `JoseDpopProofProvider`                   | Implemented           | Sign ES256/RS256 assertions and create fresh DPoP proofs.                                       |
+| `TokenResponse`, `SessionToken`                         | Implemented primitive | The token response on the wire, and the Session Token with its local `session_key` and `signed_in`. |
+| `SessionClient`                                         | Implemented           | Start (a new Session Key) and renew (the same key) signed-out Sessions; Token Exchange for MCP. |
+| `JoseSigner`, `JoseDpopProofProvider`                   | Implemented           | Sign ES256/RS256 assertions; make Session Keys and fresh DPoP proofs.                           |
+| `SessionKeyCustody`, `InMemorySessionKeys`, `jwk_thumbprint` | Implemented           | Keep Session Keys (one per Session); the RFC 7638 thumbprint that names a Session.              |
 | `verify_dpop_proof`                                     | Implemented           | Verify proof signature, request/token binding, nonce, freshness, and replay state.              |
-| `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL.                                    |
+| `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL with `dpop_jkt`.                    |
 | `validate_direct_sign_in_callback`                      | Implemented primitive | Verify callback redirect, state, issuer, denial, and code.                                      |
-| `AuthorizationCodeGrant`                                | Implemented primitive | Build a redacted PAP code-exchange form.                                                        |
 | `DirectSignInClient`                                    | Implemented           | Perform one-use browser handoff and proof-bound exchange with partial-scope reporting.          |
-| `BrowserSessionClient`, `verify_browser_assertion`      | Implemented           | Join a controlled browser through a body-only form POST and verify the assertion once.          |
-| `DpopHttpClient`                                        | Implemented           | Send DPoP resource requests with nonce retry; refuse every redirect (draft 0.2 §3).                  |
+| `BrowserSessionClient`                                  | Implemented           | Join the agent's own browser: a proof by the Session Key over the join form's one-time code.    |
+| `DpopHttpClient`                                        | Implemented           | Send DPoP resource requests with nonce retry; refuse every redirect (draft 0.3 §3).                  |
 | `ConversationClient`, `generate_message_id`             | Implemented           | Start and continue conversations with user-global idempotent message IDs.                       |
-| Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, DPoP proofs, stores, browser handoff, and browser form POST. |
+| Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, DPoP proofs, stores, browser handoff, and browser join.      |
 
 ## Discovery
 
@@ -79,7 +79,8 @@ The core plugin also supplies `pap.clock` and `pap.randomSource`. A host must
 contribute `pap.signer`, `pap.dpopProofProvider`, `pap.keyStore`,
 `pap.tokenStore`, `pap.pairwiseUserIdStore`, `pap.authorizationStateStore`,
 `pap.cache`, and `pap.browserHandoff` before a flow requiring those services
-begins. Browser Session also requires `pap.browserFormPost`. Resolution fails
+begins. Browser Session also requires `pap.browserJoin`, the agent's own
+browser. Resolution fails
 when a required provider is missing or tied at the
 winning priority; there is no insecure in-memory fallback.
 
@@ -117,24 +118,23 @@ replay rules.
 
 ## Session primitives
 
-Generate a random pairwise user ID once per local user and company issuer, then
-store that mapping durably. Never derive the identifier from an email address,
-phone number, name, or other personal information.
+Generate a random pairwise user ID (the User ID, a pairwise subject identifier
+the personal agent assigns) once per local user and company issuer, then store
+that mapping durably. Never derive the identifier from an email address, phone
+number, name, or other personal information, not even through a keyed hash.
 
 `SqlitePairwiseUserIdStore` is an atomic, file-backed reference implementation.
 Register it as `pap.pairwiseUserIdStore`, or contribute a transactional
 platform store with the aligned contract. `resolve_pairwise_user_id` fails
 closed when no unambiguous store is active.
 
-Assertion claim and form builders do not sign tokens. Signing remains behind a
+Assertion claim builders do not sign tokens. Signing remains behind a
 key-custody contribution so private keys never enter application or model
-context.
+context. The assertion names the agent in `iss` and the User ID in `sub`, and
+its `aud` is the company's `auth.issuer` alone.
 
 ```python
-from pydantic import SecretStr
-
 from personal_agent_protocol import (
-    SessionGrant,
     build_session_assertion_claims,
     resolve_pairwise_user_id,
 )
@@ -150,22 +150,15 @@ claims = build_session_assertion_claims(
     pairwise_user_id=pairwise_user_id,
     issuer="https://auth.example.com",
 )
-
-# Signing is intentionally not performed by this module.
-grant = SessionGrant(
-    assertion=SecretStr("signed-session-assertion"),
-    client_id=claims.iss,
-    client_assertion=SecretStr("signed-client-assertion"),
-)
+# Signing is intentionally not performed here: `SessionClient` signs through the
+# host's `pap.signer` and proves the request with a new Session Key.
 ```
 
-`SessionGrant.as_form()` reveals secrets at the final HTTP serialization
-boundary. Do not log or place its result in model context.
-
 For the implemented network flow, construct `SessionClient` with an existing
-Reactor platform and HTTPX client. `start()` and `renew()` resolve the signer
-and DPoP provider, create fresh assertions and proofs, send the form, and parse
-the opaque token response. See [Signed-out sessions](/guides/sessions/) for
+Reactor platform and HTTPX client. `start()` makes a new Session Key and
+`renew()` proves an existing one; both resolve the signer and DPoP provider,
+create fresh assertions and proofs, send the form, and parse the opaque token
+response. See [Signed-out sessions](/guides/sessions/) for
 usage and the exact security boundary.
 
 The maintained `PyJWT[crypto]` dependency backs local JOSE operations. Only
@@ -179,7 +172,7 @@ orchestrator and the portable primitives shared with TypeScript.
 ## Conversation and Operations models
 
 Conversation pages preserve unknown future event types so callers can skip
-them as draft 0.2 requires. Known event types are validated for their required
+them as draft 0.3 requires. Known event types are validated for their required
 payload: messages, state changes, authorization requests, user requests, and
 Direct Conversation links. Operations validate the exact confirmed revision,
 timezone-bearing timestamps, proposed expiry, and final result presence.

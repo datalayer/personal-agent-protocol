@@ -28,20 +28,25 @@ sequenceDiagram
   SDK->>Vault: Save private device code
   SDK-->>Tool: Link, user code, opaque reference
   Tool-->>User: Authenticate on company page
-  SDK->>Company: Poll at interval with DPoP
+  SDK->>Company: First poll, DPoP by the Session Key
+  Note over Company: Binds the device code to that key
   Company-->>SDK: authorization_pending
   SDK->>Company: Poll at interval
   Company-->>SDK: slow_down
   Note over SDK: Increase interval by five seconds
   SDK->>Company: Poll at new interval
-  Company-->>SDK: Signed-in Session + Account Token + partial scopes
+  Company-->>SDK: Same Session signed in + Account Token + partial scopes
   SDK->>Vault: Store Account Token
   SDK-->>Tool: Safe lifecycle evidence + opaque token reference
 ```
 
 The model sees that the link and code were presented, early polling was
-suppressed, pending and slow-down responses were respected, the original
-Session was upgraded, and one requested scope was omitted. It never sees the
+suppressed, pending and slow-down responses were respected, every poll was
+proved with the Session Key (the company binds the device code to the first
+poll's key, so a poll with another key gets `invalid_grant`), the original
+Session was signed in, and one requested scope was omitted. The link is shown
+only because its host is the issuer's or one of the issuer's
+`protected_resources`. It never sees the
 device code, assertions, proofs, or tokens.
 
 - Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/device-sign-in).

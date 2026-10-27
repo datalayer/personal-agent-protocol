@@ -39,8 +39,8 @@ from personal_agent_protocol.operations import (
     operation_from,
     operation_page,
 )
-from personal_agent_protocol.sessions import SessionToken
 from personal_agent_protocol.reactor import DPOP_PROOF_PROVIDERS, first_contribution
+from personal_agent_protocol.sessions import SessionToken
 from personal_agent_protocol.transport import DpopHttpClient
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
@@ -435,7 +435,6 @@ async def test_the_website_follows_the_session_and_refuses_bad_assertions() -> N
         reference, context=context(world)
     )
     assert (await browser.get(operation.url)).status_code == 404
-
 
 
 @pytest.mark.asyncio

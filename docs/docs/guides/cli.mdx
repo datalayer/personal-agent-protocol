@@ -47,17 +47,18 @@ command that needs input stops with exit code 4 instead of asking.
 ```bash
 pap config set client_id https://agent.example/agent.json
 pap agent key import --stdin < agent-signing-key.pem   # printed: key:key-1 and its thumbprint
-pap sessions start example.com --json
-pap auth device ses_… --scope poppy:read               # the user signs in on any device
-pap auth mediated ses_… --stdin < credentials.txt      # one field per line, then the code
-pap api openapi ses_… GET /orders
-pap api mcp ses_… search_products --arguments '{"q": "jacket"}'
+pap sessions start example.com --json                 # a new Session Key names the Session
+pap auth device "$SESSION_KEY" --scope orders:read     # the user signs in on any device
+pap auth mediated "$SESSION_KEY" --stdin < credentials.txt  # one field per line, then the code
+pap api openapi "$SESSION_KEY" GET /orders
+pap api mcp "$SESSION_KEY" search_products --arguments '{"q": "jacket"}'
 ```
 
 The CLI's personal agent is a Reactor host. Its defaults live under
 `$XDG_STATE_HOME/pap` (or `~/.local/state/pap`), owner-only and written
 atomically: the token store (`secrets.json`, `pap.tokenStore`), the signing
-and DPoP keys (`keys.json`), pairwise User IDs (`pairwise.sqlite3`), and the
+key and the Session Keys (`keys.json`; a Session Key's thumbprint names its
+Session and is what commands take as `$SESSION_KEY`), pairwise User IDs (`pairwise.sqlite3`), and the
 non-secret Session records and approvals (`state.json`). Plugins installed
 under the `personal_agent_protocol.plugins` entry-point group are discovered
 after these defaults and can replace any of them, for example with a system
@@ -67,9 +68,9 @@ printed.
 ## Operations: approve, then confirm
 
 ```bash
-pap operations approve ses_… exc_5Rt2 --revision 1    # shows the company and summary;
+pap operations approve "$SESSION_KEY" exc_5Rt2 --revision 1    # shows the company and summary;
                                                        # the user types the operation ID
-pap operations confirm ses_… exc_5Rt2 --revision 1
+pap operations confirm "$SESSION_KEY" exc_5Rt2 --revision 1
 ```
 
 Approval is taken at the CLI's own prompt for one exact operation ID and
@@ -129,7 +130,7 @@ with `schema_version: 1`.
 `tenant` (or `PAP_TENANT`; `pap-cli` by default) keeps applications apart in
 one state directory: pairwise User IDs and DPoP keys are per tenant, and every
 command sees only its tenant's Sessions. `pap sessions show` lists them, and
-another tenant's Session ID is answered like an unknown one (exit code 3), for
+another tenant's Session Key is answered like an unknown one (exit code 3), for
 every command. A tenant is 1 to 64 letters, digits, `.`, `_` or `-`.
 
 The configuration store deliberately rejects unknown keys. Do not put Account
@@ -237,25 +238,26 @@ JSON as that command's `--json`.
 | Action | `pap` command | Arguments | Runs |
 | --- | --- | --- | --- |
 | `pap.company.discover` | `company discover` | `domain` | at once |
-| `pap.sessions.show` | `sessions show` | `[session_id]` | at once |
-| `pap.conversations.events` | `conversations events` | `session_id conversation_id [cursor]` | at once |
-| `pap.conversations.follow` | `conversations follow` | `session_id conversation_id [last_event_id] [max_events]` | at once (at most 500 events) |
-| `pap.operations.show` | `operations show` | `session_id operation_id` | at once |
+| `pap.sessions.show` | `sessions show` | `[session]` | at once |
+| `pap.conversations.events` | `conversations events` | `session conversation_id [cursor]` | at once |
+| `pap.conversations.follow` | `conversations follow` | `session conversation_id [last_event_id] [max_events]` | at once (at most 500 events) |
+| `pap.operations.show` | `operations show` | `session operation_id` | at once |
 | `pap.requirements.list` | `requirements list` | `[role] [level] [status] [source]` | at once |
 | `pap.requirements.show` | `requirements show` | `requirement_id` | at once |
-| `pap.operations.cancel` | `operations cancel` | `session_id operation_id` | after the host's approval surface says yes |
-| `pap.sessions.end` | `sessions end` | `session_id` | after the host's approval surface says yes |
-| `pap.auth.disconnect` | `auth disconnect` | `session_id` | after the host's approval surface says yes |
+| `pap.operations.cancel` | `operations cancel` | `session operation_id` | after the host's approval surface says yes |
+| `pap.sessions.end` | `sessions end` | `session` | after the host's approval surface says yes |
+| `pap.auth.disconnect` | `auth disconnect` | `session` | after the host's approval surface says yes |
 
 ```bash
 pap commands list
 pap commands run pap.sessions.show
-pap commands run pap.operations.show ses_… exc_5Rt2           # by position
+pap commands run pap.operations.show "$SESSION_KEY" exc_5Rt2  # by position
 pap commands run pap.requirements.list level='MUST NOT' role=company
-pap commands run pap.sessions.end ses_…                      # exit code 6: approval_required
+pap commands run pap.sessions.end "$SESSION_KEY"             # exit code 6: approval_required
 ```
 
-Arguments are text: by position, as `name=value`, as a JSON object (a REPL
+`session` is a Session Key, the thumbprint `pap sessions show` lists. Arguments
+are text: by position, as `name=value`, as a JSON object (a REPL
 line or Studio), or as a mapping (Studio). An unknown name, a missing required
 argument, or an unknown action is a usage error (exit code 2). An action runs
 in the CLI's personal agent for the configured tenant, sees only that tenant's

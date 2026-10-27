@@ -265,7 +265,7 @@ async def test_each_dpop_proof_is_asked_for_the_requests_own_tenant() -> None:
                 session_key="K" * 43,
                 signed_in=False,
             )
-            for tenant, user in (("tenant-one", "usr_one"), ("tenant-two", "usr_two")):
+            for tenant in ("tenant-one", "tenant-two"):
                 await client.request(
                     "GET",
                     "https://shop.example/api/orders",

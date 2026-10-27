@@ -29,10 +29,10 @@ sequenceDiagram
   C-->>B: Redirect with code, state, issuer
   B->>H: Registered HTTPS callback
   H->>R: Atomically take pending request by hashed state
-  R-->>H: Request + verifier + existing session_id
+  R-->>H: Request + verifier + the Session Key it bound (dpop_jkt)
   H->>H: Verify exact redirect, state, issuer, expiry
-  H->>P: Fresh client assertion and DPoP proof
-  H->>C: Exchange code + verifier + existing session_id
+  H->>P: Fresh client assertion and DPoP proof by that Session Key
+  H->>C: Exchange code + verifier (the proof's key must match dpop_jkt)
   C-->>H: use_dpop_nonce + company nonce
   H->>P: Fresh assertion and fresh proof with nonce
   H->>C: Retry exchange once
@@ -47,7 +47,9 @@ sequenceDiagram
 - Callback state is consumed before exchange, so denial, failure, and success
   cannot leave replayable state behind.
 - Redirect location, issuer, state, expiry, content type, response size, token
-  type, sign-in status, Session ID, and scopes are all validated.
+  type, the Session Key, and scopes are all validated: the code is bound to
+  the Session Key by `dpop_jkt` in the authorization URL, so only a proof by
+  that key redeems it and it signs in that Session alone.
 - A nonce retry reuses the one authorization code and PKCE verifier but creates
   a fresh client assertion and fresh DPoP proof.
 - The company cannot return scopes the user did not request. Missing scopes are

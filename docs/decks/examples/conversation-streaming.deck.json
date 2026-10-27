@@ -71,9 +71,9 @@
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host-only", "type": "bullets", "items": ["Session Token", "DPoP proofs", "Pairwise identity"] },
+      "left": { "heading": "Host-only", "type": "bullets", "items": ["Session Token", "DPoP proofs", "The Session Key"] },
       "right": { "heading": "What the model sees", "type": "bullets", "items": ["The company's complete messages", "How many deltas and reconnects", "That nothing came twice"] },
-      "notes": "The model sees complete messages and counts, never a partial reply to act on. The token, proofs and pairwise identity stay with the host."
+      "notes": "The model sees complete messages and counts, never a partial reply to act on. The token, proofs and the Session Key stay with the host."
     },
     {
       "type": "closing",

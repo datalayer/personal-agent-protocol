@@ -435,7 +435,9 @@ async def test_one_conversation_fans_out_to_many_subscribers_from_their_cursors(
     conversations = world.conversations
 
     def message(text: str) -> Message:
-        return Message(id=generate_message_id(world.reactor), author=Author(type="human"), text=text)
+        return Message(
+            id=generate_message_id(world.reactor), author=Author(type="human"), text=text
+        )
 
     page = await conversations.start(endpoint, message("Hello"), token=session, wait=0, **world.who)
     conversation_id = page.conversation_id

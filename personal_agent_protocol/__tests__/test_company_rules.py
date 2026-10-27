@@ -129,7 +129,9 @@ async def test_a_signed_out_session_is_never_signed_in_to_another_account() -> N
     bob, bob_reference, _ = await device_sign_in(world, fresh, "acct_bob")
     assert bob is not None and bob_reference is not None
     with pytest.raises(AuthorizationError) as mismatch:
-        await accounts.refresh(bob_reference, context=context(world), session_key=session.session_key)
+        await accounts.refresh(
+            bob_reference, context=context(world), session_key=session.session_key
+        )
     assert mismatch.value.code == "account_mismatch"
 
     # The same account is welcome back.
@@ -355,7 +357,9 @@ async def test_a_message_is_recorded_as_sent_and_its_role_is_the_companys_to_set
     assert first.text == "Hi" and first.data == {"order": "ord_1"}
     assert first.context == {"locale": "en-US"}
     # A message with only context is recorded too.
-    only_context = Message(id="msg_only_ctx", author=Author(type="agent"), context={"user_available": True})
+    only_context = Message(
+        id="msg_only_ctx", author=Author(type="agent"), context={"user_available": True}
+    )
     answer = await world.conversations.send(
         endpoint,
         page.conversation_id,

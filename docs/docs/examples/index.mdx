@@ -26,7 +26,7 @@ capability owns sensitive work, and what may safely cross into model context.
 | [Conversation events](./conversation-events)           | Long poll, drain, recover, and de-duplicate ordered events    | A conversation and cursor  |
 | [Session lifecycle](./session-lifecycle)               | Start, retry, and renew a signed-out Session                  | An authorization server    |
 | [Direct Sign-In lifecycle](./direct-sign-in-lifecycle) | Upgrade the same Session after user consent                   | A browser callback         |
-| [Browser Session](./browser-session)                   | Join a controlled browser to the same Session                 | A signed browser assertion |
+| [Browser Session](./browser-session)                   | Join the agent's browser to the same Session                  | A join code and DPoP proof |
 | [Account Tokens](./account-tokens) | Refresh, rotate, narrow, expire, and revoke without exposing the token | A signed-in Session |
 | [Mediated Sign-In](./mediated-sign-in) | Relay protected input to one endpoint, then a one-time code | Declared mediated fields |
 | [Conversation streaming](./conversation-streaming) | Stream over SSE, reconnect from `Last-Event-ID`, never act on deltas | An open conversation |
@@ -101,7 +101,7 @@ DPoP proofs, Session Tokens, and Account Tokens never enter model context.
   stays behind PAP's `./server` entry and is never bundled into the browser view.
 - **`session-lifecycle`** drives the real `SessionClient` against a
   deterministic local company. Nonce retry creates fresh assertions and proofs,
-  and renewal is bound to the existing Session ID. Only status, scopes, and
+  and renewal proves the existing Session's own key, the Session Key. Only status, scopes, and
   boolean evidence reach the agent or React state.
 - **`direct-sign-in-lifecycle`** drives the real `DirectSignInClient` through
   both sides of the browser pause: atomic state consumption, exact callback

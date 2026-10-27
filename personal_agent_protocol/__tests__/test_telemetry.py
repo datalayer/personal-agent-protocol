@@ -175,9 +175,7 @@ async def test_a_company_reports_what_it_did_and_refused(
         "session_key": session.session_key,
     }
     await sessions.renew(**who, pairwise_user_id=PAIRWISE)
-    await sessions.renew(
-        **who, pairwise_user_id=PAIRWISE, resource="https://manzanita.example/mcp"
-    )
+    await sessions.renew(**who, pairwise_user_id=PAIRWISE, resource="https://manzanita.example/mcp")
     company = [e for e in recorded.events if e.stage == "company"]
     by_name = {e.name: e for e in company}
     agent = world.atlas.client_id

@@ -4,12 +4,22 @@ title: Mediated Sign-In
 
 # Mediated Sign-In
 
-Mediated Sign-In (PAP draft 0.2 §4.7) is for companies whose users cannot
-leave for a browser. The company declares the fields it needs in
+Mediated Sign-In (PAP draft 0.3 §4.7) is for companies that can't offer
+Direct or Device Sign-In yet. The company declares the fields it needs in
 `auth.mediated.fields` and an `endpoint`; the personal agent relays what the
-user types. It is the one sign-in mode where a password passes through the
-agent's host, so prefer Direct Sign-In, then Device Sign-In, when the company
-offers them.
+user types. It is not an OAuth flow, and the one sign-in mode where a password
+passes through the agent's host, so prefer Direct Sign-In, then Device Sign-In,
+when the company offers them.
+
+:::note Mediated Sign-In is transitional
+
+Like OAuth's password grant, which OAuth 2.1 removes, Mediated Sign-In is a
+step on the way, not where the protocol is headed. A company should offer it
+only until it can add Direct or Device Sign-In, and stop once those cover the
+scopes it grants. The protocol plans to remove it, on a date set when version
+1.0 is published.
+
+:::
 
 ## Protected input
 
@@ -41,22 +51,21 @@ result = await client.sign_in(
     organization=document.organization,
     issuer=document.auth.issuer,
     scopes=("orders:read",),
-    token=signed_out_session,
+    token=signed_out_session,  # its Session Key names the Session to sign in
     tenant_id="application-42",
-    pairwise_user_id=pairwise_user_id,
 )
 if result.status == "code_required":
     result = await client.submit_code(
         result.reference, token=signed_out_session,
-        tenant_id="application-42", pairwise_user_id=pairwise_user_id, issuer=issuer,
+        tenant_id="application-42", issuer=issuer,
     )
 ```
 
 ```typescript
 const client = new MediatedSignInClient({ reactor, fetch });
-let result = await client.signIn({ mediated, organization, issuer, scopes, token, tenantId, pairwiseUserId });
+let result = await client.signIn({ mediated, organization, issuer, scopes, token, tenantId });
 if (result.status === 'code_required') {
-  result = await client.submitCode(result.reference!, { token, tenantId, pairwiseUserId, issuer });
+  result = await client.submitCode(result.reference!, { token, tenantId, issuer });
 }
 ```
 
@@ -70,13 +79,15 @@ if (result.status === 'code_required') {
   and cleared; no result, error, or log carries them.
 - **A code continues alone.** `code_required` stores an opaque reference in
   the `pap.authorizationStateStore`. The continuation sends only the code, to
-  `{endpoint}/{sign_in_id}`, and only from the Session that started it
-  (`session_mismatch` otherwise, with the pending state kept).
+  `{endpoint}/{sign_in_id}`, and only from the Session that started it, proved
+  with the same Session Key (`session_mismatch` otherwise, with the pending
+  state kept).
 - **Statuses, not errors.** `failed` and `expired` are results; a refused
   request (for example `rate_limited`) is an error with `retry_after` when the
   company sent one.
-- **Same Session, no escalation.** A completed sign-in must be a signed-in
-  DPoP token for the initiating Session, with no scope that was not requested.
+- **Same Session, no escalation.** A completed sign-in must be a DPoP token for
+  the initiating Session (the same Session Key), with no scope that was not
+  requested.
   The Account Token goes to the token store; only its reference is returned.
 
 ## Security boundary
@@ -86,4 +97,4 @@ code was sent. It must never ask for a password or code in chat. If a user
 pastes one into the conversation anyway, the host should not forward it.
 
 See the runnable [Mediated Sign-In example](/examples/mediated-sign-in/) and
-the upstream [Mediated Sign-In specification](https://personalagentprotocol.org/docs/0.2/spec#mediated-sign-in).
+the upstream [Mediated Sign-In specification](https://personalagentprotocol.org/docs/0.3/spec#mediated-sign-in).

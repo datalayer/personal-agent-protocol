@@ -16,7 +16,7 @@
       "type": "statement",
       "title": "The identity is a URL",
       "statement": "The agent's HTTPS `client_id` points to **public metadata**: its name, redirect URIs and JWKS location.",
-      "notes": "There is no registration step. The client_id is itself an HTTPS URL, and what it serves describes the agent: its name, where users may be sent back to, and where its public signing keys live."
+      "notes": "There is no registration step. The client_id is itself an HTTPS URL, and what it serves describes the agent: its name, where users may be sent back to (HTTPS URLs on its own domain, or a loopback redirect URI for an app on the user's computer), and where its public signing keys live."
     },
     {
       "type": "mermaid",

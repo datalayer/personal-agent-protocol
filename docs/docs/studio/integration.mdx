@@ -98,7 +98,7 @@ references; the gateway resolves the stable pairwise subject, signer, DPoP
 provider, and token endpoint, then calls `SessionClient.start` or `renew`.
 Nonce retry and credential replacement stay inside that request. Canvas and
 the model receive only lifecycle status, granted scope names, and an opaque
-Session reference—not the pairwise subject, Session ID, assertions, proofs,
+Session reference—not the pairwise subject, Session Key, assertions, proofs,
 nonces, or token response.
 
 The Agent Runtimes `PAP Guided Journey` is the reference UX for explaining
@@ -167,14 +167,14 @@ protocols:
   personal_agent:
     connections:
       - company: example.com
-        scopes: [poppy:read]
+        scopes: [orders:read]          # the company's own scopes
         interfaces: [agent, openapi, mcp]
         extensions: [operations]
   company:
     domain: my-app.apps.datalayer.ai
     interfaces: [agent, mcp]
     signed_out: true
-    scopes: [poppy:read, poppy:write]
+    scopes: [orders:read, orders:write]
     extensions: [operations]
 ```
 

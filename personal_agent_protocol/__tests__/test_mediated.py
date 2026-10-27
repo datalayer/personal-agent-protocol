@@ -321,7 +321,8 @@ def test_rate_limited_is_reported_with_retry_after_and_no_credential() -> None:
 
 def test_a_bearer_answer_to_a_mediated_sign_in_is_refused() -> None:
     client, _ = arrange(
-        lambda _: httpx.Response(200, json=complete(token_type="Bearer")), CREDENTIALS
+        lambda _: httpx.Response(200, json=complete(token_type="Bearer")),  # noqa: S106 - a token type
+        CREDENTIALS,
     )
     with pytest.raises(AuthorizationError) as raised:
         sign_in(client)

@@ -37,7 +37,7 @@ if outcome.status == "terms_changed":
 
 ```typescript
 const approval = await approve(operation);   // async: the digest uses Web Crypto
-const outcome = await operations.confirm(endpoint, operation, { approval, token, tenantId, pairwiseUserId, issuer });
+const outcome = await operations.confirm(endpoint, operation, { approval, token, tenantId, issuer });
 ```
 
 - `approve()` is called by the host when the user approves in its interface,
@@ -109,7 +109,7 @@ display = PapConfirm(
     operation_ref=operation.operation_id,
     revision=operation.revision,
     does="buy",                                 # what it does, as the application's Rules class it
-    session=PapSessionShown.of(session_id, signed_in=True),
+    session=PapSessionShown.of(session_key, signed_in=True),
     expires_at=operation.expires_at,
     only_the_person=operation.user_approval_required,
 )
@@ -121,7 +121,7 @@ said = display.text()        # what a page without a renderer, a transcript and 
   *Changed since version 1.* after it when `was` names the revision a newer
   one replaced.
 - The Session is a one-way reference (`PapSessionShown.of`: 12 hex digits of
-  the SHA-256 of its ID), never its ID or token, and only the page sees even
+  the SHA-256 of its Session Key), never the key or a token, and only the page sees even
   that: `model_view()` tells a model the company's words, the terms, what it
   does, the revision and whether the person is signed in there.
 - The buttons are the host's own. Approving still goes through `approve()`
@@ -169,4 +169,4 @@ The TypeScript SDK types it (`PapOutcomeData`) and checks it with
 - Tokens and proofs stay host-only; errors carry codes only.
 
 See the runnable [Operations example](/examples/operations/) and the upstream
-[Operations extension](https://personalagentprotocol.org/docs/0.2/extensions/operations).
+[Operations extension](https://personalagentprotocol.org/docs/0.3/extensions/operations).

@@ -14,7 +14,8 @@ Both SDKs implement the asymmetric cryptographic operations needed by the
 current session slice:
 
 - `JoseSigner` signs client and session assertions with ES256 or RS256;
-- `JoseDpopProofProvider` creates a fresh RFC 9449 proof for each request; and
+- `JoseDpopProofProvider` makes a Session Key for each Session and creates a
+  fresh RFC 9449 proof, signed with that Session's key, for each request; and
 - `verify_dpop_proof` / `verifyDpopProof` verify the signature, method, URL,
   issuance window, nonce, access-token hash, and replay state.
 
@@ -31,10 +32,16 @@ custody.
 
 ## Key custody
 
-The local signers receive an asymmetric private key object. DPoP providers
-receive key material from an application-owned resolver keyed by the request's
-tenant, subject, and company issuer. The protected header contains only the
-public JWK; a JWK with any private member is rejected.
+The local signers receive an asymmetric private key object. The DPoP provider
+keeps Session Keys in a `SessionKeyCustody` (`generate`, `get`, `discard`, by
+tenant, company issuer, and thumbprint): `new_session_key` (`newSessionKey`)
+makes one for a new Session and returns its RFC 7638 thumbprint, which names
+the Session; `create` signs with the key the request's `session_key` names,
+and an unknown or discarded thumbprint is `unknown_session_key`, never a
+stand-in key; `discard_session_key` forgets the key of a Session that has
+ended, which is never used again. `InMemorySessionKeys` is for tests and
+examples; a host contributes durable, protected custody. The protected header
+contains only the public JWK; a JWK with any private member is rejected.
 
 For local development, an in-process private key is sufficient. TypeScript can
 also use a non-exportable Web Crypto key in trusted device code. Production
@@ -53,7 +60,7 @@ appropriate only for tests.
 
 The expiry is the last moment the verifier would still accept the identifier: a
 DPoP proof's `iat` plus the acceptance window, a client or Session assertion's
-`exp` plus the 30-second clock skew, a browser assertion's `exp`. A cache must
+`exp` plus the 30-second clock skew. A cache must
 refuse the identifier until then and may forget it after: the default
 `MemoryReplayCache` sweeps expired identifiers whenever it has doubled, so it
 holds about twice those still alive. `check_replay_cache` /
@@ -71,6 +78,8 @@ uses the uppercase HTTP method. An API proof includes `ath`, the base64url
 SHA-256 hash of the exact access token. A token-endpoint proof must omit `ath`.
 When the company requests a nonce, the verifier requires an exact match.
 
-The current helper returns the verified public JWK and its RFC 7638 thumbprint
-so a company session service can bind an issued token to that key. Token
-issuance and durable session storage remain the next company-side slice.
+The helper returns the verified public JWK and its RFC 7638 thumbprint, which
+is the Session Key: the reference companies key each Session's record by it,
+bind issued tokens to it, and check a browser join's proof against an active
+Session's key. A join proof carries the join form's code as its `nonce` and
+no `ath`.

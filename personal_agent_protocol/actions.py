@@ -273,7 +273,9 @@ async def follow_events(
     return {"conversation_id": conversation_id, "events": events}
 
 
-async def show_operation(runtime: CliRuntime, session_key: str, operation_id: str) -> dict[str, Any]:
+async def show_operation(
+    runtime: CliRuntime, session_key: str, operation_id: str
+) -> dict[str, Any]:
     """`pap operations show`: read an operation by its ID (Operations §6)."""
 
     record = runtime.session(session_key)

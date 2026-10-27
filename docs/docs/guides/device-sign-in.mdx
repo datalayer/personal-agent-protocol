@@ -9,9 +9,20 @@ Sign-In browser callback. The user authenticates on the company's own page;
 the personal agent never handles a password, one-time password, or approval
 click.
 
-Prefer Direct Sign-In when it is available. Device Sign-In adds polling and a
-code-entry step, but it works for terminals, remote runtimes, and devices that
-cannot host a callback.
+Prefer Direct Sign-In when it is available. Device Sign-In is the OAuth 2.0
+device authorization grant ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)),
+a cross-device flow, and easier to use for phishing: whoever holds the
+`device_code` gets the tokens, so an attacker can start a request and persuade
+the user to approve it ([RFC 10027](https://www.rfc-editor.org/rfc/rfc10027)
+§4.1.1). Companies that offer it and personal agents that use it follow the
+best practices of RFC 10027 (BCP 247) §2, whose protocol selection guidance
+keeps the device grant for when other cross-device flows aren't viable. It
+works for terminals, remote runtimes, and devices that cannot host a callback.
+
+The device authorization request carries no DPoP proof, so the company binds
+the `device_code` to the key of the **first poll's** proof: the Session Key of
+the Session being signed in. A poll with any other key gets `invalid_grant`,
+and once the user approves, the company signs in that key's Session.
 
 ```mermaid
 sequenceDiagram
@@ -27,7 +38,7 @@ sequenceDiagram
   U->>C: Open company page, sign in, confirm code and scopes
   loop No faster than current interval
     A->>R: Atomically take pending state
-    A->>C: Poll with private device_code + session_id + DPoP
+    A->>C: Poll with private device_code + DPoP by the Session Key
     alt authorization_pending
       C-->>A: Wait
       A->>R: Restore state with next poll time
@@ -53,10 +64,12 @@ started = await client.begin(
     client_id="https://agent.example/agent.json",
     scopes=("orders:read", "orders:return"),
     tenant_id="application-42",
-    pairwise_user_id=pairwise_user_id,
-    session_id=signed_out_session.session_id,
+    # The Session to sign in: every poll is proved with its Session Key, and the
+    # company binds the device code to the first poll's key.
+    session_key=signed_out_session.session_key,
     organization=company.document.organization,
-    poppy_domains=metadata.poppy_domains,
+    # The link must be on the issuer's host or one of its protected resources'.
+    protected_resources=metadata.protected_resources,
 )
 
 # Render only these human-facing values. A UI may turn the complete URI into a QR.
@@ -79,10 +92,9 @@ const started = await client.begin({
   clientId: 'https://agent.example/agent.json',
   scopes: ['orders:read', 'orders:return'],
   tenantId: 'application-42',
-  pairwiseUserId,
-  sessionId: signedOutSession.sessionId,
+  sessionKey: signedOutSession.sessionKey,
   organization: company.document.organization,
-  poppyDomains: metadata.poppy_domains,
+  protectedResources: metadata.protected_resources,
 });
 
 renderHumanHandoff(started.verificationUriComplete ?? started.verificationUri,
@@ -90,14 +102,18 @@ renderHumanHandoff(started.verificationUriComplete ?? started.verificationUri,
 const result = await client.poll(started.reference, abortSignal);
 ```
 
-`begin()` returns an opaque reference, not the `device_code`. `poll()` performs
+`begin()` refuses a verification link (`unsafe_verification_uri`) whose host
+is not the issuer's or a host of one of the issuer's `protected_resources`, or
+a subdomain of either, and the host shows the company's organization name and
+domain with the link and code. `begin()` returns an opaque reference, not the
+`device_code`. `poll()` performs
 at most one network poll. It suppresses premature calls locally, adds five
 seconds after `slow_down`, and consumes state after success, denial, or expiry.
 This makes scheduling explicit for workers and prevents an LLM loop from
 accidentally hammering the company endpoint.
 
-On success, both SDKs require a signed-in proof-bound token for the initiating
-Session. Extra scopes are rejected and missing scopes are reported. The Account
+On success, both SDKs require a proof-bound token for the initiating Session,
+which the device grant has signed in. Extra scopes are rejected and missing scopes are reported. The Account
 Token is written directly to the Reactor `TokenStore`; only its opaque reference
 crosses into application code. Hosts must provide durable, encrypted,
 tenant-isolated state and token stores in production.
@@ -109,4 +125,4 @@ put device codes and tokens in logs, analytics, model context, QR telemetry, or
 browser state.
 
 See the runnable [Device Sign-In example](/examples/device-sign-in/) and the
-upstream [Device Sign-In specification](https://personalagentprotocol.org/docs/0.2/spec#device-sign-in).
+upstream [Device Sign-In specification](https://personalagentprotocol.org/docs/0.3/spec#device-sign-in).

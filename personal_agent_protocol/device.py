@@ -72,9 +72,7 @@ def _within(host: str, domain: str) -> bool:
     return host == domain or host.endswith(f".{domain}")
 
 
-def verification_host_allowed(
-    url: str, *, issuer: str, protected_resources: Sequence[str]
-) -> bool:
+def verification_host_allowed(url: str, *, issuer: str, protected_resources: Sequence[str]) -> bool:
     """Whether a device sign-in link may be shown for this company (§4.6).
 
     Its host is the host of `auth.issuer` or of a URL in the issuer's

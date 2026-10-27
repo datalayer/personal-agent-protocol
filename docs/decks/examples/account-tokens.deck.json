@@ -30,11 +30,11 @@
       "title": "A refresh",
       "items": [
         { "label": "1", "title": "Lock", "detail": "Hold the token reference" },
-        { "label": "2", "title": "Grant", "detail": "refresh_token + session_id + assertion + DPoP" },
+        { "label": "2", "title": "Grant", "detail": "refresh_token + assertion + DPoP with the Session Key" },
         { "label": "3", "title": "Rotate", "detail": "New Session Token and a rotated Account Token" },
         { "label": "4", "title": "Replace", "detail": "The new token in the store, before unlocking", "current": true }
       ],
-      "notes": "The client holds the lock, reads the token, and sends a refresh token grant with the same session_id. The company signs the same Session in again and rotates the token. The new one replaces the old in the store before the lock is released and before the call returns."
+      "notes": "The client holds the lock, reads the token, and sends a refresh token grant with a DPoP proof signed by the Session Key, which names the Session. The company signs that same Session in again and rotates the token. The new one replaces the old in the store before the lock is released and before the call returns."
     },
     {
       "type": "mermaid",
@@ -45,27 +45,27 @@
     {
       "type": "mermaid",
       "title": "What the company can answer",
-      "diagram": "flowchart LR\n  R[\"Refresh\"] --> Q{\"Company answers\"}\n  Q -- \"rotated\" --> S[\"signed_in<br/>new token stored\"]\n  Q -- \"invalid_scope\" --> C[\"re_consent_required<br/>ask the user\"]\n  Q -- \"invalid_grant\" --> D[\"signed_out<br/>token deleted\"]\n  V[\"Revoke\"] -- \"200\" --> X[\"Every Session signed out<br/>token deleted\"]",
-      "caption": "Wider scopes are a decision for the user, never a retry; expiry and revocation delete the token.",
-      "notes": "Follow a refresh to the company's answer. Usually the token is rotated, the new one is stored, and the Session is signed in; narrower scopes take this path too. Wider scopes come back as invalid_scope, which the SDK reports as re-consent required: a decision for the user, never a retry. An expired token, 91 days later in the example, draws invalid_grant: the SDK deletes it and the Session carries on signed out. Below, revocation under RFC 7009: once the company answers 200, every Session signed in with that token is signed out and the stored copy is deleted."
+      "diagram": "flowchart LR\n  R[\"Refresh\"] --> Q{\"Company answers\"}\n  Q -- \"rotated\" --> S[\"signed_in<br/>new token stored\"]\n  Q -- \"invalid_scope\" --> C[\"re_consent_required<br/>ask the user\"]\n  Q -- \"invalid_grant, Session ended\" --> E[\"session_ended<br/>key discarded\"]\n  Q -- \"invalid_grant, token ended\" --> D[\"signed_out<br/>token deleted\"]\n  V[\"Revoke\"] -- \"200\" --> X[\"Every Session signed out<br/>token deleted\"]",
+      "caption": "Wider scopes are a decision for the user, never a retry; an ended Session loses its key; expiry and revocation delete the token.",
+      "notes": "Follow a refresh to the company's answer. Usually the token is rotated, the new one is stored, and the Session is signed in; narrower scopes take this path too. Wider scopes come back as invalid_scope, which the SDK reports as re-consent required: a decision for the user, never a retry. An invalid_grant has two causes, and the SDK tells them apart by renewing the Session with its assertion. Ninety-one days later in the example, the Session itself has ended: its key is refused, so the SDK discards it and reports session_ended. Without a key, the Account Token would start a new Session; it has expired too, so the company answers invalid_grant again, the SDK deletes it, and the result is signed_out. Below, revocation under RFC 7009: once the company answers 200, every Session signed in with that token is signed out and the stored copy is deleted."
     },
     {
       "type": "two-columns",
       "title": "What stays where",
       "left": { "heading": "Host-only, behind opaque references", "type": "bullets", "items": ["The Account Token", "Session Tokens", "Client assertions", "DPoP proofs"] },
-      "right": { "heading": "What the model sees", "type": "bullets", "items": ["`signed_in`, `re_consent_required`, `signed_out`", "Whether a rotation happened", "Scope names"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["`signed_in`, `re_consent_required`, `session_ended`, `signed_out`", "Whether a rotation happened", "Scope names"] },
       "notes": "The model learns the status, whether the token rotated, and which scopes it has. Every credential stays in Reactor stores, behind opaque references."
     },
     {
       "type": "statement",
       "title": "In TypeScript",
-      "statement": "`new AccountTokenClient({ reactor, fetch })`, with `refresh(reference, { context, sessionId, scopes })` and `revoke()`.",
+      "statement": "`new AccountTokenClient({ reactor, fetch })`, with `refresh(reference, { context, sessionKey, scopes })` and `revoke()`.",
       "notes": "TypeScript has the same client, and the lock is contributed at the AccountTokenLocks contribution point."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
-      "cta": "The Pydantic AI and Agent Runtimes examples refresh, race, narrow, widen, expire and revoke one token",
+      "cta": "The Pydantic AI and Agent Runtimes examples refresh, race, narrow, widen, end, expire and revoke one token",
       "notes": "Each run walks the five steps against the reference company. The Account Tokens guide covers the production setup."
     }
   ]

@@ -30,12 +30,12 @@
       "title": "How it flows",
       "items": [
         { "label": "1", "title": "Approve", "detail": "Validate the HTTPS URL, resolve public addresses" },
-        { "label": "2", "title": "Fetch", "detail": "`/.well-known/poppy.json`, no credentials" },
+        { "label": "2", "title": "Fetch", "detail": "`/.well-known/poppy.json`, no credentials, no query" },
         { "label": "3", "title": "Validate", "detail": "Strict JSON, version, domain" },
         { "label": "4", "title": "Follow", "detail": "OAuth metadata, no credentials" },
-        { "label": "5", "title": "Bind", "detail": "Issuer to the company domain", "current": true }
+        { "label": "5", "title": "Bind", "detail": "The issuer's `protected_resources` list the domain", "current": true }
       ],
-      "notes": "The policy approves the destination first. The host fetches the PAP document, validates it strictly, then follows the advertised OAuth metadata to find the authorization and token endpoints. Finally it checks the issuer really belongs to the company's domain."
+      "notes": "The policy approves the destination first. The host fetches the PAP document, validates it strictly, then follows the advertised OAuth metadata to find the authorization and token endpoints. Redirects may lead elsewhere, but the final URL must still be exactly /.well-known/poppy.json, with no query. Finally it checks both directions: the document names the issuer, and the issuer's metadata lists the company's domain in protected_resources."
     },
     {
       "type": "mermaid",
@@ -54,9 +54,9 @@
     {
       "type": "two-columns",
       "title": "What the model sees",
-      "left": { "heading": "Visible", "type": "bullets", "items": ["A verified capability summary", "Organization and interfaces"] },
+      "left": { "heading": "Visible", "type": "bullets", "items": ["A verified capability summary", "Organization, sign-in methods, scopes and interfaces"] },
       "right": { "heading": "Never", "type": "bullets", "items": ["Raw response bodies", "Any credential: none were sent"] },
-      "notes": "The tool result is an inventory of what the company supports, not the raw documents it served. And since discovery sends no credential, there is none to leak."
+      "notes": "The tool result is an inventory of what the company supports, not the raw documents it served: Direct and Device Sign-In as the OAuth metadata offers them, Mediated from auth.mediated, the company's own scopes in its own words, and whether it offers Token Exchange for MCP servers without DPoP. And since discovery sends no credential, there is none to leak."
     },
     {
       "type": "closing",

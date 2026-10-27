@@ -17,7 +17,7 @@ import httpx
 import pytest
 from reactor import PluginManifest
 
-from personal_agent_protocol import Author, DeviceSignInClient, DpopProofRequest, SessionClient
+from personal_agent_protocol import DeviceSignInClient, DpopProofRequest, SessionClient
 from personal_agent_protocol.company import CLIENT_POLICIES, CompanyConfig
 from personal_agent_protocol.company.asgi import company_app
 from personal_agent_protocol.company.service import WEB_COOKIE

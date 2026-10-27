@@ -23,13 +23,13 @@ sequenceDiagram
   participant Atlas as Atlas (personal agent)
   participant Company as Manzanita
   Atlas->>Company: Where is my jacket order? (signed out)
-  Company-->>Atlas: authorization: sign_in_required (orders:read orders:write)
+  Company-->>Atlas: authorization: insufficient_scope (orders:read orders:write)
   Atlas->>Ada: Sign in on Manzanita's page
   Ada->>Company: Approves the device code
-  Atlas->>Company: Same conversation, signed-in token
+  Atlas->>Company: Same conversation, same Session Key, signed-in token
   Company-->>Atlas: Your order ord_7Hk2 … delivered
   Ada->>Atlas: I'd like to ask about sizing myself
-  Atlas->>Company: start_direct(parent) with sender human
+  Atlas->>Company: start_direct(parent), author human
   Company-->>Atlas: Direct Conversation cnv_d
   Atlas->>Company: Message or handoff on the parent
   Company-->>Atlas: 409 direct_conversation_open (conversation_id cnv_d)
@@ -37,21 +37,25 @@ sequenceDiagram
   Company-->>Atlas: Parent: direct_closed
   Atlas->>Company: handoff(parent)
   Company-->>Atlas: state queued, then idle with responder human
+  Company-->>Atlas: Sam's reply, author human (id, name)
   Atlas->>Company: close(parent)
   Company-->>Atlas: closed, later messages are conversation_closed
 ```
 
-- **Sign-in mid-conversation (§7.11).** An `authorization` event says what is
-  missing (`sign_in_required` or `insufficient_scope`) and which scopes. The
-  host signs in with any mode the company offers and keeps sending to the
-  **same conversation ID** with the new token.
+- **Sign-in mid-conversation (§7.11).** An `authorization` event is
+  always `insufficient_scope`, with the `scope` the request needs. The host
+  signs the same Session in (the same Session Key) with any mode the company
+  offers and keeps sending to the **same conversation ID** with the new
+  token.
 - **Direct Conversations (§7.10).** Only the personal agent starts one, for
   the user to talk with the company in the agent's interface. While it is
   open, the parent refuses messages and handoff with
   `direct_conversation_open`; the SDK puts the open conversation's ID in
   `error.details["conversation_id"]`.
 - **Handoff (§7.9).** `handoff()` asks for a person; the conversation is
-  `queued` until one takes it, then `responder` is `human`. When no one is
+  `queued` until one takes it, then `responder` is `human`, and the person's
+  messages name their `author`: `type` `human`, with the person's `id` and
+  `name` when the company gives them. When no one is
   available the company says so and the agent continues.
 - **Closing (§7.12).** `close()` ends the conversation; operations it
   proposed or started are not cancelled.

@@ -53,11 +53,11 @@ recover retained events, but it cannot reconstruct events the company already
 deleted. The host should tell the person that part of the conversation may be
 missing.
 
-Session Tokens, DPoP proofs, pairwise identity, and the saved cursor remain in
+Session Tokens, Session Keys, DPoP proofs, and the saved cursor remain in
 the trusted host. A model or UI receives only the event fields it needs. A
 company that streams can be read over SSE instead, with reconnects and
 display-only `text-delta` frames: see [conversation streaming](./conversation-streaming).
 
 Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/conversation-events)
 or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/conversation-events).
-See upstream [conversation event reads](https://personalagentprotocol.org/docs/0.2/spec#reading-events).
+See upstream [conversation event reads](https://personalagentprotocol.org/docs/0.3/spec#reading-events).

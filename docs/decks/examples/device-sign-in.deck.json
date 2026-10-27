@@ -21,19 +21,19 @@
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph USR[\"User, any device\"]\n    direction TB\n    P[\"User\"]\n  end\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    T[\"Agent tool<br/>read-only\"] -- \"begin\" --> S[\"DeviceSignInClient\"]\n    S -- \"device code,<br/>Account Token\" --> V[(\"Reactor stores\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company API\"] --- G[\"Sign-in page\"]\n  end\n  HOST -- \"link and user code\" --> USR\n  USR -- \"signs in\" --> CO\n  HOST -- \"polls with DPoP\" --> CO\n  HOST -. \"evidence, opaque reference\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph USR[\"User, any device\"]\n    direction TB\n    P[\"User\"]\n  end\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    T[\"Agent tool<br/>read-only\"] -- \"begin\" --> S[\"DeviceSignInClient\"]\n    S -- \"device code,<br/>Account Token\" --> V[(\"Reactor stores\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company API\"] --- G[\"Sign-in page\"]\n  end\n  HOST -- \"link and user code\" --> USR\n  USR -- \"signs in\" --> CO\n  HOST -- \"polls, Session Key proofs\" --> CO\n  HOST -. \"evidence, opaque reference\" .-> M",
       "caption": "The user code is for the user; the device code and the tokens never leave the host's stores.",
-      "notes": "Three zones and the model. In your host, the read-only agent tool asks the DeviceSignInClient to begin, and the client keeps the private device code, and later the Account Token, in Reactor stores. The host shows the user a link and a short code. The user signs in on the company's page, from any device. Meanwhile the host polls the company, each poll with a fresh DPoP proof. Off to the side, the model receives lifecycle evidence and an opaque token reference, nothing secret."
+      "notes": "Three zones and the model. In your host, the read-only agent tool asks the DeviceSignInClient to begin, and the client keeps the private device code, and later the Account Token, in Reactor stores. The host shows the user a link and a short code. The user signs in on the company's page, from any device. Meanwhile the host polls the company, each poll with a fresh DPoP proof signed with the Session Key; the first poll binds the device code to that key, so only this Session can finish the sign-in. Off to the side, the model receives lifecycle evidence and an opaque token reference, nothing secret."
     },
     {
       "type": "flow",
       "title": "Starting",
       "items": [
-        { "label": "1", "title": "Begin", "detail": "For an existing signed-out Session" },
+        { "label": "1", "title": "Begin", "detail": "For an existing Session, named by its Session Key" },
         { "label": "2", "title": "Authorize", "detail": "Link, user code, interval, private device code" },
         { "label": "3", "title": "Hand off", "detail": "The user opens the link and enters the code", "current": true }
       ],
-      "notes": "The client asks the company for a device authorization on the Session that already exists. The company returns a link, a user code, a polling interval and a private device code. The device code goes into a Reactor store; the tool gets the link, the code and an opaque reference."
+      "notes": "The client asks the company for a device authorization on the Session that already exists. The company returns a link, a user code, a polling interval and a private device code. The client checks the link is on the issuer's host or one of its protected_resources. The device code goes into a Reactor store; the tool gets the link, the code and an opaque reference."
     },
     {
       "type": "flow",
@@ -44,14 +44,14 @@
         { "label": "6", "title": "Slow down", "detail": "slow_down: add five seconds" },
         { "label": "7", "title": "Signed in", "detail": "Same Session, Account Token, partial scopes", "current": true }
       ],
-      "notes": "A poll before the interval sends nothing. Then the company says pending, then slow down, and the client adds five seconds to its interval. Every poll that goes out carries a fresh DPoP proof. Finally the same Session comes back signed in, with an Account Token and one requested scope missing."
+      "notes": "A poll before the interval sends nothing. Then the company says pending, then slow down, and the client adds five seconds to its interval. Every poll that goes out carries a fresh DPoP proof, signed with the same Session Key. Finally the same Session comes back signed in, with an Account Token and one requested scope missing."
     },
     {
       "type": "mermaid",
       "title": "The sign-in lifecycle",
       "diagram": "stateDiagram-v2\n  direction LR\n  state \"Signed out\" as SO\n  state \"Waiting\" as W\n  state \"Polling\" as P\n  state \"Signed in\" as SI\n  [*] --> SO\n  SO --> W : link and code shown\n  W --> W : too early, no request\n  W --> P : interval passed\n  P --> W : authorization_pending\n  P --> W : slow_down, plus 5 s\n  P --> SI : same Session upgraded",
       "caption": "One Session from start to end: signed out, waiting at the company's pace, then signed in.",
-      "notes": "Follow the Session from the left. It starts signed out, and begins waiting once the link and code have been shown to the user. A poll before the interval sends no request at all. When the interval has passed the client polls: authorization_pending sends it back to waiting, and slow_down does too, with five seconds added to the interval. Finally the company answers signed in, and it is the original Session that is upgraded, not a new one. The tool's result is evidence of exactly these steps, including the one requested scope that was left out and reported."
+      "notes": "Follow the Session from the left. It starts signed out, and begins waiting once the link and code have been shown to the user. A poll before the interval sends no request at all. When the interval has passed the client polls: authorization_pending sends it back to waiting, and slow_down does too, with five seconds added to the interval. Finally the company answers signed in, and it is the original Session that is upgraded, not a new one: the token response carries no Session ID, because the proof's key names the Session. The tool's result is evidence of exactly these steps, including the one requested scope that was left out and reported."
     },
     {
       "type": "two-columns",

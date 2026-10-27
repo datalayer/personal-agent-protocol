@@ -8,9 +8,9 @@
     {
       "type": "title",
       "title": "Signed-out Session lifecycle",
-      "subtitle": "Start a Session, survive a nonce challenge, renew it before it expires",
+      "subtitle": "Start a Session under its own key, survive a nonce challenge, renew it before it expires",
       "meta": "Personal Agent Protocol · example",
-      "notes": "Every interaction a personal agent has with a company happens inside a Session. This example starts one signed out, meets the company's DPoP nonce challenge on the way, and renews the Session before its token expires."
+      "notes": "Every interaction a personal agent has with a company happens inside a Session, and each Session has its own key: the Session Key, whose thumbprint names it. This example starts one signed out, meets the company's DPoP nonce challenge on the way, and renews the Session before its token expires."
     },
     {
       "type": "statement",
@@ -21,20 +21,20 @@
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign assertions\" --> S[\"Reactor signer\"]\n    H -- \"make proofs\" --> D[\"Reactor DPoP provider\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server<br/>issues, may demand a nonce\"]\n  end\n  HOST -- \"assertions, proof\" --> CO\n  CO -- \"Session Token or nonce\" --> HOST\n  HOST -. \"status and scopes only\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign assertions\" --> S[\"Reactor signer\"]\n    H -- \"make proofs\" --> D[\"Reactor DPoP provider<br/>one key per Session\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server<br/>issues, may demand a nonce\"]\n  end\n  HOST -- \"assertions, proof\" --> CO\n  CO -- \"Session Token or nonce\" --> HOST\n  HOST -. \"status and scopes only\" .-> M",
       "caption": "The keys live in replaceable Reactor contributions; the model sees the Session's status, never its token.",
-      "notes": "Inside your trusted host, the PAP host asks two Reactor contributions for help: the signer makes the assertions, the DPoP provider makes the proofs, and both are replaceable. Assertions and a proof cross to the company's authorization server, which answers with a Session Token, or first with a nonce it wants in the next proof. Off to the side, the model receives the lifecycle status and the granted scopes, nothing it could leak."
+      "notes": "Inside your trusted host, the PAP host asks two Reactor contributions for help: the signer makes the assertions, the DPoP provider makes a new Session Key for each Session and signs the proofs with it, and both are replaceable. Assertions and a proof cross to the company's authorization server, which answers with a Session Token, or first with a nonce it wants in the next proof. Off to the side, the model receives the lifecycle status and the granted scopes, nothing it could leak."
     },
     {
       "type": "flow",
       "title": "Starting the Session",
       "items": [
         { "label": "1", "title": "Sign", "detail": "A fresh Session assertion and client assertion" },
-        { "label": "2", "title": "Prove", "detail": "A DPoP proof, no nonce yet" },
+        { "label": "2", "title": "Prove", "detail": "A new Session Key; a DPoP proof, no nonce yet" },
         { "label": "3", "title": "Ask", "detail": "JWT bearer grant at the token endpoint" },
         { "label": "4", "title": "Challenged", "detail": "use_dpop_nonce, with the company's nonce", "current": true }
       ],
-      "notes": "The host signs two assertions, proves possession of its key with a DPoP proof, and asks the token endpoint for a Session. This company answers use_dpop_nonce: it wants proofs bound to a nonce it issued, so no proof can be made in advance."
+      "notes": "The host signs two assertions, makes a new Session Key and proves possession of it with a DPoP proof, and asks the token endpoint for a Session. This company answers use_dpop_nonce: it wants proofs bound to a nonce it issued, so no proof can be made in advance."
     },
     {
       "type": "flow",
@@ -42,29 +42,29 @@
       "items": [
         { "label": "5", "title": "Sign again", "detail": "New assertions: a jti is never reused" },
         { "label": "6", "title": "Prove again", "detail": "A new proof carrying the nonce" },
-        { "label": "7", "title": "Signed-out Session", "detail": "A DPoP Session Token, bound to the key", "current": true }
+        { "label": "7", "title": "Signed-out Session", "detail": "A DPoP Session Token, bound to the Session Key", "current": true }
       ],
-      "notes": "The retry is not a resend. Assertions and proofs each carry a unique identifier the company refuses to see twice, so the host signs fresh ones and puts the nonce in the new proof. The answer is a DPoP-bound Session Token: useless to anyone who copies it without the key."
+      "notes": "The retry is not a resend. Assertions and proofs each carry a unique identifier the company refuses to see twice, so the host signs fresh ones and puts the nonce in the new proof. The answer is a DPoP-bound Session Token, with no Session ID and no scope: the proof's key names the Session, and a signed-out Session has none. It is useless to anyone who copies it without the key."
     },
     {
       "type": "mermaid",
       "title": "The whole exchange",
-      "diagram": "sequenceDiagram\n  participant H as PAP host\n  participant C as Company\n  H->>C: Start Session (assertions, proof)\n  C-->>H: use_dpop_nonce\n  H->>C: Retry (fresh assertions, proof with nonce)\n  C-->>H: Session Token (signed out)\n  Note over H,C: Before expiry\n  H->>C: Renew (fresh assertions, fresh proof)\n  C-->>H: Renewed Session Token",
-      "notes": "Here is the whole exchange at once: the challenge, the retry, and later the renewal of the same Session before its token expires."
+      "diagram": "sequenceDiagram\n  participant H as PAP host\n  participant C as Company\n  H->>C: Start Session (assertions, proof)\n  C-->>H: use_dpop_nonce\n  H->>C: Retry (fresh assertions, proof with nonce)\n  C-->>H: Session Token (signed out)\n  Note over H,C: Before expiry\n  H->>C: Renew (fresh assertions, same Session Key)\n  C-->>H: Renewed Session Token\n  H->>C: Renew, after the Session ended\n  C-->>H: invalid_grant",
+      "notes": "Here is the whole exchange at once: the challenge, the retry, and later the renewal of the same Session before its token expires, proved with the same Session Key. The earlier token keeps working until it expires. Once the company has ended the Session, renewing it draws invalid_grant."
     },
     {
       "type": "mermaid",
       "title": "Renewing, not restarting",
-      "diagram": "stateDiagram-v2\n  state \"Signed out\" as SO\n  state \"Signed in\" as SI\n  state \"Ended\" as E\n  [*] --> SO : start, one nonce retry\n  SO --> SO : renew same session_id\n  SO --> SI : sign-in, later\n  SO --> E : ended\n  E --> [*] : start a new one",
+      "diagram": "stateDiagram-v2\n  state \"Signed out\" as SO\n  state \"Signed in\" as SI\n  state \"Ended\" as E\n  [*] --> SO : start, one nonce retry\n  SO --> SO : renew, same Session Key\n  SO --> SI : sign-in, later\n  SO --> E : invalid_grant\n  E --> [*] : discard the key, start anew",
       "caption": "Renewal loops back to the same Session, so the conversation carries on.",
-      "notes": "Start at the dot. The host starts the Session signed out, after its one nonce retry. Look at the loop: before the token expires, the host renews the same session_id, with fresh assertions and a fresh proof every time, so the conversation and its context carry on. Later the same Session can move on to signed in, through one of the sign-in examples. A Session that has ended answers an error, and the only way forward is to start a new one."
+      "notes": "Start at the dot. The host starts the Session signed out, after its one nonce retry. Look at the loop: before the token expires, the host renews the Session with fresh assertions and a fresh proof signed by the same Session Key, so the conversation and its context carry on. Later the same Session can move on to signed in, through one of the sign-in examples. A Session that has ended answers invalid_grant: the host discards its key, never to use it again, and starts a new Session with a new key."
     },
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Tokens", "Assertions and proofs", "Pairwise user IDs", "Nonces and Session identifiers"] },
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Tokens", "Assertions and proofs", "Pairwise user IDs", "Nonces and Session Keys"] },
       "right": { "heading": "What the model sees", "type": "bullets", "items": ["Lifecycle status", "Granted scopes", "Safe invariants"] },
-      "notes": "None of the credentials reach the model. Tokens, assertions, proofs, pairwise subjects and nonces stay in host code and protected storage; the model sees the Session's status, its scopes, and nothing it could leak."
+      "notes": "None of the credentials reach the model. Tokens, assertions, proofs, Session Keys, pairwise subjects and nonces stay in host code and protected storage; the model sees the Session's status, its scopes, and nothing it could leak."
     },
     {
       "type": "closing",

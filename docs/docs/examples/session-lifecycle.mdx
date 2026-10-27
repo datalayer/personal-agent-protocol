@@ -1,6 +1,6 @@
 ---
 title: Signed-out Session lifecycle
-description: Start and renew a Session with fresh assertions and DPoP proofs.
+description: Start and renew a Session named by its Session Key, with fresh assertions and DPoP proofs.
 ---
 
 import Deck from '@theme/Deck';
@@ -12,7 +12,9 @@ import deck from '@site/decks/examples/session-lifecycle.deck.json';
 
 A signed-out Session gives the company a stable, pairwise context before the
 user shares account identity. The Session can support public questions and a
-conversation that later continues through sign-in.
+conversation that later continues through sign-in. Its Session Key, a DPoP key
+of its own, names it: the thumbprint of that key is how the company and the
+SDK tell Sessions apart, with no Session ID on the wire.
 
 ```mermaid
 sequenceDiagram
@@ -21,6 +23,7 @@ sequenceDiagram
   participant S as Reactor signer
   participant D as Reactor DPoP provider
   participant C as Company authorization server
+  H->>D: New Session Key for a new Session
   H->>S: Sign fresh Session assertion and client assertion
   S-->>H: Protected assertions
   H->>D: Create fresh proof (no nonce)
@@ -30,21 +33,27 @@ sequenceDiagram
   H->>S: Sign fresh assertions for retry
   H->>D: Create fresh proof with nonce
   H->>C: Retry token request
-  C-->>H: DPoP Session Token, signed_in=false
+  C-->>H: DPoP Session Token (signed out: the grant says so)
   Note over H,C: Later, before expiry
   H->>S: Sign fresh renewal assertions
-  H->>D: Create fresh renewal proof
-  H->>C: Renew the same session_id
-  C-->>H: Renewed Session Token
+  H->>D: Create fresh renewal proof with the same Session Key
+  H->>C: Renew: the key names the same Session
+  C-->>H: Renewed Session Token (the earlier one works until it expires)
+  Note over H,C: Once the Session has ended
+  H->>C: Renew with that key
+  C-->>H: invalid_grant
+  H->>D: Discard the key; a new Session gets a new one
 ```
 
 ## What the example proves
 
 - The initial Session is explicitly signed out.
 - A DPoP nonce retry produces fresh assertions and a fresh proof.
-- Renewal names the existing opaque Session ID instead of creating unrelated
-  conversational state.
-- Tokens, pairwise subjects, Session IDs, assertions, proofs, and nonces stay
+- Renewal proves the same Session Key, so it renews the same Session instead
+  of creating unrelated conversational state; no Session ID is sent or read.
+- `invalid_grant` on renewal means the Session has ended: its key is
+  discarded, never reused, and the next Session starts with a new key.
+- Tokens, pairwise subjects, Session Keys, assertions, proofs, and nonces stay
   inside host-owned code and protected storage.
 - The model sees only lifecycle status, scopes, and safe invariants.
 

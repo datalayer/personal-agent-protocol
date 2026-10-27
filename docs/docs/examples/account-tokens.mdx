@@ -25,10 +25,10 @@ sequenceDiagram
   participant Lock as pap.accountTokenLock
   participant Vault as pap.tokenStore
   participant Company as Company token endpoint
-  Tool->>SDK: refresh(reference, session_id)
+  Tool->>SDK: refresh(reference, session_key)
   SDK->>Lock: Hold the reference
   SDK->>Vault: Read Account Token
-  SDK->>Company: refresh_token grant + session_id + assertion + DPoP
+  SDK->>Company: refresh_token grant + assertion + DPoP by the Session Key
   Company-->>SDK: Signed-in Session Token + rotated Account Token
   SDK->>Vault: Replace the old token before releasing the lock
   SDK-->>Tool: signed_in, rotated, granted scopes
@@ -39,8 +39,13 @@ sequenceDiagram
   Company-->>SDK: invalid_scope
   SDK-->>Tool: re_consent_required (sign the user in again)
   Note over Company: Ninety-one days later
-  SDK->>Company: refresh_token grant
+  SDK->>Company: refresh_token grant, the old Session's key
   Company-->>SDK: invalid_grant
+  SDK->>Company: Renew the Session with its assertion
+  Company-->>SDK: invalid_grant (the Session has ended)
+  SDK-->>Tool: session_ended (its key discarded)
+  Tool->>SDK: refresh(reference), a new Session Key
+  Company-->>SDK: invalid_grant (the Account Token has expired)
   SDK->>Vault: Delete the stored copy
   SDK-->>Tool: signed_out
   Tool->>SDK: revoke(reference)
@@ -51,26 +56,31 @@ sequenceDiagram
 
 The walkthrough:
 
-1. **Refresh** signs the same Session in again (`session_id` unchanged) and the
-   company rotates the token. The new one replaces the old in the token store
+1. **Refresh** with the Session Key signs that same Session in again (the
+   proof's key names it) and the company rotates the Account Token. The
+   Session's earlier Session Tokens keep working until they expire. The new one replaces the old in the token store
    before the call returns.
 2. **Two refreshes at once** both succeed: the Reactor `pap.accountTokenLock`
    serializes them, so the second presents the token the first rotated in, not
    the one the company already revoked.
 3. **Narrower** scopes are granted; **wider** scopes come back as
    `re_consent_required`, a decision for the user, never a retry.
-4. An **expired** token draws `invalid_grant`; the SDK deletes it and the
-   Session continues signed out.
+4. Ninety-one days later the **Session has ended** too: refreshing for it is
+   `session_ended` and its key is discarded. Without a key, the Account Token
+   would start a new Session, but it has **expired**: `invalid_grant`, the SDK
+   deletes it, and the user stays signed out.
 5. **Revocation** signs out every Session signed in with the token. The next
-   question to the company draws an `authorization` event again.
+   question to the company draws an `authorization` event again
+   (`insufficient_scope`).
 
-The model sees statuses (`signed_in`, `re_consent_required`, `signed_out`),
+The model sees statuses (`signed_in`, `re_consent_required`, `session_ended`,
+`signed_out`),
 whether a rotation happened, and scope names. The Account Token, Session
-Tokens, client assertions, and DPoP proofs stay host-only, behind opaque
+Tokens, Session Keys, client assertions, and DPoP proofs stay host-only, behind opaque
 references in Reactor stores.
 
 TypeScript has the same client: `new AccountTokenClient({ reactor, fetch })`,
-with `refresh(reference, { context, sessionId, scopes })` and `revoke()`, and
+with `refresh(reference, { context, sessionKey, scopes })` and `revoke()`, and
 the lock contributed at `AccountTokenLocks`.
 
 - Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/account-tokens).

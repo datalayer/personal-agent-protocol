@@ -291,8 +291,8 @@ class ClientAssertionClaims(ProtocolModel):
         return self
 
 
-TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
-ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
+TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"  # noqa: S105 - an OAuth token or grant type, not a credential
+ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"  # noqa: S105 - an OAuth token or grant type, not a credential
 
 
 def _mcp_resource(value: str) -> str:
@@ -425,7 +425,7 @@ class SessionClient:
             form=lambda: form,
             error=SessionError,
         )
-        if response.token_type != "Bearer" or response.issued_token_type != ACCESS_TOKEN_TYPE:
+        if response.token_type != "Bearer" or response.issued_token_type != ACCESS_TOKEN_TYPE:  # noqa: S105 - an OAuth token or grant type, not a credential
             raise SessionError(
                 "unexpected_token_type", "Token Exchange answered with another token type"
             )
@@ -482,7 +482,7 @@ class SessionClient:
                     tenant_id=tenant_id, issuer=issuer, session_key=session_key
                 )
             raise
-        if response.token_type != "DPoP":
+        if response.token_type != "DPoP":  # noqa: S105 - an OAuth token or grant type, not a credential
             # Bearer Session Tokens come from Token Exchange alone (§4.3).
             raise SessionError(
                 "unexpected_token_type", "The Session request returned another token type"
@@ -501,7 +501,7 @@ class SessionClient:
         form: Callable[[], dict[str, str] | Awaitable[dict[str, str]]],
         error: type[PersonalAgentProtocolError],
     ) -> TokenResponse:
-        """POST one grant to the token endpoint with the Session Key's proof (§4.2–§4.8).
+        """POST one grant to the token endpoint with the Session Key's proof (§4.2 to §4.8).
 
         `form` gives the grant's own fields, made again for a `use_dpop_nonce` retry so
         no assertion is sent twice; the client assertion and a fresh proof signed with

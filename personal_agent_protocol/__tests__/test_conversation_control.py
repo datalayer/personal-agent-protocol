@@ -81,7 +81,12 @@ def frame(data: dict[str, object], *, name: str | None = None, with_id: bool = T
 
 @pytest.mark.asyncio
 async def test_stream_yields_events_and_deltas_and_stops_at_closed() -> None:
-    reply = {"id": "msg_r1", "author": {"type": "agent"}, "role": "company", "text": "Your order shipped."}
+    reply = {
+        "id": "msg_r1",
+        "author": {"type": "agent"},
+        "role": "company",
+        "text": "Your order shipped.",
+    }
 
     def company(request: httpx.Request) -> httpx.Response:
         assert request.headers["accept"] == "text/event-stream"

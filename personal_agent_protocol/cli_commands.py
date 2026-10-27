@@ -308,7 +308,11 @@ def _render_operation(payload: dict) -> None:
 
 
 def _message(reactor: Any, text: str, human: bool) -> Message:
-    return Message(id=generate_message_id(reactor), author=Author(type="human" if human else "agent"), text=text)
+    return Message(
+        id=generate_message_id(reactor),
+        author=Author(type="human" if human else "agent"),
+        text=text,
+    )
 
 
 def _render_page(payload: dict) -> None:
@@ -508,7 +512,6 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             metadata = company.oauth_metadata
             if metadata is None or not metadata.offers_direct:
                 raise NotConfiguredError("no_direct", "The company offers no Direct Sign-In")
-            assert metadata.authorization_endpoint is not None  # offers_direct requires it
             target = redirect_uri
             if target is None:
                 identity = AgentIdentityClient(reactor=runtime.reactor, http_client=runtime.http)
@@ -518,7 +521,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 target = registered[0]
             client = DirectSignInClient(reactor=runtime.reactor, http_client=runtime.http)
             await client.begin(
-                authorization_endpoint=metadata.authorization_endpoint,
+                authorization_endpoint=cast(str, metadata.authorization_endpoint),
                 token_endpoint=metadata.token_endpoint,
                 issuer=metadata.issuer,
                 client_id=record.client_id,
@@ -559,10 +562,9 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             metadata = company.oauth_metadata
             if metadata is None or not metadata.offers_device:
                 raise NotConfiguredError("no_device", "The company offers no Device Sign-In")
-            assert metadata.device_authorization_endpoint is not None  # offers_device requires it
             client = DeviceSignInClient(reactor=runtime.reactor, http_client=runtime.http)
             started = await client.begin(
-                device_authorization_endpoint=metadata.device_authorization_endpoint,
+                device_authorization_endpoint=cast(str, metadata.device_authorization_endpoint),
                 token_endpoint=metadata.token_endpoint,
                 issuer=metadata.issuer,
                 client_id=record.client_id,

@@ -184,9 +184,7 @@ def test_each_safe_action_is_one_implementation_on_every_surface(tmp_path: Path)
 def test_arguments_by_position_name_json_or_mapping_are_the_same(tmp_path: Path) -> None:
     world = World(tmp_path)
     session, operation = world.session, world.operation
-    expected = world.studio(
-        "pap.operations.show", {"session": session, "operation_id": operation}
-    )
+    expected = world.studio("pap.operations.show", {"session": session, "operation_id": operation})
     assert world.run("pap.operations.show", session, operation) == expected
     assert world.run("pap.operations.show", f"operation_id={operation}", session) == expected
     text = json.dumps({"session": session, "operation_id": operation})

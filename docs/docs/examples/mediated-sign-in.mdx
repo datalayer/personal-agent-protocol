@@ -10,13 +10,15 @@ import deck from '@site/decks/examples/mediated-sign-in.deck.json';
 
 <Deck spec={deck} />
 
-Some companies cannot send their users to a browser. They declare the fields
+Some companies can't offer Direct or Device Sign-In yet. They declare the fields
 they need (`auth.mediated.fields`) and an endpoint on their own domain, and
 the personal agent relays what the user types. It is the one sign-in mode
 where a password passes through the agent's host, so the SDK narrows what the
 host can do with it. The paired examples run the real `MediatedSignInClient`
 against Manzanita Outfitters, which asks for an email, a password, and then a
-one-time code.
+one-time code. Mediated Sign-In is transitional, like OAuth's password grant:
+a company offers it only until it can add Direct or Device Sign-In, and the
+protocol plans to remove it at a date set with version 1.0.
 
 ```mermaid
 sequenceDiagram
@@ -47,8 +49,9 @@ The walkthrough also shows the refusals:
 - An endpoint off the company's domain is `unsafe_mediated_endpoint`, raised
   before the user is asked anything.
 - The protected input must answer exactly the declared fields, none empty.
-- Only the Session that started a sign-in can finish it
-  (`session_mismatch`); the pending state is kept for the right one.
+- Only the Session that started a sign-in can finish it: another Session Key
+  is another Session (`session_mismatch`), and the pending state is kept for
+  the right one.
 - A wrong code is `code_required` again with the same reference; the company
   ends the sign-in with `failed` after its attempt limit.
 

@@ -5,7 +5,7 @@ title: Conversations
 # Conversations
 
 A PAP conversation is how a personal agent talks to a company's agent (draft
-0.2 §7). `ConversationClient` sends idempotent messages and reads an ordered
+0.3 §7). `ConversationClient` sends idempotent messages and reads an ordered
 event log by long polling (see [conversation messages](/examples/conversation-messages/)
 and [conversation events](/examples/conversation-events/)). This guide covers
 streaming and the controls: sign-in mid-conversation, Direct Conversations,
@@ -24,7 +24,7 @@ async for item in conversations.stream(endpoint, conversation_id, token=token, *
 ```
 
 ```typescript
-for await (const item of conversations.stream(endpoint, conversationId, { token, tenantId, pairwiseUserId, issuer })) {
+for await (const item of conversations.stream(endpoint, conversationId, { token, tenantId, issuer })) {
   if ('kind' in item && item.kind === 'text-delta') ui.showTyping(item.message_id, item.text);
   else if ('kind' in item && item.kind === 'reconnected') ui.dropPartial(item.discardedMessageIds);
   else handleEvent(item);
@@ -46,12 +46,21 @@ for await (const item of conversations.stream(endpoint, conversationId, { token,
 
 ## Sign-in mid-conversation (§7.11)
 
-When the company needs the user signed in, or more scopes, it answers with an
-`authorization` event (`sign_in_required` or `insufficient_scope`, and the
-`scope` it needs). The host runs any sign-in mode the company offers for the
-**same Session**, then keeps sending to the **same conversation ID** with the
-new Session Token. Nothing in the conversation is restarted; the model never
-sees the sign-in's codes or tokens.
+When the company needs the user's account, or more scopes, it adds an
+`authorization` event: `error` is always `insufficient_scope`, with the same
+meaning as the API error, and `scope` always names the scopes needed. The host
+responds as it would to that error, with its Account Token or by running a
+sign-in mode the company offers for the **same Session** (the same Session
+Key), then keeps sending to the **same conversation ID** with the new Session
+Token. Nothing in the conversation is restarted; the model never sees the
+sign-in's codes or tokens.
+
+A conversation isn't tied to one Session Token or even one Session: the agent
+may switch tokens partway, after signing in, renewing, or signing out, or
+continue in a new Session, as long as the token matches the conversation's
+owner. Once a conversation has used the user's account, a request on it from a
+token not signed in to that account gets `insufficient_scope`; the
+conversation stays open, so the user can sign in again and continue it.
 
 ## Direct Conversations (§7.10)
 
@@ -72,27 +81,40 @@ the company refuses later messages with `conversation_closed`. Closing does
 not cancel operations the conversation proposed or started: cancel those
 through [Operations](/guides/operations/).
 
+## Who wrote each message: `author`
+
+Every message names its `author` (§7.4): `type` is `agent` or `human`, and a
+company's message may add who, with `id`, display `name`, and `image` (an
+HTTPS URL) for its person or AI persona. The personal agent never sends those
+three: its own messages are `Message(id=..., author=Author(type="agent"), ...)`,
+or `human` for the words a person typed themselves in a Direct Conversation. A
+company built with the SDK writes its people's replies with
+`staff_reply(..., author_id=..., author_name=..., author_image=...)`.
+
 ## Who wrote each reply: `PapReplies`
 
 A company's message is written by its agent or by one of its people
-(`sender`), apart from where the conversation stands (`status`) and who
+(`author`), apart from where the conversation stands (`status`) and who
 answers it now (`responder`). A host shows them apart with `PapReplies`
 (`personal_agent_protocol.ui`), of type
-`application/vnd.datalayer.pap.replies+json`, version 2, made with
+`application/vnd.datalayer.pap.replies+json`, version 3, made with
 `PapReplies.of(company, conversation_id, messages, status=..., responder=...)`
 from the messages a page of events carried.
 
 - It names the conversation the replies are in (`conversation`): where the
   person's own words open a Direct Conversation under it, typed on the page
-  and sent as theirs (`sender: human`), never through the model. Version 1
-  named none, and a reader of version 2 refuses it.
+  and sent as theirs (`author.type: human`), never through the model. Version
+  1 named none.
+- Each reply says who wrote it (`author`: `agent` or `human`) and, when the
+  company gave one, the writer's `name` (version 3), shown as *one of its
+  people (Rosa)*.
 
 - Only the company's own messages with text are replies, each verbatim; a
   message carrying only data is the model's to read. With none, `of` returns
   `None` and nothing is drawn.
 - `text()` says each on its line: *shop.example, its agent: …* or
   *shop.example, one of its people: …*.
-- The personal agent's own messages are `sender: agent` (PAP-7.8-01): only
+- The personal agent's own messages are `author.type: agent` (PAP-7.8-01): only
   what the person typed themselves, in a Direct Conversation, is `human`.
 
 The TypeScript SDK types it (`PapRepliesData`) and checks it with
@@ -101,7 +123,8 @@ The TypeScript SDK types it (`PapRepliesData`) and checks it with
 
 ## Security boundary
 
-- Session Tokens, DPoP proofs, pairwise IDs, and cursors stay in the host.
+- Session Tokens, Session Keys, DPoP proofs, pairwise IDs, and cursors stay in
+  the host.
 - A model receives the event fields it needs: company text, data, event types,
   and statuses. It never treats conversation text, from either side, as the
   user's approval of anything.
@@ -110,4 +133,4 @@ The TypeScript SDK types it (`PapRepliesData`) and checks it with
 
 See the runnable [conversation streaming](/examples/conversation-streaming/)
 and [conversation control](/examples/conversation-control/) examples, and the
-upstream [conversations specification](https://personalagentprotocol.org/docs/0.2/spec#conversations).
+upstream [conversations specification](https://personalagentprotocol.org/docs/0.3/spec#conversations).

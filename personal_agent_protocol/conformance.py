@@ -961,7 +961,13 @@ async def _no_cookies(ctx: ConformanceContext, _: FixtureCase) -> None:
     session = await ctx.session(user)
     endpoint = await ctx.conversations_endpoint()
     body = json.dumps(
-        {"message": {"id": _message_id(), "author": {"type": "agent"}, "text": ctx.scenario.greeting}}
+        {
+            "message": {
+                "id": _message_id(),
+                "author": {"type": "agent"},
+                "text": ctx.scenario.greeting,
+            }
+        }
     ).encode()
     response = await ctx.send(
         "POST",
@@ -2756,15 +2762,16 @@ async def _browser_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
 
     def joined(response: httpx.Response) -> bool:
         return any(
-            "max-age=0" not in value.lower()
-            for value in response.headers.get_list("set-cookie")
+            "max-age=0" not in value.lower() for value in response.headers.get_list("set-cookie")
         )
 
     browser, code = await form()
     signed = await proof(code)
     victim = ctx.new_browser()
     stolen = await submit(victim, code, signed)
-    check(stolen.status_code == 400 and not joined(stolen), "a code from another browser joins none")
+    check(
+        stolen.status_code == 400 and not joined(stolen), "a code from another browser joins none"
+    )
     used = await submit(browser, code, signed)
     check(used.status_code == 400 and not joined(used), "a code is used once, whatever the result")
     browser, code = await form()

@@ -57,21 +57,26 @@ bundle.
 
 The SDK exports the same contribution points as Python (`Clocks`,
 `RandomSources`, `Signers`, `DpopProofProviders`, `TokenStores`, `Caches`,
-`BrowserHandoffs`, `BrowserFormPosts`, `PairwiseUserIdStores`,
+`BrowserHandoffs`, `BrowserJoins`, `PairwiseUserIdStores`,
 `AuthorizationStateStores`, and the rest; see [Contribution
 points](/concepts/contribution-points/)).
 Security-dependent services have no fallback and resolution fails closed when
 missing or ambiguous.
 
-`BrowserSessionClient` builds a maximum-60-second assertion and delegates its
-top-level, body-only POST to `BrowserFormPosts`. Company code imports
-`verifyBrowserAssertion` from `@datalayer/personal-agent-protocol/server`, so
-public-key verification and replay storage stay outside portable browser
-bundles. See the [Browser Session flow](/examples/browser-session/).
+`BrowserSessionClient` joins the agent's own browser (the `BrowserJoins`
+contribution) to a Session: the browser loads the company's join form, the
+client signs a DPoP proof over its one-time code with the Session Key
+(`nonce` = the code, no `ath`), and the browser submits code and proof. See the
+[Browser Session flow](/examples/browser-session/).
+
+`JoseDpopProofProvider` over a `SessionKeyCustody` (`InMemorySessionKeys` for
+tests) makes one Session Key per Session (`newSessionKey`), signs with the key
+a thumbprint names, and forgets a discarded one (`discardSessionKey`);
+`jwkThumbprint` is the RFC 7638 thumbprint that names a Session.
 
 `DpopFetchClient` owns `Authorization` and `DPoP` headers for API and
 conversation requests. It generates a fresh proof for every nonce retry and
-refuses every redirect (`redirect_refused`): under draft 0.2 §3 no token,
+refuses every redirect (`redirect_refused`): under draft 0.3 §3 no token,
 proof or body goes to the URL a protocol endpoint redirects to. See the [DPoP transport flow](/examples/dpop-transport/).
 
 `ConversationClient` composes that transport to start and continue PAP
@@ -116,10 +121,10 @@ keys are accepted; symmetric and private JWK members are rejected.
 
 ```typescript
 import {
-  SessionGrant,
   buildSessionAssertionClaims,
-  parseSessionToken,
+  parseTokenResponse,
   resolvePairwiseUserId,
+  sessionTokenFromResponse,
 } from "@datalayer/personal-agent-protocol";
 
 const pairwiseUserId = await resolvePairwiseUserId(reactor, {
@@ -133,15 +138,14 @@ const claims = buildSessionAssertionClaims({
   issuer: "https://auth.example.com",
 });
 
-// Signing is intentionally provided by a server or key-custody integration.
-const grant = new SessionGrant({
-  assertion: "signed-session-assertion",
-  clientId: claims.iss,
-  clientAssertion: "signed-client-assertion",
+// Signing is intentionally provided by a server or key-custody integration;
+// `SessionClient` does it all. The response names no Session: the Session Key
+// whose proof the request carried does, and the grant says whether it is signed in.
+const token = sessionTokenFromResponse(parseTokenResponse(await response.json()), {
+  sessionKey,
+  signedIn: false, // the JWT bearer grant starts a signed-out Session
 });
-
-const token = parseSessionToken(await response.json());
-console.log(token.sessionId, token.scopes);
+console.log(token.sessionKey, token.scopes);
 ```
 
 `SecretValue` renders as `[REDACTED]` in strings and JSON. Calling `reveal()`
@@ -174,7 +178,7 @@ for usage and the trusted-host boundary.
 Use `parseClientMetadata`, `parseJsonWebKeySet`, `parseMessage`,
 `parseConversationEvent`, `parseConversationEventPage`, and `parseOperation`
 at trust boundaries. These parsers preserve unknown compatible fields and
-future event types while enforcing the required shapes of known draft 0.2 and
+future event types while enforcing the required shapes of known draft 0.3 and
 Operations v1 objects.
 
 The models are aligned with Python through shared fixtures. Conversation
@@ -224,8 +228,7 @@ Node company (`buildCompany`) uses it unless given its own `fetch`.
 `ApiClient` does. A read answers its JSON `body`; a consequential call answers
 `202` with an `operation`, proposed and not performed until it is confirmed with
 `OperationsClient`. A refusal is an `ApiError` carrying the company's code only:
-`sign_in_required` and `insufficient_scope` say in `details.scope` which scope
-signing in would give, and a `429` says in `details.retry_after` how long to
+`insufficient_scope` says in `details.scope` which scope the request needs, and a `429` says in `details.retry_after` how long to
 wait (it is never retried for a write).
 
 ```typescript
@@ -235,24 +238,27 @@ const api = new ApiClient({ transport: new DpopFetchClient({ reactor }) });
 const orders = await api.call("GET", "https://shop.example/api/orders", {
   token: session,
   tenantId,
-  pairwiseUserId,
   issuer,
 });
 const proposed = await api.call(
   "POST",
   "https://shop.example/api/orders/ord_7Hk2/exchanges",
-  { token: session, tenantId, pairwiseUserId, issuer, body: {} },
+  { token: session, tenantId, issuer, body: {} },
 );
 console.log(proposed.status, proposed.operation?.summary);
 ```
 
-For MCP the personal agent asks for a Session Token with `resource` set to the
-MCP server's `url` from discovery (§4.3): `AccountTokenClient.tokenForMcp`
-signed in (the Account Token rotates as on any refresh), or
-`SessionClient.tokenForMcp` signed out. `fetchMcpServerMetadata` reads the
-server's protected resource metadata: a server that supports DPoP
-(`supportsDpop`) gets a DPoP token, sent with proofs by `McpDpopAuth`; one that
-doesn't gets a Bearer token, which works for anyone who holds it, so
+For MCP the personal agent gets a token for the MCP server's `url` from
+discovery alone (§4.3). `fetchMcpServerMetadata` reads the server's protected
+resource metadata. A server that supports DPoP (`supportsDpop`) gets a DPoP
+token, asked for with `resource` set to its `url`: `AccountTokenClient.refresh`
+for the signed-in Session (the Account Token rotates as on any refresh), or
+`SessionClient.start` / `renew` signed out; `McpDpopAuth` sends it with
+proofs. A server without DPoP gets a Bearer token by Token Exchange
+(`SessionClient.tokenForMcp`): the Session's current DPoP token is the
+`subjectToken`, the server's `url` the `resource`, and the answer is a Bearer
+token for the same Session, with the subject token's scopes or fewer. A Bearer
+token works for anyone who holds it, so
 `McpBearerAuth.fetch` sends it only to that exact URL (scheme, host, port and
 path) and refuses every other request before it is made
 (`bearer_not_for_this_url`). The resource must be an HTTPS URL without a
@@ -261,18 +267,25 @@ fragment. `McpClient` is a minimal Streamable HTTP client (initialize,
 it as `result.operation`, the same `Operation` as an API's `202`:
 
 ```typescript
-import { AccountTokenClient, McpClient, fetchMcpServerMetadata, mcpApi } from "@datalayer/personal-agent-protocol";
+import { AccountTokenClient, McpClient, SessionClient, fetchMcpServerMetadata, mcpApi } from "@datalayer/personal-agent-protocol";
 
 const mcpUrl = mcpApi(company.document)!.url;
 const served = await fetchMcpServerMetadata(mcpUrl, { issuer });
-const accounts = new AccountTokenClient({ reactor });
-const signedIn = await accounts.tokenForMcp(accountTokenReference, {
-  context: { tokenEndpoint, issuer, clientId, tenantId, pairwiseUserId },
-  sessionId: session.sessionId,
-  resource: mcpUrl,
-  dpop: served.supportsDpop,
-});
-const mcp = new McpClient({ token: signedIn.token!, url: mcpUrl, reactor, who: { tenantId, pairwiseUserId, issuer } });
+const token = served.supportsDpop
+  ? // A DPoP token for the MCP server, for the same Session.
+    (await new AccountTokenClient({ reactor }).refresh(accountTokenReference, {
+      context: { tokenEndpoint, issuer, clientId, tenantId, pairwiseUserId },
+      sessionKey: session.sessionKey,
+      resource: mcpUrl,
+    })).token!
+  : // No DPoP at the server: a Bearer token by Token Exchange.
+    await new SessionClient({ reactor }).tokenForMcp({
+      clientId, issuer, tokenEndpoint, tenantId,
+      sessionKey: session.sessionKey,
+      subjectToken: session.accessToken,
+      resource: mcpUrl,
+    });
+const mcp = new McpClient({ token, url: mcpUrl, reactor, who: { tenantId, issuer } });
 const tools = await mcp.listTools();
 const result = await mcp.callTool("exchange_jacket");
 console.log(tools.length, result.operation?.operation_id);
@@ -280,7 +293,7 @@ console.log(tools.length, result.operation?.operation_id);
 
 To use another MCP client, hand it `new McpDpopAuth(token, mcpUrl, { reactor, who }).fetch`
 or `new McpBearerAuth(token, mcpUrl).fetch`. An MCP refusal is an `McpError`:
-the token error from the `Bearer` or `DPoP` challenge (`sign_in_required` with
+the token error from the `Bearer` or `DPoP` challenge (`insufficient_scope` with
 `details.scope`, `invalid_token`). A tool that needs Operations, which the
 agent did not negotiate, answers an ordinary tool error. `operationFrom` reads the one operation from an API body,
 an MCP result or a message, and `operationPage` checks an operation's `url` is
@@ -290,11 +303,12 @@ on the company's domain before the agent opens it in its own browser.
 
 The TypeScript reference company serves the website as the Python one does
 when its configuration sets `web: true`: discovery lists
-`web.browser_session_endpoint`, a verified browser assertion (first use only,
-from a live Session of the same agent and user) answers `303` to its
-`return_to` with the company's own `__Host-poppy_session` cookie (`Secure`,
-`HttpOnly`, `SameSite=Lax`, no lifetime of its own, valid only while the
-Session is), and each operation's `url` shows it in that Session with a form
+`web.browser_session_endpoint`, whose GET answers the join form (a one-time
+code tied to the browser by a `__Host-poppy_join` cookie); a POST of that code
+with a DPoP proof over it by an active Session's key answers `303` with the
+company's own `__Host-poppy_session` cookie (`Secure`, `HttpOnly`,
+`SameSite=Strict`, no lifetime of its own, valid only while the Session is),
+and each operation's `url` shows it in that Session with a form
 to confirm or cancel it: the same operation, performed at most once whichever
 channel confirms it. A POST from another site, or without the page's CSRF
 token, decides nothing.
@@ -306,6 +320,10 @@ const config = new CompanyConfig({
   name: "Example Shop",
   domain: "shop.example",
   scopes: ["orders:read", "orders:write"],
+  scopeDescriptions: {
+    "orders:read": "See your orders",
+    "orders:write": "Exchange or return items in your orders",
+  },
   writeScopes: ["orders:write"],
   web: true,
 });

@@ -152,7 +152,9 @@ def test_a_narrower_refresh_reports_what_was_left_out() -> None:
 def test_a_wider_scope_is_re_consent_not_a_retry() -> None:
     client, security = arrange(lambda _: httpx.Response(400, json={"error": "invalid_scope"}))
     result = asyncio.run(
-        client.refresh("account_ref", context=CONTEXT, session_key="K" * 43, scopes=("orders:write",))
+        client.refresh(
+            "account_ref", context=CONTEXT, session_key="K" * 43, scopes=("orders:write",)
+        )
     )
     assert result.status == "re_consent_required"
     assert "account_ref" in security.tokens.values
@@ -202,7 +204,7 @@ def test_a_scope_the_company_was_not_asked_for_is_refused() -> None:
 
 def test_a_bearer_answer_to_a_refresh_is_refused() -> None:
     # Bearer Session Tokens come from Token Exchange alone (§4.3).
-    client, _ = arrange(lambda _: httpx.Response(200, json=signed_in(token_type="Bearer")))
+    client, _ = arrange(lambda _: httpx.Response(200, json=signed_in(token_type="Bearer")))  # noqa: S106 - an OAuth token type, not a credential
     with pytest.raises(AuthorizationError) as raised:
         asyncio.run(client.refresh("account_ref", context=CONTEXT, session_key="K" * 43))
     assert raised.value.code == "invalid_token_response"

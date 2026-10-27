@@ -15,7 +15,6 @@ from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untype
 from personal_agent_protocol import (
     DPOP_PROOF_PROVIDERS,
     JWT_BEARER_GRANT,
-    JWT_CLIENT_ASSERTION,
     SIGNERS,
     DpopProofRequest,
     SessionClient,
@@ -375,7 +374,7 @@ async def test_an_agent_id_rides_in_the_session_assertion() -> None:
         reactor.stop()
     sessions = [
         claims
-        for claims, purpose in zip(signer.claims, signer.purposes)
+        for claims, purpose in zip(signer.claims, signer.purposes, strict=True)
         if purpose == "session_assertion"
     ]
     assert sessions[0]["agent_id"] == "agt_shopping"

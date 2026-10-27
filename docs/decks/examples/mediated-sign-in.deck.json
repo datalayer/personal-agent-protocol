@@ -16,7 +16,7 @@
       "type": "statement",
       "title": "Why it needs care",
       "statement": "The one sign-in mode where a **password** passes through the host. So the SDK **narrows** what the host can do with it.",
-      "notes": "In every other mode the company's own page takes the password. Here it passes through the agent's host, so the SDK limits where it can go, how often, and who can see it."
+      "notes": "In every other mode the company's own page takes the password. Here it passes through the agent's host, so the SDK limits where it can go, how often, and who can see it. The protocol calls Mediated Sign-In transitional: for companies that cannot offer Direct or Device Sign-In yet, and meant to be removed, as OAuth 2.1 removed the password grant."
     },
     {
       "type": "mermaid",
@@ -42,7 +42,7 @@
       "title": "The sign-in, with its refusals",
       "diagram": "stateDiagram-v2\n  direction LR\n  state \"Signed out\" as SO\n  state \"Refused\" as RF\n  state \"Code required\" as CR\n  state \"Complete\" as OK\n  state \"Failed\" as FL\n  [*] --> SO\n  SO --> RF : endpoint off domain\n  SO --> CR : credentials sent once\n  CR --> CR : wrong code\n  CR --> OK : right code\n  CR --> FL : attempt limit",
       "caption": "Every refusal is a state the host can explain; only the right code from the right Session completes.",
-      "notes": "Start signed out. If the declared endpoint is off the company's domain, the client refuses with unsafe_mediated_endpoint before the user is asked anything. Otherwise the credentials go once, and the company answers code_required. A wrong code comes back as code_required again, with the same reference. The right code completes the sign-in. After its own attempt limit, the company answers failed. Two more refusals do not change the state: the protected input must answer exactly the declared fields, none empty, and only the Session that started the sign-in can finish it; any other gets session_mismatch, and the pending state is kept for the right one."
+      "notes": "Start signed out. If the declared endpoint is off the company's domain, the client refuses with unsafe_mediated_endpoint before the user is asked anything. Otherwise the credentials go once, and the company answers code_required. A wrong code comes back as code_required again, with the same reference. The right code completes the sign-in. After its own attempt limit, the company answers failed. Two more refusals do not change the state: the protected input must answer exactly the declared fields, none empty, and only the Session that started the sign-in can finish it; any other Session, under another Session Key, gets session_mismatch, and the pending state is kept for the right one."
     },
     {
       "type": "two-columns",

@@ -33,9 +33,9 @@
         { "label": "2", "title": "Build", "detail": "`iss`, `sub`, `aud`, `iat`, `exp`, `jti`" },
         { "label": "3", "title": "Sign", "detail": "Through the Reactor signer" },
         { "label": "4", "title": "Verify", "detail": "Signature, audience, time, `jti` replay" },
-        { "label": "5", "title": "Session", "detail": "A signed-out Session Token", "current": true }
+        { "label": "5", "title": "Session", "detail": "A signed-out Session Token, named by the proof's key", "current": true }
       ],
-      "notes": "The host resolves the subject, builds the claims and has them signed. The company checks the signature, that it is the audience, that the time window holds, and that it has never seen this jti. It answers with a signed-out Session Token."
+      "notes": "The host resolves the subject, builds the claims and has them signed. The company checks the signature, that it is the audience, that the time window holds, and that it has never seen this jti. It answers with a signed-out Session Token. The assertion does not name the Session: the token request carries a DPoP proof signed with a new Session Key, and that key's thumbprint names the Session from then on."
     },
     {
       "type": "comparison",
@@ -54,13 +54,13 @@
       "title": "How the company checks it",
       "diagram": "flowchart LR\n  S[\"Signature valid?\"] -- \"yes\" --> U[\"aud is this server?\"]\n  U -- \"yes\" --> T[\"Within iat and exp?\"]\n  T -- \"yes\" --> J[\"jti never seen?\"]\n  J -- \"yes\" --> OK[\"Signed-out Session Token\"]\n  S -- \"no\" --> R[\"Refused\"]\n  U -- \"no\" --> R\n  T -- \"no\" --> R\n  J -- \"no\" --> R",
       "caption": "Every check must pass; one failure and the assertion is worth nothing.",
-      "notes": "Read it left to right, as the company's authorization server does. First the signature must verify against the agent's key. Then the audience must name this very server, so an assertion meant for another company is useless here. Then the time must fall between iat and exp, which keeps the window short. Last, the jti must be new, so a copied assertion is refused the second time. Only when every answer is yes does the company issue a signed-out Session Token."
+      "notes": "Read it left to right, as the company's authorization server does. First the signature must verify against the agent's key. Then the audience must be this server's issuer, as one string and nothing else, not even its token endpoint URL, so an assertion meant for another company is useless here. Then the time must fall between iat and exp, which keeps the window short. Last, the jti must be new, so a copied assertion is refused the second time. Only when every answer is yes does the company issue a signed-out Session Token."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
       "cta": "The Pydantic AI and Agent Runtimes examples build real Session claims and return only their policy",
-      "notes": "The small example stops at safe assertion policy: a Reactor plugin contributes a SQLite pairwise store, and the tool reports lifetime and bindings. The Session lifecycle example sends the assertion through a real token exchange."
+      "notes": "The small example stops at safe assertion policy: a Reactor plugin contributes a SQLite pairwise store, and the tool reports lifetime and bindings. The Session lifecycle example sends the assertion in a real token request, with a DPoP proof by a new Session Key."
     }
   ]
 }

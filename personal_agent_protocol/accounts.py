@@ -179,7 +179,7 @@ class AccountTokenClient:
                 if exc.code != "invalid_grant":
                     raise
                 return await self._invalid_grant(reference, context, key, new_session, store)
-            if response.token_type != "DPoP":
+            if response.token_type != "DPoP":  # noqa: S105 - an OAuth token or grant type, not a credential
                 raise AuthorizationError(
                     "invalid_token_response",
                     "An Account Token request answers with a DPoP Session Token",

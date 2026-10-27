@@ -12,18 +12,19 @@ import deck from '@site/decks/examples/dpop-proof.deck.json';
 
 Demonstrating Proof of Possession (DPoP) prevents a stolen bearer value from
 being sufficient on its own. For every request, the host signs a fresh proof
-covering the normalized HTTP method and URL. When an access token is present,
-the proof also carries its hash; a company nonce can add server-provided
-freshness.
+covering the normalized HTTP method and URL, signed with the Session Key: each
+Session has its own key, and the key's JWK thumbprint names the Session. When
+an access token is present, the proof also carries its hash; a company nonce
+can add server-provided freshness.
 
 ```mermaid
 sequenceDiagram
   autonumber
   participant H as PAP host
-  participant K as Reactor key store / signer
+  participant K as Reactor Session Keys / signer
   participant C as Company API
   participant X as Replay cache
-  H->>K: Create proof for method, URL, token hash, nonce
+  H->>K: Proof with the Session's key: method, URL, token hash, nonce
   K-->>H: Fresh signed DPoP JWT
   H->>C: API request + Session Token + DPoP proof
   C->>C: Verify signature, htm, htu, iat, ath, nonce
@@ -44,6 +45,8 @@ sequenceDiagram
 - `ath` binds the proof to the token without embedding that token in the JWT.
 - Nonce challenges are handled by generating a fresh proof, never by mutating
   or replaying the old one.
+- The verified proof's key thumbprint is the Session Key; once a Session has
+  ended, its key is discarded and the provider refuses to sign with it again.
 - Replay protection is a server responsibility and must be atomic across the
   company's serving fleet.
 

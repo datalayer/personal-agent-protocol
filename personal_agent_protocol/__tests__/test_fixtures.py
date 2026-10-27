@@ -160,7 +160,10 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         assert (page.model_extra or {}) == {"region": "eu"}
     elif case.check == "message_context":
         for context in given["valid"]:
-            assert Message(id="msg_ctx", author=Author(type="agent"), context=context).context == context
+            assert (
+                Message(id="msg_ctx", author=Author(type="agent"), context=context).context
+                == context
+            )
         for context in given["invalid"]:
             with pytest.raises(ValueError):
                 Message(id="msg_ctx", author=Author(type="agent"), context=context)
@@ -254,7 +257,9 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             access_token=SecretStr("sat_rate_limited"),
             token_type="DPoP",  # noqa: S106 - the OAuth token type
             expires_in=60,
-            session_key=await provider.new_session_key(tenant_id="t", issuer="https://shop.example"),
+            session_key=await provider.new_session_key(
+                tenant_id="t", issuer="https://shop.example"
+            ),
             signed_in=False,
         )
         with pytest.raises(PersonalAgentProtocolError) as refused:

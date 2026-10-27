@@ -33,18 +33,18 @@
         { "label": "2", "title": "Take state", "detail": "Atomically, by hashed state" },
         { "label": "3", "title": "Verify", "detail": "Exact redirect, state, issuer, expiry", "current": true }
       ],
-      "notes": "The callback carries a code, the state and the issuer. The host takes the pending request out of the store in one atomic step, getting back the verifier and the existing session_id, then checks the redirect, state, issuer and expiry."
+      "notes": "The callback carries a code, the state and the issuer. The host takes the pending request out of the store in one atomic step, getting back the verifier and the Session Key the code is bound to, then checks the redirect, state, issuer and expiry."
     },
     {
       "type": "flow",
       "title": "The exchange",
       "items": [
-        { "label": "4", "title": "Exchange", "detail": "Code, verifier and existing session_id" },
+        { "label": "4", "title": "Exchange", "detail": "Code and verifier, proved with the Session Key" },
         { "label": "5", "title": "Challenged", "detail": "use_dpop_nonce, with a nonce" },
         { "label": "6", "title": "Retry once", "detail": "Same code and verifier, fresh assertion and proof" },
         { "label": "7", "title": "Signed in", "detail": "Same Session, `orders:read` only", "current": true }
       ],
-      "notes": "The host exchanges the code with a client assertion and a DPoP proof. The company asks for a nonce, so the host retries once: same authorization code and verifier, but a fresh assertion and a fresh proof. The answer is a signed-in token for the same Session, with orders:read."
+      "notes": "The authorization URL carried dpop_jkt, the Session Key's thumbprint, so the company bound the code to that key. The host exchanges the code with a client assertion and a DPoP proof signed with the Session Key; no other key can redeem it. The company asks for a nonce, so the host retries once: same authorization code and verifier, but a fresh assertion and a fresh proof. The answer is a signed-in token for the same Session, with orders:read, and no Session ID on the wire: the proof's key names the Session."
     },
     {
       "type": "bullets",
@@ -53,7 +53,7 @@
       "items": [
         "Redirect location, issuer, state and expiry",
         "Content type, response size and token type",
-        "Sign-in status and the **same** Session ID",
+        "The **same** Session: the code bound by `dpop_jkt`",
         "Scopes: never more than requested; missing ones reported"
       ],
       "notes": "Everything the company sends back is checked. If the company returns a scope the user was never asked for, the host rejects it. Scopes that are missing are reported, so the application can degrade or explain."

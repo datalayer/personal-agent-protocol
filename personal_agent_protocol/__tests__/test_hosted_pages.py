@@ -18,7 +18,7 @@ from personal_agent_protocol.company import CompanyConfig
 from personal_agent_protocol.company.store import AUTHORIZATION
 from personal_agent_protocol.demo.kit import personal_agent_reactor
 
-from .test_company_end_to_end import PAIRWISE, TENANT, World
+from .test_company_end_to_end import TENANT, World
 from .test_direct_and_api import begin
 
 DEVICE_PAGE = "https://pap.manzanita.example/device?slug=orders-helper"

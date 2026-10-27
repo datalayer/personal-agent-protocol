@@ -10,7 +10,8 @@ The Python SDK ships a **reference company**,
 `personal_agent_protocol.company`: a framework-neutral PAP company over plain
 ASGI, assembled from Reactor contributions. It is the counterpart the SDK's
 own end-to-end tests and demo worlds run against, and a starting point for a
-real integration. The TypeScript SDK has no company side yet.
+real integration. The TypeScript SDK ships the same company in
+`@datalayer/personal-agent-protocol/server`.
 
 :::
 
@@ -21,14 +22,24 @@ interfaces that are deployed and authorized consistently.
 
 ```json
 {
-  "protocol_version": "0.2",
+  "protocol_version": "0.3",
   "organization": {
     "name": "Example Company",
     "domain": "example.com"
   },
   "auth": {
     "issuer": "https://auth.example.com",
-    "direct": {"scopes": ["poppy:read", "poppy:write"]}
+    "scopes": {
+      "orders:read": "See your orders and returns",
+      "orders:write": "Return items in your orders"
+    },
+    "scope_hints": {
+      "orders:read": {"changes": "none", "personal_data": true},
+      "orders:write": {"changes": "reversible", "personal_data": true}
+    }
+  },
+  "excluded_tasks": {
+    "url": "https://example.com/poppy/excluded-tasks.json"
   },
   "apis": [
     {
@@ -40,9 +51,31 @@ interfaces that are deployed and authorized consistently.
 }
 ```
 
-The issuer's OAuth metadata must list the discovery domain in `poppy_domains`.
+The issuer's OAuth metadata (RFC 8414) must list `https://{domain}` in
+`protected_resources`, alongside the other resources its tokens are for (an
+MCP server's URL, say), and `grant_types_supported` must include the JWT
+bearer and `refresh_token` grants. Which sign-in modes the company offers
+comes from that metadata too: Direct Sign-In when it has an
+`authorization_endpoint` and the authorization code grant, Device Sign-In when
+it has a `device_authorization_endpoint` and the device code grant, Token
+Exchange when it lists that grant. `auth.mediated` in `poppy.json` offers
+Mediated Sign-In.
+
+Scopes are the company's own: name them for what they allow (`orders:read`,
+`payments:write`), describe each in `auth.scopes` (or in an OpenAPI
+description the company lists), and list them in the metadata's
+`scopes_supported`. The `poppy:` prefix is reserved for the protocol: never
+name a scope with it. `auth.scope_hints` says, per scope, what its most
+consequential operation `changes` (`none`, `reversible`, `irreversible`) and
+whether it touches `personal_data`, so a personal agent can choose the
+narrowest scopes a task needs. Tasks the company chose not to offer through
+the protocol are listed at `excluded_tasks.url` (§8.1), each with an optional
+alternative.
+
 Keep endpoint authorization in application code or a gateway; never ask a
-model to enforce scopes.
+model to enforce scopes. A request whose token lacks a scope gets
+`insufficient_scope` with the `scope` it needs, on APIs (`WWW-Authenticate`),
+in a conversation's `authorization` event, and on Operations.
 
 ## Implement in this order
 
@@ -91,6 +124,16 @@ config = CompanyConfig(
     scopes=("orders:read", "orders:write"),
     write_scopes=("orders:write",),
     mediated_fields=(("email", "Email", False), ("password", "Password", True)),
+    # Every scope described, in words a user and a model understand (`auth.scopes`).
+    scope_descriptions={
+        "orders:read": "See your orders, returns and exchanges",
+        "orders:write": "Exchange or return items in your orders",
+    },
+    # What each scope's most consequential operation changes, and whether it touches
+    # personal data (`auth.scope_hints`).
+    scope_hints={"orders:read": ("none", True), "orders:write": ("reversible", True)},
+    # Tasks not offered through the protocol, published at /poppy/excluded-tasks.json.
+    excluded_tasks=({"task": "Change the size of an item after it has shipped"},),
 )
 service = build_company(config, http_client=http, plugins=[(manifest, my_company_plugin)])
 app = company_app(service)  # any ASGI server, or httpx.ASGITransport in tests
@@ -100,18 +143,40 @@ app = company_app(service)  # any ASGI server, or httpx.ASGITransport in tests
 response, so any web framework can serve it; `company_app()` serves it over
 plain ASGI and rebuilds each request URL on the company's published origin so
 DPoP `htu` checks compare against what the personal agent signed. It
-implements, of draft 0.2 and Operations v1:
+implements, of draft 0.3 and Operations v1:
 
-- discovery (`/.well-known/poppy.json`) and OAuth metadata on one issuer;
-- Sessions with verified client and Session assertions, DPoP-bound tokens,
-  and renewal by `session_id`;
-- Device Sign-In with `authorization_pending` and `slow_down`
-  (`await approve_device()` stands for the company's own approval page);
+- discovery (`/.well-known/poppy.json`) and OAuth metadata on one issuer,
+  with `protected_resources`, `grant_types_supported`, `scopes_supported`,
+  `auth.scopes` and `auth.scope_hints`;
+- Sessions named by their DPoP keys: a JWT bearer grant proved with a key the
+  company doesn't know starts a Session (verified client and Session
+  assertions), one proved with a known key renews it (same `client_id` and
+  User ID, else `invalid_grant`), and an ended Session's key is remembered and
+  refused with `invalid_grant` (`ended_session_memory`). A Session's earlier
+  tokens keep working until they expire: each reflects the Session as it was
+  when issued, so renewal and sign-in revoke none of them;
+- Direct Sign-In with the authorization code bound to the Session Key named
+  by `dpop_jkt` (the exchange's proof must use that key), and loopback
+  redirect URIs matched whatever their port;
+- Device Sign-In with `authorization_pending` and `slow_down`, the device
+  code bound to the first poll's key (`await approve_device()` stands for the
+  company's own approval page);
 - Mediated Sign-In with a one-time code, an attempt limit, and uniform
   failures;
-- Account Tokens rotated on every refresh, narrower scopes only,
-  `invalid_grant` for expired, revoked, or rotated-away tokens, and revocation
-  that signs out every Session signed in with the token;
+- Account Tokens rotated on every refresh, narrower scopes only, not bound to
+  a Session Key (a new key starts a new signed-in Session), `invalid_grant`
+  for expired, revoked, or rotated-away tokens, and revocation that signs out
+  every Session signed in with the token and invalidates the Session Tokens of
+  that sign-in;
+- Token Exchange, when the MCP server doesn't support DPoP (`mcp_dpop=False`):
+  a DPoP Session Token as `subject_token` and the MCP server's URL as
+  `resource` give a Bearer token for that server alone; a token of the wrong
+  type either way is `invalid_target`. With `mcp_dpop` (the default), the
+  server's protected resource metadata lists DPoP and agents ask for a DPoP
+  token with `resource`;
+- excluded tasks (`/poppy/excluded-tasks.json`) and feedback, answering a
+  report about a task that can be done after all with its alternative
+  (`feedback_answers`);
 - conversations with idempotent messages, cursor events, waited replies, SSE,
   handoff, Direct Conversations, `authorization` events, and closing; a
   conversation that is not yours is `conversation_not_found`;
@@ -121,16 +186,26 @@ implements, of draft 0.2 and Operations v1:
   (`staffReply(conversationId, { after, text })`): `after` is the last event
   they read (`conversation_record()` reads it), so an answer written over a
   message they have not seen is refused (`StaleConversationError`) and they
-  read again; their message is `sender: human`, `role: company`, and a closed
+  read again; their message is `role: company` with `author` `{type: human}`,
+  plus `id`, `name`, and `image` when `author_id`, `author_name`, and
+  `author_image` are given, and a closed
   conversation, one not handed to people, or one with a Direct Conversation
   open takes none;
 - Operations proposed by the company agent, read, confirmed at most once
   (latest revision, approval rules, write scopes, extension negotiation),
   revised (`revise()`), and cancelled;
-- with `web` (`web=True`, `web: true` in TypeScript), the website (§5): the
-  browser-session endpoint joins the agent's own browser to its Session with
-  the company's `__Host-poppy_session` cookie, and each operation's page confirms or
-  cancels it, the same operation at most once whichever channel confirms it.
+- with `web` (`web=True`, `web: true` in TypeScript), the website (§5). A GET
+  of the browser-session endpoint answers a form with a one-time `code` (at
+  least 128 random bits, at most 60 seconds) and an empty `proof` field, tied
+  to that browser by a `__Host-poppy_join` cookie (`SameSite=Strict`,
+  `HttpOnly`, `Secure`), never cached, framed, or kept by its opener. The
+  agent's browser posts the code with a DPoP proof over it (`nonce` = the
+  code) signed with the Session Key; the company checks cookie and code (used
+  once, whatever the result), the proof, and that its key is an active
+  Session's (an unknown key is an error, never a new Session), then answers
+  `303` with its `__Host-poppy_session` cookie. Each operation's page confirms
+  or cancels the operation, the same operation at most once whichever channel
+  confirms it.
 
 ### Reactor points
 
@@ -297,6 +372,7 @@ config = CompanyConfig(
     name="Orders helper",
     domain="orders.example",
     scopes=("orders:read",),
+    scope_descriptions={"orders:read": "See your orders"},
     operations=False,
     device_page="https://pap.orders.example/device?slug=orders-helper",
     consent_page="https://datalayer.ai/pap/consent?slug=orders-helper&request={request_id}",
@@ -315,7 +391,7 @@ config = CompanyConfig(
 - The consent page reads the request with
   `service.authorization_request(request_id)` (`authorizationRequest`): the
   agent's `client_name`, its `client_id` domain, each requested scope with its
-  `custom_scopes` words, and `expires_at`. Reading does not consume the
+  `scope_descriptions` words, and `expires_at`. Reading does not consume the
   request, and the summary carries no `state`, PKCE challenge, or redirect.
   The user's decision then goes to `approve_authorization` or
   `deny_authorization` as before.
@@ -332,14 +408,15 @@ config = CompanyConfig(
     name="Orders helper",
     domain="orders-helper.apps.datalayer.ai",
     scopes=("orders:read",),
+    scope_descriptions={"orders:read": "See your orders"},
     operations=False,
     aliases=("orders.example.com",),
 )
 ```
 
 Each alias publishes the company's discovery document, naming itself as the
-organization's domain (§3), and the issuer's OAuth metadata lists it in
-`poppy_domains`, so a personal agent that discovers the alias verifies the
+organization's domain (§3), and the issuer's OAuth metadata lists
+`https://{alias}` in `protected_resources`, so a personal agent that discovers the alias verifies the
 same issuer: one company, never a second identity. Every endpoint stays on
 `domain`; on an alias, which the request's `Host` names, anything but
 `/.well-known/poppy.json` answers `404 not_found`. An alias is a DNS name in
@@ -367,5 +444,5 @@ checked with `check_store`, a company agent, and one executor, serves it with
 [`company-apis`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis)
 example reads and proposes through Manzanita's OpenAPI API and MCP server.
 
-Use the upstream [company implementation guidance](https://personalagentprotocol.org/docs/0.2/guides)
+Use the upstream [company implementation guidance](https://personalagentprotocol.org/docs/0.3/guides)
 alongside the normative specification.

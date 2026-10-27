@@ -12,43 +12,91 @@ controls each party needs to make and enforce its own policy.
 
 The personal agent fetches `https://{domain}/.well-known/poppy.json`. The
 document identifies the company and advertises any supported website, OpenAPI
-or MCP APIs, company-agent protocols, sign-in methods, and extensions.
+or MCP APIs, company-agent protocols, Mediated Sign-In, the company's own
+scopes (`auth.scopes`, with `auth.scope_hints`), the tasks it doesn't offer
+(`excluded_tasks`), and extensions.
 
-Discovery is a trust bootstrap, not ordinary JSON fetching. The agent verifies
-that `organization.domain` is the domain requested. If the document names an
-OAuth issuer, the agent fetches that issuer's metadata and checks both the
-exact issuer and its `poppy_domains` membership.
+Discovery is a trust bootstrap, not ordinary JSON fetching. A redirect may go
+to another host, but the document is used only when the final URL's path is
+exactly `/.well-known/poppy.json`, with no query. The agent verifies that
+`organization.domain` is the host that served it. It then fetches the OAuth
+issuer's metadata ([RFC 8414](https://www.rfc-editor.org/rfc/rfc8414)) and
+checks both the exact issuer and that its `protected_resources` lists
+`https://{organization.domain}`. The same metadata says which sign-in modes
+the company offers, through `grant_types_supported`: Direct Sign-In with the
+authorization code grant, Device Sign-In with the device code grant, and Token
+Exchange for MCP servers without DPoP.
 
-## 2. Start a session
+## 2. Start a Session
 
-A session ties together one user's activity at one company through one
+A Session ties together one user's activity at one company through one
 personal agent. It starts signed out. The company can recognize a returning
-user through a stable, opaque, pairwise user ID without learning the user's
-identity.
+user through a stable, opaque User ID without learning who the user is: a
+pairwise subject identifier, as in OpenID Connect, except that the personal
+agent assigns it, one for each pair of user and company. An agent that acts
+for a user through several agents may also name which one a Session is for,
+with an Agent ID.
 
-The personal agent authenticates itself and requests a short-lived session
-token. Non-MCP tokens are sender-constrained with DPoP. The token is opaque to
-the personal agent.
+The personal agent starts a Session with the JWT bearer grant
+([RFC 7523](https://www.rfc-editor.org/rfc/rfc7523) §2.1). It issues the
+assertion itself, as [draft-ietf-wimse-aims](https://datatracker.ietf.org/doc/draft-ietf-wimse-aims/)
+§10.4.2 describes, except that AIMS names the agent in `sub` while PAP names it
+in `iss` and the user in `sub`, because the token is for that user. The
+assertion's `aud` is the company's issuer alone, narrower than
+[draft-ietf-oauth-rfc7523bis](https://datatracker.ietf.org/doc/draft-ietf-oauth-rfc7523bis/),
+which also allows the token endpoint URL.
+
+Each Session has its own DPoP key, the **Session Key**. Its thumbprint names
+the Session: a proof from a new key starts a Session, a proof from a known key
+renews it or signs it in, and no Session ID travels on the wire. The token is
+opaque to the personal agent. Earlier tokens of a Session keep working until
+they expire, each reflecting the Session as it was when issued.
+
+Off-the-shelf authorization servers generally don't accept this grant as it
+is: they accept a JWT bearer assertion only for a subject they already know,
+and the company has usually never seen the User ID before. So a company needs
+some custom work for the grant that starts a Session, such as an extension to
+its authorization server or a service in front of its token endpoint. The
+requests after it are standard OAuth requests.
 
 ## 3. Sign in only when needed
 
-If a task needs account access, PAP supports direct, device, and mediated
-sign-in. Direct and device flows keep the user's credentials at the company
-and should normally be preferred. Successful sign-in produces a long-lived
-account token; that token is used only at the token endpoint to obtain scoped,
-short-lived session tokens.
+If a task needs account access, the company answers `insufficient_scope` with
+the scopes it needs. PAP supports Direct, Device, and Mediated Sign-In, each
+signing in the **same Session**:
+
+- **Direct Sign-In**: the OAuth authorization code flow with PKCE, the code
+  bound to the Session Key with `dpop_jkt`.
+- **Device Sign-In**: the device authorization grant, the device code bound
+  to the key of the first poll. It follows the cross-device best practices of
+  [RFC 10027](https://www.rfc-editor.org/rfc/rfc10027) (BCP 247), so an agent
+  uses Direct Sign-In when it can.
+- **Mediated Sign-In**: the agent relays the user's credentials. It is
+  **transitional**, like OAuth's password grant: a company offers it only
+  until it can add Direct or Device Sign-In, and the protocol plans to remove
+  it at a date set with version 1.0.
+
+Successful sign-in produces a long-lived Account Token; it is used only at the
+token endpoint, to obtain scoped, short-lived Session Tokens for an existing
+Session or a new one.
 
 ## 4. Choose an interface
 
 The discovery document may offer several ways to work:
 
 - **OpenAPI** for structured operations;
-- **MCP** for tool-oriented access;
-- **web browsing** joined to the same session; and
-- **conversations** with a company agent or company representative.
+- **MCP** for tool-oriented access, with a DPoP token for a server that
+  supports DPoP, or a Bearer token for that server alone by Token Exchange;
+- **web browsing**, the agent's own browser joined to the same Session
+  through the company's form, with a one-time code and a proof by the Session
+  Key; and
+- **conversations** with a company agent or company representative, each
+  message naming its `author`.
 
 An implementation skips interface types it does not understand. A company can
-adopt PAP progressively without exposing every channel on day one.
+adopt PAP progressively without exposing every channel on day one. A task the
+company chose not to offer is listed in its excluded tasks, with an
+alternative when there is one, so the agent can tell the user at once.
 
 ## 5. Confirm consequential actions
 
@@ -57,6 +105,38 @@ it out. The personal agent presents the company's exact current revision to
 the user and confirms that revision. Retries refer to the same operation so the
 company does not perform the action twice.
 
+## PAP and OAuth
+
+PAP builds on OAuth: [RFC 6749](https://www.rfc-editor.org/rfc/rfc6749),
+[RFC 7523](https://www.rfc-editor.org/rfc/rfc7523) (the JWT bearer grant and
+client authentication), [RFC 7636](https://www.rfc-editor.org/rfc/rfc7636)
+(PKCE), [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628) (the device
+authorization grant), [RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)
+(DPoP), [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) (resource
+indicators), [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009) (revocation),
+and the OAuth 2.0 Security Best Current Practice,
+[RFC 9700](https://www.rfc-editor.org/rfc/rfc9700). Token Exchange is
+[RFC 8693](https://www.rfc-editor.org/rfc/rfc8693). Every request except
+Mediated Sign-In is a standard OAuth request.
+
+What a company's authorization server needs beyond those specifications
+(§4.10):
+
+- Sessions named by DPoP keys, with a record for each Session;
+- assertions the personal agent issues, naming itself in `iss`, the User ID
+  in `sub`, and optionally an Agent ID;
+- one account per Session: a Session signed in to one account can't sign in
+  to another (`account_mismatch`);
+- described scopes: each scope in `scopes_supported` described in an OpenAPI
+  description the company lists or in `auth.scopes`;
+- Account Tokens that start Sessions, since they aren't bound to a Session Key;
+- Bearer tokens only by Token Exchange, each for one MCP server; and
+- a few fields and codes: `refresh_token_expires_in`, `extension_required`,
+  and the reserved `poppy:` scope prefix.
+
+Outside OAuth, the protocol adds `poppy.json`, Mediated Sign-In, the browser
+join form, conversations, and extensions.
+
 Continue with the [personal-agent guide](/guides/personal-agent/), the
 [company guide](/guides/company/), or the upstream
-[draft specification](https://personalagentprotocol.org/docs/0.2/spec).
+[draft specification](https://personalagentprotocol.org/docs/0.3/spec).

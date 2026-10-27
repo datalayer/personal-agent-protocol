@@ -24,18 +24,18 @@
       "title": "Sign-in mid-conversation",
       "items": [
         { "label": "1", "title": "Ask", "detail": "Where is my jacket order? Signed out" },
-        { "label": "2", "title": "Authorization", "detail": "sign_in_required, orders:read orders:write" },
+        { "label": "2", "title": "Authorization", "detail": "insufficient_scope, orders:read orders:write" },
         { "label": "3", "title": "Sign in", "detail": "Ada approves the device code" },
-        { "label": "4", "title": "Same conversation", "detail": "Signed-in token, same conversation ID", "current": true }
+        { "label": "4", "title": "Same conversation", "detail": "Same Session signed in, same conversation ID", "current": true }
       ],
-      "notes": "Signed out, Manzanita cannot look up an order, so it answers with an authorization event: sign_in_required and the scopes it needs. The host signs Ada in with a mode the company offers, here device sign-in, and keeps sending to the same conversation ID with the new token."
+      "notes": "Signed out, Manzanita cannot look up an order, so it answers with an authorization event: insufficient_scope, with the scope the request needs. The host signs Ada in for that scope with a mode the company offers, here device sign-in, on the same Session, named by the same Session Key, and keeps sending to the same conversation ID with the signed-in token."
     },
     {
       "type": "flow",
       "title": "A Direct Conversation",
       "items": [
         { "label": "1", "title": "Ada asks", "detail": "To talk about sizing herself" },
-        { "label": "2", "title": "start_direct", "detail": "Under the parent, sender human" },
+        { "label": "2", "title": "start_direct", "detail": "Under the parent, author human" },
         { "label": "3", "title": "Parent locked", "detail": "409 direct_conversation_open", "current": true },
         { "label": "4", "title": "Close it", "detail": "The parent sees direct_closed" }
       ],
@@ -47,10 +47,10 @@
       "items": [
         { "label": "1", "title": "handoff()", "detail": "Ask for a person at the company" },
         { "label": "2", "title": "Queued", "detail": "Until someone takes it" },
-        { "label": "3", "title": "Human", "detail": "Idle, responder is human" },
+        { "label": "3", "title": "Human", "detail": "Idle; replies' author is human" },
         { "label": "4", "title": "close()", "detail": "Later messages: conversation_closed", "current": true }
       ],
-      "notes": "A handoff puts the conversation in the queued state until a person takes it; then the responder is human. When nobody is available, the company says so and the agent carries on. Closing ends the conversation, but operations it proposed or started are not cancelled."
+      "notes": "A handoff puts the conversation in the queued state until a person takes it; then the responder is human, and each of their messages names its author: type human, with the person's id and name when the company gives them. When nobody is available, the company says so and the agent carries on. Closing ends the conversation, but operations it proposed or started are not cancelled."
     },
     {
       "type": "mermaid",

@@ -185,7 +185,6 @@ from .store import (
 )
 from .verify import verify_assertion
 
-REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - OAuth grant type
 _PAGE = 50
 #: How often a compare-and-set is retried against concurrent writers before giving up.
 _CAS_ATTEMPTS = 32
@@ -347,7 +346,7 @@ class CompanyConfig:
     #: original response a repeated key gets again (guides, *Retries*: a set time, a day).
     idempotency_lifetime: timedelta = timedelta(days=1)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901 - one branch per protocol rule
         _check_aliases(self.domain, self.aliases)
         _check_positive(idempotency_lifetime=self.idempotency_lifetime)
         for name, value in (("device_page", self.device_page), ("consent_page", self.consent_page)):
@@ -845,8 +844,14 @@ class CompanyService:
                 return await self._join_page()
             if method == "POST" and path == "/poppy/browser-session" and self.config.web:
                 return await self._browser_session(request)
-            if method == "GET" and path == "/poppy/excluded-tasks.json" and self.config.excluded_tasks:
-                return CompanyResponse(200, {"tasks": [dict(task) for task in self.config.excluded_tasks]})
+            if (
+                method == "GET"
+                and path == "/poppy/excluded-tasks.json"
+                and self.config.excluded_tasks
+            ):
+                return CompanyResponse(
+                    200, {"tasks": [dict(task) for task in self.config.excluded_tasks]}
+                )
             if path.startswith("/operations/") and self.config.web and self.config.operations:
                 return await self._operation_page(request, method, path.split("/")[2])
             if method == "POST" and path == "/oauth/token":
@@ -888,9 +893,7 @@ class CompanyService:
 
     # Discovery ---------------------------------------------------------------------
 
-    def discovery_document(
-        self, domain: str | None = None
-    ) -> dict[str, Any]:
+    def discovery_document(self, domain: str | None = None) -> dict[str, Any]:
         """The discovery document published at `domain`: the company's own, or one of its
         aliases, which it names as the organization's domain; its endpoints stay on `base`.
 
@@ -1209,7 +1212,7 @@ class CompanyService:
         session = replace(
             known,
             expires_at=self._now() + self.config.session_lifetime,
-            token_type="DPoP",
+            token_type="DPoP",  # noqa: S106 - an OAuth token type, not a credential
             resource=resource,
             account_id=None,
             scopes=(),
@@ -1291,7 +1294,7 @@ class CompanyService:
             account_token=_digest(rotated),
             expires_at=now + self.config.session_lifetime,
             resource=resource,
-            token_type="DPoP",
+            token_type="DPoP",  # noqa: S106 - an OAuth token type, not a credential
         )
         response = await self._issue(
             signed_in,
@@ -1323,7 +1326,7 @@ class CompanyService:
         subject = await self._token_session(form.get("subject_token", ""))
         if (
             subject is None
-            or subject.token_type != "DPoP"
+            or subject.token_type != "DPoP"  # noqa: S105 - an OAuth token or grant type, not a credential
             or subject.client_id != client_id
             or subject.key_thumbprint != thumbprint
             or subject.expires_at <= self._now()
@@ -1335,15 +1338,13 @@ class CompanyService:
             raise _RefusedError(400, "invalid_scope")
         bearer = replace(
             subject,
-            token_type="Bearer",
+            token_type="Bearer",  # noqa: S106 - an OAuth token type, not a credential
             key_thumbprint="",
             resource=self.config.mcp_url,
             scopes=requested or subject.scopes,
             expires_at=min(subject.expires_at, self._now() + self.config.session_lifetime),
         )
-        response = await self._issue(
-            bearer, requested=requested, exchanged=True
-        )
+        response = await self._issue(bearer, requested=requested, exchanged=True)
         self._report_session(bearer, renewed=False, for_mcp=True)
         return response
 
@@ -1438,7 +1439,7 @@ class CompanyService:
         if changed is None:
             raise KeyError("unknown user code")
 
-    async def _device_grant(
+    async def _device_grant(  # noqa: C901 - one branch per protocol rule
         self, form: Mapping[str, str], client_id: str, thumbprint: str
     ) -> CompanyResponse:
         key = _digest(form.get("device_code", ""))
@@ -3653,15 +3654,23 @@ class CompanyService:
             self._page(400, "This browser could not join the session."),
             headers={
                 **self._page(400, "").headers,
-                "Set-Cookie": f"{JOIN_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict",
+                "Set-Cookie": (
+                    f"{JOIN_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict"
+                ),
             },
         )
         form = dict(parse_qsl(request.body.decode()))
-        code, proof, browser = form.get("code", ""), form.get("proof", ""), _cookie(request, JOIN_COOKIE)
+        code, proof, browser = (
+            form.get("code", ""),
+            form.get("proof", ""),
+            _cookie(request, JOIN_COOKIE),
+        )
         taken = await self.store.take(JOIN_CODE, _digest(code)) if code else None
         issued = None if taken is None else JoinCode.from_json(taken)
-        if issued is None or browser is None or not hmac.compare_digest(
-            issued.browser, _digest(browser)
+        if (
+            issued is None
+            or browser is None
+            or not hmac.compare_digest(issued.browser, _digest(browser))
         ):
             return refused
         try:

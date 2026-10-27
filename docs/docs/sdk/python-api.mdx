@@ -17,6 +17,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`AccountTokenContext`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Class. Where an Account Token is used, and for whom (all non-secret).
 - [`AccountTokenLock`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Serialize every use of one Account Token (PAP §4.8 rotation).
 - [`AgentIdentityClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/identity.py) — Class. Fetch and verify a personal agent's public identity documents.
+- [`Alternative`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Another way to do a task (§8.2): `instructions`, `references`, or both.
+- [`AlternativeReference`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where an alternative points (§8.2): an OpenAPI operation, an MCP tool, or a page.
 - [`ApiClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. Read and change through a company's API, the credentials host-owned.
 - [`ApiError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. The company refused an API call; `code` is its error, never its body.
 - [`ApiResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. A successful API answer: the body, or the operation it proposes.
@@ -25,21 +27,18 @@ Unknown or internal symbols are deliberately excluded.
 - [`ApprovalSurface`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The host's own approval surface: the user, not a model, answers.
 - [`approve`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Record the user's approval of the revision the host just showed them.
 - [`ApprovedUrl`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. A URL the safety policy approved, and the addresses it approved for its host.
+- [`Author`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Who wrote a message (§7.4): `agent` or `human`, and for a Company message, who.
+- [`AUTHORIZATION_CODE_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `AUTHORIZATION_CODE_GRANT` constant.
 - [`AUTHORIZATION_STATE_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `AUTHORIZATION_STATE_STORES` constant.
-- [`AuthorizationCodeGrant`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Redacted PAP authorization-code exchange values.
 - [`AuthorizationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. An authorization flow failed without exposing callback secrets.
 - [`AuthorizationStateStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist and atomically consume short-lived authorization state.
-- [`BROWSER_ASSERTION_TYPE`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Constant. Public `BROWSER_ASSERTION_TYPE` constant.
-- [`BROWSER_FORM_POSTS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `BROWSER_FORM_POSTS` constant.
 - [`BROWSER_HANDOFFS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `BROWSER_HANDOFFS` constant.
-- [`BrowserAssertionClaims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Claims that bind a controlled browser to one PAP Session.
-- [`BrowserAssertionReplayCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Public `BrowserAssertionReplayCache` class.
-- [`BrowserFormPost`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Submit protected fields as a controlled top-level browser navigation.
+- [`BROWSER_JOINS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `BROWSER_JOINS` constant.
 - [`BrowserHandoff`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Hand a human-only authorization URL to a trusted browser surface.
-- [`BrowserSessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Sign and POST a browser assertion without putting it in a URL.
+- [`BrowserJoin`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The personal agent's own browser, joining a Session through the company's form (§5).
+- [`BrowserSessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Join the agent's own browser to a Session with a proof over a one-time code.
 - [`BrowserSessionError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A browser-session handoff or assertion failed safely.
-- [`BrowserSessionStart`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Safe status after a controlled form POST has started.
-- [`build_browser_assertion_claims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Function. Build unsigned PAP section 5 claims for protected signing.
+- [`BrowserSessionStart`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Safe status once the browser has submitted the join form.
 - [`build_client_assertion_claims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. Build unsigned `private_key_jwt` claims for any request to the company's OAuth server.
 - [`build_direct_sign_in_request`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Build a user-browser authorization URL with random state and S256 PKCE.
 - [`build_pap_reactor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. Build a PAP Reactor host with plugins and return any HTTP client it owns.
@@ -76,9 +75,12 @@ Unknown or internal symbols are deliberately excluded.
 - [`DPOP_PROOF_PROVIDERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `DPOP_PROOF_PROVIDERS` constant.
 - [`DpopHttpClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/transport.py) — Class. Send replay-safe DPoP requests; a redirect is refused, never followed (§3).
 - [`DpopKeyMaterial`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Private signing handle and separately exportable public JWK.
-- [`DpopProofProvider`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Create a fresh DPoP proof while keeping its private key protected.
+- [`DpopProofProvider`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Create fresh DPoP proofs with Session Keys whose private halves it keeps (§4.3).
 - [`DpopProofRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Inputs for one fresh proof-of-possession JWT.
 - [`DpopReplayCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Atomically remember a proof ID until its acceptance window ends.
+- [`ExcludedTask`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A task the company chose not to offer through the protocol (§8.1).
+- [`ExcludedTasks`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The document at `excluded_tasks.url` (§8.1): the same for every user.
+- [`ExcludedTasksDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where the tasks the Company chose not to offer through the protocol are listed (§8.1).
 - [`feedback_endpoint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Function. The company's feedback endpoint, when it asks for feedback.
 - [`FeedbackClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. Send feedback reports with a Session Token, signed in or out, and a DPoP proof.
 - [`FeedbackDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where personal agents report a task the protocol can't do at this company (§8).
@@ -89,13 +91,16 @@ Unknown or internal symbols are deliberately excluded.
 - [`generate_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. Generate a non-PII user ID to persist for one user/company issuer pair.
 - [`IdentityError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Personal-agent metadata or public keys could not be verified safely.
 - [`InMemoryProtocolCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default `pap.cache`: a bounded, least-recently-used map in one process.
+- [`InMemorySessionKeys`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Session Keys in this process's memory: a new P-256 key for each Session (§4.3).
 - [`InMemoryStandingPermissionStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. A single-process store of standing permissions, for examples and tests.
 - [`InProcessAccountTokenLock`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default Account Token lock for a single process.
+- [`is_loopback_redirect`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. A loopback redirect URI (RFC 8252 §7.3): `http` to a loopback IP literal, any port.
 - [`JoseAlgorithm`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Constant. Public `JoseAlgorithm` constant.
-- [`JoseDpopProofProvider`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Create fresh RFC 9449 proofs using per-user/company key material.
+- [`JoseDpopProofProvider`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Create fresh RFC 9449 proofs, each with the key of its own Session (§4.3).
 - [`JoseSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Sign PAP assertions with an injected asymmetric private key or handle.
 - [`JsonWebKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. One asymmetric public signing key published by a personal agent.
 - [`JsonWebKeySet`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A non-empty set of public keys suitable for PAP assertion verification.
+- [`jwk_thumbprint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Function. A public JWK's RFC 7638 SHA-256 thumbprint: a Session Key's name (§4.3).
 - [`JWT_BEARER_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Constant. Public `JWT_BEARER_GRANT` constant.
 - [`JWT_CLIENT_ASSERTION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Constant. Public `JWT_CLIENT_ASSERTION` constant.
 - [`MediatedSignInClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Class. Relay a user's credentials to the company's mediated endpoint, once.
@@ -103,7 +108,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`Message`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Message sent by either side or returned in a conversation event.
 - [`MetadataFetch`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The bounds of one public metadata fetch: size, total time, approved addresses.
 - [`new_idempotency_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. A fresh key for a write: a random UUID (version 4).
-- [`OAuthServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `OAuthServerMetadata` class.
+- [`OAuthServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The issuer's RFC 8414 metadata, with the fields this protocol requires (§3.2).
 - [`openapi_url`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. The company's OpenAPI description, when it advertises one.
 - [`OpenTelemetrySink`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/telemetry.py) — Class. `pap.telemetry` as OpenTelemetry spans, one per event, under the current span.
 - [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `Operation` class.
@@ -134,16 +139,19 @@ Unknown or internal symbols are deliberately excluded.
 - [`RATE_LIMIT_BUDGETS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `RATE_LIMIT_BUDGETS` constant.
 - [`RateLimitBudget`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. A company's request budget, shared by every task and user of the host.
 - [`RecordingTelemetrySink`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/telemetry.py) — Class. `pap.telemetry` in memory: every event, in order.
+- [`redirect_uri_matches`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. Whether `given` is the redirect URI `registered` names (§4.1, §4.5).
 - [`REFRESH_TOKEN_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Constant. Public `REFRESH_TOKEN_GRANT` constant.
+- [`RESERVED_SCOPE_PREFIX`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `RESERVED_SCOPE_PREFIX` constant.
 - [`resolve_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pairwise.py) — Function. Resolve the active Reactor store and return its stable pairwise ID.
 - [`ResolvingTransport`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Every request to an untrusted host resolved, vetted, and pinned.
 - [`RETRY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `RETRY_POLICIES` constant.
 - [`RetryPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. When to retry a refused request (Guides, retries).
+- [`ScopeHint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. What a scope allows, its most consequential operation (§4.4): a Company's claim.
 - [`SessionAssertionClaims`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Claims signed by the personal agent when starting or renewing a session.
-- [`SessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Start and renew signed-out PAP sessions over the OAuth token endpoint.
+- [`SessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Start and renew signed-out PAP Sessions, each named by its own key (§4.2, §4.3).
 - [`SessionError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A session request failed without exposing response secrets.
-- [`SessionGrant`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Redacted form values for a PAP JWT-bearer session request.
-- [`SessionToken`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Opaque token response returned by a PAP company.
+- [`SessionKeyCustody`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Where Session Keys live: made one per Session, found by thumbprint, then forgotten.
+- [`SessionToken`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. A Session Token, with what the SDK knows of it beside the wire response.
 - [`SharedRateLimitBudget`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default `pap.rateLimitBudget`: per-company budgets in one process.
 - [`Signer`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign a compact assertion without exposing private key material.
 - [`SIGNERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `SIGNERS` constant.
@@ -165,14 +173,14 @@ Unknown or internal symbols are deliberately excluded.
 - [`TermLimit`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. A bound on one term, named by its dotted path in `terms`.
 - [`terms_digest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. A digest of exactly what a revision says: its summary and its terms.
 - [`TextDelta`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Class. A piece of a message still being written (SSE `text-delta`, §7.6).
+- [`TOKEN_EXCHANGE_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `TOKEN_EXCHANGE_GRANT` constant.
 - [`TOKEN_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `TOKEN_STORES` constant.
+- [`TokenResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. A token endpoint's answer, as on the wire (§4.2, §4.4): no Session named in it.
 - [`TokenStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Keep credentials behind opaque references and explicit deletion.
 - [`TransportError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. An authenticated PAP resource request failed safely.
 - [`URL_SAFETY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `URL_SAFETY_POLICIES` constant.
 - [`UserApproval`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. The user approved this revision, as it was shown to them.
 - [`validate_direct_sign_in_callback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Validate redirect location, state, and issuer before exposing the code.
 - [`verification_host_allowed`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/device.py) — Function. Whether a device sign-in link may be shown for this company (§4.6).
-- [`VerifiedBrowserAssertion`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Public `VerifiedBrowserAssertion` class.
 - [`VerifiedDpopProof`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Safe identity of a verified, newly accepted DPoP proof.
-- [`verify_browser_assertion`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Function. Verify type, signature, bindings, lifetime, return target, and replay.
 - [`verify_dpop_proof`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Function. Verify signature, binding, freshness, nonce, token hash, and replay state.

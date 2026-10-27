@@ -8,10 +8,10 @@ against Manzanita Outfitters with its website on, from
    GET. The page is a form with a one-time `code` and an empty `proof` field;
    a `SameSite=Strict`, `HttpOnly`, `Secure` cookie ties the code to that
    browser, and the page is never cached or framed.
-2. The host reads the code from that page alone (never from a message or
+1. The host reads the code from that page alone (never from a message or
    another page) and signs a DPoP proof with the Session Key: `htm` POST, `htu`
    the endpoint, the code as its `nonce`, no `ath`.
-3. The browser submits code and proof. Manzanita checks the cookie against the
+1. The browser submits code and proof. Manzanita checks the cookie against the
    code, that the code is unused and unexpired, and that the proof's key is an
    active Session's key, then answers `303` with its own cookie for that
    Session.

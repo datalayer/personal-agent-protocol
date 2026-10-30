@@ -32,7 +32,7 @@ class RepeatedHeader extends Error {}
 /**
  * Headers a request carries at most once: a second is refused (`400`). One credential
  * per request: a repeated one is never merged or picked from (RFC 6750 §2). A repeated
- * `DPoP` header is joined, so its proof fails as `invalid_dpop_proof` (§4.3).
+ * `Poppy-Session` header is joined, so it fails as `invalid_session` (§5.3).
  */
 const SINGLE_HEADERS = ["authorization"] as const;
 
@@ -50,8 +50,8 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Uint8A
 
 function lowerCaseHeaders(request: IncomingMessage): Record<string, string> {
   // One credential per request: a repeated one is never merged or picked from (RFC 6750
-  // §2). `headers` keeps one `authorization` and joins `dpop`, whose joined proofs are no
-  // compact JWT (§4.3); `headersDistinct` keeps every value.
+  // §2). `headers` keeps one `authorization`, and one `poppy-session`; `headersDistinct`
+  // keeps every value, so repeated Session headers are joined and are no compact JWT (§5.3).
   for (const name of SINGLE_HEADERS) {
     if ((request.headersDistinct[name]?.length ?? 0) > 1) throw new RepeatedHeader();
   }
@@ -60,6 +60,8 @@ function lowerCaseHeaders(request: IncomingMessage): Record<string, string> {
     if (value === undefined) continue;
     headers[name.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
   }
+  const sessions = request.headersDistinct["poppy-session"];
+  if (sessions !== undefined) headers["poppy-session"] = sessions.join(", ");
   return headers;
 }
 
@@ -86,8 +88,8 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
  * A request listener answering at the company's own HTTPS origin.
  *
  * The request URL is rebuilt on `service.config.base`, the origin the company
- * publishes, so DPoP `htu` checks compare against what the personal agent
- * signed whatever proxy or TLS terminator is in front.
+ * publishes, so Session JWT `htu` checks compare against what the personal
+ * agent signed whatever proxy or TLS terminator is in front.
  */
 export function companyRequestListener(
   service: CompanyService,

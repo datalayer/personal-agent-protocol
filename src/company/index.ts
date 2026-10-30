@@ -169,7 +169,19 @@ export function buildCompany(
 
 export * from "./points.js";
 export * from "./service.js";
-export { verifyAssertion, type VerifyAssertionOptions } from "./verify.js";
+export {
+  DelegationCache,
+  SESSION_JWT_WINDOW_SECONDS,
+  unverifiedSessionIssuer,
+  verifyAssertion,
+  verifyDelegation,
+  verifySessionJwt,
+  type ResolveClient,
+  type VerifiedDelegation,
+  type VerifiedSessionJwt,
+  type VerifyAssertionOptions,
+  type VerifySessionJwtOptions,
+} from "./verify.js";
 export { checkReplayCache, checkStore, recordSamples, StoreConformanceError } from "./testing.js";
 export {
   byHost,

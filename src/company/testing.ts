@@ -25,7 +25,6 @@
  * identifier stays refused; distinct identifiers are all accepted.
  */
 
-import type { Operation } from "../models.js";
 import type { ReplayCache } from "./points.js";
 import {
   RecordKinds,
@@ -34,10 +33,9 @@ import {
   type AccountGrant,
   type CompanyStore,
   type IdempotencyRecord,
+  type IssuedAccessToken,
   type IssuedCode,
-  type IssuedNonce,
   type JoinCode,
-  type IssuedSession,
   type JsonObject,
   type KnownClient,
   type MessageReceipt,
@@ -46,7 +44,6 @@ import {
   type PendingDevice,
   type PendingMediated,
   type ReplayMark,
-  type SessionPointer,
   type SignInAttempts,
   type StoredConversation,
   type StoredFeedback,
@@ -54,6 +51,7 @@ import {
   type StoredRecord,
   type StoredSession,
   type UserCode,
+  type WebSession,
 } from "./store.js";
 
 const CONCURRENCY = 16;
@@ -87,59 +85,51 @@ function same(a: unknown, b: unknown): boolean {
 /** One record of every kind the company keeps, each field set, for round trips. */
 export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
   const later = new Date(now.getTime() + 5 * 60 * 1000).toISOString();
-  const signedIn: IssuedSession = {
-    sessionKey: "ses_1",
+  const web: WebSession = {
     clientId: "https://atlas.example",
+    sid: "sid_1",
     pairwiseUserId: "usr_1",
-    keyThumbprint: "thumb",
     expiresAt: later,
-    accountId: "acct_1",
-    scopes: ["orders:read", "orders:write"],
-    accountToken: "digest_1",
-    resource: "https://shop.example/mcp",
     agentId: "agt_1",
+    accountId: "acct_1",
+    scopes: ["orders:read"],
+    family: "fam_1",
   };
-  const operation = {
-    operation_id: "op_1",
-    revision: 2,
-    state: "succeeded",
-    summary: "Exchange the jacket.",
-    terms: { order_id: "ord_1", price: { amount: "1.00", currency: "USD" } },
-    expires_at: null,
-    user_approval_required: true,
-    url: "https://shop.example/operations/op_1",
-    confirmation: { revision: 2, approved_by: "user", confirmed_at: now.toISOString() },
-    result: { summary: "Exchanged.", data: null },
-  } as unknown as Operation;
   const records: Record<string, object> = {
     [RecordKinds.session]: {
-      sessionKey: "ses_1",
       clientId: "https://atlas.example",
+      sid: "sid_1",
       pairwiseUserId: "usr_1",
-      tokens: { tok_1: signedIn },
-      latest: "tok_1",
-      accountId: "acct_1",
       endsAt: later,
+      agentId: "agt_1",
+      ended: true,
     } satisfies StoredSession,
-    [RecordKinds.sessionToken]: { sessionKey: "ses_1" } satisfies SessionPointer,
-    [RecordKinds.accountToken]: {
+    [RecordKinds.accessToken]: {
+      clientId: "https://atlas.example",
+      accountId: "acct_1",
+      scopes: ["orders:read", "orders:write"],
+      expiresAt: later,
       family: "fam_1",
+      resource: "https://shop.example/mcp",
+    } satisfies IssuedAccessToken,
+    [RecordKinds.refreshToken]: {
       accountId: "acct_1",
       clientId: "c",
-      pairwiseUserId: "u",
       scopes: ["a", "b"],
       expiresAt: later,
       revoked: true,
+      family: "fam_1",
+      signedInAt: now.toISOString(),
     } satisfies AccountGrant,
     [RecordKinds.accountFamily]: {
       clientId: "c",
       accountId: "acct_1",
       tokens: ["t1", "t2"],
-      sessions: ["ses_1"],
+      accessTokens: ["a1"],
       revoked: true,
     } satisfies AccountFamily,
     [RecordKinds.accountAgent]: { families: ["fam_1", "fam_2"] } satisfies AccountAgent,
-    [RecordKinds.client]: { extensions: ["operations"] } satisfies KnownClient,
+    [RecordKinds.client]: { extensions: { operations: "2" } } satisfies KnownClient,
     [RecordKinds.device]: {
       clientId: "c",
       scopes: ["a"],
@@ -150,7 +140,6 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       accountId: "acct_1",
       granted: ["a"],
       denied: true,
-      sessionKey: "jkt",
     } satisfies PendingDevice,
     [RecordKinds.userCode]: { device: "dev_digest" } satisfies UserCode,
     [RecordKinds.authorization]: {
@@ -159,7 +148,6 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       scopes: ["a"],
       state: "st",
       codeChallenge: "chal",
-      dpopJkt: "jkt",
       expiresAt: later,
       clientName: "Atlas",
       browserBinding: "bind",
@@ -168,18 +156,18 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       clientId: "c",
       redirectUri: "https://atlas.example/cb",
       codeChallenge: "chal",
-      dpopJkt: "jkt",
       requested: ["a"],
       accountId: "acct_1",
       scopes: ["a"],
       expiresAt: later,
     } satisfies IssuedCode,
     [RecordKinds.mediated]: {
-      sessionKey: "ses_1",
+      clientId: "c",
       accountId: "acct_1",
       scopes: ["a"],
       codeReference: "ref",
       expiresAt: later,
+      sentTo: "a•••@example.com",
       attemptKeys: ["k1", "k2"],
       attempts: 2,
       status: "failed",
@@ -197,16 +185,31 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
     } satisfies StoredConversation,
     [RecordKinds.messageId]: { conversationId: "cnv_1", digest: "digest" } satisfies MessageReceipt,
     [RecordKinds.operation]: {
-      operation,
+      operationId: "op_1",
       action: "exchange",
       owner: ["c", "u"],
+      key: "key",
+      revisions: [
+        {
+          revision: "rev_1",
+          summary: "Exchange the jacket.",
+          terms: { order_id: "ord_1", price: { amount: "1.00", currency: "USD" } },
+          expiresAt: later,
+          request: "request",
+          asked: "asked",
+          withdrawn: true,
+        },
+      ],
       accountId: "acct_1",
       scopes: ["orders:write"],
-      performed: true,
+      status: "performed",
+      approved: "rev_1",
+      approvedAt: now.toISOString(),
+      outcome: { summary: "Exchanged.", data: { order: "ord_1" }, succeeded: true },
     } satisfies StoredOperation,
     [RecordKinds.proposal]: { operationId: "op_1" } satisfies OperationProposal,
-    [RecordKinds.browserCookie]: { sessionKey: "ses_1" } satisfies SessionPointer,
-    [RecordKinds.joinCode]: { browser: "browser_digest" } satisfies JoinCode,
+    [RecordKinds.browserCookie]: web,
+    [RecordKinds.joinCode]: { browser: "browser_digest", authorized: web } satisfies JoinCode,
     [RecordKinds.replay]: {} satisfies ReplayMark,
     [RecordKinds.signInAttempts]: { failures: 3, lockedUntil: later } satisfies SignInAttempts,
     [RecordKinds.feedback]: {
@@ -217,11 +220,10 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       pairwiseUserId: "u",
       receivedAt: now.toISOString(),
     } satisfies StoredFeedback,
-    [RecordKinds.dpopNonce]: {} satisfies IssuedNonce,
     [RecordKinds.idempotency]: {
       digest: "digest",
-      status: 202,
-      body: { operation: { operation_id: "op_1" } },
+      status: 200,
+      body: { summary: "Exchanged." },
     } satisfies IdempotencyRecord,
   };
   return records as Readonly<Record<string, JsonObject>>;

@@ -10,18 +10,17 @@
  * The port of the Python `personal_agent_protocol.demo.manzanita`, for tests
  * and the language pairings: a user wants to return a jacket that is not
  * warm enough. Manzanita offers Direct, Device and Mediated Sign-In, a company
- * agent, an OpenAPI API, an MCP server, web pages for its operations joined to the
- * agent's Session (§5), and the Operations extension. Its parts are
- * contributions:
+ * agent, an OpenAPI API, an MCP server, web pages joined to the agent's Session
+ * (§6), and the Operations extension. Its parts are contributions:
  *
  * - `ManzanitaAccounts` (`pap.company.accounts`): one account, Ada's, with a
  *   password and a one-time code.
  * - `ManzanitaAgent` (`pap.company.agent`): reads the order once signed in
- *   (`authorization` until then) and proposes the exchange as an operation.
+ *   (`authorization` until then) and offers the exchange as an operation.
  * - `ManzanitaApi` (`pap.company.api`): orders, and consequential calls that
- *   propose operations (`202`).
+ *   need the user's approval (`403 approval_required`).
  * - `ManzanitaMcp` (`pap.company.mcp`): the same orders and exchange, as MCP
- *   tools (§6, Operations §4.2).
+ *   tools (§7, Operations 4).
  * - `ExchangeExecutor` (`pap.company.operationExecutor`): performs the
  *   exchange, once. Gift wrap, a return that fails partway, and a repair whose
  *   carrier never answers show the other ends of an operation.
@@ -47,6 +46,7 @@ import {
   ToolResults,
   buildCompany,
   type AccountDirectory,
+  type ActionResult,
   type CompanyConfigOptions,
   type ApiCall,
   type ApiResult,
@@ -63,7 +63,7 @@ import {
   type ToolResult,
   type Turn,
 } from "../company/index.js";
-import type { Operation, OperationResult } from "../models.js";
+import type { Operation } from "../models.js";
 import { Clocks, type Clock, type PapCoreOptions } from "../reactor.js";
 import type { SecretValue } from "../secret.js";
 
@@ -140,28 +140,29 @@ export const EXCHANGE: ProposedOperation = {
     order_id: "ord_7Hk2",
     price_difference: { amount: "70.00", currency: "USD" },
   },
-  userApprovalRequired: true,
+  subject: "ord_7Hk2",
 };
 
-/** What each consequential API path proposes (Operations §4.1). */
+/** What each consequential API path needs the user's approval of (Operations 4). */
 export const PROPOSALS: Readonly<Record<string, ProposedOperation>> = {
   exchanges: EXCHANGE,
   "gift-wrap": {
     action: "orders.gift_wrap",
     summary: "Gift-wrap order ord_7Hk2 before it ships again, USD 5.00.",
     terms: { order_id: "ord_7Hk2", price: { amount: "5.00", currency: "USD" } },
+    subject: "ord_7Hk2",
   },
   returns: {
     action: "orders.return",
     summary: "Return the Ridge Jacket (M) from order ord_7Hk2 for a refund of USD 180.00.",
     terms: { order_id: "ord_7Hk2", refund: { amount: "180.00", currency: "USD" } },
-    userApprovalRequired: true,
+    subject: "ord_7Hk2",
   },
   repairs: {
     action: "orders.repair",
     summary: "Send the Ridge Jacket (M) from order ord_7Hk2 for a zip repair, free.",
     terms: { order_id: "ord_7Hk2", price: { amount: "0.00", currency: "USD" } },
-    userApprovalRequired: true,
+    subject: "ord_7Hk2",
   },
 };
 
@@ -187,7 +188,7 @@ export class ManzanitaAgent implements CompanyAgent {
         return [
           {
             text:
-              "The insulated Ridge Jacket is in stock. Your agent cannot confirm exchanges " +
+              "The insulated Ridge Jacket is in stock. Your agent cannot approve exchanges " +
               "with us: exchange it on manzanita.example.",
           },
         ];
@@ -207,7 +208,7 @@ export class ManzanitaAgent implements CompanyAgent {
   }
 }
 
-/** Manzanita's OpenAPI API: orders, and changes proposed as operations. */
+/** Manzanita's OpenAPI API: orders, and exchanges that need the user's approval. */
 export class ManzanitaApi implements CompanyApi {
   readonly description = "Orders and exchanges";
 
@@ -218,16 +219,16 @@ export class ManzanitaApi implements CompanyApi {
       paths: {
         "/api/orders": { get: { summary: "Your orders (orders:read)" } },
         "/api/orders/{order_id}/exchanges": {
-          post: { summary: "Propose an exchange (orders:write): 202 and an operation" },
+          post: { summary: "An exchange (orders:write): 403 approval_required and an operation" },
         },
         "/api/orders/{order_id}/gift-wrap": {
-          post: { summary: "Propose gift wrap (orders:write): 202 and an operation" },
+          post: { summary: "Gift wrap (orders:write): 403 approval_required and an operation" },
         },
         "/api/orders/{order_id}/returns": {
-          post: { summary: "Propose a return (orders:write): 202 and an operation" },
+          post: { summary: "A return (orders:write): 403 approval_required and an operation" },
         },
         "/api/orders/{order_id}/repairs": {
-          post: { summary: "Propose a repair (orders:write): 202 and an operation" },
+          post: { summary: "A repair (orders:write): 403 approval_required and an operation" },
         },
       },
     };
@@ -253,7 +254,7 @@ export class ManzanitaApi implements CompanyApi {
   }
 }
 
-/** Manzanita's MCP server: the same orders and exchange, as tools (§6, Operations §4.2). */
+/** Manzanita's MCP server: the same orders and exchange, as tools (§7, Operations 4). */
 export class ManzanitaMcp implements CompanyMcp {
   readonly description = "Orders and exchanges, as MCP tools";
 
@@ -266,7 +267,7 @@ export class ManzanitaMcp implements CompanyMcp {
       },
       {
         name: "exchange_jacket",
-        description: "Propose the insulated jacket in exchange (orders:write).",
+        description: "Exchange for the insulated jacket (orders:write).",
         inputSchema: { type: "object", properties: {} },
       },
     ];
@@ -295,7 +296,7 @@ export class ExchangeExecutor implements OperationExecutor {
   readonly action = "orders.exchange";
   readonly performed: string[] = [];
 
-  async perform(operation: Operation, _accountId: string): Promise<OperationResult> {
+  async perform(operation: Operation, _accountId: string | undefined): Promise<ActionResult> {
     this.performed.push(operation.operation_id);
     const terms = (operation.terms ?? {}) as Record<string, unknown>;
     const difference = (terms.price_difference ?? {}) as Record<string, unknown>;
@@ -313,7 +314,7 @@ export class GiftWrapExecutor implements OperationExecutor {
   readonly action = "orders.gift_wrap";
   readonly performed: string[] = [];
 
-  async perform(operation: Operation, _accountId: string): Promise<OperationResult> {
+  async perform(operation: Operation, _accountId: string | undefined): Promise<ActionResult> {
     this.performed.push(operation.operation_id);
     return {
       summary: "Order ord_7Hk2 will be gift-wrapped. USD 5.00 charged to the card ending 4242.",
@@ -326,7 +327,7 @@ export class ReturnExecutor implements OperationExecutor {
   readonly action = "orders.return";
   readonly performed: string[] = [];
 
-  async perform(operation: Operation, _accountId: string): Promise<OperationResult> {
+  async perform(operation: Operation, _accountId: string | undefined): Promise<ActionResult> {
     this.performed.push(operation.operation_id);
     throw new OperationFailed({
       summary:
@@ -342,7 +343,7 @@ export class RepairExecutor implements OperationExecutor {
   readonly action = "orders.repair";
   readonly performed: string[] = [];
 
-  async perform(operation: Operation, _accountId: string): Promise<OperationResult> {
+  async perform(operation: Operation, _accountId: string | undefined): Promise<ActionResult> {
     this.performed.push(operation.operation_id);
     throw new OperationOutcomeUnknown("the carrier did not answer");
   }

@@ -4,9 +4,11 @@
  * BSD 3-Clause License
  */
 
-/** Verify a personal agent's client and Session assertions (§4.1, §4.2). */
+/** Verify a personal agent's client assertions and Session JWTs (§4.1, §5.2, §5.3). */
 
 import {
+  compactVerify,
+  decodeJwt,
   decodeProtectedHeader,
   errors as joseErrors,
   importJWK,
@@ -15,15 +17,27 @@ import {
   type JWTPayload,
 } from "jose";
 
-import { SessionError } from "../errors.js";
-import type { JsonWebKeySet } from "../models.js";
+import {
+  DELEGATION_MAX_LIFETIME_SECONDS,
+  DELEGATION_TYPE,
+  SESSION_ID,
+  SESSION_JWT_ALGORITHM,
+  SESSION_JWT_TYPE,
+  constantTimeEqual,
+  jwkThumbprint,
+  normalizedHtu,
+  tokenHash,
+} from "../crypto.js";
+import { ProofError, SessionError } from "../errors.js";
+import type { ClientMetadata, JsonWebKeySet } from "../models.js";
 import { SecretValue } from "../secret.js";
 import type { ReplayCache } from "./points.js";
 
-const ALGORITHMS = new Set(["ES256", "RS256"]);
+/** Companies accept client assertions and delegations signed with these (§4.1, §5.2). */
+const ALGORITHMS = new Set(["ES256", "PS384"]);
 /**
- * An assertion lives at most this long: `exp` at most five minutes after `iat` (§4.1,
- * §4.2). The SDKs' own assertions live 60 seconds.
+ * An assertion lives at most this long: `exp` at most five minutes after `iat` (§4.1).
+ * The SDKs' own assertions live 60 seconds.
  */
 const MAX_LIFETIME_SECONDS = 300;
 /** A `jti` this short is guessable: its replay key could collide with another's. */
@@ -35,8 +49,7 @@ export interface VerifyAssertionOptions {
   readonly issuer: string;
   /**
    * The one value `aud` must be, compared character for character: the company's
-   * `auth.issuer`, for a client assertion and a Session assertion alike, never an
-   * endpoint URL (§4.1, §4.2, §9.4).
+   * issuer, never an endpoint URL (§4.1, §10.4).
    */
   readonly audience: string;
   readonly replayCache: ReplayCache;
@@ -56,9 +69,8 @@ function status(error: string): number {
  *
  * The `jti` is remembered per `client_id` (the assertion's `iss`) until it expires.
  *
- * A client assertion's `sub` is the `client_id` (`subject: issuer`); a
- * Session assertion's is the pairwise user ID (`subject` omitted returns it
- * unchecked for the caller to read).
+ * A client assertion's `sub` is the `client_id` (`subject: issuer`). Every failure is the
+ * same `error`, so nothing about which check failed leaks to the caller.
  */
 export async function verifyAssertion(
   assertion: SecretValue | string,
@@ -77,7 +89,7 @@ export async function verifyAssertion(
   if (claims === undefined) throw refuse("Assertion signature is invalid");
   if (claims.aud !== options.audience) {
     // `aud` is one string, the issuer, exactly: an array, or the token endpoint, is
-    // refused, so the assertion works at one company (§4.1, §4.2).
+    // refused, so the assertion works at one company (§4.1).
     throw refuse("Assertion audience is invalid");
   }
   const iat = Number(claims.iat);
@@ -115,7 +127,7 @@ async function decode(
   const algorithm = String(header.alg ?? "");
   if (!ALGORITHMS.has(algorithm)) throw new TypeError("assertion algorithm is not allowed");
   if (header.typ !== undefined && header.typ !== "JWT") {
-    // A browser assertion (`poppy-browser+jwt`) or a DPoP proof is never a token assertion.
+    // A Session JWT or a delegation is never a client assertion (§5.2, RFC 8725 §3.11).
     throw new TypeError("assertion type is not allowed");
   }
   const kid = header.kid;
@@ -140,4 +152,300 @@ async function decode(
     }
   }
   return undefined;
+}
+
+// Session JWTs (§5.2, §5.3) ---------------------------------------------------------
+
+/** The acceptance window of a Session JWT's `iat`, in seconds (§5.3: such as one minute). */
+export const SESSION_JWT_WINDOW_SECONDS = 60;
+const JTI = /^[A-Za-z0-9_-]{16,256}$/u;
+const AGENT_ID = /^[A-Za-z0-9_-]{1,256}$/u;
+/** Members a JWK must not have for `cnf.jwk` to be a public key (§5.2). */
+const PRIVATE_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] as const;
+
+/** A personal agent's metadata and keys, the key `kid` names fetched when not cached. */
+export type ResolveClient = (
+  clientId: string,
+  kid: string | undefined,
+) => Promise<readonly [ClientMetadata, JsonWebKeySet]>;
+
+/** A delegation that verified (§5.2): its agent, its delegated key, until when. */
+export interface VerifiedDelegation {
+  readonly clientId: string;
+  readonly publicJwk: JWK;
+  readonly thumbprint: string;
+  /** When it expires, in seconds since the epoch. */
+  readonly expiresAt: number;
+}
+
+/** A Session JWT that verified (§5.3): who sent the request, in which Session. */
+export interface VerifiedSessionJwt {
+  readonly clientId: string;
+  readonly sid: string;
+  readonly sub: string;
+  readonly agentId?: string;
+  readonly jti: string;
+  /** Its `iat`, in seconds since the epoch. */
+  readonly issuedAt: number;
+  readonly delegation: VerifiedDelegation;
+}
+
+/**
+ * Verified delegations, until each expires (§5.2: a resource MAY cache them).
+ *
+ * Keyed by the delegation itself; bounded, the oldest dropped first.
+ */
+export class DelegationCache {
+  readonly #entries = new Map<string, VerifiedDelegation>();
+  readonly maxEntries: number;
+
+  constructor(maxEntries = 4096) {
+    this.maxEntries = maxEntries;
+  }
+
+  get size(): number {
+    return this.#entries.size;
+  }
+
+  get(compact: string, now: Date): VerifiedDelegation | undefined {
+    const found = this.#entries.get(compact);
+    if (found !== undefined && now.getTime() >= found.expiresAt * 1000) {
+      this.#entries.delete(compact);
+      return undefined;
+    }
+    return found;
+  }
+
+  put(compact: string, delegation: VerifiedDelegation): void {
+    this.#entries.set(compact, delegation);
+    for (const oldest of this.#entries.keys()) {
+      if (this.#entries.size <= this.maxEntries) break;
+      this.#entries.delete(oldest);
+    }
+  }
+}
+
+function refused(message: string, cause?: unknown): SessionError {
+  return new SessionError("invalid_session", message, { statusCode: 400, cause });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The `iss` a Session JWT names, unverified: whose policy to ask before fetching anything. */
+export function unverifiedSessionIssuer(compact: string): string {
+  let claims: JWTPayload;
+  try {
+    claims = decodeJwt(compact);
+  } catch (cause) {
+    throw refused("The Session header is not a JWT", cause);
+  }
+  if (typeof claims.iss !== "string" || !claims.iss.startsWith("https://")) {
+    throw refused("The Session JWT names no personal agent");
+  }
+  return claims.iss;
+}
+
+/** A JWS's payload, read as JSON once its signature verified. */
+async function verifiedClaims(compact: string, key: JWK, algorithm: string): Promise<Record<string, unknown>> {
+  const publicKey = await importJWK(key, algorithm);
+  const { payload } = await compactVerify(compact, publicKey, { algorithms: [algorithm] });
+  const claims: unknown = JSON.parse(new TextDecoder().decode(payload));
+  if (!isRecord(claims)) throw new TypeError("a JWT's claims are a JSON object");
+  return claims;
+}
+
+/** Steps 1 and 2 of §5.2: the jwks key its `kid` names signed it, and its claims hold. */
+export async function verifyDelegation(
+  compact: string,
+  options: {
+    readonly clientId: string;
+    readonly resolve: ResolveClient;
+    readonly now: Date;
+    readonly cache?: DelegationCache;
+  },
+): Promise<VerifiedDelegation> {
+  const { clientId, resolve, now, cache } = options;
+  const cached = cache?.get(compact, now);
+  if (cached !== undefined) {
+    if (cached.clientId !== clientId) throw refused("The delegation is another agent's");
+    return cached;
+  }
+  let header: ReturnType<typeof decodeProtectedHeader>;
+  try {
+    header = decodeProtectedHeader(compact);
+  } catch (cause) {
+    throw refused("The delegation is not a JWT", cause);
+  }
+  const { alg: algorithm, kid } = header;
+  if (typeof algorithm !== "string" || !ALGORITHMS.has(algorithm) || typeof kid !== "string" || !kid) {
+    throw refused("The delegation's algorithm or key ID is not allowed");
+  }
+  if (header.typ !== DELEGATION_TYPE) throw refused("A delegation's typ is pap-delegation+jwt");
+  let keys: JsonWebKeySet;
+  try {
+    [, keys] = await resolve(clientId, kid);
+  } catch (cause) {
+    throw refused("The agent's keys could not be fetched", cause);
+  }
+  const key = keys.keys.find((candidate) => candidate.kid === kid);
+  if (key === undefined || (key.alg !== undefined && key.alg !== algorithm)) {
+    throw refused("No key of the agent's jwks_uri signed the delegation");
+  }
+  let claims: Record<string, unknown>;
+  try {
+    claims = await verifiedClaims(compact, { ...key } as JWK, algorithm);
+  } catch (cause) {
+    throw refused("The delegation's signature is invalid", cause);
+  }
+  if (claims.iss !== clientId) throw refused("The delegation's iss is not the Session JWT's");
+  const { iat, exp, jti, cnf } = claims;
+  if (typeof jti !== "string" || !jti) throw refused("A delegation has a jti");
+  if (!Number.isInteger(iat) || !Number.isInteger(exp)) {
+    throw refused("The delegation's times are not NumericDates");
+  }
+  const issued = iat as number;
+  const expires = exp as number;
+  if (now.getTime() >= expires * 1000) throw refused("The delegation has expired");
+  if (expires - issued > DELEGATION_MAX_LIFETIME_SECONDS || expires <= issued) {
+    throw refused("A delegation expires at most 24 hours after it is issued");
+  }
+  const jwk = isRecord(cnf) ? cnf.jwk : undefined;
+  if (
+    !isRecord(jwk) ||
+    jwk.kty !== "EC" ||
+    jwk.crv !== "P-256" ||
+    PRIVATE_MEMBERS.some((member) => member in jwk)
+  ) {
+    // The delegated key signs ES256 Session JWTs: a public P-256 key, nothing private.
+    throw refused("The delegation's cnf.jwk is not a public P-256 key");
+  }
+  let thumbprint: string;
+  try {
+    thumbprint = await jwkThumbprint(jwk as JWK);
+  } catch (cause) {
+    throw refused("The delegation's cnf.jwk is incomplete", cause);
+  }
+  const verified: VerifiedDelegation = {
+    clientId,
+    publicJwk: { ...(jwk as JWK) },
+    thumbprint,
+    expiresAt: expires,
+  };
+  cache?.put(compact, verified);
+  return verified;
+}
+
+export interface VerifySessionJwtOptions {
+  /** This company's issuer, which `aud` must be, exactly. */
+  readonly issuer: string;
+  readonly method: string;
+  readonly url: string;
+  readonly resolve: ResolveClient;
+  readonly replayCache: ReplayCache;
+  readonly now: Date;
+  /** The access token the request carries, if any. */
+  readonly accessToken?: string;
+  readonly delegations?: DelegationCache;
+  readonly windowSeconds?: number;
+}
+
+/**
+ * Verify the Session header of one request (§5.2, §5.3); `invalid_session` on any failure.
+ *
+ * The delegation first (`verifyDelegation`, cached), then the JWT's signature with the
+ * delegated key, its `kid` that key's thumbprint, its `iat` no later than the delegation's
+ * `exp`; then `typ`, `alg`, `aud` (this company's issuer, exactly), `htm` and `htu`, `iat`
+ * within the window, and `ath` against the access token, or absent without one. A JWT
+ * signed directly by a key from `jwks_uri` has no delegation and is refused. A reused `jti`
+ * is refused (§5.3: a company MAY).
+ */
+export async function verifySessionJwt(
+  compact: string,
+  options: VerifySessionJwtOptions,
+): Promise<VerifiedSessionJwt> {
+  const { issuer, method, url, resolve, replayCache, now, accessToken, delegations } = options;
+  const window = options.windowSeconds ?? SESSION_JWT_WINDOW_SECONDS;
+  if (compact.split(".").length !== 3 || /[, \t]/u.test(compact)) {
+    throw refused("The Session header is not one compact JWT");
+  }
+  let header: ReturnType<typeof decodeProtectedHeader>;
+  try {
+    header = decodeProtectedHeader(compact);
+  } catch (cause) {
+    throw refused("The Session header is not a JWT", cause);
+  }
+  if (header.typ !== SESSION_JWT_TYPE || header.alg !== SESSION_JWT_ALGORITHM) {
+    throw refused("A Session JWT's typ is poppy-session+jwt and its alg ES256");
+  }
+  const delegationCompact = header.pap_dlg;
+  if (typeof delegationCompact !== "string" || !delegationCompact) {
+    // Signed with a key from jwks_uri itself, or by anyone: never accepted (§5.2).
+    throw refused("A Session JWT carries its delegation");
+  }
+  if (typeof header.kid !== "string") throw refused("A Session JWT names its delegated key");
+  const clientId = unverifiedSessionIssuer(compact);
+  const delegation = await verifyDelegation(delegationCompact, {
+    clientId,
+    resolve,
+    now,
+    ...(delegations === undefined ? {} : { cache: delegations }),
+  });
+  if (!constantTimeEqual(header.kid, delegation.thumbprint)) {
+    throw refused("The Session JWT's kid is not its delegated key's thumbprint");
+  }
+  let claims: Record<string, unknown>;
+  try {
+    claims = await verifiedClaims(compact, delegation.publicJwk, SESSION_JWT_ALGORITHM);
+  } catch (cause) {
+    throw refused("The Session JWT's signature is invalid", cause);
+  }
+  const { iat, aud, htm, htu, sid, sub, agent_id: agentId, jti, ath } = claims;
+  if (!Number.isInteger(iat)) throw refused("The Session JWT's iat is not a NumericDate");
+  const issued = iat as number;
+  if (issued > delegation.expiresAt) {
+    throw refused("The Session JWT was signed after its delegation expired");
+  }
+  // One string, this company's issuer, exactly (§5.2, §10.4).
+  if (aud !== issuer) throw refused("The Session JWT is for another company");
+  let target: string;
+  try {
+    target = normalizedHtu(url);
+  } catch (cause) {
+    if (cause instanceof ProofError) throw refused("The request URL is not HTTPS", cause);
+    throw cause;
+  }
+  if (htm !== method.toUpperCase() || htu !== target) throw refused("The Session JWT is for another request");
+  const seconds = now.getTime() / 1000;
+  if (issued < seconds - window || issued > seconds + window) {
+    throw refused("The Session JWT is outside the acceptance window");
+  }
+  if (typeof sid !== "string" || !SESSION_ID.test(sid)) throw refused("The Session ID is malformed");
+  if (typeof sub !== "string" || !sub || sub.length > 256) throw refused("The User ID is malformed");
+  if (agentId !== undefined && (typeof agentId !== "string" || !AGENT_ID.test(agentId))) {
+    throw refused("The Agent ID is malformed");
+  }
+  if (typeof jti !== "string" || !JTI.test(jti)) throw refused("The Session JWT's jti is malformed");
+  if (accessToken !== undefined) {
+    if (typeof ath !== "string" || !constantTimeEqual(ath, await tokenHash(accessToken))) {
+      throw refused("The Session JWT's ath does not match the access token");
+    }
+  } else if (ath !== undefined) {
+    throw refused("A Session JWT without an access token has no ath");
+  }
+  // Remembered for as long as the JWT would be accepted (§5.3: a company MAY).
+  const first = await replayCache.markOnce(`session:${clientId}:${jti}`, {
+    expiresAt: new Date((issued + window) * 1000),
+  });
+  if (!first) throw refused("The Session JWT has already been used");
+  return {
+    clientId,
+    sid,
+    sub,
+    ...(agentId === undefined ? {} : { agentId }),
+    jti,
+    issuedAt: issued,
+    delegation,
+  };
 }

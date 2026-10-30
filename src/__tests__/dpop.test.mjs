@@ -390,7 +390,7 @@ test("nonces need binding, binding is one of three, and the schemes follow it", 
   assert.deepEqual(schemes("required"), ["DPoP"]);
   const defaults = new CompanyConfig(baseConfig);
   assert.deepEqual(
-    [defaults.dpopBinding, defaults.dpopNonces, defaults.dpopNonceLifetime, defaults.dpopProofWindow],
+    [defaults.dpopBinding, defaults.dpopNonces, defaults.dpopNonceLifetimeSeconds, defaults.dpopProofWindowSeconds],
     ["off", false, 300, 60],
   );
 });

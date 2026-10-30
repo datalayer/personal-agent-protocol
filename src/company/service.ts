@@ -286,9 +286,9 @@ export interface CompanyConfigOptions {
   /** Proofs must carry a nonce the company gave (RFC 9449 §8, §9). */
   readonly dpopNonces?: boolean;
   /** How long a given nonce is accepted, in seconds (default five minutes). */
-  readonly dpopNonceLifetime?: number;
+  readonly dpopNonceLifetimeSeconds?: number;
   /** The acceptance window of a proof's `iat`, in seconds (default a minute). */
-  readonly dpopProofWindow?: number;
+  readonly dpopProofWindowSeconds?: number;
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -340,8 +340,8 @@ export class CompanyConfig {
   readonly idempotencyLifetimeSeconds: number;
   readonly dpopBinding: DpopBinding;
   readonly dpopNonces: boolean;
-  readonly dpopNonceLifetime: number;
-  readonly dpopProofWindow: number;
+  readonly dpopNonceLifetimeSeconds: number;
+  readonly dpopProofWindowSeconds: number;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -377,16 +377,16 @@ export class CompanyConfig {
     this.idempotencyLifetimeSeconds = options.idempotencyLifetimeSeconds ?? 24 * 60 * 60;
     this.dpopBinding = options.dpopBinding ?? "off";
     this.dpopNonces = options.dpopNonces ?? false;
-    this.dpopNonceLifetime = options.dpopNonceLifetime ?? 5 * 60;
-    this.dpopProofWindow = options.dpopProofWindow ?? 60;
+    this.dpopNonceLifetimeSeconds = options.dpopNonceLifetimeSeconds ?? 5 * 60;
+    this.dpopProofWindowSeconds = options.dpopProofWindowSeconds ?? 60;
     for (const [name, lifetime] of Object.entries({
       idempotencyLifetimeSeconds: this.idempotencyLifetimeSeconds,
       sessionLifetimeSeconds: this.sessionLifetimeSeconds,
       accessTokenLifetimeSeconds: this.accessTokenLifetimeSeconds,
       refreshTokenLifetimeSeconds: this.refreshTokenLifetimeSeconds,
       sessionJwtWindowSeconds: this.sessionJwtWindowSeconds,
-      dpopNonceLifetime: this.dpopNonceLifetime,
-      dpopProofWindow: this.dpopProofWindow,
+      dpopNonceLifetimeSeconds: this.dpopNonceLifetimeSeconds,
+      dpopProofWindowSeconds: this.dpopProofWindowSeconds,
     })) {
       if (!(lifetime > 0)) throw new RangeError(`${name} must be positive`);
     }
@@ -1377,7 +1377,7 @@ export class CompanyService {
         url: request.url,
         replayCache: this.#replay(),
         now: this.#now(),
-        windowSeconds: this.config.dpopProofWindow,
+        windowSeconds: this.config.dpopProofWindowSeconds,
         ...(accessToken === undefined ? {} : { accessToken }),
       });
     } catch (error) {
@@ -1396,7 +1396,7 @@ export class CompanyService {
   async #giveDpopNonce(): Promise<string> {
     const nonce = this.#id("nonce");
     await this.store.put(RecordKinds.dpopNonce, nonce, {} satisfies IssuedNonce, {
-      expiresAt: this.#later(this.config.dpopNonceLifetime),
+      expiresAt: this.#later(this.config.dpopNonceLifetimeSeconds),
     });
     return nonce;
   }

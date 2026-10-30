@@ -94,6 +94,46 @@ test("starts and continues with distinct user-global message IDs", async () => {
   assert.ok(!("Authorization" in calls[0].headers));
 });
 
+test("an authorization event with its challenge on an accepted message is one need", async () => {
+  // The status says the message was accepted: it is never sent again (§8.11).
+  const calls = [];
+  const fetch = async (input) => {
+    calls.push(new URL(input).pathname);
+    return new Response(
+      JSON.stringify({
+        conversation_id: "cnv_one",
+        events: [
+          {
+            id: "evt_1",
+            type: "authorization",
+            created_at: "2026-10-30T12:00:00Z",
+            error: "insufficient_scope",
+            scope: "orders:read",
+          },
+        ],
+        cursor: "evt_1",
+        has_more: false,
+        status: "idle",
+        responder: "agent",
+      }),
+      {
+        status: 201,
+        headers: { "content-type": "application/json", "www-authenticate": 'Bearer error="insufficient_scope", scope="orders:read"' },
+      },
+    );
+  };
+  const { reactor, client } = setup(fetch);
+  const answer = await client.start(
+    "https://company.example/poppy",
+    { id: client.generateMessageId(), author: { type: "agent" }, text: "Hi" },
+    { ...request, wait: 0 },
+  );
+  assert.deepEqual(calls, ["/poppy"]);
+  const needs = answer.events.filter((event) => event.type === "authorization");
+  assert.deepEqual(needs.map(({ error, scope }) => [error, scope]), [["insufficient_scope", "orders:read"]]);
+  reactor.stop();
+});
+
 test("surfaces message ID conflicts without response body details", async () => {
   const fetch = async () =>
     new Response(

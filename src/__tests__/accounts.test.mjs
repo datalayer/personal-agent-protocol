@@ -114,6 +114,21 @@ test("a narrower refresh reports what was left out", async () => {
   assert.equal(tokens.get("refresh_ref").reveal(), "refresh-token-1");
 });
 
+test("a refresh that omits the refresh token keeps the one held", async () => {
+  // RFC 6749 §6: the next refresh presents the same token (§4.4).
+  const presented = [];
+  const { client, tokens } = arrange((_url, form) => {
+    presented.push(form.refresh_token);
+    return json(200, signedIn());
+  });
+  const first = await client.refresh("refresh_ref", { context });
+  const second = await client.refresh("refresh_ref", { context });
+  assert.deepEqual([first.status, second.status], ["signed_in", "signed_in"]);
+  assert.deepEqual([first.rotated, second.rotated], [false, false]);
+  assert.deepEqual(presented, ["refresh-token-1", "refresh-token-1"]);
+  assert.equal(tokens.get("refresh_ref").reveal(), "refresh-token-1");
+});
+
 test("a response without scope granted exactly the narrower scopes asked for", async () => {
   const { access_token, token_type } = signedIn();
   const { client } = arrange(() => json(200, { access_token, token_type }));

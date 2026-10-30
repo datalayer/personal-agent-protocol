@@ -131,6 +131,24 @@ def test_a_narrower_refresh_reports_what_was_left_out() -> None:
     assert security.tokens.values["refresh_ref"].get_secret_value() == "refresh-token-1"
 
 
+def test_a_refresh_that_omits_the_refresh_token_keeps_the_one_held() -> None:
+    """RFC 6749 §6: the next refresh presents the same token (§4.4)."""
+
+    presented: list[str] = []
+
+    def company(request: httpx.Request) -> httpx.Response:
+        presented.append(form(request)["refresh_token"])
+        return httpx.Response(200, json=signed_in())
+
+    client, security = arrange(company)
+    first = asyncio.run(client.refresh("refresh_ref", context=CONTEXT))
+    second = asyncio.run(client.refresh("refresh_ref", context=CONTEXT))
+    assert first.status == second.status == "signed_in"
+    assert not first.rotated and not second.rotated
+    assert presented == ["refresh-token-1", "refresh-token-1"]
+    assert security.tokens.values["refresh_ref"].get_secret_value() == "refresh-token-1"
+
+
 def test_a_wider_scope_is_re_consent_not_a_retry() -> None:
     client, security = arrange(lambda _: httpx.Response(400, json={"error": "invalid_scope"}))
     result = asyncio.run(client.refresh("refresh_ref", context=CONTEXT, scopes=("orders:write",)))

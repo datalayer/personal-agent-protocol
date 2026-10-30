@@ -241,3 +241,52 @@ async def test_read_events_rejects_conversation_mismatch() -> None:
                 session=session(),
             )
         reactor.stop()
+
+
+@pytest.mark.asyncio
+async def test_an_authorization_event_with_its_challenge_on_an_accepted_message_is_one_need() -> (
+    None
+):
+    """The status says the message was accepted: it is never sent again (§8.11)."""
+
+    sent: list[str] = []
+
+    def company(request: httpx.Request) -> httpx.Response:
+        sent.append(request.url.path)
+        return httpx.Response(
+            201,
+            headers={"WWW-Authenticate": 'Bearer error="insufficient_scope", scope="orders:read"'},
+            json={
+                "conversation_id": "cnv_one",
+                "events": [
+                    {
+                        "id": "evt_1",
+                        "type": "authorization",
+                        "created_at": "2026-10-30T12:00:00Z",
+                        "error": "insufficient_scope",
+                        "scope": "orders:read",
+                    }
+                ],
+                "cursor": "evt_1",
+                "has_more": False,
+                "status": "idle",
+                "responder": "agent",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
+        reactor, _ = build_pap_reactor(
+            http_client=http,
+            plugins=[(PluginManifest(name="jwts", version="1"), Plugin())],
+        )
+        client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
+        message = Message(id=generate_message_id(reactor), author=Author(type="agent"), text="Hi")
+        answer = await client.start(
+            "https://company.example/poppy", message, session=session(), wait=0
+        )
+        reactor.stop()
+    assert sent == ["/poppy"]
+    needs = [event for event in answer.events if event.type == "authorization"]
+    assert [(event.error, event.scope) for event in needs] == [
+        ("insufficient_scope", "orders:read")
+    ]

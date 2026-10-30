@@ -1521,14 +1521,14 @@
       "description": "A personal agent that does not list operations gets extension_required (403) from a channel that would propose one, never an operation."
     },
     {
-      "id": "protocol.feedback-needs-auth",
-      "kind": "negative",
+      "id": "protocol.feedback-needs-no-auth",
+      "kind": "positive",
       "role": "personal-agent",
       "requirements": [
-        "PAP-9.3-01"
+        "PAP-3.2-26"
       ],
       "check": "discovery",
-      "description": "A company that lists feedback needs an issuer (§3.2): a domain without protected resource metadata naming one is refused.",
+      "description": "A company that lists feedback needs no issuer (§3.2): a domain without protected resource metadata is one with none.",
       "input": {
         "domain": "example.com",
         "responses": {
@@ -1549,7 +1549,8 @@
         }
       },
       "expect": {
-        "error": "issuer_not_found"
+        "issuer": null,
+        "identifier": "https://example.com"
       }
     },
     {

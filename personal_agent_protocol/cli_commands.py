@@ -345,9 +345,9 @@ async def _mcp_client(runtime: CliRuntime, record: SessionRecord) -> tuple[McpCl
     server = mcp_api(company.document)
     if server is None:
         raise NotConfiguredError("no_mcp", "The company lists no MCP server")
-    await fetch_mcp_server_metadata(runtime.http, server.url, issuer=record.issuer)
     token: AccessToken | None = None
     if record.refresh_reference is not None:
+        await fetch_mcp_server_metadata(runtime.http, server.url, issuer=record.issuer)
         result = await RefreshTokenClient(
             reactor=runtime.reactor, http_client=runtime.http
         ).token_for_mcp(record.refresh_reference, context=account_context(record), url=server.url)
@@ -470,18 +470,16 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 )
             company = await company_of(runtime, str(selected))
             metadata = company.oauth_metadata
-            if metadata is None:
-                raise NotConfiguredError("no_sessions", "The company offers no Sessions")
             pairwise = await resolve_pairwise_user_id(
                 runtime.reactor,
                 tenant_id=runtime.tenant_id,
                 local_user_id=user,
-                company_issuer=metadata.issuer,
+                company_issuer=company.identifier,
             )
             started = await SessionClient(reactor=runtime.reactor, http_client=runtime.http).start(
                 client_id=str(client_id),
                 pairwise_user_id=pairwise,
-                issuer=metadata.issuer,
+                issuer=company.identifier,
                 tenant_id=runtime.tenant_id,
             )
             record = SessionRecord(
@@ -489,9 +487,9 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 sid=started.sid,
                 domain=company.document.organization.domain,
                 company=company.document.organization.name,
-                issuer=metadata.issuer,
-                token_endpoint=metadata.token_endpoint,
-                revocation_endpoint=metadata.revocation_endpoint,
+                issuer=company.identifier,
+                token_endpoint=None if metadata is None else metadata.token_endpoint,
+                revocation_endpoint=None if metadata is None else metadata.revocation_endpoint,
                 client_id=str(client_id),
                 tenant_id=runtime.tenant_id,
                 user=user,
@@ -500,7 +498,9 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 signed_in=False,
                 scope="",
                 expires_at="",
-                dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
+                dpop_signing_algs=(
+                    None if metadata is None else metadata.dpop_signing_alg_values_supported
+                ),
             )
             runtime.state.sessions[record.id] = record
             runtime.state.save()
@@ -590,8 +590,8 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session)
             company = await company_of(runtime, record.domain)
-            metadata = company.oauth_metadata
-            if metadata is None or not metadata.offers_direct:
+            metadata = company.require_oauth()
+            if not metadata.offers_direct:
                 raise NotConfiguredError("no_direct", "The company offers no Direct Sign-In")
             target = redirect_uri
             if target is None:
@@ -640,8 +640,8 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session)
             company = await company_of(runtime, record.domain)
-            metadata = company.oauth_metadata
-            if metadata is None or not metadata.offers_device:
+            metadata = company.require_oauth()
+            if not metadata.offers_device:
                 raise NotConfiguredError("no_device", "The company offers no Device Sign-In")
             client = DeviceSignInClient(reactor=runtime.reactor, http_client=runtime.http)
             started = await client.begin(

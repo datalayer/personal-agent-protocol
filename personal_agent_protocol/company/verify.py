@@ -335,7 +335,7 @@ async def verify_session_jwt(  # noqa: C901 - one check per claim, in the spec's
 
     The delegation first (`verify_delegation`, cached), then the JWT's signature with
     the delegated key, its `kid` that key's thumbprint, its `iat` no later than the
-    delegation's `exp`; then `typ`, `alg`, `aud` (this company's issuer, exactly),
+    delegation's `exp`; then `typ`, `alg`, `aud` (this company's identifier, exactly),
     `htm` and `htu`, `iat` within `window`, and `ath` against the access token, or
     absent without one. A JWT signed directly by a key from `jwks_uri` has no
     delegation and is refused. A reused `jti` is refused (§5.3: a company MAY).
@@ -388,7 +388,7 @@ async def verify_session_jwt(  # noqa: C901 - one check per claim, in the spec's
     if issued > delegation.expires_at:
         raise _refused("The Session JWT was signed after its delegation expired")
     if claims.get("aud") != issuer:
-        # One string, this company's issuer, exactly (§5.2, §10.4).
+        # One string, this company's identifier (§3.2), exactly (§5.2, §10.4).
         raise _refused("The Session JWT is for another company")
     try:
         target = normalized_htu(url)

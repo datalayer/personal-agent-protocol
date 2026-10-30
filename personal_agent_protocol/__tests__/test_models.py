@@ -50,7 +50,7 @@ def test_discovery_needs_an_issuer_for_an_api_not_auth() -> None:
             ],
         }
     )
-    assert document.auth is None and document.needs_issuer
+    assert document.auth is None and not document.needs_issuer
     website = DiscoveryDocument.model_validate(
         {
             "protocol_version": "0.3",

@@ -77,7 +77,7 @@ from .crypto import (
 from .demo.kit import AgentIdentity, ControlledBrowser, MemoryVault, MutableClock, PersonalAgentHost
 from .device import DeviceSignInClient
 from .discovery import DiscoveryClient
-from .errors import PersonalAgentProtocolError, TransportError
+from .errors import AuthorizationError, PersonalAgentProtocolError, TransportError
 from .feedback import FeedbackClient, FeedbackReport, feedback_endpoint
 from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
 from .models import Approval, Author, ConversationEvent, DiscoveredCompany, Message, Operation
@@ -115,7 +115,15 @@ from .transport import SessionHttpClient, session_headers
 Kind = Literal["positive", "negative", "recovery"]
 Outcome = Literal["passed", "failed", "skipped"]
 SCHEMA_VERSION = 1
-SUITES = ("protocol", "security", "lifecycle", "conversations", "operations", "dpop")
+SUITES = (
+    "protocol",
+    "security",
+    "lifecycle",
+    "conversations",
+    "operations",
+    "dpop",
+    "no-issuer",
+)
 
 
 # Fixtures ---------------------------------------------------------------------------
@@ -455,12 +463,12 @@ class ConformanceContext:
         return "usr_conf_" + base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
 
     async def session(self, user: str, agent: Agent | None = None) -> PapSession:
-        metadata = await self.metadata()
+        company = await self.company()
         actor = agent or self.agent
         return await actor.sessions.start(
             client_id=actor.identity.client_id,
             pairwise_user_id=user,
-            issuer=metadata.issuer,
+            issuer=company.identifier,
             tenant_id=self.tenant_id,
         )
 
@@ -625,11 +633,10 @@ class ConformanceContext:
         now = self.now() + timedelta(seconds=mutation.get("iat_offset", 0))
         request = self.jwt_request(session, method, url, token)
         claims = session_jwt_claims(request, issued_at=now)
-        if "aud" in mutation:
-            metadata = await self.metadata()
-            claims["aud"] = (
-                metadata.token_endpoint if mutation["aud"] == "token_endpoint" else mutation["aud"]
-            )
+        if mutation.get("aud") == "token_endpoint":
+            claims["aud"] = (await self.metadata()).token_endpoint
+        elif "aud" in mutation:
+            claims["aud"] = mutation["aud"]
         if "htm" in mutation:
             claims["htm"] = mutation["htm"]
         if "htu" in mutation:
@@ -2959,6 +2966,181 @@ async def _dpop_mcp_challenge(ctx: ConformanceContext, _: FixtureCase) -> None:
         "resource_metadata" in answer.headers.get("www-authenticate", ""),
         "the challenge keeps resource_metadata (§7)",
     )
+
+
+# A Company with no issuer (§3.2) ------------------------------------------------------
+
+
+def _no_issuer_company(company: DiscoveredCompany) -> None:
+    check(company.issuer is None, "no issuer")
+    check(company.oauth_metadata is None, "no OAuth metadata")
+    check(company.identifier == company.resource, "its identifier is its HTTPS domain")
+
+
+Answer = Callable[[], Awaitable[httpx.Response]]
+
+
+class _OneAnswer(httpx.AsyncBaseTransport):
+    """The company's own network, but for one URL: an error is never no issuer (§3.2)."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, url: str, answer: Answer) -> None:
+        self.inner, self.url, self.answer = inner, url, answer
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if str(request.url) == self.url:
+            return await self.answer()
+        return await self.inner.handle_async_request(request)
+
+
+async def _discover_with(
+    ctx: ConformanceContext, answer: Answer, *, timeout: float = 5.0
+) -> DiscoveredCompany:
+    """Discovery of the company with its domain's protected resource metadata as `answer`."""
+
+    inner = cast(httpx.AsyncBaseTransport, ctx.http._transport)
+    url = f"{ctx.base_url}/.well-known/oauth-protected-resource"
+    async with httpx.AsyncClient(transport=_OneAnswer(inner, url, answer)) as http:
+        client = DiscoveryClient(
+            http_client=http, address_resolver=ctx.address_resolver, timeout=timeout
+        )
+        return await client.discover(ctx.domain)
+
+
+def _json_answer(status: int, body: object) -> Answer:
+    async def answer() -> httpx.Response:
+        return httpx.Response(status, json=body)
+
+    return answer
+
+
+async def _discovery_stops(
+    ctx: ConformanceContext, fixture: FixtureCase, answer: Answer, *, timeout: float = 5.0
+) -> None:
+    with _raises(PersonalAgentProtocolError) as raised:
+        await _discover_with(ctx, answer, timeout=timeout)
+    check(raised.value.code == fixture.expect["error"], f"stopped by {raised.value.code}")
+
+
+@case("no-issuer.discovery")
+async def _no_issuer_discovery(ctx: ConformanceContext, _: FixtureCase) -> None:
+    company = await ctx.company()
+    _no_issuer_company(company)
+    check(company.resource_metadata is None, "the domain's metadata is a 404")
+
+
+@case("no-issuer.metadata-without-servers")
+async def _no_issuer_metadata(ctx: ConformanceContext, _: FixtureCase) -> None:
+    for extra in ({}, {"authorization_servers": []}):
+        answer = _json_answer(200, {"resource": ctx.base_url, **extra})
+        _no_issuer_company(await _discover_with(ctx, answer))
+
+
+@case("no-issuer.no-oauth-server")
+async def _no_oauth_server(ctx: ConformanceContext, _: FixtureCase) -> None:
+    company = await ctx.company()
+    check(company.document.auth is None, "poppy.json has no auth")
+    for method, path in (
+        ("GET", "/.well-known/oauth-authorization-server"),
+        ("POST", "/oauth/token"),
+        ("POST", "/oauth/device"),
+        ("POST", "/oauth/revoke"),
+        ("GET", "/oauth/authorize"),
+    ):
+        answer = await ctx.send(method, f"{ctx.base_url}{path}")
+        check(answer.status_code == 404, f"{method} {path}: got {answer.status_code}")
+
+
+@case("no-issuer.session-audience")
+async def _no_issuer_audience(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    session = await ctx.session(ctx.new_user())
+    check(session.issuer == ctx.base_url, "the Session names the identifier")
+    url = await ctx.conversations_endpoint()
+    message = json.dumps(
+        {"message": _message(ctx.scenario.greeting).model_dump(mode="json", exclude_none=True)}
+    ).encode()
+    json_body = {"Content-Type": "application/json"}
+    accepted = await ctx.send(
+        "POST", url, headers={**await ctx.auth(session, "POST", url), **json_body}, content=message
+    )
+    check(accepted.is_success, f"aud is the identifier: got {accepted.status_code}")
+    forged = await ctx.forged_session_jwt(session, "POST", url, mutation=fixture.mutation)
+    refused = await ctx.send(
+        "POST", url, headers={"Poppy-Session": forged, **json_body}, content=message
+    )
+    expect_refusal(refused, fixture.expect["status"], fixture.expect["error"], fixture.id)
+
+
+@case("no-issuer.signed-out-interfaces")
+async def _no_issuer_interfaces(ctx: ConformanceContext, _: FixtureCase) -> None:
+    session = await ctx.session(ctx.new_user())
+    endpoint = await ctx.conversations_endpoint()
+    receipt = await ctx.agent.conversations.start(
+        endpoint, _message(ctx.scenario.greeting), session=session
+    )
+    check(receipt.conversation_id, "a conversation starts signed out")
+    feedback = feedback_endpoint((await ctx.company()).document)
+    if feedback is None:
+        raise SkipCase("the company lists no feedback endpoint")
+    await FeedbackClient(transport=ctx.agent.transport).report(
+        feedback,
+        FeedbackReport(task="no issuer", description="A report from a signed-out Session."),
+        session=session,
+    )
+    check(await _join(ctx, session, ctx.url("/")), "a browser joins signed out")
+
+
+@case("no-issuer.sign-in-refused-locally")
+async def _no_issuer_sign_in(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    company = await ctx.company()
+    with _raises(AuthorizationError) as raised:
+        company.require_oauth()
+    check(raised.value.code == fixture.expect["error"], f"refused by {raised.value.code}")
+
+
+@case("no-issuer.no-fallback-server-error")
+async def _no_fallback_500(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    await _discovery_stops(ctx, fixture, _json_answer(500, {"error": "server_error"}))
+
+
+@case("no-issuer.no-fallback-timeout")
+async def _no_fallback_timeout(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    async def never() -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(404)
+
+    await _discovery_stops(ctx, fixture, never, timeout=1.0)
+
+
+@case("no-issuer.no-fallback-invalid-metadata")
+async def _no_fallback_invalid(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    await _discovery_stops(ctx, fixture, _json_answer(200, {"authorization_servers": []}))
+
+
+@case("no-issuer.no-fallback-unverified-issuer")
+async def _no_fallback_issuer(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    # The company has no issuer: the one named here publishes no metadata.
+    metadata = {"resource": ctx.base_url, "authorization_servers": [ctx.base_url]}
+    await _discovery_stops(ctx, fixture, _json_answer(200, metadata))
+
+
+@case("no-issuer.sign-in-offered-without-issuer")
+async def _sign_in_without_issuer(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    served = (await ctx.company()).document.model_dump(mode="json", exclude_none=True)
+    endpoint = await ctx.conversations_endpoint()
+    agent = {"protocols": [{"type": "poppy", "endpoint": endpoint, "access": "signed_in"}]}
+    inner = cast(httpx.AsyncBaseTransport, ctx.http._transport)
+    for offers in (
+        {"auth": {"issuer": ctx.base_url}},
+        {"agent": agent},
+        {"extensions": {"mediated-sign-in": {"version": "1"}}},
+    ):
+        answer = _json_answer(200, {**served, **offers})
+        url = f"{ctx.base_url}/.well-known/poppy.json"
+        async with httpx.AsyncClient(transport=_OneAnswer(inner, url, answer)) as http:
+            client = DiscoveryClient(http_client=http, address_resolver=ctx.address_resolver)
+            with _raises(PersonalAgentProtocolError) as raised:
+                await client.discover(ctx.domain)
+        check(raised.value.code == fixture.expect["error"], f"stopped by {raised.value.code}")
 
 
 # Running and reporting ----------------------------------------------------------------

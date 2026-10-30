@@ -40,7 +40,7 @@ from .apis import conversation_endpoint
 from .cli_host import CliRuntime, InputSource, NotConfiguredError, SessionRecord
 from .conversations import ConversationClient, StreamReconnected, TextDelta
 from .discovery import DiscoveryClient
-from .errors import PersonalAgentProtocolError
+from .errors import AuthorizationError, PersonalAgentProtocolError
 from .mediated import mediated_sign_in
 from .models import ConversationEvent, DiscoveredCompany, Operation, Organization
 from .reactor import APPROVAL_SURFACES, ApprovalRequest, ApprovalSurface, optional_contribution
@@ -80,11 +80,12 @@ async def discover_company(
     metadata = company.oauth_metadata
     return {
         "schema_version": 1,
-        "verified": metadata is not None,
+        "verified": True,
         "domain": document.organization.domain,
         "organization": document.organization.name,
         "protocol_version": document.protocol_version,
         "issuer": metadata.issuer if metadata else None,
+        "identifier": company.identifier,
         # Direct, Device and Mediated from the issuer's grants, the last with its extension.
         "sign_in": [
             name
@@ -134,6 +135,8 @@ def operation_view(operation: Operation) -> dict[str, Any]:
 
 
 def account_context(record: SessionRecord) -> RefreshTokenContext:
+    if record.token_endpoint is None:
+        raise AuthorizationError("no_issuer", "A Company with no issuer offers no sign-in")
     return RefreshTokenContext(
         token_endpoint=record.token_endpoint,
         issuer=record.issuer,

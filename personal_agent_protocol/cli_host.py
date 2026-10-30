@@ -422,9 +422,11 @@ class SessionRecord:
     sid: str
     domain: str
     company: str
+    #: The Company's identifier (§3.2): its issuer, else its HTTPS domain.
     issuer: str
-    token_endpoint: str
-    revocation_endpoint: str
+    #: `None` at a Company with no issuer.
+    token_endpoint: str | None
+    revocation_endpoint: str | None
     client_id: str
     tenant_id: str
     user: str

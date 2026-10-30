@@ -1,0 +1,152 @@
+{
+  "suite": "no-issuer",
+  "profile": "0.3",
+  "description": "A Company with no OAuth issuer (spec 3.2): signed-out Sessions, its identifier its HTTPS domain, and no sign-in. The company cases run against the reference company configured as the world says, in every language pairing. An error is never read as no issuer: the no-fallback cases change one discovery answer and the discovery stops.",
+  "worlds": {
+    "no-issuer": {
+      "oauth": false,
+      "mediated_fields": [],
+      "operations": false
+    }
+  },
+  "cases": [
+    {
+      "id": "no-issuer.discovery",
+      "kind": "positive",
+      "role": "both",
+      "requirements": [
+        "PAP-3.2-25",
+        "PAP-3.2-26"
+      ],
+      "world": "no-issuer",
+      "description": "The domain's protected resource metadata is a 404: the Company has no issuer and no OAuth metadata, and its identifier is https://{organization.domain}."
+    },
+    {
+      "id": "no-issuer.metadata-without-servers",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-26"
+      ],
+      "world": "no-issuer",
+      "description": "Valid protected resource metadata with authorization_servers absent or empty says the same as a 404."
+    },
+    {
+      "id": "no-issuer.no-oauth-server",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-3.2-23"
+      ],
+      "world": "no-issuer",
+      "description": "A signed-out Company runs no authorization server: its OAuth endpoints and metadata are not there, and poppy.json has no auth.issuer."
+    },
+    {
+      "id": "no-issuer.session-audience",
+      "kind": "positive",
+      "role": "both",
+      "requirements": [
+        "PAP-3.2-25",
+        "PAP-5.3-05"
+      ],
+      "world": "no-issuer",
+      "description": "A Session JWT names the identifier in aud, which the Company accepts; any other aud is invalid_session.",
+      "mutation": {
+        "aud": "https://other-company.example"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
+    },
+    {
+      "id": "no-issuer.signed-out-interfaces",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-3.2-23",
+        "PAP-9.3-01"
+      ],
+      "world": "no-issuer",
+      "description": "Conversations, feedback and browser join work signed out, with verified Sessions and no authorization server."
+    },
+    {
+      "id": "no-issuer.sign-in-refused-locally",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-23"
+      ],
+      "world": "no-issuer",
+      "description": "Sign-in at a Company with no issuer is refused by the SDK, with no request sent.",
+      "expect": {
+        "error": "no_issuer"
+      }
+    },
+    {
+      "id": "no-issuer.no-fallback-server-error",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-27"
+      ],
+      "world": "no-issuer",
+      "description": "A 500 from the domain's protected resource metadata stops discovery: never the domain.",
+      "expect": {
+        "error": "http_error"
+      }
+    },
+    {
+      "id": "no-issuer.no-fallback-timeout",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-27"
+      ],
+      "world": "no-issuer",
+      "description": "A timeout at the domain's protected resource metadata stops discovery: never the domain.",
+      "expect": {
+        "error": "metadata_timeout"
+      }
+    },
+    {
+      "id": "no-issuer.no-fallback-invalid-metadata",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-27"
+      ],
+      "world": "no-issuer",
+      "description": "Invalid protected resource metadata stops discovery: never the domain.",
+      "expect": {
+        "error": "invalid_resource_metadata"
+      }
+    },
+    {
+      "id": "no-issuer.no-fallback-unverified-issuer",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-27"
+      ],
+      "world": "no-issuer",
+      "description": "An issuer that can't be verified stops discovery: its metadata is not published, and the domain is not used instead.",
+      "expect": {
+        "error": "http_error"
+      }
+    },
+    {
+      "id": "no-issuer.sign-in-offered-without-issuer",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-26"
+      ],
+      "world": "no-issuer",
+      "description": "A document that offers sign-in, by auth.issuer, an access signed_in entry or Mediated Sign-In, can't be served by a domain with no issuer.",
+      "expect": {
+        "error": "issuer_not_found"
+      }
+    }
+  ]
+}

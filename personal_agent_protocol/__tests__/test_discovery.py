@@ -141,9 +141,14 @@ async def test_one_authorization_server_and_another_auth_issuer_is_refused() -> 
 
 @pytest.mark.asyncio
 async def test_a_company_that_needs_an_issuer_and_publishes_none_is_refused() -> None:
+    """`auth.issuer` says it has one: a 404 can't make it a Company without (§3.2)."""
+
+    document = fixture("discovery-valid.json")
+    assert document["auth"]["issuer"]  # type: ignore[index]
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/.well-known/poppy.json":
-            return httpx.Response(200, json=fixture("discovery-valid.json"))
+            return httpx.Response(200, json=document)
         return httpx.Response(404, json={"error": "not_found"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:

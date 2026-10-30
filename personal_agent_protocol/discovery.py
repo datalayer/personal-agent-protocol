@@ -131,7 +131,14 @@ class DiscoveryClient:
 
         resource_metadata = await self._domain_resource_metadata(document)
         metadata: OAuthServerMetadata | None = None
-        if resource_metadata is not None:
+        if resource_metadata is None or not resource_metadata.authorization_servers:
+            # The only way to no issuer: 404, or metadata that lists none (§3.2).
+            if document.needs_issuer:
+                raise DiscoveryError(
+                    "issuer_not_found",
+                    "The company offers sign-in and its domain names no issuer",
+                )
+        else:
             issuer = self._issuer(document, resource_metadata)
             metadata_data, _ = await self._get_json(_metadata_url(issuer))
             try:
@@ -164,9 +171,8 @@ class DiscoveryClient:
     ) -> ProtectedResourceMetadata | None:
         """The domain's protected resource metadata, which names its issuer (§3.2).
 
-        Its `resource` is exactly `https://{organization.domain}`. A domain without
-        it has no issuer: refused when the document lists anything that needs one,
-        else a website to browse only.
+        Its `resource` is exactly `https://{organization.domain}`. `None` for a 404, which
+        says the Company has no issuer; any other failure is raised, and never read so.
         """
 
         resource = f"https://{document.organization.domain}"
@@ -174,11 +180,6 @@ class DiscoveryClient:
             data, _ = await self._get_json(protected_resource_metadata_url(resource))
         except DiscoveryError as exc:
             if exc.code == "http_error" and exc.status_code == 404:
-                if document.needs_issuer:
-                    raise DiscoveryError(
-                        "issuer_not_found",
-                        "The domain publishes no protected resource metadata naming its issuer",
-                    ) from exc
                 return None
             raise
         try:

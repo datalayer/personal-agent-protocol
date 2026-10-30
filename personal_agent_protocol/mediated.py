@@ -39,7 +39,12 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .auth import _scopes
 from .errors import AuthorizationError
-from .models import DiscoveredCompany, MediatedSignIn, OAuthServerMetadata, ProtocolModel
+from .models import (
+    MEDIATED_EXTENSION,
+    DiscoveredCompany,
+    MediatedSignIn,
+    ProtocolModel,
+)
 from .reactor import (
     AUTHORIZATION_STATE_STORES,
     CLOCKS,
@@ -56,7 +61,6 @@ from .reactor import (
 from .sessions import AccessToken, SessionClient, TokenResponse, _opaque_id, finish_sign_in
 from .telemetry import sign_in_result, signed_in_as, traced
 
-MEDIATED_EXTENSION = "mediated-sign-in"
 MEDIATED_VERSION = "1"
 MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in"
 
@@ -164,7 +168,7 @@ class MediatedSignInClient:
         """
 
         mediated = self._offered(company)
-        metadata = cast(OAuthServerMetadata, company.oauth_metadata)
+        metadata = company.require_oauth()
         organization = company.document.organization
         requested = _scopes(scopes)
         credentials = await self._collect(

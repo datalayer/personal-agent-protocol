@@ -359,21 +359,28 @@ requirements:
   section: '3.2'
   level: MUST
   role: company
-  text: A Company whose poppy.json lists agent, apis, feedback, web.browser_session_endpoint, or an extension
-    that uses the issuer MUST have one.
+  text: A Company that offers sign-in MUST have an OAuth issuer.
   status: implemented
   implementation:
   - personal_agent_protocol.discovery:DiscoveryClient
+  - personal_agent_protocol.models:DiscoveredCompany.require_oauth
+  - personal_agent_protocol.company.service:CompanyConfig
   tests:
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_no_issuer_is_refused_for_a_company_that_offers_sign_in
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_sign_in_is_refused_locally
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_no_issuer_over_tls
   conformance:
   - protocol.website-without-issuer
+  - no-issuer.no-oauth-server
+  - no-issuer.signed-out-interfaces
+  - no-issuer.sign-in-refused-locally
 - id: PAP-3.2-24
   section: '3.2'
   level: MUST
   role: both
-  text: Its resource MUST be exactly https://{organization.domain}, and its authorization_servers names
-    the issuer.
+  text: If the Company publishes this metadata, its resource MUST be exactly https://{organization.domain},
+    and its authorization_servers, when nonempty, names the issuer.
   status: implemented
   implementation:
   - personal_agent_protocol.discovery:DiscoveryClient
@@ -383,6 +390,78 @@ requirements:
   - protocol.issuer-from-protected-resource-metadata
   - protocol.resource-metadata-names-another-resource
   - protocol.several-authorization-servers-need-auth-issuer
+- id: PAP-3.2-25
+  section: '3.2'
+  level: MUST
+  role: both
+  text: The Company's identifier is its issuer when it has one, and otherwise https://{organization.domain},
+    with the host in lowercase and no trailing slash. Session JWTs MUST use this identifier as their audience,
+    and User IDs and Agent IDs are scoped by it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveredCompany.identifier
+  - personal_agent_protocol.company.service:CompanyConfig.identifier
+  tests:
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_no_issuer_is_found_and_the_identifier_is_the_domain
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_with_an_issuer_the_identifier_is_the_issuer
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_the_companys_identifier_is_its_lowercase_domain
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_no_issuer_over_tls
+  conformance:
+  - no-issuer.discovery
+  - no-issuer.session-audience
+- id: PAP-3.2-26
+  section: '3.2'
+  level: MUST
+  role: personal-agent
+  text: HTTP 404, or valid metadata with authorization_servers absent or empty, means the Company has no
+    issuer. This is valid only when auth.issuer is absent and the Company offers no sign-in; otherwise the
+    Personal Agent MUST NOT use the Company.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  - personal_agent_protocol.models:DiscoveryDocument.needs_issuer
+  tests:
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_no_issuer_is_found_and_the_identifier_is_the_domain
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_no_issuer_is_refused_for_a_company_that_offers_sign_in
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_no_issuer_over_tls
+  conformance:
+  - protocol.feedback-needs-no-auth
+  - no-issuer.discovery
+  - no-issuer.metadata-without-servers
+  - no-issuer.sign-in-offered-without-issuer
+- id: PAP-3.2-27
+  section: '3.2'
+  level: MUST NOT
+  role: personal-agent
+  text: A Personal Agent MUST NOT use the domain fallback after a timeout, another error status, invalid
+    metadata, or a failure to verify an issuer.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  tests:
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_another_status_is_never_the_domain_fallback
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_a_timeout_is_never_the_domain_fallback
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_invalid_metadata_is_never_the_domain_fallback
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_an_issuer_that_fails_to_verify_is_never_the_domain_fallback
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_no_issuer_over_tls
+  conformance:
+  - no-issuer.no-fallback-server-error
+  - no-issuer.no-fallback-timeout
+  - no-issuer.no-fallback-invalid-metadata
+  - no-issuer.no-fallback-unverified-issuer
+- id: PAP-3.2-28
+  section: '3.2'
+  level: MUST NOT
+  role: personal-agent
+  text: It MUST NOT fall back for a Company whose issuer it already knows unless a successful discovery explicitly
+    establishes that the issuer was removed.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  tests:
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_a_known_issuer_is_never_lost_to_an_error
+  reason: null
 - id: PAP-3.3-01
   section: '3.3'
   level: MUST
@@ -767,15 +846,17 @@ requirements:
   section: '5.1'
   level: MUST
   role: personal-agent
-  text: The Personal Agent MUST give each of its Users a User ID for each Company, where a Company is
-    identified by its issuer (3.2).
+  text: The Personal Agent MUST give each of its Users a User ID for each Company, using the Company's identifier
+    (3.2).
   status: implemented
   implementation:
   - personal_agent_protocol.pairwise:SqlitePairwiseUserIdStore
   - personal_agent_protocol.reactor:PAIRWISE_USER_ID_STORES
+  - personal_agent_protocol.models:DiscoveredCompany.identifier
   tests:
   - personal_agent_protocol/__tests__/test_pairwise.py::test_persists_stable_pairwise_ids_by_exact_tenant_user_and_issuer
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_user_ids_are_scoped_by_the_identifier
   conformance:
   - lifecycle.parallel-sessions
 - id: PAP-5.1-02
@@ -1118,15 +1199,18 @@ requirements:
   section: '5.3'
   level: MUST
   role: company
-  text: 'The Company MUST complete these checks: aud is its own issuer, compared character for character.'
+  text: 'The Company MUST complete these checks: aud is its Company''s identifier, compared character for
+    character.'
   status: implemented
   implementation:
   - personal_agent_protocol.company.verify:verify_session_jwt
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_no_issuer_over_tls
   conformance:
   - security.session-jwt-other-audience
   - security.session-jwt-token-endpoint-audience
+  - no-issuer.session-audience
 - id: PAP-5.3-06
   section: '5.3'
   level: MUST
@@ -1817,8 +1901,8 @@ requirements:
   section: '9.3'
   level: MUST
   role: company
-  text: A Company MUST accept a report only with the Session header, signed in or signed out, and needs
-    no scope for it.
+  text: The Company MUST verify the header before attributing a report to a Personal Agent, User, or Session,
+    and needs no scope for a report.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._feedback
@@ -1828,10 +1912,11 @@ requirements:
   - personal_agent_protocol/__tests__/test_feedback.py::test_the_company_ignores_unknown_members_and_refuses_a_malformed_report
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_no_issuer_over_tls
   conformance:
-  - protocol.feedback-needs-auth
   - protocol.feedback-endpoint-listed
   - protocol.feedback-report
+  - no-issuer.signed-out-interfaces
 - id: PAP-9.3-02
   section: '9.3'
   level: SHOULD NOT

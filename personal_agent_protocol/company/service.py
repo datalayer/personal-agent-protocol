@@ -326,6 +326,10 @@ class CompanyConfig:
     device: bool = True
     direct: bool = True
     operations: bool = True
+    #: Whether the company has an OAuth issuer (§3.2). Without one it runs no OAuth server:
+    #: its protected resource metadata and OAuth endpoints are 404, it publishes no `auth`,
+    #: `identifier` is its HTTPS domain, and every Session stays signed out.
+    oauth: bool = True
     humans_available: bool = False
     #: How long a Session lasts (§5.5: the Company decides); then it has ended.
     session_lifetime: timedelta = timedelta(days=1)
@@ -397,6 +401,13 @@ class CompanyConfig:
             dpop_nonce_lifetime=self.dpop_nonce_lifetime,
             dpop_proof_window=self.dpop_proof_window,
         )
+        if not self.oauth and (
+            self.mediated_fields or self.operations or self.aliases or self.dpop_binding != "off"
+        ):
+            # Each needs an issuer: sign-in, an approving account, the domains it joins (§3.2).
+            raise ValueError(
+                "a company with no issuer has no mediated_fields, operations, aliases or DPoP"
+            )
         if self.dpop_binding not in ("off", "optional", "required"):
             raise ValueError("dpop_binding is off, optional or required")
         if self.dpop_nonces and self.dpop_binding == "off":
@@ -444,6 +455,12 @@ class CompanyConfig:
     @property
     def base(self) -> str:
         return f"https://{self.domain}"
+
+    @property
+    def identifier(self) -> str:
+        """The company's identifier (§3.2): its issuer, else its lowercase HTTPS domain."""
+
+        return self.base if self.oauth else f"https://{self.domain.lower()}"
 
     @property
     def token_schemes(self) -> tuple[str, ...]:
@@ -658,6 +675,8 @@ class _RateLimitedError(_RefusedError):
         self.retry_after = retry_after
 
 
+#: What a company with no issuer doesn't serve (§3.2).
+_OAUTH_PATHS = ("/oauth/", "/.well-known/oauth-")
 #: A proof's refusals: challenged as `DPoP`, the one scheme that has proofs (RFC 9449 §7.1).
 _PROOF_REFUSALS = frozenset({"invalid_dpop_proof", "use_dpop_nonce"})
 _CHALLENGED = frozenset({"invalid_token", "insufficient_scope", _SIGNED_OUT, *_PROOF_REFUSALS})
@@ -892,7 +911,7 @@ class CompanyService:
             outcome,
             (time.perf_counter() - exchange.started) * 1000 if exchange is not None else 0.0,
             {
-                "pap.company.issuer": self.config.base,
+                "pap.company.issuer": self.config.identifier,
                 "pap.company.domain": self.config.domain,
                 "pap.company.route": exchange.route if exchange is not None else None,
                 "pap.client.id": exchange.client_id if exchange is not None else None,
@@ -960,6 +979,9 @@ class CompanyService:
             return _json_error(400, "invalid_request")
         try:
             host = request.headers.get("host", "").split(":", 1)[0].lower()
+            if not self.config.oauth and path.startswith(_OAUTH_PATHS):
+                # No issuer: a 404 is how an agent learns it (§3.2).
+                return _json_error(404, "not_found")
             if host in self.config.aliases:
                 # An alias publishes the company's discovery document, and nothing else (§3).
                 if method == "GET" and path == "/.well-known/poppy.json":
@@ -1043,20 +1065,21 @@ class CompanyService:
         """
         config = self.config
         organization = config.organization_domain(domain)
-        # Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
-        auth: dict[str, Any] = {"issuer": config.base}
-        auth["scopes"] = {scope: config.scope_descriptions[scope] for scope in config.scopes}
-        if config.scope_hints:
-            auth["scope_hints"] = {
-                scope: {"changes": changes, "personal_data": personal}
-                for scope, (changes, personal) in config.scope_hints.items()
-            }
         document: dict[str, Any] = {
             "protocol_version": PROTOCOL_PROFILE,
             "organization": {"name": config.name, "domain": organization},
-            "auth": auth,
             "agent": {"protocols": [{"type": "poppy", "endpoint": config.conversations_endpoint}]},
         }
+        if config.oauth:
+            # Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
+            auth: dict[str, Any] = {"issuer": config.base}
+            auth["scopes"] = {scope: config.scope_descriptions[scope] for scope in config.scopes}
+            if config.scope_hints:
+                auth["scope_hints"] = {
+                    scope: {"changes": changes, "personal_data": personal}
+                    for scope, (changes, personal) in config.scope_hints.items()
+                }
+            document["auth"] = auth
         apis: list[dict[str, str]] = []
         api = self._api()
         if api is not None:
@@ -2182,7 +2205,7 @@ class CompanyService:
 
         verified = await verify_session_jwt(
             header,
-            issuer=self.config.base,
+            issuer=self.config.identifier,
             method=request.method,
             url=request.url,
             resolve=resolve,
@@ -3457,7 +3480,9 @@ class CompanyService:
         error code.
         """
 
-        extra: dict[str, object] = {"resource_metadata": self.config.mcp_resource_metadata}
+        extra: dict[str, object] = {}
+        if self.config.oauth:
+            extra["resource_metadata"] = self.config.mcp_resource_metadata
         if scope is not None:
             extra["scope"] = scope
         body: dict[str, object] | None = {"error": error} if error else None
@@ -3483,7 +3508,7 @@ class CompanyService:
         a token this company issued, without the header, is `invalid_session` (§5.3).
         """
 
-        if not request.headers.get(SESSION_HEADER):
+        if self.config.oauth and not request.headers.get(SESSION_HEADER):
             _, _, presented = request.headers.get("authorization", "").partition(" ")
             if not presented:
                 return self._mcp_refusal(401, "")

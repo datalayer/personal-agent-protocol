@@ -23,6 +23,8 @@ from pydantic import (
     model_validator,
 )
 
+from .errors import AuthorizationError
+
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
 #: The `protocol_version` values this SDK uses a document of (§3.1): before 1.0 every
 #: version can break the one before, so only its own `major.minor`.
@@ -35,6 +37,8 @@ REFRESH_TOKEN_GRANT = "refresh_token"
 #: The grants that say the Company offers Direct and Device Sign-In (§3.2, §4.4).
 AUTHORIZATION_CODE_GRANT = "authorization_code"
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+#: The sign-in extension, listed in `extensions` (Mediated Sign-In 2).
+MEDIATED_EXTENSION = "mediated-sign-in"
 #: `changes` values a scope hint may give (§4.4); any other is read as `irreversible`.
 SCOPE_CHANGES = ("none", "reversible", "irreversible")
 _DOMAIN = re.compile(
@@ -221,8 +225,25 @@ class AuthCapabilities(ProtocolModel):
 
 
 class AgentProtocol(ProtocolModel):
+    """A conversation protocol the Company Agent speaks (§3.1, §8).
+
+    `access` is kept as written, whatever it says; read `account_access`.
+    """
+
     type: str = Field(min_length=1)
     endpoint: str
+    access: str | None = None
+
+    @property
+    def account_access(self) -> Literal["session", "signed_in"]:
+        """Whether a `poppy` entry needs account access before useful work can begin (§3.2).
+
+        `signed_in` lets the agent arrange sign-in before its first request; a value this
+        SDK doesn't know is an absent hint. A hint only: it grants nothing, and challenges
+        and authorization events still decide.
+        """
+
+        return "signed_in" if self.type == "poppy" and self.access == "signed_in" else "session"
 
     @field_validator("endpoint")
     @classmethod
@@ -316,18 +337,19 @@ class DiscoveryDocument(ProtocolModel):
 
     @property
     def needs_issuer(self) -> bool:
-        """Whether the Company must have an OAuth issuer (§3.2).
+        """Whether the Company offers sign-in, which needs an OAuth issuer (§3.2).
 
-        One that lists `agent`, `apis`, `feedback`, `web.browser_session_endpoint`,
-        or an extension: without an issuer it can only be browsed as a website.
+        `auth.issuer`, an `access: signed_in` conversation entry, or Mediated Sign-In.
+        Anything else works signed out: APIs, conversations, feedback and browser join.
         """
 
         return (
-            self.agent is not None
-            or bool(self.apis)
-            or self.feedback is not None
-            or bool(self.web and self.web.browser_session_endpoint)
-            or bool(self.extensions)
+            (self.auth is not None and self.auth.issuer is not None)
+            or (
+                self.agent is not None
+                and any(item.account_access == "signed_in" for item in self.agent.protocols)
+            )
+            or MEDIATED_EXTENSION in self.extensions
         )
 
 
@@ -422,12 +444,13 @@ class ProtectedResourceMetadata(ProtocolModel):
     """RFC 9728 protected resource metadata, with the fields this protocol uses (§3.2, §4.5).
 
     The Company's domain publishes it with `resource` exactly `https://{domain}` and
-    its issuer in `authorization_servers`; a service that accepts only tokens issued
+    its issuer, if any, in `authorization_servers`; a service that accepts only tokens issued
     for it publishes it with its own `resource`, as MCP servers do (§4.5, §7).
     """
 
     resource: str
-    authorization_servers: list[str] = Field(min_length=1)
+    #: Absent or empty at the domain of a Company with no issuer (§3.2).
+    authorization_servers: list[str] = Field(default_factory=list)
     scopes_supported: list[str] = Field(default_factory=list)
     bearer_methods_supported: list[str] = Field(default_factory=list)
 
@@ -827,8 +850,8 @@ class ExcludedTasks(ProtocolModel):
 class DiscoveredCompany(ProtocolModel):
     """A verified `poppy.json`, its domain's protected resource metadata, and its issuer's.
 
-    `resource_metadata` and `oauth_metadata` are `None` only for a Company that has
-    no issuer, which can only be browsed as a website (§3.2).
+    A Company with no issuer has no `oauth_metadata`, and `resource_metadata` only when
+    the domain publishes it with no authorization server; it offers no sign-in (§3.2).
     """
 
     discovery_url: str
@@ -847,3 +870,21 @@ class DiscoveredCompany(ProtocolModel):
         """`https://{organization.domain}`: the resource the default access token is for."""
 
         return f"https://{self.document.organization.domain}"
+
+    @property
+    def identifier(self) -> str:
+        """Who the Company is (§3.2): its issuer, else `https://{organization.domain}`.
+
+        Session JWTs name it in `aud`, and User IDs and Agent IDs are scoped by it. Discovery
+        reaches the domain only when it established that there is no issuer: never after an
+        error, a timeout, or an issuer that failed to verify.
+        """
+
+        return self.issuer or self.resource
+
+    def require_oauth(self) -> OAuthServerMetadata:
+        """The issuer's metadata, or `AuthorizationError` (`no_issuer`), before any sign-in."""
+
+        if self.oauth_metadata is None:
+            raise AuthorizationError("no_issuer", "A Company with no issuer offers no sign-in")
+        return self.oauth_metadata

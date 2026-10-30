@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from personal_agent_protocol.cli import create_app
 from personal_agent_protocol.cli_commands import EXIT_CODES, ExitCode
 from personal_agent_protocol.cli_host import local_host
 from personal_agent_protocol.cli_plugin import MANIFEST, PapCliPlugin
+from personal_agent_protocol.company import CompanyConfig
 from personal_agent_protocol.company.store import AUTHORIZATION, DEVICE, PendingDevice
 from personal_agent_protocol.config import ConfigStore
 from personal_agent_protocol.demo.kit import (
@@ -30,7 +32,7 @@ from personal_agent_protocol.demo.kit import (
     MutableClock,
     ScriptedBrowser,
 )
-from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
+from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, CONFIG, manzanita
 from personal_agent_protocol.reactor import BROWSER_HANDOFFS
 
 
@@ -68,12 +70,13 @@ class Pap:
         *,
         approve_on_wait: bool = True,
         plugins: tuple[tuple[PluginManifest, object], ...] = (),
+        config: CompanyConfig | None = None,
     ) -> None:
         self.clock = MutableClock()
         self.network = InProcessNetwork()
         self.atlas = AgentIdentity(domain="atlas.example", name="Atlas")
         self.network.add(self.atlas.domain, self.atlas.website())
-        self.shop, self.plugin = manzanita(self.network, self.clock)
+        self.shop, self.plugin = manzanita(self.network, self.clock, config=config)
         self.state = tmp_path / "state"
         self.approve_on_wait = approve_on_wait
         self.outputs: list[str] = []
@@ -342,6 +345,19 @@ def test_disconnect_revokes_every_refresh_token_held_for_that_user(tmp_path: Pat
     # Another user of this agent keeps theirs.
     assert pap("sessions", "renew", other_user, "--json")["session"]["signed_in"] is True
     assert pap("api", "openapi", other_user, "GET", "/api/orders", "--json")["body"]["orders"]
+
+
+def test_a_company_with_no_issuer_gives_sessions_and_refuses_sign_in(tmp_path: Path) -> None:
+    """Signed out it works; a sign-in stops at the SDK, naming why (§3.2)."""
+
+    pap = Pap(tmp_path, config=replace(CONFIG, oauth=False, mediated_fields=(), operations=False))
+    pap.set_up()
+    started = pap("sessions", "start", "--json")["session"]
+    assert started["issuer"] == "https://manzanita.example"
+    assert started["token_endpoint"] is None
+    for kind in ("direct", "device"):
+        refused = pap("auth", kind, started["id"], "--scope", "orders:read", code=1)
+        assert "no_issuer" in refused.output
 
 
 def test_exit_codes_for_setup_input_refusals_and_usage(tmp_path: Path) -> None:

@@ -21,9 +21,9 @@
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph ADA[\"Ada's side\"]\n    direction TB\n    U[\"Ada\"] -- \"approves\" --> A[\"Atlas<br/>her personal agent\"]\n  end\n  subgraph LED[\"Ledgerly\"]\n    direction TB\n    LC[\"Company to Atlas\"] -- \"relays\" --> LA[\"Agent at Northwind<br/>own client_id, keys\"]\n  end\n  subgraph NW[\"Northwind Bank\"]\n    direction TB\n    N[\"Bank API<br/>proposes payments\"]\n  end\n  ADA -- \"PAP, as to any company\" --> LED\n  LED -- \"PAP, as any agent\" --> NW\n  ADA -. \"summaries, who approved\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph ADA[\"Ada's side\"]\n    direction TB\n    U[\"Ada\"] -- \"approves\" --> A[\"Atlas<br/>her personal agent\"]\n  end\n  subgraph LED[\"Ledgerly\"]\n    direction TB\n    LC[\"Company to Atlas\"] -- \"relays\" --> LA[\"Agent at Northwind<br/>own client_id, keys\"]\n  end\n  subgraph NW[\"Northwind Bank\"]\n    direction TB\n    N[\"Bank API<br/>proposes payments\"]\n  end\n  ADA -- \"PAP, as to any company\" --> LED\n  LED -- \"PAP, as any agent\" --> NW\n  ADA -. \"summaries only\" .-> M",
       "caption": "Two ordinary PAP relationships meet in Ledgerly; there is no company-to-company protocol.",
-      "notes": "Read left to right. On Ada's side, Atlas is her personal agent, and to Atlas, Ledgerly is a company like any other. Inside Ledgerly there are two roles: the company Atlas talks to, and a personal agent at Northwind Bank, with its own client_id and keys on its own domain. Northwind only ever sees a personal agent called Ledgerly, which Ada connected herself by approving its code on Northwind's own page. Off to the side, the model receives the companies' summaries and who approved each payment, never a token, code or proof of any party."
+      "notes": "Read left to right. On Ada's side, Atlas is her personal agent, and to Atlas, Ledgerly is a company like any other. Inside Ledgerly there are two roles: the company Atlas talks to, and a personal agent at Northwind Bank, with its own client_id and keys on its own domain. Northwind only ever sees a personal agent called Ledgerly, which Ada connected herself by approving its code on Northwind's own page. Off to the side, the model receives the companies' summaries, never a token, code or Session JWT of any party."
     },
     {
       "type": "mermaid",
@@ -42,10 +42,10 @@
       "title": "Every payment, asked",
       "items": [
         { "label": "1", "title": "INV-0042", "detail": "EUR 1250.00: Ada approves, Northwind sends it" },
-        { "label": "2", "title": "\"Without asking\"", "detail": "Ada asks: Ledgerly tells her it cannot" },
+        { "label": "2", "title": "Nothing carries over", "detail": "An approval covers one revision of one payment" },
         { "label": "3", "title": "INV-0043", "detail": "EUR 980.00: a new Operation for Ada", "current": true }
       ],
-      "notes": "Ada approves the first payment. She then asks Ledgerly to pay Acme without asking her each time, and the answer is no: every operation Northwind returns goes to Ada, and nothing approves one in her name. So the next bill, INV-0043, is a new Operation for her to approve."
+      "notes": "Ada approves the first payment. That approval covers that revision alone: every operation Northwind returns goes to Ada, and nothing approves one in her name. So the next bill, INV-0043, is a new Operation for her to approve."
     },
     {
       "type": "mermaid",
@@ -57,9 +57,9 @@
     {
       "type": "two-columns",
       "title": "What the model sees",
-      "left": { "heading": "Visible", "type": "bullets", "items": ["Summaries, as the companies wrote them", "Who approved each payment", "That there is no company-to-company protocol"] },
-      "right": { "heading": "Never", "type": "bullets", "items": ["A token of any party", "A device code", "A proof"] },
-      "notes": "The model can explain what happened and who approved it. It never sees a token, code or proof belonging to any of the three parties."
+      "left": { "heading": "Visible", "type": "bullets", "items": ["Summaries, as the companies wrote them", "That there is no company-to-company protocol"] },
+      "right": { "heading": "Never", "type": "bullets", "items": ["A token of any party", "A device code", "A Session JWT"] },
+      "notes": "The model can explain what happened. It never sees a token, code or Session JWT belonging to any of the three parties."
     },
     {
       "type": "closing",

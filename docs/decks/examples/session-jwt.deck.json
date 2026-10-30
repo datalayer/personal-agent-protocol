@@ -1,72 +1,76 @@
 {
   "deck": {
-    "title": "DPoP proof",
+    "title": "Session JWT",
     "subtitle": "Personal Agent Protocol, by example",
     "template": "datalayer"
   },
   "slides": [
     {
       "type": "title",
-      "title": "DPoP proof",
-      "subtitle": "Bind a one-use proof to an HTTP request, an access token and a protected key",
+      "title": "Session JWT",
+      "subtitle": "Sign one request's Session JWT with a delegated key, and keep it out of the model",
       "meta": "Personal Agent Protocol · example",
-      "notes": "Demonstrating Proof of Possession, DPoP for short, is how PAP makes sure a token on its own is never enough. In PAP the key is the Session Key: each Session has its own, and its thumbprint names the Session. This example makes a Session Key and a real proof, verifies it, and then shows a replay being refused."
+      "notes": "Every request to a company carries a Session JWT in the Poppy-Session header. It names the Session and the User, and it covers that one request. This example signs a real one, verifies it, and changes each thing it covers to show the refusal."
     },
     {
       "type": "statement",
-      "title": "Why a proof",
-      "statement": "A stolen bearer value is **not sufficient** on its own: every request also needs a fresh proof from the key.",
-      "notes": "With a plain bearer token, whoever copies it can use it. With DPoP, each request carries a proof signed by a key the host protects, so a copied token without the key is useless."
+      "title": "Why a JWT per request",
+      "statement": "An access token says **which account**. The Session JWT says **which Session, which User, and this request**.",
+      "notes": "The company joins the two on each request. Signed out, the request carries the Session JWT alone. Signed in, it carries an access token too, and the JWT's ath claim holds the token's hash. A copied access token is refused without a Session header from the agent's key. The JWT never grants account access by itself."
     },
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign this request\" --> K[\"Reactor key store<br/>holds the Session Keys\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company API<br/>verifies the proof\"] -- \"record jti\" --> X[(\"Replay cache\")]\n  end\n  HOST -- \"request, token, proof\" --> CO\n  HOST -. \"policy booleans only\" .-> M",
-      "caption": "The key never leaves the key store; the model gets yes-or-no evidence, nothing more.",
-      "notes": "The host asks for a proof covering one request. The Reactor key store signs it with the Session Key, without ever giving the key out. The company reads the key's thumbprint from the proof: that is the Session. The company verifies it, and remembers it so it can never be used twice. Off to the side, the model: all it ever receives from this exchange is yes-or-no evidence about the policy."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign this request\" --> K[\"Reactor Session signer<br/>holds the delegated keys\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company API<br/>verifies the Session header\"] -- \"record jti\" --> X[(\"Replay cache\")]\n  end\n  HOST -- \"request, Poppy-Session, Bearer token\" --> CO\n  HOST -. \"policy booleans only\" .-> M",
+      "caption": "The key never leaves the Session signer; the model gets yes-or-no evidence, nothing more.",
+      "notes": "The host asks for a Session JWT covering one request. The Reactor Session signer signs it with a delegated key, without ever giving the key out, and puts the delegation that vouches for the key in the JWT's header as pap_dlg. The company verifies the delegation against the agent's jwks_uri, then the JWT against the delegated key. A company may also reject a reused jti, as the reference companies do. Off to the side, the model: all it ever receives from this exchange is yes-or-no evidence about the policy."
     },
     {
       "type": "comparison",
-      "title": "What a proof covers",
-      "columns": ["Covers", "Binds the proof to"],
+      "title": "What a Session JWT covers",
+      "columns": ["Holds", "Binds the JWT to"],
       "rows": [
-        { "label": "htm", "values": ["Method", "This HTTP method"] },
-        { "label": "htu", "values": ["Normalized URL", "This target, without query or fragment"] },
-        { "label": "ath", "values": ["Token hash", "This token, without embedding it"] },
-        { "label": "nonce", "values": ["Company nonce", "Freshness the server chose"] },
-        { "label": "jti", "values": ["Unique ID", "One use only"] }
+        { "label": "iss", "values": ["The agent's `client_id`", "This personal agent"] },
+        { "label": "aud", "values": ["The company's issuer", "This company"] },
+        { "label": "sid, sub", "values": ["Session ID, User ID", "This Session, this User"] },
+        { "label": "agent_id", "values": ["An Agent ID, optional", "This agent of the User's"] },
+        { "label": "htm, htu", "values": ["Method, URL", "This request, without query or fragment"] },
+        { "label": "ath", "values": ["Access token hash", "This token, without embedding it"] },
+        { "label": "iat, jti", "values": ["Time, unique ID", "Now, and one use where the company checks"] }
       ],
-      "notes": "Each claim narrows where the proof works. Method and URL tie it to one request target. The token hash ties it to the token without putting the token in the proof. A nonce adds freshness from the company, and the jti makes it single-use."
+      "notes": "Each claim narrows where the JWT works. The audience ties it to one company, the sid and sub to one Session and User, the method and URL to one request target. The token hash ties it to the token without putting the token in the JWT, and is absent when there is no token. The iat keeps it fresh, and the jti lets a company refuse a second use."
     },
     {
       "type": "mermaid",
       "title": "First use, then a replay",
-      "diagram": "sequenceDiagram\n  participant H as PAP host\n  participant C as Company API\n  participant X as Replay cache\n  H->>C: Request, token, proof\n  C->>X: Record jti until expiry\n  X-->>C: Accepted\n  C-->>H: API response\n  H->>C: Same proof again\n  C->>X: Record jti\n  X-->>C: Already seen\n  C-->>H: Safe replay error",
-      "notes": "The first time, the company verifies the proof and records its identifier atomically, and the request goes through. The same proof a second time is already in the cache, so the company answers with a safe replay error."
+      "diagram": "sequenceDiagram\n  participant H as PAP host\n  participant C as Company API\n  participant X as Replay cache\n  H->>C: Request, Poppy-Session, token\n  C->>C: Delegation, signature, claims\n  C->>X: Record jti\n  X-->>C: Accepted\n  C-->>H: API response\n  H->>C: Same Session JWT again\n  C->>X: Record jti\n  X-->>C: Already seen\n  C-->>H: 400 invalid_session",
+      "notes": "The first time, the company verifies the delegation, the signature and the claims, records the jti atomically, and the request goes through. The same JWT a second time is already in the cache, so the company answers 400 with invalid_session. Rejecting a reused jti is a company's choice; the reference companies do it."
     },
     {
       "type": "bullets",
       "title": "What the example proves",
       "icon": "check",
       "items": [
-        "A new proof and `jti` for every attempt, retry and redirect",
-        "A nonce challenge means a **fresh** proof, never an edited or replayed one",
-        "Replay protection is the server's job, **atomic** across its fleet\",\n        \"One key per Session; an ended Session's key is **discarded**, never reused"
+        "A new `jti` and Session JWT for every attempt, retry and redirect",
+        "`htm`, `htu` and `aud` stop reuse on another request or at another company",
+        "`ath` binds the JWT to the token without embedding it",
+        "Each User ID has its own delegated key",
+        "Where a company rejects replays, the check is **atomic** across its fleet"
       ],
-      "notes": "Retries and redirects always get a new proof. When a company asks for a nonce, the host signs a new proof with it rather than changing the old one. And the company's replay check must be atomic across every server it runs, or a replay could slip through on another node. Each Session has its own key; once a Session ends, its key is discarded and the provider refuses to sign with it again."
+      "notes": "Retries and redirects always get a new JWT. Each User ID at a company has its own delegated key, so a key's thumbprint names one User at one company. And a company that rejects replays must make the check atomic across every server it runs, or a replay could slip through on another node."
     },
     {
       "type": "two-columns",
       "title": "What the model sees",
-      "left": { "heading": "Visible", "type": "bullets", "items": ["Policy booleans: method, URL, token and nonce bound", "Signature verified, the key names the Session, replay rejected"] },
-      "right": { "heading": "Never", "type": "bullets", "items": ["The proof or the token", "The nonce or the `jti`", "The JWK, thumbprint or private key"] },
-      "notes": "The tool returns only yes-or-no evidence about the policy. The proof, the token, the nonce, the key and everything that identifies it stay in host code."
+      "left": { "heading": "Visible", "type": "bullets", "items": ["Policy booleans: method, URL, token and company bound", "Signature verified, replay rejected"] },
+      "right": { "heading": "Never", "type": "bullets", "items": ["The Session JWT or the token", "The delegation or the `jti`", "The keys, the Session ID, the User ID"] },
+      "notes": "The tool returns only yes-or-no evidence about the policy. The Session JWT, the delegation, the token, the keys and the identifiers stay in host code."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
-      "cta": "The Pydantic AI and Agent Runtimes examples create, verify and replay a real ES256 proof",
-      "notes": "Run either example to see the replay refused. For production key custody and replay stores, read the JOSE and DPoP guide, then the DPoP transport example for retries and redirects."
+      "cta": "The Pydantic AI and Agent Runtimes examples sign, verify and replay a real ES256 Session JWT",
+      "notes": "Run either example to see each refusal. Then read the Delegation example for what vouches for the key, and the Session transport example for retries and redirects."
     }
   ]
 }

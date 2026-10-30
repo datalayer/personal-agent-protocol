@@ -1,66 +1,66 @@
 {
   "deck": {
-    "title": "Session assertion",
+    "title": "Delegation",
     "subtitle": "Personal Agent Protocol, by example",
     "template": "datalayer"
   },
   "slides": [
     {
       "type": "title",
-      "title": "Session assertion",
-      "subtitle": "A short-lived, audience-bound assertion for a pairwise user identity",
+      "title": "Delegation",
+      "subtitle": "Vouch for a delegated key with claims that name no User and no Company",
       "meta": "Personal Agent Protocol · example",
-      "notes": "To get a signed-out Session, a personal agent signs a Session assertion. This example shows what goes into one, and why each part is there."
+      "notes": "Session JWTs are signed with a short-lived delegated key, not with a key from the agent's jwks_uri. A delegation is how a jwks key vouches for that delegated key. This example shows what goes into one, and what stays out."
     },
     {
       "type": "statement",
-      "title": "Why an assertion",
-      "statement": "The agent asks for a Session **as itself**, for a user, without impersonating the human.",
-      "notes": "The assertion identifies the agent, refers to the user only through an identifier made for this one company, names the exact authorization server it is meant for, and expires quickly."
+      "title": "Why a delegation",
+      "statement": "The keys in `jwks_uri` sign **a key**, never a request, so they never see a **User** or a **Company**.",
+      "notes": "A delegation identifies the agent and the delegated public key, and expires quickly. It says nothing about the User or the Company. The Session JWT it vouches for carries those, signed by the delegated key."
     },
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>builds the claims\"] -- \"resolve subject\" --> P[(\"Pairwise ID store\")]\n    H -- \"sign the claims\" --> S[\"Reactor signer<br/>holds the private key\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server<br/>verifies, issues Session\"]\n  end\n  HOST -- \"compact assertion\" --> CO\n  HOST -. \"policy, Session ready\" .-> M",
-      "caption": "The subject and the key stay in the host; the model learns the policy and an opaque reference.",
-      "notes": "The model only asks for a Session. Inside your trusted host, the PAP host resolves the user's pairwise subject for this company from the pairwise ID store, builds the claims, and has the Reactor signer sign them without the private key ever leaving it. Only the compact assertion crosses to the company, whose authorization server verifies it and issues a signed-out Session. Off to the side, the model gets the lifetime, the bindings and an opaque Session reference, never the subject, the jti, the claims, the assertion or the key."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>a key per User ID\"] -- \"resolve subject\" --> P[(\"Pairwise ID store\")]\n    H -- \"sign the claims\" --> S[\"Reactor signer<br/>a key in jwks_uri\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company API<br/>verifies delegation, then JWT\"]\n  end\n  HOST -- \"Session JWT with its delegation\" --> CO\n  HOST -. \"claim names, lifetime\" .-> M",
+      "caption": "The subject and the keys stay in the host; the model learns which claims exist and how long they last.",
+      "notes": "Inside your trusted host, the PAP host resolves the user's pairwise User ID for this company from the pairwise ID store, and makes a delegated key for that User ID. The Reactor signer, holding a key from the agent's jwks_uri, signs the delegation without the private key ever leaving it. The compact delegation travels in the header of each Session JWT, and the company verifies it first. Off to the side, the model gets the claim names and the lifetime, never the subject, the jti, the delegation or a key."
     },
     {
       "type": "flow",
       "title": "How it flows",
       "items": [
-        { "label": "1", "title": "Resolve", "detail": "The pairwise subject for this company" },
-        { "label": "2", "title": "Build", "detail": "`iss`, `sub`, `aud`, `iat`, `exp`, `jti`" },
-        { "label": "3", "title": "Sign", "detail": "Through the Reactor signer" },
-        { "label": "4", "title": "Verify", "detail": "Signature, audience, time, `jti` replay" },
-        { "label": "5", "title": "Session", "detail": "A signed-out Session Token, named by the proof's key", "current": true }
+        { "label": "1", "title": "Resolve", "detail": "The pairwise User ID for this company" },
+        { "label": "2", "title": "Make a key", "detail": "One delegated P-256 key for that User ID" },
+        { "label": "3", "title": "Sign", "detail": "`iss`, `cnf`, `iat`, `exp`, `jti`, through the Reactor signer" },
+        { "label": "4", "title": "Carry", "detail": "In `pap_dlg`, in each Session JWT's header" },
+        { "label": "5", "title": "Verify", "detail": "The delegation, then the Session JWT", "current": true }
       ],
-      "notes": "The host resolves the subject, builds the claims and has them signed. The company checks the signature, that it is the audience, that the time window holds, and that it has never seen this jti. It answers with a signed-out Session Token. The assertion does not name the Session: the token request carries a DPoP proof signed with a new Session Key, and that key's thumbprint names the Session from then on."
+      "notes": "The host resolves the User ID and makes a delegated key for it; a key is never shared by two User IDs. The Reactor signer signs a delegation for the key, with the purpose delegation. Each Session JWT carries it in its pap_dlg header. Before the delegation expires, the signer rotates: a new key and a new delegation. It never signs after expiry."
     },
     {
       "type": "comparison",
       "title": "What each claim does",
       "columns": ["What it holds", "Why"],
       "rows": [
-        { "label": "sub", "values": ["Pairwise subject", "Two companies cannot correlate the user"] },
-        { "label": "aud", "values": ["One authorization server", "Useless anywhere else"] },
-        { "label": "iat, exp", "values": ["A short lifetime", "Bounds how long it is useful"] },
-        { "label": "jti", "values": ["Unique per assertion", "Lets the company reject replays"] }
+        { "label": "iss", "values": ["The agent's `client_id`", "Names the agent, and where its keys are"] },
+        { "label": "cnf", "values": ["The delegated public key", "The key allowed to sign Session JWTs"] },
+        { "label": "iat, exp", "values": ["At most 24 hours", "Bounds how long a stolen key is useful"] },
+        { "label": "jti", "values": ["Unique per delegation", "No two delegations look the same"] }
       ],
-      "notes": "Each claim limits the damage if an assertion escapes. The subject cannot be matched across companies, the audience pins it to one server, the lifetime is short, and the unique identifier lets the company refuse a second use."
+      "notes": "Each claim is there for the company to check the key, and none says who it is for. There is no sub, no aud, no Agent ID. A delegation can't be withdrawn before it expires, so its lifetime limits what a stolen delegated key can do. The subject stays pairwise in the Session JWT: two companies cannot correlate a user by comparing PAP identifiers."
     },
     {
       "type": "mermaid",
       "title": "How the company checks it",
-      "diagram": "flowchart LR\n  S[\"Signature valid?\"] -- \"yes\" --> U[\"aud is this server?\"]\n  U -- \"yes\" --> T[\"Within iat and exp?\"]\n  T -- \"yes\" --> J[\"jti never seen?\"]\n  J -- \"yes\" --> OK[\"Signed-out Session Token\"]\n  S -- \"no\" --> R[\"Refused\"]\n  U -- \"no\" --> R\n  T -- \"no\" --> R\n  J -- \"no\" --> R",
-      "caption": "Every check must pass; one failure and the assertion is worth nothing.",
-      "notes": "Read it left to right, as the company's authorization server does. First the signature must verify against the agent's key. Then the audience must be this server's issuer, as one string and nothing else, not even its token endpoint URL, so an assertion meant for another company is useless here. Then the time must fall between iat and exp, which keeps the window short. Last, the jti must be new, so a copied assertion is refused the second time. Only when every answer is yes does the company issue a signed-out Session Token."
+      "diagram": "flowchart LR\n  S[\"Signed by the jwks key<br/>its kid names?\"] -- \"yes\" --> U[\"typ, iss,<br/>at most 24 hours?\"]\n  U -- \"yes\" --> T[\"Unexpired?\"]\n  T -- \"yes\" --> J[\"Session JWT signed<br/>by cnf.jwk?\"]\n  J -- \"yes\" --> OK[\"Check the Session JWT's claims\"]\n  S -- \"no\" --> R[\"400 invalid_session\"]\n  U -- \"no\" --> R\n  T -- \"no\" --> R\n  J -- \"no\" --> R",
+      "caption": "Every check must pass; one failure is invalid_session.",
+      "notes": "Read it left to right, as the company does. It fetches the agent's client metadata and jwks_uri, and the delegation must verify with the key its kid names. Its typ must be pap-delegation+jwt, its iss the JWT's client_id, and its lifetime 24 hours at most. It must not have expired. Then the Session JWT must verify with the key in cnf.jwk. A Session JWT signed directly by a jwks key, with no delegation, is refused. A company may cache a verified delegation until it expires. Any failure is 400 with invalid_session."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
-      "cta": "The Pydantic AI and Agent Runtimes examples build real Session claims and return only their policy",
-      "notes": "The small example stops at safe assertion policy: a Reactor plugin contributes a SQLite pairwise store, and the tool reports lifetime and bindings. The Session lifecycle example sends the assertion in a real token request, with a DPoP proof by a new Session Key."
+      "cta": "The Pydantic AI and Agent Runtimes examples sign a real delegation and return only its policy",
+      "notes": "The small example stops at the delegation's claims: a Reactor plugin contributes a SQLite pairwise store, and the tool reports the claim names, the lifetime, and that no User and no Company are named. The Session lifecycle example sends a Session JWT with its delegation on each request."
     }
   ]
 }

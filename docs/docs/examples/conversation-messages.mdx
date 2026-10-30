@@ -23,11 +23,11 @@ sequenceDiagram
   participant C as Company agent
   A->>H: Ask to start a conversation
   H->>H: Generate msg_ ID (128 random bits)
-  H->>C: POST first message + DPoP
+  H->>C: POST first message + Session JWT
   C-->>H: 201 conversation_id, status, responder
   H-->>A: Conversation status only
   A->>H: Continue with context update
-  H->>C: POST new message ID + DPoP
+  H->>C: POST new message ID + Session JWT
   C-->>H: 202 status or waited event page
   Note over H,C: Retry keeps the exact ID and content
   H-->>A: Safe conversation result
@@ -39,7 +39,7 @@ a Direct Conversation. Python and TypeScript both expose `ConversationClient`.
 It validates opaque IDs, supports `text`, `data`, and
 `context`, bounds response bodies, rejects duplicate JSON members, surfaces
 company error codes without including response bodies, and can request replies
-with `cursor` and `wait`. Authentication remains in `DpopHttpClient` and never
+with `cursor` and `wait`. Authentication remains in `SessionHttpClient` and never
 enters model-visible tool inputs or results.
 
 TypeScript additionally propagates caller-owned `AbortSignal` cancellation.

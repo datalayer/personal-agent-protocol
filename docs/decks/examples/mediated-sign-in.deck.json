@@ -8,7 +8,7 @@
     {
       "type": "title",
       "title": "Mediated Sign-In",
-      "subtitle": "Relay the user's credentials to one company endpoint, once, out of the model's sight",
+      "subtitle": "Relay the user's credentials to the token endpoint, once, out of the model's sight",
       "meta": "Personal Agent Protocol · example",
       "notes": "Some companies cannot send their users to a browser. With Mediated Sign-In, the personal agent relays what the user types to the company. The example runs the real MediatedSignInClient against Manzanita Outfitters, which asks for an email, a password, and then a one-time code."
     },
@@ -21,33 +21,33 @@
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph USR[\"User\"]\n    direction TB\n    U[\"User\"]\n  end\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    I[\"pap.protectedInput<br/>never the chat\"] -- \"values\" --> S[\"MediatedSignInClient<br/>sends once, drops\"]\n    S -- \"tokens\" --> V[(\"Reactor stores\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Mediated endpoint<br/>on its own domain\"]\n  end\n  USR -- \"types credentials, code\" --> HOST\n  HOST -- \"one POST with DPoP\" --> CO\n  HOST -. \"labels, domain, masked sent_to\" .-> M",
-      "caption": "The password crosses the host once, to the company's own domain, and never reaches the model.",
-      "notes": "Start with the user, who types the email, the password and later the code into pap.protectedInput, the host's trusted surface, never the chat. The MediatedSignInClient sends those values once, in one POST with a DPoP proof, to the endpoint the company declared on its own domain, then drops them. The tokens that come back go into Reactor stores. Off to the side, the model: it knows the field labels and which are secret, the company's domain, where the code was sent, masked, and the statuses and granted scopes. That is enough to guide the user, and none of it is a value."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph USR[\"User\"]\n    direction TB\n    U[\"User\"]\n  end\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    I[\"pap.protectedInput<br/>never the chat\"] -- \"values\" --> S[\"MediatedSignInClient<br/>sends once, drops\"]\n    S -- \"tokens\" --> V[(\"Reactor stores\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Token endpoint<br/>an extension grant\"]\n  end\n  USR -- \"types credentials, code\" --> HOST\n  HOST -- \"one POST, client assertion\" --> CO\n  HOST -. \"labels, domain, masked sent_to\" .-> M",
+      "caption": "The password crosses the host once, to the issuer's token endpoint, and never reaches the model.",
+      "notes": "Start with the user, who types the email, the password and later the code into pap.protectedInput, the host's trusted surface, never the chat. The MediatedSignInClient sends those values once, in one POST with a client assertion, to the issuer's token endpoint, as an OAuth extension grant, then drops them. The tokens that come back go into Reactor stores. Off to the side, the model: it knows the field labels and which are secret, the company's domain, where the code was sent, masked, and the statuses and granted scopes. That is enough to guide the user, and none of it is a value."
     },
     {
       "type": "flow",
       "title": "Credentials, then a code",
       "items": [
-        { "label": "1", "title": "Check", "detail": "Endpoint on the company's domain, or refuse" },
+        { "label": "1", "title": "Check", "detail": "Extension and grant offered, field names allowed, or refuse" },
         { "label": "2", "title": "Ask", "detail": "Email and password, in protected input" },
-        { "label": "3", "title": "Send once", "detail": "POST with DPoP, no redirect followed; values dropped" },
+        { "label": "3", "title": "Send once", "detail": "POST the grant, no redirect followed; values dropped" },
         { "label": "4", "title": "Code", "detail": "code_required, masked sent_to" },
-        { "label": "5", "title": "Complete", "detail": "Signed-in Session and Account Token", "current": true }
+        { "label": "5", "title": "Complete", "detail": "Access token and refresh token", "current": true }
       ],
-      "notes": "The client checks the endpoint before asking the user anything. It sends the credentials once, with a DPoP proof, follows no redirect, and drops the values. The company asks for a code sent to a masked address; the user types it, the code goes only to that sign-in, and the Session comes back signed in."
+      "notes": "The client checks the extension and the grant before asking the user anything. It sends the credentials once, with a client assertion, follows no redirect, and drops the values. The company asks for a code sent to a masked address; the user types it, the continuation carries sign_in_id and the code alone, and the company answers with an access token and a refresh token."
     },
     {
       "type": "mermaid",
       "title": "The sign-in, with its refusals",
-      "diagram": "stateDiagram-v2\n  direction LR\n  state \"Signed out\" as SO\n  state \"Refused\" as RF\n  state \"Code required\" as CR\n  state \"Complete\" as OK\n  state \"Failed\" as FL\n  [*] --> SO\n  SO --> RF : endpoint off domain\n  SO --> CR : credentials sent once\n  CR --> CR : wrong code\n  CR --> OK : right code\n  CR --> FL : attempt limit",
-      "caption": "Every refusal is a state the host can explain; only the right code from the right Session completes.",
-      "notes": "If a declared field is named like a parameter of the grant, the client refuses with invalid_mediated_extension before the user is asked anything. Otherwise the credentials go once, to the issuer's token endpoint, and the company answers code_required. A wrong code comes back as code_required again, with the same reference. The right code completes the sign-in. After its own attempt limit, the company answers failed. Two more refusals do not change the state: the protected input must answer exactly the declared fields, none empty, and only the client_id that started the sign-in can finish it; the company answers anyone else invalid_grant."
+      "diagram": "stateDiagram-v2\n  direction LR\n  state \"Signed out\" as SO\n  state \"Refused\" as RF\n  state \"Code required\" as CR\n  state \"Complete\" as OK\n  state \"Failed\" as FL\n  [*] --> SO\n  SO --> RF : field name not allowed\n  SO --> CR : credentials sent once\n  CR --> CR : wrong code\n  CR --> OK : right code\n  CR --> FL : attempt limit",
+      "caption": "Every refusal is a state the host can explain; only the right code from the right `client_id` completes.",
+      "notes": "If a declared field is named like a parameter of the grant, the client refuses with invalid_mediated_extension before the user is asked anything. Otherwise the credentials go once, to the issuer's token endpoint, and the company answers code_required. A wrong code comes back as code_required again, with the same reference. The right code completes the sign-in. After its own attempt limit, the company ends the sign-in with invalid_grant. Two more refusals do not change the state: the protected input must answer exactly the declared fields, none empty, and only the client_id that started the sign-in can finish it; the company answers anyone else invalid_grant."
     },
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Never the model's", "type": "bullets", "items": ["Credentials and the code: protected input and one request body", "Session Token and Account Token: Reactor stores"] },
+      "left": { "heading": "Never the model's", "type": "bullets", "items": ["Credentials and the code: protected input and one request body", "Access token and refresh token: Reactor stores"] },
       "right": { "heading": "What the model sees", "type": "bullets", "items": ["Field labels, and which are secret", "The company's domain", "The masked code destination", "Statuses and granted scopes"] },
       "notes": "The model knows enough to guide the user: which fields, which company, where the code went. The values themselves exist only in the protected input and in the single request that carries them."
     },

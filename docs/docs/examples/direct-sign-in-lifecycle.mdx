@@ -1,6 +1,6 @@
 ---
 title: Direct Sign-In lifecycle
-description: Consume a browser callback once and upgrade the original Session with proof-bound consent.
+description: Consume a browser callback once, exchange the code, and keep the tokens in the host.
 ---
 
 import Deck from '@theme/Deck';
@@ -11,10 +11,11 @@ import deck from '@site/decks/examples/direct-sign-in-lifecycle.deck.json';
 <Deck spec={deck} />
 
 The complete flow resumes after the user authorizes on the company's page. The
-host consumes the pending state exactly once, verifies the callback, exchanges
-the code with PKCE and proof-of-possession, and requires the response to upgrade
-the same Session. Partial consent is an ordinary result, not an excuse to
-silently widen access.
+host consumes the pending state exactly once, verifies the callback, and exchanges
+the code with PKCE and a client assertion. The answer is plain OAuth: an access
+token and a refresh token. Sign-in doesn't know the Session: a Session is signed in
+on each request that carries the access token. Partial consent is an ordinary
+result, not an excuse to silently widen access.
 
 ```mermaid
 sequenceDiagram
@@ -24,20 +25,18 @@ sequenceDiagram
   participant C as Company authorization server
   participant H as PAP host
   participant R as Reactor state store
-  participant P as Signer + DPoP provider
+  participant P as Reactor signer
   U->>B: Approve orders:read · decline orders:return
   C-->>B: Redirect with code, state, issuer
   B->>H: Registered HTTPS callback
   H->>R: Atomically take pending request by hashed state
-  R-->>H: Request + verifier + the Session Key it bound (dpop_jkt)
+  R-->>H: Request + verifier
   H->>H: Verify exact redirect, state, issuer, expiry
-  H->>P: Fresh client assertion and DPoP proof by that Session Key
-  H->>C: Exchange code + verifier (the proof's key must match dpop_jkt)
-  C-->>H: use_dpop_nonce + company nonce
-  H->>P: Fresh assertion and fresh proof with nonce
-  H->>C: Retry exchange once
-  C-->>H: Signed-in DPoP token for same Session · orders:read
+  H->>P: Fresh client assertion
+  H->>C: Exchange code + verifier + assertion
+  C-->>H: Bearer access token + refresh token · orders:read
   H->>H: Reject scope escalation · compute missing scopes
+  H->>H: Move the refresh token into pap.tokenStore
   H-->>U: Signed in · return scope unavailable
   Note over H,R: A replayed callback finds no state and is rejected
 ```
@@ -47,16 +46,15 @@ sequenceDiagram
 - Callback state is consumed before exchange, so denial, failure, and success
   cannot leave replayable state behind.
 - Redirect location, issuer, state, expiry, content type, response size, token
-  type, the Session Key, and scopes are all validated: the code is bound to
-  the Session Key by `dpop_jkt` in the authorization URL, so only a proof by
-  that key redeems it and it signs in that Session alone.
-- A nonce retry reuses the one authorization code and PKCE verifier but creates
-  a fresh client assertion and fresh DPoP proof.
+  type, and scopes are all validated. The SDK sends no DPoP proofs and refuses a
+  `DPoP` token type.
+- Neither the authorization URL nor the code exchange names a Session: one sign-in
+  can serve several Sessions.
 - The company cannot return scopes the user did not request. Missing scopes are
   reported so the application can degrade safely or explain the limitation.
-- The Account Token moves into the host's `pap.tokenStore` before `complete()`
-  returns: the result carries only `account_token_reference`, and its `token`
-  has no `refresh_token`. Session and Account Tokens do not enter URLs, logs,
+- The refresh token moves into the host's `pap.tokenStore` before `complete()`
+  returns: the result carries only `refresh_token_reference`, and its `token`
+  has no `refresh_token`. Access and refresh tokens do not enter URLs, logs,
   analytics, React state, or model transcripts.
 
 The example intentionally grants only `orders:read` from a request for both

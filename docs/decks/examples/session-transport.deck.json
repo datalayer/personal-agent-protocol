@@ -1,46 +1,46 @@
 {
   "deck": {
-    "title": "DPoP-aware transport",
+    "title": "Session transport",
     "subtitle": "Personal Agent Protocol, by example",
     "template": "datalayer"
   },
   "slides": [
     {
       "type": "title",
-      "title": "DPoP-aware transport",
-      "subtitle": "Send every request with a fresh proof, and know when not to send it",
+      "title": "Session transport",
+      "subtitle": "Send every request with a fresh Session JWT, and know when not to send it",
       "meta": "Personal Agent Protocol · example",
-      "notes": "Once a Session exists, the agent calls the company's APIs and conversations with its Session Token. This example shows the HTTP client that does that safely: fresh proofs on every attempt, one nonce retry, and no redirects."
+      "notes": "Once a Session exists, the agent calls the company's APIs and conversations in it, signed in with an access token or signed out without one. This example shows the HTTP client that does that safely: a fresh Session JWT on every attempt, one restart on invalid_session, and no redirects."
     },
     {
       "type": "statement",
       "title": "Why a transport of its own",
-      "statement": "A valid proof is **only half** of DPoP safety. The other half is **where and when** it is sent.",
-      "notes": "Making a correct DPoP proof is not enough. The transport has to make a new one for each attempt, refuse to follow a redirect with the token attached, and stop callers from swapping in their own credentials."
+      "statement": "A valid Session JWT is **only half** of the job. The other half is **where and when** it is sent.",
+      "notes": "Signing a correct Session JWT is not enough. The transport has to get a new one for each attempt, refuse a redirect rather than resend the token to another URL, and stop callers from swapping in their own credentials."
     },
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    T[\"Agent tool<br/>opaque token reference\"] --> H[\"DPoP HTTP client<br/>owns the headers\"]\n    H -- \"prove this request\" --> P[\"Reactor proof provider<br/>holds the Session Key\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company API\"]\n  end\n  HOST -- \"request, token, proof\" --> CO\n  HOST -. \"API result only\" .-> M",
-      "caption": "The tool holds a reference, the client holds the headers, the provider holds the key; the model gets the result.",
-      "notes": "Read the host from the top. The agent tool asks for a company resource with only an opaque reference to the Session Token. The DPoP HTTP client, DpopHttpClient in Python and DpopFetchClient in TypeScript, owns the Authorization and DPoP headers. It asks the Reactor proof provider for a proof bound to the method, target and token hash, signed with the Session Key that names the Session, without ever seeing the key. The request names only the tenant and the issuer. Only the request, the token and the proof cross to the company API. Off to the side, the model: it gets the API result, never a Session Token, proof, nonce or Session Key."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    T[\"Agent tool<br/>opaque references\"] --> H[\"Session HTTP client<br/>owns the headers\"]\n    H -- \"sign this request\" --> P[\"Reactor Session signer<br/>holds the delegated key\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company API\"]\n  end\n  HOST -- \"request, Poppy-Session, Bearer token\" --> CO\n  HOST -. \"API result only\" .-> M",
+      "caption": "The tool holds a reference, the client holds the headers, the signer holds the key; the model gets the result.",
+      "notes": "Read the host from the top. The agent tool asks for a company resource and holds only opaque references. The Session HTTP client, SessionHttpClient in Python and SessionFetchClient in TypeScript, owns the Authorization and Poppy-Session headers. It asks the Reactor Session signer for a Session JWT bound to the method, the target and the token hash, without ever seeing the key. Only the request, the access token and the Session JWT cross to the company API. Off to the side, the model: it gets the API result, never an access token, a Session JWT or a key."
     },
     {
       "type": "flow",
-      "title": "A request with a nonce challenge",
+      "title": "A request that restarts the Session",
       "items": [
-        { "label": "1", "title": "Prove", "detail": "Proof 1 for GET /orders and the token hash" },
-        { "label": "2", "title": "Send", "detail": "Authorization: DPoP, plus the proof" },
-        { "label": "3", "title": "Challenged", "detail": "401 use_dpop_nonce, with a nonce" },
-        { "label": "4", "title": "Retry once", "detail": "Proof 2 carries the nonce: 200", "current": true }
+        { "label": "1", "title": "Sign", "detail": "JWT 1 for GET /orders and the token hash" },
+        { "label": "2", "title": "Send", "detail": "`Poppy-Session` and `Authorization: Bearer`" },
+        { "label": "3", "title": "Refused", "detail": "400 `invalid_session`" },
+        { "label": "4", "title": "Restart once", "detail": "A new Session, JWT 2 for the same request: 200", "current": true }
       ],
-      "notes": "The first attempt gets a nonce challenge. The client makes a second proof for the same request, this time with the company's nonce, and retries once. The tool gets the API result, with no token or proof in it."
+      "notes": "The first attempt is refused with invalid_session: the Session failed a check, or it has ended. The client starts a new Session in its place, signs a second JWT for the same request, and sends it again. The tool gets the API result, with no token or Session JWT in it."
     },
     {
       "type": "mermaid",
       "title": "The redirect is refused",
-      "diagram": "sequenceDiagram\n  participant A as Agent tool\n  participant H as DPoP client\n  participant C as Company API\n  A->>H: GET orders again\n  H->>C: Token + proof 3\n  C-->>H: 307 to /orders/current\n  H-->>A: redirect_refused",
-      "notes": "On the second call the company answers with a redirect. The client does not follow it: under draft 0.3 no token, proof, assertion or body goes to the URL a protocol endpoint redirects to. The tool gets redirect_refused, and nothing reaches the new URL."
+      "diagram": "sequenceDiagram\n  participant A as Agent tool\n  participant H as Session client\n  participant C as Company API\n  A->>H: GET orders again\n  H->>C: Token + JWT 3\n  C-->>H: 307 to /orders/current\n  H-->>A: redirect_refused",
+      "notes": "On the second call the company answers with a redirect. The client does not follow it: under draft 0.3 no token, Session JWT, assertion or body goes to the URL a protocol endpoint redirects to. The tool gets redirect_refused, and nothing reaches the new URL."
     },
     {
       "type": "bullets",
@@ -48,32 +48,32 @@
       "icon": "check",
       "items": [
         "HTTPS resource URLs only, with no embedded credentials",
-        "`Authorization` and `DPoP` are host-owned: callers cannot set them",
-        "A fresh proof for every attempt, including the retry",
-        "One retry on `use_dpop_nonce`, never more",
+        "`Authorization` and `Poppy-Session` are host-owned: callers cannot set them",
+        "A fresh Session JWT for every attempt, including the resend",
+        "One restart on `invalid_session`, never more",
         "Redirects are never followed",
         "Request bodies are replayable values, not streams"
       ],
-      "notes": "These are the rules the client enforces. Notice the last one: because a retry may resend the body, bodies are values that can be sent twice, not streams that can be read once."
+      "notes": "These are the rules the client enforces. Notice the last one: because a restart resends the body, bodies are values that can be sent twice, not streams that can be read once."
     },
     {
       "type": "mermaid",
       "title": "Each answer, decided",
-      "diagram": "flowchart LR\n  S[\"Send with<br/>a fresh proof\"] --> Q{\"Company answers\"}\n  Q -- \"200\" --> R[\"Result to the tool<br/>no token or proof\"]\n  Q -- \"307 redirect\" --> X[\"redirect_refused<br/>nothing sent on\"]\n  Q -- \"first nonce challenge\" --> F[\"New proof<br/>with the nonce\"]\n  F --> S\n  Q -- \"second challenge\" --> Y[\"No second retry\"]",
-      "caption": "Every attempt gets its own proof, one nonce retry at most, and a redirect is never followed.",
-      "notes": "Start at the left: every attempt goes out with a fresh proof. A 200 goes back to the tool with no token or proof in it. A redirect stops right there with redirect_refused, and nothing is sent to the new URL. A use_dpop_nonce challenge gets exactly one retry, with a new proof carrying the company's nonce; it is never retried a second time. Because a retry may resend the body, request bodies are replayable values, not streams."
+      "diagram": "flowchart LR\n  S[\"Send with<br/>a fresh Session JWT\"] --> Q{\"Company answers\"}\n  Q -- \"200\" --> R[\"Result to the tool<br/>no token or JWT\"]\n  Q -- \"307 redirect\" --> X[\"redirect_refused<br/>nothing sent on\"]\n  Q -- \"first invalid_session\" --> F[\"A new Session\"]\n  F --> S\n  Q -- \"second invalid_session\" --> Y[\"Back to the caller\"]",
+      "caption": "Every attempt gets its own Session JWT, one restart at most, and a redirect is never followed.",
+      "notes": "Start at the left: every attempt goes out with a fresh Session JWT. A 200 goes back to the tool with no token or JWT in it. A redirect stops right there with redirect_refused, and nothing is sent to the new URL. An invalid_session starts a new Session once, and the request is sent again in it; a second one in a row goes back to the caller. Because a restart resends the body, request bodies are replayable values, not streams."
     },
     {
       "type": "statement",
       "title": "MCP has its own client",
-      "statement": "An MCP server **with DPoP** gets a DPoP token; one **without** gets a **Bearer** by Token Exchange. This transport accepts **DPoP only**.",
-      "notes": "MCP tokens are issued for one server's URL alone. A server that supports DPoP gets a DPoP token, asked for with resource set to its URL. One without DPoP gets a Bearer token by Token Exchange: the Session's DPoP token is the subject token, the server's URL the resource. McpClient sends either. This transport refuses Bearer tokens instead of quietly downgrading, so an MCP token never reaches the company's API through it."
+      "statement": "An MCP token is issued for **one server's URL**, asked for with `resource`, and works **only there**.",
+      "notes": "A refresh with resource set to the server's url gets the token: token_for_mcp in Python, tokenForMcp in TypeScript. There is no Token Exchange any more. McpClient sends it through McpSessionAuth, which adds the Session header and a plain Bearer token, and refuses any other URL before a request is sent. So an MCP token never reaches the company's API."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
-      "cta": "The Pydantic AI and Agent Runtimes examples send a request through a nonce challenge, then meet a refused redirect",
-      "notes": "Both examples run the same two calls: one that succeeds after a nonce retry, and one that stops at a redirect. Upstream's Using Session Tokens section has the rules in full."
+      "cta": "The Pydantic AI and Agent Runtimes examples send a request through a Session restart, then meet a refused redirect",
+      "notes": "Both examples run the same two calls: one that succeeds after a restart, and one that stops at a redirect. Upstream's Sessions section has the rules in full."
     }
   ]
 }

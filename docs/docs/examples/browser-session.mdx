@@ -1,6 +1,6 @@
 ---
 title: Browser Session
-description: Join the personal agent's own browser to a PAP Session with a one-time code and a DPoP proof by the Session Key.
+description: Join the personal agent's own browser to a PAP Session with a one-time code the agent authorizes.
 ---
 
 import Deck from '@theme/Deck';
@@ -12,31 +12,32 @@ import deck from '@site/decks/examples/browser-session.deck.json';
 
 PAP can carry one Session across APIs, conversations, and the company's
 website. When discovery advertises `web.browser_session_endpoint`, the personal
-agent's own browser joins the Session through a form on that page (§5): the
-page gives the browser a one-time code, the personal agent signs a DPoP proof
-over the code with its Session Key, and the browser submits the form. The
-company answers with its own cookie for the Session. Only the browser that
-loaded the page can submit its code, and only the agent that holds the Session
-Key can sign the proof, so no one else can make a browser join the Session.
+agent's own browser joins the Session through a form on that page (§6): the
+page gives the browser a one-time code, the personal agent authorizes the code
+in a request of its own, with the Session header and the access token if signed
+in, and the browser submits the form. The company answers with its own cookie
+for the Session. Only the browser that loaded the page can submit its code, and
+only an agent that can sign for the Session can authorize it. The access token
+never passes through the browser.
 
 ```mermaid
 sequenceDiagram
   autonumber
   participant A as Personal agent host
-  participant P as Reactor DPoP provider
   participant B as Agent's own browser
   participant C as Company browser-session endpoint
   B->>C: GET the endpoint (top-level navigation)
-  C-->>B: Form with one-time code + empty proof field
+  C-->>B: Form with a one-time code
   Note over B,C: __Host- cookie, SameSite=Strict, ties the code to this browser
   B-->>A: The code, read from that page only
-  A->>P: Proof: htm POST, htu endpoint, nonce = code, no ath
-  P-->>A: Signed with the Session Key
-  A->>B: Put the proof in the form
-  B->>C: POST code + proof, with the cookie
-  C->>C: Cookie matches code, code unused and unexpired, proof valid, key = an active Session's
+  A->>C: POST {endpoint}/authorize: the code, Poppy-Session, access token if signed in
+  C->>C: Header and token valid, code issued, unexpired, not authorized before
+  C-->>A: 204
+  A->>B: Submit the form
+  B->>C: POST the code alone, with the cookie
+  C->>C: Cookie matches the code, code authorized, unexpired, not submitted before
   C-->>B: 303 + the company's Session cookie
-  Note over A,B: Code, proof, Session Key and cookies never enter model context
+  Note over A,B: Code, Session JWT, tokens and cookies never enter model context
 ```
 
 ## Personal-agent responsibilities
@@ -49,19 +50,20 @@ sequenceDiagram
   endpoint, never from a message, a conversation, or another page: a code from
   anywhere else may come from someone else's browser, which would then join
   the user's Session (§9.6).
-- Sign the proof with the Session Key of the Session the browser joins, signed
-  in or out: `htm` `POST`, `htu` the endpoint, `nonce` the code, no `ath`.
-- Read the code and sign the proof in host code the model can't read (§9.2).
+- Authorize the code at `{endpoint}/authorize`, with the Session header of the
+  Session the browser joins and, if signed in, the access token the website
+  should act with. The browser never sees either.
+- Read the code and authorize it in host code the model can't read (§10.2).
 - After an error, start again from the GET. The agent may join again at any
   time; each join replaces the company's earlier cookie.
 
-`BrowserSessionClient.join(browser_session_endpoint, tenant_id, issuer,
-session_key)` resolves the clock, the DPoP provider, and the agent's browser
-through Reactor: the browser is the host's `pap.browserJoin` contribution
-(`BrowserJoins` in TypeScript), whose `load_join_form(endpoint)` returns the
-code as a secret and `submit_join_form(proof)` posts it from the same browser.
-The client refuses a code shorter than 128 bits (`invalid_join_code`) and
-returns only the endpoint and when the browser joined.
+`BrowserSessionClient.join(browser_session_endpoint=..., session=..., token=...)`
+resolves the clock and the agent's browser through Reactor: the browser is the
+host's `pap.browserJoin` contribution (`BrowserJoins` in TypeScript), whose
+`load_join_form(endpoint)` returns the code as a secret and `submit_join_form()`
+posts it from the same browser. The client refuses a code shorter than 128 bits
+(`invalid_join_code`), sends the `/authorize` request through its
+`SessionHttpClient`, and returns only the endpoint and when the browser joined.
 
 In TypeScript, the agent joins its browser to the Session, signed in with the
 account's access token or signed out, then browses the company's website in it.
@@ -87,20 +89,24 @@ await browser.get(`https://${company.document.organization.domain}/`);
 The page (step 1):
 
 - a form with a hidden `code` (at least 128 random bits, expiring within 60
-  seconds) and an empty `proof` field, posting to the endpoint;
+  seconds), posting to the endpoint;
 - a cookie set in the same response that ties the code to this browser:
   `Secure`, `HttpOnly`, `SameSite=Strict`, with the `__Host-` prefix;
 - `Cache-Control: no-store`, `Content-Security-Policy: frame-ancestors 'none'`,
   and `Cross-Origin-Opener-Policy: same-origin`;
 - loading it starts, ends, or changes no Session and no other cookie.
 
-The submission (step 3) is accepted only when the cookie matches the code; the
-code was issued, is unexpired and unused (a code is used by the first request
-that sends it, whatever the result); the proof is a valid DPoP proof for this
-POST with the code as `nonce`; and its key is an active Session's. A key the
-company doesn't know is an error here, never a new Session. Then the company
-sets its Session cookie, clears the join cookie, and answers `303`; otherwise
-`400` (or `429`) and no cookie.
+The authorization (step 2) checks the Session header as at any resource, which
+starts the Session if its `sid` is new, and the access token, if any. The code
+must have been issued, be unexpired, and not be authorized before. The company
+records it for that Session and, if signed in, for the token's account and
+scopes, and answers `204`; otherwise `400` with `invalid_request`.
+
+The submission (step 3) is accepted only when the cookie matches the code and the
+code was authorized, is unexpired and has not been submitted before (a code is
+used by the first request that submits it, whatever the result). Then the company
+sets its Session cookie, clears the join cookie, and answers `303`; otherwise an
+error status and no cookie.
 
 The Session cookie is the company's own. It must be `Secure` and `HttpOnly`,
 should use the `__Host-` prefix, must follow the Session's state (sign-in,
@@ -112,21 +118,18 @@ configuration) do this at `/poppy/browser-session`: the join cookie is
 `__Host-poppy_join`, and the Session cookie `__Host-poppy_session` is
 `Secure`, `HttpOnly` and `SameSite=Strict`, has no lifetime of its own, and
 stands for the Session only while it is live, so signing out reaches the
-website on its next request. Each operation's page (`/operations/{id}`) shows
-it in that Session and confirms or cancels it through a same-site form with a
-CSRF token bound to the cookie; the conformance cases
-`lifecycle.browser-joins-session`, `lifecycle.browser-join-refused`, and
-`operations.web-confirm-at-most-once` cover them.
+website on its next request. The conformance cases
+`lifecycle.browser-joins-session` and `lifecycle.browser-join-refused` cover them.
 
 ## What the example proves
 
 The [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/browser-session)
 runs against Manzanita with its website on. It joins the agent's browser
-(`303` and the Session cookie; the proof's key is the Session Key and its
-nonce the code), then shows the two refusals §9.6 asks for: the same code
-submitted again with a fresh valid proof is refused, and a code the agent's
-browser loaded, submitted from another browser without its cookie, is refused
-and used up. Its tool result holds statuses and booleans only.
+(`303` and the Session cookie; the form carries the code alone, and nothing of the
+Session goes through the browser), then shows the two refusals §10.6 asks for: the
+same code submitted again is refused, and a code the agent authorized, submitted
+from another browser without its cookie, is refused and used up. Its tool result
+holds statuses and booleans only.
 
 See upstream [Web browsing](https://personalagentprotocol.org/docs/0.3/spec#web-browsing)
 and [Joining a browser to a Session](https://personalagentprotocol.org/docs/0.3/spec#browser-join).

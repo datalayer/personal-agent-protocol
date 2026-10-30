@@ -21,9 +21,9 @@
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    S[\"ConversationClient.stream<br/>reconnects, drops repeats\"] -- \"messages, deltas,<br/>reconnect notices\" --> T[\"Agent tool\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company API<br/>SSE frames with IDs\"]\n  end\n  HOST -- \"GET events, DPoP,<br/>Last-Event-ID\" --> CO\n  HOST -. \"complete messages, counts\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    S[\"ConversationClient.stream<br/>reconnects, drops repeats\"] -- \"messages, deltas,<br/>reconnect notices\" --> T[\"Agent tool\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company API<br/>SSE frames with IDs\"]\n  end\n  HOST -- \"GET events, Session JWT,<br/>Last-Event-ID\" --> CO\n  HOST -. \"complete messages, counts\" .-> M",
       "caption": "Deltas stop at the host's display; the model gets complete messages and counts only.",
-      "notes": "Start on the right: the company answers the events request with Server-Sent Event frames, each with an ID. In the host, the SDK's stream method opens that stream with DPoP, reconnects from the Last-Event-ID when it ends, and drops anything already delivered. It hands the agent tool messages, deltas and reconnect notices. Off to the side, the model: it only ever sees the complete messages and how many deltas and reconnects there were."
+      "notes": "Start on the right: the company answers the events request with Server-Sent Event frames, each with an ID. In the host, the SDK's stream method opens that stream with a Session JWT, reconnects from the Last-Event-ID when it ends, and drops anything already delivered. It hands the agent tool messages, deltas and reconnect notices. Off to the side, the model: it only ever sees the complete messages and how many deltas and reconnects there were."
     },
     {
       "type": "flow",
@@ -71,9 +71,9 @@
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host-only", "type": "bullets", "items": ["Session Token", "DPoP proofs", "The Session Key"] },
+      "left": { "heading": "Host-only", "type": "bullets", "items": ["Access token", "Session JWTs", "The delegated key"] },
       "right": { "heading": "What the model sees", "type": "bullets", "items": ["The company's complete messages", "How many deltas and reconnects", "That nothing came twice"] },
-      "notes": "The model sees complete messages and counts, never a partial reply to act on. The token, proofs and the Session Key stay with the host."
+      "notes": "The model sees complete messages and counts, never a partial reply to act on. The token, the Session JWTs and the delegated key stay with the host."
     },
     {
       "type": "closing",

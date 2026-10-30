@@ -45,7 +45,7 @@
         { "label": "7", "title": "Answer lost", "detail": "The bank performed it; the reply never came" },
         { "label": "8", "title": "Send again", "detail": "The same approval: the original response", "current": true }
       ],
-      "notes": "The host shows Ada which terms changed and she approves the new revision. The bank performs the payment but the answer is lost. The SDK sends the same request with the same approval, and the bank answers with its original response: the payment happens once."
+      "notes": "The host shows Ada which terms changed and she approves the new revision. The bank performs the payment but the answer is lost. The SDK sends the same request with the same approval, and the bank answers with its original response: the payment happens at most once. At an API the operation comes as 403 approval_required, and the same request comes back with a Poppy-Approval header; in this conversation, a company message carries the operation and an agent message the approval."
     },
     {
       "type": "mermaid",
@@ -57,9 +57,9 @@
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host and user only", "type": "bullets", "items": ["Tokens and proofs", "The decision to approve"] },
+      "left": { "heading": "Host and user only", "type": "bullets", "items": ["Tokens and Session JWTs", "The decision to approve"] },
       "right": { "heading": "What the model sees", "type": "bullets", "items": ["Revisions", "Changed term paths", "Error codes", "What the bank says it came to, as written"] },
-      "notes": "The model can explain what happened, but it cannot approve. Tokens and proofs stay in the host, and the decision stays with the user in the host's own interface."
+      "notes": "The model can explain what happened, but it cannot approve. Tokens and Session JWTs stay in the host, and the decision stays with the user in the host's own interface."
     },
     {
       "type": "closing",

@@ -13,7 +13,8 @@ import deck from '@site/decks/examples/agent-identity.deck.json';
 A company needs a stable way to identify the software acting for a user. The
 agent's HTTPS `client_id` points to public metadata describing its name,
 redirect URIs, and JWKS location. The company verifies that metadata before it
-accepts signed assertions; the private signing key never leaves its custodian.
+accepts client assertions or delegations; the private signing key never leaves
+its custodian.
 
 ```mermaid
 sequenceDiagram

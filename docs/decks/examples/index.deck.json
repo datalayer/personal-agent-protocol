@@ -15,7 +15,7 @@
     {
       "type": "mermaid",
       "title": "What every flow shows",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Host code and Reactor contributions\"]\n    direction TB\n    T[\"PAP client\"] --- K[\"Keys, tokens,<br/>browser, state\"]\n  end\n  CO[\"Company\"]\n  HOST -- \"assertions, proofs, tokens\" --> CO\n  CO -- \"verified answers\" --> HOST\n  HOST -. \"status, scopes, booleans\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Host code and Reactor contributions\"]\n    direction TB\n    T[\"PAP client\"] --- K[\"Keys, tokens,<br/>browser, state\"]\n  end\n  CO[\"Company\"]\n  HOST -- \"assertions, Session JWTs, tokens\" --> CO\n  CO -- \"verified answers\" --> HOST\n  HOST -. \"status, scopes, booleans\" .-> M",
       "caption": "Where the data travels, who owns the sensitive work, and what may reach the model.",
       "notes": "Every page answers the same three questions. Which requests go where; which Reactor capability holds the keys, tokens and secrets; and what is left that the model may see. The answer to the last one is always: much less than the host knows. In the picture: the secrets cross only between the host and the company; the model, on the dotted line, gets a safe summary."
     },
@@ -25,17 +25,17 @@
       "items": [
         { "label": "1", "title": "Company discovery", "detail": "Resolve and validate public PAP capabilities" },
         { "label": "2", "title": "Agent identity", "detail": "Verify agent metadata and signing policy" },
-        { "label": "3", "title": "Session assertion", "detail": "Bind a short-lived request to a pairwise user" },
-        { "label": "4", "title": "DPoP proof", "detail": "Bind one proof to one HTTP request" }
+        { "label": "3", "title": "Delegation", "detail": "Vouch for a delegated key, naming no User and no Company" },
+        { "label": "4", "title": "Session JWT", "detail": "Bind one Session JWT to one HTTP request" }
       ],
-      "notes": "The first flows are the building blocks. A personal agent finds out what a company supports, the company checks who the agent is, and the agent learns to make the two signed things every request needs: a Session assertion and a DPoP proof."
+      "notes": "The first flows are the building blocks. A personal agent finds out what a company supports, the company checks who the agent is, and the agent learns to make the two signed things every request depends on: a delegation that vouches for a delegated key, and a Session JWT signed with that key."
     },
     {
       "type": "mermaid",
       "title": "Sessions, sign-in and conversations",
-      "diagram": "flowchart LR\n  S[\"Session<br/>lifecycle, DPoP transport,<br/>browser\"] --> I[\"Signing in<br/>Direct, Device, Mediated\"]\n  I --> A[\"Account Tokens<br/>refresh, narrow, revoke\"]\n  S --> C[\"Conversations<br/>messages, events, streaming\"]\n  A --> C\n  C --> O[\"Control and<br/>Operations\"]",
-      "caption": "Every flow happens in a Session; sign-in and Account Tokens unlock what needs the account.",
-      "notes": "The middle of the set builds on those blocks. Sessions start, renew and travel safely; users sign in without the model ever touching OAuth state or tokens; and conversations carry messages, events, streams and the operations a user approves."
+      "diagram": "flowchart LR\n  S[\"Session<br/>lifecycle, transport,<br/>browser\"] --> I[\"Signing in<br/>Direct, Device, Mediated\"]\n  I --> A[\"Refresh tokens<br/>refresh, narrow, revoke\"]\n  S --> C[\"Conversations<br/>messages, events, streaming\"]\n  A --> C\n  C --> O[\"Control and<br/>Operations\"]",
+      "caption": "Every flow happens in a Session; sign-in and refresh tokens unlock what needs the account.",
+      "notes": "The middle of the set builds on those blocks. Sessions start and travel safely; users sign in without the model ever touching OAuth state or tokens; and conversations carry messages, events, streams and the operations a user approves."
     },
     {
       "type": "two-columns",
@@ -54,7 +54,7 @@
         "Real keys and real HTTP over ASGI, in one process, no network",
         "Production hosts swap the fixtures through **Reactor contributions**"
       ],
-      "notes": "The examples teach the boundary without any real secret. The newer ones talk to a reference company with real keys and real HTTP, all inside one process. In production, the same code gets egress, state, browsers, signing, DPoP, key custody and token storage from Reactor contributions."
+      "notes": "The examples teach the boundary without any real secret. The newer ones talk to a reference company with real keys and real HTTP, all inside one process. In production, the same code gets egress, state, browsers, signing, delegated key custody and token storage from Reactor contributions."
     },
     {
       "type": "comparison",
@@ -72,7 +72,7 @@
       "title": "Shown by an example alone",
       "icon": "arrow",
       "items": [
-        "**Company APIs**: OpenAPI with DPoP; MCP with DPoP, or a Bearer by Token Exchange",
+        "**Company APIs**: OpenAPI with the Session header; MCP with an access token for its URL alone",
         "**Company service**: build a company with `personal_agent_protocol.company`",
         "**Sign-in display**: what a page and a model each get of `PapSignIn`",
         "**Telemetry**: one allowlisted event per protocol stage"

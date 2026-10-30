@@ -1,72 +1,72 @@
 {
   "deck": {
-    "title": "Account Tokens",
+    "title": "Refresh tokens",
     "subtitle": "Personal Agent Protocol, by example",
     "template": "datalayer"
   },
   "slides": [
     {
       "type": "title",
-      "title": "Account Tokens",
+      "title": "Refresh tokens",
       "subtitle": "Keep a user signed in with a rotating token that never leaves the host",
       "meta": "Personal Agent Protocol · example",
-      "notes": "A sign-in returns an Account Token, which is the OAuth refresh token. This example shows how the agent uses it to sign a Session in again, how it rotates, and how it ends. It runs the real AccountTokenClient against Manzanita Outfitters, with real keys over HTTP in one process."
+      "notes": "A sign-in returns a refresh token, which earlier drafts called the Account Token. This example shows how the agent uses it to get new access tokens, how it rotates, and how it ends. It runs the real RefreshTokenClient against Manzanita Outfitters, with real keys over HTTP in one process."
     },
     {
       "type": "statement",
-      "title": "Why Account Tokens",
-      "statement": "Session Tokens are **short-lived**. The Account Token signs the Session in **again**, without asking the user.",
-      "notes": "Session Tokens expire quickly on purpose. The Account Token lets the agent sign the same Session back in, and it is used only at the company's token and revocation endpoints."
+      "title": "Why refresh tokens",
+      "statement": "Access tokens are **short-lived**. The refresh token gets a **new one**, without asking the user.",
+      "notes": "Access tokens expire quickly on purpose. The refresh token is used only at the company's token and revocation endpoints. It is not tied to a Session: any of the User's Sessions can use the access tokens it gets."
     },
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    C[\"AccountTokenClient\"] -- \"hold the reference\" --> L[\"pap.accountTokenLock\"]\n    C -- \"read, replace\" --> S[(\"pap.tokenStore<br/>holds the Account Token\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    T[\"Token endpoint<br/>rotates the token\"]\n    R[\"Revocation endpoint<br/>ends the token\"]\n  end\n  HOST -- \"grant, assertion, DPoP\" --> CO\n  HOST -. \"status and scopes only\" .-> M",
-      "caption": "The Account Token stays in the host's store; the model learns a status and scope names.",
-      "notes": "Start inside the host. The AccountTokenClient holds a lock on the token reference, then reads the Account Token from the Reactor token store and later replaces it there. Only the grant, signed with a client assertion and a DPoP proof, crosses to the company, whose token endpoint rotates the token and whose revocation endpoint ends it. Off to the side, the model: it receives only the status and the scope names."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    C[\"RefreshTokenClient\"] -- \"hold the reference\" --> L[\"pap.refreshTokenLock\"]\n    C -- \"read, replace\" --> S[(\"pap.tokenStore<br/>holds the refresh token\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    T[\"Token endpoint<br/>rotates the token\"]\n    R[\"Revocation endpoint<br/>ends the token\"]\n  end\n  HOST -- \"grant, client assertion\" --> CO\n  HOST -. \"status and scopes only\" .-> M",
+      "caption": "The refresh token stays in the host's store; the model learns a status and scope names.",
+      "notes": "Start inside the host. The RefreshTokenClient holds a lock on the token reference, then reads the refresh token from the Reactor token store and later replaces it there. Only the grant, with a client assertion, crosses to the company, whose token endpoint rotates the token and whose revocation endpoint ends it. Off to the side, the model: it receives only the status and the scope names."
     },
     {
       "type": "flow",
       "title": "A refresh",
       "items": [
         { "label": "1", "title": "Lock", "detail": "Hold the token reference" },
-        { "label": "2", "title": "Grant", "detail": "refresh_token + assertion + DPoP with the Session Key" },
-        { "label": "3", "title": "Rotate", "detail": "New Session Token and a rotated Account Token" },
+        { "label": "2", "title": "Grant", "detail": "`refresh_token` + a fresh client assertion" },
+        { "label": "3", "title": "Rotate", "detail": "A new access token and a rotated refresh token" },
         { "label": "4", "title": "Replace", "detail": "The new token in the store, before unlocking", "current": true }
       ],
-      "notes": "The client holds the lock, reads the token, and sends a refresh token grant with a DPoP proof signed by the Session Key, which names the Session. The company signs that same Session in again and rotates the token. The new one replaces the old in the store before the lock is released and before the call returns."
+      "notes": "The client holds the lock, reads the token, and sends a refresh token grant with a client assertion. The grant names no Session. The company returns a new access token and rotates the refresh token. The new one replaces the old in the store before the lock is released and before the call returns."
     },
     {
       "type": "mermaid",
       "title": "Two refreshes at once",
-      "diagram": "sequenceDiagram\n  participant A as Refresh A\n  participant B as Refresh B\n  participant L as Lock\n  participant C as Company\n  A->>L: Hold the reference\n  B->>L: Hold the reference\n  A->>C: Grant with token 1\n  C-->>A: Session Token, token 2\n  A->>L: Store token 2, release\n  B->>C: Grant with token 2\n  C-->>B: Session Token, token 3",
+      "diagram": "sequenceDiagram\n  participant A as Refresh A\n  participant B as Refresh B\n  participant L as Lock\n  participant C as Company\n  A->>L: Hold the reference\n  B->>L: Hold the reference\n  A->>C: Grant with token 1\n  C-->>A: Access token, token 2\n  A->>L: Store token 2, release\n  B->>C: Grant with token 2\n  C-->>B: Access token, token 3",
       "notes": "Two refreshes ask for the same token reference. Refresh A gets the lock first, so B waits for it. Both succeed. A presents token 1, the company rotates it to token 2, and A stores token 2 before releasing the lock. Only then does B go, presenting token 2 rather than the token the company already revoked. Without the lock, both would present token 1 and the second would fail."
     },
     {
       "type": "mermaid",
       "title": "What the company can answer",
-      "diagram": "flowchart LR\n  R[\"Refresh\"] --> Q{\"Company answers\"}\n  Q -- \"rotated\" --> S[\"signed_in<br/>new token stored\"]\n  Q -- \"invalid_scope\" --> C[\"re_consent_required<br/>ask the user\"]\n  Q -- \"invalid_grant, Session ended\" --> E[\"session_ended<br/>key discarded\"]\n  Q -- \"invalid_grant, token ended\" --> D[\"signed_out<br/>token deleted\"]\n  V[\"Revoke\"] -- \"200\" --> X[\"Every Session signed out<br/>token deleted\"]",
-      "caption": "Wider scopes are a decision for the user, never a retry; an ended Session loses its key; expiry and revocation delete the token.",
-      "notes": "Follow a refresh to the company's answer. Usually the token is rotated, the new one is stored, and the Session is signed in; narrower scopes take this path too. Wider scopes come back as invalid_scope, which the SDK reports as re-consent required: a decision for the user, never a retry. An invalid_grant has two causes, and the SDK tells them apart by renewing the Session with its assertion. Ninety-one days later in the example, the Session itself has ended: its key is refused, so the SDK discards it and reports session_ended. Without a key, the Account Token would start a new Session; it has expired too, so the company answers invalid_grant again, the SDK deletes it, and the result is signed_out. Below, revocation under RFC 7009: once the company answers 200, every Session signed in with that token is signed out and the stored copy is deleted."
+      "diagram": "flowchart LR\n  R[\"Refresh\"] --> Q{\"Company answers\"}\n  Q -- \"rotated\" --> S[\"signed_in<br/>new token stored\"]\n  Q -- \"invalid_scope\" --> C[\"re_consent_required<br/>ask the user\"]\n  Q -- \"invalid_grant\" --> D[\"signed_out<br/>token deleted\"]\n  V[\"Revoke\"] -- \"200\" --> X[\"Sessions go on signed out<br/>token deleted\"]",
+      "caption": "Wider scopes are a decision for the user, never a retry; expiry and revocation delete the token.",
+      "notes": "Follow a refresh to the company's answer. Usually the token is rotated, the new one is stored, and the result is signed_in; narrower scopes take this path too. Wider scopes come back as invalid_scope, which the SDK reports as re-consent required: a decision for the user, never a retry. Ninety-one days later in the example, the refresh token has expired: the company answers invalid_grant, the SDK deletes the stored copy, and the result is signed_out. Below, revocation under RFC 7009: once the company answers 200 the stored copy is deleted, an access token still in hand is invalid_token, and the Session goes on signed out by sending no token. Sign-out revokes every refresh token held for the account."
     },
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host-only, behind opaque references", "type": "bullets", "items": ["The Account Token", "Session Tokens", "Client assertions", "DPoP proofs"] },
-      "right": { "heading": "What the model sees", "type": "bullets", "items": ["`signed_in`, `re_consent_required`, `session_ended`, `signed_out`", "Whether a rotation happened", "Scope names"] },
+      "left": { "heading": "Host-only, behind opaque references", "type": "bullets", "items": ["The refresh token", "Access tokens", "Client assertions", "Session JWTs"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["`signed_in`, `re_consent_required`, `signed_out`", "Whether a rotation happened", "Scope names"] },
       "notes": "The model learns the status, whether the token rotated, and which scopes it has. Every credential stays in Reactor stores, behind opaque references."
     },
     {
       "type": "statement",
       "title": "In TypeScript",
-      "statement": "`new AccountTokenClient({ reactor, fetch })`, with `refresh(reference, { context, sessionKey, scopes })` and `revoke()`.",
-      "notes": "TypeScript has the same client, and the lock is contributed at the AccountTokenLocks contribution point."
+      "statement": "`new RefreshTokenClient({ reactor, fetch })`, with `refresh(reference, { context, scopes })`, `revoke()` and `signOut()`.",
+      "notes": "TypeScript has the same client, and the lock is contributed at the RefreshTokenLocks contribution point. A token for one MCP server is a refresh with resource set to the server's URL: tokenForMcp in TypeScript, token_for_mcp in Python."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
-      "cta": "The Pydantic AI and Agent Runtimes examples refresh, race, narrow, widen, end, expire and revoke one token",
-      "notes": "Each run walks the five steps against the reference company. The Account Tokens guide covers the production setup."
+      "cta": "The Pydantic AI and Agent Runtimes examples refresh, race, narrow, widen, expire and revoke one token",
+      "notes": "Each run walks the five steps against the reference company. The refresh tokens guide covers the production setup."
     }
   ]
 }

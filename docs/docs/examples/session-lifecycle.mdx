@@ -1,6 +1,6 @@
 ---
 title: Signed-out Session lifecycle
-description: Start and renew a Session named by its Session Key, with fresh assertions and DPoP proofs.
+description: Start a Session with no network call, sign every request, and restart once on invalid_session.
 ---
 
 import Deck from '@theme/Deck';
@@ -12,54 +12,55 @@ import deck from '@site/decks/examples/session-lifecycle.deck.json';
 
 A signed-out Session gives the company a stable, pairwise context before the
 user shares account identity. The Session can support public questions and a
-conversation that later continues through sign-in. Its Session Key, a DPoP key
-of its own, names it: the thumbprint of that key is how the company and the
-SDK tell Sessions apart, with no Session ID on the wire.
+conversation that later continues through sign-in. A Session is local:
+`SessionClient.start` makes a `PapSession` with a random `sid` and asks the
+company nothing. The company meets the Session on its first request, and the
+`Poppy-Session` header of every request names it.
 
 ```mermaid
 sequenceDiagram
   autonumber
   participant H as PAP host
-  participant S as Reactor signer
-  participant D as Reactor DPoP provider
-  participant C as Company authorization server
-  H->>D: New Session Key for a new Session
-  H->>S: Sign fresh Session assertion and client assertion
-  S-->>H: Protected assertions
-  H->>D: Create fresh proof (no nonce)
-  D-->>H: DPoP proof 1
-  H->>C: Start signed-out Session
-  C-->>H: use_dpop_nonce + company nonce
-  H->>S: Sign fresh assertions for retry
-  H->>D: Create fresh proof with nonce
-  H->>C: Retry token request
-  C-->>H: DPoP Session Token (signed out: the grant says so)
-  Note over H,C: Later, before expiry
-  H->>S: Sign fresh renewal assertions
-  H->>D: Create fresh renewal proof with the same Session Key
-  H->>C: Renew: the key names the same Session
-  C-->>H: Renewed Session Token (the earlier one works until it expires)
-  Note over H,C: Once the Session has ended
-  H->>C: Renew with that key
-  C-->>H: invalid_grant
-  H->>D: Discard the key; a new Session gets a new one
+  participant S as Reactor Session signer
+  participant C as Company API
+  H->>H: SessionClient.start: a random sid, no network call
+  H->>S: Session JWT for this request
+  S-->>H: Signed by the delegated key, with its delegation
+  H->>C: Request + Poppy-Session, no access token
+  C->>C: Verify the header, an unknown sid starts a signed-out Session
+  C-->>H: Answer
+  Note over H,C: Each later request: a fresh Session JWT, the same sid
+  H->>S: Session JWT for the next request
+  H->>C: Request + Poppy-Session
+  C-->>H: 400 invalid_session
+  H->>H: session.restart(): a new sid, the same User ID
+  H->>S: Session JWT for the same request
+  H->>C: The same request, in the new Session
+  C-->>H: Answer
+  Note over H,C: invalid_session again right after a restart
+  H->>H: Stop: the refusal goes to the caller
 ```
 
 ## What the example proves
 
-- The initial Session is explicitly signed out.
-- A DPoP nonce retry produces fresh assertions and a fresh proof.
-- Renewal proves the same Session Key, so it renews the same Session instead
-  of creating unrelated conversational state; no Session ID is sent or read.
-- `invalid_grant` on renewal means the Session has ended: its key is
-  discarded, never reused, and the next Session starts with a new key.
-- Tokens, pairwise subjects, Session Keys, assertions, proofs, and nonces stay
-  inside host-owned code and protected storage.
-- The model sees only lifecycle status, scopes, and safe invariants.
+- Starting a Session sends no request. The Session is signed out until a request
+  carries an access token.
+- Every request carries a new Session JWT, with a new `jti`, for the same `sid`.
+- `invalid_session` means the Session failed a check or has ended. The client
+  starts a new Session once, with a new `sid`, and sends the request again in it.
+- A second `invalid_session` stops there: the refusal goes to the caller.
+- The User ID and the delegated key stay the same across a restart.
+- Session IDs, pairwise subjects, Session JWTs, delegations, and keys stay inside
+  host-owned code and protected storage.
+- The model sees only lifecycle status and safe invariants.
 
-The deterministic company transport returns one nonce challenge so the retry
-path is always exercised. Production code uses the same `SessionClient` with
-real HTTPS and managed Reactor contributions.
+To end a Session without signing out, the agent stops using its `sid`. Its refresh
+tokens are unaffected.
+
+The deterministic company transport answers `invalid_session` on chosen requests,
+so the restart path is always exercised. Production code uses the same
+`SessionClient` and `SessionHttpClient` with real HTTPS and managed Reactor
+contributions.
 
 Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/session-lifecycle)
 or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/session-lifecycle).

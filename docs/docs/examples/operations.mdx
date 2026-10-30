@@ -52,6 +52,15 @@ The walkthrough:
    timeout. The company performs the action once, and a repeat gets the original
    response; while it is being performed, `503` and `Retry-After`.
 
+The wire depends on where the company asks. At an API, the first request answers
+`403` with `approval_required` and the operation, and the retry is the same request
+with a `Poppy-Approval` header naming the `operation_id` and the `revision`. At an
+MCP server, the tool returns an error result with the operation, and the retry
+carries the approval in `_meta`. In a conversation, as here, a company message
+carries the operation and the agent's message carries the approval. Operations have
+no endpoint and no state of their own: the same request, with the approval, is all
+there is.
+
 The model sees revisions, changed term paths, error codes, and what the company
 says it came to, as written. Tokens stay host-only, and the decision to approve
 stays with the user in the host's own interface.

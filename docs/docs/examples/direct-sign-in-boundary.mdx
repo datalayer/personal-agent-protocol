@@ -10,7 +10,7 @@ import deck from '@site/decks/examples/direct-sign-in-boundary.deck.json';
 
 <Deck spec={deck} />
 
-Direct Sign-In upgrades an existing signed-out Session. The personal agent may
+Direct Sign-In is plain OAuth, and it names no Session. The personal agent may
 explain why authorization is needed, but the host—not the model—constructs the
 OAuth request, stores one-use state, and opens the company's page in a trusted
 browser.
@@ -23,9 +23,8 @@ sequenceDiagram
   participant R as Reactor state store
   participant B as Trusted user browser
   participant C as Company authorization server
-  M->>H: Request orders:read for existing Session
+  M->>H: Request orders:read
   H->>H: Generate random state and PKCE verifier
-  H->>H: dpop_jkt = the Session Key's thumbprint
   H->>H: Derive S256 code challenge
   H->>R: Store pending request by hashed state, with expiry
   H->>B: Open protected authorization URL
@@ -39,9 +38,8 @@ sequenceDiagram
 
 - State and the verifier come from cryptographically secure randomness.
 - Only the S256 challenge crosses to the authorization endpoint.
-- `dpop_jkt`, the Session Key's thumbprint, binds the code to the Session: the
-  company signs that Session in, and a code taken from the redirect can't be
-  redeemed with any other key.
+- The URL names no Session. A code taken from the redirect is useless without
+  the verifier and a client assertion from the agent.
 - The full authorization URL is a secret because it contains state and user
   intent; it is revealed only to the browser handoff capability.
 - The state store must expire entries and support atomic consumption later.

@@ -23,13 +23,13 @@ sequenceDiagram
   participant H as Trusted PAP host
   participant C as Company agent
   A->>H: Follow conversation cnv_demo
-  H->>C: GET /events?cursor=evt_saved&wait=30 + DPoP
+  H->>C: GET /events?cursor=evt_saved&wait=30 + Session JWT
   C-->>H: 410 cursor_expired
   H-->>A: Notify that retained history has a gap
-  H->>C: GET /events?wait=30 + DPoP
+  H->>C: GET /events?wait=30 + Session JWT
   C-->>H: evt_1, evt_2 · cursor=evt_2 · has_more=true
   H-->>A: Deliver unseen events in order
-  H->>C: GET /events?cursor=evt_2&wait=0 + DPoP
+  H->>C: GET /events?cursor=evt_2&wait=0 + Session JWT
   C-->>H: repeated evt_2, evt_3 · has_more=false
   H->>H: Drop repeated evt_2
   H-->>A: Deliver evt_3
@@ -53,7 +53,7 @@ recover retained events, but it cannot reconstruct events the company already
 deleted. The host should tell the person that part of the conversation may be
 missing.
 
-Session Tokens, Session Keys, DPoP proofs, and the saved cursor remain in
+Access tokens, delegated keys, Session JWTs, and the saved cursor remain in
 the trusted host. A model or UI receives only the event fields it needs. A
 company that streams can be read over SSE instead, with reconnects and
 display-only `text-delta` frames: see [conversation streaming](./conversation-streaming).

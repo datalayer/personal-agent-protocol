@@ -23,7 +23,7 @@ sequenceDiagram
   participant SDK as ConversationClient.stream()
   participant Net as Network
   participant Company
-  SDK->>Company: GET /events (Accept: text/event-stream) + DPoP
+  SDK->>Company: GET /events (Accept: text/event-stream) + Session JWT
   Company-->>SDK: id evt_1 (user message)
   Company-->>SDK: text-delta msg_r (half of the reply)
   Net--xSDK: Connection drops before message msg_r
@@ -58,8 +58,8 @@ What the stream guarantees:
   back to the long-polling `events()` reader.
 
 The model sees the company's complete messages, how many deltas and
-reconnects there were, and that nothing was delivered twice. The Session
-Token, the Session Key, and DPoP proofs stay host-only.
+reconnects there were, and that nothing was delivered twice. The access
+token, the delegated key, and Session JWTs stay host-only.
 
 TypeScript: `for await (const item of client.stream(endpoint, id, options))`,
 where `item.kind` is `"text-delta"` or `"reconnected"` for the two

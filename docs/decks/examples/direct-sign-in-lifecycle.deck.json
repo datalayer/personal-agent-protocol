@@ -8,22 +8,22 @@
     {
       "type": "title",
       "title": "Direct Sign-In lifecycle",
-      "subtitle": "Take the callback once, exchange the code, upgrade the same Session",
+      "subtitle": "Take the callback once, exchange the code, keep the tokens in the host",
       "meta": "Personal Agent Protocol · example",
-      "notes": "This example picks up where the boundary example stopped: the user has approved on the company's page. The host now has to turn the browser callback into a signed-in Session, once, and without widening access."
+      "notes": "This example picks up where the boundary example stopped: the user has approved on the company's page. The host now has to turn the browser callback into tokens, once, and without widening access."
     },
     {
       "type": "statement",
       "title": "Why it matters",
-      "statement": "Sign-in upgrades **the same Session**. Partial consent is a **result**, not an error.",
-      "notes": "The user is signed in on the Session the conversation already has, not a new one. And if the user grants less than was asked, the host reports it plainly instead of quietly asking for more."
+      "statement": "Sign-in names **no Session**. Partial consent is a **result**, not an error.",
+      "notes": "Sign-in is plain OAuth. A Session is signed in on each request that carries the access token, so the conversation carries on in the Session it already has. And if the user grants less than was asked, the host reports it plainly instead of quietly asking for more."
     },
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph USR[\"User, trusted browser\"]\n    direction TB\n    B[\"Browser<br/>orders:read granted\"]\n  end\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    R[(\"Reactor state store\")] -- \"pending state, once\" --> H[\"PAP host\"]\n    H -- \"sign\" --> P[\"Signer and<br/>DPoP provider\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server\"]\n  end\n  USR -- \"code, state, issuer\" --> HOST\n  HOST -- \"exchange with proof\" --> CO\n  HOST -. \"status, scopes, reference\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph USR[\"User, trusted browser\"]\n    direction TB\n    B[\"Browser<br/>orders:read granted\"]\n  end\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    R[(\"Reactor state store\")] -- \"pending state, once\" --> H[\"PAP host\"]\n    H -- \"sign\" --> P[\"Reactor signer\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server\"]\n  end\n  USR -- \"code, state, issuer\" --> HOST\n  HOST -- \"exchange, client assertion\" --> CO\n  HOST -. \"status, scopes, reference\" .-> M",
       "caption": "The callback comes in, the exchange goes out; the model gets a status and a reference.",
-      "notes": "Start with the user, who approves orders:read and declines orders:return. The company redirects the browser to the host's registered HTTPS callback, carrying a code, the state and the issuer. In the host, the PAP host takes the pending state out of the Reactor state store, once, and asks the signer and DPoP provider for a fresh client assertion and proof. It then exchanges the code with the company's authorization server. Off to the side, the model: it learns that the user is signed in, which scopes were granted and which are missing, and an account token reference, never a token."
+      "notes": "Start with the user, who approves orders:read and declines orders:return. The company redirects the browser to the host's registered HTTPS callback, carrying a code, the state and the issuer. In the host, the PAP host takes the pending state out of the Reactor state store, once, and asks the signer for a fresh client assertion. It then exchanges the code with the company's authorization server. Off to the side, the model: it learns that the user is signed in, which scopes were granted and which are missing, and a refresh token reference, never a token."
     },
     {
       "type": "flow",
@@ -33,18 +33,18 @@
         { "label": "2", "title": "Take state", "detail": "Atomically, by hashed state" },
         { "label": "3", "title": "Verify", "detail": "Exact redirect, state, issuer, expiry", "current": true }
       ],
-      "notes": "The callback carries a code, the state and the issuer. The host takes the pending request out of the store in one atomic step, getting back the verifier and the Session Key the code is bound to, then checks the redirect, state, issuer and expiry."
+      "notes": "The callback carries a code, the state and the issuer. The host takes the pending request out of the store in one atomic step, getting back the verifier, then checks the redirect, state, issuer and expiry."
     },
     {
       "type": "flow",
       "title": "The exchange",
       "items": [
-        { "label": "4", "title": "Exchange", "detail": "Code and verifier, proved with the Session Key" },
-        { "label": "5", "title": "Challenged", "detail": "use_dpop_nonce, with a nonce" },
-        { "label": "6", "title": "Retry once", "detail": "Same code and verifier, fresh assertion and proof" },
-        { "label": "7", "title": "Signed in", "detail": "Same Session, `orders:read` only", "current": true }
+        { "label": "4", "title": "Assert", "detail": "A fresh client assertion" },
+        { "label": "5", "title": "Exchange", "detail": "Code, verifier and assertion" },
+        { "label": "6", "title": "Tokens", "detail": "A Bearer access token and a refresh token" },
+        { "label": "7", "title": "Signed in", "detail": "`orders:read` only", "current": true }
       ],
-      "notes": "The authorization URL carried dpop_jkt, the Session Key's thumbprint, so the company bound the code to that key. The host exchanges the code with a client assertion and a DPoP proof signed with the Session Key; no other key can redeem it. The company asks for a nonce, so the host retries once: same authorization code and verifier, but a fresh assertion and a fresh proof. The answer is a signed-in token for the same Session, with orders:read, and no Session ID on the wire: the proof's key names the Session."
+      "notes": "The host exchanges the code with the PKCE verifier and a fresh client assertion. The answer is plain OAuth: a Bearer access token, with orders:read, and a refresh token. The SDK sends no DPoP proofs and refuses a DPoP token type. Nothing on the wire names a Session; the next request that carries the access token signs its Session in."
     },
     {
       "type": "bullets",
@@ -53,7 +53,7 @@
       "items": [
         "Redirect location, issuer, state and expiry",
         "Content type, response size and token type",
-        "The **same** Session: the code bound by `dpop_jkt`",
+        "No Session named: one sign-in can serve several Sessions",
         "Scopes: never more than requested; missing ones reported"
       ],
       "notes": "Everything the company sends back is checked. If the company returns a scope the user was never asked for, the host rejects it. Scopes that are missing are reported, so the application can degrade or explain."
@@ -68,9 +68,9 @@
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Token", "Account Token, in `pap.tokenStore`", "Code, state and verifier", "Assertions and proofs"] },
-      "right": { "heading": "What the user and model see", "type": "bullets", "items": ["Signed in", "Granted and missing scopes", "`account_token_reference`"] },
-      "notes": "The Account Token goes into the host's token store before complete returns; the result carries only a reference, with no refresh token. No token reaches URLs, logs, analytics, React state or a model transcript."
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Access token", "Refresh token, in `pap.tokenStore`", "Code, state and verifier", "Client assertions"] },
+      "right": { "heading": "What the user and model see", "type": "bullets", "items": ["Signed in", "Granted and missing scopes", "`refresh_token_reference`"] },
+      "notes": "The refresh token goes into the host's token store before complete returns; the result carries only a reference. No token reaches URLs, logs, analytics, React state or a model transcript."
     },
     {
       "type": "closing",

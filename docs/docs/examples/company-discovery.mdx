@@ -12,8 +12,9 @@ import deck from '@site/decks/examples/company-discovery.deck.json';
 
 Discovery turns a company domain into verified, public PAP metadata. The
 personal agent fetches `/.well-known/poppy.json`, validates the document and
-supported protocol version, then follows the advertised OAuth metadata. No
-Session Token, cookie, assertion, or user identifier belongs on these requests.
+supported protocol version, reads the issuer from the domain's protected
+resource metadata, and then reads that issuer's OAuth metadata. No access token,
+Session JWT, cookie, assertion, or user identifier belongs on these requests.
 
 ```mermaid
 sequenceDiagram
@@ -29,6 +30,9 @@ sequenceDiagram
   H->>C: GET /.well-known/poppy.json (no credentials)
   C-->>H: Organization, issuer, interfaces, extensions
   H->>H: Strict JSON + version + domain validation
+  H->>C: GET /.well-known/oauth-protected-resource (no credentials)
+  C-->>H: resource = https://{domain}, authorization_servers
+  H->>H: Find the issuer
   H->>A: GET OAuth metadata (no credentials)
   A-->>H: Endpoints, grants, protected_resources
   H->>H: Bind issuer to company domain (protected_resources)
@@ -43,9 +47,10 @@ sequenceDiagram
   final URL's path must be exactly `/.well-known/poppy.json` with no query
   (`invalid_discovery_location`), and the issuer's metadata must list
   `https://{domain}` in `protected_resources`.
-- The summary says which sign-in modes the OAuth metadata offers (Direct,
-  Device, Token Exchange), the company's own scopes in its own words
-  (`auth.scopes`), and the interfaces it lists.
+- The summary says which sign-in modes the company offers (Direct and Device
+  from the OAuth metadata, Mediated from its extension and grant type), the
+  company's own scopes in its own words (`auth.scopes`), and the interfaces it
+  lists.
 - The tool result contains a capability inventory, not raw response bodies.
 - Discovery is credential-free, which prevents accidental token forwarding to
   an unverified host.

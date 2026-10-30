@@ -4,7 +4,7 @@ description: Sign one request's Session JWT with a delegated key, and keep it ou
 ---
 
 import Deck from '@theme/Deck';
-import deck from '@site/decks/examples/dpop-proof.deck.json';
+import deck from '@site/decks/examples/session-jwt.deck.json';
 
 # Session JWT
 
@@ -46,8 +46,8 @@ sequenceDiagram
 - `ath` binds the JWT to the token without embedding that token in the JWT.
 - Each User ID at a company has its own delegated key, so a key's thumbprint
   names one User at one Company.
-- Replay protection is a server responsibility and must be atomic across the
-  company's serving fleet.
+- Rejecting a reused `jti` is the company's choice. A company that does must make
+  the check atomic across its serving fleet; the reference companies do.
 
 The example signs and verifies a real ES256 Session JWT, changes each thing it
 covers to show the refusal, then verifies it again to demonstrate rejection.
@@ -56,4 +56,4 @@ contains policy booleans only. The Session JWT, the delegation, the access token
 the keys, the Session ID, and the User ID stay in the host.
 
 Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/session-jwt)
-or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/dpop-proof).
+or the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/session-jwt).

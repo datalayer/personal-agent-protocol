@@ -8,69 +8,69 @@
     {
       "type": "title",
       "title": "Signed-out Session lifecycle",
-      "subtitle": "Start a Session under its own key, survive a nonce challenge, renew it before it expires",
+      "subtitle": "Start a Session with no network call, sign every request, restart once when refused",
       "meta": "Personal Agent Protocol · example",
-      "notes": "Every interaction a personal agent has with a company happens inside a Session, and each Session has its own key: the Session Key, whose thumbprint names it. This example starts one signed out, meets the company's DPoP nonce challenge on the way, and renews the Session before its token expires."
+      "notes": "Every interaction a personal agent has with a company happens inside a Session. A Session is local: the agent makes it, with a random sid, and asks the company nothing. This example starts one signed out, sends requests in it, and shows what happens when the company answers invalid_session."
     },
     {
       "type": "statement",
       "title": "Why start signed out",
       "statement": "The company recognises the **same user** across visits, without learning **who** they are.",
-      "notes": "A signed-out Session gives the company a stable, pairwise context: the same user ID every time this agent comes back for this user, and a different one at every other company. Public questions and a conversation can start here, and continue later through sign-in."
+      "notes": "A signed-out Session gives the company a stable, pairwise context: the same User ID every time this agent comes back for this user, and a different one at every other company. Public questions and a conversation can start here, and continue later through sign-in."
     },
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign assertions\" --> S[\"Reactor signer\"]\n    H -- \"make proofs\" --> D[\"Reactor DPoP provider<br/>one key per Session\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Authorization server<br/>issues, may demand a nonce\"]\n  end\n  HOST -- \"assertions, proof\" --> CO\n  CO -- \"Session Token or nonce\" --> HOST\n  HOST -. \"status and scopes only\" .-> M",
-      "caption": "The keys live in replaceable Reactor contributions; the model sees the Session's status, never its token.",
-      "notes": "Inside your trusted host, the PAP host asks two Reactor contributions for help: the signer makes the assertions, the DPoP provider makes a new Session Key for each Session and signs the proofs with it, and both are replaceable. Assertions and a proof cross to the company's authorization server, which answers with a Session Token, or first with a nonce it wants in the next proof. Off to the side, the model receives the lifecycle status and the granted scopes, nothing it could leak."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>holds the PapSession\"] -- \"sign this request\" --> S[\"Reactor Session signer<br/>one delegated key per User ID\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company API<br/>verifies the Session header\"]\n  end\n  HOST -- \"request, Poppy-Session\" --> CO\n  CO -- \"answer or invalid_session\" --> HOST\n  HOST -. \"status only\" .-> M",
+      "caption": "The keys live in a replaceable Reactor contribution; the model sees the Session's status, never its ID.",
+      "notes": "Inside your trusted host, the PAP host holds the PapSession and asks the Reactor Session signer for a Session JWT for each request. The signer keeps one delegated key per User ID, and a delegation that vouches for it. The JWT crosses to the company in the Poppy-Session header, and the company verifies it before anything else. It answers, or refuses with invalid_session. Off to the side, the model receives the lifecycle status, nothing it could leak."
     },
     {
       "type": "flow",
       "title": "Starting the Session",
       "items": [
-        { "label": "1", "title": "Sign", "detail": "A fresh Session assertion and client assertion" },
-        { "label": "2", "title": "Prove", "detail": "A new Session Key; a DPoP proof, no nonce yet" },
-        { "label": "3", "title": "Ask", "detail": "JWT bearer grant at the token endpoint" },
-        { "label": "4", "title": "Challenged", "detail": "use_dpop_nonce, with the company's nonce", "current": true }
+        { "label": "1", "title": "Start", "detail": "`SessionClient.start`: a random `sid`, no network call" },
+        { "label": "2", "title": "Sign", "detail": "A Session JWT for this request" },
+        { "label": "3", "title": "Send", "detail": "`Poppy-Session`, no access token" },
+        { "label": "4", "title": "Met", "detail": "An unknown `sid` starts a signed-out Session", "current": true }
       ],
-      "notes": "The host signs two assertions, makes a new Session Key and proves possession of it with a DPoP proof, and asks the token endpoint for a Session. This company answers use_dpop_nonce: it wants proofs bound to a nonce it issued, so no proof can be made in advance."
+      "notes": "SessionClient.start makes a PapSession with a random sid. There is no grant and no token. The company first hears of the Session on the first request: it verifies the Session header, sees a sid it does not know, and starts a signed-out Session for that client_id and User ID."
     },
     {
       "type": "flow",
-      "title": "The retry",
+      "title": "Every later request",
       "items": [
-        { "label": "5", "title": "Sign again", "detail": "New assertions: a jti is never reused" },
-        { "label": "6", "title": "Prove again", "detail": "A new proof carrying the nonce" },
-        { "label": "7", "title": "Signed-out Session", "detail": "A DPoP Session Token, bound to the Session Key", "current": true }
+        { "label": "5", "title": "Sign again", "detail": "A new JWT: a new `jti`, this method and URL" },
+        { "label": "6", "title": "Same `sid`", "detail": "The company continues the same Session" },
+        { "label": "7", "title": "Signed in, if a token goes with it", "detail": "On each request that carries an access token", "current": true }
       ],
-      "notes": "The retry is not a resend. Assertions and proofs each carry a unique identifier the company refuses to see twice, so the host signs fresh ones and puts the nonce in the new proof. The answer is a DPoP-bound Session Token, with no Session ID and no scope: the proof's key names the Session, and a signed-out Session has none. It is useless to anyone who copies it without the key."
+      "notes": "A Session JWT covers one request, so each request signs a new one. The sid stays the same, and that is what continues the Session. A Session is signed in on each request that carries an access token, and signed out on each that does not. Sign-in itself does not know the Session."
     },
     {
       "type": "mermaid",
       "title": "The whole exchange",
-      "diagram": "sequenceDiagram\n  participant H as PAP host\n  participant C as Company\n  H->>C: Start Session (assertions, proof)\n  C-->>H: use_dpop_nonce\n  H->>C: Retry (fresh assertions, proof with nonce)\n  C-->>H: Session Token (signed out)\n  Note over H,C: Before expiry\n  H->>C: Renew (fresh assertions, same Session Key)\n  C-->>H: Renewed Session Token\n  H->>C: Renew, after the Session ended\n  C-->>H: invalid_grant",
-      "notes": "Here is the whole exchange at once: the challenge, the retry, and later the renewal of the same Session before its token expires, proved with the same Session Key. The earlier token keeps working until it expires. Once the company has ended the Session, renewing it draws invalid_grant."
+      "diagram": "sequenceDiagram\n  participant H as PAP host\n  participant C as Company\n  H->>H: Start: a random sid\n  H->>C: Request, Poppy-Session\n  C-->>H: Answer\n  H->>C: Next request, a fresh JWT, same sid\n  C-->>H: 400 invalid_session\n  H->>H: A new sid, once\n  H->>C: The same request, in the new Session\n  C-->>H: Answer\n  H->>C: Next request\n  C-->>H: 400 invalid_session\n  H->>H: A new sid\n  H->>C: The same request\n  C-->>H: 400 invalid_session\n  H->>H: Stop: the caller gets the refusal",
+      "notes": "Here is the whole exchange at once. The first request starts the Session at the company. Later a request draws invalid_session: the Session failed a check, or it has ended. The client makes a new sid and sends the request again in the new Session, and it goes through. In the example a later request is refused, and so is its one resend. A second invalid_session in a row is not retried: it goes back to the caller."
     },
     {
       "type": "mermaid",
-      "title": "Renewing, not restarting",
-      "diagram": "stateDiagram-v2\n  state \"Signed out\" as SO\n  state \"Signed in\" as SI\n  state \"Ended\" as E\n  [*] --> SO : start, one nonce retry\n  SO --> SO : renew, same Session Key\n  SO --> SI : sign-in, later\n  SO --> E : invalid_grant\n  E --> [*] : discard the key, start anew",
-      "caption": "Renewal loops back to the same Session, so the conversation carries on.",
-      "notes": "Start at the dot. The host starts the Session signed out, after its one nonce retry. Look at the loop: before the token expires, the host renews the Session with fresh assertions and a fresh proof signed by the same Session Key, so the conversation and its context carry on. Later the same Session can move on to signed in, through one of the sign-in examples. A Session that has ended answers invalid_grant: the host discards its key, never to use it again, and starts a new Session with a new key."
+      "title": "Restart once, then stop",
+      "diagram": "stateDiagram-v2\n  state \"Signed out\" as SO\n  state \"Signed in, on this request\" as SI\n  state \"Refused\" as R\n  state \"Stopped\" as X\n  [*] --> SO : start, no network call\n  SO --> SI : an access token goes with it\n  SI --> SO : no access token\n  SO --> R : invalid_session\n  SI --> R : invalid_session\n  R --> SO : a new sid, the request sent again\n  R --> X : invalid_session again\n  X --> [*]",
+      "caption": "A restart keeps the User ID and changes the sid; a second refusal stops the client.",
+      "notes": "Start at the dot: the host starts the Session signed out, with no network call. A request with an access token is signed in; one without is signed out. invalid_session can come in either. The client then makes a new sid, keeps the same User ID and delegated key, and sends the request again. If that is refused too, it stops. To end a Session without signing out, the agent simply stops using its sid; its refresh tokens are unaffected."
     },
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Tokens", "Assertions and proofs", "Pairwise user IDs", "Nonces and Session Keys"] },
-      "right": { "heading": "What the model sees", "type": "bullets", "items": ["Lifecycle status", "Granted scopes", "Safe invariants"] },
-      "notes": "None of the credentials reach the model. Tokens, assertions, proofs, Session Keys, pairwise subjects and nonces stay in host code and protected storage; the model sees the Session's status, its scopes, and nothing it could leak."
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session IDs and pairwise User IDs", "Session JWTs and delegations", "Delegated keys", "Access tokens"] },
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["Lifecycle status", "Safe invariants"] },
+      "notes": "None of the credentials reach the model. Session IDs, User IDs, Session JWTs, delegations and keys stay in host code and protected storage; the model sees the Session's status and nothing it could leak."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
       "cta": "The Pydantic AI and Agent Runtimes examples run this lifecycle against a deterministic company",
-      "notes": "The example's company always answers one nonce challenge, so the retry path is exercised on every run. Production code uses the same SessionClient over real HTTPS, with managed Reactor contributions."
+      "notes": "The example's company answers invalid_session on chosen requests, so the restart is exercised on every run. Production code uses the same SessionClient and SessionHttpClient over real HTTPS, with managed Reactor contributions."
     }
   ]
 }

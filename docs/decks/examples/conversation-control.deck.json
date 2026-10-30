@@ -28,7 +28,7 @@
         { "label": "3", "title": "Sign in", "detail": "Ada approves the device code" },
         { "label": "4", "title": "Same conversation", "detail": "Same Session signed in, same conversation ID", "current": true }
       ],
-      "notes": "Signed out, Manzanita cannot look up an order, so it answers with an authorization event: insufficient_scope, with the scope the request needs. The host signs Ada in for that scope with a mode the company offers, here device sign-in, on the same Session, named by the same Session Key, and keeps sending to the same conversation ID with the signed-in token."
+      "notes": "Signed out, Manzanita cannot look up an order, so it answers with an authorization event: insufficient_scope, with the scope the request needs. The host signs Ada in for that scope with a mode the company offers, here device sign-in, and keeps sending to the same conversation ID, in the same Session, with the new access token."
     },
     {
       "type": "flow",
@@ -50,21 +50,21 @@
         { "label": "3", "title": "Human", "detail": "Idle; replies' author is human" },
         { "label": "4", "title": "close()", "detail": "Later messages: conversation_closed", "current": true }
       ],
-      "notes": "A handoff puts the conversation in the queued state until a person takes it; then the responder is human, and each of their messages names its author: type human, with the person's id and name when the company gives them. When nobody is available, the company says so and the agent carries on. Closing ends the conversation, but operations it proposed or started are not cancelled."
+      "notes": "A handoff puts the conversation in the queued state until a person takes it; then the responder is human, and each of their messages names its author: type human, with the person's id and name when the company gives them. When nobody is available, the company says so and the agent carries on. Closing ends the conversation, but it doesn't cancel anything the conversation started, such as an order or a return."
     },
     {
       "type": "mermaid",
       "title": "The conversation's status",
       "diagram": "stateDiagram-v2\n  direction LR\n  [*] --> working: message\n  working --> idle: answered\n  idle --> working: next message\n  idle --> queued: handoff\n  queued --> idle: a person takes it\n  idle --> closed: close\n  closed --> [*]",
-      "caption": "After a handoff the responder is human; closing does not cancel the conversation's operations.",
-      "notes": "Follow the parent conversation's status. A message makes it working, and the answer leaves it idle, ready for the next one. Signing in part-way through keeps the same conversation ID, so the loop just continues with the new token. A handoff puts it in queued until a person at the support desk takes it; then it is idle again, with the responder human. If nobody is available, the company says so and the agent carries on. Close ends it: later messages draw conversation_closed, and operations it proposed or started are not cancelled."
+      "caption": "After a handoff the responder is human; closing does not cancel what the conversation started.",
+      "notes": "Follow the parent conversation's status. A message makes it working, and the answer leaves it idle, ready for the next one. Signing in part-way through keeps the same conversation ID, so the loop just continues with the new token. A handoff puts it in queued until a person at the support desk takes it; then it is idle again, with the responder human. If nobody is available, the company says so and the agent carries on. Close ends it: later messages draw conversation_closed, and nothing the conversation started is cancelled."
     },
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host-only", "type": "bullets", "items": ["Tokens", "The device code", "DPoP proofs", "The user code, shown by the host"] },
+      "left": { "heading": "Host-only", "type": "bullets", "items": ["Tokens", "The device code", "Session JWTs", "The user code, shown by the host"] },
       "right": { "heading": "What the model sees", "type": "bullets", "items": ["Event types and statuses", "The company's answers", "Error codes"] },
-      "notes": "The model sees what happened, never the means. Tokens, the device code and proofs stay in the host, and the user code is shown to the user by the host, not by the model."
+      "notes": "The model sees what happened, never the means. Tokens, the device code and Session JWTs stay in the host, and the user code is shown to the user by the host, not by the model."
     },
     {
       "type": "closing",

@@ -21,16 +21,16 @@
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model<br/>through the agent tool\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"Trusted host<br/>generates message IDs\"] -- \"retains\" --> R[(\"Each Message<br/>ID and content\")]\n    H -- \"sends through\" --> D[\"DpopHttpClient<br/>token and DPoP\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company agent<br/>status, responder\"]\n  end\n  M -- \"start or continue\" --> HOST\n  HOST -- \"message, token, proof\" --> CO\n  HOST -. \"conversation status only\" .-> M",
-      "caption": "The tool asks and gets a status back; IDs, tokens and proofs stay in the host.",
-      "notes": "The model, through the agent tool, asks to start or continue a conversation; it never holds a credential. Inside the host, the trusted host generates each message ID and retains the whole Message, so it can be retried exactly. It sends through DpopHttpClient, which holds the Session Token and signs every request with DPoP. Only the message, the token and the proof cross to the company agent, which answers with the conversation's status and responder. Back to the model goes the status alone."
+      "diagram": "flowchart LR\n  M[\"Model<br/>through the agent tool\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"Trusted host<br/>generates message IDs\"] -- \"retains\" --> R[(\"Each Message<br/>ID and content\")]\n    H -- \"sends through\" --> D[\"SessionHttpClient<br/>token and Session JWT\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    C[\"Company agent<br/>status, responder\"]\n  end\n  M -- \"start or continue\" --> HOST\n  HOST -- \"message, token, Session JWT\" --> CO\n  HOST -. \"conversation status only\" .-> M",
+      "caption": "The tool asks and gets a status back; IDs, tokens and Session JWTs stay in the host.",
+      "notes": "The model, through the agent tool, asks to start or continue a conversation; it never holds a credential. Inside the host, the trusted host generates each message ID and retains the whole Message, so it can be retried exactly. It sends through SessionHttpClient, which adds a fresh Session JWT to every request, and the access token when signed in. Only the message, the token and the Session JWT cross to the company agent, which answers with the conversation's status and responder. Back to the model goes the status alone."
     },
     {
       "type": "flow",
       "title": "Start, then continue",
       "items": [
         { "label": "1", "title": "Generate", "detail": "A msg_ ID with at least 128 random bits" },
-        { "label": "2", "title": "Start", "detail": "POST the first message + DPoP" },
+        { "label": "2", "title": "Start", "detail": "POST the first message + Session JWT" },
         { "label": "3", "title": "Created", "detail": "201: conversation_id, status, responder" },
         { "label": "4", "title": "Continue", "detail": "A new message ID, 202 or a waited event page", "current": true }
       ],
@@ -59,9 +59,9 @@
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Token", "DPoP proofs", "The Session Key", "Message IDs"] },
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Access token", "Session JWTs", "The delegated key", "Message IDs"] },
       "right": { "heading": "What the model sees", "type": "bullets", "items": ["Conversation status", "That the IDs were unique", "The retry rule"] },
-      "notes": "The model only learns the conversation's status. The token, the proofs, the Session Key that signs them and the message IDs stay in the host. The request names only the tenant and the issuer; the proof's key names the Session."
+      "notes": "The model only learns the conversation's status. The token, the Session JWTs, the delegated key that signs them and the message IDs stay in the host."
     },
     {
       "type": "closing",

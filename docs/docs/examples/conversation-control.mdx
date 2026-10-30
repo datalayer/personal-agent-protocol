@@ -26,7 +26,7 @@ sequenceDiagram
   Company-->>Atlas: authorization: insufficient_scope (orders:read orders:write)
   Atlas->>Ada: Sign in on Manzanita's page
   Ada->>Company: Approves the device code
-  Atlas->>Company: Same conversation, same Session Key, signed-in token
+  Atlas->>Company: Same conversation, same Session, with the access token
   Company-->>Atlas: Your order ord_7Hk2 … delivered
   Ada->>Atlas: I'd like to ask about sizing myself
   Atlas->>Company: start_direct(parent), author human
@@ -42,26 +42,25 @@ sequenceDiagram
   Company-->>Atlas: closed, later messages are conversation_closed
 ```
 
-- **Sign-in mid-conversation (§7.11).** An `authorization` event is
+- **Sign-in mid-conversation (§8.11).** An `authorization` event is
   always `insufficient_scope`, with the `scope` the request needs. The host
-  signs the same Session in (the same Session Key) with any mode the company
-  offers and keeps sending to the **same conversation ID** with the new
-  token.
-- **Direct Conversations (§7.10).** Only the personal agent starts one, for
+  signs the user in with any mode the company offers and keeps sending to the
+  **same conversation ID**, in the same Session, with the new access token.
+- **Direct Conversations (§8.10).** Only the personal agent starts one, for
   the user to talk with the company in the agent's interface. While it is
   open, the parent refuses messages and handoff with
   `direct_conversation_open`; the SDK puts the open conversation's ID in
   `error.details["conversation_id"]`.
-- **Handoff (§7.9).** `handoff()` asks for a person; the conversation is
+- **Handoff (§8.9).** `handoff()` asks for a person; the conversation is
   `queued` until one takes it, then `responder` is `human`, and the person's
   messages name their `author`: `type` `human`, with the person's `id` and
   `name` when the company gives them. When no one is
   available the company says so and the agent continues.
-- **Closing (§7.12).** `close()` ends the conversation; operations it
-  proposed or started are not cancelled.
+- **Closing (§8.12).** `close()` ends the conversation; it doesn't cancel
+  anything the conversation started, such as an order or a return.
 
 The model sees event types, statuses, the company's answers, and error codes.
-Tokens, the device code, and proofs stay host-only; the user code is shown to
+Tokens, the device code, and Session JWTs stay host-only; the user code is shown to
 the user by the host, not by the model.
 
 TypeScript: `startDirect()`, `handoff()`, and `close()` on

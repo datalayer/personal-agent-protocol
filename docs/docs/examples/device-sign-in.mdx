@@ -22,32 +22,29 @@ sequenceDiagram
   participant SDK as DeviceSignInClient
   participant Company
   participant Vault as Reactor stores
-  Tool->>SDK: Begin for existing signed-out Session
+  Tool->>SDK: Begin for the scopes it needs
   SDK->>Company: Request device authorization
   Company-->>SDK: Link, user code, interval, private device code
   SDK->>Vault: Save private device code
   SDK-->>Tool: Link, user code, opaque reference
   Tool-->>User: Authenticate on company page
-  SDK->>Company: First poll, DPoP by the Session Key
-  Note over Company: Binds the device code to that key
+  SDK->>Company: First poll, with a fresh client assertion
   Company-->>SDK: authorization_pending
   SDK->>Company: Poll at interval
   Company-->>SDK: slow_down
   Note over SDK: Increase interval by five seconds
   SDK->>Company: Poll at new interval
-  Company-->>SDK: Same Session signed in + Account Token + partial scopes
-  SDK->>Vault: Store Account Token
+  Company-->>SDK: Access token + refresh token + partial scopes
+  SDK->>Vault: Store the refresh token
   SDK-->>Tool: Safe lifecycle evidence + opaque token reference
 ```
 
 The model sees that the link and code were presented, early polling was
-suppressed, pending and slow-down responses were respected, every poll was
-proved with the Session Key (the company binds the device code to the first
-poll's key, so a poll with another key gets `invalid_grant`), the original
-Session was signed in, and one requested scope was omitted. The link is shown
-only because its host is the issuer's or one of the issuer's
-`protected_resources`. It never sees the
-device code, assertions, proofs, or tokens.
+suppressed, pending and slow-down responses were respected, every network poll
+carried a fresh client assertion, and one requested scope was omitted. The sign-in
+names no Session: any Session is signed in by sending the access token. The link is
+shown only because its host is the issuer's or one of the issuer's
+`protected_resources`. It never sees the device code, assertions, or tokens.
 
 - Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/device-sign-in).
 - Run the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/device-sign-in).

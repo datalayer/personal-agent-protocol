@@ -24,21 +24,21 @@
       "title": "Getting to a conversation",
       "items": [
         { "label": "1", "title": "Discover", "detail": "Manzanita's PAP and OAuth metadata" },
-        { "label": "2", "title": "Signed-out Session", "detail": "A `Poppy-Session` JWT, signed by a delegated key" },
+        { "label": "2", "title": "Signed-out Session", "detail": "A random `sid`, no network call" },
         { "label": "3", "title": "Ask", "detail": "Where is my jacket order?" },
         { "label": "4", "title": "Sign in first", "detail": "An `authorization` event: insufficient_scope", "current": true }
       ],
-      "notes": "Atlas discovers Manzanita and starts a signed-out Session, with a JWT on each request signed by a short-lived delegated key. When Ada asks about her order, Manzanita answers in the conversation with an authorization event: insufficient_scope, with the scope the request needs, which only a signed-in Session can have."
+      "notes": "Atlas discovers Manzanita and starts a signed-out Session, locally, with a random sid. Each request carries a Session JWT signed by a short-lived delegated key. When Ada asks about her order, Manzanita answers in the conversation with an authorization event: insufficient_scope, with the scope the request needs, which only a signed-in Session can have."
     },
     {
       "type": "flow",
       "title": "Signing in on the company's page",
       "items": [
-        { "label": "5", "title": "Device authorization", "detail": "For the same Session" },
+        { "label": "5", "title": "Device authorization", "detail": "For the scopes; it names no Session" },
         { "label": "6", "title": "Ada approves", "detail": "On manzanita.example/device, with the code" },
-        { "label": "7", "title": "Poll", "detail": "Signed-in Session and an Account Token", "current": true }
+        { "label": "7", "title": "Poll", "detail": "An access token and a refresh token", "current": true }
       ],
-      "notes": "Atlas asks for Device Sign-In on the same Session. Atlas tells Ada where to go. She enters the code and approves on Manzanita's own page. Atlas polls, and the Session is now signed in, with an Account Token."
+      "notes": "Atlas asks for Device Sign-In, which names no Session. Atlas tells Ada where to go. She enters the code and approves on Manzanita's own page. Atlas polls and gets an access token and a refresh token. The Session is signed in on each request that carries the access token."
     },
     {
       "type": "flow",
@@ -54,16 +54,16 @@
     {
       "type": "mermaid",
       "title": "Performed once, then signed out",
-      "diagram": "stateDiagram-v2\n  state \"Signed-out Session\" as SO\n  state \"Signed in, Account Token\" as SI\n  state \"Narrowed to orders:read\" as N\n  state \"Token revoked\" as R\n  [*] --> SO\n  SO --> SI : Device Sign-In\n  SI --> SI : approval sent again, same answer\n  SI --> N : refresh, narrowed\n  N --> R : sign me out",
+      "diagram": "stateDiagram-v2\n  state \"Signed-out Session\" as SO\n  state \"Signed in, refresh token held\" as SI\n  state \"Narrowed to orders:read\" as N\n  state \"Token revoked\" as R\n  [*] --> SO\n  SO --> SI : Device Sign-In, access token sent\n  SI --> SI : approval sent again, same answer\n  SI --> N : refresh, narrowed\n  N --> R : sign me out",
       "caption": "Rights come with sign-in, shrink to what is needed, and go at sign-out.",
-      "notes": "Follow what Atlas holds, from the top. After discovery it has a signed-out Session. Ada signs in on Manzanita's page, and the same Session is now signed in, with an Account Token. Look at the loop: Atlas sends the same approval again, as a network retry would, and gets back the original response, so the exchange happened once. Then it refreshes the Account Token narrowed to orders:read, and when Ada says sign me out, it revokes the token."
+      "notes": "Follow what Atlas holds, from the top. After discovery it has a signed-out Session. Ada signs in on Manzanita's page, Atlas holds a refresh token, and the same Session is signed in by sending the access token. Look at the loop: Atlas sends the same approval again, as a network retry would, and gets back the original response, so the exchange happened once. Then it refreshes for an access token narrowed to orders:read, and when Ada says sign me out, it revokes the refresh token. The Session goes on signed out."
     },
     {
       "type": "two-columns",
       "title": "What the model sees",
       "left": { "heading": "In plain words", "type": "bullets", "items": ["What the company asked", "Where Ada signed in", "What was proposed and approved", "What Manzanita did, in its own words"] },
-      "right": { "heading": "Never", "type": "bullets", "items": ["The device code", "A token", "A delegation or a proof", "The power to approve"] },
-      "notes": "The model gets the story in plain words, so it can explain the proposal to Ada. It never sees a code, token, delegation or proof, and it cannot approve anything: Ada approves in the host's interface."
+      "right": { "heading": "Never", "type": "bullets", "items": ["The device code", "A token", "A delegation or a Session JWT", "The power to approve"] },
+      "notes": "The model gets the story in plain words, so it can explain the proposal to Ada. It never sees a code, token, delegation or Session JWT, and it cannot approve anything: Ada approves in the host's interface."
     },
     {
       "type": "bullets",
@@ -73,7 +73,7 @@
         "Company discovery and Session lifecycle",
         "Conversation control, for the `authorization` event",
         "Device Sign-In",
-        "Operations and Account Tokens"
+        "Operations and refresh tokens"
       ],
       "notes": "Each step of the journey is one feature with its own page. Follow those pages when you want the detail of a single step."
     },

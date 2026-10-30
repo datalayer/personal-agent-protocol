@@ -8,22 +8,22 @@
     {
       "type": "title",
       "title": "Browser Session",
-      "subtitle": "Join the agent's own browser to its Session with a one-time code and a proof",
+      "subtitle": "Join the agent's own browser to its Session with a one-time code the agent authorizes",
       "meta": "Personal Agent Protocol · example",
-      "notes": "PAP can carry one Session across APIs, conversations and the company's website. This example shows how the browser the agent controls joins the Session the agent already has: through a form on the company's browser-session page, a one-time code, and a DPoP proof signed with the Session Key."
+      "notes": "PAP can carry one Session across APIs, conversations and the company's website. This example shows how the browser the agent controls joins the Session the agent already has: through a form on the company's browser-session page, a one-time code, and a request of the agent's own that authorizes the code."
     },
     {
       "type": "statement",
       "title": "Why a Browser Session",
       "statement": "One Session, on the **API** and on the **website**: the same user, the same sign-in, the same scopes.",
-      "notes": "Sometimes the agent needs a company web page, say to confirm an operation. Instead of signing in again, the browser joins the Session the agent already holds, signed in or out."
+      "notes": "Sometimes the agent needs a company web page. Instead of signing in again, the browser joins the Session the agent already holds, signed in or out."
     },
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    A[\"Personal agent\"] -- \"read the code\" --> B[\"Agent's own browser<br/>not the user's\"]\n    A -- \"sign over the code\" --> D[\"Reactor DPoP provider<br/>holds the Session Key\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    E[\"Browser-session endpoint<br/>form, then cookie\"] -- \"code used once\" --> R[(\"Join codes\")]\n  end\n  HOST -- \"GET, then code and proof\" --> CO\n  HOST -. \"statuses, booleans\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    A[\"Personal agent\"] -- \"read the code\" --> B[\"Agent's own browser<br/>not the user's\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    E[\"Browser-session endpoint<br/>form, authorize, cookie\"] -- \"code used once\" --> R[(\"Join codes\")]\n  end\n  HOST -- \"GET, /authorize, then the form\" --> CO\n  HOST -. \"statuses, booleans\" .-> M",
       "caption": "The code comes from the company's page in the agent's own browser; the model gets statuses and yes-or-no evidence.",
-      "notes": "Inside the host, the personal agent has its own browser, not the user's ordinary browser, load the company's browser-session endpoint, the one discovery advertised. The page holds a one-time code. The host reads it from that page alone and has the Reactor DPoP provider sign a proof over it with the Session Key. The browser posts code and proof back; the company uses the code once, checks the proof, and answers 303 with its own cookie for the Session. Off to the side, the model receives statuses and yes-or-no evidence, never the code, the proof or the cookie."
+      "notes": "Inside the host, the personal agent has its own browser, not the user's ordinary browser, load the company's browser-session endpoint, the one discovery advertised. The page holds a one-time code. The host reads it from that page alone and sends it to the endpoint's /authorize URL, with the Session header and the access token if signed in. The browser then posts the code back; the company checks it and answers 303 with its own cookie for the Session. Off to the side, the model receives statuses and yes-or-no evidence, never the code, the Session JWT or the cookie."
     },
     {
       "type": "flow",
@@ -31,11 +31,11 @@
       "items": [
         { "label": "1", "title": "Load", "detail": "GET the endpoint: a form with a one-time code" },
         { "label": "2", "title": "Tie", "detail": "A __Host- SameSite=Strict cookie binds code to browser" },
-        { "label": "3", "title": "Sign", "detail": "DPoP proof with the Session Key; the code as nonce" },
-        { "label": "4", "title": "Submit", "detail": "The browser posts code and proof" },
+        { "label": "3", "title": "Authorize", "detail": "POST `{endpoint}/authorize`: code, Session header, access token if signed in" },
+        { "label": "4", "title": "Submit", "detail": "The browser posts the code alone" },
         { "label": "5", "title": "Cookie", "detail": "303 and the company's Session cookie", "current": true }
       ],
-      "notes": "The browser loads the endpoint with a GET as a top-level navigation. The page is a form with a hidden code of at least 128 random bits, valid for 60 seconds at most, and an empty proof field; a __Host- cookie, Secure, HttpOnly and SameSite=Strict, ties the code to this browser. The agent signs a DPoP proof with the Session Key: htm POST, htu the endpoint, the code as nonce, no ath. The browser submits the form; the company answers 303 with its own cookie for the Session."
+      "notes": "The browser loads the endpoint with a GET as a top-level navigation. The page is a form with a hidden code of at least 128 random bits, valid for 60 seconds at most; a __Host- cookie, Secure, HttpOnly and SameSite=Strict, ties the code to this browser. The agent authorizes the code at {endpoint}/authorize, as JSON, with the Session header and, if signed in, the access token. The company answers 204. The browser then submits the form; the company answers 303 with its own cookie for the Session. The access token never passes through the browser."
     },
     {
       "type": "bullets",
@@ -44,36 +44,36 @@
       "items": [
         "Join only at the advertised HTTPS `web.browser_session_endpoint`",
         "Read the code from the page **its own browser** loaded, nowhere else",
-        "Sign with the Session Key of the Session the browser joins",
-        "Proof: `htm` POST, `htu` the endpoint, `nonce` the code, no `ath`",
-        "Read and sign in host code the model cannot read"
+        "Authorize with the Session header of the Session the browser joins",
+        "Add the access token when the website should act signed in",
+        "Read and authorize in host code the model cannot read"
       ],
-      "notes": "BrowserSessionClient resolves the clock, the DPoP provider and the browser through Reactor: pap.browserJoin loads the form and submits it. A code from a message, a conversation or another page may come from someone else's browser, which would then join the user's Session; so the code comes only from the page the agent's own browser loaded."
+      "notes": "BrowserSessionClient resolves the clock and the browser through Reactor, and sends the authorize request through the Session transport: pap.browserJoin loads the form and submits it. A code from a message, a conversation or another page may come from someone else's browser, which would then join the user's Session; so the code comes only from the page the agent's own browser loaded."
     },
     {
       "type": "mermaid",
       "title": "Join once, refuse the rest",
-      "diagram": "sequenceDiagram\n  participant B as Agent's browser\n  participant C as Company endpoint\n  participant X as Another browser\n  B->>C: GET the join page\n  C-->>B: Form with code, join cookie\n  B->>C: POST code and proof, with cookie\n  C->>C: Cookie, code, proof, Session Key\n  C-->>B: 303 and Session cookie\n  B->>C: Same code again\n  C-->>B: 400, code already used\n  X->>C: Fresh code, no join cookie\n  C-->>X: 400, and the code is used up",
-      "notes": "Follow the first POST. The company checks that the join cookie matches the code, that the code is one it issued, unexpired and unused, that the proof is valid for this POST with the code as nonce, and that its key is an active Session's key; an unknown key is an error here, never a new Session. The first use goes through: 303 with the company's cookie. The same code again, even with a fresh valid proof, is refused: a code is used by the first request that sends it. A fresh code submitted from another browser, without the join cookie, is refused too, and is used up."
+      "diagram": "sequenceDiagram\n  participant B as Agent's browser\n  participant A as Agent\n  participant C as Company endpoint\n  participant X as Another browser\n  B->>C: GET the join page\n  C-->>B: Form with code, join cookie\n  A->>C: POST /authorize, code, Session header\n  C-->>A: 204\n  B->>C: POST the code, with cookie\n  C->>C: Cookie, code authorized, not submitted\n  C-->>B: 303 and Session cookie\n  B->>C: Same code again\n  C-->>B: 400, code already used\n  X->>C: A fresh authorized code, no join cookie\n  C-->>X: 400, and the code is used up",
+      "notes": "Follow the first submission. The company checks that the join cookie matches the code, and that the code was authorized in the agent's own request, is unexpired, and has not been submitted before. The first use goes through: 303 with the company's cookie. The same code again is refused: a code is used by the first request that submits it. A fresh code the agent authorized, submitted from another browser without the join cookie, is refused too, and is used up."
     },
     {
       "type": "statement",
       "title": "The company's cookie",
       "statement": "`Secure`, `HttpOnly`, set only on the join, and it **never outlives** the PAP Session.",
-      "notes": "The cookie follows later sign-in, sign-out and scope changes. In the reference companies, the __Host-poppy_session cookie has no lifetime of its own, so signing out reaches the website on its next request. Joining again replaces it."
+      "notes": "The cookie acts for the account and scopes authorized in the agent's request, and stops acting for the account at sign-out. In the reference companies, the __Host-poppy_session cookie has no lifetime of its own, so signing out reaches the website on its next request. Joining again replaces it."
     },
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Never in a URL or model context", "type": "bullets", "items": ["The one-time code", "The proof and the Session Key", "The company's cookies"] },
+      "left": { "heading": "Never in a URL or model context", "type": "bullets", "items": ["The one-time code", "The Session JWT and the access token", "The company's cookies"] },
       "right": { "heading": "What the tool returns", "type": "bullets", "items": ["Statuses: 200, 303, 400", "The page's headers, checked", "Who was refused, and why", "Boolean policy evidence"] },
-      "notes": "The code and the proof travel only in the form body, from the agent's own browser. What the model gets back is the status of each step and yes-or-no evidence that each rule held."
+      "notes": "The code travels only in a request body, the Session JWT and the token only in the agent's own request. What the model gets back is the status of each step and yes-or-no evidence that each rule held."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
       "cta": "The Pydantic AI example joins against the reference company, then replays a code and submits one from another browser, and sees both refused",
-      "notes": "The example runs Manzanita with its website on, in one process. It joins the agent's own browser through a Reactor pap.browserJoin contribution, checks the proof's key and nonce, then tries a replayed code and a code from another browser. Upstream's Web browsing section has the rules in full."
+      "notes": "The example runs Manzanita with its website on, in one process. It joins the agent's own browser through a Reactor pap.browserJoin contribution, checks the form carried the code alone, then tries a replayed code and a code from another browser. Upstream's Web browsing section has the rules in full."
     }
   ]
 }

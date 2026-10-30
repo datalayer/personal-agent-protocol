@@ -55,7 +55,7 @@
       "type": "closing",
       "title": "Run it yourself",
       "cta": "The Pydantic AI and Agent Runtimes examples verify an identity through AgentIdentityClient",
-      "notes": "Run either example to watch the checks pass. Then continue with Session assertions, the first thing a verified agent signs, and read the personal-agent guide."
+      "notes": "Run either example to watch the checks pass. Then continue with Delegation, how a key from the agent's jwks_uri vouches for the key that signs its requests, and read the personal-agent guide."
     }
   ]
 }

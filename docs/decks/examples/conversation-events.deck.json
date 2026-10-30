@@ -21,9 +21,9 @@
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model or product UI\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>long polls\"] -- \"keeps\" --> K[(\"Saved cursor<br/>delivered event IDs\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company agent<br/>serves pages\"] -- \"reads\" --> L[(\"Ordered event log\")]\n  end\n  HOST -- \"GET events, token, DPoP\" --> CO\n  HOST -. \"event fields only\" .-> M",
+      "diagram": "flowchart LR\n  M[\"Model or product UI\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host<br/>long polls\"] -- \"keeps\" --> K[(\"Saved cursor<br/>delivered event IDs\")]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company agent<br/>serves pages\"] -- \"reads\" --> L[(\"Ordered event log\")]\n  end\n  HOST -- \"GET events, token, Session JWT\" --> CO\n  HOST -. \"event fields only\" .-> M",
       "caption": "The host does the reading and keeps the cursor; the model or UI receives only the event fields it needs.",
-      "notes": "Start inside the host. The PAP host long polls the company, and keeps two things to itself: the saved cursor and the IDs of the events it has already delivered. Each request crosses with the Session Token and a DPoP proof. On the company's side, its agent serves pages from an ordered event log, each with a cursor and a has_more flag. Off to the side, the model or the product's interface follows the conversation and receives only the event fields it needs, never the token, the proofs, the Session Key or the cursor."
+      "notes": "Start inside the host. The PAP host long polls the company, and keeps two things to itself: the saved cursor and the IDs of the events it has already delivered. Each request crosses with a fresh Session JWT, and the access token when signed in. On the company's side, its agent serves pages from an ordered event log, each with a cursor and a has_more flag. Off to the side, the model or the product's interface follows the conversation and receives only the event fields it needs, never the token, the Session JWTs, the keys or the cursor."
     },
     {
       "type": "mermaid",
@@ -47,9 +47,9 @@
     {
       "type": "two-columns",
       "title": "What stays where",
-      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Session Token", "DPoP proofs", "The Session Key", "The saved cursor"] },
+      "left": { "heading": "Host-owned, never the model's", "type": "bullets", "items": ["Access token", "Session JWTs", "The delegated key", "The saved cursor"] },
       "right": { "heading": "What the model or UI sees", "type": "bullets", "items": ["Event types, in order", "The company's messages", "Whether the conversation closed"] },
-      "notes": "Tokens, proofs, the Session Key and the cursor stay in the trusted host. The model or the interface receives only the event fields it needs."
+      "notes": "Tokens, Session JWTs, the delegated key and the cursor stay in the trusted host. The model or the interface receives only the event fields it needs."
     },
     {
       "type": "closing",

@@ -28,16 +28,16 @@ sequenceDiagram
   participant Atlas as Atlas (personal agent)
   participant M as Manzanita (company)
   Atlas->>M: Discovery + OAuth metadata
-  Atlas->>M: Signed-out Session (Poppy-Session JWT, a delegated key)
+  Atlas->>Atlas: Start a Session: a random sid, signed out, no network call
   Ada->>Atlas: Where is my jacket order?
-  Atlas->>M: Start conversation
+  Atlas->>M: Start conversation + Poppy-Session, no access token
   M-->>Atlas: Sign in first + authorization: insufficient_scope
-  Atlas->>M: Device authorization for the same Session
+  Atlas->>M: Device authorization for the scopes it needs
   Atlas->>Ada: Open manzanita.example/device and enter the code
   Ada->>M: Signs in and approves on Manzanita's page
-  Atlas->>M: Poll → same Session signed in + Account Token
+  Atlas->>M: Poll → access token + refresh token
   Ada->>Atlas: Exchange it for something warmer
-  Atlas->>M: Same conversation, signed in
+  Atlas->>M: Same conversation, same Session, with the access token
   M-->>Atlas: An operation: USD 70.00 more
   Atlas->>Ada: Show summary and terms
   Ada->>Atlas: Approve this revision
@@ -47,19 +47,19 @@ sequenceDiagram
   M-->>Atlas: The original response, performed once
   Atlas->>M: Refresh narrowed to orders:read
   Ada->>Atlas: Sign me out
-  Atlas->>M: Revoke the Account Token
+  Atlas->>M: Revoke the refresh token, the Session goes on signed out
 ```
 
 Each step is one feature, documented on its own page:
 [company discovery](./company-discovery), [session lifecycle](./session-lifecycle),
 [conversation control](./conversation-control) for the `authorization`
 event, [Device Sign-In](./device-sign-in), [Operations](./operations), and
-[Account Tokens](./account-tokens).
+[Refresh tokens](./account-tokens).
 
 The model sees the steps in plain words: what the company asked, where Ada
 signed in, what was proposed, what she approved, and what Manzanita did, in
 its own words. It never sees the device code, a token, a delegation, or a
-proof. Ada approves in the host's interface; the model can explain the
+Session JWT. Ada approves in the host's interface; the model can explain the
 proposal but cannot approve it.
 
 The same world runs in `personal_agent_protocol/__tests__/test_company_end_to_end.py`,

@@ -12,4 +12,4 @@
 /** The Personal Agent Protocol draft implemented. */
 export const PROTOCOL_PROFILE = "0.3";
 /** The upstream specification revision (its page date) the draft was implemented from. */
-export const PROTOCOL_REVISION = "2026-10-26";
+export const PROTOCOL_REVISION = "2026-10-28";

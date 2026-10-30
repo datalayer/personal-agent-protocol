@@ -6,7 +6,7 @@
 
 # Changelog
 
-## 0.28.0 (unreleased)
+## 0.28.0 (2026-10-30)
 
 PAP draft 0.3 as rewritten upstream at `3e9bada` (revision 2026-10-28), in both
 SDKs and both reference companies, with no compatibility with the `a95b757`

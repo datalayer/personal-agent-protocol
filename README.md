@@ -10,7 +10,7 @@
 
 Python and TypeScript SDKs for the
 [Personal Agent Protocol](https://personalagentprotocol.org): both implement
-[draft 0.3](https://personalagentprotocol.org/docs/0.3/spec) (2026-10-26) and its
+[draft 0.3](https://personalagentprotocol.org/docs/0.3/spec) (2026-10-28) and its
 Operations extension v2. See
 [Compatibility](https://personal-agent-protocol.datalayer.tech/releases/compatibility/),
 [Migration](https://personal-agent-protocol.datalayer.tech/releases/migration/),

@@ -2,9 +2,9 @@
 
 - Protocol: Personal Agent Protocol (Poppy)
 - Profile implemented: draft 0.3
-- Upstream page revision: 2026-10-26
-- Upstream source: commit a95b757 of https://github.com/personal-agent-protocol/personal-agent-protocol
-- Last reviewed by this repository: 2026-10-27
+- Upstream page revision: 2026-10-28
+- Upstream source: commit 3e9bada of https://github.com/personal-agent-protocol/personal-agent-protocol
+- Last reviewed by this repository: 2026-10-30
 - Specification: https://personalagentprotocol.org/docs/0.3/spec
 - Guides: https://personalagentprotocol.org/docs/0.3/guides
 - Operations extension: version 2
@@ -13,20 +13,21 @@
 - Operations extension page: https://personalagentprotocol.org/docs/0.3/extensions/operations
 
 Draft 0.3 is still being written upstream, at /docs/spec; this repository
-implements it as of commit a95b757, reviewed on 2026-10-27, and every later
-upstream commit is reviewed before a release names it. The changes from 0.2,
-each in the CHANGELOG and the 0.2 → 0.3 migration page: Session Keys name
-Sessions (no `session_id`), authorization and device codes are bound to them,
-`invalid_grant` for an ended Session's key; `signed_in` removed, `scope` as in
-RFC 6749; `insufficient_scope` replaces `sign_in_required`; Bearer tokens for
-MCP servers without DPoP by Token Exchange; `grant_types_supported` says the
-sign-in types, `scopes_supported` and `auth.scopes` the company's own scopes,
-`auth.scope_hints` what they allow; `protected_resources` replaces
-`poppy_domains`; discovery redirects end at the well-known path; loopback
-redirect URIs; Agent IDs; the browser joins a Session through a form with a
-one-time code (no browser assertion); `author` replaces `sender`; excluded
-tasks, alternatives, and feedback answered with one; more secrets kept out of
-model context.
+implements it as of commit 3e9bada, reviewed on 2026-10-30, and every later
+upstream commit is reviewed before a release names it. 3e9bada rewrote 0.3, and
+the SDKs keep no compatibility with the a95b757 shape 0.27 implements. The
+changes, each in the CHANGELOG and the 0.27 → 0.28 migration page: Sessions are
+separate from OAuth, with a `Poppy-Session` JWT per request named by a random
+`sid`, signed with short-lived delegated keys vouched for by a delegation (no
+JWT bearer grant, Session assertion, renewal, or Session Key); `ES256` and
+`PS384` for client assertions and delegations, and blind signing; plain OAuth
+refresh and access tokens, with DPoP the Company's choice; the issuer from the
+domain's protected resource metadata (RFC 9728), `auth` optional; tokens for
+one service by `resource`, and MCP tokens the same way (no Token Exchange); the
+browser join by `/authorize`; `invalid_session` for a failed header; a 401
+challenge when signed out; rate limits as 429 with `Retry-After` and no body;
+Operations version 2; the Mediated Sign-In extension; feedback without `kind`;
+`poppy:` scopes no longer reserved.
 
 Upstream is a draft. Changes are reviewed and released as explicit protocol
 profiles; generated code must never change from an unattended documentation

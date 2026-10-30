@@ -88,6 +88,13 @@ def test_the_docs_are_versioned_with_the_release() -> None:
     assert f"| `{__version__}` | `{PROTOCOL_PROFILE}` | {PROTOCOL_REVISION} |" in compatibility
     minor = ".".join(__version__.split(".")[:2])
     assert f"| `{minor}.x` | Yes" in (docs / "releases" / "support.mdx").read_text()
+    for manifest in (
+        "personal_agent_protocol/reactor.py",
+        "personal_agent_protocol/company/__init__.py",
+        "src/reactor.ts",
+        "src/company/index.ts",
+    ):
+        assert re.search(rf'version[=:] ?"{re.escape(__version__)}"', (ROOT / manifest).read_text())
     changelog = (ROOT / "CHANGELOG.md").read_text()
     assert f"## {__version__} (" in changelog
     assert (

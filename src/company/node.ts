@@ -35,6 +35,8 @@ class RepeatedHeader extends Error {}
  * `Poppy-Session` header is joined, so it fails as `invalid_session` (§5.3).
  */
 const SINGLE_HEADERS = ["authorization"] as const;
+/** Headers a repeat of which is joined, so the joined value fails its check (§5.3, RFC 9449 §4.3). */
+const JOINED_HEADERS = ["poppy-session", "dpop"] as const;
 
 async function readBody(request: IncomingMessage, limit: number): Promise<Uint8Array> {
   const chunks: Buffer[] = [];
@@ -51,7 +53,7 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Uint8A
 function lowerCaseHeaders(request: IncomingMessage): Record<string, string> {
   // One credential per request: a repeated one is never merged or picked from (RFC 6750
   // §2). `headers` keeps one `authorization`, and one `poppy-session`; `headersDistinct`
-  // keeps every value, so repeated Session headers are joined and are no compact JWT (§5.3).
+  // keeps every value, so repeated Session or DPoP headers are joined and are no compact JWT.
   for (const name of SINGLE_HEADERS) {
     if ((request.headersDistinct[name]?.length ?? 0) > 1) throw new RepeatedHeader();
   }
@@ -60,8 +62,10 @@ function lowerCaseHeaders(request: IncomingMessage): Record<string, string> {
     if (value === undefined) continue;
     headers[name.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
   }
-  const sessions = request.headersDistinct["poppy-session"];
-  if (sessions !== undefined) headers["poppy-session"] = sessions.join(", ");
+  for (const name of JOINED_HEADERS) {
+    const values = request.headersDistinct[name];
+    if (values !== undefined) headers[name] = values.join(", ");
+  }
   return headers;
 }
 

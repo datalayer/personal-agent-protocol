@@ -4,7 +4,7 @@
  * BSD 3-Clause License
  */
 
-/** Verify a personal agent's client assertions and Session JWTs (§4.1, §5.2, §5.3). */
+/** Verify a personal agent's client assertions, Session JWTs and DPoP proofs (§4.1, §4.5, §5.3). */
 
 import {
   compactVerify,
@@ -20,12 +20,15 @@ import {
 import {
   DELEGATION_MAX_LIFETIME_SECONDS,
   DELEGATION_TYPE,
+  DPOP_ALGORITHM,
+  DPOP_PROOF_TYPE,
   SESSION_ID,
   SESSION_JWT_ALGORITHM,
   SESSION_JWT_TYPE,
   constantTimeEqual,
   jwkThumbprint,
   normalizedHtu,
+  publicJwk,
   tokenHash,
 } from "../crypto.js";
 import { ProofError, SessionError } from "../errors.js";
@@ -448,4 +451,92 @@ export async function verifySessionJwt(
     issuedAt: issued,
     delegation,
   };
+}
+
+// DPoP proofs (§4.5, RFC 9449) ---------------------------------------------------------
+
+/** What a verified, newly accepted DPoP proof says: its key's thumbprint, and its nonce. */
+export interface VerifiedDpopProof {
+  readonly thumbprint: string;
+  readonly nonce?: string;
+}
+
+export interface VerifyDpopProofOptions {
+  readonly method: string;
+  readonly url: string;
+  readonly replayCache: ReplayCache;
+  readonly now: Date;
+  /** The acceptance window of the proof's `iat`, in seconds. */
+  readonly windowSeconds: number;
+  /** The access token the request carries, if any. */
+  readonly accessToken?: string;
+}
+
+function refusedProof(message: string, cause?: unknown): ProofError {
+  return new ProofError("invalid_dpop_proof", message, { cause });
+}
+
+/** The proof's public key, a P-256 JWK: a private member or another curve is refused. */
+function dpopKey(header: Record<string, unknown>): JWK {
+  const { jwk } = header;
+  if (!isRecord(jwk)) throw refusedProof("A DPoP proof carries its public key");
+  if (jwk.kty !== "EC" || jwk.crv !== "P-256") throw refusedProof("A DPoP proof's key is P-256");
+  return publicJwk(jwk as JWK);
+}
+
+/**
+ * Verify one DPoP proof as RFC 9449 §4.3 says.
+ *
+ * One `DPoP` header holding one JWT: `typ` `dpop+jwt`, `alg` ES256, a public P-256 `jwk` that
+ * signed it, `htm` and `htu` matching the request, `iat` within the window, a `jti` not seen
+ * while the proof would be accepted, and `ath` for `accessToken`, or none without one. Any
+ * failure is `ProofError` (`invalid_dpop_proof`). Whether the key and the nonce are the right
+ * ones is the caller's to decide.
+ */
+export async function verifyDpopProof(
+  proof: SecretValue | string,
+  options: VerifyDpopProofOptions,
+): Promise<VerifiedDpopProof> {
+  const { method, url, replayCache, now, windowSeconds, accessToken } = options;
+  const compact = proof instanceof SecretValue ? proof.reveal() : proof;
+  if (compact.split(".").length !== 3 || /[, \t]/u.test(compact)) {
+    // Two `DPoP` headers arrive joined: refused (RFC 9449 §4.3).
+    throw refusedProof("A DPoP header is one compact JWT");
+  }
+  let claims: Record<string, unknown>;
+  let thumbprint: string;
+  try {
+    const header = decodeProtectedHeader(compact);
+    if (header.typ !== DPOP_PROOF_TYPE || header.alg !== DPOP_ALGORITHM) {
+      throw refusedProof("A DPoP proof's typ or alg is wrong");
+    }
+    const key = dpopKey(header as Record<string, unknown>);
+    claims = await verifiedClaims(compact, key, DPOP_ALGORITHM);
+    thumbprint = await jwkThumbprint(key);
+  } catch (cause) {
+    if (cause instanceof ProofError) throw cause;
+    throw refusedProof("A DPoP proof's signature is invalid", cause);
+  }
+  const { jti, iat, htm, htu, ath, nonce } = claims;
+  if (typeof jti !== "string" || jti.length < MIN_JTI || jti.length > 256 || !Number.isInteger(iat)) {
+    throw refusedProof("A DPoP proof's jti or iat is invalid");
+  }
+  const issued = iat as number;
+  if (Math.abs(issued - now.getTime() / 1000) > windowSeconds) {
+    throw refusedProof("A DPoP proof is outside its acceptance window");
+  }
+  if (htm !== method.toUpperCase() || htu !== normalizedHtu(url)) {
+    throw refusedProof("A DPoP proof is for another request");
+  }
+  if (accessToken === undefined) {
+    if (ath !== undefined && ath !== null) throw refusedProof("A proof without an access token has no ath");
+  } else if (typeof ath !== "string" || !constantTimeEqual(ath, await tokenHash(accessToken))) {
+    throw refusedProof("A DPoP proof's ath does not match the token");
+  }
+  // Remembered for as long as the proof would be accepted: until `iat` leaves the window.
+  const first = await replayCache.markOnce(`dpop:${thumbprint}:${jti}`, {
+    expiresAt: new Date((issued + windowSeconds) * 1000),
+  });
+  if (!first) throw refusedProof("A DPoP proof is used once");
+  return { thumbprint, ...(typeof nonce === "string" ? { nonce } : {}) };
 }

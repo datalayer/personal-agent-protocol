@@ -60,7 +60,7 @@ TYPESCRIPT_AGENT_GAPS: dict[str, str] = {}
 
 #: The conformance worlds the TypeScript side runs. `None` is the default world, Bearer
 #: tokens; each pairing runs each of them, a world's report beside the pairing's.
-TYPESCRIPT_WORLDS: tuple[str | None, ...] = (None,)
+TYPESCRIPT_WORLDS: tuple[str | None, ...] = (None, "dpop-binding")
 
 
 def _save(name: str, report: dict[str, Any], world: str | None) -> None:

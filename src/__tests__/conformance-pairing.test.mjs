@@ -14,7 +14,7 @@ import test from "node:test";
 
 import { exportJWK, generateKeyPair } from "jose";
 
-import { Context, companyCases, identityFrom, runConformance } from "./support/conformance.mjs";
+import { Context, companyCases, identityFrom, runConformance, worldConfig } from "./support/conformance.mjs";
 import { serveCompany } from "./support/tls-company.mjs";
 import { MutableClock, certificates, tlsFetch } from "./support/world.mjs";
 
@@ -105,6 +105,31 @@ test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", 
   const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
   assert.deepEqual(Object.keys(failed), Object.keys(GAPS), JSON.stringify(failed));
   assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
+});
+
+test("the DPoP cases: TypeScript agent ↔ TypeScript company over TLS, in the world that binds", async () => {
+  const world = "dpop-binding";
+  const cases = companyCases(world);
+  assert.ok(cases.length >= 20);
+  const report = await runPairing({ config: worldConfig(world), cases });
+  const reports = process.env.PAP_CONFORMANCE_REPORTS;
+  if (reports) {
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, `typescript-agent-typescript-company.${world}.json`), `${JSON.stringify(report, null, 2)}\n`);
+  }
+  const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
+  assert.deepEqual(failed, {});
+  assert.deepEqual(report.summary, { passed: cases.length, failed: 0, skipped: 0 });
+  assert.deepEqual(new Set(report.cases.map((item) => item.kind)), new Set(["positive", "negative", "recovery"]));
+});
+
+test("every case belongs to one world", () => {
+  const fixtures = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop"].flatMap((suite) =>
+    JSON.parse(readFileSync(new URL(`../../protocol/fixtures/conformance/${suite}.json`, import.meta.url), "utf8"))
+      .cases.filter((item) => item.check === undefined),
+  );
+  const selected = [...companyCases(), ...companyCases("dpop-binding")].map((item) => item.id);
+  assert.deepEqual(selected.sort(), fixtures.map((item) => item.id).sort());
 });
 
 test("the MCP cases pass with a token for the server's url (§4.5, §7)", async () => {

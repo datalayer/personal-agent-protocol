@@ -16,7 +16,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair, importJWK } from "jose";
+import { SignJWT, calculateJwkThumbprint, decodeProtectedHeader, exportJWK, generateKeyPair, importJWK } from "jose";
 
 import {
   APPROVAL_HEADER,
@@ -28,9 +28,15 @@ import {
   BrowserSessionClient,
   Clocks,
   ConversationClient,
+  DPOP_ALGORITHM,
+  DPOP_HEADER,
+  DPOP_NONCE_HEADER,
+  DPOP_PROOF_TYPE,
   DelegatedSessionSigner,
   DeviceSignInClient,
   DirectSignInClient,
+  DpopProvers,
+  FeedbackClient,
   InMemoryDelegatedKeys,
   McpClient,
   McpError,
@@ -56,9 +62,13 @@ import {
   conversationEndpoint,
   delegationClaims,
   discoverCompany,
+  dpopProofClaims,
   feedbackEndpoint,
   fetchMcpServerMetadata,
+  firstContribution,
+  jwkThumbprint,
   mcpApi,
+  newDpopKey,
   offersDevice,
   offersDirect,
   openapiUrl,
@@ -72,22 +82,38 @@ import {
 import { JoseSigner } from "../../../lib/server.js";
 import { ControlledBrowser } from "./controlled-browser.mjs";
 
-const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations"];
+const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop"];
 const CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const DAY_SECONDS = 24 * 60 * 60;
 
-/** Every fixture case the company is tested on (no `check`: those the SDK decides alone). */
-export function companyCases() {
+const suiteDocument = (suite) =>
+  JSON.parse(readFileSync(new URL(`../../../protocol/fixtures/conformance/${suite}.json`, import.meta.url), "utf8"));
+
+/**
+ * The fixture cases of one world the company is tested on (no `check`: those the SDK decides
+ * alone). `world` names the company's configuration the cases need (`worldConfig`); `undefined`
+ * is the default world.
+ */
+export function companyCases(world) {
   const cases = [];
   for (const suite of SUITES) {
-    const document = JSON.parse(
-      readFileSync(new URL(`../../../protocol/fixtures/conformance/${suite}.json`, import.meta.url), "utf8"),
-    );
-    for (const raw of document.cases) {
-      if (raw.check === undefined) cases.push({ ...raw, suite, mutation: raw.mutation ?? {} });
+    for (const raw of suiteDocument(suite).cases) {
+      if (raw.check === undefined && raw.world === world) cases.push({ ...raw, suite, mutation: raw.mutation ?? {} });
     }
   }
   return cases;
+}
+
+/** The company configuration a world names, from its suite's `worlds`, in TypeScript's spelling. */
+export function worldConfig(world) {
+  for (const suite of SUITES) {
+    const named = suiteDocument(suite).worlds?.[world];
+    if (named !== undefined) {
+      const camel = (name) => name.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+      return Object.fromEntries(Object.entries(named).map(([name, value]) => [camel(name), value]));
+    }
+  }
+  throw new Error(`no conformance world ${world}`);
 }
 
 export class SkipCase extends Error {}
@@ -354,6 +380,7 @@ export class Context {
       tenantId: this.tenantId,
       organization: (await this.company()).document.organization,
       protectedResources: metadata.protected_resources,
+      dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
     });
     await this.driver.approveDevice(started.userCode, { account: account ?? this.driver.accounts[0], scopes: granted });
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -379,6 +406,7 @@ export class Context {
       redirectUri: actor.identity.metadata.redirect_uris[0],
       scopes: scopes ?? this.scenario.scopes,
       tenantId: this.tenantId,
+      dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
     });
     const callbackUrl = await this.driver.approveAuthorization(actor.userBrowser.urls.at(-1), {
       account: account ?? this.driver.accounts[0],
@@ -397,6 +425,7 @@ export class Context {
       clientId: agent.identity.clientId,
       tenantId: this.tenantId,
       ...(metadata.revocation_endpoint ? { revocationEndpoint: metadata.revocation_endpoint } : {}),
+      dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
     };
   }
 
@@ -414,9 +443,9 @@ export class Context {
     return this.fetch(url, { method, headers, ...(body === undefined ? {} : { body }), redirect: "manual" });
   }
 
-  /** The headers of one request in `session`: `Poppy-Session`, and `Authorization`. */
-  auth(session, method, url, token, { agent = this.agent } = {}) {
-    return sessionHeaders(agent.reactor, method, url, { session, token });
+  /** The headers of one request in `session`: its Session JWT, token, and any proof. */
+  auth(session, method, url, token, { agent = this.agent, dpopNonce } = {}) {
+    return sessionHeaders(agent.reactor, method, url, { session, token, dpopNonce });
   }
 
   jwtRequest(session, method, url, token) {
@@ -516,10 +545,14 @@ export class Context {
   }
 
   /** A raw token request: no Session header goes to an OAuth endpoint (§5.2). */
-  async tokenRequest(form) {
+  async tokenRequest(form, { dpop } = {}) {
     const endpoint = (await this.metadata()).token_endpoint;
     return this.send("POST", endpoint, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        ...(dpop === undefined ? {} : { [DPOP_HEADER]: dpop }),
+      },
       body: new URLSearchParams(form).toString(),
     });
   }
@@ -1851,6 +1884,253 @@ caseFor("lifecycle.browser-join-refused")(async (ctx) => {
   check((await authorize(code)).status === 204, "the agent authorizes a new code");
   const valid = await submit(browser, code);
   check(valid.status === 303 && joined(valid), "a valid join sets the Session's cookie");
+});
+
+// DPoP (§4.5, RFC 9449) ---------------------------------------------------------------
+
+const prover = (ctx) => firstContribution(ctx.agent.reactor, DpopProvers, "DPoP prover");
+
+async function dpopKey(ctx) {
+  const metadata = await ctx.metadata();
+  return prover(ctx).keys.keyFor({ tenantId: ctx.tenantId, issuer: metadata.issuer });
+}
+
+/** A proof the SDK would never send: real keys, one thing wrong (RFC 9449 §4.2). */
+async function forgedProof(ctx, key, method, url, { token, nonce, mutation = {} } = {}) {
+  const claims = await dpopProofClaims(
+    {
+      method,
+      url,
+      tenantId: ctx.tenantId,
+      issuer: ctx.baseUrl,
+      ...(token === undefined ? {} : { accessToken: token.accessToken }),
+      ...(nonce === undefined || nonce === null ? {} : { nonce }),
+    },
+    { issuedAt: new Date(ctx.now().getTime() + (mutation.iat_offset ?? 0) * 1000), randomBytes: strongRandom },
+  );
+  for (const name of ["ath", "htm", "htu"]) if (name in mutation) claims[name] = mutation[name];
+  return new SignJWT(claims)
+    .setProtectedHeader({ alg: DPOP_ALGORITHM, typ: mutation.typ ?? DPOP_PROOF_TYPE, jwk: key.publicJwk })
+    .sign(key.privateKey);
+}
+
+/** A signed-in user's DPoP token, and the API URL it reads. */
+async function boundUser(ctx) {
+  if (!(await ctx.metadata()).dpop_signing_alg_values_supported?.length) {
+    throw new SkipCase("the company lists no DPoP algorithm");
+  }
+  const [, signed] = await signedInUser(ctx);
+  check(signed.token.tokenType === "DPoP", "the token is bound");
+  return [signed, ctx.url(ctx.scenario.read_path)];
+}
+
+/** The nonce `url` gives this request: `null` when the company asks for none. */
+async function resourceNonce(ctx, signed, url) {
+  const headers = await ctx.auth(signed.session, "GET", url, signed.token);
+  return (await ctx.send("GET", url, { headers })).headers.get(DPOP_NONCE_HEADER);
+}
+
+/** `GET url` with the token, a fresh Session JWT, and `proof` in place of the SDK's. */
+async function withProof(ctx, signed, url, proof) {
+  const headers = await ctx.auth(signed.session, "GET", url, signed.token);
+  delete headers[DPOP_HEADER];
+  if (proof !== undefined) headers[DPOP_HEADER] = proof;
+  return ctx.send("GET", url, { headers });
+}
+
+async function proofRefused(response, what) {
+  await expectRefusal(response, 401, "invalid_dpop_proof", what);
+  const challenge = response.headers.get("www-authenticate") ?? "";
+  check(challenge.startsWith('DPoP error="invalid_dpop_proof"'), `${what}: the DPoP challenge, got ${challenge}`);
+}
+
+/** The nonce the token endpoint gives a proof. */
+async function tokenNonce(ctx, signed) {
+  const metadata = await ctx.metadata();
+  const proof = await forgedProof(ctx, await dpopKey(ctx), "POST", metadata.token_endpoint);
+  const answer = await ctx.tokenRequest(await refreshForm(ctx, signed.reference), { dpop: proof });
+  await expectRefusal(answer, 400, "use_dpop_nonce", "a proof with no nonce");
+  return answer.headers.get(DPOP_NONCE_HEADER);
+}
+
+caseFor("dpop.metadata-lists-es256")(async (ctx) => {
+  check((await ctx.metadata()).dpop_signing_alg_values_supported?.includes(DPOP_ALGORITHM), "the metadata lists ES256");
+});
+
+caseFor("dpop.token-bound-and-used")(async (ctx) => {
+  const [signed, url] = await boundUser(ctx);
+  const answer = await ctx.agent.transport.request("GET", url, { session: signed.session, token: signed.token });
+  check(answer.status === 200, `the bound token reads the API, got ${answer.status}`);
+});
+
+caseFor("dpop.session-and-proof-different-keys")(async (ctx) => {
+  const [signed, url] = await boundUser(ctx);
+  const headers = await ctx.auth(signed.session, "GET", url, signed.token);
+  const delegated = decodeProtectedHeader(headers["Poppy-Session"]).kid;
+  const proved = await jwkThumbprint(decodeProtectedHeader(headers[DPOP_HEADER]).jwk);
+  check(proved === (await dpopKey(ctx)).thumbprint, "the proof is by the DPoP key");
+  check(proved !== delegated, "the proof's key is not the delegated key");
+  const agents = await Promise.all(ctx.agent.identity.jwks.keys.map((key) => jwkThumbprint(key)));
+  check(!agents.includes(proved), "the proof's key is not one of the agent's jwks_uri");
+});
+
+caseFor("dpop.token-request-needs-a-proof")(async (ctx) => {
+  const [signed] = await boundUser(ctx);
+  const answer = await ctx.tokenRequest(await refreshForm(ctx, signed.reference));
+  await expectRefusal(answer, 400, "invalid_dpop_proof", "a token request with no proof");
+  const refreshed = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(signed.session.sub) });
+  check(refreshed.status === "signed_in", "the refused request spent nothing");
+});
+
+caseFor(
+  "dpop.token-proof-for-another-url",
+  "dpop.token-proof-with-ath",
+  "dpop.token-proof-outside-the-window",
+  "dpop.token-proof-wrong-typ",
+)(async (ctx, fixture) => {
+  const [signed] = await boundUser(ctx);
+  const metadata = await ctx.metadata();
+  const nonce = await tokenNonce(ctx, signed);
+  const proof = await forgedProof(ctx, await dpopKey(ctx), "POST", metadata.token_endpoint, { nonce, mutation: fixture.mutation });
+  const answer = await ctx.tokenRequest(await refreshForm(ctx, signed.reference), { dpop: proof });
+  await expectRefusal(answer, 400, "invalid_dpop_proof", fixture.id);
+});
+
+caseFor("dpop.nonce-at-the-token-endpoint")(async (ctx) => {
+  const [signed] = await boundUser(ctx);
+  const metadata = await ctx.metadata();
+  const nonce = await tokenNonce(ctx, signed);
+  check(nonce, "use_dpop_nonce gives a DPoP-Nonce");
+  const proof = await forgedProof(ctx, await dpopKey(ctx), "POST", metadata.token_endpoint, { nonce });
+  const answer = await ctx.tokenRequest(await refreshForm(ctx, signed.reference), { dpop: proof });
+  check(answer.status === 200, `served with the nonce, got ${answer.status}`);
+  check((await answer.json()).token_type === "DPoP", "the token is bound");
+});
+
+caseFor("dpop.nonce-at-a-resource")(async (ctx) => {
+  const [signed, url] = await boundUser(ctx);
+  const headers = await ctx.auth(signed.session, "GET", url, signed.token);
+  const rejected = await ctx.send("GET", url, { headers });
+  await expectRefusal(rejected, 401, "use_dpop_nonce", "a proof with no nonce");
+  const challenge = rejected.headers.get("www-authenticate") ?? "";
+  check(challenge.startsWith('DPoP error="use_dpop_nonce"'), "the DPoP challenge");
+  check(rejected.headers.get(DPOP_NONCE_HEADER), "it gives a DPoP-Nonce");
+  const transport = new SessionFetchClient({ reactor: ctx.agent.reactor, fetch: ctx.fetch });
+  const answer = await transport.request("GET", url, { session: signed.session, token: signed.token });
+  check(answer.status === 200, `the SDK retries once, got ${answer.status}`);
+  check(transport.dpopNonces.size > 0, "and keeps the nonce for the origin");
+});
+
+caseFor("dpop.bound-token-without-a-proof")(async (ctx) => {
+  const [signed, url] = await boundUser(ctx);
+  await proofRefused(await withProof(ctx, signed, url), "a bound token with no proof");
+});
+
+caseFor("dpop.bound-token-as-bearer")(async (ctx) => {
+  const [signed, url] = await boundUser(ctx);
+  const headers = await ctx.auth(signed.session, "GET", url, signed.token);
+  delete headers[DPOP_HEADER];
+  headers.Authorization = `Bearer ${signed.token.accessToken.reveal()}`;
+  const answer = await ctx.send("GET", url, { headers });
+  await expectRefusal(answer, 401, "invalid_token", "a bound token as Bearer");
+  check((answer.headers.get("www-authenticate") ?? "").includes("DPoP"), "the challenge names DPoP");
+});
+
+caseFor("dpop.proof-of-another-key")(async (ctx) => {
+  const [signed, url] = await boundUser(ctx);
+  const nonce = await resourceNonce(ctx, signed, url);
+  const proof = await forgedProof(ctx, await newDpopKey(), "GET", url, { token: signed.token, nonce });
+  await proofRefused(await withProof(ctx, signed, url, proof), "another key's proof");
+});
+
+caseFor("dpop.proof-replayed")(async (ctx) => {
+  const [signed, url] = await boundUser(ctx);
+  const nonce = await resourceNonce(ctx, signed, url);
+  const proof = await forgedProof(ctx, await dpopKey(ctx), "GET", url, { token: signed.token, nonce });
+  const first = await withProof(ctx, signed, url, proof);
+  check(first.status === 200, `the proof works once, got ${first.status}`);
+  await proofRefused(await withProof(ctx, signed, url, proof), "a replayed proof");
+});
+
+caseFor(
+  "dpop.proof-wrong-ath",
+  "dpop.proof-wrong-htm",
+  "dpop.proof-wrong-htu",
+  "dpop.proof-outside-the-window",
+)(async (ctx, fixture) => {
+  const [signed, url] = await boundUser(ctx);
+  const nonce = await resourceNonce(ctx, signed, url);
+  const proof = await forgedProof(ctx, await dpopKey(ctx), "GET", url, { token: signed.token, nonce, mutation: fixture.mutation });
+  await proofRefused(await withProof(ctx, signed, url, proof), fixture.id);
+});
+
+caseFor("dpop.session-header-still-checked")(async (ctx) => {
+  const [signed, url] = await boundUser(ctx);
+  const dpopNonce = await resourceNonce(ctx, signed, url);
+  const headers = await ctx.auth(signed.session, "GET", url, signed.token, { dpopNonce: dpopNonce ?? undefined });
+  delete headers["Poppy-Session"];
+  await expectRefusal(await ctx.send("GET", url, { headers }), 400, "invalid_session", "a proof and no Session header");
+});
+
+caseFor("dpop.refresh-after-the-key-is-lost")(async (ctx) => {
+  const [signed, url] = await boundUser(ctx);
+  const metadata = await ctx.metadata();
+  await prover(ctx).keys.forget({ tenantId: ctx.tenantId, issuer: metadata.issuer });
+  const context = await ctx.accountContext(signed.session.sub);
+  const refreshed = await ctx.agent.accounts.refresh(signed.reference, { context });
+  check(refreshed.status === "signed_in", "a refresh, not a new sign-in");
+  check(refreshed.token.tokenType === "DPoP", "a token for the new key");
+  const { transport } = ctx.agent;
+  const answer = await transport.request("GET", url, { session: signed.session, token: refreshed.token });
+  check(answer.status === 200, `which works, got ${answer.status}`);
+  const stale = await transport.request("GET", url, { session: signed.session, token: signed.token });
+  await proofRefused(stale, "the token of the lost key");
+});
+
+caseFor("dpop.conversation-and-stream")(async (ctx) => {
+  const [signed] = await boundUser(ctx);
+  const endpoint = await ctx.conversationsEndpoint();
+  const { session, token } = signed;
+  const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { session, token });
+  const items = [];
+  for await (const item of ctx.agent.conversations.stream(endpoint, receipt.conversation_id, { session, token, maxReconnects: 0 })) {
+    items.push(item);
+    break;
+  }
+  check(items.length > 0, "the stream answers with the bound token");
+});
+
+caseFor("dpop.feedback")(async (ctx) => {
+  const [signed] = await boundUser(ctx);
+  const endpoint = feedbackEndpoint((await ctx.company()).document);
+  if (endpoint === undefined) throw new SkipCase("the company lists no feedback endpoint");
+  await new FeedbackClient({ transport: ctx.agent.transport }).report(
+    endpoint,
+    { task: "dpop conformance", description: "A report with a bound token." },
+    { session: signed.session, token: signed.token },
+  );
+});
+
+caseFor("dpop.browser-join")(async (ctx) => {
+  const [signed] = await boundUser(ctx);
+  await join(ctx, signed, ctx.url("/"));
+});
+
+caseFor("dpop.mcp-token-bound")(async (ctx) => {
+  const readTool = tool(ctx.scenario.mcp_read_tool);
+  const { signed, token, url } = await signedInMcp(ctx);
+  check(token.tokenType === "DPoP", "the MCP token is bound too");
+  const answer = await mcpClient(ctx, signed.session, token, url).callTool(readTool);
+  check(!answer.isError, "the MCP server accepts it with proofs");
+});
+
+caseFor("dpop.mcp-challenge-keeps-resource-metadata")(async (ctx) => {
+  const { signed, token, url } = await signedInMcp(ctx);
+  const headers = { ...(await ctx.auth(signed.session, "POST", url, token)), "Content-Type": "application/json" };
+  delete headers[DPOP_HEADER];
+  const answer = await ctx.send("POST", url, { headers, body: '{"jsonrpc":"2.0","id":1,"method":"ping"}' });
+  await proofRefused(answer, "an MCP token with no proof");
+  check((answer.headers.get("www-authenticate") ?? "").includes("resource_metadata"), "the challenge keeps resource_metadata (§7)");
 });
 
 /** Run each case; a failure never stops the others. The report is the runner's schema 1. */

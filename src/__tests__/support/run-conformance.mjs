@@ -10,13 +10,14 @@
 //   node run-conformance.mjs config.json
 //
 // config.json: {"port", "ca", "base_url", "scenario", "accounts", "capabilities",
-// "clock" (ISO), "agent": {"domain", "name", "key", "extensions"}, "other": {...}}.
+// "clock" (ISO), "world" (a conformance world, or null for the default),
+// "agent": {"domain", "name", "key", "extensions"}, "other": {...}}.
 // The user's and the demo operator's actions are asked of the Python side, one JSON line
 // each ({"ask": "approve_device" | "wait" | "revise" | "forget_events" | "disconnect" |
 // "performed", ...}). Ends with {"report": ...} (exit 0) or {"failed": message} (exit 1).
 import { readFileSync } from "node:fs";
 
-import { Context, identityFrom, runConformance } from "./conformance.mjs";
+import { Context, companyCases, identityFrom, runConformance } from "./conformance.mjs";
 import { channel } from "./lines.mjs";
 import { MutableClock, tlsFetch } from "./world.mjs";
 
@@ -72,7 +73,7 @@ try {
     scenario: config.scenario,
     clock,
   });
-  const report = await runConformance(context);
+  const report = await runConformance(context, { cases: companyCases(config.world ?? undefined) });
   lines.send({ report });
   lines.close();
   process.exit(0);

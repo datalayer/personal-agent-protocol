@@ -35,6 +35,7 @@ import {
   type IdempotencyRecord,
   type IssuedAccessToken,
   type IssuedCode,
+  type IssuedNonce,
   type JoinCode,
   type JsonObject,
   type KnownClient,
@@ -111,6 +112,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       expiresAt: later,
       family: "fam_1",
       resource: "https://shop.example/mcp",
+      dpopJkt: "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
     } satisfies IssuedAccessToken,
     [RecordKinds.refreshToken]: {
       accountId: "acct_1",
@@ -211,6 +213,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
     [RecordKinds.browserCookie]: web,
     [RecordKinds.joinCode]: { browser: "browser_digest", authorized: web } satisfies JoinCode,
     [RecordKinds.replay]: {} satisfies ReplayMark,
+    [RecordKinds.dpopNonce]: {} satisfies IssuedNonce,
     [RecordKinds.signInAttempts]: { failures: 3, lockedUntil: later } satisfies SignInAttempts,
     [RecordKinds.feedback]: {
       reportId: "fb_1",

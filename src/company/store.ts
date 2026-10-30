@@ -232,6 +232,8 @@ export const RecordKinds = {
   signInAttempts: "sign_in_attempts",
   /** A feedback report a personal agent sent (§9.3), kept for the company's operator. */
   feedback: "feedback",
+  /** A DPoP nonce the company gave, accepted in a proof until it expires (RFC 9449 §8). */
+  dpopNonce: "dpop_nonce",
   /** An API write's `Idempotency-Key` in one Session, and its original response (guides, *Retries*). */
   idempotency: "idempotency",
 } as const;
@@ -245,7 +247,8 @@ export type RecordKind = (typeof RecordKinds)[keyof typeof RecordKinds];
  *
  * `resource` is the service it was issued for, absent for the default token that works at
  * every service that doesn't ask for its own. `family` is the sign-in it comes from, whose
- * sign-out ends it (§5.5).
+ * sign-out ends it (§5.5). `dpopJkt` is the thumbprint of the key it is bound to (§4.5,
+ * RFC 9449 §6), absent for a Bearer token.
  */
 export interface IssuedAccessToken {
   readonly clientId: string;
@@ -254,6 +257,7 @@ export interface IssuedAccessToken {
   readonly expiresAt: string;
   readonly family: string;
   readonly resource?: string;
+  readonly dpopJkt?: string;
 }
 
 /**
@@ -387,6 +391,9 @@ export interface PendingMediated {
 
 /** An identifier seen once: the record is its presence, until its expiry. */
 export type ReplayMark = Record<string, never>;
+
+/** A DPoP nonce the company gave: accepted in a proof until the record expires. */
+export type IssuedNonce = Record<string, never>;
 
 /**
  * An API write's `Idempotency-Key` in one Session: the request's digest, and its answer.

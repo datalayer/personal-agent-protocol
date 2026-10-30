@@ -8,16 +8,21 @@
 // Python's test_dpop.py holds the Python SDK.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { createServer, request as httpsRequest } from "node:https";
 import test from "node:test";
 
-import { compactVerify, decodeJwt, decodeProtectedHeader, importJWK } from "jose";
+import { SignJWT, compactVerify, decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair, importJWK } from "jose";
 
 import {
   Clocks,
+  DEVICE_CODE_GRANT,
   DpopProvers,
+  ProtectedInputs,
   InMemoryDpopKeys,
   JoseDpopProver,
   McpSessionAuth,
+  MediatedSignInClient,
   PapSession,
   ProofError,
   SecretValue,
@@ -31,8 +36,13 @@ import {
   challengeParameters,
   firstContribution,
   jwkThumbprint,
+  newDpopKey,
   tokenHash,
 } from "../../lib/index.js";
+import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
+import { CompanyConfig, companyRequestListener, verifyDpopProof } from "../../lib/server.js";
+import { Context, identityFrom } from "./support/conformance.mjs";
+import { MutableClock, ScriptedInput, certificates, inProcessFetch } from "./support/world.mjs";
 
 const ISSUER = "https://shop.example";
 const NOW = new Date("2026-10-30T12:00:00Z");
@@ -359,4 +369,247 @@ test("MCP sends a proof, retries a nonce once, and keeps it", async () => {
 
 test("a challenge names its parameters whichever scheme comes first", () => {
   assert.equal(challengeParameters(NONCE_CHALLENGE["WWW-Authenticate"]).error, "use_dpop_nonce");
+});
+
+// The reference company --------------------------------------------------------------
+
+const baseConfig = {
+  name: "Shop",
+  domain: "shop.example",
+  scopes: ["a:read"],
+  scopeDescriptions: { "a:read": "Read" },
+  operations: false,
+};
+
+test("nonces need binding, binding is one of three, and the schemes follow it", () => {
+  assert.throws(() => new CompanyConfig({ ...baseConfig, dpopNonces: true }), /dpopNonces need/u);
+  assert.throws(() => new CompanyConfig({ ...baseConfig, dpopBinding: "sometimes" }), /dpopBinding is/u);
+  const schemes = (dpopBinding) => [...new CompanyConfig({ ...baseConfig, dpopBinding }).tokenSchemes];
+  assert.deepEqual(schemes("off"), ["Bearer"]);
+  assert.deepEqual(schemes("optional"), ["Bearer", "DPoP"]);
+  assert.deepEqual(schemes("required"), ["DPoP"]);
+  const defaults = new CompanyConfig(baseConfig);
+  assert.deepEqual(
+    [defaults.dpopBinding, defaults.dpopNonces, defaults.dpopNonceLifetime, defaults.dpopProofWindow],
+    ["off", false, 300, 60],
+  );
+});
+
+const scenario = JSON.parse(readFileSync(new URL("../../protocol/scenarios/manzanita-conformance.json", import.meta.url), "utf8"));
+
+/** Manzanita in process, configured by `config`, and a conformance context of Atlas. */
+async function binding(config) {
+  const clock = new MutableClock();
+  const sites = {};
+  const fetch = inProcessFetch(sites);
+  const { service } = manzanita({ fetch, clock, ...(config === undefined ? {} : { config }) });
+  sites["manzanita.example"] = service;
+  const pair = await generateKeyPair("ES256", { extractable: true });
+  const atlas = await identityFrom({ domain: "atlas.example", name: "Atlas", privateJwk: await exportJWK(pair.privateKey) });
+  sites[atlas.domain] = { "/agent.json": atlas.metadata, "/jwks.json": atlas.jwks };
+  const driver = {
+    capabilities: new Set(["clock"]),
+    accounts: ["acct_ada", "acct_ada_business"],
+    async approveDevice(userCode, { account }) {
+      await service.approveDevice(userCode, { accountId: account });
+    },
+    async wait(seconds) {
+      clock.advance(seconds);
+    },
+  };
+  return { ctx: new Context({ baseUrl: "https://manzanita.example", identity: atlas, fetch, scenario, clock, driver }), service, fetch };
+}
+
+const signedIn = async (ctx) => {
+  const user = ctx.newUser();
+  return ctx.signIn(user, await ctx.session(user));
+};
+
+test("by default nothing is listed and a proof changes nothing", async () => {
+  const { ctx } = await binding();
+  assert.equal((await ctx.metadata()).dpop_signing_alg_values_supported, undefined);
+  const signed = await signedIn(ctx);
+  assert.equal(signed.token.tokenType, "Bearer");
+  const url = ctx.url(scenario.read_path);
+  const headers = await ctx.auth(signed.session, "GET", url, signed.token);
+  assert.ok(headers.Authorization.startsWith("Bearer ") && !("DPoP" in headers));
+  assert.equal((await ctx.send("GET", url, { headers })).status, 200);
+  const again = await ctx.auth(signed.session, "GET", url, signed.token);
+  again.Authorization = again.Authorization.replace("Bearer", "DPoP");
+  const refused = await ctx.send("GET", url, { headers: again });
+  assert.equal(refused.status, 401);
+  assert.equal(refused.headers.get("www-authenticate"), 'Bearer error="invalid_token"');
+});
+
+test("optional binds with a proof and issues Bearer without", async () => {
+  const { ctx } = await binding({ dpopBinding: "optional" });
+  assert.deepEqual((await ctx.metadata()).dpop_signing_alg_values_supported, ["ES256"]);
+  const bound = await signedIn(ctx);
+  assert.equal(bound.token.tokenType, "DPoP");
+  // No proof, because the host read nothing from the metadata: a Bearer token.
+  const context = { ...(await ctx.accountContext("anyone")), dpopSigningAlgs: undefined };
+  const plain = await ctx.agent.accounts.refresh(bound.reference, { context });
+  assert.equal(plain.token.tokenType, "Bearer");
+  const url = ctx.url(scenario.read_path);
+  const used = await ctx.agent.transport.request("GET", url, { session: bound.session, token: plain.token });
+  assert.equal(used.status, 200);
+  // An unbound token sent as DPoP: every scheme the resource takes is challenged.
+  const headers = await ctx.auth(bound.session, "GET", url, plain.token);
+  headers.Authorization = headers.Authorization.replace("Bearer", "DPoP");
+  const refused = await ctx.send("GET", url, { headers });
+  assert.equal(refused.status, 401);
+  assert.equal(refused.headers.get("www-authenticate"), 'Bearer error="invalid_token", DPoP error="invalid_token"');
+});
+
+test("required challenges DPoP alone, signed out too", async () => {
+  const { ctx } = await binding({ dpopBinding: "required" });
+  const session = await ctx.session(ctx.newUser());
+  const url = ctx.url(scenario.read_path);
+  const refused = await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) });
+  assert.equal(refused.status, 401);
+  assert.ok(refused.headers.get("www-authenticate").startsWith("DPoP scope="));
+});
+
+test("a refused proof spends no device code", async () => {
+  const { ctx } = await binding({ dpopBinding: "required" });
+  const metadata = await ctx.metadata();
+  const { device } = ctx.agent;
+  const started = await device.begin({
+    deviceAuthorizationEndpoint: metadata.device_authorization_endpoint,
+    tokenEndpoint: metadata.token_endpoint,
+    issuer: metadata.issuer,
+    clientId: ctx.agent.identity.clientId,
+    scopes: scenario.scopes,
+    tenantId: ctx.tenantId,
+    organization: (await ctx.company()).document.organization,
+    protectedResources: metadata.protected_resources,
+  });
+  await ctx.driver.approveDevice(started.userCode, { account: ctx.driver.accounts[0] });
+  await ctx.driver.wait(started.pollInterval);
+  const pending = ctx.agent.state.get(started.reference);
+  // The host forgot the metadata, so no proof went.
+  await assert.rejects(device.poll(started.reference), (error) => error.code === "invalid_dpop_proof");
+  const form = async () => ({
+    grant_type: DEVICE_CODE_GRANT,
+    device_code: pending.deviceCode.reveal(),
+    ...(await ctx.clientForm()),
+  });
+  // A proof with a stale iat, at the token endpoint directly: the code stays good.
+  const key = await newDpopKey();
+  const stale = await new SignJWT({ jti: "j".repeat(22), htm: "POST", htu: metadata.token_endpoint, iat: 0 })
+    .setProtectedHeader({ alg: "ES256", typ: "dpop+jwt", jwk: key.publicJwk })
+    .sign(key.privateKey);
+  const refused = await ctx.tokenRequest(await form(), { dpop: stale });
+  assert.deepEqual([refused.status, (await refused.json()).error], [400, "invalid_dpop_proof"]);
+  const proof = await firstContribution(ctx.agent.reactor, DpopProvers, "DPoP prover").prove({
+    method: "POST",
+    url: metadata.token_endpoint,
+    tenantId: ctx.tenantId,
+    issuer: metadata.issuer,
+  });
+  await ctx.driver.wait(started.pollInterval);
+  const issued = await ctx.tokenRequest(await form(), { dpop: proof.reveal() });
+  assert.deepEqual([issued.status, (await issued.json()).token_type], [200, "DPoP"]);
+});
+
+test("a Mediated Sign-In binds its token", async () => {
+  const { ctx, fetch } = await binding({ dpopBinding: "required", dpopNonces: true });
+  const company = await ctx.company();
+  const input = new ScriptedInput({ ...ADA }, { code: ADA_CODE });
+  await ctx.agent.reactor.install({
+    name: "typed",
+    contributes: [{ point: ProtectedInputs, value: input, options: { id: "typed" } }],
+  });
+  const client = new MediatedSignInClient({ reactor: ctx.agent.reactor, fetch });
+  const started = await client.signIn({
+    company,
+    clientId: ctx.agent.identity.clientId,
+    scopes: ["orders:read"],
+    tenantId: ctx.tenantId,
+  });
+  assert.equal(started.status, "code_required");
+  const done = await client.submitCode(started.reference);
+  assert.equal(done.token.tokenType, "DPoP");
+});
+
+test("a repeated DPoP header is refused at the Node adapter", async () => {
+  const { ctx, service } = await binding({ dpopBinding: "required" });
+  const signed = await signedIn(ctx);
+  const url = ctx.url(scenario.read_path);
+  const headers = await ctx.auth(signed.session, "GET", url, signed.token);
+  const proof = headers.DPoP;
+  delete headers.DPoP;
+  const tls = certificates(["manzanita.example"]);
+  const server = createServer({ cert: tls.cert, key: tls.key }, companyRequestListener(service));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const answer = await new Promise((resolve, reject) => {
+      const request = httpsRequest(
+        {
+          host: "127.0.0.1",
+          port: server.address().port,
+          servername: "manzanita.example",
+          ca: tls.ca,
+          path: new URL(url).pathname,
+          method: "GET",
+          headers: [...Object.entries(headers).flat(), "Host", "manzanita.example", "DPoP", proof, "DPoP", proof],
+          agent: false,
+        },
+        (response) => {
+          let body = "";
+          response.on("data", (chunk) => (body += chunk));
+          response.on("end", () => resolve({ status: response.statusCode, body: JSON.parse(body) }));
+        },
+      );
+      request.on("error", reject);
+      request.end();
+    });
+    assert.deepEqual([answer.status, answer.body.error], [401, "invalid_dpop_proof"]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("a private key or another curve in a proof is refused", async () => {
+  const issuedAt = Math.floor(NOW.getTime() / 1000);
+  const claims = { jti: "j".repeat(22), htm: "GET", htu: ORDERS, iat: issuedAt };
+  const key = await newDpopKey();
+  const other = await generateKeyPair("ES384", { extractable: true });
+  const proofs = [
+    await new SignJWT(claims)
+      .setProtectedHeader({ alg: "ES256", typ: "dpop+jwt", jwk: { ...key.publicJwk, d: "AAAA" } })
+      .sign(key.privateKey),
+    await new SignJWT(claims)
+      .setProtectedHeader({ alg: "ES384", typ: "dpop+jwt", jwk: await exportJWK(other.publicKey) })
+      .sign(other.privateKey),
+    await new SignJWT(claims)
+      .setProtectedHeader({ alg: "HS256", typ: "dpop+jwt" })
+      .sign(new TextEncoder().encode("s".repeat(32))),
+  ];
+  const replayCache = { markOnce: async () => true };
+  for (const proof of proofs) {
+    await assert.rejects(
+      verifyDpopProof(proof, { method: "GET", url: ORDERS, replayCache, now: NOW, windowSeconds: 60 }),
+      (error) => error instanceof ProofError && error.code === "invalid_dpop_proof",
+    );
+  }
+});
+
+test("a good proof names its key and nonce, once", async () => {
+  const key = await newDpopKey();
+  const marks = [];
+  const replayCache = {
+    markOnce: async (name, options) => {
+      marks.push([name, options.expiresAt.getTime()]);
+      return marks.length === 1;
+    },
+  };
+  const issuedAt = Math.floor(NOW.getTime() / 1000);
+  const proof = await new SignJWT({ jti: "j".repeat(22), htm: "GET", htu: ORDERS, iat: issuedAt, nonce: "n-1" })
+    .setProtectedHeader({ alg: "ES256", typ: "dpop+jwt", jwk: key.publicJwk })
+    .sign(key.privateKey);
+  const options = { method: "get", url: `${ORDERS}?page=2`, replayCache, now: NOW, windowSeconds: 60 };
+  assert.deepEqual(await verifyDpopProof(proof, options), { thumbprint: key.thumbprint, nonce: "n-1" });
+  assert.deepEqual(marks[0], [`dpop:${key.thumbprint}:${"j".repeat(22)}`, (issuedAt + 60) * 1000]);
+  await assert.rejects(verifyDpopProof(proof, options), (error) => error.code === "invalid_dpop_proof");
 });

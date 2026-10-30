@@ -25,7 +25,8 @@
  *   order (delegation, delegated key, claims, access token), Sessions kept by
  *   `client_id` and `sid`, ended ones remembered; any failure is
  *   `invalid_session` (HTTP 400). Its own access token without the header is refused.
- * - OAuth (§4): Bearer access tokens and refresh tokens; Direct Sign-In, Device
+ * - OAuth (§4): access tokens, Bearer or, with `dpopBinding`, bound with DPoP (§4.5), and
+ *   refresh tokens, never bound; Direct Sign-In, Device
  *   Sign-In with `authorization_pending` and `slow_down`, refresh with rotation,
  *   narrower scopes and `resource` (RFC 8707: `invalid_target` for one it doesn't
  *   serve), and revocation (RFC 7009) whose sign-in ends whole.
@@ -65,6 +66,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { IDEMPOTENCY_KEY, WRITE_METHODS } from "../apis.js";
+import { DPOP_ALGORITHM } from "../crypto.js";
 import { ProofError, ProtocolValidationError, SessionError } from "../errors.js";
 import { parseJsonStrict } from "../json.js";
 import { MEDIATED_EXTENSION, MEDIATED_GRANT, MEDIATED_VERSION } from "../mediated.js";
@@ -94,7 +96,7 @@ import {
 import { PROTOCOL_PROFILE } from "../profile.js";
 import { Clocks, RandomSources, firstContribution, optionalContribution } from "../reactor.js";
 import { SecretValue } from "../secret.js";
-import { JWT_CLIENT_ASSERTION } from "../sessions.js";
+import { DPOP_NONCE_HEADER, JWT_CLIENT_ASSERTION } from "../sessions.js";
 import { emit, telemetrySink, type TelemetryInterface } from "../telemetry.js";
 import {
   ClientPolicies,
@@ -130,6 +132,7 @@ import {
   type IdempotencyRecord,
   type IssuedAccessToken,
   type IssuedCode,
+  type IssuedNonce,
   type JoinCode,
   type JsonObject,
   type KnownClient,
@@ -153,8 +156,10 @@ import {
   DelegationCache,
   unverifiedSessionIssuer,
   verifyAssertion,
+  verifyDpopProof,
   verifySessionJwt,
   type ResolveClient,
+  type VerifiedDpopProof,
   type VerifiedSessionJwt,
 } from "./verify.js";
 
@@ -190,6 +195,9 @@ const PERFORMING_RETRY_AFTER = "5";
 export const MAX_WAIT_SECONDS = 30;
 
 export type MediatedFieldSpec = readonly [name: string, label: string, secret: boolean];
+
+/** Whether a company binds its access tokens with DPoP (§4.5). */
+export type DpopBinding = "off" | "optional" | "required";
 
 export interface CompanyConfigOptions {
   readonly name: string;
@@ -269,6 +277,18 @@ export interface CompanyConfigOptions {
    * original response a repeated key gets again (guides, *Retries*: a set time; default a day).
    */
   readonly idempotencyLifetimeSeconds?: number;
+  /**
+   * Whether access tokens are bound with DPoP, the Company's choice (§4.5). `off` (the
+   * default) lists no algorithm and issues Bearer tokens. `optional` binds a token when a
+   * proof comes with its request. `required` also refuses a token request with no proof.
+   */
+  readonly dpopBinding?: DpopBinding;
+  /** Proofs must carry a nonce the company gave (RFC 9449 §8, §9). */
+  readonly dpopNonces?: boolean;
+  /** How long a given nonce is accepted, in seconds (default five minutes). */
+  readonly dpopNonceLifetime?: number;
+  /** The acceptance window of a proof's `iat`, in seconds (default a minute). */
+  readonly dpopProofWindow?: number;
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -318,6 +338,10 @@ export class CompanyConfig {
   readonly endedSessionMemorySeconds: number;
   readonly sessionJwtWindowSeconds: number;
   readonly idempotencyLifetimeSeconds: number;
+  readonly dpopBinding: DpopBinding;
+  readonly dpopNonces: boolean;
+  readonly dpopNonceLifetime: number;
+  readonly dpopProofWindow: number;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -351,15 +375,25 @@ export class CompanyConfig {
     this.endedSessionMemorySeconds = options.endedSessionMemorySeconds ?? 30 * 24 * 60 * 60;
     this.sessionJwtWindowSeconds = options.sessionJwtWindowSeconds ?? 60;
     this.idempotencyLifetimeSeconds = options.idempotencyLifetimeSeconds ?? 24 * 60 * 60;
+    this.dpopBinding = options.dpopBinding ?? "off";
+    this.dpopNonces = options.dpopNonces ?? false;
+    this.dpopNonceLifetime = options.dpopNonceLifetime ?? 5 * 60;
+    this.dpopProofWindow = options.dpopProofWindow ?? 60;
     for (const [name, lifetime] of Object.entries({
       idempotencyLifetimeSeconds: this.idempotencyLifetimeSeconds,
       sessionLifetimeSeconds: this.sessionLifetimeSeconds,
       accessTokenLifetimeSeconds: this.accessTokenLifetimeSeconds,
       refreshTokenLifetimeSeconds: this.refreshTokenLifetimeSeconds,
       sessionJwtWindowSeconds: this.sessionJwtWindowSeconds,
+      dpopNonceLifetime: this.dpopNonceLifetime,
+      dpopProofWindow: this.dpopProofWindow,
     })) {
       if (!(lifetime > 0)) throw new RangeError(`${name} must be positive`);
     }
+    if (!["off", "optional", "required"].includes(this.dpopBinding)) {
+      throw new RangeError("dpopBinding is off, optional or required");
+    }
+    if (this.dpopNonces && this.dpopBinding === "off") throw new RangeError("dpopNonces need dpopBinding");
     for (const alias of this.aliases) {
       if (!alias || alias !== alias.toLowerCase().replace(/\.$/, "") || alias.includes("/") || alias.includes(":")) {
         throw new RangeError("an alias is a DNS domain name, in small letters");
@@ -422,6 +456,11 @@ export class CompanyConfig {
 
   get base(): string {
     return `https://${this.domain}`;
+  }
+  /** The `Authorization` schemes a resource accepts, each challenged (§7). */
+  get tokenSchemes(): readonly string[] {
+    if (this.dpopBinding === "off") return ["Bearer"];
+    return this.dpopBinding === "optional" ? ["Bearer", "DPoP"] : ["DPoP"];
   }
   get tokenEndpoint(): string {
     return `${this.base}/oauth/token`;
@@ -606,7 +645,9 @@ class WatchedReplayCache implements ReplayCache {
   }
 }
 
-const CHALLENGED = new Set(["invalid_token", "insufficient_scope", SIGNED_OUT]);
+/** A proof's refusals: challenged as `DPoP`, the one scheme that has proofs (RFC 9449 §7.1). */
+const PROOF_REFUSALS = new Set(["invalid_dpop_proof", "use_dpop_nonce"]);
+const CHALLENGED = new Set(["invalid_token", "insufficient_scope", SIGNED_OUT, ...PROOF_REFUSALS]);
 
 /**
  * A JSON error; a token error at 401 or 403 in `WWW-Authenticate` too (§7).
@@ -619,10 +660,11 @@ function jsonError(
   error: string,
   extra: Readonly<Record<string, unknown>> = {},
   headers: Readonly<Record<string, string>> = {},
+  schemes: readonly string[] = ["Bearer"],
 ): CompanyResponse {
   const out: Record<string, string> = { ...NO_STORE, ...headers };
   if (CHALLENGED.has(error) && (status === 401 || status === 403)) {
-    out["WWW-Authenticate"] = challenge("Bearer", error, extra);
+    out["WWW-Authenticate"] = challenges(schemes, error, extra);
   }
   if (error === SIGNED_OUT) return { status, headers: out };
   return { status, body: { error, ...extra }, headers: out };
@@ -636,6 +678,12 @@ function challenge(scheme: string, error: string, extra: Readonly<Record<string,
     if (typeof item === "string") parts.push(`${name}="${item}"`);
   }
   return parts.length ? `${scheme} ${parts.join(", ")}` : scheme;
+}
+
+/** A challenge for each scheme the resource accepts (§7). */
+function challenges(schemes: readonly string[], error: string, extra: Readonly<Record<string, unknown>>): string {
+  const named = PROOF_REFUSALS.has(error) ? ["DPoP"] : schemes;
+  return named.map((scheme) => challenge(scheme, error, extra)).join(", ");
 }
 
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,256}$/u;
@@ -1077,7 +1125,9 @@ export class CompanyService {
       }
     } catch (error) {
       if (error instanceof RateLimitedRefusal) return rateLimited(error.retryAfter);
-      if (error instanceof Refused) return jsonError(error.status, error.error, error.extra, error.headers);
+      if (error instanceof Refused) {
+        return jsonError(error.status, error.error, error.extra, error.headers, this.config.tokenSchemes);
+      }
       if (error instanceof SessionError || error instanceof ProofError) {
         // A JSON body, HTTP 400, whichever check failed (§5.3).
         if (error.code === "invalid_session") return jsonError(400, "invalid_session");
@@ -1206,6 +1256,7 @@ export class CompanyService {
       metadata.device_authorization_endpoint = config.deviceEndpoint;
     }
     if (config.mediatedFields.length) grants.push(MEDIATED_GRANT);
+    if (config.dpopBinding !== "off") metadata.dpop_signing_alg_values_supported = [DPOP_ALGORITHM];
     return metadata;
   }
 
@@ -1284,15 +1335,74 @@ export class CompanyService {
     const form = pairs(text(request.body));
     const grant = form.grant_type;
     const clientId = await this.#client(form);
-    if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId);
-    if (grant === AUTHORIZATION_CODE_GRANT && this.config.direct) return this.#codeGrant(form, clientId);
-    if (grant === DEVICE_CODE_GRANT && this.config.device) return this.#deviceGrant(form, clientId);
+    // Before any grant is used: a proof refused spends no code.
+    const jkt = await this.#tokenBinding(request);
+    if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, jkt);
+    if (grant === AUTHORIZATION_CODE_GRANT && this.config.direct) return this.#codeGrant(form, clientId, jkt);
+    if (grant === DEVICE_CODE_GRANT && this.config.device) return this.#deviceGrant(form, clientId, jkt);
     if (grant === MEDIATED_GRANT && this.config.mediatedFields.length) {
       // The request itself uses the extension: no client metadata entry is asked for, and
       // `extension_required` can't refuse it (§3.3).
-      return this.#mediatedGrant(form, clientId);
+      return this.#mediatedGrant(form, clientId, jkt);
     }
     throw new Refused(400, "unsupported_grant_type");
+  }
+
+  /** The thumbprint the tokens of this request are bound to, or `undefined` for Bearer. */
+  async #tokenBinding(request: CompanyRequest): Promise<string | undefined> {
+    if (this.config.dpopBinding === "off") return undefined;
+    if (request.headers.dpop) return this.#dpopProof(request, { status: 400 });
+    if (this.config.dpopBinding === "required") throw new Refused(400, "invalid_dpop_proof");
+    return undefined;
+  }
+
+  /**
+   * Check the request's proof (RFC 9449 §4.3): its key's thumbprint.
+   *
+   * `status` is the endpoint's: 400 at the token endpoint, as OAuth errors are, and 401 at a
+   * resource. `boundTo` is the key an access token needs. With `dpopNonces`, a proof with no
+   * nonce the company gave is `use_dpop_nonce`, with one in `DPoP-Nonce`.
+   */
+  async #dpopProof(
+    request: CompanyRequest,
+    options: { readonly status: number; readonly accessToken?: string; readonly boundTo?: string },
+  ): Promise<string> {
+    const { status, accessToken, boundTo } = options;
+    const proof = request.headers.dpop;
+    if (!proof) throw new Refused(status, "invalid_dpop_proof");
+    let verified: VerifiedDpopProof;
+    try {
+      verified = await verifyDpopProof(proof, {
+        method: request.method,
+        url: request.url,
+        replayCache: this.#replay(),
+        now: this.#now(),
+        windowSeconds: this.config.dpopProofWindow,
+        ...(accessToken === undefined ? {} : { accessToken }),
+      });
+    } catch (error) {
+      if (error instanceof ProofError) throw new Refused(status, "invalid_dpop_proof");
+      throw error;
+    }
+    if (boundTo !== undefined && !sameText(verified.thumbprint, boundTo)) {
+      throw new Refused(status, "invalid_dpop_proof");
+    }
+    if (this.config.dpopNonces && !(await this.#dpopNonceGiven(verified.nonce))) {
+      throw new Refused(status, "use_dpop_nonce", {}, { [DPOP_NONCE_HEADER]: await this.#giveDpopNonce() });
+    }
+    return verified.thumbprint;
+  }
+
+  async #giveDpopNonce(): Promise<string> {
+    const nonce = this.#id("nonce");
+    await this.store.put(RecordKinds.dpopNonce, nonce, {} satisfies IssuedNonce, {
+      expiresAt: this.#later(this.config.dpopNonceLifetime),
+    });
+    return nonce;
+  }
+
+  async #dpopNonceGiven(nonce: string | undefined): Promise<boolean> {
+    return nonce !== undefined && (await this.store.get(RecordKinds.dpopNonce, nonce)) !== undefined;
   }
 
   /**
@@ -1323,7 +1433,11 @@ export class CompanyService {
    * Narrower scopes only; `resource` for one service. Exactly one refresh claims the
    * presented token, which stops working the moment it is claimed.
    */
-  async #refreshGrant(form: Readonly<Record<string, string>>, clientId: string): Promise<CompanyResponse> {
+  async #refreshGrant(
+    form: Readonly<Record<string, string>>,
+    clientId: string,
+    jkt: string | undefined,
+  ): Promise<CompanyResponse> {
     const resource = this.#resource(form);
     const presented = digest(form.refresh_token ?? "");
     const entry = await this.store.get(RecordKinds.refreshToken, presented);
@@ -1376,6 +1490,7 @@ export class CompanyService {
       refreshToken: rotated,
       // A refresh naming no scope gets them in the response: the agent can't know.
       requested,
+      jkt,
     });
     const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, grant.family);
     if (family === undefined || family.revoked) {
@@ -1476,7 +1591,11 @@ export class CompanyService {
     if (changed === undefined) throw new Error("unknown user code");
   }
 
-  async #deviceGrant(form: Readonly<Record<string, string>>, clientId: string): Promise<CompanyResponse> {
+  async #deviceGrant(
+    form: Readonly<Record<string, string>>,
+    clientId: string,
+    jkt: string | undefined,
+  ): Promise<CompanyResponse> {
     const key = digest(form.device_code ?? "");
     let polled = false;
     for (let attempt = 0; attempt < CAS_ATTEMPTS && !polled; attempt += 1) {
@@ -1530,7 +1649,7 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     await this.store.delete(RecordKinds.userCode, approved.userCode);
-    return this.#signIn(clientId, approved.accountId, approved.granted, approved.scopes);
+    return this.#signIn(clientId, approved.accountId, approved.granted, approved.scopes, jkt);
   }
 
   async #forgetDevice(key: string, pending: PendingDevice): Promise<void> {
@@ -1631,6 +1750,7 @@ export class CompanyService {
     accountId: string,
     scopes: readonly string[],
     requested: readonly string[],
+    jkt: string | undefined,
   ): Promise<CompanyResponse> {
     if (!scopes.length) {
       // A sign-in grants at least one scope: approving none is a decline (§4.7).
@@ -1658,7 +1778,7 @@ export class CompanyService {
     };
     await this.store.put(RecordKinds.accountFamily, family, json(signIn), expiry(expiresAt));
     await this.#rememberFamily(clientId, accountId, family);
-    return this.#issue({ clientId, accountId, scopes, family, refreshToken, requested });
+    return this.#issue({ clientId, accountId, scopes, family, refreshToken, requested, jkt });
   }
 
   async #rememberFamily(clientId: string, accountId: string, family: string): Promise<void> {
@@ -1675,9 +1795,10 @@ export class CompanyService {
   }
 
   /**
-   * A token response (§4.7): a Bearer access token, and the refresh token if any.
+   * A token response (§4.7): an access token, and the refresh token if any.
    *
-   * `scope` follows RFC 6749: left out when it grants exactly the scopes requested.
+   * Bearer, or `DPoP` bound to the key `jkt` names; a refresh token is never bound (RFC 9449
+   * §5). `scope` follows RFC 6749: left out when it grants exactly the scopes requested.
    */
   async #issue(options: {
     readonly clientId: string;
@@ -1687,8 +1808,9 @@ export class CompanyService {
     readonly resource?: string;
     readonly refreshToken?: string;
     readonly requested: readonly string[];
+    readonly jkt: string | undefined;
   }): Promise<CompanyResponse> {
-    const { clientId, accountId, scopes, family, resource, refreshToken, requested } = options;
+    const { clientId, accountId, scopes, family, resource, refreshToken, requested, jkt } = options;
     const accessToken = this.#id("at");
     const key = digest(accessToken);
     const expiresAt = this.#later(this.config.accessTokenLifetimeSeconds);
@@ -1699,6 +1821,7 @@ export class CompanyService {
       expiresAt: expiresAt.toISOString(),
       family,
       ...(resource === undefined ? {} : { resource }),
+      ...(jkt === undefined ? {} : { dpopJkt: jkt }),
     };
     await this.store.put(RecordKinds.accessToken, key, json(issued), expiry(expiresAt));
     if (!(await this.#joinFamily(family, { accessToken: key }))) {
@@ -1707,7 +1830,7 @@ export class CompanyService {
     }
     const body: Record<string, unknown> = {
       access_token: accessToken,
-      token_type: "Bearer",
+      token_type: jkt === undefined ? "Bearer" : "DPoP",
       expires_in: Math.trunc(this.config.accessTokenLifetimeSeconds),
     };
     const asked = new Set(requested);
@@ -1935,7 +2058,11 @@ export class CompanyService {
     return pending;
   }
 
-  async #codeGrant(form: Readonly<Record<string, string>>, clientId: string): Promise<CompanyResponse> {
+  async #codeGrant(
+    form: Readonly<Record<string, string>>,
+    clientId: string,
+    jkt: string | undefined,
+  ): Promise<CompanyResponse> {
     const issued = (await this.store.take(RecordKinds.code, digest(form.code ?? ""))) as unknown as
       | IssuedCode
       | undefined;
@@ -1952,7 +2079,7 @@ export class CompanyService {
       .update(form.code_verifier ?? "")
       .digest("base64url");
     if (!sameText(verifier, issued.codeChallenge)) throw new Refused(400, "invalid_grant");
-    return this.#signIn(clientId, issued.accountId, issued.scopes, issued.requested);
+    return this.#signIn(clientId, issued.accountId, issued.scopes, issued.requested, jkt);
   }
 
   #redirectUrl(redirectUri: string, values: Readonly<Record<string, string>>): string {
@@ -2093,7 +2220,11 @@ export class CompanyService {
         403,
         "extension_required",
         { extension: OPERATIONS_EXTENSION },
-        { "WWW-Authenticate": `Bearer error="extension_required", extension="${OPERATIONS_EXTENSION}"` },
+        {
+          "WWW-Authenticate": challenges(this.config.tokenSchemes, "extension_required", {
+            extension: OPERATIONS_EXTENSION,
+          }),
+        },
       );
     }
     const requested = fingerprint("api", method, path, new URL(request.url).search, body ?? null);
@@ -2108,7 +2239,7 @@ export class CompanyService {
   }
 
   /**
-   * A token refusal at the MCP server: the `Bearer` challenge with `resource_metadata`.
+   * A token refusal at the MCP server: its challenges, with `resource_metadata`.
    *
    * RFC 9728 §5.1: so a client with stale metadata learns where to read it (§4.5, §7). A
    * signed-out call for the account gets the challenge with `scope` and no error code.
@@ -2125,7 +2256,7 @@ export class CompanyService {
       status,
       ...(error ? { body: scope === undefined ? { error } : { error, scope } } : {}),
       headers: {
-        "WWW-Authenticate": challenge("Bearer", error, extra),
+        "WWW-Authenticate": challenges(this.config.tokenSchemes, error, extra),
         ...NO_STORE,
         ...headers,
       },
@@ -2288,14 +2419,18 @@ export class CompanyService {
    *
    * `resource` is the service the request is for: `undefined` for the company's own
    * endpoints, which take the default token, or the MCP server's `url`. Resolves to the
-   * access token's digest (or `""`) and the caller's Session.
+   * access token's digest (or `""`) and the caller's Session. A token bound with DPoP needs the
+   * `DPoP` scheme and a proof by its key; an unbound one is sent as `Bearer` (§4.5, RFC 9449
+   * §7.1), each after the Session header's checks.
    */
   async #caller(request: CompanyRequest, resource?: string): Promise<[string, CallerSession]> {
     const authorization = request.headers.authorization ?? "";
     const space = authorization.indexOf(" ");
     const scheme = space < 0 ? authorization : authorization.slice(0, space);
     const token = space < 0 ? "" : authorization.slice(space + 1);
-    const presented = scheme.toLowerCase() === "bearer" && token ? token : undefined;
+    const kind = scheme.toLowerCase();
+    const accepted = kind === "bearer" || (kind === "dpop" && this.config.dpopBinding !== "off");
+    const presented = accepted && token ? token : undefined;
     if (authorization && presented === undefined) throw new Refused(401, "invalid_token");
     const header = request.headers[SESSION_HEADER];
     if (!header) {
@@ -2344,6 +2479,10 @@ export class CompanyService {
         throw new Refused(401, "invalid_token", {
           resource_metadata: this.#resourceMetadataUrl(resource),
         });
+      }
+      if ((issued.dpopJkt !== undefined) !== (kind === "dpop")) throw new Refused(401, "invalid_token");
+      if (issued.dpopJkt !== undefined) {
+        await this.#dpopProof(request, { status: 401, accessToken: presented, boundTo: issued.dpopJkt });
       }
     }
     const sessionKey = await this.#session(verified);
@@ -2501,8 +2640,14 @@ export class CompanyService {
   }
 
   /** The grant's first request: credentials and `scope` (Mediated Sign-In 3). */
-  async #mediatedGrant(form: Readonly<Record<string, string>>, clientId: string): Promise<CompanyResponse> {
-    if (Object.hasOwn(form, "sign_in_id") || Object.hasOwn(form, "one_time_code")) return this.#mediatedCode(form, clientId);
+  async #mediatedGrant(
+    form: Readonly<Record<string, string>>,
+    clientId: string,
+    jkt: string | undefined,
+  ): Promise<CompanyResponse> {
+    if (Object.hasOwn(form, "sign_in_id") || Object.hasOwn(form, "one_time_code")) {
+      return this.#mediatedCode(form, clientId, jkt);
+    }
     const config = this.config;
     const granted = words(form.scope);
     if (!granted.length || granted.some((scope) => !config.mediatedGrantScopes.includes(scope))) {
@@ -2545,7 +2690,7 @@ export class CompanyService {
     const { accountId, codeReference, sentTo } = authenticated;
     if (codeReference === undefined) {
       await this.#attemptsCleared(keys);
-      return this.#signIn(clientId, accountId, granted, granted);
+      return this.#signIn(clientId, accountId, granted, granted, jkt);
     }
     const codeLocked = await this.#lockedFor([this.#codeKey(accountId)]);
     // Too many wrong codes for this account: no new code until the lockout ends.
@@ -2583,7 +2728,11 @@ export class CompanyService {
   }
 
   /** The grant's continuation: `sign_in_id` and the code, nothing else (Mediated 4). */
-  async #mediatedCode(form: Readonly<Record<string, string>>, clientId: string): Promise<CompanyResponse> {
+  async #mediatedCode(
+    form: Readonly<Record<string, string>>,
+    clientId: string,
+    jkt: string | undefined,
+  ): Promise<CompanyResponse> {
     const signInId = form.sign_in_id;
     const code = form.one_time_code;
     if (
@@ -2636,7 +2785,7 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     await this.#attemptsCleared([...completed.attemptKeys, codeKey]);
-    return this.#signIn(clientId, completed.accountId, completed.scopes, completed.scopes);
+    return this.#signIn(clientId, completed.accountId, completed.scopes, completed.scopes, jkt);
   }
 
   /** The sign-in ends as `status`, kept so a later code gets the same error. */

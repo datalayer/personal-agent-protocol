@@ -175,11 +175,14 @@ export {
   unverifiedSessionIssuer,
   verifyAssertion,
   verifyDelegation,
+  verifyDpopProof,
   verifySessionJwt,
   type ResolveClient,
   type VerifiedDelegation,
+  type VerifiedDpopProof,
   type VerifiedSessionJwt,
   type VerifyAssertionOptions,
+  type VerifyDpopProofOptions,
   type VerifySessionJwtOptions,
 } from "./verify.js";
 export { checkReplayCache, checkStore, recordSamples, StoreConformanceError } from "./testing.js";

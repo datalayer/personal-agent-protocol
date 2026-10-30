@@ -18,8 +18,10 @@
 // {"op": "approve_device", ..., "scopes"}, {"op": "revise", "operation_id"},
 // {"op": "forget_events", "conversation_id"}, {"op": "disconnect", "client_id",
 // "account_id"} → {"ok": ...}, and {"op": "performed", "operation_id"} → {"count"}.
+// Config "world" names a conformance world: Manzanita configured as it says.
 import { readFileSync } from "node:fs";
 
+import { worldConfig } from "./conformance.mjs";
 import { channel } from "./lines.mjs";
 import { serveCompany } from "./tls-company.mjs";
 
@@ -32,6 +34,7 @@ const company = await serveCompany({
   ca: readFileSync(config.ca),
   agents: config.agents ?? {},
   ...(clock === undefined ? {} : { clock }),
+  ...(config.world ? { config: worldConfig(config.world) } : {}),
 });
 const lines = channel();
 lines.send({ ready: { port: company.port } });

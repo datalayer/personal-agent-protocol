@@ -107,15 +107,13 @@ is the host's choice, and it needs a `BlindSigningKey` of its own.
 
 Whether a company binds its access tokens with DPoP
 ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)) is its choice (spec 4.5), and
-the spec says a personal agent SHOULD support it. The Python SDK does. The TypeScript SDK doesn't send DPoP proofs yet,
-and refuses a `DPoP` token type with `unsupported_token_type`, so it can't sign in at
-a company that requires DPoP.
+the spec says a personal agent SHOULD support it. Both SDKs do.
 
 - **Keys.** `pap.dpopProver` signs each proof. Its default, `JoseDpopProver`, keeps
   one P-256 key per company for a tenant in a `DpopKeyCustody`, never a delegated
   key and never one from `jwks_uri`: a proof and a Session JWT are separate
   signatures with separate keys (spec 5.2). The default custody, `InMemoryDpopKeys`,
-  is for one process; the `pap` CLI keeps its keys in its key file.
+  is for one process; the Python `pap` CLI keeps its keys in its key file.
 - **A proof** has `typ` `dpop+jwt`, `alg` ES256 and the public `jwk` in its header,
   and `jti` (128 random bits), `htm`, `htu` without query or fragment, and `iat` in
   its claims, with `ath` when an access token goes and `nonce` when the server gave
@@ -136,8 +134,8 @@ a company that requires DPoP.
 - **Refresh tokens aren't bound** (RFC 9449 §5, a confidential client). A lost key
   means refreshing, which gets a token for a new key, not signing in again.
 
-The reference company binds its tokens when configured to, with `dpop_binding` (see
-[the company guide](/guides/company/)); by default it issues Bearer tokens and lists
+Both reference companies bind their tokens when configured to, with `dpop_binding`
+(`dpopBinding`; see [the company guide](/guides/company/)); by default they issue Bearer tokens and list
 no DPoP algorithm. A Session JWT's `ath` already makes a copied access token useless
 without the agent's delegated key, except at an MCP server that ignores the Session
 header.

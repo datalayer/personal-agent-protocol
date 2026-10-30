@@ -37,7 +37,14 @@ else:  # "signed_out"
 ```typescript
 const accounts = new RefreshTokenClient({ reactor, fetch });
 const result = await accounts.refresh(refreshTokenReference, {
-  context: { tokenEndpoint, revocationEndpoint, issuer, clientId, tenantId },
+  context: {
+    tokenEndpoint,
+    revocationEndpoint,
+    issuer,
+    clientId,
+    tenantId,
+    dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
+  },
   scopes: ['orders:read'],
 });
 if (result.status === 'signed_in') {
@@ -51,10 +58,10 @@ if (result.status === 'signed_in') {
 
 A refresh is a `refresh_token` grant with a fresh client assertion. It names no
 Session: the access token it returns belongs to the account, and a Session is
-signed in by carrying that token. With `dpop_signing_algs` from the metadata, a
-refresh sends a DPoP proof when the issuer lists ES256; a `DPoP` token type with no
-proof sent is `unsupported_token_type`. Refresh tokens aren't bound, so a lost DPoP
-key means refreshing. The TypeScript SDK doesn't send DPoP proofs yet.
+signed in by carrying that token. With `dpop_signing_algs` (`dpopSigningAlgs`) from
+the metadata, a refresh sends a DPoP proof when the issuer lists ES256; a `DPoP` token
+type with no proof sent is `unsupported_token_type`. Refresh tokens aren't bound, so a
+lost DPoP key means refreshing.
 
 ## Rotation is serialized
 

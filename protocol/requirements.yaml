@@ -655,7 +655,7 @@ requirements:
   role: personal-agent
   text: Personal Agents SHOULD support DPoP, because a Personal Agent that doesn't can't sign in at a
     Company that requires it.
-  status: open
+  status: implemented
   implementation:
   - personal_agent_protocol.sessions:SessionClient.token_request
   - personal_agent_protocol.transport:session_headers
@@ -671,8 +671,6 @@ requirements:
   - dpop.proof-shape
   - dpop.token-bound-and-used
   - dpop.refresh-after-the-key-is-lost
-  reason: The Python SDK proves and uses DPoP tokens; the TypeScript SDK sends no DPoP proofs yet, and
-    refuses a DPoP token response, so it can't sign in at a Company that requires DPoP.
 - id: PAP-4.7-01
   section: '4.7'
   level: MUST
@@ -2870,7 +2868,7 @@ guide:
   text: If a company issues DPoP-bound access tokens, also sign a DPoP proof for each request that carries
     one, and support nonces as RFC 9449 §8 describes. The proof and the Session JWT are separate signatures
     with separate keys (5.2).
-  status: partial
+  status: implemented
   implementation:
   - personal_agent_protocol.transport:session_headers
   - personal_agent_protocol.transport:SessionHttpClient.request
@@ -2889,7 +2887,6 @@ guide:
   - dpop.feedback
   - dpop.browser-join
   - dpop.mcp-token-bound
-  reason: The Python SDK does; the TypeScript SDK sends no DPoP proofs yet.
 - id: GUIDE-pa-discovery-01
   source: guide
   section: Finding a company
@@ -3609,7 +3606,7 @@ guide:
   role: company
   text: Binding access tokens with DPoP is your choice (4.5). If you do, verify the proof as RFC 9449 describes,
     separately from the Session JWT.
-  status: partial
+  status: implemented
   implementation:
   - personal_agent_protocol.company.verify:verify_dpop_proof
   - personal_agent_protocol.company.service:CompanyConfig
@@ -3642,5 +3639,3 @@ guide:
   - dpop.browser-join
   - dpop.mcp-token-bound
   - dpop.mcp-challenge-keeps-resource-metadata
-  reason: The Python reference company does; the TypeScript one issues Bearer tokens and lists no DPoP
-    algorithm yet.

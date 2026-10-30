@@ -180,8 +180,8 @@ token request; a `DPoP` token then needs nothing more from the host:
 With a list that doesn't include ES256, or none, no proof goes. The default
 `pap.dpopProver` keeps its keys in memory: a host whose tokens outlive a process
 contributes `JoseDpopProver` with a durable `DpopKeyCustody` (`key_for`, `forget`),
-below the default's order of 100. A lost key means refreshing: refresh tokens aren't
-bound. See [DPoP](/guides/cryptography/#dpop).
+below the default's order of 100, as the `pap` CLI's file-backed keys do. A lost key
+means refreshing: refresh tokens aren't bound. See [DPoP](/guides/cryptography/#dpop).
 
 ## Conversation and Operations models
 

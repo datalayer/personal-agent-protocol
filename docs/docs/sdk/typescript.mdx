@@ -56,7 +56,7 @@ remain on a server or KMS; they must never be shipped in a browser or desktop
 bundle.
 
 The SDK exports the same contribution points as Python (`Clocks`,
-`RandomSources`, `Signers`, `SessionSigners`, `TokenStores`, `Caches`,
+`RandomSources`, `Signers`, `SessionSigners`, `DpopProvers`, `TokenStores`, `Caches`,
 `BrowserHandoffs`, `BrowserJoins`, `PairwiseUserIdStores`,
 `AuthorizationStateStores`, and the rest; see [Contribution
 points](/concepts/contribution-points/)).
@@ -77,9 +77,11 @@ hours, and signs each Session JWT with it; it rotates the key before the
 delegation expires and never signs past it. `jwkThumbprint` is the RFC 7638
 thumbprint in a Session JWT's `kid`.
 
-`SessionFetchClient` owns the `Poppy-Session` and `Authorization` headers for
-API and conversation requests. Each request carries a fresh Session JWT, and
-an `invalid_session` answer starts a new Session once. It refuses every redirect
+`SessionFetchClient` owns the `Poppy-Session`, `Authorization` and `DPoP` headers
+for API and conversation requests. Each request carries a fresh Session JWT, and
+with a `DPoP` token a fresh proof; an `invalid_session` answer starts a new Session
+once, and a `use_dpop_nonce` challenge sends the request again once, the latest
+nonce kept per origin. It refuses every redirect
 (`redirect_refused`): no token or body goes to the URL a protocol endpoint
 redirects to. See the [Session transport flow](/examples/session-transport/).
 
@@ -151,8 +153,9 @@ out of logs, UI state, analytics, and model-visible tools.
 `SessionClient` starts a `PapSession` and sends token requests with a fresh
 client assertion. It requires a host-provided `pap.signer` contribution,
 supports `AbortSignal` on token requests, and rejects redirects and malformed
-token responses. A `DPoP` token type is `unsupported_token_type`: this SDK does
-not send DPoP proofs yet. See [Signed-out sessions](/guides/sessions/) for usage
+token responses. `tokenRequest` takes the `tenantId` whose key proves and the
+issuer's `dpopSigningAlgs`; a `DPoP` token type with no proof sent is
+`unsupported_token_type`. See [Signed-out sessions](/guides/sessions/) for usage
 and the exact security boundary.
 
 `JoseSigner` signs client assertions and delegations with ES256 or PS384. It and
@@ -171,6 +174,28 @@ primitives. See [Direct Sign-In](/guides/direct-sign-in/) for usage and the
 trusted-host boundary. `DeviceSignInClient` and `MediatedSignInClient` sign in
 the same way; each stores the refresh token behind a reference, which
 `RefreshTokenClient` uses.
+
+## DPoP
+
+A company that binds its access tokens lists ES256 in its metadata's
+`dpop_signing_alg_values_supported`. Pass what the metadata says to whatever sends a
+token request; a `DPoP` token then needs nothing more from the host:
+
+- `DeviceSignInClient.begin` and `DirectSignInClient.begin` take `dpopSigningAlgs`;
+- so does `RefreshTokenContext`, for refreshes and tokens for one service;
+- `MediatedSignInClient.signIn` reads it from `company`, and takes the `tenantId`
+  whose key proves.
+
+With a list that doesn't include ES256, or none, no proof goes. The default
+`pap.dpopProver` (`DpopProvers`, contribution `in-memory`) keeps its keys in memory: a
+host whose tokens outlive a process contributes `JoseDpopProver` with a durable
+`DpopKeyCustody` (`keyFor`, `forget`), below the default's order of 100. A lost key
+means refreshing: refresh tokens aren't bound. See
+[DPoP](/guides/cryptography/#dpop).
+
+A company built with `CompanyConfig` binds its tokens with `dpopBinding` (`off`,
+`optional` or `required`) and asks for nonces with `dpopNonces`; `verifyDpopProof`
+comes from `@datalayer/personal-agent-protocol/server`.
 
 ## Client, conversation, and Operations models
 

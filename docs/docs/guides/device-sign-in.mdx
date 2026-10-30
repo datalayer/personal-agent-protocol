@@ -92,6 +92,8 @@ const started = await client.begin({
   tenantId: 'application-42',
   organization: company.document.organization,
   protectedResources: metadata.protected_resources,
+  // A DPoP proof goes with each poll when this includes ES256.
+  dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
 });
 
 renderHumanHandoff(started.verificationUriComplete ?? started.verificationUri,

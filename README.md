@@ -201,14 +201,9 @@ Duplicate JSON members are rejected at Python and TypeScript trust boundaries.
 
 Every flow of draft 0.3 and Operations v2 is implemented in both SDKs and
 both reference companies: discovery, Sessions, Direct, Device and Mediated
-Sign-In, refresh tokens, OpenAPI and MCP, conversations with SSE, handoff and
+Sign-In, refresh tokens, DPoP, OpenAPI and MCP, conversations with SSE, handoff and
 close, browser sessions, feedback, and Operations. What remains:
 
-- DPoP in TypeScript, which the specification says personal agents SHOULD
-  support. The Python SDK sends proofs and uses `DPoP` tokens, and its reference
-  company binds its tokens when configured to (`dpop_binding`). The TypeScript SDK
-  doesn't send DPoP proofs yet and refuses a `DPoP` token type, so it can't sign in
-  at a company that requires it;
 - production backends the host contributes: the SDK ships no KMS/HSM signer
   or durable delegated key custody, no durable token store, and only in-memory
   company stores and replay caches (`check_store` checks a durable one);

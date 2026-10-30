@@ -115,6 +115,18 @@ Unknown or internal symbols are deliberately excluded.
 - [`DiscoveryTransport`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `DiscoveryTransport`.
 - [`DiscoveryTransports`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `DiscoveryTransports`.
 - [`DisplayLike`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Type; entry `.`. Anything shaped like a display: Reactor's `Display`, or a tool result's `_meta["reactor.ui/display"]`.
+- [`DPOP_ALGORITHM`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Const; entry `.`. Public TypeScript const `DPOP_ALGORITHM`.
+- [`DPOP_HEADER`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Const; entry `.`. The header that carries a DPoP proof (RFC 9449 §4.1).
+- [`DPOP_NONCE_HEADER`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Const; entry `.`. The header a server gives a DPoP nonce in (RFC 9449 §8).
+- [`DPOP_PROOF_TYPE`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Const; entry `.`. A DPoP proof's `typ` and `alg` (§4.5, RFC 9449 §4.2).
+- [`DpopKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `.`. One DPoP key: `thumbprint` is what the Company binds a token to (RFC 9449 §6).
+- [`DpopKeyCustody`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `.`. Where DPoP keys live: one per Company for a tenant, made on first use.
+- [`DpopKeyWho`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `.`. Public TypeScript interface `DpopKeyWho`.
+- [`dpopNonceAsked`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/refusals.ts) — Function; entry `.`. The nonce a resource's `use_dpop_nonce` challenge gives, to retry with (RFC 9449 §9).
+- [`dpopProofClaims`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Value; entry `.`. Public TypeScript value `dpopProofClaims`.
+- [`DpopProofRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. What one DPoP proof is signed for (§4.5, RFC 9449 §4.2).
+- [`DpopProver`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Sign the DPoP proof of one request (§4.5).
+- [`DpopProvers`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. `DpopProver`: the DPoP proof of a request, when the Company lists ES256 or bound a token.
 - [`effectiveChanges`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. A hint's `changes`, with a value this SDK doesn't know read as `irreversible` (§4.4).
 - [`emsaPssEncode`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/blind.ts) — Value; entry `.`. Public TypeScript value `emsaPssEncode`.
 - [`ExcludedTask`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. A task the company chose not to offer through the protocol (§8.1).
@@ -143,6 +155,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`IdentityRequestOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/identity.ts) — Interface; entry `.`. Public TypeScript interface `IdentityRequestOptions`.
 - [`inertSummary`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. A summary whose links, images and HTML show as text, wherever it is rendered.
 - [`InMemoryDelegatedKeys`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Class; entry `.`. Delegated keys in this process's memory, one per User ID.
+- [`InMemoryDpopKeys`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Class; entry `.`. DPoP keys in this process's memory, one per Company for a tenant.
 - [`InMemoryProtocolCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/limits.ts) — Class; entry `.`. Default `pap.cache`: a bounded, least-recently-used map in one process.
 - [`InProcessRefreshTokenLock`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Class; entry `.`. One in-process lock per reference: the default refresh token lock.
 - [`invalidSession`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/transport.ts) — Value; entry `.`. Public TypeScript value `invalidSession`.
@@ -154,6 +167,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`isPapSessionShown`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. Whether a value is a `PapSessionShown`: a 12-hex-digit reference and `signed_in`, nothing else.
 - [`JOSE_ALGORITHMS`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Const; entry `.`. The algorithms a key in `jwks_uri` signs client assertions and delegations with (§4.1, §5.2).
 - [`JoseAlgorithm`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Type; entry `.`. Public TypeScript type `JoseAlgorithm`.
+- [`JoseDpopProver`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Class; entry `.`. `pap.dpopProver`: a fresh proof for each request, by the Company's DPoP key (§4.5).
+- [`JoseDpopProverOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `.`. Public TypeScript interface `JoseDpopProverOptions`.
 - [`JsonWebKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `JsonWebKey`.
 - [`JsonWebKeySet`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `JsonWebKeySet`.
 - [`JwksRequestOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/identity.ts) — Interface; entry `.`. Public TypeScript interface `JwksRequestOptions`.
@@ -170,7 +185,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`McpClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Interface; entry `.`. Public TypeScript interface `McpClientOptions`.
 - [`McpError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Class; entry `.`. The MCP server refused a request; `code` is its token or JSON-RPC error.
 - [`McpServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Type; entry `.`. An MCP server's protected resource metadata (RFC 9728, §7).
-- [`McpSessionAuth`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Class; entry `.`. The Session header, and signed in a Bearer token, to one MCP server's URL only (§7).
+- [`McpSessionAuth`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Class; entry `.`. The Session header, and signed in a token, to one MCP server's URL only (§7).
 - [`McpToolResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Interface; entry `.`. A tool's answer; `operation` is set when it needs the user's approval (Operations 4).
 - [`MEDIATED_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mediated.ts) — Const; entry `.`. The Mediated Sign-In extension v1: the user's credentials, as an OAuth extension grant.
 - [`MEDIATED_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mediated.ts) — Const; entry `.`. Public TypeScript const `MEDIATED_GRANT`.
@@ -185,6 +200,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`MIN_MODULUS_BITS`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/blind.ts) — Const; entry `.`. Smaller moduli are refused (RFC 9474 §7; 3072 bits is suggested).
 - [`needsIssuer`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Whether the Company must have an OAuth issuer (§3.2).
 - [`negotiateExtensions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/extensions.ts) — Function; entry `.`. The extensions both sides list, at the same major version, that this host supports.
+- [`newDpopKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Value; entry `.`. Public TypeScript value `newDpopKey`.
 - [`newIdempotencyKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/apis.ts) — Function; entry `.`. A fresh key for a write: a random UUID (version 4).
 - [`newSessionId`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Function; entry `.`. A new `sid`: 128 random bits, 22 URL-safe characters, never used again (§5.2).
 - [`normalizedHtu`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Function; entry `.`. `htu`: the request's URL without its query or fragment (§5.2).

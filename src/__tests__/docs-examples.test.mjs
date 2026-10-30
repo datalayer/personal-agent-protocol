@@ -287,6 +287,7 @@ example("docs/docs/guides/account-tokens.mdx#0", async (w) => {
       reactor: w.reactor,
       fetch: w.fetch,
       refreshTokenReference: reference,
+      metadata,
       tokenEndpoint: metadata.token_endpoint,
       revocationEndpoint: metadata.revocation_endpoint,
       issuer,

@@ -43,10 +43,10 @@ a new one from the first request that names it.
 Sign-in and refresh are plain OAuth and give an `AccessToken`: `access_token`, a
 `token_type` of `Bearer` or `DPoP`, `expires_in`, `scope`, and `resource` when it
 was issued for one service. The specification says a personal agent SHOULD support
-DPoP. The Python SDK does: it sends a proof with token requests when the issuer lists
+DPoP. Both SDKs do: they send a proof with token requests when the issuer lists
 ES256, and with every request that carries a `DPoP` token. A `DPoP` token type with
-no proof sent is refused (`unsupported_token_type`). The TypeScript SDK doesn't send DPoP proofs yet, and refuses a
-`DPoP` token type. See [DPoP](/guides/cryptography/#dpop).
+no proof sent is refused (`unsupported_token_type`). See
+[DPoP](/guides/cryptography/#dpop).
 
 A personal agent that acts for a user through several agents MAY name which one
 a Session is for with an Agent ID (`agent_id`, `agentId`). It follows the same

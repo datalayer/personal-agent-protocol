@@ -164,9 +164,10 @@ implements, of draft 0.3 and Operations v2:
   (`await approve_device()` stands for the company's own approval page);
 - Mediated Sign-In with a one-time code, an attempt limit, and uniform
   failures;
-- Bearer access tokens, or in Python tokens bound with DPoP (`dpop_binding`: `off` by
-  default, `optional` binds when a proof comes, `required` refuses a token request
-  with none; `dpop_nonces` asks for server nonces), at every API, conversation,
+- Bearer access tokens, or tokens bound with DPoP (`dpop_binding`, in TypeScript
+  `dpopBinding`: `off` by default, `optional` binds when a proof comes, `required`
+  refuses a token request with none; `dpop_nonces`, `dpopNonces`, asks for server
+  nonces), at every API, conversation,
   feedback, MCP and browser `/authorize` request; a bad proof is `invalid_dpop_proof`,
   HTTP 400 at the token endpoint and 401 at a resource;
 - refresh tokens, never bound, rotated on every refresh, narrower

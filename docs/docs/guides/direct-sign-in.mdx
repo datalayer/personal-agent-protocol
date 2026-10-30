@@ -88,6 +88,8 @@ const started = await signIn.begin({
   redirectUri: 'https://agent.example/oauth/callback',
   scopes: ['orders:read'],
   tenantId: 'application-42',
+  // A DPoP proof goes with the code exchange when the issuer's metadata lists ES256:
+  // dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
 });
 
 // Later, at the registered callback route. Never put this URL in UI/model state.

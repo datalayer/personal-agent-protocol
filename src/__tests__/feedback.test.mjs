@@ -11,12 +11,12 @@ import test from "node:test";
 
 import {
   DeviceSignInClient,
-  DpopFetchClient,
   FEEDBACK_DESCRIPTION_MAX_LENGTH,
   FEEDBACK_TASK_MAX_LENGTH,
   FeedbackClient,
   FeedbackError,
   SessionClient,
+  SessionFetchClient,
   discoverCompany,
   feedbackEndpoint,
   parseDiscoveryDocument,
@@ -45,18 +45,16 @@ async function world({ config, plugins } = {}) {
   const { service: shop } = manzanita({ fetch, clock, ...(config ? { config } : {}), ...(plugins ? { plugins } : {}) });
   sites["manzanita.example"] = shop;
   const host = await agentHost({ identity, fetch, clock });
-  const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
+  const transport = new SessionFetchClient({ reactor: host.reactor, fetch });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const start = () =>
-    sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT });
-  return { clock, fetch, identity, shop, host, transport, company, metadata, who, start };
+    sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT });
+  return { clock, fetch, identity, shop, host, transport, company, metadata, start };
 }
 
 async function signedIn(w) {
-  const session = await w.start();
   const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
   const started = await device.begin({
     deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
@@ -65,7 +63,6 @@ async function signedIn(w) {
     clientId: w.identity.clientId,
     scopes: ["orders:read"],
     tenantId: TENANT,
-    sessionKey: session.sessionKey,
     organization: w.company.document.organization,
     protectedResources: w.metadata.protected_resources,
   });
@@ -78,7 +75,7 @@ test("a report is task and description only", () => {
   assert.deepEqual(parseFeedbackReport(GIFT_CARD), GIFT_CARD);
   // Nothing else rides along (§9.3).
   for (const report of [
-    { kind: "missing", task: "x", description: "y" },
+    { kind: "missing", task: "x", description: "y" }, // no `kind` any more
     { task: "x", description: "y", user: "Ada" },
     { task: "x".repeat(FEEDBACK_TASK_MAX_LENGTH + 1), description: "y" },
     { task: "x", description: "y".repeat(FEEDBACK_DESCRIPTION_MAX_LENGTH + 1) },
@@ -108,12 +105,12 @@ test("a signed-out and a signed-in Session report, with no scope", async () => {
   assert.equal(endpoint, FEEDBACK);
   const client = new FeedbackClient({ transport: w.transport });
   // The task can be done after all: 200 and an alternative, content from the company (§8.3).
-  const alternative = await client.report(endpoint, GIFT_CARD, { token: session, ...w.who });
+  const alternative = await client.report(endpoint, GIFT_CARD, { session });
   assert.ok(alternative.instructions);
   assert.deepEqual(usableReferences(alternative, w.company.document).map((reference) => reference.type), ["web"]);
   const token = await signedIn(w);
   assert.equal(
-    await client.report(endpoint, { task: "Return a jacket", description: "No return option in any channel." }, { token, ...w.who }),
+    await client.report(endpoint, { task: "Return a jacket", description: "No return option in any channel." }, { session, token }),
     undefined,
   );
   const reports = await w.shop.feedbackReports();
@@ -127,24 +124,26 @@ test("the company ignores other members and refuses a malformed report", async (
   const w = await world();
   const session = await w.start();
   const post = (body) =>
-    w.transport.request("POST", FEEDBACK, { token: session, ...w.who, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  // Other members are ignored, so later versions can add some (§9.3).
+    w.transport.request("POST", FEEDBACK, { session, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  // A member it doesn't recognize, such as the withdrawn `kind`, is ignored (§9.3).
   const accepted = await post({ kind: "slow", task: "Track a parcel", description: "Took ages." });
   assert.equal(accepted.status, 202);
   assert.equal(await accepted.text(), "");
+  assert.equal((await w.shop.feedbackReports())[0].task, "Track a parcel");
   assert.equal((await w.shop.feedbackReports())[0].kind, undefined);
   for (const body of [
     { task: "x".repeat(201), description: "too long a task" },
     { task: "x", description: "y".repeat(2001) },
-    { kind: "missing", task: "x" },
+    { task: "x" },
+    { description: "y" },
     ["not", "an", "object"],
   ]) {
     const refused = await post(body);
     assert.deepEqual([refused.status, await refused.json()], [400, { error: "invalid_request" }]);
   }
-  // Only with a Session Token.
+  // Only with the Session header.
   const bare = await w.fetch(FEEDBACK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(GIFT_CARD) });
-  assert.equal(bare.status, 401);
+  assert.deepEqual([bare.status, await bare.json()], [400, { error: "invalid_session" }]);
   assert.equal((await w.shop.feedbackReports()).length, 1);
 });
 
@@ -153,7 +152,7 @@ test("feedback refusals carry their code and Retry-After", async () => {
     plugins: [{ name: "limit", contributes: [{ point: CompanyRateLimits, value: { admit: async () => 30 }, options: { id: "limit" } }] }],
   });
   const session = await w.start();
-  await assert.rejects(new FeedbackClient({ transport: w.transport }).report(FEEDBACK, GIFT_CARD, { token: session, ...w.who }), (error) => {
+  await assert.rejects(new FeedbackClient({ transport: w.transport }).report(FEEDBACK, GIFT_CARD, { session }), (error) => {
     assert.ok(error instanceof FeedbackError);
     assert.deepEqual([error.code, error.statusCode, error.details], ["rate_limited", 429, { retry_after: "30" }]);
     return true;
@@ -164,7 +163,7 @@ test("a company without feedback neither lists nor accepts it", async () => {
   const w = await world({ config: { feedback: false } });
   const session = await w.start();
   assert.equal(feedbackEndpoint(w.company.document), undefined);
-  await assert.rejects(new FeedbackClient({ transport: w.transport }).report(FEEDBACK, GIFT_CARD, { token: session, ...w.who }), (error) => {
+  await assert.rejects(new FeedbackClient({ transport: w.transport }).report(FEEDBACK, GIFT_CARD, { session }), (error) => {
     assert.ok(error instanceof FeedbackError);
     assert.equal(error.statusCode, 404);
     return true;
@@ -175,7 +174,7 @@ test("a feedback endpoint answering with a redirect gets nothing", async () => {
   const w = await world();
   const session = await w.start();
   const sent = [];
-  const transport = new DpopFetchClient({
+  const transport = new SessionFetchClient({
     reactor: w.host.reactor,
     fetch: async (input) => {
       sent.push(String(input));
@@ -183,7 +182,7 @@ test("a feedback endpoint answering with a redirect gets nothing", async () => {
     },
   });
   await assert.rejects(
-    new FeedbackClient({ transport }).report(FEEDBACK, GIFT_CARD, { token: session, ...w.who }),
+    new FeedbackClient({ transport }).report(FEEDBACK, GIFT_CARD, { session }),
     (error) => error.code === "redirect_refused",
   );
   assert.deepEqual(sent, [FEEDBACK]);

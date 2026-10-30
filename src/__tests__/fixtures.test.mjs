@@ -11,6 +11,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  accessTokenFromResponse,
+  jwkThumbprint,
   parseClientMetadata,
   parseConversationEventPage,
   parseDiscoveryDocument,
@@ -21,7 +23,6 @@ import {
   parseProtectedResourceMetadata,
   parseOperation,
   parseTokenResponse,
-  sessionTokenFromResponse,
 } from "../../lib/index.js";
 
 const fixtures = new URL("../../protocol/fixtures/", import.meta.url);
@@ -49,15 +50,10 @@ test("strict JSON rejects duplicate members", () => {
   assert.throws(() => parseJsonStrict('{"issuer":"first","issuer":"second"}'), invalid("duplicate_json_member"));
 });
 
-test("an operation requires the exact current revision", () => {
-  assert.throws(() => parseOperation({
-    operation_id: "op_123",
-    revision: 2,
-    state: "in_progress",
-    summary: "Change the booking",
-    confirmation: { revision: 1, approved_by: "user", confirmed_at: "2026-10-10T10:00:00Z" },
-    result: null,
-  }), /current revision/);
+test("an operation's revision is an opaque string, and it has an expiry", () => {
+  assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), revision: 2 }), invalid("invalid_type"));
+  const { expires_at: _expires, ...without } = fixture("operation-valid.json");
+  assert.throws(() => parseOperation(without), /expires_at/);
 });
 
 test("shared client, conversation, and operation fixtures", () => {
@@ -65,25 +61,33 @@ test("shared client, conversation, and operation fixtures", () => {
   const operation = parseOperation(fixture("operation-valid.json"));
   const page = parseConversationEventPage(fixture("conversation-events-valid.json"));
   assert.equal(client.extensions["example.org/preferences"].mode, "compact");
-  assert.equal(operation.user_approval_required, true);
+  assert.equal(operation.revision, "1791487200-k3Jd9Qx2mW8v");
+  assert.equal("user_approval_required" in operation, false);
   assert.deepEqual(page.events[0].message.operation, operation);
   assert.equal(page.events[2].type, "example.org/future-event");
   assert.equal(page.events[2].future, true);
 });
 
-test("the JWKS, OAuth metadata, and Session token fixtures parse", () => {
+test("the JWKS, OAuth metadata, and token response fixtures parse", () => {
   assert.equal(parseJsonWebKeySet(fixture("jwks-valid.json")).keys[0].kid, "agent-signing-2026-10");
   assert.deepEqual(parseOAuthServerMetadata(fixture("oauth-metadata-valid.json")).protected_resources, ["https://example.com", "https://mcp.example.com/mcp"]);
-  const token = sessionTokenFromResponse(parseTokenResponse(fixture("session-token-valid.json")), {
-    sessionKey: "K".repeat(43),
-    signedIn: false,
-  });
-  assert.equal(token.signedIn, false);
-  assert.deepEqual(token.scopes, []);
+  const response = parseTokenResponse(fixture("token-response-valid.json"));
+  assert.equal(response.tokenType, "Bearer");
+  assert.equal(response.refreshToken.reveal(), "opaque-refresh-token");
+  assert.deepEqual(accessTokenFromResponse(response).scopes, ["orders:read", "orders:write"]);
+});
+
+test("the Session JWT fixture's kid is the thumbprint of the delegation's key", async () => {
+  const session = fixture("session-jwt-valid.json");
+  const delegation = fixture("delegation-valid.json");
+  assert.equal(session.header.kid, await jwkThumbprint(delegation.payload.cnf.jwk));
+  assert.match(session.payload.ath, /^[A-Za-z0-9_-]{43}$/);
+  assert.ok(delegation.payload.exp - delegation.payload.iat <= 24 * 3600);
+  assert.deepEqual(Object.keys(delegation.payload).sort(), ["cnf", "exp", "iat", "iss", "jti"]);
 });
 
 test("a message requires content", () => {
-  assert.throws(() => parseMessage({ id: "msg_empty", author: { type: "agent" } }), /requires text, data, context, or operation/);
+  assert.throws(() => parseMessage({ id: "msg_empty", author: { type: "agent" } }), (error) => error.code === "invalid_message");
 });
 
 test("a known conversation event requires its fields", () => {
@@ -107,21 +111,12 @@ test("client metadata requires the same domain for security URLs", () => {
 });
 
 test("optional members serialized as null read as absent, as Python's models do", () => {
-  const operation = parseOperation({
-    ...fixture("operation-valid.json"),
-    state: "cancelled",
-    url: null,
-    terms: null,
-    expires_at: null,
-    result: { summary: "Nothing was changed.", data: null },
-  });
-  assert.equal("url" in operation, false);
+  const operation = parseOperation({ ...fixture("operation-valid.json"), terms: null });
   assert.equal("terms" in operation, false);
-  assert.equal("expires_at" in operation, false);
-  assert.deepEqual(operation.result, { summary: "Nothing was changed." });
-  const message = parseMessage({ id: "msg_1", author: { type: "agent" }, role: null, text: "Hi", data: null, context: null, operation: null });
+  // `approval` too: a company's message with `approval: null` is a message, not a refusal.
+  const message = parseMessage({ id: "msg_1", author: { type: "agent" }, role: null, text: "Hi", data: null, context: null, operation: null, approval: null });
   assert.deepEqual(message, { id: "msg_1", author: { type: "agent" }, text: "Hi" });
   // A null where a member is required is still refused.
   assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), summary: null }));
-  assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), expires_at: null }), /requires expires_at/);
+  assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), expires_at: null }));
 });

@@ -1029,6 +1029,7 @@ export function parseMessage(value: unknown): Message {
     "data",
     "context",
     "operation",
+    "approval",
   ]);
   const text = source.text === undefined ? undefined : string(source.text, "message.text");
   const data = optionalRecord(source.data, "message.data");
@@ -1059,6 +1060,7 @@ export function parseMessage(value: unknown): Message {
     ...(data === undefined ? {} : { data }),
     ...(context === undefined ? {} : { context }),
     ...(operation === undefined ? {} : { operation }),
+    ...(approval === undefined ? {} : { approval }),
   } as Message;
 }
 

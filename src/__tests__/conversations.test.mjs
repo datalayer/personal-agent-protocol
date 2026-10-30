@@ -10,29 +10,30 @@ import test from "node:test";
 import {
   ConversationClient,
   ConversationError,
-  DpopFetchClient,
-  DpopProofProviders,
+  PapSession,
   SecretValue,
+  SessionFetchClient,
+  SessionSigners,
   buildPapReactor,
 } from "../../lib/index.js";
 
-const token = {
-  accessToken: new SecretValue("session-secret"),
-  tokenType: "DPoP",
-  expiresIn: 300,
-  scopes: [],
-  sessionKey: "K".repeat(43),
-  signedIn: false,
-};
+const session = () =>
+  new PapSession({
+    sid: "s".repeat(22),
+    sub: "usr_ada",
+    issuer: "https://auth.example",
+    clientId: "https://agent.example/agent.json",
+    tenantId: "tenant",
+  });
 
 function setup(fetch) {
   const plugin = {
     name: "@tests/pap-conversations",
     contributes: [
       {
-        point: DpopProofProviders,
-        value: { create: async () => new SecretValue("proof") },
-        options: { id: "proofs" },
+        point: SessionSigners,
+        value: { sign: async (request) => new SecretValue(`jwt-for-${request.method.toLowerCase()}`) },
+        options: { id: "jwts" },
       },
     ],
   };
@@ -41,21 +42,17 @@ function setup(fetch) {
     reactor,
     client: new ConversationClient({
       reactor,
-      transport: new DpopFetchClient({ reactor, fetch }),
+      transport: new SessionFetchClient({ reactor, fetch }),
     }),
   };
 }
 
-const request = {
-  token,
-  tenantId: "tenant",
-  issuer: "https://auth.example",
-};
+const request = { session: session() };
 
 test("starts and continues with distinct user-global message IDs", async () => {
   const calls = [];
   const fetch = async (input, init) => {
-    calls.push({ url: input.toString(), body: JSON.parse(init.body) });
+    calls.push({ url: input.toString(), body: JSON.parse(init.body), headers: init.headers });
     return new Response(
       JSON.stringify({
         conversation_id: "cnv_one",
@@ -92,6 +89,9 @@ test("starts and continues with distinct user-global message IDs", async () => {
   assert.notEqual(first.id, followUp.id);
   assert.equal(calls[0].body.message.id, first.id);
   assert.equal(calls[1].body.message.id, followUp.id);
+  // Signed out: the Session header alone.
+  assert.equal(calls[0].headers["Poppy-Session"], "jwt-for-post");
+  assert.ok(!("Authorization" in calls[0].headers));
 });
 
 test("surfaces message ID conflicts without response body details", async () => {
@@ -214,7 +214,7 @@ test("rejects event pages for a different conversation", async () => {
 
 test("a conversation refusal reads its code from the body or the challenge, and its extension", async () => {
   const answers = [
-    () => new Response(null, { status: 401, headers: { "WWW-Authenticate": 'DPoP error="invalid_token"' } }),
+    () => new Response(null, { status: 401, headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' } }),
     () =>
       new Response(JSON.stringify({ error: "extension_required", extension: "operations" }), {
         status: 403,
@@ -228,10 +228,50 @@ test("a conversation refusal reads its code from the body or the challenge, and 
   ];
   const { reactor, client } = setup(async () => answers.shift()());
   const read = () => client.readEvents("https://shop.example/poppy/conversations", "cnv_example", request);
-  // A token error may come only in WWW-Authenticate (§6).
+  // A token error may come only in WWW-Authenticate (§7).
   await assert.rejects(read(), (error) => error instanceof ConversationError && error.code === "invalid_token" && error.statusCode === 401);
   // extension_required names its extension in the JSON body at a conversation (§3.3).
   await assert.rejects(read(), (error) => error.code === "extension_required" && error.details.extension === "operations");
   await assert.rejects(read(), (error) => error.code === "invalid_request" && error.statusCode === 400);
   reactor.stop();
+});
+
+test("an unknown status reads as working, and an unknown responder as human", async () => {
+  const fetch = async () =>
+    new Response(
+      JSON.stringify({
+        conversation_id: "cnv_one",
+        events: [
+          { id: "evt_one", type: "state", created_at: "2026-10-10T12:00:00Z", status: "paused", responder: "robot" },
+        ],
+        cursor: "evt_one",
+        has_more: false,
+        status: "paused",
+        responder: "robot",
+      }),
+      { status: 200 },
+    );
+  const { reactor, client } = setup(fetch);
+  const page = await client.readEvents("https://api.example/conversations", "cnv_one", request);
+  reactor.stop();
+  assert.deepEqual([page.status, page.responder], ["working", "human"]);
+  assert.deepEqual([page.events[0].status, page.events[0].responder], ["working", "human"]);
+});
+
+test("an invalid_session while sending starts a new Session once, and the message goes again", async () => {
+  const bodies = [];
+  const fetch = async (_input, init) => {
+    bodies.push(JSON.parse(init.body));
+    return bodies.length === 1
+      ? new Response('{"error":"invalid_session"}', { status: 400 })
+      : new Response('{"conversation_id":"cnv_one","status":"working","responder":"agent"}', { status: 202 });
+  };
+  const { reactor, client } = setup(fetch);
+  const mine = session();
+  const before = mine.sid;
+  const message = { id: client.generateMessageId(), author: { type: "agent" }, text: "Hello" };
+  await client.send("https://api.example/conversations", "cnv_one", message, { session: mine });
+  reactor.stop();
+  assert.notEqual(mine.sid, before);
+  assert.deepEqual(bodies[0], bodies[1]);
 });

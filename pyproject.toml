@@ -129,3 +129,4 @@ ignore = ["FBT001", "FBT002", "FBT003"]
 # OAuth's token type and auth method names, which newer ruff reads as passwords.
 "personal_agent_protocol/models.py" = ["S105"]
 "personal_agent_protocol/sessions.py" = ["S105"]
+"personal_agent_protocol/cli_host.py" = ["S105"]

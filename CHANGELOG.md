@@ -28,8 +28,7 @@ target, upstream `3e9bada`: see the
   the `DPoP` scheme and a proof by its key at every API, conversation, feedback, MCP
   and browser `/authorize` request. Challenges name each scheme a resource accepts.
 - **Conformance:** a `dpop` suite: 25 cases in a world that binds, with nonces, in
-  all four pairings, and three the SDKs decide alone. `pap conformance run --world
-  dpop-binding` runs them against the demo company.
+  all four pairings, and three the SDKs decide alone. `pap conformance run --world dpop-binding` runs them against the demo company.
 - **Breaking:** `SessionClient.token_request` and `MediatedSignInClient.sign_in`
   take a `tenant_id` (and `token_request` the issuer's `dpop_signing_algs`). The
   `dpop_jkt` field is new in a company store's access-token record, so a durable

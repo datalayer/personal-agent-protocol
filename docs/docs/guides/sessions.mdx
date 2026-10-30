@@ -20,7 +20,8 @@ sends no request.
 
 The personal agent chooses each Session's `sid`: at least 128 random bits, in
 URL-safe characters. `PapSession` keeps it with `sub` (the User ID), the optional
-`agent_id`, `issuer`, `client_id`, and `tenant_id`; its `handle`, `ses_` and the
+`agent_id`, `issuer` (the Company's identifier: its issuer, or its HTTPS domain
+without one), `client_id`, and `tenant_id`; its `handle`, `ses_` and the
 `sid`, is its name for a person or a CLI.
 
 Every request to a company's APIs, conversations, feedback, browser-session
@@ -70,8 +71,8 @@ in OpenID Connect Core §8, except that the personal agent assigns it, one for
 each pair of user and company. It is not a profile identifier, must not contain
 or be derived from personal information (not even through a keyed hash), and
 must not be regenerated per process. Resolve it through the `pap.pairwiseUserIdStore` contribution
-using the local tenant/application, local user ID, and the exact verified OAuth
-issuer. Different issuers must receive unlinkable values.
+using the local tenant/application, local user ID, and the verified Company
+identifier (`company.identifier`). Different identifiers must receive unlinkable values.
 
 ## Python
 
@@ -131,7 +132,7 @@ carries a Session JWT from `pap.sessionSigner` (`SessionSigners` in TypeScript).
 For each attempt, the transport (`SessionHttpClient`, `SessionFetchClient`):
 
 - asks `pap.sessionSigner` for a fresh Session JWT, bound to the request's method
-  and URL, the company's issuer, and the access token's hash (`ath`) when one is
+  and URL, the Company's identifier, and the access token's hash (`ath`) when one is
   sent;
 - sends it in `Poppy-Session`, with any access token in `Authorization`, and
   refuses every redirect;

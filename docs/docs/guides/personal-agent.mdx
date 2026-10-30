@@ -11,7 +11,7 @@ This guide separates the working SDK surface from the remaining roadmap.
 1. Accept a company domain—not an arbitrary metadata URL—from the task.
 1. Call the discovery client.
 1. Choose only an interface and extension your runtime supports.
-1. Keep the returned issuer and endpoints attached to that verified company.
+1. Keep the returned identifier and endpoints attached to that verified company.
 
 ```python
 from personal_agent_protocol import DiscoveryClient
@@ -29,7 +29,9 @@ TypeScript callers should contribute a DNS-aware URL safety policy.
 ## Available now: start a signed-out session
 
 Resolve one pairwise identifier, the User ID, for each tenant, internal user,
-and exact verified company issuer: a pairwise subject identifier that the
+and verified company identifier (`company.identifier`, `companyIdentifier(company)`):
+its issuer, or `https://{organization.domain}` for a Company with no issuer. The
+User ID is a pairwise subject identifier that the
 personal agent assigns, one for each pair of user and company, never derived
 from personal information. The store creates a random value atomically and
 returns the same mapping across restarts.
@@ -41,12 +43,12 @@ user_id = await resolve_pairwise_user_id(
     reactor,
     tenant_id="application-42",
     local_user_id="local-user-42",
-    company_issuer=company.oauth_metadata.issuer,
+    company_issuer=company.identifier,
 )
 session = await SessionClient(reactor=reactor, http_client=http).start(
     client_id="https://agent.example/agent.json",
     pairwise_user_id=user_id,
-    issuer=company.oauth_metadata.issuer,
+    issuer=company.identifier,
     tenant_id="application-42",
 )
 ```
@@ -61,18 +63,44 @@ delegated key that `pap.signer` vouches for. Those host services must keep
 private keys outside model context and tool arguments. See [Signed-out
 sessions](/guides/sessions/) for the complete implemented boundary.
 
+## A Company with no issuer
+
+A Company offers sign-in only with an OAuth issuer (§3.2). A 404 from the domain's
+protected resource metadata, or valid metadata that lists no authorization server,
+says it has none, and that is valid only when `poppy.json` has no `auth.issuer`,
+no `access: signed_in` entry, and no sign-in extension. It then has no
+`oauth_metadata`, and its `identifier` is `https://{organization.domain}`: Session
+JWTs name it in `aud`, and User IDs are scoped by it, so each such domain is a
+separate Company. APIs, conversations, feedback and browser join work signed out.
+`company.require_oauth()` (`requireOauth(company)`) refuses a sign-in with
+`no_issuer`, before anything is sent.
+
+A timeout, another status, invalid metadata, or an issuer that fails to verify
+never selects the domain: discovery stops with its error. If the identifier does
+change, because a Company adds or changes its issuer, that means new User IDs,
+Agent IDs and Sessions, and earlier carts and conversations don't carry over.
+
+An `agent.protocols` entry of type `poppy` may hint `access: signed_in`
+(`account_access`, `accountAccess`): the interface needs account access before
+useful work can begin, so a host can sign in first. It grants nothing, and a value
+the SDK doesn't know reads as `session`.
+
 ## Choosing scopes and how to sign in
 
 Scopes are the company's own (`orders:read`, `payments:write`). Request only
-the scopes a task needs, from the issuer's `scopes_supported`, described in `auth.scopes` (or
-the company's OpenAPI description). `auth.scope_hints` says, per scope, what
+the scopes a task needs. `scopes_supported` may be incomplete: a scope documented by
+the company's APIs or sign-in extensions can be requested too, and a missing
+description or hint says nothing about whether it is safe to request. Descriptions
+are in `auth.scopes` or the company's OpenAPI description. `auth.scope_hints` says, per scope, what
 its most consequential operation `changes` (`none`, `reversible`,
 `irreversible`) and whether it touches `personal_data`, so a host can decide
 before sign-in which scopes need the user's go-ahead.
 
 A request that needs more than the token holds gets `insufficient_scope`, with
 the `scope` it needs, on an API, in a conversation's `authorization` event,
-and on Operations. Answer it with a refresh token that covers the scopes, or
+and on Operations. An `authorization` event can come with the matching
+`WWW-Authenticate` on a successful response: the two are one need, and the accepted
+message is never sent again. Answer it with a refresh token that covers the scopes, or
 by having the user sign in, then send the new access token in the same Session.
 The OAuth metadata says which modes the
 company offers (`offers_direct`, `offers_device`; `mediated_sign_in(company)` for
@@ -107,7 +135,8 @@ The lifecycle, in Python and TypeScript:
    Sign-In;
 1. **Implemented:** narrow scopes or a resource when refreshing with the
    [refresh token](/guides/account-tokens/);
-1. **Implemented:** join the agent's own browser to the Session (the
+1. **Implemented:** join the agent's own browser, one it controls and never the
+   User's (§6), to the Session (the
    [browser join form](/examples/browser-session/)), open a
    [conversation](/guides/conversations/), or call OpenAPI and MCP APIs (an
    access token, issued for the MCP server's own URL there);

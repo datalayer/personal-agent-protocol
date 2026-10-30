@@ -26,9 +26,16 @@ Both SDKs implement the asymmetric cryptographic operations of draft 0.3:
   signature, the method, URL, issuance window, access-token hash and replay
   state.
 
-ES256 is the default. PS384 is what blind signing produces. A company accepts
-both, and nothing else: RS256, symmetric algorithms and `none` are rejected even
-if the underlying JOSE library supports them.
+ES256 is the default. PS384 is what blind signing produces. A company MUST accept
+ES256 and SHOULD accept PS384; the reference companies accept both, and nothing else:
+RS256, symmetric algorithms and `none` are rejected even if the underlying JOSE
+library supports them.
+
+`token_endpoint_auth_signing_alg_values_supported` in the issuer's metadata describes
+client assertions only: it says nothing of delegation signatures, which have no
+discovery field, and `invalid_session` doesn't tell an unsupported algorithm from any
+other failure. An agent that needs blind signing may be unable to work with a company
+that doesn't support PS384.
 
 A DPoP proof is a separate signature by a separate key: see [DPoP](#dpop).
 
@@ -121,6 +128,8 @@ the spec says a personal agent SHOULD support it. Both SDKs do.
 - **Token requests** send a proof when the issuer's
   `dpop_signing_alg_values_supported` includes ES256, and only then: a company that
   lists nothing, or a list without ES256, gets exactly the request it got before.
+  At MCP, Bearer is the baseline: a token for an MCP server carries a proof only when
+  that server's protected resource metadata lists ES256, whatever the issuer lists.
   `use_dpop_nonce` with a `DPoP-Nonce` header is retried once, with a fresh proof and
   a fresh client assertion.
 - **Token responses** can be `Bearer` or `DPoP`, ignoring case. Binding is the

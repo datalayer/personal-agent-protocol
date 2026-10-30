@@ -65,9 +65,11 @@ it has a `device_authorization_endpoint` and the device code grant. The
 `grant_types_supported`, offers Mediated Sign-In.
 
 Scopes are the company's own: name them for what they allow (`orders:read`,
-`payments:write`), describe each in `auth.scopes` (or in an OpenAPI
-description the company lists), and list them in the metadata's
-`scopes_supported`. `auth.scope_hints` says, per scope, what its most
+`payments:write`). A company should describe each in `auth.scopes` (or in an
+OpenAPI description it lists), and list them in the metadata's
+`scopes_supported`; neither is required, and that list is discovery, not
+enforcement: agents can request scopes documented by an API or sign-in extension
+too. `auth.scope_hints` says, per scope, what its most
 consequential operation `changes` (`none`, `reversible`, `irreversible`) and
 whether it touches `personal_data`, so a personal agent can choose the
 narrowest scopes a task needs. Tasks the company chose not to offer through
@@ -79,6 +81,19 @@ model to enforce scopes. A request whose token lacks a scope gets
 `insufficient_scope` with the `scope` it needs, on APIs (`WWW-Authenticate`),
 in a conversation's `authorization` event, and on Operations. A signed-out
 request for account data gets a `401` challenge with the same `scope`.
+
+## Signed-out support without OAuth
+
+A company offers signed-out Sessions, APIs, conversations, feedback and browser
+join without running an authorization server (§3.2). Return 404 from the domain's
+protected resource metadata, or publish it with no authorization servers, and leave
+out `auth.issuer`, sign-in extensions and `access: signed_in`. Its identifier is then
+`https://{organization.domain}`, lowercase with no trailing slash: verify Session JWTs
+against it. Each such domain is a separate Company. When an issuer is added and the
+identifier changes, Users get new IDs and Sessions; the protocol doesn't link them.
+The reference companies do this with `oauth=False` (`oauth: false`): no OAuth server,
+no `auth`, a 404 at the protected resource metadata, and no Mediated Sign-In,
+Operations, aliases or DPoP, which each need an issuer.
 
 ## Implement in this order
 
@@ -169,7 +184,11 @@ implements, of draft 0.3 and Operations v2:
   refuses a token request with none; `dpop_nonces`, `dpopNonces`, asks for server
   nonces), at every API, conversation,
   feedback, MCP and browser `/authorize` request; a bad proof is `invalid_dpop_proof`,
-  HTTP 400 at the token endpoint and 401 at a resource;
+  HTTP 400 at the token endpoint and 401 at a resource. At MCP, Bearer stays the
+  baseline, so ordinary MCP clients stay supported: with binding on, the server's own
+  metadata lists ES256, its challenges name Bearer then DPoP, and `required` still gives
+  a Bearer token, without a proof, to a request whose `resource` is the MCP server's URL,
+  which works at that server alone;
 - refresh tokens, never bound, rotated on every refresh, narrower
   scopes only, `invalid_grant` for expired, revoked, or rotated-away tokens, and
   revocation that ends the whole sign-in: its refresh and access tokens stop
@@ -209,7 +228,16 @@ implements, of draft 0.3 and Operations v2:
   company checks cookie and code (used once, whatever the result) and that the
   agent authorized it, then answers
   `303` with its `__Host-poppy_session` cookie. `web_session(cookie)` tells the
-  company's own pages which Session a browser stands for.
+  company's own pages which Session a browser stands for. Each join replaces the
+  cookie, which stops working, so a join without an access token ends the sign-in of
+  the one before. The reference companies have no website login beyond this cookie. A
+  company with its own login cookie keeps it separate and checks the Session's cookie
+  first: a signed-out join leaves that login alone, a signed-in join clears it, and an
+  earlier login doesn't come back (§6 has a table of each case).
+
+A Session header is verified on every request that carries it. The draft requires that
+only before relying on Session claims, so a stateless endpoint may skip it; the
+reference companies don't.
 
 ### Reactor points
 

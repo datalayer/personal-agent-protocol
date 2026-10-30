@@ -14,12 +14,13 @@ import {
   ApiClient,
   ApiError,
   DeviceSignInClient,
-  DpopFetchClient,
-  OperationsClient,
   SessionClient,
-  approve,
+  SessionFetchClient,
+  accessTokenFromResponse,
   discoverCompany,
   openapiUrl,
+  parseOperation,
+  parseTokenResponse,
 } from "../../lib/index.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -37,18 +38,16 @@ async function world() {
   const { service: shop, plugin } = manzanita({ fetch, clock });
   sites["manzanita.example"] = shop;
   const host = await agentHost({ identity, fetch, clock });
-  const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
+  const transport = new SessionFetchClient({ reactor: host.reactor, fetch });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const session = await new SessionClient({ reactor: host.reactor, fetch }).start({
     clientId: identity.clientId,
     pairwiseUserId: PAIRWISE,
     issuer: metadata.issuer,
-    tokenEndpoint: metadata.token_endpoint,
     tenantId: TENANT,
   });
-  return { clock, fetch, identity, shop, plugin, host, transport, company, metadata, who, session };
+  return { clock, fetch, identity, shop, plugin, host, transport, company, metadata, session };
 }
 
 async function signIn(w, granted) {
@@ -60,7 +59,6 @@ async function signIn(w, granted) {
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    sessionKey: w.session.sessionKey,
     organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
     protectedResources: w.metadata.protected_resources,
   });
@@ -81,87 +79,128 @@ async function refusal(promise) {
   assert.fail("expected an ApiError");
 }
 
-test("signed out, then signed in: a read and a proposed exchange", async () => {
+test("signed out, then signed in: a read, and an exchange refused until it is approved", async () => {
   const w = await world();
   const api = new ApiClient({ transport: w.transport });
   assert.equal(openapiUrl(w.company.document), "https://manzanita.example/api/openapi.json");
 
-  // Signed out: the API names the scopes the request needs (§6).
-  const signedOut = await refusal(api.call("GET", ORDERS, { ...w.who, token: w.session }));
+  // Signed out: the API says which scope signing in would give (§7).
+  const signedOut = await refusal(api.call("GET", ORDERS, { session: w.session }));
   assert.equal(signedOut.code, "insufficient_scope");
   assert.deepEqual(signedOut.details, { scope: "orders:read" });
 
   const token = await signIn(w);
-  const read = await api.call("GET", ORDERS, { ...w.who, token });
+  const read = await api.call("GET", ORDERS, { session: w.session, token });
   assert.equal(read.status, 200);
   assert.deepEqual(read.body, { orders: [{ order_id: "ord_7Hk2", item: "Ridge Jacket, size M", status: "delivered" }] });
   assert.equal(read.operation, undefined);
 
-  // A consequential call answers 202 with an operation: proposed, not performed.
-  const proposed = await api.call("POST", `${ORDERS}/ord_7Hk2/exchanges`, { ...w.who, token, body: {} });
-  assert.equal(proposed.status, 202);
-  assert.equal(proposed.operation.state, "proposed");
+  // A consequential call is refused with an operation: nothing is done.
+  const exchange = `${ORDERS}/ord_7Hk2/exchanges`;
+  const proposed = await api.call("POST", exchange, { session: w.session, token, body: {} });
+  assert.equal(proposed.status, 403);
+  assert.ok(proposed.operation.operation_id);
   assert.deepEqual(w.plugin.executor.performed, []);
-  const done = await new OperationsClient({ reactor: w.host.reactor, transport: w.transport }).confirm(
-    w.shop.config.operationsEndpoint,
-    proposed.operation,
-    { ...w.who, token, approval: await approve(proposed.operation) },
-  );
-  assert.equal(done.operation.state, "succeeded");
-  assert.deepEqual(w.plugin.executor.performed, [proposed.operation.operation_id]);
+  const { operation_id, revision } = proposed.operation;
+  const done = await api.call("POST", exchange, {
+    session: w.session,
+    token,
+    body: {},
+    approval: { operation_id, revision },
+  });
+  assert.equal(done.status, 200);
+  assert.ok(done.body.summary.startsWith("Exchanged"));
+  assert.deepEqual(w.plugin.executor.performed, [operation_id]);
 });
 
 test("partial consent: a write that was not granted is insufficient_scope", async () => {
   const w = await world();
   const token = await signIn(w, ["orders:read"]);
-  const error = await refusal(new ApiClient({ transport: w.transport }).call("POST", `${ORDERS}/ord_7Hk2/exchanges`, { ...w.who, token, body: {} }));
+  const error = await refusal(
+    new ApiClient({ transport: w.transport }).call("POST", `${ORDERS}/ord_7Hk2/exchanges`, { session: w.session, token, body: {} }),
+  );
   assert.equal(error.code, "insufficient_scope");
   assert.equal(error.statusCode, 403);
+  assert.deepEqual(w.plugin.executor.performed, []);
 });
 
 /** An `ApiClient` over a scripted server answering every request with `answer`. */
 async function scripted(answer) {
   const w = await world();
-  const transport = new DpopFetchClient({ reactor: w.host.reactor, fetch: async () => answer() });
+  const transport = new SessionFetchClient({ reactor: w.host.reactor, fetch: async () => answer() });
   return { api: new ApiClient({ transport, maxResponseBytes: 64 }), w };
 }
 
-test("refusals: a challenge only, a rate limit, a bad 202, invalid and oversized bodies", async () => {
-  let s = await scripted(() => new Response(null, { status: 401, headers: { "WWW-Authenticate": 'DPoP error="insufficient_scope", scope="orders:write"' } }));
-  let error = await refusal(s.api.call("GET", ORDERS, { ...s.w.who, token: s.w.session }));
+const accessToken = () =>
+  accessTokenFromResponse(parseTokenResponse({ access_token: "access-secret", token_type: "Bearer", scope: "orders:read" }));
+
+test("refusals: a challenge, a rate limit, a bad operation, invalid and oversized bodies", async () => {
+  // Signed out: a 401 challenge with `scope` and no error code (§7).
+  let s = await scripted(() => new Response(null, { status: 401, headers: { "WWW-Authenticate": 'Bearer scope="orders:write"' } }));
+  let error = await refusal(s.api.call("GET", ORDERS, { session: s.w.session }));
   assert.equal(error.code, "insufficient_scope");
   assert.deepEqual(error.details, { scope: "orders:write" });
 
-  s = await scripted(() => new Response('{"error":"rate_limited"}', { status: 429, headers: { "Retry-After": "7" } }));
-  error = await refusal(s.api.call("POST", ORDERS, { ...s.w.who, token: s.w.session, body: {} }));
+  s = await scripted(() => new Response(null, { status: 401, headers: { "WWW-Authenticate": 'Bearer error="invalid_token", resource_metadata="https://mcp.example/prm"' } }));
+  error = await refusal(s.api.call("GET", ORDERS, { session: s.w.session, token: accessToken() }));
+  assert.equal(error.code, "invalid_token");
+  assert.deepEqual(error.details, { resource_metadata: "https://mcp.example/prm" });
+
+  s = await scripted(() => new Response(null, { status: 403, headers: { "WWW-Authenticate": 'Bearer error="insufficient_scope", scope="orders:write"' } }));
+  error = await refusal(s.api.call("GET", ORDERS, { session: s.w.session, token: accessToken() }));
+  assert.deepEqual([error.code, error.statusCode, error.details], ["insufficient_scope", 403, { scope: "orders:write" }]);
+
+  // A 429 has `Retry-After` and no body (§5.6).
+  s = await scripted(() => new Response(null, { status: 429, headers: { "Retry-After": "7" } }));
+  error = await refusal(s.api.call("POST", ORDERS, { session: s.w.session, body: {} }));
   assert.deepEqual([error.code, error.statusCode, error.details], ["rate_limited", 429, { retry_after: "7" }]);
 
-  s = await scripted(() => new Response('{"operation":{"operation_id":"op_1"}}', { status: 202 }));
-  error = await refusal(s.api.call("POST", ORDERS, { ...s.w.who, token: s.w.session, body: {} }));
-  assert.deepEqual([error.code, error.statusCode], ["invalid_operation", 202]);
+  s = await scripted(() => new Response(null, { status: 503, headers: { "Retry-After": "1" } }));
+  error = await refusal(s.api.call("POST", ORDERS, { session: s.w.session, body: {} }));
+  assert.deepEqual([error.statusCode, error.details], [503, { retry_after: "1" }]);
+
+  s = await scripted(() => new Response('{"error":"approval_required","operation":{}}', { status: 403 }));
+  error = await refusal(s.api.call("POST", ORDERS, { session: s.w.session, body: {} }));
+  assert.deepEqual([error.code, error.statusCode], ["invalid_operation", 403]);
 
   s = await scripted(() => new Response("not json", { status: 200 }));
-  assert.equal((await refusal(s.api.call("GET", ORDERS, { ...s.w.who, token: s.w.session }))).code, "invalid_json");
+  assert.equal((await refusal(s.api.call("GET", ORDERS, { session: s.w.session }))).code, "invalid_json");
 
   s = await scripted(() => new Response(JSON.stringify({ padding: "x".repeat(100) }), { status: 200 }));
-  assert.equal((await refusal(s.api.call("GET", ORDERS, { ...s.w.who, token: s.w.session }))).code, "response_too_large");
+  assert.equal((await refusal(s.api.call("GET", ORDERS, { session: s.w.session }))).code, "response_too_large");
 
   s = await scripted(() => new Response("<html>oops</html>", { status: 500 }));
-  assert.equal((await refusal(s.api.call("GET", ORDERS, { ...s.w.who, token: s.w.session }))).code, "invalid_json");
+  assert.equal((await refusal(s.api.call("GET", ORDERS, { session: s.w.session }))).code, "invalid_json");
 
   s = await scripted(() => new Response('{"detail":"no"}', { status: 500 }));
-  error = await refusal(s.api.call("GET", ORDERS, { ...s.w.who, token: s.w.session }));
+  error = await refusal(s.api.call("GET", ORDERS, { session: s.w.session }));
   assert.deepEqual([error.code, error.statusCode], ["api_request_failed", 500]);
 
   s = await scripted(() => new Response(null, { status: 204 }));
-  const deleted = await s.api.call("DELETE", ORDERS, { ...s.w.who, token: s.w.session, idempotencyKey: "del-1" });
+  const deleted = await s.api.call("DELETE", ORDERS, { session: s.w.session, idempotencyKey: "del-1" });
   assert.deepEqual(deleted, { status: 204, body: undefined, idempotencyKey: "del-1" });
 });
 
-test("the request: JSON in, host-owned credentials, no Bearer token", async () => {
+test("approval_required comes back as the operation, not an error", async () => {
+  const operation = {
+    operation_id: "exc_5Rt2",
+    revision: "r1",
+    summary: "Exchange it.",
+    expires_at: "2026-10-10T18:00:00Z",
+  };
+  const w = await world();
+  const fetch = async () => new Response(JSON.stringify({ error: "approval_required", operation }), { status: 403 });
+  const api = new ApiClient({ transport: new SessionFetchClient({ reactor: w.host.reactor, fetch }) });
+  const answered = await api.call("POST", ORDERS, { session: w.session, body: {}, idempotencyKey: "key-1" });
+  assert.equal(answered.status, 403);
+  assert.deepEqual(answered.operation, parseOperation(operation));
+  assert.equal(answered.idempotencyKey, "key-1");
+});
+
+test("the request: JSON in, host-owned credentials, an approval in its header", async () => {
   const w = await world();
   const seen = [];
-  const transport = new DpopFetchClient({
+  const transport = new SessionFetchClient({
     reactor: w.host.reactor,
     fetch: async (url, init) => {
       seen.push({ url: String(url), init });
@@ -169,12 +208,23 @@ test("the request: JSON in, host-owned credentials, no Bearer token", async () =
     },
   });
   const api = new ApiClient({ transport });
-  assert.deepEqual((await api.call("POST", ORDERS, { ...w.who, token: w.session, body: { note: "hi" } })).body, { ok: true });
+  const approval = { operation_id: "exc_5Rt2", revision: "r1" };
+  const token = accessToken();
+  const answered = await api.call("POST", ORDERS, { session: w.session, token, body: { note: "hi" }, approval });
+  assert.deepEqual(answered.body, { ok: true });
   const headers = new Headers(seen[0].init.headers);
   assert.equal(headers.get("content-type"), "application/json");
   assert.equal(headers.get("accept"), "application/json");
-  assert.match(headers.get("authorization"), /^DPoP /);
-  assert.ok(headers.get("dpop"));
+  assert.equal(headers.get("authorization"), "Bearer access-secret");
+  assert.ok(headers.get("poppy-session"));
+  assert.equal(headers.get("dpop"), null);
+  assert.equal(headers.get("poppy-approval"), 'operation_id="exc_5Rt2", revision="r1"');
   assert.equal(seen[0].init.body, '{"note":"hi"}');
+  // Signed out: the Session header alone.
+  await api.call("GET", ORDERS, { session: w.session });
+  const signedOut = new Headers(seen[1].init.headers);
+  assert.equal(signedOut.get("authorization"), null);
+  assert.ok(signedOut.get("poppy-session"));
+  assert.notEqual(signedOut.get("poppy-session"), headers.get("poppy-session"));
   assert.throws(() => new ApiClient({ transport, maxResponseBytes: 0 }), RangeError);
 });

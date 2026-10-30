@@ -1,0 +1,417 @@
+{
+  "suite": "dpop",
+  "profile": "0.3",
+  "description": "DPoP (spec 4.5, RFC 9449): a company that binds its access tokens, and a personal agent that proves. Cases with a world run against the reference company configured as that world says, in every language pairing; the default world stays Bearer, so the pairings cover both. Cases with a check are decided by the SDK alone.",
+  "worlds": {
+    "dpop-binding": {
+      "dpop_binding": "required",
+      "dpop_nonces": true
+    }
+  },
+  "cases": [
+    {
+      "id": "dpop.proof-only-when-listed",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-4.5-01"
+      ],
+      "description": "A token request carries a DPoP proof when the issuer's dpop_signing_alg_values_supported includes ES256, and only then: never to a company that lists nothing, or lists it without ES256.",
+      "check": "dpop_token_request",
+      "input": [
+        {
+          "algs": [
+            "ES256"
+          ],
+          "token_type": "DPoP"
+        },
+        {
+          "algs": [
+            "RS256",
+            "ES256"
+          ],
+          "token_type": "DPoP"
+        },
+        {
+          "algs": [
+            "ES256"
+          ],
+          "token_type": "Bearer"
+        },
+        {
+          "algs": null,
+          "token_type": "Bearer"
+        },
+        {
+          "algs": [],
+          "token_type": "Bearer"
+        },
+        {
+          "algs": [
+            "RS256"
+          ],
+          "token_type": "Bearer"
+        }
+      ],
+      "expect": [
+        {
+          "proof": true
+        },
+        {
+          "proof": true
+        },
+        {
+          "proof": true
+        },
+        {
+          "proof": false
+        },
+        {
+          "proof": false
+        },
+        {
+          "proof": false
+        }
+      ]
+    },
+    {
+      "id": "dpop.dpop-answer-needs-a-proof",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-4.5-01"
+      ],
+      "description": "A DPoP token type answering a request that sent no proof is refused: the token is bound to a key nothing showed.",
+      "check": "dpop_token_request",
+      "input": [
+        {
+          "algs": null,
+          "token_type": "DPoP"
+        },
+        {
+          "algs": [
+            "RS256"
+          ],
+          "token_type": "dpop"
+        }
+      ],
+      "expect": [
+        {
+          "proof": false,
+          "error": "unsupported_token_type"
+        },
+        {
+          "proof": false,
+          "error": "unsupported_token_type"
+        }
+      ]
+    },
+    {
+      "id": "dpop.proof-shape",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-4.5-01",
+        "GUIDE-jwt-05"
+      ],
+      "description": "A proof's header is typ dpop+jwt, alg ES256 and a public jwk; its claims are jti of at least 128 random bits, htm, htu without query or fragment, and iat, with ath for an access token and the nonce when given.",
+      "check": "dpop_proof_shape",
+      "input": {
+        "method": "post",
+        "url": "https://shop.example/api/orders?page=2#top",
+        "access_token": "opaque-access-token",
+        "nonce": "nonce-1"
+      },
+      "expect": {
+        "htm": "POST",
+        "htu": "https://shop.example/api/orders",
+        "ath": "ziBUtZEpY5JqE5mEv5FPe8jxfREaojHC2Eo9VfATgy4",
+        "nonce": "nonce-1"
+      }
+    },
+    {
+      "id": "dpop.metadata-lists-es256",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A company that binds tokens lists dpop_signing_alg_values_supported with ES256 in its OAuth metadata.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.token-bound-and-used",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-4.5-01",
+        "GUIDE-pa-session-03",
+        "GUIDE-co-session-06"
+      ],
+      "description": "Signing in sends a proof and gets a DPoP token, which works at the API with the DPoP scheme, a proof and the Session header.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.session-and-proof-different-keys",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "GUIDE-pa-session-03"
+      ],
+      "description": "The Session JWT and the proof are separate signatures by separate keys: the proof's key is neither the delegated key nor a key of the agent's jwks_uri.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.token-request-needs-a-proof",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A company that requires binding refuses a token request with no proof with 400 invalid_dpop_proof, and the grant still works afterwards.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.token-proof-for-another-url",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A token request's proof for another htu is 400 invalid_dpop_proof.",
+      "world": "dpop-binding",
+      "mutation": {
+        "htu": "https://elsewhere.example/oauth/token"
+      }
+    },
+    {
+      "id": "dpop.token-proof-with-ath",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A token request's proof with an ath is 400 invalid_dpop_proof.",
+      "world": "dpop-binding",
+      "mutation": {
+        "ath": "bm90LWFuLWFjY2Vzcy10b2tlbg"
+      }
+    },
+    {
+      "id": "dpop.token-proof-outside-the-window",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A token request's proof with an old iat is 400 invalid_dpop_proof.",
+      "world": "dpop-binding",
+      "mutation": {
+        "iat_offset": -3600
+      }
+    },
+    {
+      "id": "dpop.token-proof-wrong-typ",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A token request's proof that isn't typ dpop+jwt is 400 invalid_dpop_proof.",
+      "world": "dpop-binding",
+      "mutation": {
+        "typ": "JWT"
+      }
+    },
+    {
+      "id": "dpop.nonce-at-the-token-endpoint",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "GUIDE-pa-session-03",
+        "GUIDE-co-session-06",
+        "GUIDE-retry-02"
+      ],
+      "description": "A proof with no nonce gets 400 use_dpop_nonce and DPoP-Nonce; a fresh proof with it and a fresh client assertion are served.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.nonce-at-a-resource",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "GUIDE-pa-session-03",
+        "GUIDE-co-session-06",
+        "GUIDE-retry-02"
+      ],
+      "description": "A proof with no nonce gets 401 with a DPoP use_dpop_nonce challenge and DPoP-Nonce; the SDK retries once with a fresh proof and Session JWT, and keeps the nonce for the origin.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.bound-token-without-a-proof",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A bound token with no proof is 401 with a DPoP invalid_dpop_proof challenge.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.bound-token-as-bearer",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A bound token sent with the Bearer scheme is 401 invalid_token.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.proof-of-another-key",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A bound token with a good proof by another key is 401 invalid_dpop_proof.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.proof-replayed",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A proof used once is refused the second time, with a fresh Session JWT: 401 invalid_dpop_proof.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.proof-wrong-ath",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A proof whose ath is another token's is 401 invalid_dpop_proof.",
+      "world": "dpop-binding",
+      "mutation": {
+        "ath": "bm90LXRoZS10b2tlbi1zZW50"
+      }
+    },
+    {
+      "id": "dpop.proof-wrong-htm",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A proof for another method is 401 invalid_dpop_proof.",
+      "world": "dpop-binding",
+      "mutation": {
+        "htm": "DELETE"
+      }
+    },
+    {
+      "id": "dpop.proof-wrong-htu",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A proof for another URL is 401 invalid_dpop_proof.",
+      "world": "dpop-binding",
+      "mutation": {
+        "htu": "https://elsewhere.example/api"
+      }
+    },
+    {
+      "id": "dpop.proof-outside-the-window",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A proof with an old iat is 401 invalid_dpop_proof.",
+      "world": "dpop-binding",
+      "mutation": {
+        "iat_offset": -3600
+      }
+    },
+    {
+      "id": "dpop.session-header-still-checked",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "A good proof doesn't replace the Session header: without it the request is 400 invalid_session.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.refresh-after-the-key-is-lost",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "PAP-4.5-01"
+      ],
+      "description": "Refresh tokens aren't bound: after the DPoP key is lost a refresh gets a token for a new key, which works, and the old token is refused.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.conversation-and-stream",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "GUIDE-pa-session-03",
+        "GUIDE-co-session-06"
+      ],
+      "description": "A bound token works at conversations, sending and streaming, each request with a fresh proof.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.feedback",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "GUIDE-pa-session-03",
+        "GUIDE-co-session-06"
+      ],
+      "description": "A bound token works at the feedback endpoint.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.browser-join",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "GUIDE-pa-session-03",
+        "GUIDE-co-session-06"
+      ],
+      "description": "A bound token authorizes a browser join at {endpoint}/authorize.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.mcp-token-bound",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "GUIDE-pa-session-03",
+        "GUIDE-co-session-06"
+      ],
+      "description": "A token issued for the MCP server's url is bound too, and calls tools there with proofs.",
+      "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.mcp-challenge-keeps-resource-metadata",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06"
+      ],
+      "description": "An MCP server's challenge to a bound token with no proof is DPoP invalid_dpop_proof with resource_metadata.",
+      "world": "dpop-binding"
+    }
+  ]
+}

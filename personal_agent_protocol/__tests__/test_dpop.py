@@ -10,8 +10,10 @@ import hashlib
 import json
 from base64 import urlsafe_b64encode
 from collections.abc import Callable
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import cast
 from urllib.parse import parse_qs
 
 import httpx
@@ -23,13 +25,17 @@ from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untype
 
 from personal_agent_protocol import (
     CLOCKS,
+    DEVICE_CODE_GRANT,
     DPOP_PROVERS,
+    PROTECTED_INPUTS,
     SESSION_SIGNERS,
     SIGNERS,
     AccessToken,
+    AuthorizationError,
     DpopProofRequest,
     InMemoryDpopKeys,
     JoseDpopProver,
+    MediatedSignInClient,
     PapSession,
     SessionClient,
     SessionError,
@@ -40,7 +46,13 @@ from personal_agent_protocol import (
     build_pap_reactor,
 )
 from personal_agent_protocol.cli_host import FileDpopKeys, FileKeyStore
-from personal_agent_protocol.crypto import jwk_thumbprint, token_hash
+from personal_agent_protocol.company import CompanyConfig, MemoryReplayCache
+from personal_agent_protocol.company.verify import verify_dpop_proof
+from personal_agent_protocol.conformance import ConformanceContext, SignedIn
+from personal_agent_protocol.crypto import jwk_thumbprint, new_dpop_key, token_hash
+from personal_agent_protocol.demo.conformance import MANZANITA_SCENARIO, ManzanitaConformance
+from personal_agent_protocol.demo.kit import ScriptedInput
+from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, CONFIG
 from personal_agent_protocol.errors import ProofError
 from personal_agent_protocol.mcp import McpSessionAuth
 from personal_agent_protocol.reactor import first_contribution
@@ -487,3 +499,205 @@ async def test_mcp_sends_a_proof_and_retries_a_nonce_once() -> None:
     platform.stop()
     await http.aclose()
     assert client.dpop_nonces == {}
+
+
+# The reference company --------------------------------------------------------------
+
+
+def _config(**changes: object) -> CompanyConfig:
+    return replace(CONFIG, **changes)  # type: ignore[arg-type]
+
+
+def _binding(monkeypatch: pytest.MonkeyPatch, **changes: object) -> ManzanitaConformance:
+    monkeypatch.setattr("personal_agent_protocol.demo.conformance.world_config", lambda _: changes)
+    return ManzanitaConformance("a-test-world")
+
+
+async def _signed_in(ctx: ConformanceContext) -> SignedIn:
+    user = ctx.new_user()
+    return await ctx.sign_in(user, await ctx.session(user))
+
+
+def test_nonces_need_binding_and_binding_is_one_of_three() -> None:
+    with pytest.raises(ValueError, match="dpop_nonces need"):
+        _config(dpop_nonces=True)
+    with pytest.raises(ValueError, match="dpop_binding is"):
+        _config(dpop_binding="sometimes")
+
+
+@pytest.mark.asyncio
+async def test_by_default_nothing_is_listed_and_a_proof_changes_nothing() -> None:
+    world = ManzanitaConformance()
+    ctx = world.context()
+    assert (await ctx.metadata()).dpop_signing_alg_values_supported is None
+    signed = await _signed_in(ctx)
+    assert signed.token.token_type == "Bearer"
+    url = ctx.url(MANZANITA_SCENARIO.read_path)
+    headers = await ctx.auth(signed.session, "GET", url, signed.token)
+    assert headers["Authorization"].startswith("Bearer ") and "DPoP" not in headers
+    assert (await ctx.send("GET", url, headers=headers)).status_code == 200
+    headers = await ctx.auth(signed.session, "GET", url, signed.token)
+    headers["Authorization"] = headers["Authorization"].replace("Bearer", "DPoP")
+    refused = await ctx.send("GET", url, headers=headers)
+    assert refused.status_code == 401
+    assert refused.headers["www-authenticate"] == 'Bearer error="invalid_token"'
+
+
+@pytest.mark.asyncio
+async def test_optional_binds_with_a_proof_and_issues_bearer_without(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _binding(monkeypatch, dpop_binding="optional")
+    ctx = world.context()
+    assert (await ctx.metadata()).dpop_signing_alg_values_supported == ["ES256"]
+    bound = await _signed_in(ctx)
+    assert bound.token.token_type == "DPoP"
+    # No proof, because the host read nothing from the metadata: a Bearer token.
+    context = replace(await ctx.account_context("anyone"), dpop_signing_algs=None)
+    plain = await ctx.agent.accounts.refresh(bound.reference, context=context)
+    token = plain.token
+    assert token is not None and token.token_type == "Bearer"
+    url = ctx.url(MANZANITA_SCENARIO.read_path)
+    used = await ctx.agent.transport.request("GET", url, session=bound.session, token=token)
+    assert used.status_code == 200
+    # An unbound token sent as DPoP: every scheme the resource takes is challenged.
+    headers = await ctx.auth(bound.session, "GET", url, token)
+    headers["Authorization"] = headers["Authorization"].replace("Bearer", "DPoP")
+    refused = await ctx.send("GET", url, headers=headers)
+    assert refused.status_code == 401
+    assert refused.headers["www-authenticate"] == (
+        'Bearer error="invalid_token", DPoP error="invalid_token"'
+    )
+
+
+@pytest.mark.asyncio
+async def test_required_challenges_dpop_alone_signed_out_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _binding(monkeypatch, dpop_binding="required")
+    ctx = world.context()
+    session = await ctx.session(ctx.new_user())
+    url = ctx.url(MANZANITA_SCENARIO.read_path)
+    refused = await ctx.send("GET", url, headers=await ctx.auth(session, "GET", url))
+    assert refused.status_code == 401
+    assert refused.headers["www-authenticate"].startswith("DPoP scope=")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_proof_spends_no_device_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    world = _binding(monkeypatch, dpop_binding="required")
+    ctx = world.context()
+    metadata = await ctx.metadata()
+    device = ctx.agent.device
+    started = await device.begin(
+        device_authorization_endpoint=str(metadata.device_authorization_endpoint),
+        token_endpoint=metadata.token_endpoint,
+        issuer=metadata.issuer,
+        client_id=ctx.agent.identity.client_id,
+        scopes=MANZANITA_SCENARIO.scopes,
+        tenant_id=ctx.tenant_id,
+        organization=(await ctx.company()).document.organization,
+        protected_resources=metadata.protected_resources,
+    )
+    await ctx.driver.approve_device(started.user_code, account=ctx.driver.accounts[0])
+    await ctx.driver.wait(started.poll_interval)
+    # The host forgot the metadata, so no proof went.
+    with pytest.raises(AuthorizationError) as refused:
+        await device.poll(started.reference)
+    assert refused.value.code == "invalid_dpop_proof"
+    # A proof with a bad signature, at the token endpoint directly: the code stays good.
+    pending = await ctx.agent.vault.take(started.reference)
+    device_code = pending.device_code.get_secret_value()
+    form = {
+        "grant_type": DEVICE_CODE_GRANT,
+        "device_code": device_code,
+        **(await ctx.client_form()),
+    }
+    good = jwt.encode(
+        {"jti": "j" * 22, "htm": "POST", "htu": metadata.token_endpoint, "iat": 0},
+        (key := new_dpop_key()).private_key,
+        algorithm="ES256",
+        headers={"typ": "dpop+jwt", "jwk": key.public_jwk},
+    )
+    stale = await ctx.token_request(form, dpop=good)
+    assert stale.status_code == 400 and stale.json()["error"] == "invalid_dpop_proof"
+    form = {**form, **(await ctx.client_form())}
+    prover = first_contribution(ctx.agent.reactor, DPOP_PROVERS, "DPoP prover")
+    proof = await cast(JoseDpopProver, prover).prove(
+        DpopProofRequest(
+            method="POST",
+            url=metadata.token_endpoint,
+            tenant_id=ctx.tenant_id,
+            issuer=metadata.issuer,
+        )
+    )
+    await ctx.driver.wait(started.poll_interval)
+    issued = await ctx.token_request(form, dpop=proof.get_secret_value())
+    assert issued.status_code == 200 and issued.json()["token_type"] == "DPoP"
+
+
+@pytest.mark.asyncio
+async def test_a_mediated_sign_in_binds_its_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    world = _binding(monkeypatch, dpop_binding="required", dpop_nonces=True)
+    ctx = world.context()
+    company = await ctx.company()
+    typed = first_contribution(ctx.agent.reactor, PROTECTED_INPUTS, "protected input")
+    cast(ScriptedInput, typed).answers.extend([dict(ADA), {"code": ADA_CODE}])
+    client = MediatedSignInClient(reactor=ctx.agent.reactor, http_client=ctx.http)
+    started = await client.sign_in(
+        company=company,
+        client_id=ctx.agent.identity.client_id,
+        scopes=("orders:read",),
+        tenant_id=ctx.tenant_id,
+    )
+    assert started.status == "code_required" and started.reference is not None
+    done = await client.submit_code(started.reference)
+    assert done.token is not None
+    assert done.token.token_type == "DPoP"
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_dpop_header_is_refused_at_the_asgi_door(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = _binding(monkeypatch, dpop_binding="required")
+    ctx = world.context()
+    signed = await _signed_in(ctx)
+    url = ctx.url(MANZANITA_SCENARIO.read_path)
+    headers = await ctx.auth(signed.session, "GET", url, signed.token)
+    proof = headers.pop("DPoP")
+    twice = [*headers.items(), ("DPoP", proof), ("DPoP", proof)]
+    request = httpx.Request("GET", url, headers=twice)
+    answer = await ctx.http.send(request)
+    assert answer.status_code == 401 and answer.json()["error"] == "invalid_dpop_proof"
+
+
+@pytest.mark.asyncio
+async def test_a_private_key_or_another_curve_in_a_proof_is_refused() -> None:
+    now = NOW
+    private = new_dpop_key()
+    leaky = {**private.public_jwk, "d": "AAAA"}
+    other = ec.generate_private_key(ec.SECP384R1())
+    other_jwk = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(other.public_key()))
+    claims = {"jti": "j" * 22, "htm": "GET", "htu": ORDERS, "iat": int(now.timestamp())}
+    cases = [
+        jwt.encode(
+            claims,
+            private.private_key,
+            algorithm="ES256",
+            headers={"typ": "dpop+jwt", "jwk": leaky},
+        ),
+        jwt.encode(claims, other, algorithm="ES384", headers={"typ": "dpop+jwt", "jwk": other_jwk}),
+        jwt.encode(claims, "s" * 32, algorithm="HS256", headers={"typ": "dpop+jwt"}),
+    ]
+    for proof in cases:
+        with pytest.raises(ProofError) as refused:
+            await verify_dpop_proof(
+                proof,
+                method="GET",
+                url=ORDERS,
+                replay_cache=MemoryReplayCache(),
+                now=now,
+                window=timedelta(seconds=60),
+            )
+        assert refused.value.code == "invalid_dpop_proof"

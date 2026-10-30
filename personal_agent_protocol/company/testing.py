@@ -49,6 +49,7 @@ from .store import (
     CODE,
     CONVERSATION,
     DEVICE,
+    DPOP_NONCE,
     FEEDBACK,
     IDEMPOTENCY,
     JOIN_CODE,
@@ -70,6 +71,7 @@ from .store import (
     IdempotencyRecord,
     IssuedAccessToken,
     IssuedCode,
+    IssuedNonce,
     JoinCode,
     KnownClient,
     MessageReceipt,
@@ -113,6 +115,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
         expires_at=later,
         family="fam_1",
         resource="https://shop.example/mcp",
+        dpop_jkt="NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
     )
     web = WebSession(
         client_id="https://atlas.example",
@@ -187,6 +190,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
         BROWSER_COOKIE: web,
         JOIN_CODE: JoinCode("browser_digest", web),
         REPLAY: ReplayMark(),
+        DPOP_NONCE: IssuedNonce(),
         SIGN_IN_ATTEMPTS: SignInAttempts(3, later),
         FEEDBACK: StoredFeedback(
             "fb_1", "Pay with a gift card", "No gift card field.", "c", "u", now

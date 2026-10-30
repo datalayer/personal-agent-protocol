@@ -20,7 +20,8 @@ What it implements of draft 0.3 (upstream 3e9bada) and Operations v2:
   order (delegation, delegated key, claims, access token), Sessions kept by
   `client_id` and `sid`, ended ones remembered; any failure is
   `invalid_session` (HTTP 400). Its own access token without the header is refused.
-- OAuth (§4): Bearer access tokens and refresh tokens; Direct Sign-In, Device
+- OAuth (§4): access tokens, Bearer or, with `dpop_binding`, bound with DPoP (§4.5),
+  and refresh tokens, never bound; Direct Sign-In, Device
   Sign-In with `authorization_pending` and `slow_down`, refresh with rotation,
   narrower scopes and `resource` (RFC 8707: `invalid_target` for one it doesn't
   serve), and revocation (RFC 7009) whose sign-in ends whole.
@@ -77,6 +78,7 @@ from pydantic import SecretStr, ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from ..apis import IDEMPOTENCY_KEY, WRITE_METHODS
+from ..crypto import DPOP_ALGORITHM
 from ..errors import (
     PersonalAgentProtocolError,
     ProofError,
@@ -160,6 +162,7 @@ from .store import (
     CODE,
     CONVERSATION,
     DEVICE,
+    DPOP_NONCE,
     FEEDBACK,
     IDEMPOTENCY,
     JOIN_CODE,
@@ -178,6 +181,7 @@ from .store import (
     IdempotencyRecord,
     IssuedAccessToken,
     IssuedCode,
+    IssuedNonce,
     JoinCode,
     JsonObject,
     KnownClient,
@@ -201,6 +205,7 @@ from .verify import (
     DelegationCache,
     unverified_session_issuer,
     verify_assertion,
+    verify_dpop_proof,
     verify_session_jwt,
 )
 
@@ -370,6 +375,16 @@ class CompanyConfig:
     #: How long an API write's `Idempotency-Key` is remembered in its Session, with the
     #: original response a repeated key gets again (guides, *Retries*: a set time, a day).
     idempotency_lifetime: timedelta = timedelta(days=1)
+    #: Whether access tokens are bound with DPoP, the Company's choice (§4.5). `off` lists
+    #: no algorithm and issues Bearer tokens. `optional` binds a token when a proof comes
+    #: with its request. `required` also refuses a token request with no proof.
+    dpop_binding: Literal["off", "optional", "required"] = "off"
+    #: Proofs must carry a nonce the company gave (RFC 9449 §8, §9).
+    dpop_nonces: bool = False
+    #: How long a given nonce is accepted.
+    dpop_nonce_lifetime: timedelta = timedelta(minutes=5)
+    #: The acceptance window of a proof's `iat`.
+    dpop_proof_window: timedelta = timedelta(seconds=60)
 
     def __post_init__(self) -> None:  # noqa: C901 - one branch per protocol rule
         _check_aliases(self.domain, self.aliases)
@@ -379,7 +394,13 @@ class CompanyConfig:
             access_token_lifetime=self.access_token_lifetime,
             refresh_token_lifetime=self.refresh_token_lifetime,
             session_jwt_window=self.session_jwt_window,
+            dpop_nonce_lifetime=self.dpop_nonce_lifetime,
+            dpop_proof_window=self.dpop_proof_window,
         )
+        if self.dpop_binding not in ("off", "optional", "required"):
+            raise ValueError("dpop_binding is off, optional or required")
+        if self.dpop_nonces and self.dpop_binding == "off":
+            raise ValueError("dpop_nonces need dpop_binding")
         for name, value in (("device_page", self.device_page), ("consent_page", self.consent_page)):
             if value is None:
                 continue
@@ -423,6 +444,16 @@ class CompanyConfig:
     @property
     def base(self) -> str:
         return f"https://{self.domain}"
+
+    @property
+    def token_schemes(self) -> tuple[str, ...]:
+        """The `Authorization` schemes a resource accepts, each challenged (§7)."""
+
+        return {
+            "off": ("Bearer",),
+            "optional": ("Bearer", "DPoP"),
+            "required": ("DPoP",),
+        }[self.dpop_binding]
 
     def organization_domain(self, domain: str | None = None) -> str:
         """The domain a discovery document names: the company's own, or one of its aliases."""
@@ -627,11 +658,18 @@ class _RateLimitedError(_RefusedError):
         self.retry_after = retry_after
 
 
-_CHALLENGED = frozenset({"invalid_token", "insufficient_scope", _SIGNED_OUT})
+#: A proof's refusals: challenged as `DPoP`, the one scheme that has proofs (RFC 9449 §7.1).
+_PROOF_REFUSALS = frozenset({"invalid_dpop_proof", "use_dpop_nonce"})
+_CHALLENGED = frozenset({"invalid_token", "insufficient_scope", _SIGNED_OUT, *_PROOF_REFUSALS})
 
 
 def _json_error(
-    status: int, error: str, headers: Mapping[str, str] | None = None, **extra: object
+    status: int,
+    error: str,
+    headers: Mapping[str, str] | None = None,
+    *,
+    schemes: Sequence[str] = ("Bearer",),
+    **extra: object,
 ) -> CompanyResponse:
     """A JSON error; a token error at 401 or 403 in `WWW-Authenticate` too (§7).
 
@@ -641,7 +679,7 @@ def _json_error(
 
     out = {"Cache-Control": "no-store", **(headers or {})}
     if error in _CHALLENGED and status in {401, 403}:
-        out["WWW-Authenticate"] = _challenge("Bearer", error, extra)
+        out["WWW-Authenticate"] = _challenges(schemes, error, extra)
     if error == _SIGNED_OUT:
         return CompanyResponse(status, None, out)
     return CompanyResponse(status, {"error": error, **extra}, out)
@@ -656,6 +694,13 @@ def _challenge(scheme: str, error: str, extra: Mapping[str, object]) -> str:
         if isinstance(value, str):
             parts.append(f'{name}="{value}"')
     return f"{scheme} {', '.join(parts)}" if parts else scheme
+
+
+def _challenges(schemes: Sequence[str], error: str, extra: Mapping[str, object]) -> str:
+    """A challenge for each scheme the resource accepts (§7)."""
+
+    named = ("DPoP",) if error in _PROOF_REFUSALS else schemes
+    return ", ".join(_challenge(scheme, error, extra) for scheme in named)
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
@@ -967,7 +1012,13 @@ class CompanyService:
         except _RateLimitedError as limited:
             return self._rate_limited(limited.retry_after)
         except _RefusedError as refused:
-            return _json_error(refused.status, refused.error, refused.headers, **refused.extra)
+            return _json_error(
+                refused.status,
+                refused.error,
+                refused.headers,
+                schemes=self.config.token_schemes,
+                **refused.extra,
+            )
         except (SessionError, ProofError) as error:
             status = error.status_code or (401 if error.code == "invalid_client" else 400)
             if error.code == "invalid_session":
@@ -1094,6 +1145,8 @@ class CompanyService:
             metadata["device_authorization_endpoint"] = config.device_endpoint
         if config.mediated_fields:
             grants.append(MEDIATED_GRANT)
+        if config.dpop_binding != "off":
+            metadata["dpop_signing_alg_values_supported"] = [DPOP_ALGORITHM]
         return metadata
 
     # OAuth -------------------------------------------------------------------------
@@ -1173,17 +1226,82 @@ class CompanyService:
         form = dict(parse_qsl(request.body.decode()))
         grant = form.get("grant_type")
         client_id = await self._client(form)
+        # Before any grant is used: a proof refused spends no code.
+        jkt = await self._token_binding(request)
         if grant == REFRESH_TOKEN_GRANT:
-            return await self._refresh_grant(form, client_id)
+            return await self._refresh_grant(form, client_id, jkt)
         if grant == AUTHORIZATION_CODE_GRANT and self.config.direct:
-            return await self._code_grant(form, client_id)
+            return await self._code_grant(form, client_id, jkt)
         if grant == DEVICE_CODE_GRANT and self.config.device:
-            return await self._device_grant(form, client_id)
+            return await self._device_grant(form, client_id, jkt)
         if grant == MEDIATED_GRANT and self.config.mediated_fields:
             # The request itself uses the extension: no client metadata entry is asked
             # for, and `extension_required` can't refuse it (§3.3).
-            return await self._mediated_grant(form, client_id)
+            return await self._mediated_grant(form, client_id, jkt)
         raise _RefusedError(400, "unsupported_grant_type")
+
+    async def _token_binding(self, request: CompanyRequest) -> str | None:
+        """The thumbprint the tokens of this request are bound to, or `None` for Bearer."""
+
+        if self.config.dpop_binding == "off":
+            return None
+        if request.headers.get("dpop"):
+            return await self._dpop_proof(request, status=400)
+        if self.config.dpop_binding == "required":
+            raise _RefusedError(400, "invalid_dpop_proof")
+        return None
+
+    async def _dpop_proof(
+        self,
+        request: CompanyRequest,
+        *,
+        status: int,
+        access_token: str | None = None,
+        bound_to: str | None = None,
+    ) -> str:
+        """Check the request's proof (RFC 9449 §4.3): its key's thumbprint.
+
+        `status` is the endpoint's: 400 at the token endpoint, as OAuth errors are,
+        and 401 at a resource. `bound_to` is the key an access token needs. With
+        `dpop_nonces`, a proof with no nonce the company gave is `use_dpop_nonce`, with
+        one in `DPoP-Nonce`.
+        """
+
+        proof = request.headers.get("dpop")
+        if not proof:
+            raise _RefusedError(status, "invalid_dpop_proof")
+        try:
+            verified = await verify_dpop_proof(
+                proof,
+                method=request.method,
+                url=request.url,
+                replay_cache=self._replay(),
+                now=self._now(),
+                window=self.config.dpop_proof_window,
+                access_token=access_token,
+            )
+        except ProofError as exc:
+            raise _RefusedError(status, "invalid_dpop_proof") from exc
+        if bound_to is not None and not hmac.compare_digest(verified.thumbprint, bound_to):
+            raise _RefusedError(status, "invalid_dpop_proof")
+        if self.config.dpop_nonces and not await self._dpop_nonce_given(verified.nonce):
+            raise _RefusedError(
+                status, "use_dpop_nonce", headers={"DPoP-Nonce": await self._give_dpop_nonce()}
+            )
+        return verified.thumbprint
+
+    async def _give_dpop_nonce(self) -> str:
+        nonce = self._id("nonce")
+        await self.store.put(
+            DPOP_NONCE,
+            nonce,
+            IssuedNonce().to_json(),
+            expires_at=self._now() + self.config.dpop_nonce_lifetime,
+        )
+        return nonce
+
+    async def _dpop_nonce_given(self, nonce: str | None) -> bool:
+        return nonce is not None and await self.store.get(DPOP_NONCE, nonce) is not None
 
     def _resource(self, form: Mapping[str, str]) -> str | None:
         """The `resource` a token is issued for (RFC 8707, §4.5): one this company serves.
@@ -1209,7 +1327,9 @@ class CompanyService:
         read = tuple(scope for scope in self.config.scopes if scope not in self.config.write_scopes)
         return read or self.config.scopes
 
-    async def _refresh_grant(self, form: Mapping[str, str], client_id: str) -> CompanyResponse:
+    async def _refresh_grant(
+        self, form: Mapping[str, str], client_id: str, jkt: str | None
+    ) -> CompanyResponse:
         """An access token from a refresh token, which is rotated (§4.4).
 
         Narrower scopes only; `resource` for one service. Exactly one refresh claims
@@ -1266,6 +1386,7 @@ class CompanyService:
             refresh_token=rotated,
             # A refresh naming no scope gets them in the response: the agent can't know.
             requested=requested,
+            jkt=jkt,
         )
         family = await self._read(ACCOUNT_FAMILY, grant.family, AccountFamily.from_json)
         if family is None or family.revoked:
@@ -1365,7 +1486,9 @@ class CompanyService:
         if changed is None:
             raise KeyError("unknown user code")
 
-    async def _device_grant(self, form: Mapping[str, str], client_id: str) -> CompanyResponse:
+    async def _device_grant(
+        self, form: Mapping[str, str], client_id: str, jkt: str | None
+    ) -> CompanyResponse:
         key = _digest(form.get("device_code", ""))
         for _ in range(_CAS_ATTEMPTS):
             entry = await self.store.get(DEVICE, key)
@@ -1402,7 +1525,7 @@ class CompanyService:
             raise _RefusedError(400, "invalid_grant")
         await self.store.delete(USER_CODE, approved.user_code)
         return await self._sign_in(
-            client_id, approved.account_id, approved.granted, requested=approved.scopes
+            client_id, approved.account_id, approved.granted, requested=approved.scopes, jkt=jkt
         )
 
     async def _forget_device(self, key: str, pending: PendingDevice) -> None:
@@ -1501,6 +1624,7 @@ class CompanyService:
         scopes: tuple[str, ...],
         *,
         requested: tuple[str, ...],
+        jkt: str | None,
     ) -> CompanyResponse:
         """A sign-in: a new refresh token, and an access token (§4.7).
 
@@ -1543,6 +1667,7 @@ class CompanyService:
             resource=None,
             refresh_token=refresh_token,
             requested=requested,
+            jkt=jkt,
         )
 
     async def _remember_family(self, client_id: str, account_id: str, family: str) -> None:
@@ -1570,10 +1695,13 @@ class CompanyService:
         resource: str | None,
         refresh_token: str | None,
         requested: tuple[str, ...],
+        jkt: str | None,
     ) -> CompanyResponse:
-        """A token response (§4.7): a Bearer access token, and the refresh token if any.
+        """A token response (§4.7): an access token, and the refresh token if any.
 
-        `scope` follows RFC 6749: left out when it grants exactly the scopes requested.
+        Bearer, or `DPoP` bound to the key `jkt` names; a refresh token is never bound
+        (RFC 9449 §5). `scope` follows RFC 6749: left out when it grants exactly the
+        scopes requested.
         """
 
         access_token = self._id("at")
@@ -1589,6 +1717,7 @@ class CompanyService:
                 expires_at=expires_at,
                 family=family,
                 resource=resource,
+                dpop_jkt=jkt,
             ).to_json(),
             expires_at=expires_at,
         )
@@ -1597,7 +1726,7 @@ class CompanyService:
             raise _RefusedError(400, "invalid_grant")
         body: dict[str, object] = {
             "access_token": access_token,
-            "token_type": "Bearer",
+            "token_type": "Bearer" if jkt is None else "DPoP",
             "expires_in": int(self.config.access_token_lifetime.total_seconds()),
         }
         if set(scopes) != set(requested):
@@ -1817,7 +1946,9 @@ class CompanyService:
             raise KeyError("unknown, used, or expired sign-in request")
         return pending
 
-    async def _code_grant(self, form: Mapping[str, str], client_id: str) -> CompanyResponse:
+    async def _code_grant(
+        self, form: Mapping[str, str], client_id: str, jkt: str | None
+    ) -> CompanyResponse:
         taken = await self.store.take(CODE, _digest(form.get("code", "")))
         issued = None if taken is None else IssuedCode.from_json(taken)
         if (
@@ -1835,7 +1966,7 @@ class CompanyService:
         if not hmac.compare_digest(challenge.decode(), issued.code_challenge):
             raise _RefusedError(400, "invalid_grant")
         return await self._sign_in(
-            client_id, issued.account_id, issued.scopes, requested=issued.requested
+            client_id, issued.account_id, issued.scopes, requested=issued.requested, jkt=jkt
         )
 
     def _redirect_url(self, redirect_uri: str, **values: str) -> str:
@@ -1976,7 +2107,11 @@ class CompanyService:
                 403,
                 "extension_required",
                 headers={
-                    "WWW-Authenticate": 'Bearer error="extension_required", extension="operations"'
+                    "WWW-Authenticate": _challenges(
+                        self.config.token_schemes,
+                        "extension_required",
+                        {"extension": "operations"},
+                    )
                 },
                 extension="operations",
             )
@@ -2014,11 +2149,15 @@ class CompanyService:
 
         `resource` is the service the request is for: `None` for the company's own
         endpoints, which take the default token, or the MCP server's `url`. Returns
-        the access token's digest (or `""`) and the caller's Session.
+        the access token's digest (or `""`) and the caller's Session. A token bound with
+        DPoP needs the `DPoP` scheme and a proof by its key; an unbound one is sent as
+        `Bearer` (§4.5, RFC 9449 §7.1), each after the Session header's checks.
         """
 
         scheme, _, token = request.headers.get("authorization", "").partition(" ")
-        presented = token if scheme.lower() == "bearer" and token else None
+        kind = scheme.lower()
+        accepted = kind == "bearer" or (kind == "dpop" and self.config.dpop_binding != "off")
+        presented = token if accepted and token else None
         if request.headers.get("authorization") and presented is None:
             raise _RefusedError(401, "invalid_token")
         header = request.headers.get(SESSION_HEADER)
@@ -2072,6 +2211,12 @@ class CompanyService:
                 # Not issued for this service: where to read which one it is (§4.5, §7).
                 raise _RefusedError(
                     401, "invalid_token", resource_metadata=self._resource_metadata_url(resource)
+                )
+            if (issued.dpop_jkt is not None) != (kind == "dpop"):
+                raise _RefusedError(401, "invalid_token")
+            if issued.dpop_jkt is not None:
+                await self._dpop_proof(
+                    request, status=401, access_token=presented, bound_to=issued.dpop_jkt
                 )
         session_key = await self._session(verified)
         session = CallerSession(
@@ -2242,11 +2387,13 @@ class CompanyService:
             429, None, {"Retry-After": str(retry_after), "Cache-Control": "no-store"}
         )
 
-    async def _mediated_grant(self, form: Mapping[str, str], client_id: str) -> CompanyResponse:
+    async def _mediated_grant(
+        self, form: Mapping[str, str], client_id: str, jkt: str | None
+    ) -> CompanyResponse:
         """The grant's first request: credentials and `scope` (Mediated Sign-In 3)."""
 
         if "sign_in_id" in form or "one_time_code" in form:
-            return await self._mediated_code(form, client_id)
+            return await self._mediated_code(form, client_id, jkt)
         config = self.config
         granted = tuple(s for s in form.get("scope", "").split(" ") if s)
         if not granted or any(s not in config.mediated_grant_scopes for s in granted):
@@ -2280,7 +2427,7 @@ class CompanyService:
         if authenticated.code_reference is None:
             await self._attempts_cleared(keys)
             return await self._sign_in(
-                client_id, authenticated.account_id, granted, requested=granted
+                client_id, authenticated.account_id, granted, requested=granted, jkt=jkt
             )
         locked = await self._locked_for((code_key,))
         if locked is not None:
@@ -2314,7 +2461,9 @@ class CompanyService:
             expires_in=max(1, left),
         )
 
-    async def _mediated_code(self, form: Mapping[str, str], client_id: str) -> CompanyResponse:
+    async def _mediated_code(
+        self, form: Mapping[str, str], client_id: str, jkt: str | None
+    ) -> CompanyResponse:
         """The grant's continuation: `sign_in_id` and the code, nothing else (Mediated 4)."""
 
         sign_in_id, code = form.get("sign_in_id"), form.get("one_time_code")
@@ -2365,7 +2514,7 @@ class CompanyService:
             raise _RefusedError(400, "invalid_grant")
         await self._attempts_cleared((*completed.attempt_keys, code_key))
         return await self._sign_in(
-            client_id, completed.account_id, completed.scopes, requested=completed.scopes
+            client_id, completed.account_id, completed.scopes, requested=completed.scopes, jkt=jkt
         )
 
     async def _mediated_ended(
@@ -3301,7 +3450,7 @@ class CompanyService:
         scope: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> CompanyResponse:
-        """A token refusal at the MCP server: the `Bearer` challenge with `resource_metadata`.
+        """A token refusal at the MCP server: its challenges, with `resource_metadata`.
 
         RFC 9728 §5.1: so a client with stale metadata learns where to read it (§4.5,
         §7). A signed-out call for the account gets the challenge with `scope` and no
@@ -3318,7 +3467,7 @@ class CompanyService:
             status,
             body,
             {
-                "WWW-Authenticate": _challenge("Bearer", error, extra),
+                "WWW-Authenticate": _challenges(self.config.token_schemes, error, extra),
                 "Cache-Control": "no-store",
                 **(headers or {}),
             },

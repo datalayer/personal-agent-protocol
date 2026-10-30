@@ -30,7 +30,7 @@ import httpx
 import jwt
 import pytest
 
-from personal_agent_protocol.conformance import ConformanceReport, run_conformance
+from personal_agent_protocol.conformance import ConformanceReport, run_conformance, select_cases
 from personal_agent_protocol.demo.conformance import (
     MANZANITA_SCENARIO,
     DemoDriver,
@@ -58,12 +58,17 @@ TYPESCRIPT_COMPANY_GAPS: dict[str, str] = {}
 #: Cases the TypeScript agent's suite does not pass against the Python company.
 TYPESCRIPT_AGENT_GAPS: dict[str, str] = {}
 
+#: The conformance worlds the TypeScript side runs. `None` is the default world, Bearer
+#: tokens; each pairing runs each of them, a world's report beside the pairing's.
+TYPESCRIPT_WORLDS: tuple[str | None, ...] = (None,)
 
-def _save(name: str, report: dict[str, Any]) -> None:
+
+def _save(name: str, report: dict[str, Any], world: str | None) -> None:
     directory = os.environ.get("PAP_CONFORMANCE_REPORTS")
     if directory:
         Path(directory).mkdir(parents=True, exist_ok=True)
-        (Path(directory) / f"{name}.json").write_text(json.dumps(report, indent=2) + "\n")
+        stem = name if world is None else f"{name}.{world}"
+        (Path(directory) / f"{stem}.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
 class NodeDriver:
@@ -125,7 +130,10 @@ def _print(title: str, report: ConformanceReport) -> None:
 
 
 @pytest.mark.asyncio
-async def test_python_runner_against_the_typescript_company(tmp_path: Path) -> None:
+@pytest.mark.parametrize("world", TYPESCRIPT_WORLDS)
+async def test_python_runner_against_the_typescript_company(
+    tmp_path: Path, world: str | None
+) -> None:
     from reactor import PluginManifest  # noqa: F401 - the runner's host needs Reactor
 
     from personal_agent_protocol.conformance import ConformanceContext
@@ -143,6 +151,7 @@ async def test_python_runner_against_the_typescript_company(tmp_path: Path) -> N
                 "key": str(key),
                 "ca": str(ca),
                 "clock": clock.now().isoformat().replace("+00:00", "Z"),
+                "world": world,
                 "agents": {
                     identity.domain: {"/agent.json": identity.metadata, "/jwks.json": identity.jwks}
                     for identity in (atlas, plain)
@@ -175,7 +184,7 @@ async def test_python_runner_against_the_typescript_company(tmp_path: Path) -> N
             browser_http=browser,
         )
         try:
-            report = await run_conformance(context)
+            report = await run_conformance(context, cases=select_cases(world=world))
         finally:
             await http.aclose()
             await browser.aclose()
@@ -183,7 +192,7 @@ async def test_python_runner_against_the_typescript_company(tmp_path: Path) -> N
         await node.send({"op": "close"})
     finally:
         await node.stop()
-    _save("python-agent-typescript-company", report.to_json())
+    _save("python-agent-typescript-company", report.to_json(), world)
     _print("Python agent ↔ TypeScript company", report)
     failed = {r.id: r.message for r in report.results if r.outcome == "failed"}
     assert failed.keys() == TYPESCRIPT_COMPANY_GAPS.keys(), failed
@@ -247,8 +256,11 @@ async def _answer(driver: DemoDriver, line: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_typescript_runner_against_the_python_company(tmp_path: Path) -> None:
-    world = ManzanitaConformance()
+@pytest.mark.parametrize("world_name", TYPESCRIPT_WORLDS)
+async def test_typescript_runner_against_the_python_company(
+    tmp_path: Path, world_name: str | None
+) -> None:
+    world = ManzanitaConformance(world_name)
     driver = world.driver
 
     def agent(identity: AgentIdentity, name: str) -> dict[str, Any]:
@@ -276,6 +288,7 @@ async def test_typescript_runner_against_the_python_company(tmp_path: Path) -> N
                     "accounts": list(driver.accounts),
                     "capabilities": sorted(driver.capabilities),
                     "clock": world.clock.now().isoformat().replace("+00:00", "Z"),
+                    "world": world_name,
                     "agent": agent(world.atlas, "atlas"),
                     "other": agent(world.plain, "plain"),
                 }
@@ -296,7 +309,7 @@ async def test_typescript_runner_against_the_python_company(tmp_path: Path) -> N
                     await node.send({"error": f"{type(error).__name__}: {error}"})
         finally:
             await node.stop()
-    _save("typescript-agent-python-company", document)
+    _save("typescript-agent-python-company", document, world_name)
     report = ConformanceReport.from_json(document)
     _print("TypeScript agent ↔ Python company", report)
     failed = {r.id: r.message for r in report.results if r.outcome == "failed"}

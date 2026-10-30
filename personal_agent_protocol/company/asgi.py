@@ -16,6 +16,8 @@ from .service import CompanyRequest, CompanyService
 #: TypeScript company's Node adapter.
 MAX_BODY_BYTES = 1 << 20
 
+#: Headers a repeat of which is joined, so the joined value fails its check (§5.3, RFC 9449 §4.3).
+_JOINED_HEADERS = ("poppy-session", "dpop")
 #: Headers a request carries at most once: a second is refused (`400`).
 #: One credential per request: a repeated one is never merged or picked from (RFC 6750 §2).
 #: A repeated `Poppy-Session` header is joined, so it fails as `invalid_session` (§5.3).
@@ -48,12 +50,12 @@ def _encoded(headers: Mapping[str, str]) -> list[tuple[bytes, bytes]]:
 
 
 def _headers(raw: list[tuple[bytes, bytes]]) -> dict[str, str]:
-    """Lower-case names; a repeated `Poppy-Session` header is joined, so it fails (§5.3)."""
+    """Lower-case names; a repeated `Poppy-Session` or `DPoP` header is joined, so it fails."""
 
     headers: dict[str, str] = {}
     for raw_name, raw_value in raw:
         name, value = raw_name.decode().lower(), raw_value.decode()
-        joined = name == "poppy-session" and name in headers
+        joined = name in _JOINED_HEADERS and name in headers
         headers[name] = f"{headers[name]}, {value}" if joined else value
     return headers
 

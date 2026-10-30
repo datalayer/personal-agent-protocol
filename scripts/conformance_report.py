@@ -29,7 +29,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "docs" / "docs" / "protocol" / "conformance-report.mdx"
-SUITES = ("protocol", "security", "lifecycle", "conversations", "operations")
+SUITES = ("protocol", "security", "lifecycle", "conversations", "operations", "dpop")
 
 #: Every pairing, in the order of the page's columns: (file stem, agent, company).
 PAIRINGS = (
@@ -76,6 +76,11 @@ def _load(directory: Path) -> dict[str, dict[str, Any]]:
             document = json.loads(path.read_text(encoding="utf-8"))
             if document.get("schema_version") != 1:
                 raise SystemExit(f"{path}: unsupported report schema")
+            # A world's cases, run in a report of their own (`{stem}.{world}.json`).
+            for extra in sorted(directory.glob(f"{stem}.*.json")):
+                for key, value in json.loads(extra.read_text(encoding="utf-8"))["summary"].items():
+                    document["summary"][key] += value
+                document["cases"] += json.loads(extra.read_text(encoding="utf-8"))["cases"]
             reports[stem] = document
     if not reports:
         raise SystemExit(f"no conformance reports in {directory}")
@@ -154,7 +159,7 @@ def render(reports: dict[str, dict[str, Any]]) -> str:
             continue
         lines += [
             "",
-            f"## {suite.capitalize()}",
+            f"## {'DPoP' if suite == 'dpop' else suite.capitalize()}",
             "",
             f"| Case | Kind | Requirements | {header} |",
             "| --- | --- | --- | " + " | ".join("---" for _ in columns) + " |",

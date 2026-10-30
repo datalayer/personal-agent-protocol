@@ -657,11 +657,20 @@ requirements:
     Company that requires it.
   status: open
   implementation:
-  - personal_agent_protocol.sessions:SessionClient
+  - personal_agent_protocol.sessions:SessionClient.token_request
+  - personal_agent_protocol.transport:session_headers
+  - personal_agent_protocol.crypto:JoseDpopProver
   tests:
   - personal_agent_protocol/__tests__/test_dpop.py::test_a_token_request_proves_when_the_issuer_lists_es256
   - personal_agent_protocol/__tests__/test_dpop.py::test_a_token_request_sends_no_proof_to_a_company_that_does_not_list_es256
   - personal_agent_protocol/__tests__/test_sessions.py::test_a_dpop_answer_with_no_proof_sent_is_refused
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_binding_with_dpop_over_tls
+  conformance:
+  - dpop.proof-only-when-listed
+  - dpop.dpop-answer-needs-a-proof
+  - dpop.proof-shape
+  - dpop.token-bound-and-used
+  - dpop.refresh-after-the-key-is-lost
   reason: The Python SDK proves and uses DPoP tokens; the TypeScript SDK sends no DPoP proofs yet, and
     refuses a DPoP token response, so it can't sign in at a Company that requires DPoP.
 - id: PAP-4.7-01
@@ -2600,8 +2609,12 @@ guide:
   status: implemented
   implementation:
   - personal_agent_protocol.sessions:_opaque_id
+  - personal_agent_protocol.crypto:dpop_proof_claims
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_dpop.py::test_a_proof_needs_128_random_bits_and_a_timezone
+  conformance:
+  - dpop.proof-shape
 - id: GUIDE-keys-01
   source: guide
   section: Rotating keys
@@ -2732,6 +2745,12 @@ guide:
   - personal_agent_protocol.sessions:SessionClient.token_request
   tests:
   - personal_agent_protocol/__tests__/test_transport.py::test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_dpop.py::test_a_resource_nonce_is_retried_once_and_the_latest_kept_for_the_origin
+  - personal_agent_protocol/__tests__/test_dpop.py::test_use_dpop_nonce_is_retried_once_with_a_fresh_proof_and_assertion
+  - personal_agent_protocol/__tests__/test_dpop.py::test_a_restarted_session_sends_a_fresh_proof_and_a_redirect_is_refused
+  conformance:
+  - dpop.nonce-at-the-token-endpoint
+  - dpop.nonce-at-a-resource
 - id: GUIDE-retry-03
   source: guide
   section: Retries
@@ -2843,6 +2862,34 @@ guide:
   - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
   reason: Delegations are renewed before they expire and never signed past; their iat is the signing time,
     not rounded down.
+- id: GUIDE-pa-session-03
+  source: guide
+  section: The Session header
+  level: SHOULD
+  role: personal-agent
+  text: If a company issues DPoP-bound access tokens, also sign a DPoP proof for each request that carries
+    one, and support nonces as RFC 9449 §8 describes. The proof and the Session JWT are separate signatures
+    with separate keys (5.2).
+  status: partial
+  implementation:
+  - personal_agent_protocol.transport:session_headers
+  - personal_agent_protocol.transport:SessionHttpClient.request
+  - personal_agent_protocol.mcp:McpSessionAuth
+  - personal_agent_protocol.crypto:JoseDpopProver
+  tests:
+  - personal_agent_protocol/__tests__/test_dpop.py::test_a_dpop_token_goes_with_a_proof_and_the_session_header
+  - personal_agent_protocol/__tests__/test_dpop.py::test_a_resource_nonce_is_retried_once_and_the_latest_kept_for_the_origin
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_binding_with_dpop_over_tls
+  conformance:
+  - dpop.token-bound-and-used
+  - dpop.session-and-proof-different-keys
+  - dpop.nonce-at-the-token-endpoint
+  - dpop.nonce-at-a-resource
+  - dpop.conversation-and-stream
+  - dpop.feedback
+  - dpop.browser-join
+  - dpop.mcp-token-bound
+  reason: The Python SDK does; the TypeScript SDK sends no DPoP proofs yet.
 - id: GUIDE-pa-discovery-01
   source: guide
   section: Finding a company
@@ -3555,3 +3602,45 @@ guide:
   - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_replayed_token_request_is_refused
   conformance:
   - security.session-jwt-replay
+- id: GUIDE-co-session-06
+  source: guide
+  section: Verifying the Session header
+  level: SHOULD
+  role: company
+  text: Binding access tokens with DPoP is your choice (4.5). If you do, verify the proof as RFC 9449 describes,
+    separately from the Session JWT.
+  status: partial
+  implementation:
+  - personal_agent_protocol.company.verify:verify_dpop_proof
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_dpop.py::test_optional_binds_with_a_proof_and_issues_bearer_without
+  - personal_agent_protocol/__tests__/test_dpop.py::test_a_refused_proof_spends_no_device_code
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_binding_with_dpop_over_tls
+  conformance:
+  - dpop.metadata-lists-es256
+  - dpop.token-bound-and-used
+  - dpop.token-request-needs-a-proof
+  - dpop.token-proof-for-another-url
+  - dpop.token-proof-with-ath
+  - dpop.token-proof-outside-the-window
+  - dpop.token-proof-wrong-typ
+  - dpop.nonce-at-the-token-endpoint
+  - dpop.nonce-at-a-resource
+  - dpop.bound-token-without-a-proof
+  - dpop.bound-token-as-bearer
+  - dpop.proof-of-another-key
+  - dpop.proof-replayed
+  - dpop.proof-wrong-ath
+  - dpop.proof-wrong-htm
+  - dpop.proof-wrong-htu
+  - dpop.proof-outside-the-window
+  - dpop.session-header-still-checked
+  - dpop.conversation-and-stream
+  - dpop.feedback
+  - dpop.browser-join
+  - dpop.mcp-token-bound
+  - dpop.mcp-challenge-keeps-resource-metadata
+  reason: The Python reference company does; the TypeScript one issues Bearer tokens and lists no DPoP
+    algorithm yet.

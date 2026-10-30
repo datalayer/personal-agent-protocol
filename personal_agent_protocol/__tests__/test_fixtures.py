@@ -20,8 +20,16 @@ import httpcore
 import httpx
 import jwt
 import pytest
+from pydantic import SecretStr
 
-from personal_agent_protocol import DiscoveryClient, SessionClient, SessionHttpClient
+from personal_agent_protocol import (
+    DiscoveryClient,
+    DpopProofRequest,
+    InMemoryDpopKeys,
+    JoseDpopProver,
+    SessionClient,
+    SessionHttpClient,
+)
 from personal_agent_protocol.apis import ApiClient, conversation_endpoint, known_apis
 from personal_agent_protocol.conformance import load_fixture_cases
 from personal_agent_protocol.crypto import DelegatedSessionSigner, InMemoryDelegatedKeys
@@ -293,8 +301,72 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             )
         assert len(keys) == expect["keys"]
         assert len(delegations) == expect["delegations"]
+    elif case.check == "dpop_token_request":
+        await _dpop_token_requests(case)
+    elif case.check == "dpop_proof_shape":
+        await _dpop_proof_shape(case)
     else:  # pragma: no cover - a fixture with a check this test does not know
         raise AssertionError(f"unknown fixture check {case.check!r}")
+
+
+def _recording(sent: list[httpx.Request], answer: dict[str, Any]) -> Any:
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=answer)
+
+    return respond
+
+
+async def _dpop_token_requests(case: Any) -> None:
+    """Whether a token request proves, and what becomes of its answer (§4.5)."""
+
+    for given, expect in zip(case.input, case.expect, strict=True):
+        sent: list[httpx.Request] = []
+        answer = {"access_token": "t", "token_type": given["token_type"], "expires_in": 60}
+        http = httpx.AsyncClient(transport=httpx.MockTransport(_recording(sent, answer)))
+        identity = AgentIdentity(domain="atlas.example", name="Atlas")
+        host = PersonalAgentHost(identity, MutableClock())
+        reactor = personal_agent_reactor(host, network=InProcessNetwork(), http_client=http)
+        request = SessionClient(reactor=reactor, http_client=http).token_request(
+            client_id=identity.client_id,
+            issuer="https://shop.example",
+            token_endpoint="https://shop.example/oauth/token",  # noqa: S106 - a URL
+            form=lambda: {"grant_type": "refresh_token", "refresh_token": "rt"},
+            error=SessionError,
+            tenant_id="t",
+            dpop_signing_algs=given["algs"],
+        )
+        if "error" in expect:
+            with pytest.raises(SessionError) as refused:
+                await request
+            assert refused.value.code == expect["error"]
+        else:
+            await request
+        assert ("dpop" in sent[0].headers) is expect["proof"]
+
+
+async def _dpop_proof_shape(case: Any) -> None:
+    """A proof's header and claims (RFC 9449 §4.2)."""
+
+    given, expect = case.input, case.expect
+    prover = JoseDpopProver(InMemoryDpopKeys())
+    proof = await prover.prove(
+        DpopProofRequest(
+            method=given["method"],
+            url=given["url"],
+            tenant_id="t",
+            issuer="https://shop.example",
+            access_token=SecretStr(given["access_token"]),
+            nonce=given["nonce"],
+        )
+    )
+    compact = proof.get_secret_value()
+    header = jwt.get_unverified_header(compact)
+    assert header["typ"] == "dpop+jwt" and header["alg"] == "ES256"
+    assert set(header["jwk"]) == {"kty", "crv", "x", "y"}
+    claims = jwt.decode(compact, options={"verify_signature": False})
+    assert {name: claims[name] for name in expect} == expect
+    assert len(claims["jti"]) >= 22
 
 
 @pytest.mark.asyncio

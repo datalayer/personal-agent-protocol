@@ -58,6 +58,8 @@ REPLAY = "replay"
 SIGN_IN_ATTEMPTS = "sign_in_attempts"
 #: A feedback report a personal agent sent (§8), kept for the company's operator.
 FEEDBACK = "feedback"
+#: A DPoP nonce the company gave, accepted in a proof until it expires (RFC 9449 §8).
+DPOP_NONCE = "dpop_nonce"
 #: An API write's `Idempotency-Key` in one Session, and its original response (guides, *Retries*).
 IDEMPOTENCY = "idempotency"
 
@@ -82,6 +84,7 @@ RECORD_KINDS = (
     REPLAY,
     SIGN_IN_ATTEMPTS,
     FEEDBACK,
+    DPOP_NONCE,
     IDEMPOTENCY,
 )
 
@@ -266,7 +269,8 @@ class IssuedAccessToken:
 
     `resource` is the service it was issued for, or `None` for the default token
     that works at every service that doesn't ask for its own. `family` is the
-    sign-in it comes from, whose sign-out ends it (§5.5).
+    sign-in it comes from, whose sign-out ends it (§5.5). `dpop_jkt` is the thumbprint of
+    the key it is bound to (§4.5, RFC 9449 §6), or `None` for a Bearer token.
     """
 
     client_id: str
@@ -275,6 +279,7 @@ class IssuedAccessToken:
     expires_at: datetime
     family: str
     resource: str | None = None
+    dpop_jkt: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -284,6 +289,7 @@ class IssuedAccessToken:
             "expires_at": _time(self.expires_at),
             "family": self.family,
             "resource": self.resource,
+            "dpop_jkt": self.dpop_jkt,
         }
 
     @classmethod
@@ -295,6 +301,7 @@ class IssuedAccessToken:
             expires_at=_parse(value["expires_at"]),
             family=value["family"],
             resource=value["resource"],
+            dpop_jkt=value["dpop_jkt"],
         )
 
 
@@ -987,6 +994,20 @@ class StoredFeedback:
 
 
 @dataclass(frozen=True)
+class IssuedNonce:
+    """A DPoP nonce the company gave: accepted in a proof until the record expires."""
+
+    def to_json(self) -> JsonObject:
+        return {}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> IssuedNonce:
+        if value:
+            raise ValueError("an issued nonce has no members")
+        return cls()
+
+
+@dataclass(frozen=True)
 class IdempotencyRecord:
     """An API write's `Idempotency-Key` in one Session: the request's digest, and its answer.
 
@@ -1029,5 +1050,6 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     REPLAY: ReplayMark.from_json,
     SIGN_IN_ATTEMPTS: SignInAttempts.from_json,
     FEEDBACK: StoredFeedback.from_json,
+    DPOP_NONCE: IssuedNonce.from_json,
     IDEMPOTENCY: IdempotencyRecord.from_json,
 }

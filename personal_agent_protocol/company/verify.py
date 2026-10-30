@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Verify a personal agent's client assertions and Session JWTs (§4.1, §5.2, §5.3)."""
+"""Verify a personal agent's client assertions, Session JWTs and DPoP proofs (§4.1, §4.5, §5.3)."""
 
 from __future__ import annotations
 
@@ -22,11 +22,14 @@ from pydantic import SecretStr
 from ..crypto import (
     DELEGATION_MAX_LIFETIME,
     DELEGATION_TYPE,
+    DPOP_ALGORITHM,
+    DPOP_PROOF_TYPE,
     SESSION_ID,
     SESSION_JWT_ALGORITHM,
     SESSION_JWT_TYPE,
     jwk_thumbprint,
     normalized_htu,
+    public_jwk,
     token_hash,
 )
 from ..errors import ProofError, SessionError
@@ -429,3 +432,94 @@ async def verify_session_jwt(  # noqa: C901 - one check per claim, in the spec's
         issued_at=issued,
         delegation=delegation,
     )
+
+
+@dataclass(frozen=True)
+class VerifiedDpopProof:
+    """What a verified, newly accepted DPoP proof says: its key's thumbprint, and its nonce."""
+
+    thumbprint: str
+    nonce: str | None = None
+
+
+def _dpop_key(header: dict[str, Any]) -> dict[str, Any]:
+    """The proof's public key, a P-256 JWK: a private member or another curve is refused."""
+
+    jwk_value = header.get("jwk")
+    if not isinstance(jwk_value, dict):
+        raise ProofError("invalid_dpop_proof", "A DPoP proof carries its public key")
+    if jwk_value.get("kty") != "EC" or jwk_value.get("crv") != "P-256":
+        raise ProofError("invalid_dpop_proof", "A DPoP proof's key is P-256")
+    return public_jwk(jwk_value)
+
+
+async def verify_dpop_proof(  # noqa: C901 - one check per claim, in order
+    proof: SecretStr | str,
+    *,
+    method: str,
+    url: str,
+    replay_cache: ReplayCache,
+    now: datetime,
+    window: timedelta,
+    access_token: str | None = None,
+) -> VerifiedDpopProof:
+    """Verify one DPoP proof as RFC 9449 §4.3 says.
+
+    One `DPoP` header holding one JWT: `typ` `dpop+jwt`, `alg` ES256, a public P-256
+    `jwk` that signed it, `htm` and `htu` matching the request, `iat` within `window`,
+    a `jti` not seen while the proof would be accepted, and `ath` for `access_token`,
+    or none without one. Any failure is `ProofError` (`invalid_dpop_proof`). Whether the
+    key and the nonce are the right ones is the caller's to decide.
+    """
+
+    compact = proof.get_secret_value() if isinstance(proof, SecretStr) else proof
+    if compact.count(".") != 2 or any(char in compact for char in ", \t"):
+        # Two `DPoP` headers arrive joined: refused (RFC 9449 §4.3).
+        raise ProofError("invalid_dpop_proof", "A DPoP header is one compact JWT")
+    try:
+        header = jwt.get_unverified_header(compact)
+        if header.get("typ") != DPOP_PROOF_TYPE or header.get("alg") != DPOP_ALGORITHM:
+            raise ProofError("invalid_dpop_proof", "A DPoP proof's typ or alg is wrong")
+        key_value = _dpop_key(header)
+        key = jwt.PyJWK.from_dict(key_value, algorithm=DPOP_ALGORITHM).key
+        claims = jwt.decode(
+            compact,
+            key,
+            algorithms=[DPOP_ALGORITHM],
+            options={
+                "require": ["jti", "htm", "htu", "iat"],
+                "verify_aud": False,
+                "verify_iat": False,
+                "verify_exp": False,
+                "verify_nbf": False,
+            },
+        )
+        thumbprint = jwk_thumbprint(key_value)
+    except ProofError:
+        raise
+    except (KeyError, TypeError, ValueError, jwt.PyJWTError) as exc:
+        raise ProofError("invalid_dpop_proof", "A DPoP proof's signature is invalid") from exc
+    jti, issued = claims.get("jti"), claims.get("iat")
+    if (
+        not isinstance(jti, str)
+        or not _MIN_JTI <= len(jti) <= 256
+        or isinstance(issued, bool)
+        or not isinstance(issued, int)
+    ):
+        raise ProofError("invalid_dpop_proof", "A DPoP proof's jti or iat is invalid")
+    issued_at = datetime.fromtimestamp(issued, timezone.utc)
+    if abs(issued_at - now) > window:
+        raise ProofError("invalid_dpop_proof", "A DPoP proof is outside its acceptance window")
+    if claims.get("htm") != method.upper() or claims.get("htu") != normalized_htu(url):
+        raise ProofError("invalid_dpop_proof", "A DPoP proof is for another request")
+    ath = claims.get("ath")
+    if access_token is None:
+        if ath is not None:
+            raise ProofError("invalid_dpop_proof", "A proof without an access token has no ath")
+    elif not isinstance(ath, str) or not hmac.compare_digest(ath, token_hash(access_token)):
+        raise ProofError("invalid_dpop_proof", "A DPoP proof's ath does not match the token")
+    # Remembered for as long as the proof would be accepted: until `iat` leaves the window.
+    if not await replay_cache.mark_once(f"dpop:{thumbprint}:{jti}", expires_at=issued_at + window):
+        raise ProofError("invalid_dpop_proof", "A DPoP proof is used once")
+    nonce = claims.get("nonce")
+    return VerifiedDpopProof(thumbprint, nonce if isinstance(nonce, str) else None)

@@ -20,11 +20,12 @@ async with served_over_tls(world.network):
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from ..company import CompanyRequest, CompanyService
-from ..conformance import ConformanceContext, Proposal, Scenario
+from ..conformance import ConformanceContext, Proposal, Scenario, world_config
 from .kit import AgentIdentity, InProcessNetwork, MutableClock
-from .manzanita import DOMAIN, ManzanitaPlugin, manzanita
+from .manzanita import CONFIG, DOMAIN, ManzanitaPlugin, manzanita
 
 #: What the suite asks of Manzanita.
 MANZANITA_SCENARIO = Scenario(
@@ -120,16 +121,20 @@ class DemoDriver:
 
 
 class ManzanitaConformance:
-    """Manzanita, Atlas, and Plain on one in-process network (serve it over TLS to test)."""
+    """Manzanita, Atlas, and Plain on one in-process network (serve it over TLS to test).
 
-    def __init__(self) -> None:
+    `world` names a conformance world (`world_config`): Manzanita configured as it says.
+    """
+
+    def __init__(self, world: str | None = None) -> None:
         self.clock = MutableClock()
         self.network = InProcessNetwork()
         self.atlas = AgentIdentity(domain="atlas.example", name="Atlas")
         self.plain = AgentIdentity(domain="plain.example", name="Plain", extensions=())
         for identity in (self.atlas, self.plain):
             self.network.add(identity.domain, identity.website())
-        self.service, self.plugin = manzanita(self.network, self.clock)
+        config = None if world is None else replace(CONFIG, **world_config(world))
+        self.service, self.plugin = manzanita(self.network, self.clock, config=config)
         self.driver = DemoDriver(self.service, self.plugin, self.clock, self.plain)
         self.http = self.network.client()
 

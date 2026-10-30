@@ -461,7 +461,7 @@ def _assert_no_leak(harvest: Harvest) -> None:
 
 @pytest.mark.asyncio
 async def test_no_credential_reaches_logs_errors_urls_or_model_text(harvest: Harvest) -> None:
-    from personal_agent_protocol.conformance import CASES, run_conformance, select_cases
+    from personal_agent_protocol.conformance import run_conformance, select_cases
     from personal_agent_protocol.demo.conformance import ManzanitaConformance
 
     # Manzanita: Device Sign-In, conversations, operations, refresh tokens.
@@ -489,7 +489,7 @@ async def test_no_credential_reaches_logs_errors_urls_or_model_text(harvest: Har
     world = ManzanitaConformance()
     cases = tuple(case for case in select_cases() if case.id != "security.token-in-url-refused")
     report = await run_conformance(world.context(), cases=cases)
-    assert len(report.results) == len(CASES) - 1
+    assert len(report.results) == len(cases)
     assert [r.id for r in report.results if r.outcome == "failed"] == []
     harvest.model_texts.append(("the conformance report", json.dumps(report.to_json())))
 

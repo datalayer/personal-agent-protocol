@@ -61,19 +61,24 @@ from .auth import DirectSignInClient
 from .browser import BrowserSessionClient
 from .conversations import ConversationClient, TextDelta
 from .crypto import (
+    DPOP_ALGORITHM,
+    DPOP_PROOF_TYPE,
     SESSION_JWT_ALGORITHM,
     SESSION_JWT_TYPE,
-    DelegatedSessionSigner,
+    DpopKey,
+    JoseDpopProver,
     JoseSigner,
     delegation_claims,
+    dpop_proof_claims,
     jwk_thumbprint,
+    new_dpop_key,
     session_jwt_claims,
 )
 from .demo.kit import AgentIdentity, ControlledBrowser, MemoryVault, MutableClock, PersonalAgentHost
 from .device import DeviceSignInClient
 from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError, TransportError
-from .feedback import feedback_endpoint
+from .feedback import FeedbackClient, FeedbackReport, feedback_endpoint
 from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
 from .models import Approval, Author, ConversationEvent, DiscoveredCompany, Message, Operation
 from .operations import (
@@ -86,9 +91,10 @@ from .operations import (
 from .profile import PROTOCOL_PROFILE
 from .reactor import (
     CLOCKS,
-    SESSION_SIGNERS,
+    DPOP_PROVERS,
     AddressResolver,
     Clock,
+    DpopProofRequest,
     SessionJwtRequest,
     SystemClock,
     build_pap_reactor,
@@ -97,13 +103,19 @@ from .reactor import (
 )
 from .refusals import challenge_parameters
 from .requirements import protocol_path
-from .sessions import AccessToken, PapSession, SessionClient
-from .transport import SessionHttpClient
+from .sessions import (
+    DPOP_HEADER,
+    DPOP_NONCE_HEADER,
+    AccessToken,
+    PapSession,
+    SessionClient,
+)
+from .transport import SessionHttpClient, session_headers
 
 Kind = Literal["positive", "negative", "recovery"]
 Outcome = Literal["passed", "failed", "skipped"]
 SCHEMA_VERSION = 1
-SUITES = ("protocol", "security", "lifecycle", "conversations", "operations")
+SUITES = ("protocol", "security", "lifecycle", "conversations", "operations", "dpop")
 
 
 # Fixtures ---------------------------------------------------------------------------
@@ -124,6 +136,8 @@ class FixtureCase:
     expect: Any = None
     target: str | None = None
     mutation: dict[str, Any] = field(default_factory=dict)
+    #: The world the case runs in, named in its suite's `worlds`: `None` for the default.
+    world: str | None = None
 
 
 def load_fixture_cases(suites: Iterable[str] = SUITES) -> tuple[FixtureCase, ...]:
@@ -148,9 +162,22 @@ def load_fixture_cases(suites: Iterable[str] = SUITES) -> tuple[FixtureCase, ...
                     expect=raw.get("expect"),
                     target=raw.get("target"),
                     mutation=dict(raw.get("mutation", {})),
+                    world=raw.get("world"),
                 )
             )
     return tuple(cases)
+
+
+def world_config(world: str) -> dict[str, Any]:
+    """The company configuration a world names, from its suite's `worlds`."""
+
+    for suite in SUITES:
+        document = json.loads(
+            protocol_path("fixtures", "conformance", f"{suite}.json").read_text(encoding="utf-8")
+        )
+        if world in document.get("worlds", {}):
+            return dict(document["worlds"][world])
+    raise ValueError(f"no conformance world {world}")
 
 
 # The user, and a demo company's operator ---------------------------------------------
@@ -466,6 +493,7 @@ class ConformanceContext:
             tenant_id=self.tenant_id,
             organization=(await self.company()).document.organization,
             protected_resources=metadata.protected_resources,
+            dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
         )
         await self.driver.approve_device(
             started.user_code, account=account or self.driver.accounts[0], scopes=granted
@@ -501,6 +529,7 @@ class ConformanceContext:
             redirect_uri=str(actor.identity.metadata["redirect_uris"][0]),
             scopes=tuple(scopes or self.scenario.scopes),
             tenant_id=self.tenant_id,
+            dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
         )
         callback = await self.driver.approve_authorization(
             actor.user_browser.urls[-1],
@@ -520,6 +549,7 @@ class ConformanceContext:
             client_id=actor.identity.client_id,
             tenant_id=self.tenant_id,
             revocation_endpoint=metadata.revocation_endpoint,
+            dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
         )
 
     async def refresh_token(self, reference: str) -> SecretStr:
@@ -550,18 +580,18 @@ class ConformanceContext:
         token: AccessToken | None = None,
         *,
         agent: Agent | None = None,
+        dpop_nonce: str | None = None,
     ) -> dict[str, str]:
-        """The headers of one request in `session`: `Poppy-Session`, and `Authorization`."""
+        """The headers of one request in `session`: its Session JWT, token, and any proof."""
 
-        signer = cast(
-            DelegatedSessionSigner,
-            first_contribution((agent or self.agent).reactor, SESSION_SIGNERS, "session signer"),
+        return await session_headers(
+            (agent or self.agent).reactor,
+            method,
+            url,
+            session=session,
+            token=token,
+            dpop_nonce=dpop_nonce,
         )
-        jwt_value = await signer.sign(self.jwt_request(session, method, url, token))
-        headers = {"Poppy-Session": jwt_value.get_secret_value()}
-        if token is not None:
-            headers["Authorization"] = f"Bearer {token.access_token.get_secret_value()}"
-        return headers
 
     @staticmethod
     def jwt_request(
@@ -692,18 +722,20 @@ class ConformanceContext:
             "jti": base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("="),
         }
 
-    async def token_request(self, form: dict[str, str]) -> httpx.Response:
+    async def token_request(
+        self, form: dict[str, str], *, dpop: str | None = None
+    ) -> httpx.Response:
         """A raw token request: no Session header goes to an OAuth endpoint (§5.2)."""
 
         metadata = await self.metadata()
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        }
+        if dpop is not None:
+            headers[DPOP_HEADER] = dpop
         return await self.send(
-            "POST",
-            metadata.token_endpoint,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            },
-            content=urlencode(form).encode(),
+            "POST", metadata.token_endpoint, headers=headers, content=urlencode(form).encode()
         )
 
     async def client_form(self, identity: AgentIdentity | None = None) -> dict[str, str]:
@@ -2593,6 +2625,342 @@ async def _browser_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
     check(valid.status_code == 303 and joined(valid), "a valid join sets the Session's cookie")
 
 
+# DPoP (§4.5, RFC 9449) ---------------------------------------------------------------
+
+
+def _prover(ctx: ConformanceContext) -> JoseDpopProver:
+    return cast(JoseDpopProver, first_contribution(ctx.agent.reactor, DPOP_PROVERS, "DPoP prover"))
+
+
+async def _dpop_key(ctx: ConformanceContext) -> DpopKey:
+    metadata = await ctx.metadata()
+    return await _prover(ctx).keys.key_for(tenant_id=ctx.tenant_id, issuer=metadata.issuer)
+
+
+def _forged_proof(
+    ctx: ConformanceContext,
+    key: DpopKey,
+    method: str,
+    url: str,
+    *,
+    token: AccessToken | None = None,
+    nonce: str | None = None,
+    mutation: dict[str, Any] | None = None,
+) -> str:
+    """A proof the SDK would never send: real keys, one thing wrong (RFC 9449 §4.2)."""
+
+    mutation = mutation or {}
+    claims = dpop_proof_claims(
+        DpopProofRequest(
+            method=method,
+            url=url,
+            tenant_id=ctx.tenant_id,
+            issuer=ctx.base_url,
+            access_token=None if token is None else token.access_token,
+            nonce=nonce,
+        ),
+        issued_at=ctx.now() + timedelta(seconds=mutation.get("iat_offset", 0)),
+    )
+    claims.update({name: mutation[name] for name in ("ath", "htm", "htu") if name in mutation})
+    return jwt.encode(
+        claims,
+        key.private_key,
+        algorithm=DPOP_ALGORITHM,
+        headers={"typ": mutation.get("typ", DPOP_PROOF_TYPE), "jwk": key.public_jwk},
+    )
+
+
+async def _bound(ctx: ConformanceContext) -> tuple[SignedIn, str]:
+    """A signed-in user's DPoP token, and the API URL it reads."""
+
+    if not (await ctx.metadata()).dpop_signing_alg_values_supported:
+        raise SkipCase("the company lists no DPoP algorithm")
+    _user, signed = await _signed_in_user(ctx)
+    check(signed.token.token_type == "DPoP", "the token is bound")  # noqa: S105
+    return signed, ctx.url(ctx.scenario.read_path)
+
+
+async def _resource_nonce(ctx: ConformanceContext, signed: SignedIn, url: str) -> str | None:
+    """The nonce `url` gives this request: `None` when the company asks for none."""
+
+    headers = await ctx.auth(signed.session, "GET", url, signed.token)
+    return (await ctx.send("GET", url, headers=headers)).headers.get(DPOP_NONCE_HEADER)
+
+
+async def _refused_proof(
+    ctx: ConformanceContext, signed: SignedIn, url: str, proof: str | None
+) -> httpx.Response:
+    """`GET url` with the token, a fresh Session JWT, and `proof` in place of the SDK's."""
+
+    headers = await ctx.auth(signed.session, "GET", url, signed.token)
+    del headers[DPOP_HEADER]
+    if proof is not None:
+        headers[DPOP_HEADER] = proof
+    return await ctx.send("GET", url, headers=headers)
+
+
+def _proof_refused(response: httpx.Response, what: str) -> None:
+    expect_refusal(response, 401, "invalid_dpop_proof", what)
+    challenge = response.headers.get("www-authenticate", "")
+    check(
+        challenge.startswith('DPoP error="invalid_dpop_proof"'),
+        f"{what}: the DPoP challenge, got {challenge!r}",
+    )
+
+
+async def _refresh_form(ctx: ConformanceContext, signed: SignedIn) -> dict[str, str]:
+    return {
+        "grant_type": "refresh_token",
+        "refresh_token": (await ctx.refresh_token(signed.reference)).get_secret_value(),
+        **(await ctx.client_form()),
+    }
+
+
+async def _token_nonce(ctx: ConformanceContext, signed: SignedIn) -> str | None:
+    """The nonce the token endpoint gives a proof: `None` when it asks for none."""
+
+    metadata = await ctx.metadata()
+    proof = _forged_proof(ctx, await _dpop_key(ctx), "POST", metadata.token_endpoint)
+    answer = await ctx.token_request(await _refresh_form(ctx, signed), dpop=proof)
+    expect_refusal(answer, 400, "use_dpop_nonce", "a proof with no nonce")
+    return answer.headers.get(DPOP_NONCE_HEADER)
+
+
+@case("dpop.metadata-lists-es256")
+async def _dpop_metadata(ctx: ConformanceContext, _: FixtureCase) -> None:
+    listed = (await ctx.metadata()).dpop_signing_alg_values_supported
+    check(listed is not None and DPOP_ALGORITHM in listed, "the metadata lists ES256")
+
+
+@case("dpop.token-bound-and-used")
+async def _dpop_used(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    answer = await ctx.agent.transport.request(
+        "GET", url, session=signed.session, token=signed.token
+    )
+    check(answer.status_code == 200, f"the bound token reads the API, got {answer.status_code}")
+
+
+@case("dpop.session-and-proof-different-keys")
+async def _dpop_separate_keys(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    headers = await ctx.auth(signed.session, "GET", url, signed.token)
+    delegated = jwt.get_unverified_header(headers["Poppy-Session"])["kid"]
+    proof = jwt.get_unverified_header(headers[DPOP_HEADER])
+    prover_key = jwk_thumbprint(proof["jwk"])
+    check(prover_key == (await _dpop_key(ctx)).thumbprint, "the proof is by the DPoP key")
+    check(prover_key != delegated, "the proof's key is not the delegated key")
+    agents = {jwk_thumbprint(key) for key in ctx.agent.identity.jwks["keys"]}
+    check(prover_key not in agents, "the proof's key is not one of the agent's jwks_uri")
+
+
+@case("dpop.token-request-needs-a-proof")
+async def _dpop_token_no_proof(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, _url = await _bound(ctx)
+    answer = await ctx.token_request(await _refresh_form(ctx, signed))
+    expect_refusal(answer, 400, "invalid_dpop_proof", "a token request with no proof")
+    context = await ctx.account_context(signed.session.sub)
+    refreshed = await ctx.agent.accounts.refresh(signed.reference, context=context)
+    check(refreshed.status == "signed_in", "the refused request spent nothing")
+
+
+@case(
+    "dpop.token-proof-for-another-url",
+    "dpop.token-proof-with-ath",
+    "dpop.token-proof-outside-the-window",
+    "dpop.token-proof-wrong-typ",
+)
+async def _dpop_token_bad_proof(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    signed, _url = await _bound(ctx)
+    metadata = await ctx.metadata()
+    nonce = await _token_nonce(ctx, signed)
+    proof = _forged_proof(
+        ctx,
+        await _dpop_key(ctx),
+        "POST",
+        metadata.token_endpoint,
+        nonce=nonce,
+        mutation=fixture.mutation,
+    )
+    answer = await ctx.token_request(await _refresh_form(ctx, signed), dpop=proof)
+    expect_refusal(answer, 400, "invalid_dpop_proof", fixture.id)
+
+
+@case("dpop.nonce-at-the-token-endpoint")
+async def _dpop_token_nonce(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, _url = await _bound(ctx)
+    metadata = await ctx.metadata()
+    nonce = await _token_nonce(ctx, signed)
+    check(nonce, "use_dpop_nonce gives a DPoP-Nonce")
+    proof = _forged_proof(ctx, await _dpop_key(ctx), "POST", metadata.token_endpoint, nonce=nonce)
+    answer = await ctx.token_request(await _refresh_form(ctx, signed), dpop=proof)
+    check(answer.status_code == 200, f"served with the nonce, got {answer.status_code}")
+    bound = answer.json()["token_type"] == "DPoP"  # noqa: S105 - an OAuth token type
+    check(bound, "the token is bound")
+
+
+@case("dpop.nonce-at-a-resource")
+async def _dpop_resource_nonce(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    headers = await ctx.auth(signed.session, "GET", url, signed.token)
+    refused = await ctx.send("GET", url, headers=headers)
+    expect_refusal(refused, 401, "use_dpop_nonce", "a proof with no nonce")
+    challenge = refused.headers.get("www-authenticate", "")
+    check(challenge.startswith('DPoP error="use_dpop_nonce"'), "the DPoP challenge")
+    check(refused.headers.get(DPOP_NONCE_HEADER), "it gives a DPoP-Nonce")
+    transport = SessionHttpClient(reactor=ctx.agent.reactor, http_client=ctx.http)
+    answer = await transport.request("GET", url, session=signed.session, token=signed.token)
+    check(answer.status_code == 200, f"the SDK retries once, got {answer.status_code}")
+    check(transport.dpop_nonces, "and keeps the nonce for the origin")
+
+
+@case("dpop.bound-token-without-a-proof")
+async def _dpop_no_proof(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    _proof_refused(await _refused_proof(ctx, signed, url, None), "a bound token with no proof")
+
+
+@case("dpop.bound-token-as-bearer")
+async def _dpop_as_bearer(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    headers = await ctx.auth(signed.session, "GET", url, signed.token)
+    del headers[DPOP_HEADER]
+    headers["Authorization"] = f"Bearer {signed.token.access_token.get_secret_value()}"
+    answer = await ctx.send("GET", url, headers=headers)
+    expect_refusal(answer, 401, "invalid_token", "a bound token as Bearer")
+    check("DPoP" in answer.headers.get("www-authenticate", ""), "the challenge names DPoP")
+
+
+@case("dpop.proof-of-another-key")
+async def _dpop_other_key(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    nonce = await _resource_nonce(ctx, signed, url)
+    proof = _forged_proof(ctx, new_dpop_key(), "GET", url, token=signed.token, nonce=nonce)
+    _proof_refused(await _refused_proof(ctx, signed, url, proof), "another key's proof")
+
+
+@case("dpop.proof-replayed")
+async def _dpop_replayed(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    nonce = await _resource_nonce(ctx, signed, url)
+    proof = _forged_proof(ctx, await _dpop_key(ctx), "GET", url, token=signed.token, nonce=nonce)
+    first = await _refused_proof(ctx, signed, url, proof)
+    check(first.status_code == 200, f"the proof works once, got {first.status_code}")
+    _proof_refused(await _refused_proof(ctx, signed, url, proof), "a replayed proof")
+
+
+@case(
+    "dpop.proof-wrong-ath",
+    "dpop.proof-wrong-htm",
+    "dpop.proof-wrong-htu",
+    "dpop.proof-outside-the-window",
+)
+async def _dpop_bad_proof(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    nonce = await _resource_nonce(ctx, signed, url)
+    proof = _forged_proof(
+        ctx,
+        await _dpop_key(ctx),
+        "GET",
+        url,
+        token=signed.token,
+        nonce=nonce,
+        mutation=fixture.mutation,
+    )
+    _proof_refused(await _refused_proof(ctx, signed, url, proof), fixture.id)
+
+
+@case("dpop.session-header-still-checked")
+async def _dpop_no_session_header(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    nonce = await _resource_nonce(ctx, signed, url)
+    headers = await ctx.auth(signed.session, "GET", url, signed.token, dpop_nonce=nonce)
+    del headers["Poppy-Session"]
+    answer = await ctx.send("GET", url, headers=headers)
+    expect_refusal(answer, 400, "invalid_session", "a proof and no Session header")
+
+
+@case("dpop.refresh-after-the-key-is-lost")
+async def _dpop_key_lost(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url = await _bound(ctx)
+    metadata = await ctx.metadata()
+    await _prover(ctx).keys.forget(tenant_id=ctx.tenant_id, issuer=metadata.issuer)
+    context = await ctx.account_context(signed.session.sub)
+    refreshed = await ctx.agent.accounts.refresh(signed.reference, context=context)
+    check(refreshed.status == "signed_in", "a refresh, not a new sign-in")
+    token = cast(AccessToken, refreshed.token)
+    check(token.token_type == "DPoP", "a token for the new key")  # noqa: S105
+    transport = ctx.agent.transport
+    answer = await transport.request("GET", url, session=signed.session, token=token)
+    check(answer.status_code == 200, f"which works, got {answer.status_code}")
+    stale = await transport.request("GET", url, session=signed.session, token=signed.token)
+    _proof_refused(stale, "the token of the lost key")
+
+
+@case("dpop.conversation-and-stream")
+async def _dpop_conversation(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, _url = await _bound(ctx)
+    endpoint = await ctx.conversations_endpoint()
+    receipt = await ctx.agent.conversations.start(
+        endpoint, _message(ctx.scenario.greeting), session=signed.session, token=signed.token
+    )
+    items = []
+    async for item in ctx.agent.conversations.stream(
+        endpoint, receipt.conversation_id, session=signed.session, token=signed.token
+    ):
+        items.append(item)
+        break
+    check(items, "the stream answers with the bound token")
+
+
+@case("dpop.feedback")
+async def _dpop_feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, _url = await _bound(ctx)
+    endpoint = feedback_endpoint((await ctx.company()).document)
+    if endpoint is None:
+        raise SkipCase("the company lists no feedback endpoint")
+    await FeedbackClient(transport=ctx.agent.transport).report(
+        endpoint,
+        FeedbackReport(task="dpop conformance", description="A report with a bound token."),
+        session=signed.session,
+        token=signed.token,
+    )
+
+
+@case("dpop.browser-join")
+async def _dpop_browser(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, _url = await _bound(ctx)
+    joined = await _join(ctx, signed, ctx.url("/"))
+    check(joined, "the bound token authorized the join")
+
+
+@case("dpop.mcp-token-bound")
+async def _dpop_mcp(ctx: ConformanceContext, _: FixtureCase) -> None:
+    read_tool = _tool(ctx.scenario.mcp_read_tool)
+    _user, signed, token, url = await _signed_in_mcp(ctx)
+    check(token.token_type == "DPoP", "the MCP token is bound too")  # noqa: S105
+    answer = await (await _mcp_client(ctx, signed.session, token, url)).call_tool(read_tool)
+    check(not answer.is_error, "the MCP server accepts it with proofs")
+
+
+@case("dpop.mcp-challenge-keeps-resource-metadata")
+async def _dpop_mcp_challenge(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _user, signed, token, url = await _signed_in_mcp(ctx)
+    headers = {
+        **await ctx.auth(signed.session, "POST", url, token),
+        "Content-Type": "application/json",
+    }
+    del headers[DPOP_HEADER]
+    answer = await ctx.send(
+        "POST", url, headers=headers, content=b'{"jsonrpc":"2.0","id":1,"method":"ping"}'
+    )
+    _proof_refused(answer, "an MCP token with no proof")
+    check(
+        "resource_metadata" in answer.headers.get("www-authenticate", ""),
+        "the challenge keeps resource_metadata (§7)",
+    )
+
+
 # Running and reporting ----------------------------------------------------------------
 
 
@@ -2737,14 +3105,20 @@ def select_cases(
     ids: Iterable[str] = (),
     requirements: Iterable[str] = (),
     suites: Iterable[str] = (),
+    world: str | None = None,
 ) -> tuple[FixtureCase, ...]:
-    """The runner's fixture cases, filtered by ID, requirement, or suite."""
+    """The runner's fixture cases of one world, filtered by ID, requirement, or suite.
+
+    `world` names the company's configuration the cases need (`world_config`); `None`
+    is the default world.
+    """
 
     wanted_ids, wanted_reqs, wanted_suites = frozenset(ids), frozenset(requirements), set(suites)
     return tuple(
         fixture
         for fixture in load_fixture_cases()
         if fixture.id in CASES
+        and fixture.world == world
         and (not wanted_ids or fixture.id in wanted_ids)
         and (not wanted_reqs or wanted_reqs.intersection(fixture.requirements))
         and (not wanted_suites or fixture.suite in wanted_suites)
@@ -2814,4 +3188,5 @@ __all__ = [
     "load_fixture_cases",
     "run_conformance",
     "select_cases",
+    "world_config",
 ]

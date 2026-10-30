@@ -21,6 +21,18 @@ from personal_agent_protocol.conformance import (
 )
 from personal_agent_protocol.demo.conformance import ManzanitaConformance
 
+DPOP_WORLD = "dpop-binding"
+
+
+def save_world_report(report: ConformanceReport, pairing: str, world: str) -> None:
+    """Kept beside the pairing's report: `scripts/conformance_report.py` reads both."""
+
+    reports = os.environ.get("PAP_CONFORMANCE_REPORTS")
+    if reports:
+        Path(reports).mkdir(parents=True, exist_ok=True)
+        target = Path(reports) / f"{pairing}.{world}.json"
+        target.write_text(json.dumps(report.to_json(), indent=2) + "\n")
+
 
 def _failures(report: ConformanceReport) -> list[str]:
     return [f"{r.id}: {r.message}" for r in report.results if r.outcome != "passed"]
@@ -43,9 +55,34 @@ async def test_python_agent_python_company_over_tls() -> None:
         target = Path(reports) / "python-agent-python-company.json"
         target.write_text(json.dumps(report.to_json(), indent=2) + "\n")
     assert _failures(report) == []
-    assert {r.id for r in report.results} == set(CASES)
+    assert {r.id for r in report.results} == {case.id for case in select_cases()}
     kinds = {r.kind for r in report.results}
     assert kinds == {"positive", "negative", "recovery"}
+
+
+@pytest.mark.asyncio
+async def test_python_agent_python_company_binding_with_dpop_over_tls() -> None:
+    """The DPoP world's cases: Manzanita binds its tokens, with nonces (§4.5, RFC 9449)."""
+
+    pytest.importorskip("uvicorn")
+    from personal_agent_protocol.demo.sockets import served_over_tls
+
+    world = ManzanitaConformance(DPOP_WORLD)
+    cases = select_cases(world=DPOP_WORLD)
+    async with served_over_tls(world.network) as network:
+        assert network.socket_transport is not None
+        report = await run_conformance(world.context(), cases=cases)
+    save_world_report(report, "python-agent-python-company", DPOP_WORLD)
+    assert _failures(report) == []
+    assert {r.id for r in report.results} == {case.id for case in cases}
+    assert {r.kind for r in report.results} == {"positive", "negative", "recovery"}
+    assert len(cases) >= 20
+
+
+def test_every_runner_case_belongs_to_one_world() -> None:
+    worlds = (None, DPOP_WORLD)
+    selected = [case.id for world in worlds for case in select_cases(world=world)]
+    assert sorted(selected) == sorted(CASES)
 
 
 @pytest.mark.asyncio
@@ -104,7 +141,11 @@ async def test_the_mcp_cases_pass_with_a_token_for_the_servers_url() -> None:
     """The MCP cases on their own: tokens by `resource`, the server's `url` (§4.5, §7)."""
 
     world = ManzanitaConformance()
-    mcp = [case for case in CASES if ".mcp-" in case or case == "operations.cross-channel-mcp"]
+    mcp = [
+        case.id
+        for case in select_cases()
+        if ".mcp-" in case.id or case.id == "operations.cross-channel-mcp"
+    ]
     report = await run_conformance(world.context(), cases=select_cases(ids=mcp))
     assert sorted(result.id for result in report.results) == sorted(mcp)
     assert sorted(mcp) == [

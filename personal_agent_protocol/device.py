@@ -124,6 +124,7 @@ class _PendingDeviceSignIn:
     expires_at: datetime
     next_poll_at: datetime
     interval: int
+    dpop_signing_algs: Sequence[str] | None = None
 
 
 class DeviceSignInClient:
@@ -157,6 +158,7 @@ class DeviceSignInClient:
         tenant_id: str,
         organization: Organization,
         protected_resources: Sequence[str],
+        dpop_signing_algs: Sequence[str] | None = None,
     ) -> DeviceSignInStart:
         """Request a device code and retain it behind an opaque state reference (§4.3).
 
@@ -164,7 +166,9 @@ class DeviceSignInClient:
         poppy.json, and
         `protected_resources` its issuer's (OAuth metadata): the verification link
         is refused (`unsafe_verification_uri`) unless its host is the issuer's or
-        one of those resources', or a subdomain of either (§4.6).
+        one of those resources', or a subdomain of either (§4.6). `dpop_signing_algs`
+        is its `dpop_signing_alg_values_supported`: each poll sends a DPoP proof when it
+        includes ES256 (§4.5).
         """
 
         clock, random_source, signer = self._proof_inputs()
@@ -239,6 +243,7 @@ class DeviceSignInClient:
             expires_at=expires_at,
             next_poll_at=now + timedelta(seconds=authorization.interval),
             interval=authorization.interval,
+            dpop_signing_algs=dpop_signing_algs,
         )
         store = self._state_store()
         await store.put(reference, pending, expires_at=expires_at)
@@ -283,6 +288,8 @@ class DeviceSignInClient:
                     "device_code": pending.device_code.get_secret_value(),
                 },
                 error=AuthorizationError,
+                tenant_id=pending.tenant_id,
+                dpop_signing_algs=pending.dpop_signing_algs,
             )
         except AuthorizationError as exc:
             if exc.code in {"authorization_pending", "slow_down"}:

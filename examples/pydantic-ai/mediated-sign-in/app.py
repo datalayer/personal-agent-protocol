@@ -79,6 +79,7 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
             company=company.model_copy(update={"document": hostile}),
             client_id=atlas.client_id,
             scopes=("orders:read",),
+            tenant_id="example",
         )
         reserved_field_refused = "not refused"
     except AuthorizationError as error:
@@ -87,7 +88,10 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
 
     # The declared fields, collected by the host, sent once to the issuer's token endpoint.
     started = await mediated.sign_in(
-        company=company, client_id=atlas.client_id, scopes=("orders:read", "orders:write")
+        company=company,
+        client_id=atlas.client_id,
+        scopes=("orders:read", "orders:write"),
+        tenant_id="example",
     )
     if not (started.reference is not None):
         raise RuntimeError("the example world is incomplete")

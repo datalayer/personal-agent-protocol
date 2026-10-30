@@ -127,10 +127,20 @@ def test_an_access_token_remembers_the_service_it_was_issued_for() -> None:
     assert AccessToken.from_response(response, resource=mcp).resource == mcp
 
 
-@pytest.mark.parametrize("token_type", ["DPoP", "dpop", "mac"])
-def test_a_token_response_is_bearer(token_type: str) -> None:
+@pytest.mark.parametrize(
+    ("given", "read"),
+    [("Bearer", "Bearer"), ("bearer", "Bearer"), ("DPoP", "DPoP"), ("dpop", "DPoP")],
+)
+def test_a_token_response_is_bearer_or_dpop_ignoring_case(given: str, read: str) -> None:
+    response = TokenResponse.model_validate({"access_token": "t", "token_type": given})
+    assert response.token_type == read
+    token = AccessToken.from_response(response, requested_scopes=("orders:read",))
+    assert token.token_type == read
+
+
+def test_any_other_token_type_is_refused() -> None:
     with pytest.raises(ValueError):
-        TokenResponse.model_validate({"access_token": "t", "token_type": token_type})
+        TokenResponse.model_validate({"access_token": "t", "token_type": "mac"})
 
 
 class FakeSigner:
@@ -182,7 +192,9 @@ def token_response() -> dict[str, object]:
     return {"access_token": "opaque-access-token", "token_type": "Bearer", "expires_in": 3600}
 
 
-async def refresh(client: SessionClient) -> TokenResponse:
+async def refresh(
+    client: SessionClient, dpop_signing_algs: list[str] | None = None
+) -> TokenResponse:
     """One grant at the token endpoint, as a sign-in or a refresh sends it."""
 
     return await client.token_request(
@@ -191,6 +203,8 @@ async def refresh(client: SessionClient) -> TokenResponse:
         token_endpoint=TOKEN_ENDPOINT,
         form=lambda: {"grant_type": "refresh_token", "refresh_token": "refresh-secret"},
         error=SessionError,
+        tenant_id="tenant-one",
+        dpop_signing_algs=dpop_signing_algs,
     )
 
 
@@ -276,7 +290,7 @@ async def test_the_token_endpoint_gets_a_client_assertion_and_no_session() -> No
 
 
 @pytest.mark.asyncio
-async def test_a_dpop_token_type_is_refused_at_the_token_endpoint() -> None:
+async def test_a_dpop_answer_with_no_proof_sent_is_refused() -> None:
     answer = {"access_token": "key-bound-secret", "token_type": "DPoP", "expires_in": 60}
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _: httpx.Response(200, json=answer))

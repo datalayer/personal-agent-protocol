@@ -11,7 +11,7 @@ import hashlib
 import hmac
 import re
 import secrets
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import cast
@@ -219,6 +219,7 @@ class _PendingDirectSignIn:
     token_endpoint: str
     tenant_id: str
     expires_at: datetime
+    dpop_signing_algs: Sequence[str] | None = None
 
 
 def _state_reference(state: str) -> str:
@@ -273,8 +274,13 @@ class DirectSignInClient:
         scopes: Iterable[str],
         tenant_id: str,
         lifetime_seconds: int = 600,
+        dpop_signing_algs: Sequence[str] | None = None,
     ) -> DirectSignInStart:
-        """Store one-use state, then open the authorization URL for the user (§4.2)."""
+        """Store one-use state, then open the authorization URL for the user (§4.2).
+
+        `dpop_signing_algs` is the issuer's `dpop_signing_alg_values_supported`: the
+        code exchange sends a DPoP proof when it includes ES256 (§4.5).
+        """
 
         if not 0 < lifetime_seconds <= 900:
             raise ValueError("Direct Sign-In state lifetime must be between 1 and 900 seconds")
@@ -312,6 +318,7 @@ class DirectSignInClient:
             token_endpoint=_https_url(token_endpoint, "token endpoint"),
             tenant_id=tenant_id,
             expires_at=expires_at,
+            dpop_signing_algs=dpop_signing_algs,
         )
         await store.put(reference, pending, expires_at=expires_at)
         try:
@@ -367,6 +374,8 @@ class DirectSignInClient:
             token_endpoint=pending.token_endpoint,
             form=lambda: form,
             error=AuthorizationError,
+            tenant_id=pending.tenant_id,
+            dpop_signing_algs=pending.dpop_signing_algs,
         )
         return await self._result(response, pending)
 

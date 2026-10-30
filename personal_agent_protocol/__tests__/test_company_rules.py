@@ -164,7 +164,7 @@ async def test_mediated_sign_in_in_a_session_another_account_used_signs_in() -> 
     )
     mediated = MediatedSignInClient(reactor=world.reactor, http_client=world.http)
     started = await mediated.sign_in(
-        company=world.company, client_id=session.client_id, scopes=("orders:read",)
+        company=world.company, client_id=session.client_id, scopes=("orders:read",), tenant_id="t"
     )
     assert started.status == "code_required" and started.reference is not None
     done = await mediated.submit_code(started.reference)
@@ -365,7 +365,7 @@ async def test_an_extension_used_by_the_request_needs_no_client_metadata_entry()
     )
     client = MediatedSignInClient(reactor=reactor, http_client=world.http)
     started = await client.sign_in(
-        company=company, client_id=plain.client_id, scopes=("orders:read",)
+        company=company, client_id=plain.client_id, scopes=("orders:read",), tenant_id="t"
     )
     assert started.status == "code_required"
     done = await client.submit_code(started.reference)  # type: ignore[arg-type]
@@ -397,12 +397,15 @@ async def test_northwind_publishes_the_extension_with_less_than_its_other_sign_i
     )
     client = MediatedSignInClient(reactor=world.reactor, http_client=world.http)
     done = await client.sign_in(
-        company=company, client_id=world.atlas.client_id, scopes=("accounts:read",)
+        company=company, client_id=world.atlas.client_id, scopes=("accounts:read",), tenant_id="t"
     )
     assert done.status == "complete" and done.granted_scopes == ("accounts:read",)
     with pytest.raises(AuthorizationError) as wrong:
         await client.sign_in(
-            company=company, client_id=world.atlas.client_id, scopes=("accounts:read",)
+            company=company,
+            client_id=world.atlas.client_id,
+            scopes=("accounts:read",),
+            tenant_id="t",
         )
     assert wrong.value.code == "invalid_grant"
 

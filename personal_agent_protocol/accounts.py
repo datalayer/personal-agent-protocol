@@ -30,7 +30,7 @@ a log, or a URL.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -90,13 +90,18 @@ class SignOutResult(ProtocolModel):
 
 @dataclass(frozen=True)
 class RefreshTokenContext:
-    """Where a refresh token is used, and for whom (all non-secret)."""
+    """Where a refresh token is used, and for whom (all non-secret).
+
+    `dpop_signing_algs` is the issuer's `dpop_signing_alg_values_supported`: a refresh
+    sends a DPoP proof when it includes ES256 (§4.5).
+    """
 
     token_endpoint: str
     issuer: str
     client_id: str
     tenant_id: str
     revocation_endpoint: str | None = None
+    dpop_signing_algs: Sequence[str] | None = None
 
 
 class RefreshTokenClient:
@@ -163,6 +168,8 @@ class RefreshTokenClient:
                     token_endpoint=token_url,
                     form=lambda: form,
                     error=AuthorizationError,
+                    tenant_id=context.tenant_id,
+                    dpop_signing_algs=context.dpop_signing_algs,
                 )
             except AuthorizationError as exc:
                 if exc.code == "invalid_scope":

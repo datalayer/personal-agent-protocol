@@ -253,6 +253,8 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
                 token_endpoint="https://shop.example/oauth/token",  # noqa: S106 - a URL
                 form=lambda: {"grant_type": "refresh_token", "refresh_token": "rt_rate_limited"},
                 error=SessionError,
+                tenant_id="t",
+                dpop_signing_algs=None,
             )
         assert raised.value.code == expect["error"]
         assert raised.value.details == {"retry_after": expect["retry_after"]}

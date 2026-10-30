@@ -44,7 +44,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterat
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 import jwt
@@ -435,6 +435,10 @@ class SessionRecord:
     expires_at: str
     refresh_reference: str | None = None
     agent_id: str | None = None
+    #: How its access token is sent (§4.5).
+    token_type: Literal["Bearer", "DPoP"] = "Bearer"  # noqa: S105 - an OAuth token type
+    #: The issuer's `dpop_signing_alg_values_supported`, for its refreshes (§4.5).
+    dpop_signing_algs: list[str] | None = None
 
     def public(self) -> dict[str, Any]:
         """What may be printed: opaque references, never a token or the User ID."""

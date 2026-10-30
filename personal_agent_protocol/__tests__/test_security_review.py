@@ -737,6 +737,8 @@ async def test_finding_15_a_token_response_is_read_only_up_to_its_limit() -> Non
             token_endpoint=md.token_endpoint,  # type: ignore[union-attr]
             form=lambda: {"grant_type": "refresh_token", "refresh_token": "x"},
             error=SessionError,
+            tenant_id="t",
+            dpop_signing_algs=None,
         )
     assert refused.value.code == "response_too_large"
     assert endless.sent <= 3  # 64 KiB chunks: stopped just past 100 KiB
@@ -813,7 +815,10 @@ async def test_finding_7_the_mediated_client_sends_credentials_once_and_follows_
     )
     with pytest.raises(AuthorizationError):
         await client.sign_in(
-            company=world.company, client_id=world.atlas.client_id, scopes=("orders:read",)
+            company=world.company,
+            client_id=world.atlas.client_id,
+            scopes=("orders:read",),
+            tenant_id="t",
         )
     assert seen == ["/oauth/token"]
 

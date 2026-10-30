@@ -163,6 +163,7 @@ def sign_in(client: MediatedSignInClient, offered: DiscoveredCompany | None = No
             company=company() if offered is None else offered,
             client_id=CLIENT_ID,
             scopes=("orders:read", "orders:return"),
+            tenant_id="tenant-one",
         )
     )
 
@@ -371,7 +372,7 @@ def test_a_rate_limited_code_keeps_the_sign_in() -> None:
     assert started.reference in host.state.values
 
 
-def test_a_dpop_answer_to_a_mediated_sign_in_is_refused() -> None:
+def test_a_dpop_answer_to_a_mediated_sign_in_with_no_proof_is_refused() -> None:
     client, _ = arrange(
         lambda _: httpx.Response(200, json=complete(token_type="DPoP")),  # noqa: S106 - a token type
         CREDENTIALS,

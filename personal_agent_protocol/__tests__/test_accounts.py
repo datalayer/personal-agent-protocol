@@ -167,7 +167,7 @@ def test_a_scope_the_company_was_not_asked_for_is_refused() -> None:
     assert raised.value.code == "scope_escalation"
 
 
-def test_a_dpop_answer_to_a_refresh_is_refused() -> None:
+def test_a_dpop_answer_to_a_refresh_with_no_proof_is_refused() -> None:
     client, _ = arrange(lambda _: httpx.Response(200, json=signed_in(token_type="DPoP")))  # noqa: S106 - an OAuth token type, not a credential
     with pytest.raises(AuthorizationError) as raised:
         asyncio.run(client.refresh("refresh_ref", context=CONTEXT))

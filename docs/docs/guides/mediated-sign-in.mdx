@@ -69,7 +69,9 @@ The answers must be exactly the declared fields, none empty, as `SecretStr`.
 
 ```python
 client = MediatedSignInClient(reactor=reactor, http_client=http)
-result = await client.sign_in(company=company, client_id=client_id, scopes=("orders:read",))
+result = await client.sign_in(
+    company=company, client_id=client_id, scopes=("orders:read",), tenant_id="tenant-one"
+)
 if result.status == "code_required":
     result = await client.submit_code(result.reference)
 ```

@@ -121,7 +121,7 @@ async def credentials(runtime: CliRuntime, record: SessionRecord) -> dict[str, A
         secret = await runtime.secrets.get(record.token_reference)
         if secret is None:
             raise NotConfiguredError("no_access_token", "The Session's token is gone: renew it")
-        token = AccessToken(access_token=secret, scope=record.scope)
+        token = AccessToken(access_token=secret, token_type=record.token_type, scope=record.scope)
     return {"session": session, "token": token}
 
 
@@ -140,6 +140,7 @@ def account_context(record: SessionRecord) -> RefreshTokenContext:
         client_id=record.client_id,
         tenant_id=record.tenant_id,
         revocation_endpoint=record.revocation_endpoint,
+        dpop_signing_algs=record.dpop_signing_algs,
     )
 
 

@@ -241,7 +241,7 @@ async def test_mediated_sign_in_with_a_one_time_code() -> None:
     session = await world.signed_out_session()
     mediated = MediatedSignInClient(reactor=world.reactor, http_client=world.http)
     started = await mediated.sign_in(
-        company=world.company, client_id=session.client_id, scopes=("orders:read",)
+        company=world.company, client_id=session.client_id, scopes=("orders:read",), tenant_id="t"
     )
     assert started.status == "code_required" and started.sent_to == "a•••@example.com"
     wrong = await mediated.submit_code(started.reference)  # type: ignore[arg-type]

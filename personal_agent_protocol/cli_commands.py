@@ -272,6 +272,7 @@ async def _keep(
         record.refresh_reference = refresh_reference
     record.signed_in = True
     record.scope = token.scope
+    record.token_type = token.token_type
     record.expires_at = runtime.expires_at(token.expires_in or 3600)
     runtime.state.sessions[record.id] = record
     runtime.state.save()
@@ -499,6 +500,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 signed_in=False,
                 scope="",
                 expires_at="",
+                dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
             )
             runtime.state.sessions[record.id] = record
             runtime.state.save()
@@ -607,6 +609,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 redirect_uri=target,
                 scopes=_scopes(scope, company, "direct"),
                 tenant_id=record.tenant_id,
+                dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
             )
             callback = runtime.input.read("Callback URL", secret=True)
             result = await client.complete(callback.get_secret_value())
@@ -650,6 +653,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 tenant_id=record.tenant_id,
                 organization=company.document.organization,
                 protected_resources=metadata.protected_resources,
+                dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
             )
             link = started.verification_uri_complete or started.verification_uri
             # The company that asks, by name and domain, with the link and code (§4.6).
@@ -700,6 +704,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 company=company,
                 client_id=record.client_id,
                 scopes=_scopes(scope, company, "mediated"),
+                tenant_id=record.tenant_id,
             )
             while result.status == "code_required" and result.reference is not None:
                 result = await client.submit_code(result.reference)

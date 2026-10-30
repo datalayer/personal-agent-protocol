@@ -9,20 +9,28 @@ from __future__ import annotations
 import hashlib
 import json
 from base64 import urlsafe_b64encode
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import SecretStr
+from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 
 from personal_agent_protocol import (
+    CLOCKS,
     DPOP_PROVERS,
+    SIGNERS,
     DpopProofRequest,
     InMemoryDpopKeys,
     JoseDpopProver,
+    SessionClient,
+    SessionError,
+    TokenResponse,
     build_pap_reactor,
 )
 from personal_agent_protocol.cli_host import FileDpopKeys, FileKeyStore
@@ -107,10 +115,6 @@ async def test_a_proof_needs_128_random_bits_and_a_timezone() -> None:
 
 @pytest.mark.asyncio
 async def test_the_default_prover_reads_the_hosts_clock_when_it_signs() -> None:
-    from reactor import PluginManifest
-
-    from personal_agent_protocol import CLOCKS
-
     class Stopped:
         def now(self) -> datetime:
             return NOW
@@ -145,3 +149,135 @@ async def test_the_cli_keeps_its_dpop_keys_in_the_key_file(tmp_path: Path) -> No
     assert json.loads(path.read_text())["dpop"].keys() == {f"t|{ISSUER}"}
     await keys.forget(tenant_id="t", issuer=ISSUER)
     assert (await keys.key_for(tenant_id="t", issuer=ISSUER)).thumbprint != first.thumbprint
+
+
+# Token requests ---------------------------------------------------------------------
+
+
+class _Signer:
+    async def sign(self, claims: dict[str, object], *, purpose: str) -> SecretStr:
+        return SecretStr(f"assertion-{claims['jti']}")
+
+
+class _Host:
+    def provide_contributions(self, contributions: object) -> None:
+        contributions.contribute(SIGNERS, _Signer(), contribution_id="agent")  # type: ignore[attr-defined]
+
+
+def _sessions(http: httpx.AsyncClient) -> tuple[SessionClient, PluginPlatform]:
+    platform, _ = build_pap_reactor(
+        http_client=http, plugins=[(PluginManifest(name="host", version="1"), _Host())]
+    )
+    return SessionClient(reactor=platform, http_client=http), platform
+
+
+TOKEN_ENDPOINT = f"{ISSUER}/oauth/token"
+ISSUED = {"access_token": "at", "token_type": "DPoP", "expires_in": 60}
+
+
+async def _token_request(
+    answers: Callable[[httpx.Request], httpx.Response], algs: list[str] | None
+) -> tuple[TokenResponse, list[httpx.Request]]:
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return answers(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client, platform = _sessions(http)
+        try:
+            response = await client.token_request(
+                client_id="https://agent.example/agent.json",
+                issuer=ISSUER,
+                token_endpoint=TOKEN_ENDPOINT,
+                form=lambda: {"grant_type": "refresh_token", "refresh_token": "rt"},
+                error=SessionError,
+                tenant_id="tenant",
+                dpop_signing_algs=algs,
+            )
+        finally:
+            platform.stop()
+    return response, sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("algs", [["ES256"], ["RS256", "ES256"]])
+async def test_a_token_request_proves_when_the_issuer_lists_es256(algs: list[str]) -> None:
+    response, sent = await _token_request(lambda _: httpx.Response(200, json=ISSUED), algs)
+    assert response.token_type == "DPoP"
+    _, claims = _read(SecretStr(sent[0].headers["dpop"]))
+    assert claims["htm"] == "POST" and claims["htu"] == TOKEN_ENDPOINT
+    assert "ath" not in claims and "nonce" not in claims
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("algs", [None, [], ["RS256"], ["es256"]])
+async def test_a_token_request_sends_no_proof_to_a_company_that_does_not_list_es256(
+    algs: list[str] | None,
+) -> None:
+    answer = {**ISSUED, "token_type": "Bearer"}
+    _, sent = await _token_request(lambda _: httpx.Response(200, json=answer), algs)
+    assert "dpop" not in sent[0].headers
+
+
+@pytest.mark.asyncio
+async def test_bearer_after_a_proof_is_the_companys_choice() -> None:
+    answer = {**ISSUED, "token_type": "Bearer"}
+    response, sent = await _token_request(lambda _: httpx.Response(200, json=answer), ["ES256"])
+    assert response.token_type == "Bearer" and "dpop" in sent[0].headers
+
+
+@pytest.mark.asyncio
+async def test_dpop_with_no_proof_sent_is_refused() -> None:
+    with pytest.raises(SessionError) as refused:
+        await _token_request(lambda _: httpx.Response(200, json=ISSUED), ["RS256"])
+    assert refused.value.code == "unsupported_token_type"
+    assert "at" not in str(refused.value).split()
+
+
+@pytest.mark.asyncio
+async def test_use_dpop_nonce_is_retried_once_with_a_fresh_proof_and_assertion() -> None:
+    def answers(request: httpx.Request) -> httpx.Response:
+        if "nonce" in _read(SecretStr(request.headers["dpop"]))[1]:
+            return httpx.Response(200, json=ISSUED)
+        body = {"error": "use_dpop_nonce"}
+        return httpx.Response(400, json=body, headers={"DPoP-Nonce": "n-1"})
+
+    response, sent = await _token_request(answers, ["ES256"])
+    assert response.token_type == "DPoP" and len(sent) == 2
+    first, second = (_read(SecretStr(item.headers["dpop"]))[1] for item in sent)
+    assert first["jti"] != second["jti"] and second["nonce"] == "n-1"
+    assertions = [parse_qs(item.content.decode())["client_assertion"] for item in sent]
+    assert assertions[0] != assertions[1]
+
+
+@pytest.mark.asyncio
+async def test_a_second_use_dpop_nonce_is_refused_and_not_retried_again() -> None:
+    def answers(_: httpx.Request) -> httpx.Response:
+        body = {"error": "use_dpop_nonce"}
+        return httpx.Response(400, json=body, headers={"DPoP-Nonce": "n-again"})
+
+    sent: list[httpx.Request] = []
+
+    def counted(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return answers(request)
+
+    with pytest.raises(SessionError) as refused:
+        await _token_request(counted, ["ES256"])
+    assert refused.value.code == "use_dpop_nonce" and len(sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_use_dpop_nonce_with_no_proof_sent_is_not_retried() -> None:
+    sent: list[httpx.Request] = []
+
+    def answers(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        body = {"error": "use_dpop_nonce"}
+        return httpx.Response(400, json=body, headers={"DPoP-Nonce": "n-1"})
+
+    with pytest.raises(SessionError) as refused:
+        await _token_request(answers, None)
+    assert refused.value.code == "use_dpop_nonce" and len(sent) == 1

@@ -659,10 +659,11 @@ requirements:
   implementation:
   - personal_agent_protocol.sessions:SessionClient
   tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_a_dpop_token_type_is_refused_at_the_token_endpoint
-  - personal_agent_protocol/__tests__/test_accounts.py::test_a_dpop_answer_to_a_refresh_is_refused
-  reason: The SDKs send no DPoP proofs yet, and refuse a DPoP token response, so they can't sign in at
-    a Company that requires DPoP.
+  - personal_agent_protocol/__tests__/test_dpop.py::test_a_token_request_proves_when_the_issuer_lists_es256
+  - personal_agent_protocol/__tests__/test_dpop.py::test_a_token_request_sends_no_proof_to_a_company_that_does_not_list_es256
+  - personal_agent_protocol/__tests__/test_sessions.py::test_a_dpop_answer_with_no_proof_sent_is_refused
+  reason: The Python SDK proves and uses DPoP tokens; the TypeScript SDK sends no DPoP proofs yet, and
+    refuses a DPoP token response, so it can't sign in at a Company that requires DPoP.
 - id: PAP-4.7-01
   section: '4.7'
   level: MUST

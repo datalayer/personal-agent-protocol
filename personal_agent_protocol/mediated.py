@@ -28,6 +28,7 @@ transitional: prefer Direct or Device Sign-In when the company offers them.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal, cast
@@ -124,6 +125,8 @@ class _PendingCode:
     scopes: tuple[str, ...]
     company_name: str
     company_domain: str
+    tenant_id: str
+    dpop_signing_algs: Sequence[str] | None = None
     sign_in_id: str = ""
     sent_to: str | None = None
     expires_at: datetime = datetime.max
@@ -153,8 +156,12 @@ class MediatedSignInClient:
         company: DiscoveredCompany,
         client_id: str,
         scopes: tuple[str, ...],
+        tenant_id: str,
     ) -> MediatedSignInResult:
-        """Collect the declared fields from the user and send them with the grant."""
+        """Collect the declared fields from the user and send them with the grant.
+
+        A DPoP proof goes with the grant when the issuer's metadata lists ES256 (§4.5).
+        """
 
         mediated = self._offered(company)
         metadata = cast(OAuthServerMetadata, company.oauth_metadata)
@@ -180,6 +187,8 @@ class MediatedSignInClient:
             scopes=requested,
             company_name=organization.name,
             company_domain=organization.domain,
+            tenant_id=tenant_id,
+            dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
         )
         try:
             form = {
@@ -247,6 +256,8 @@ class MediatedSignInClient:
                 token_endpoint=pending.token_endpoint,
                 form=lambda: form,
                 error=AuthorizationError,
+                tenant_id=pending.tenant_id,
+                dpop_signing_algs=pending.dpop_signing_algs,
             )
         except AuthorizationError as exc:
             if exc.code == "code_required":

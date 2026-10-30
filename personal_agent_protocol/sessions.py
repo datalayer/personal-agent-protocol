@@ -8,7 +8,8 @@ A Session is local: `SessionClient.start` chooses its `sid` at random and asks
 the company nothing (§5.2). Every request then carries a Session JWT the
 `pap.sessionSigner` signs for it (`transport.SessionHttpClient`). Account access
 is plain OAuth: sign-in and refresh return an access token and a refresh token
-(§4.4, §4.5, §4.7); the token endpoint gets a client assertion and nothing else.
+(§4.4, §4.5, §4.7). The token endpoint gets a client assertion, and a DPoP proof when
+the issuer's metadata lists ES256 (§4.5).
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 import base64
 import inspect
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal, cast
@@ -26,16 +27,19 @@ import httpx
 from pydantic import Field, SecretStr, field_validator, model_validator
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .crypto import SESSION_ID
+from .crypto import DPOP_ALGORITHM, SESSION_ID
 from .errors import PersonalAgentProtocolError, ProtocolValidationError, SessionError
 from .json import loads_strict
 from .models import ProtocolModel
 from .reactor import (
     CLOCKS,
+    DPOP_PROVERS,
     RANDOM_SOURCES,
     SIGNERS,
     TOKEN_STORES,
     Clock,
+    DpopProofRequest,
+    DpopProver,
     RandomSource,
     Signer,
     TokenStore,
@@ -48,6 +52,10 @@ from .telemetry import by_issuer, session_result, traced
 JWT_CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
 RandomBytes = Callable[[int], bytes]
+#: The header that carries a DPoP proof (RFC 9449 §4.1).
+DPOP_HEADER = "DPoP"
+#: The header a server gives a DPoP nonce in (RFC 9449 §8).
+DPOP_NONCE_HEADER = "DPoP-Nonce"
 #: A client assertion's `exp` is at most this long after its `iat` (§4.1).
 ASSERTION_MAX_LIFETIME_SECONDS = 300
 
@@ -213,8 +221,7 @@ class PapSession:
 class TokenResponse(ProtocolModel):
     """A token endpoint's answer, as on the wire (§4.7): plain OAuth.
 
-    `token_type` is compared ignoring case (RFC 6749 §5.1). This SDK does not
-    send DPoP proofs yet (§4.5: a SHOULD), so a `DPoP` token is refused.
+    `token_type` is compared ignoring case (RFC 6749 §5.1): `Bearer` or `DPoP`.
     """
 
     access_token: SecretStr
@@ -227,9 +234,9 @@ class TokenResponse(ProtocolModel):
     @classmethod
     def validate_token_type(cls, value: str) -> str:
         if value.lower() == "dpop":
-            raise ValueError("DPoP-bound access tokens are not supported by this SDK yet")
+            return "DPoP"
         if value.lower() != "bearer":
-            raise ValueError("an access token is Bearer")
+            raise ValueError("an access token is Bearer or DPoP")
         return "Bearer"
 
 
@@ -240,11 +247,13 @@ class AccessToken(ProtocolModel):
     that works at all of the Company's services but one that asks for its own.
     `scope` is what was granted: a response that leaves it out granted exactly the
     scopes requested (RFC 6749 §5.1). Never the refresh token: that one stays in
-    `pap.tokenStore`.
+    `pap.tokenStore`. `token_type` says how it is sent: `DPoP`, bound to the Company's
+    DPoP key, with a proof on every request (§4.5). Refresh tokens aren't bound, so
+    a lost key means refreshing, not signing in again (RFC 9449 §5).
     """
 
     access_token: SecretStr
-    token_type: Literal["Bearer"] = "Bearer"
+    token_type: Literal["Bearer", "DPoP"] = "Bearer"
     expires_in: int | None = None
     scope: str = ""
     resource: str | None = None
@@ -271,6 +280,7 @@ class AccessToken(ProtocolModel):
             )
         return cls(
             access_token=response.access_token,
+            token_type=cast(Literal["Bearer", "DPoP"], response.token_type),
             expires_in=response.expires_in,
             scope=scope,
             resource=resource,
@@ -373,23 +383,103 @@ class SessionClient:
         token_endpoint: str,
         form: Callable[[], dict[str, str] | Awaitable[dict[str, str]]],
         error: type[PersonalAgentProtocolError],
+        tenant_id: str,
+        dpop_signing_algs: Sequence[str] | None,
     ) -> TokenResponse:
         """POST one grant to the token endpoint with a fresh client assertion (§4.1, §4.4).
 
         `form` gives the grant's own fields. No Session header goes to an OAuth
-        endpoint (§5.2). Raises `error` with the company's OAuth error code.
+        endpoint (§5.2). `dpop_signing_algs` is the issuer's
+        `dpop_signing_alg_values_supported`: when it includes ES256 a DPoP proof goes
+        with the request, so the Company can bind the tokens (§4.5), and a
+        `use_dpop_nonce` refusal is retried once, with a fresh proof and client
+        assertion. Raises `error` with the company's OAuth error code.
         """
 
         fields = form()
         if inspect.isawaitable(fields):
             fields = await fields
+        proves = dpop_signing_algs is not None and DPOP_ALGORITHM in dpop_signing_algs
+        nonce: str | None = None
+        while True:
+            response, payload = await self._post_grant(
+                fields,
+                client_id=client_id,
+                issuer=issuer,
+                token_endpoint=token_endpoint,
+                error=error,
+                proof=(
+                    await self._proof(token_endpoint, tenant_id, issuer, nonce) if proves else None
+                ),
+            )
+            given = response.headers.get(DPOP_NONCE_HEADER)
+            if (
+                not proves
+                or nonce is not None
+                or given is None
+                or response.status_code != 400
+                or not isinstance(payload, dict)
+                or payload.get("error") != "use_dpop_nonce"
+            ):
+                break
+            nonce = given
+        if response.is_success:
+            try:
+                token = TokenResponse.model_validate(payload)
+            except (ValueError, ProtocolValidationError) as exc:
+                raise error(
+                    "invalid_token_response",
+                    "Token response is malformed",
+                    status_code=response.status_code,
+                ) from exc
+            if token.token_type == "DPoP" and not proves:
+                raise error(
+                    "unsupported_token_type",
+                    "The company bound the token to a key no proof showed",
+                    status_code=response.status_code,
+                )
+            return token
+        raise error(
+            refusal_code(response, payload, "http_error"),
+            "Company refused the token request",
+            status_code=response.status_code,
+            details=refusal_details(response, payload) or None,
+        )
+
+    async def _proof(
+        self, token_endpoint: str, tenant_id: str, issuer: str, nonce: str | None
+    ) -> SecretStr:
+        prover = cast(DpopProver, first_contribution(self.reactor, DPOP_PROVERS, "DPoP prover"))
+        return await prover.prove(
+            DpopProofRequest(
+                method="POST",
+                url=token_endpoint,
+                tenant_id=tenant_id,
+                issuer=issuer,
+                nonce=nonce,
+            )
+        )
+
+    async def _post_grant(
+        self,
+        fields: dict[str, str],
+        *,
+        client_id: str,
+        issuer: str,
+        token_endpoint: str,
+        error: type[PersonalAgentProtocolError],
+        proof: SecretStr | None,
+    ) -> tuple[httpx.Response, object]:
+        """One POST of a grant, with a fresh client assertion: its response and JSON body."""
+
         data = {**fields, **(await self.client_authentication(client_id=client_id, issuer=issuer))}
+        headers = {"Accept": "application/json"}
+        if proof is not None:
+            headers[DPOP_HEADER] = proof.get_secret_value()
         try:
             response = await send_bounded(
                 self.http,
-                self.http.build_request(
-                    "POST", token_endpoint, data=data, headers={"Accept": "application/json"}
-                ),
+                self.http.build_request("POST", token_endpoint, data=data, headers=headers),
                 max_bytes=self.max_response_bytes,
             )
         except httpx.HTTPError as exc:
@@ -402,27 +492,7 @@ class SessionClient:
                 status_code=response.status_code,
             )
         # A 429 has `Retry-After` and no body (§5.6).
-        payload = None if refused_without_body(response) else self._decode(response, error)
-        if response.is_success:
-            try:
-                return TokenResponse.model_validate(payload)
-            except (ValueError, ProtocolValidationError) as exc:
-                dpop = (
-                    isinstance(payload, dict) and str(payload.get("token_type")).lower() == "dpop"
-                )
-                raise error(
-                    "unsupported_token_type" if dpop else "invalid_token_response",
-                    "The company issued a DPoP-bound token, which this SDK doesn't support yet"
-                    if dpop
-                    else "Token response is malformed",
-                    status_code=response.status_code,
-                ) from exc
-        raise error(
-            refusal_code(response, payload, "http_error"),
-            "Company refused the token request",
-            status_code=response.status_code,
-            details=refusal_details(response, payload) or None,
-        )
+        return response, None if refused_without_body(response) else self._decode(response, error)
 
     async def client_authentication(self, *, client_id: str, issuer: str) -> dict[str, str]:
         """`client_id` and a fresh client assertion, as form fields (§4.1)."""
@@ -468,6 +538,8 @@ class SessionClient:
 
 __all__ = [
     "ASSERTION_MAX_LIFETIME_SECONDS",
+    "DPOP_HEADER",
+    "DPOP_NONCE_HEADER",
     "JWT_CLIENT_ASSERTION",
     "AccessToken",
     "ClientAssertionClaims",

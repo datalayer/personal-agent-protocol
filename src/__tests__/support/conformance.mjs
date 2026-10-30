@@ -16,51 +16,65 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-import { SignJWT, exportJWK, generateKeyPair, importJWK } from "jose";
+import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair, importJWK } from "jose";
 
 import {
-  AccountTokenClient,
+  APPROVAL_HEADER,
+  ApiClient,
+  ApiError,
   AuthorizationStateStores,
+  BrowserHandoffs,
   BrowserJoins,
   BrowserSessionClient,
   Clocks,
   ConversationClient,
+  DelegatedSessionSigner,
   DeviceSignInClient,
-  DpopFetchClient,
-  DpopProofProviders,
-  InMemorySessionKeys,
-  InMemoryStandingPermissionStore,
-  JoseDpopProofProvider,
+  DirectSignInClient,
+  InMemoryDelegatedKeys,
   McpClient,
+  McpError,
+  OPERATIONS_VERSION,
   OperationsClient,
   PROTOCOL_PROFILE,
+  PapSession,
   PersonalAgentProtocolError,
+  RefreshTokenClient,
+  SESSION_JWT_ALGORITHM,
+  SESSION_JWT_TYPE,
   SecretValue,
+  ServiceTokens,
   SessionClient,
+  SessionFetchClient,
+  SessionSigners,
   Signers,
-  StandingPermissionStores,
   TokenStores,
-  approve,
+  TransportError,
+  approvalHeader,
   buildPapReactor,
+  challengeParameters,
+  conversationEndpoint,
+  delegationClaims,
   discoverCompany,
   feedbackEndpoint,
   fetchMcpServerMetadata,
+  mcpApi,
   offersDevice,
   offersDirect,
-  mcpApi,
-  operationPage,
-  operationsEndpoint,
+  openapiUrl,
+  operationsNegotiated,
   parseClientMetadata,
-  parseOperation,
+  serviceResource,
+  sessionHeaders,
+  sessionJwtClaims,
+  staleResourceMetadata,
 } from "../../../lib/index.js";
 import { JoseSigner } from "../../../lib/server.js";
 import { ControlledBrowser } from "./controlled-browser.mjs";
 
 const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations"];
-const JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 const CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
-const TOKEN_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange";
-const ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token";
+const DAY_SECONDS = 24 * 60 * 60;
 
 /** Every fixture case the company is tested on (no `check`: those the SDK decides alone). */
 export function companyCases() {
@@ -86,7 +100,9 @@ export function check(condition, message) {
 const b64 = (bytes) => Buffer.from(bytes).toString("base64url");
 const segment = (value) => b64(JSON.stringify(value));
 const opaque = (prefix) => `${prefix}_${b64(randomBytes(16))}`;
+const strongRandom = (length) => new Uint8Array(randomBytes(length));
 
+/** Expect a refusal from `promise`; anything else fails the case. */
 async function refused(promise, what) {
   try {
     await promise;
@@ -97,9 +113,11 @@ async function refused(promise, what) {
   throw new ConformanceFailure(`expected the company to refuse (${what})`);
 }
 
+const textOf = (response) => response.clone().text();
+
 async function errorOf(response) {
   try {
-    const payload = JSON.parse(await response.clone().text());
+    const payload = JSON.parse(await textOf(response));
     return typeof payload?.error === "string" ? payload.error : undefined;
   } catch {
     return undefined;
@@ -136,9 +154,15 @@ export async function identityFrom({ domain, name, privateJwk, extensions = ["op
       jwks_uri: `https://${domain}/jwks.json`,
       redirect_uris: [`https://${domain}/oauth/callback`],
       token_endpoint_auth_method: "private_key_jwt",
-      extensions: Object.fromEntries(extensions.map((extension) => [extension, { version: "1" }])),
+      extensions: Object.fromEntries(extensions.map((extension) => [extension, { version: extension === "operations" ? OPERATIONS_VERSION : "1" }])),
     },
   };
+}
+
+/** A stranger's identity at the same domain and `kid`: its key isn't the published one. */
+async function strangerOf(identity) {
+  const pair = await generateKeyPair("ES256", { extractable: true });
+  return identityFrom({ domain: identity.domain, name: "Stranger", kid: identity.kid, privateJwk: await exportJWK(pair.privateKey) });
 }
 
 /**
@@ -153,8 +177,9 @@ export class Agent {
     this.tokens = new Map();
     this.state = new Map();
     this.browserFetch = browserFetch;
-    this.sessionKeys = new InMemorySessionKeys();
-    this.standing = new InMemoryStandingPermissionStore();
+    this.delegatedKeys = new InMemoryDelegatedKeys();
+    // The user's browser: the authorization URLs Direct Sign-In opened, for the driver.
+    this.userBrowser = { urls: [], open: async (url) => void this.userBrowser.urls.push(url.reveal()) };
     this.reactor = buildPapReactor({ fetch }, [
       {
         name: `${identity.domain}-conformance`,
@@ -166,9 +191,13 @@ export class Agent {
             options: { id: "agent-key" },
           },
           {
-            point: DpopProofProviders,
-            value: new JoseDpopProofProvider({ now: () => clock.now(), keys: this.sessionKeys }),
-            options: { id: "dpop-keys" },
+            point: SessionSigners,
+            value: new DelegatedSessionSigner({
+              custody: this.delegatedKeys,
+              signer: new JoseSigner({ privateKey: identity.privateKey, algorithm: "ES256", keyId: identity.kid }),
+              now: () => clock.now(),
+            }),
+            options: { id: "delegated-keys" },
           },
           {
             point: TokenStores,
@@ -191,19 +220,20 @@ export class Agent {
             },
             options: { id: "state" },
           },
-          { point: StandingPermissionStores, value: this.standing, options: { id: "standing" } },
+          { point: BrowserHandoffs, value: this.userBrowser, options: { id: "user-browser" } },
           ...(this.browser === undefined
             ? []
             : [{ point: BrowserJoins, value: this.browser, options: { id: "controlled-browser" } }]),
         ],
       },
     ]);
-    this.transport = new DpopFetchClient({ reactor: this.reactor, fetch });
+    this.transport = new SessionFetchClient({ reactor: this.reactor, fetch });
     this.sessions = new SessionClient({ reactor: this.reactor, fetch });
     this.device = new DeviceSignInClient({ reactor: this.reactor, fetch });
-    this.accounts = new AccountTokenClient({ reactor: this.reactor, fetch });
+    this.accounts = new RefreshTokenClient({ reactor: this.reactor, fetch });
+    this.api = new ApiClient({ transport: this.transport });
     this.conversations = new ConversationClient({ reactor: this.reactor, transport: this.transport });
-    this.operations = new OperationsClient({ reactor: this.reactor, transport: this.transport });
+    this.operations = new OperationsClient({ reactor: this.reactor, sleep: async () => {} });
   }
 }
 
@@ -224,6 +254,8 @@ export class Context {
     this.discovered = undefined;
   }
 
+  // The company ---------------------------------------------------------------------
+
   async company() {
     if (this.discovered === undefined) {
       this.discovered = await discoverCompany(this.domain, { reactor: this.agent.reactor });
@@ -241,20 +273,24 @@ export class Context {
   }
 
   async conversationsEndpoint() {
-    const protocol = (await this.company()).document.agent?.protocols?.find((item) => item.type === "poppy");
-    if (protocol === undefined) throw new SkipCase("the company lists no poppy conversation protocol");
-    return protocol.endpoint;
-  }
-
-  async operationsEndpoint() {
-    const endpoint = operationsEndpoint((await this.company()).document, parseClientMetadata(this.agent.identity.metadata));
-    if (endpoint === undefined) throw new SkipCase("operations v1 is not negotiated with this company");
+    const endpoint = conversationEndpoint((await this.company()).document);
+    if (endpoint === undefined) throw new SkipCase("the company lists no poppy conversation protocol");
     return endpoint;
   }
 
+  async operationsNegotiated() {
+    const metadata = parseClientMetadata(this.agent.identity.metadata);
+    if (!operationsNegotiated((await this.company()).document, metadata)) {
+      throw new SkipCase("operations v2 is not negotiated with this company");
+    }
+  }
+
+  /** An API path at the company's API (its OpenAPI `url`'s origin), else its origin. */
   url(path) {
     return `${this.apiBase ?? this.baseUrl}${path}`;
   }
+
+  // Capabilities --------------------------------------------------------------------
 
   require(...capabilities) {
     const missing = capabilities.filter((name) => !this.driver.capabilities.has(name));
@@ -277,12 +313,11 @@ export class Context {
     return this.clock.now();
   }
 
+  // Users and Sessions --------------------------------------------------------------
+
+  /** A fresh pairwise User ID, so no case sees another's state. */
   newUser() {
     return opaque("usr_conf");
-  }
-
-  async who(_user) {
-    return { tenantId: this.tenantId, issuer: (await this.metadata()).issuer };
   }
 
   /** Another browser, with a cookie jar of its own, on the runner's browser network. */
@@ -297,28 +332,19 @@ export class Context {
       clientId: agent.identity.clientId,
       pairwiseUserId: user,
       issuer: metadata.issuer,
-      tokenEndpoint: metadata.token_endpoint,
       tenantId: this.tenantId,
-    });
-  }
-
-  async renew(user, sessionKey, { agent = this.agent, resource } = {}) {
-    const metadata = await this.metadata();
-    return agent.sessions.renew({
-      clientId: agent.identity.clientId,
-      pairwiseUserId: user,
-      issuer: metadata.issuer,
-      tokenEndpoint: metadata.token_endpoint,
-      tenantId: this.tenantId,
-      sessionKey,
-      ...(resource === undefined ? {} : { resource }),
     });
   }
 
   /** Device Sign-In, the user approving on the company's page through the driver. */
   async signIn(user, session, { scopes, granted, account, agent = this.agent } = {}) {
     const metadata = await this.metadata();
-    if (!offersDevice(metadata)) throw new SkipCase("the company offers no Device Sign-In");
+    if (!offersDevice(metadata)) {
+      if (this.driver.capabilities.has("direct_sign_in") && offersDirect(metadata)) {
+        return this.#directSignIn(agent, session, { scopes, granted, account });
+      }
+      throw new SkipCase("the company offers no Device Sign-In");
+    }
     const started = await agent.device.begin({
       deviceAuthorizationEndpoint: metadata.device_authorization_endpoint,
       tokenEndpoint: metadata.token_endpoint,
@@ -326,7 +352,6 @@ export class Context {
       clientId: agent.identity.clientId,
       scopes: scopes ?? this.scenario.scopes,
       tenantId: this.tenantId,
-      sessionKey: session.sessionKey,
       organization: (await this.company()).document.organization,
       protectedResources: metadata.protected_resources,
     });
@@ -335,64 +360,129 @@ export class Context {
       await this.driver.wait(started.pollInterval);
       const polled = await agent.device.poll(started.reference);
       if (polled.status === "complete") {
-        check(polled.token !== undefined && polled.accountTokenReference !== undefined, "sign-in returns its token");
-        return { token: polled.token, reference: polled.accountTokenReference };
+        check(polled.token !== undefined && polled.refreshTokenReference !== undefined, "sign-in returns its token");
+        return { session, token: polled.token, reference: polled.refreshTokenReference };
       }
     }
     throw new ConformanceFailure("Device Sign-In did not complete after approval");
   }
 
-  async accountContext(user, agent = this.agent) {
+  /** Direct Sign-In, the driver playing the user on the company's consent page. */
+  async #directSignIn(actor, session, { scopes, granted, account }) {
+    const metadata = await this.metadata();
+    const client = new DirectSignInClient({ reactor: actor.reactor, fetch: this.fetch });
+    await client.begin({
+      authorizationEndpoint: metadata.authorization_endpoint,
+      tokenEndpoint: metadata.token_endpoint,
+      issuer: metadata.issuer,
+      clientId: actor.identity.clientId,
+      redirectUri: actor.identity.metadata.redirect_uris[0],
+      scopes: scopes ?? this.scenario.scopes,
+      tenantId: this.tenantId,
+    });
+    const callbackUrl = await this.driver.approveAuthorization(actor.userBrowser.urls.at(-1), {
+      account: account ?? this.driver.accounts[0],
+      scopes: granted,
+    });
+    const done = await client.complete({ callbackUrl });
+    check(done.refreshTokenReference !== undefined, "sign-in returns its refresh token");
+    return { session, token: done.token, reference: done.refreshTokenReference };
+  }
+
+  async accountContext(_user, agent = this.agent) {
     const metadata = await this.metadata();
     return {
       tokenEndpoint: metadata.token_endpoint,
       issuer: metadata.issuer,
       clientId: agent.identity.clientId,
       tenantId: this.tenantId,
-      pairwiseUserId: user,
       ...(metadata.revocation_endpoint ? { revocationEndpoint: metadata.revocation_endpoint } : {}),
     };
   }
 
-  accountToken(reference) {
+  /** The refresh token behind `reference`. */
+  refreshToken(reference) {
     const value = this.agent.tokens.get(reference);
-    check(value instanceof SecretValue, "the Account Token is stored behind its reference");
-    return value.reveal();
+    check(value instanceof SecretValue, "the refresh token is stored behind its reference");
+    return value;
   }
+
+  // Raw requests (for what the SDK would never send) -----------------------------------
 
   /** One request exactly as given: no cookies, no redirects followed. */
   send(method, url, { headers = {}, body } = {}) {
     return this.fetch(url, { method, headers, ...(body === undefined ? {} : { body }), redirect: "manual" });
   }
 
-  /**
-   * A DPoP proof, optionally made `shift` seconds off.
-   *
-   * Signed with `sessionKey`, else the key of `token`'s Session, else a new Session Key:
-   * a proof from a key the company has never seen starts a Session at the token endpoint
-   * (§4.3).
-   */
-  async proof(_user, method, url, { token, sessionKey, agent = this.agent, shift = 0, nonce } = {}) {
-    const metadata = await this.metadata();
-    let provider = agent.reactor.getContributions(DpopProofProviders)[0].value;
-    let key = sessionKey ?? (typeof token === "object" && token !== null ? token.sessionKey : undefined);
-    key ??= await provider.newSessionKey({ tenantId: this.tenantId, issuer: metadata.issuer });
-    if (shift) {
-      if (!(provider instanceof JoseDpopProofProvider)) throw new SkipCase("the DPoP provider cannot make a proof at another time");
-      provider = new JoseDpopProofProvider({ now: () => new Date(this.now().getTime() + shift * 1000), keys: provider.keys });
-    }
-    const accessToken =
-      token === undefined ? undefined : token instanceof SecretValue ? token : token.accessToken ?? new SecretValue(token);
-    const proof = await provider.create({
+  /** The headers of one request in `session`: `Poppy-Session`, and `Authorization`. */
+  auth(session, method, url, token, { agent = this.agent } = {}) {
+    return sessionHeaders(agent.reactor, method, url, { session, token });
+  }
+
+  jwtRequest(session, method, url, token) {
+    const accessToken = token instanceof SecretValue ? token : token?.accessToken;
+    return {
       method,
       url,
-      tenantId: this.tenantId,
-      issuer: metadata.issuer,
-      sessionKey: key,
+      tenantId: session.tenantId,
+      issuer: session.issuer,
+      clientId: session.clientId,
+      sid: session.sid,
+      sub: session.sub,
+      ...(session.agentId === undefined ? {} : { agentId: session.agentId }),
       ...(accessToken === undefined ? {} : { accessToken }),
-      ...(nonce === undefined ? {} : { nonce }),
+    };
+  }
+
+  /** A Session JWT the SDK would never send: real keys, one thing wrong (§5.2). */
+  async forgedSessionJwt(session, method, url, { token, mutation = {} } = {}) {
+    const identity = this.agent.identity;
+    const clockNow = this.now().getTime();
+    const issuedAt = new Date(clockNow + (mutation.iat_offset ?? 0) * 1000);
+    const claims = await sessionJwtClaims(this.jwtRequest(session, method, url, token), { issuedAt, randomBytes: strongRandom });
+    if ("aud" in mutation) {
+      claims.aud = mutation.aud === "token_endpoint" ? (await this.metadata()).token_endpoint : mutation.aud;
+    }
+    if ("htm" in mutation) claims.htm = mutation.htm;
+    if ("htu" in mutation) claims.htu = mutation.htu;
+    if ("ath" in mutation) claims.ath = mutation.ath;
+    if (mutation.drop_ath) delete claims.ath;
+    const delegated = await generateKeyPair("ES256", { extractable: true });
+    const { kty, crv, x, y } = await exportJWK(delegated.publicKey);
+    const publicKey = { kty, crv, x, y };
+    const lifetime = mutation.delegation_lifetime ?? 3600;
+    const body = delegationClaims({
+      clientId: identity.clientId,
+      publicKey,
+      issuedAt: new Date(clockNow + (mutation.delegation_iat_offset ?? 0) * 1000),
+      lifetimeSeconds: Math.min(lifetime, DAY_SECONDS),
+      randomBytes: strongRandom,
     });
-    return proof.reveal();
+    if (lifetime > DAY_SECONDS) body.exp = body.iat + lifetime;
+    if (mutation.delegation_extra) Object.assign(body, mutation.delegation_extra);
+    const signedBy = async (privateKey) =>
+      (await new JoseSigner({ privateKey, algorithm: "ES256", keyId: identity.kid }).sign(body, { purpose: "delegation" })).reveal();
+    let delegation = await signedBy(identity.privateKey);
+    if (mutation.delegation_signer === "stranger") {
+      delegation = await signedBy((await generateKeyPair("ES256")).privateKey);
+    }
+    if (mutation.delegation_typ) {
+      delegation = await new SignJWT(body)
+        .setProtectedHeader({ alg: "ES256", typ: mutation.delegation_typ, kid: identity.kid })
+        .sign(identity.privateKey);
+    }
+    const header = {
+      typ: mutation.typ ?? SESSION_JWT_TYPE,
+      kid: mutation.kid ?? (await calculateJwkThumbprint(publicKey, "sha256")),
+      pap_dlg: delegation,
+    };
+    if (mutation.no_delegation) {
+      // Signed directly with a key from `jwks_uri`, which never signs a Session JWT.
+      const { pap_dlg: _gone, ...direct } = header;
+      return new SignJWT(claims).setProtectedHeader({ ...direct, kid: identity.kid, alg: "ES256" }).sign(identity.privateKey);
+    }
+    if (mutation.alg === "none") return `${segment({ ...header, alg: "none" })}.${segment(claims)}.`;
+    return new SignJWT(claims).setProtectedHeader({ ...header, alg: SESSION_JWT_ALGORITHM }).sign(delegated.privateKey);
   }
 
   claims({ subject, audience, lifetime = 60, shift = 0 }) {
@@ -418,20 +508,20 @@ export class Context {
       return `${input}.${b64(mac)}`;
     }
     const token = await new SignJWT(claims).setProtectedHeader({ ...header, alg: "ES256" }).sign(identity.privateKey);
-    if (algorithm === "RS256") {
+    if (algorithm === "PS384") {
       const [, payload, signature] = token.split(".");
-      return `${segment({ ...header, alg: "RS256" })}.${payload}.${signature}`;
+      return `${segment({ ...header, alg: "PS384" })}.${payload}.${signature}`;
     }
     return token;
   }
 
-  /** A raw token request; `dpop === true` makes a fresh valid proof, `null` sends none. */
-  async tokenRequest(user, form, { dpop = true } = {}) {
+  /** A raw token request: no Session header goes to an OAuth endpoint (§5.2). */
+  async tokenRequest(form) {
     const endpoint = (await this.metadata()).token_endpoint;
-    const headers = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
-    if (dpop === true) headers.DPoP = await this.proof(user, "POST", endpoint);
-    else if (dpop !== null) headers.DPoP = dpop;
-    return this.send("POST", endpoint, { headers, body: new URLSearchParams(form).toString() });
+    return this.send("POST", endpoint, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams(form).toString(),
+    });
   }
 
   async clientForm(identity = this.agent.identity) {
@@ -443,13 +533,6 @@ export class Context {
       client_assertion: await this.assertion(claims, { identity }),
     };
   }
-
-  /** A raw read with a token and a fresh proof. */
-  async read(user, url, token) {
-    return this.send("GET", url, {
-      headers: { Authorization: `DPoP ${token.accessToken.reveal()}`, DPoP: await this.proof(user, "GET", url, { token }) },
-    });
-  }
 }
 
 export const CASES = {};
@@ -457,211 +540,205 @@ export const CASES = {};
 function caseFor(...ids) {
   return (run) => {
     for (const id of ids) {
-      if (CASES[id] !== undefined) throw new Error(`conformance case ${id} is registered twice`);
+      if (Object.hasOwn(CASES, id)) throw new Error(`conformance case ${id} is registered twice`);
       CASES[id] = run;
     }
   };
 }
 
-const message = (text, author = "agent") => ({ id: opaque("msg"), author: { type: author }, text });
+const refreshForm = async (ctx, reference, identity) => ({
+  grant_type: "refresh_token",
+  refresh_token: ctx.refreshToken(reference).reveal(),
+  ...(await ctx.clientForm(identity)),
+});
 
 // Protocol ------------------------------------------------------------------------------
 
 caseFor("protocol.extension-required-company")(async (ctx) => {
   const other = ctx.otherAgent();
-  check(!other.identity.extensions.includes("operations"), "the second identity lists no operations");
+  check(!("operations" in other.identity.metadata.extensions), "the second identity lists no operations");
   const proposal = ctx.proposal("user");
   const user = ctx.newUser();
-  const signed = await ctx.signIn(user, await ctx.session(user, other), { agent: other });
-  const response = await other.transport.request(proposal.method, ctx.url(proposal.path), {
-    ...(await ctx.who(user)),
-    token: signed.token,
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(proposal.body ?? {}),
-  });
-  await expectRefusal(response, 403, "extension_required", "an operation without the extension");
+  const session = await ctx.session(user, other);
+  const signed = await ctx.signIn(user, session, { agent: other });
+  const error = await refused(
+    other.api.call(proposal.method, ctx.url(proposal.path), { session: signed.session, token: signed.token, body: proposal.body ?? {} }),
+    "an operation without the extension",
+  );
+  check(error.code === "extension_required", `expected extension_required, got ${error.code}`);
+  check(error.statusCode === 403, "extension_required is HTTP 403");
 });
 
-// Security: assertions --------------------------------------------------------------------
+// Security: assertions ------------------------------------------------------------------
 
 caseFor(
   "security.client-assertion-alg-none",
   "security.client-assertion-hs256-public-key",
-  "security.client-assertion-rs256-header-on-ec-key",
+  "security.client-assertion-ps384-header-on-ec-key",
   "security.client-assertion-embedded-key-ignored",
   "security.client-assertion-bad-audience",
   "security.client-assertion-audience-array",
   "security.client-assertion-token-endpoint-audience",
 )(async (ctx, fixture) => {
   const metadata = await ctx.metadata();
-  const mutation = fixture.mutation;
-  const user = ctx.newUser();
+  const { mutation } = fixture;
   const clientId = ctx.agent.identity.clientId;
   let audience = mutation.aud ?? metadata.issuer;
   // The token endpoint is not the issuer: refused, compared character for character.
   if (mutation.aud === "token_endpoint") audience = metadata.token_endpoint;
   if (mutation.aud_array) audience = [metadata.issuer, "https://other-company.example"];
+  const claims = ctx.claims({ subject: clientId, audience });
   const headers = {};
   let identity;
   if (mutation.signer === "stranger") {
-    const pair = await generateKeyPair("ES256", { extractable: true });
-    const jwk = { ...(await exportJWK(pair.privateKey)) };
-    identity = await identityFrom({ domain: ctx.agent.identity.domain, name: "Stranger", privateJwk: jwk });
+    identity = await strangerOf(ctx.agent.identity);
     if (mutation.embed_jwk) headers.jwk = identity.jwks.keys[0];
   }
-  const clientAssertion = await ctx.assertion(ctx.claims({ subject: clientId, audience }), {
+  const clientAssertion = await ctx.assertion(claims, {
     ...(identity === undefined ? {} : { identity }),
     algorithm: mutation.alg ?? "ES256",
     headers,
   });
-  const form = {
-    grant_type: JWT_BEARER,
-    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.issuer })),
+  const response = await ctx.tokenRequest({
+    grant_type: "refresh_token",
+    refresh_token: "rt_conformance_unknown",
     client_id: clientId,
     client_assertion_type: CLIENT_ASSERTION,
     client_assertion: clientAssertion,
-  };
-  const response = await ctx.tokenRequest(user, form);
-  await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
-  check(!(await response.text()).includes(clientAssertion), "a refusal never echoes the assertion");
-});
-
-caseFor(
-  "security.session-assertion-bad-audience",
-  "security.session-assertion-token-endpoint-audience",
-  "security.session-assertion-five-minutes",
-  "security.session-assertion-wrong-issuer",
-  "security.session-assertion-clock-skew-tolerated",
-  "security.session-assertion-from-the-future",
-  "security.session-assertion-expired",
-  "security.session-assertion-long-lived",
-  "security.session-assertion-replay",
-  "security.browser-assertion-at-token-endpoint",
-)(async (ctx, fixture) => {
-  const metadata = await ctx.metadata();
-  const mutation = fixture.mutation;
-  const user = ctx.newUser();
-  const claims = ctx.claims({
-    subject: user,
-    audience: mutation.aud === "token_endpoint" ? metadata.token_endpoint : (mutation.aud ?? metadata.issuer),
-    lifetime: Number(mutation.lifetime ?? 60),
-    shift: Number(mutation.iat_offset ?? 0),
   });
-  if ("iss" in mutation) claims.iss = mutation.iss;
-  const assertion = await ctx.assertion(claims, { headers: "typ" in mutation ? { typ: mutation.typ } : {} });
-  const send = async () =>
-    ctx.tokenRequest(user, { grant_type: JWT_BEARER, assertion, ...(await ctx.clientForm()) });
-  let response = await send();
-  if (mutation.replay) {
-    check(response.status === 200, "the first use of the assertion is accepted");
-    response = await send();
-  }
-  if (fixture.expect.status === 200) {
-    check(response.status === 200, `${fixture.id}: expected 200, got ${response.status}`);
-    const body = await response.json();
-    // Signed out: the grant says so, and there is no `scope` (§4.2); no Session is named.
-    check(!("scope" in body) && !("signed_in" in body), "a new Session starts signed out");
-    check(!("session_id" in body), "the response names no Session: its key does");
-    return;
-  }
   await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
+  check(!(await textOf(response)).includes(clientAssertion), "a refusal never echoes the assertion");
 });
 
-caseFor("security.token-request-without-dpop", "security.token-dpop-with-ath")(async (ctx, fixture) => {
-  const metadata = await ctx.metadata();
-  const user = ctx.newUser();
-  const form = {
-    grant_type: JWT_BEARER,
-    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.issuer })),
-    ...(await ctx.clientForm()),
-  };
-  const response = fixture.mutation.omit
-    ? await ctx.tokenRequest(user, form, { dpop: null })
-    : await ctx.tokenRequest(user, form, {
-        dpop: await ctx.proof(user, "POST", metadata.token_endpoint, { token: fixture.mutation.ath }),
-      });
-  await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
-});
-
-// Security: proofs at a resource -------------------------------------------------------------
+/** A signature that doesn't verify: another JWT's, one bit changed. */
+function flip(compact) {
+  const signature = compact.slice(compact.lastIndexOf(".") + 1);
+  return `${signature[0] !== "A" ? "A" : "B"}${signature.slice(1)}`;
+}
 
 caseFor(
-  "security.dpop-alg-none",
-  "security.dpop-wrong-signature",
-  "security.dpop-other-key",
-  "security.dpop-method-mismatch",
-  "security.dpop-url-mismatch",
-  "security.dpop-stale",
-  "security.dpop-replay",
-  "security.dpop-token-hash-mismatch",
-  "security.dpop-missing",
-  "security.dpop-token-as-bearer",
+  "security.session-jwt-alg-none",
+  "security.session-jwt-wrong-signature",
+  "security.session-jwt-wrong-typ",
+  "security.session-jwt-wrong-kid",
+  "security.session-jwt-signed-with-jwks-key",
+  "security.session-jwt-expired-delegation",
+  "security.session-jwt-delegation-over-24-hours",
+  "security.session-jwt-delegation-wrong-typ",
+  "security.session-jwt-delegation-stranger-key",
+  "security.session-jwt-other-audience",
+  "security.session-jwt-token-endpoint-audience",
+  "security.session-jwt-method-mismatch",
+  "security.session-jwt-url-mismatch",
+  "security.session-jwt-stale",
+  "security.session-jwt-from-the-future",
+  "security.session-jwt-ath-mismatch",
+  "security.session-jwt-ath-missing",
+  "security.session-jwt-ath-without-token",
 )(async (ctx, fixture) => {
-  const mutation = fixture.mutation;
+  // A Session JWT with one thing wrong: `invalid_session`, HTTP 400, whatever it was (§5.3).
+  const { mutation } = fixture;
   const user = ctx.newUser();
   const session = await ctx.session(user);
+  const signed = await ctx.signIn(user, session);
   const url = ctx.url(ctx.scenario.read_path);
-  const token = session.accessToken.reveal();
-  const valid = () => ctx.proof(user, "GET", url, { token: session });
-  const control = await ctx.send("GET", url, { headers: { Authorization: `DPoP ${token}`, DPoP: await valid() } });
-  check(![400, 401].includes(control.status), "a valid proof is accepted");
-  const headers = { Authorization: `${mutation.scheme ?? "DPoP"} ${token}` };
-  if (mutation.alg === "none") {
-    const proof = await valid();
-    const header = JSON.parse(Buffer.from(proof.split(".")[0], "base64url").toString());
-    headers.DPoP = `${segment({ ...header, alg: "none" })}.${proof.split(".")[1]}.`;
-  } else if (mutation.tamper_signature) {
-    const [first, second] = [await valid(), await valid()];
-    headers.DPoP = [...first.split(".").slice(0, 2), second.split(".")[2]].join(".");
-  } else if (mutation.key === "other") {
-    // Another key than the one the token is bound to: a fresh Session Key.
-    headers.DPoP = await ctx.proof(user, "GET", url, { token: session.accessToken });
-  } else if ("htm" in mutation) {
-    headers.DPoP = await ctx.proof(user, mutation.htm, url, { token: session });
-  } else if ("htu" in mutation) {
-    headers.DPoP = await ctx.proof(user, "GET", mutation.htu, { token: session });
-  } else if ("iat_offset" in mutation) {
-    headers.DPoP = await ctx.proof(user, "GET", url, { token: session, shift: mutation.iat_offset });
-  } else if (mutation.replay) {
-    const replayed = await valid();
-    const used = await ctx.send("GET", url, { headers: { ...headers, DPoP: replayed } });
-    check(![400, 401].includes(used.status), "the first use of the proof is accepted");
-    headers.DPoP = replayed;
-  } else if ("ath" in mutation) {
-    headers.DPoP = await ctx.proof(user, "GET", url, { token: mutation.ath });
-  } else if (!mutation.omit) {
-    headers.DPoP = await valid();
+  const headers = await ctx.auth(session, "GET", url, signed.token);
+  const control = await ctx.send("GET", url, { headers });
+  check(control.status === 200, "a valid Session JWT is accepted");
+  const token = mutation.signed_out ? undefined : signed.token;
+  let forged = await ctx.forgedSessionJwt(session, "GET", url, { token, mutation });
+  if (mutation.tamper_signature) {
+    const other = await ctx.auth(session, "GET", url, signed.token);
+    forged = [...headers["Poppy-Session"].split(".").slice(0, 2), flip(other["Poppy-Session"])].join(".");
   }
-  const response = await ctx.send("GET", url, { headers });
+  const sent = { "Poppy-Session": forged };
+  if (token !== undefined) sent.Authorization = `Bearer ${token.accessToken.reveal()}`;
+  const response = await ctx.send("GET", url, { headers: sent });
   await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
-  check(!(await response.text()).includes(token), "a refusal never echoes the Session Token");
-  if (response.status === 401) check(response.headers.has("www-authenticate"), "a refusal carries WWW-Authenticate");
+  check(!(await textOf(response)).includes(forged), "a refusal never echoes the Session JWT");
+});
+
+caseFor("security.session-header-missing")(async (ctx, fixture) => {
+  // A request with no Session header is refused, and its access token useless (§5.3).
+  const user = ctx.newUser();
+  const signed = await ctx.signIn(user, await ctx.session(user));
+  const url = ctx.url(ctx.scenario.read_path);
+  const token = signed.token.accessToken.reveal();
+  for (const headers of [{}, { Authorization: `Bearer ${token}` }]) {
+    const response = await ctx.send("GET", url, { headers });
+    await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
+    check(!(await textOf(response)).includes(token), "a refusal never echoes the access token");
+  }
+});
+
+caseFor("security.session-jwt-replay")(async (ctx, fixture) => {
+  // A company MAY refuse a reused `jti` (§5.3); the reference company does.
+  const user = ctx.newUser();
+  const session = await ctx.session(user);
+  const signed = await ctx.signIn(user, session);
+  const url = ctx.url(ctx.scenario.read_path);
+  const headers = await ctx.auth(session, "GET", url, signed.token);
+  const first = await ctx.send("GET", url, { headers });
+  check(first.status === 200, "the first use is accepted");
+  await expectRefusal(await ctx.send("GET", url, { headers }), fixture.expect.status, fixture.expect.error, fixture.id);
+});
+
+caseFor("security.session-header-twice")(async (ctx, fixture) => {
+  // Exactly one `Poppy-Session` header holding one JWT: two are `invalid_session` (§5.2).
+  const session = await ctx.session(ctx.newUser());
+  const url = ctx.url(ctx.scenario.read_path);
+  const first = await ctx.auth(session, "GET", url);
+  const second = await ctx.auth(session, "GET", url);
+  const response = await ctx.send("GET", url, { headers: { "Poppy-Session": `${first["Poppy-Session"]}, ${second["Poppy-Session"]}` } });
+  await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
+});
+
+caseFor("security.session-sub-stays-the-same")(async (ctx, fixture) => {
+  // A known `sid` keeps its `sub` (§5.2, §5.3): another User ID in it is refused.
+  const session = await ctx.session(ctx.newUser());
+  const url = ctx.url(ctx.scenario.read_path);
+  await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) });
+  const other = new PapSession({
+    sid: session.sid,
+    sub: ctx.newUser(),
+    issuer: session.issuer,
+    clientId: session.clientId,
+    tenantId: session.tenantId,
+  });
+  const response = await ctx.send("GET", url, { headers: await ctx.auth(other, "GET", url) });
+  await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
+});
+
+caseFor("security.access-token-of-another-agent")(async (ctx, fixture) => {
+  // The access token was issued to the same `client_id` as `iss` (§5.3).
+  const other = ctx.otherAgent();
+  const user = ctx.newUser();
+  const signed = await ctx.signIn(user, await ctx.session(user));
+  const theirs = await ctx.session(user, other);
+  const url = ctx.url(ctx.scenario.read_path);
+  const response = await ctx.send("GET", url, { headers: await ctx.auth(theirs, "GET", url, signed.token, { agent: other }) });
+  await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
 });
 
 caseFor("security.token-in-url-refused")(async (ctx) => {
   const user = ctx.newUser();
   const session = await ctx.session(user);
+  const signed = await ctx.signIn(user, session);
+  const token = signed.token.accessToken.reveal();
   const url = ctx.url(ctx.scenario.read_path);
-  const proof = await ctx.proof(user, "GET", url, { token: session });
-  const response = await ctx.send("GET", `${url}?${new URLSearchParams({ access_token: session.accessToken.reveal() })}`, {
-    headers: { DPoP: proof },
-  });
-  // Any refusal will do (§4.3 says only MUST NOT accept): 400 or 401 are both seen.
+  const headers = await ctx.auth(session, "GET", url);
+  const response = await ctx.send("GET", `${url}?${new URLSearchParams({ access_token: token })}`, { headers });
+  // Any refusal will do (§5.6 says only MUST NOT accept): 400 or 401 are both seen.
   check(response.status >= 400 && response.status < 500, `a token in the URL: expected a refusal, got ${response.status}`);
-  check(!(await response.text()).includes(session.accessToken.reveal()), "a refusal never echoes the Session Token");
+  check(!(await textOf(response)).includes(token), "a refusal never echoes the access token");
 });
 
 caseFor("security.authorization-header-without-cookies")(async (ctx) => {
-  const user = ctx.newUser();
-  const session = await ctx.session(user);
+  const session = await ctx.session(ctx.newUser());
   const endpoint = await ctx.conversationsEndpoint();
   const response = await ctx.send("POST", endpoint, {
-    headers: {
-      Authorization: `DPoP ${session.accessToken.reveal()}`,
-      DPoP: await ctx.proof(user, "POST", endpoint, { token: session }),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ message: message(ctx.scenario.greeting) }),
+    headers: { ...(await ctx.auth(session, "POST", endpoint)), "Content-Type": "application/json" },
+    body: JSON.stringify({ message: { id: messageId(), author: { type: "agent" }, text: ctx.scenario.greeting } }),
   });
   check(response.status === 201, `served without cookies: got ${response.status}`);
 });
@@ -669,24 +746,14 @@ caseFor("security.authorization-header-without-cookies")(async (ctx) => {
 caseFor("security.token-responses-not-cached")(async (ctx) => {
   const metadata = await ctx.metadata();
   const user = ctx.newUser();
-  const issued = await ctx.tokenRequest(user, {
-    grant_type: JWT_BEARER,
-    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.issuer })),
-    ...(await ctx.clientForm()),
-  });
-  check(issued.status === 200, "the Session starts");
+  const signed = await ctx.signIn(user, await ctx.session(user));
+  const issued = await ctx.tokenRequest(await refreshForm(ctx, signed.reference));
+  check(issued.status === 200, "the refresh is answered");
   check((issued.headers.get("cache-control") ?? "").includes("no-store"), "a token response is not cached");
-  if (offersDevice(metadata)) {
-    const form = {
-      scope: ctx.scenario.read_scope,
-      ...(await ctx.clientForm()),
-      client_assertion: await ctx.assertion(
-        ctx.claims({ subject: ctx.agent.identity.clientId, audience: metadata.issuer }),
-      ),
-    };
+  if (metadata.device_authorization_endpoint !== undefined) {
     const codes = await ctx.send("POST", metadata.device_authorization_endpoint, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(form).toString(),
+      body: new URLSearchParams({ scope: ctx.scenario.read_scope, ...(await ctx.clientForm()) }).toString(),
     });
     check(codes.status === 200, "Device Sign-In starts");
     check((codes.headers.get("cache-control") ?? "").includes("no-store"), "a device-code response is not cached");
@@ -697,65 +764,75 @@ caseFor("security.refusals-disclose-no-credential")(async (ctx) => {
   const user = ctx.newUser();
   const session = await ctx.session(user);
   const signed = await ctx.signIn(user, session);
-  const accountToken = ctx.accountToken(signed.reference);
+  const refresh = ctx.refreshToken(signed.reference);
+  const secret = refresh.reveal();
+  // The refresh token sent where it does not belong, with a bad client assertion.
   const form = {
     grant_type: "refresh_token",
-    refresh_token: accountToken,
+    refresh_token: secret,
     ...(await ctx.clientForm()),
+    client_assertion: await ctx.assertion(ctx.claims({ subject: ctx.agent.identity.clientId, audience: "https://elsewhere.example/t" })),
   };
-  form.client_assertion = await ctx.assertion(
-    ctx.claims({ subject: ctx.agent.identity.clientId, audience: "https://elsewhere.example/t" }),
-  );
-  const refusedToken = await ctx.tokenRequest(user, form);
-  check([400, 401].includes(refusedToken.status), "a bad client assertion is refused");
-  const text = await refusedToken.text();
-  for (const secret of [accountToken, form.client_assertion]) check(!text.includes(secret), "a token refusal never echoes a credential");
+  const bad = await ctx.tokenRequest(form);
+  check(bad.status === 400 || bad.status === 401, "a bad client assertion is refused");
+  const text = await textOf(bad);
+  for (const value of [secret, form.client_assertion]) check(!text.includes(value), "a token refusal never echoes a credential");
   const url = ctx.url(ctx.scenario.read_path);
   const used = await ctx.send("GET", url, {
-    headers: { Authorization: `DPoP ${accountToken}`, DPoP: await ctx.proof(user, "GET", url, { token: accountToken }) },
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      "Poppy-Session": await ctx.forgedSessionJwt(session, "GET", url, { token: refresh }),
+    },
   });
-  await expectRefusal(used, 401, "invalid_token", "an Account Token at an API");
-  check(!(await used.text()).includes(accountToken), "an API refusal never echoes a credential");
+  await expectRefusal(used, 401, "invalid_token", "a refresh token at an API");
+  check(!(await textOf(used)).includes(secret), "an API refusal never echoes a credential");
 });
 
-// Lifecycle ---------------------------------------------------------------------------------
+// Lifecycle ---------------------------------------------------------------------------
 
-async function probe(ctx, user, token) {
-  return (await ctx.read(user, ctx.url(ctx.scenario.read_path), token)).status;
+/**
+ * What a read says of the request (§7): `served`, `signed_out`, or `invalid_token`.
+ *
+ * Signed out, a request for the account gets a 401 challenge with `scope` and no error
+ * code; an access token that stopped working gets `invalid_token`.
+ */
+async function probe(ctx, session, token) {
+  const url = ctx.url(ctx.scenario.read_path);
+  const response = await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url, token) });
+  if (response.status === 200) return "served";
+  const challenge = challengeParameters(response.headers.get("www-authenticate") ?? "");
+  if (response.status === 401 && !("error" in challenge) && "scope" in challenge) return "signed_out";
+  if (response.status === 401 && challenge.error === "invalid_token") return "invalid_token";
+  return `http_${response.status}`;
 }
 
 caseFor("lifecycle.signed-out-session")(async (ctx) => {
   const session = await ctx.session(ctx.newUser());
-  check(session.tokenType === "DPoP", "a proof-bound Session Token is DPoP");
-  check(session.expiresIn > 0 && session.expiresIn <= 24 * 3600, "Session Tokens last hours, not days");
-  check(!session.signedIn && session.scopes.length === 0, "a new Session is signed out");
+  check(session.sid.length >= 22, "a sid has at least 128 random bits");
+  check((await probe(ctx, session)) === "signed_out", "a new Session is signed out");
 });
 
 caseFor("lifecycle.parallel-sessions")(async (ctx) => {
   const user = ctx.newUser();
   const [first, second] = await Promise.all([ctx.session(user), ctx.session(user)]);
-  check(first.sessionKey !== second.sessionKey, "parallel Sessions are distinct");
+  check(first.sid !== second.sid, "parallel Sessions are distinct");
   const endpoint = await ctx.conversationsEndpoint();
   for (const session of [first, second]) {
-    const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { ...(await ctx.who(user)), token: session });
+    const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { session });
     check(receipt.conversation_id, "each Session is served");
   }
 });
 
-caseFor("lifecycle.renew-signed-out")(async (ctx) => {
-  const user = ctx.newUser();
-  const old = await ctx.session(user);
-  const renewed = await ctx.renew(user, old.sessionKey);
-  check(renewed.sessionKey === old.sessionKey, "renewal keeps the Session");
-  check((await probe(ctx, user, renewed)) === 403, "the new token is served (signed out)");
-  // Whether the replaced token stops at once is the company's choice (no MUST in §4.2).
-});
-
-caseFor("lifecycle.renew-for-another-user")(async (ctx) => {
-  const owner = await ctx.session(ctx.newUser());
-  const error = await refused(ctx.renew(ctx.newUser(), owner.sessionKey), "renewal for another user");
-  // A key naming another user's Session is `invalid_grant` (§4.2).
-  check(error.code === "invalid_grant", `got ${error.code}`);
+caseFor("lifecycle.signed-out-challenge")(async (ctx) => {
+  // An account request with no access token: 401, `scope`, no error code (§7).
+  const session = await ctx.session(ctx.newUser());
+  const url = ctx.url(ctx.scenario.read_path);
+  const response = await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) });
+  check(response.status === 401, `expected 401, got ${response.status}`);
+  const challenge = challengeParameters(response.headers.get("www-authenticate") ?? "");
+  check("scope" in challenge && !("error" in challenge), "the challenge names scopes only");
+  const error = await refused(ctx.agent.api.call("GET", url, { session }), "a signed-out read");
+  check(error.code === "insufficient_scope", "the SDK reads it as insufficient_scope");
 });
 
 caseFor("lifecycle.sign-in-scopes")(async (ctx) => {
@@ -763,16 +840,14 @@ caseFor("lifecycle.sign-in-scopes")(async (ctx) => {
   const session = await ctx.session(user);
   const granted = [ctx.scenario.read_scope];
   const signed = await ctx.signIn(user, session, { granted });
-  check(signed.token.signedIn, "the Session is signed in");
-  check(signed.token.sessionKey === session.sessionKey, "the same Session is signed in");
   check(JSON.stringify(signed.token.scopes) === JSON.stringify(granted), "only what the user approved is granted");
+  check((await probe(ctx, session, signed.token)) === "served", "signed in with the token");
+  check((await probe(ctx, session)) === "signed_out", "without it, the Session is signed out");
 });
 
 caseFor("lifecycle.unknown-scope-refused")(async (ctx) => {
   const metadata = await ctx.metadata();
-  if (!offersDevice(metadata)) throw new SkipCase("no Device Sign-In");
-  const user = ctx.newUser();
-  const session = await ctx.session(user);
+  if (metadata.device_authorization_endpoint === undefined) throw new SkipCase("no Device Sign-In");
   const error = await refused(
     ctx.agent.device.begin({
       deviceAuthorizationEndpoint: metadata.device_authorization_endpoint,
@@ -781,7 +856,6 @@ caseFor("lifecycle.unknown-scope-refused")(async (ctx) => {
       clientId: ctx.agent.identity.clientId,
       scopes: ["conformance:not-a-scope"],
       tenantId: ctx.tenantId,
-      sessionKey: session.sessionKey,
       organization: (await ctx.company()).document.organization,
       protectedResources: metadata.protected_resources,
     }),
@@ -790,154 +864,103 @@ caseFor("lifecycle.unknown-scope-refused")(async (ctx) => {
   check(error.code === "invalid_scope", `got ${error.code}`);
 });
 
-caseFor("lifecycle.account-token-signs-in-new-session")(async (ctx) => {
+caseFor("lifecycle.refresh-token-serves-any-session")(async (ctx) => {
+  // A refresh token isn't tied to a Session: any of the User's uses its tokens (§4.4, §5.4).
   const user = ctx.newUser();
   const signed = await ctx.signIn(user, await ctx.session(user));
   const fresh = await ctx.session(user);
-  const result = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user), sessionKey: fresh.sessionKey });
-  check(result.status === "signed_in" && result.token !== undefined, "the Session signs in");
-  check((await probe(ctx, user, result.token)) === 200, "it reads");
+  const result = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user) });
+  check(result.status === "signed_in" && result.token !== undefined, "an access token comes back");
+  check((await probe(ctx, fresh, result.token)) === "served", "and works in another Session");
 });
 
 caseFor("lifecycle.rotated-token")(async (ctx) => {
   const user = ctx.newUser();
-  const session = await ctx.session(user);
-  const signed = await ctx.signIn(user, session);
-  const before = ctx.accountToken(signed.reference);
-  const context = await ctx.accountContext(user);
-  const result = await ctx.agent.accounts.refresh(signed.reference, { context, sessionKey: session.sessionKey });
-  if (!result.rotated) throw new SkipCase("the company does not rotate Account Tokens");
-  const metadata = await ctx.metadata();
-  const old = await ctx.tokenRequest(
-    user,
-    { grant_type: "refresh_token", refresh_token: before, ...(await ctx.clientForm()) },
-    { dpop: await ctx.proof(user, "POST", metadata.token_endpoint, { sessionKey: session.sessionKey }) },
-  );
-  await expectRefusal(old, 400, "invalid_grant", "a rotated-away Account Token");
-  const again = await ctx.agent.accounts.refresh(signed.reference, { context, sessionKey: session.sessionKey });
+  const signed = await ctx.signIn(user, await ctx.session(user));
+  const form = await refreshForm(ctx, signed.reference);
+  const result = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user) });
+  if (!result.rotated) throw new SkipCase("the company does not rotate refresh tokens");
+  await expectRefusal(await ctx.tokenRequest(form), 400, "invalid_grant", "a rotated-away refresh token");
+  const again = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user) });
   check(again.status === "signed_in", "the stored, rotated token keeps working");
 });
 
 caseFor("lifecycle.narrower-scopes")(async (ctx) => {
   const user = ctx.newUser();
-  const session = await ctx.session(user);
-  const signed = await ctx.signIn(user, session);
+  const signed = await ctx.signIn(user, await ctx.session(user));
   const result = await ctx.agent.accounts.refresh(signed.reference, {
     context: await ctx.accountContext(user),
-    sessionKey: session.sessionKey,
     scopes: [ctx.scenario.read_scope],
   });
-  check(result.status === "signed_in", "a narrower refresh signs in");
+  check(result.status === "signed_in", "a narrower refresh is answered");
   check(JSON.stringify(result.grantedScopes) === JSON.stringify([ctx.scenario.read_scope]), "only the narrower scope");
 });
 
 caseFor("lifecycle.wider-scopes-refused")(async (ctx) => {
   const user = ctx.newUser();
-  const session = await ctx.session(user);
-  const signed = await ctx.signIn(user, session, { granted: [ctx.scenario.read_scope] });
+  const signed = await ctx.signIn(user, await ctx.session(user), { granted: [ctx.scenario.read_scope] });
   const result = await ctx.agent.accounts.refresh(signed.reference, {
     context: await ctx.accountContext(user),
-    sessionKey: session.sessionKey,
     scopes: ctx.scenario.scopes,
   });
   check(result.status === "re_consent_required", `got ${result.status}`);
 });
 
-caseFor("lifecycle.account-token-from-another-client")(async (ctx) => {
+caseFor("lifecycle.refresh-token-from-another-client")(async (ctx) => {
   const other = ctx.otherAgent();
   const user = ctx.newUser();
   const signed = await ctx.signIn(user, await ctx.session(user));
-  const otherSession = await ctx.session(user, other);
-  const metadata = await ctx.metadata();
-  const response = await ctx.tokenRequest(
-    user,
-    {
-      grant_type: "refresh_token",
-      refresh_token: ctx.accountToken(signed.reference),
-      ...(await ctx.clientForm(other.identity)),
-    },
-    { dpop: await ctx.proof(user, "POST", metadata.token_endpoint, { agent: other, sessionKey: otherSession.sessionKey }) },
-  );
-  await expectRefusal(response, 400, "invalid_grant", "another client's Account Token");
+  const response = await ctx.tokenRequest(await refreshForm(ctx, signed.reference, other.identity));
+  await expectRefusal(response, 400, "invalid_grant", "another client's refresh token");
 });
 
-caseFor("lifecycle.account-token-at-api")(async (ctx) => {
+caseFor("lifecycle.refresh-token-at-api")(async (ctx) => {
   const user = ctx.newUser();
-  const signed = await ctx.signIn(user, await ctx.session(user));
-  const secret = ctx.accountToken(signed.reference);
+  const session = await ctx.session(user);
+  const signed = await ctx.signIn(user, session);
+  const secret = ctx.refreshToken(signed.reference);
   const url = ctx.url(ctx.scenario.read_path);
   const response = await ctx.send("GET", url, {
-    headers: { Authorization: `DPoP ${secret}`, DPoP: await ctx.proof(user, "GET", url, { token: secret }) },
+    headers: {
+      Authorization: `Bearer ${secret.reveal()}`,
+      "Poppy-Session": await ctx.forgedSessionJwt(session, "GET", url, { token: secret }),
+    },
   });
-  await expectRefusal(response, 401, "invalid_token", "an Account Token at an API");
-});
-
-caseFor("lifecycle.account-mismatch")(async (ctx) => {
-  const user = ctx.newUser();
-  const [first, second] = ctx.driver.accounts;
-  const signed = await ctx.signIn(user, await ctx.session(user), { account: first });
-  const otherSession = await ctx.session(user);
-  await ctx.signIn(user, otherSession, { account: second });
-  const error = await refused(
-    ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user), sessionKey: otherSession.sessionKey }),
-    "a refresh into another account's Session",
-  );
-  check(error.code === "account_mismatch", `got ${error.code}`);
-});
-
-caseFor("lifecycle.account-token-for-another-users-session")(async (ctx) => {
-  const user = ctx.newUser();
-  const signed = await ctx.signIn(user, await ctx.session(user));
-  const stranger = await ctx.session(ctx.newUser());
-  const metadata = await ctx.metadata();
-  // The key names another user's Session: refused, no token issued (§4.8).
-  const response = await ctx.tokenRequest(
-    user,
-    { grant_type: "refresh_token", refresh_token: ctx.accountToken(signed.reference), ...(await ctx.clientForm()) },
-    { dpop: await ctx.proof(user, "POST", metadata.token_endpoint, { sessionKey: stranger.sessionKey }) },
-  );
-  await expectRefusal(response, 400, "invalid_grant", "an Account Token for another user's Session");
+  await expectRefusal(response, 401, "invalid_token", "a refresh token at an API");
 });
 
 caseFor("lifecycle.sign-out-takes-effect")(async (ctx) => {
   const user = ctx.newUser();
-  const signed = await ctx.signIn(user, await ctx.session(user));
-  check((await probe(ctx, user, signed.token)) === 200, "signed in, the read is served");
+  const session = await ctx.session(user);
+  const signed = await ctx.signIn(user, session);
+  check((await probe(ctx, session, signed.token)) === "served", "signed in, the read is served");
   const revoked = await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
-  check(revoked.revoked && revoked.deletedLocally, "the Account Token is revoked and gone");
-  check((await probe(ctx, user, signed.token)) === 403, "the earlier signed-in token is handled as signed out right away");
+  check(revoked.revoked && revoked.deletedLocally, "the refresh token is revoked and gone");
+  check((await probe(ctx, session, signed.token)) === "invalid_token", "the access token it gave stops working right away");
 });
 
 caseFor("lifecycle.sign-out-session-continues")(async (ctx) => {
   const user = ctx.newUser();
   const session = await ctx.session(user);
   const signed = await ctx.signIn(user, session);
-  const secret = ctx.accountToken(signed.reference);
+  const form = await refreshForm(ctx, signed.reference);
   await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
-  const renewed = await ctx.renew(user, session.sessionKey);
-  check(!renewed.signedIn, "the Session continues signed out");
-  const metadata = await ctx.metadata();
-  const response = await ctx.tokenRequest(
-    user,
-    { grant_type: "refresh_token", refresh_token: secret, ...(await ctx.clientForm()) },
-    { dpop: await ctx.proof(user, "POST", metadata.token_endpoint, { sessionKey: session.sessionKey }) },
-  );
-  await expectRefusal(response, 400, "invalid_grant", "a revoked token");
+  check((await probe(ctx, session)) === "signed_out", "the Session continues signed out");
+  await expectRefusal(await ctx.tokenRequest(form), 400, "invalid_grant", "a revoked token");
 });
 
-caseFor("lifecycle.sign-out-every-session")(async (ctx) => {
+caseFor("lifecycle.sign-out-revokes-every-refresh-token")(async (ctx) => {
+  // Sign-out revokes every refresh token held for the account (§4.6, §5.5).
   const user = ctx.newUser();
-  const first = await ctx.session(user);
-  const signed = await ctx.signIn(user, first);
-  const second = await ctx.session(user);
-  const context = await ctx.accountContext(user);
-  const rotated = await ctx.agent.accounts.refresh(signed.reference, { context, sessionKey: second.sessionKey });
-  check(rotated.status === "signed_in" && rotated.token !== undefined, "a second Session signs in");
-  await ctx.agent.accounts.revoke(signed.reference, { context });
-  for (const token of [signed.token, rotated.token]) {
-    check((await probe(ctx, user, token)) === 403, "every Session from the sign-in is signed out");
+  const account = ctx.driver.accounts[0];
+  const first = await ctx.signIn(user, await ctx.session(user), { account });
+  const second = await ctx.signIn(user, await ctx.session(user), { account });
+  const done = await ctx.agent.accounts.signOut([first.reference, second.reference], { context: await ctx.accountContext(user) });
+  check(done.signedOut && done.revoked === 2, "every refresh token is revoked");
+  for (const signed of [first, second]) {
+    check((await probe(ctx, signed.session, signed.token)) === "invalid_token", "the access tokens they gave stop working");
+    check((await probe(ctx, signed.session)) === "signed_out", "its Session goes on signed out");
   }
-  check(!(await ctx.renew(user, first.sessionKey)).signedIn, "renewing with the assertion gives a signed-out token");
 });
 
 caseFor("lifecycle.disconnect-from-account-settings")(async (ctx) => {
@@ -946,63 +969,72 @@ caseFor("lifecycle.disconnect-from-account-settings")(async (ctx) => {
   const session = await ctx.session(user);
   const signed = await ctx.signIn(user, session);
   await ctx.driver.disconnect(ctx.agent.identity.clientId, ctx.driver.accounts[0]);
-  check((await probe(ctx, user, signed.token)) === 403, "its Sessions are signed out");
-  const result = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user), sessionKey: session.sessionKey });
+  check((await probe(ctx, session, signed.token)) === "invalid_token", "its access tokens stop working");
+  const result = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user) });
   check(result.status === "signed_out", "the agent finds out from invalid_grant");
   check(!ctx.agent.tokens.has(signed.reference), "and forgets the token");
 });
 
-// Conversations ------------------------------------------------------------------------------
+// Conversations -----------------------------------------------------------------------
 
-async function conversationOf(ctx, user, session) {
-  const endpoint = await ctx.conversationsEndpoint();
-  const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { ...(await ctx.who(user)), token: session });
-  return receipt.conversation_id;
-}
+const messageId = () => opaque("msg");
+const message = (text, author = "agent") => ({ id: messageId(), author: { type: author }, text });
 
 async function asUser(ctx) {
   const user = ctx.newUser();
-  const session = await ctx.session(user);
-  return { user, session, endpoint: await ctx.conversationsEndpoint(), who: { ...(await ctx.who(user)), token: session } };
+  return { user, session: await ctx.session(user), endpoint: await ctx.conversationsEndpoint() };
+}
+
+async function conversationOf(ctx, session, token) {
+  const endpoint = await ctx.conversationsEndpoint();
+  const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), {
+    session,
+    ...(token === undefined ? {} : { token }),
+  });
+  return receipt.conversation_id;
 }
 
 caseFor("conversations.start-and-reply")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), who);
+  const { session, endpoint } = await asUser(ctx);
+  const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { session });
   check(receipt.status && receipt.responder, "the answer has status and responder");
-  const body = await (await ctx.read(user, `${endpoint}/${receipt.conversation_id}/events`, session)).json();
+  const url = `${endpoint}/${receipt.conversation_id}/events`;
+  const body = await (await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) })).json();
   for (const key of ["cursor", "has_more", "status", "responder"]) check(key in body, `a read includes ${key}`);
-  const company = body.events.filter((event) => event.type === "message" && event.message.role === "company").map((event) => event.message);
+  const company = body.events.filter((e) => e.type === "message" && e.message.role === "company").map((e) => e.message);
   check(company.length, "the company replies");
-  check(company.every((item) => ["agent", "human"].includes(item.author?.type)), "replies carry author");
+  check(company.every((m) => ["agent", "human"].includes(m.author?.type)), "replies carry author");
 });
 
 caseFor("conversations.retry-replays")(async (ctx) => {
-  const { endpoint, who } = await asUser(ctx);
+  const { session, endpoint } = await asUser(ctx);
   const first = message(ctx.scenario.greeting);
-  const receipt = await ctx.agent.conversations.start(endpoint, first, who);
-  const page = await ctx.agent.conversations.readEvents(endpoint, receipt.conversation_id, who);
-  const again = await ctx.agent.conversations.start(endpoint, first, who);
-  check(again.conversation_id === receipt.conversation_id, "a retry returns the same one");
-  const after = await ctx.agent.conversations.readEvents(endpoint, receipt.conversation_id, who);
+  const started = await ctx.agent.conversations.start(endpoint, first, { session });
+  const page = await ctx.agent.conversations.readEvents(endpoint, started.conversation_id, { session });
+  const again = await ctx.agent.conversations.start(endpoint, first, { session });
+  check(again.conversation_id === started.conversation_id, "a retry returns the same one");
+  const after = await ctx.agent.conversations.readEvents(endpoint, started.conversation_id, { session });
   check(after.events.length === page.events.length, "a retry adds nothing");
 });
 
 caseFor("conversations.message-id-conflict")(async (ctx) => {
-  const { endpoint, who } = await asUser(ctx);
+  const { session, endpoint } = await asUser(ctx);
   const first = message(ctx.scenario.greeting);
-  await ctx.agent.conversations.start(endpoint, first, who);
-  const error = await refused(ctx.agent.conversations.start(endpoint, { ...first, text: "Something else entirely." }, who), "a changed message");
+  await ctx.agent.conversations.start(endpoint, first, { session });
+  const error = await refused(
+    ctx.agent.conversations.start(endpoint, { ...first, text: "Something else entirely." }, { session }),
+    "a reused message ID",
+  );
   check(error.code === "message_id_conflict", `got ${error.code}`);
   check(error.statusCode === 409, "message_id_conflict is HTTP 409");
 });
 
 caseFor("conversations.invalid-cursor")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const conversation = await conversationOf(ctx, user, session);
+  const { session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
   const error = await refused(
-    ctx.agent.conversations.readEvents(endpoint, conversation, { ...who, cursor: "evt_never_issued_by_the_company" }),
-    "an unknown cursor",
+    ctx.agent.conversations.readEvents(endpoint, conversation, { session, cursor: "evt_never_issued_by_the_company" }),
+    "an invalid cursor",
   );
   check(error.code === "invalid_cursor", `got ${error.code}`);
   check(error.statusCode === 400, "invalid_cursor is HTTP 400");
@@ -1010,18 +1042,18 @@ caseFor("conversations.invalid-cursor")(async (ctx) => {
 
 caseFor("conversations.cursor-expired-recovery")(async (ctx) => {
   ctx.require("forget_events");
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const conversation = await conversationOf(ctx, user, session);
-  const page = await ctx.agent.conversations.readEvents(endpoint, conversation, who);
+  const { session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
+  const page = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
   const saved = page.events[0].id;
-  await ctx.agent.conversations.send(endpoint, conversation, message("One more thing."), who);
+  await ctx.agent.conversations.send(endpoint, conversation, message("One more thing."), { session });
   await ctx.driver.forgetEvents(conversation);
-  const error = await refused(ctx.agent.conversations.readEvents(endpoint, conversation, { ...who, cursor: saved }), "a forgotten cursor");
+  const error = await refused(ctx.agent.conversations.readEvents(endpoint, conversation, { session, cursor: saved }), "a forgotten cursor");
   check(error.code === "cursor_expired", `got ${error.code}`);
   check(error.statusCode === 410, "cursor_expired is HTTP 410");
   const told = [];
   const events = ctx.agent.conversations.events(endpoint, conversation, {
-    ...who,
+    session,
     cursor: saved,
     wait: 0,
     onCursorExpired: () => void told.push(true),
@@ -1033,45 +1065,43 @@ caseFor("conversations.cursor-expired-recovery")(async (ctx) => {
 });
 
 caseFor("conversations.has-more-drained")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const conversation = await conversationOf(ctx, user, session);
-  let page = await ctx.agent.conversations.readEvents(endpoint, conversation, who);
+  const { session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
+  let page = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
   let sent = 0;
   while (!page.has_more && sent < 80) {
-    await ctx.agent.conversations.send(endpoint, conversation, message(`Note ${sent}.`), who);
+    await ctx.agent.conversations.send(endpoint, conversation, message(`Note ${sent}.`), { session });
     sent += 1;
-    if (sent % 10 === 0) page = await ctx.agent.conversations.readEvents(endpoint, conversation, who);
+    if (sent % 10 === 0) page = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
   }
   if (!page.has_more) throw new SkipCase("the company returned every event in one page");
   const ids = [];
   let cursor;
-  while (true) {
-    const current = await ctx.agent.conversations.readEvents(endpoint, conversation, { ...who, ...(cursor ? { cursor } : {}) });
+  for (;;) {
+    const current = await ctx.agent.conversations.readEvents(endpoint, conversation, { session, ...(cursor === undefined ? {} : { cursor }) });
     ids.push(...current.events.map((event) => event.id));
     cursor = current.cursor;
     if (!current.has_more) break;
   }
-  check(new Set(ids).size === ids.length, "draining has_more pages repeats nothing");
-  check(JSON.stringify(ids.slice(0, page.events.length)) === JSON.stringify(page.events.map((event) => event.id)), "pages keep the order");
+  check(ids.length === new Set(ids).size, "draining has_more pages repeats nothing");
+  check(page.events.every((event, index) => event.id === ids[index]), "pages keep the order");
 });
 
 caseFor("conversations.empty-read")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const conversation = await conversationOf(ctx, user, session);
-  const page = await ctx.agent.conversations.readEvents(endpoint, conversation, who);
-  const empty = await ctx.agent.conversations.readEvents(endpoint, conversation, { ...who, cursor: page.cursor });
+  const { session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
+  const page = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
+  const empty = await ctx.agent.conversations.readEvents(endpoint, conversation, { session, cursor: page.cursor });
   check(empty.events.length === 0, "nothing new: no events");
   check(empty.cursor === page.cursor, "the cursor is the request's own");
   check(empty.has_more === false, "has_more is false");
 });
 
-const isEvent = (item) => item.kind === undefined;
-
-async function streamItems(ctx, who, conversation, { lastEventId, until }) {
+async function streamItems(ctx, session, conversation, { lastEventId, until }) {
   const endpoint = await ctx.conversationsEndpoint();
   const items = [];
   const stream = ctx.agent.conversations.stream(endpoint, conversation, {
-    ...who,
+    session,
     ...(lastEventId === undefined ? {} : { lastEventId }),
     maxReconnects: 1,
   });
@@ -1087,23 +1117,26 @@ async function streamItems(ctx, who, conversation, { lastEventId, until }) {
   return items;
 }
 
+const isEvent = (item) => item.kind === undefined;
+
 caseFor("conversations.sse-reconnect")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const conversation = await conversationOf(ctx, user, session);
-  await ctx.agent.conversations.send(endpoint, conversation, message("And another question."), who);
-  const ids = (await ctx.agent.conversations.readEvents(endpoint, conversation, who)).events.map((event) => event.id);
+  const { session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
+  await ctx.agent.conversations.send(endpoint, conversation, message("And another question."), { session });
+  const every = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
+  const ids = every.events.map((event) => event.id);
   check(ids.length >= 3, "the conversation has events to stream");
   const eventsOf = (items) => items.filter(isEvent);
-  const first = await streamItems(ctx, who, conversation, { until: (items) => eventsOf(items).length >= 2 });
+  const first = await streamItems(ctx, session, conversation, { until: (items) => eventsOf(items).length >= 2 });
   const handled = eventsOf(first).at(-1).id;
-  const resumed = await streamItems(ctx, who, conversation, { lastEventId: handled, until: (items) => eventsOf(items).length >= 1 });
+  const resumed = await streamItems(ctx, session, conversation, { lastEventId: handled, until: (items) => eventsOf(items).length >= 1 });
   check(eventsOf(resumed)[0].id === ids[ids.indexOf(handled) + 1], "the stream resumes right after Last-Event-ID");
 });
 
 caseFor("conversations.text-delta-not-actionable")(async (ctx) => {
-  const { user, session, who } = await asUser(ctx);
-  const conversation = await conversationOf(ctx, user, session);
-  const items = await streamItems(ctx, who, conversation, {
+  const { session } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
+  const items = await streamItems(ctx, session, conversation, {
     until: (seen) => seen.some((item) => isEvent(item) && item.message?.role === "company"),
   });
   const deltas = items.filter((item) => item.kind === "text-delta");
@@ -1114,24 +1147,24 @@ caseFor("conversations.text-delta-not-actionable")(async (ctx) => {
 });
 
 caseFor("conversations.attribution")(async (ctx) => {
-  const { endpoint, who } = await asUser(ctx);
+  const { session, endpoint } = await asUser(ctx);
   const words = message("These are the user's own words.", "human");
-  const receipt = await ctx.agent.conversations.start(endpoint, words, who);
-  const page = await ctx.agent.conversations.readEvents(endpoint, receipt.conversation_id, who);
+  const receipt = await ctx.agent.conversations.start(endpoint, words, { session });
+  const page = await ctx.agent.conversations.readEvents(endpoint, receipt.conversation_id, { session });
   const messages = page.events.filter((event) => event.message).map((event) => event.message);
   const mine = messages.filter((item) => item.id === words.id);
-  check(mine.length && mine[0].role === "user", "the user's message comes back with role user");
-  check(mine.length && mine[0].author.type === "human", "and keeps author human");
+  check(mine[0]?.role === "user", "the user's message comes back with role user");
+  check(mine[0]?.author.type === "human", "and keeps author human");
   const theirs = messages.filter((item) => item.role === "company");
   check(theirs.length && theirs.every((item) => ["agent", "human"].includes(item.author.type)), "replies have author");
 });
 
 caseFor("conversations.handoff")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const conversation = await conversationOf(ctx, user, session);
-  const receipt = await ctx.agent.conversations.handoff(endpoint, conversation, who);
+  const { session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
+  const receipt = await ctx.agent.conversations.handoff(endpoint, conversation, { session });
   check(["queued", "idle", "working"].includes(receipt.status), "handoff answers a status");
-  const page = await ctx.agent.conversations.readEvents(endpoint, conversation, who);
+  const page = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
   const states = page.events.filter((event) => event.type === "state");
   check(states.length, "each status change is a state event");
   check(states.at(-1).status === page.status, "the last state event is the current status");
@@ -1139,359 +1172,409 @@ caseFor("conversations.handoff")(async (ctx) => {
 });
 
 caseFor("conversations.direct-conversation")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const parent = await conversationOf(ctx, user, session);
-  const direct = await ctx.agent.conversations.startDirect(endpoint, parent, message("I'd like to ask myself.", "human"), who);
-  let page = await ctx.agent.conversations.readEvents(endpoint, parent, who);
+  const { session, endpoint } = await asUser(ctx);
+  const parent = await conversationOf(ctx, session);
+  const direct = await ctx.agent.conversations.startDirect(endpoint, parent, message("I'd like to ask myself.", "human"), { session });
+  let page = await ctx.agent.conversations.readEvents(endpoint, parent, { session });
   const opened = page.events.filter((event) => event.type === "direct_opened");
-  check(opened.length && opened.at(-1).conversation_id === direct.conversation_id, "direct_opened");
-  const error = await refused(ctx.agent.conversations.send(endpoint, parent, message("Meanwhile."), who), "a message while Direct");
+  check(opened.at(-1)?.conversation_id === direct.conversation_id, "direct_opened");
+  const error = await refused(ctx.agent.conversations.send(endpoint, parent, message("Meanwhile."), { session }), "a message to a parent");
   check(error.code === "direct_conversation_open", `got ${error.code}`);
   check(error.details?.conversation_id === direct.conversation_id, "the refusal names the Direct Conversation");
-  await ctx.agent.conversations.close(endpoint, direct.conversation_id, who);
-  page = await ctx.agent.conversations.readEvents(endpoint, parent, who);
+  await ctx.agent.conversations.close(endpoint, direct.conversation_id, { session });
+  page = await ctx.agent.conversations.readEvents(endpoint, parent, { session });
   check(page.events.some((event) => event.type === "direct_closed"), "direct_closed");
-  await ctx.agent.conversations.send(endpoint, parent, message("Back to you."), who);
+  await ctx.agent.conversations.send(endpoint, parent, message("Back to you."), { session });
 });
 
 caseFor("conversations.direct-of-direct-refused")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const parent = await conversationOf(ctx, user, session);
-  const direct = await ctx.agent.conversations.startDirect(endpoint, parent, message("Hi.", "human"), who);
-  const error = await refused(ctx.agent.conversations.startDirect(endpoint, direct.conversation_id, message("Hi.", "human"), who), "a Direct of a Direct");
+  const { session, endpoint } = await asUser(ctx);
+  const parent = await conversationOf(ctx, session);
+  const direct = await ctx.agent.conversations.startDirect(endpoint, parent, message("Hi.", "human"), { session });
+  const error = await refused(
+    ctx.agent.conversations.startDirect(endpoint, direct.conversation_id, message("Hi.", "human"), { session }),
+    "a Direct Conversation under a Direct Conversation",
+  );
   check(["conversation_not_found", "conversation_closed", "direct_conversation_open"].includes(error.code), `got ${error.code}`);
 });
 
 caseFor("conversations.authorization-then-same-conversation")(async (ctx) => {
   const prompt = ctx.scenario.account_prompt;
-  if (!prompt) throw new SkipCase("the scenario has no account prompt");
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const receipt = await ctx.agent.conversations.start(endpoint, message(prompt), who);
-  const page = await ctx.agent.conversations.readEvents(endpoint, receipt.conversation_id, who);
+  if (prompt === undefined || prompt === null) throw new SkipCase("the scenario has no account prompt");
+  const { user, session, endpoint } = await asUser(ctx);
+  const receipt = await ctx.agent.conversations.start(endpoint, message(prompt), { session });
+  const page = await ctx.agent.conversations.readEvents(endpoint, receipt.conversation_id, { session });
   check(page.events.some((event) => event.type === "authorization"), "the company asks for sign-in with an authorization event");
   check(page.events.some((event) => event.message?.role === "company"), "and says so in a message");
   const signed = await ctx.signIn(user, session);
-  const again = await ctx.agent.conversations.send(endpoint, receipt.conversation_id, message(prompt), { ...who, token: signed.token });
+  const again = await ctx.agent.conversations.send(endpoint, receipt.conversation_id, message(prompt), { session: signed.session, token: signed.token });
   check(again.conversation_id === receipt.conversation_id, "the same conversation continues");
 });
 
 caseFor("conversations.closed")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
-  const conversation = await conversationOf(ctx, user, session);
-  const closed = await ctx.agent.conversations.close(endpoint, conversation, who);
+  const { session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
+  const closed = await ctx.agent.conversations.close(endpoint, conversation, { session });
   check(closed.status === "closed", "closing answers status closed");
-  const error = await refused(ctx.agent.conversations.send(endpoint, conversation, message("Still there?"), who), "a closed conversation");
+  const error = await refused(ctx.agent.conversations.send(endpoint, conversation, message("Still there?"), { session }), "a message to a closed conversation");
   check(error.code === "conversation_closed", `got ${error.code}`);
   check(error.statusCode === 409, "conversation_closed is HTTP 409");
-  const page = await ctx.agent.conversations.readEvents(endpoint, conversation, who);
+  const page = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
   check(page.status === "closed" && page.events.length, "its events stay readable");
 });
 
 caseFor("conversations.not-found-indistinguishable")(async (ctx) => {
-  const owner = ctx.newUser();
-  const theirs = await conversationOf(ctx, owner, await ctx.session(owner));
-  const { user, session, endpoint } = await asUser(ctx);
+  const theirs = await conversationOf(ctx, await ctx.session(ctx.newUser()));
+  const { session, endpoint } = await asUser(ctx);
   const bodies = [];
   for (const conversation of [theirs, "cnv_conformance_unknown_000000"]) {
-    const response = await ctx.read(user, `${endpoint}/${conversation}/events`, session);
-    bodies.push(JSON.stringify([response.status, await response.json()]));
+    const url = `${endpoint}/${conversation}/events`;
+    const response = await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) });
+    bodies.push([response.status, await response.json()]);
   }
-  check(bodies[0] === bodies[1], "another user's and an unknown conversation look the same");
-  const [status, body] = JSON.parse(bodies[0]);
-  check(status === 404 && body.error === "conversation_not_found", "404 conversation_not_found");
+  check(JSON.stringify(bodies[0]) === JSON.stringify(bodies[1]), "another user's and an unknown conversation look the same");
+  check(bodies[0][0] === 404 && bodies[0][1].error === "conversation_not_found", "404");
 });
 
-caseFor("conversations.signed-out-token-on-account-conversation")(async (ctx) => {
-  const { user, session, endpoint, who } = await asUser(ctx);
+caseFor("conversations.signed-out-on-account-conversation")(async (ctx) => {
+  const { user, session, endpoint } = await asUser(ctx);
   const signed = await ctx.signIn(user, session);
-  const conversation = await conversationOf(ctx, user, signed.token);
+  const conversation = await conversationOf(ctx, session, signed.token);
   await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
-  const signedOut = await ctx.renew(user, session.sessionKey);
-  const error = await refused(ctx.agent.conversations.readEvents(endpoint, conversation, { ...who, token: signedOut }), "a signed-out token");
+  const error = await refused(ctx.agent.conversations.readEvents(endpoint, conversation, { session }), "a signed-out read");
+  // The challenge with `scope` and no error code, read as `insufficient_scope` (§5.5, §7).
   check(error.code === "insufficient_scope", `got ${error.code}`);
+  check(error.statusCode === 401, "a signed-out request gets the 401 challenge");
 });
 
-// Operations --------------------------------------------------------------------------------
+// Operations ----------------------------------------------------------------------------
 
 async function signedInUser(ctx) {
   const user = ctx.newUser();
-  const signed = await ctx.signIn(user, await ctx.session(user));
-  return { user, signed, who: { ...(await ctx.who(user)), token: signed.token } };
+  return [user, await ctx.signIn(user, await ctx.session(user))];
 }
 
-async function propose(ctx, user, signed, kind) {
+function request(ctx, signed, kind, approval, { token, session } = {}) {
   const proposal = ctx.proposal(kind);
-  const response = await ctx.agent.transport.request(proposal.method, ctx.url(proposal.path), {
-    ...(await ctx.who(user)),
-    token: signed.token,
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(proposal.body ?? {}),
+  return ctx.agent.api.call(proposal.method, ctx.url(proposal.path), {
+    session: session ?? signed.session,
+    token: token ?? signed.token,
+    body: proposal.body ?? {},
+    ...(approval === undefined ? {} : { approval }),
   });
-  check(response.status === 202, `the API answers 202, got ${response.status}`);
-  const body = await response.json();
-  check(body.operation, "with an operation");
-  return parseOperation(body.operation);
 }
 
-caseFor("operations.proposed-not-performed")(async (ctx) => {
-  await ctx.operationsEndpoint();
-  const { user, signed } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  check(operation.state === "proposed", "a proposal is proposed");
+/** The request for the action: refused, with the operation (Operations 4). */
+async function propose(ctx, signed, kind) {
+  const answer = await request(ctx, signed, kind);
+  check(answer.status === 403 && answer.operation !== undefined, "approval_required, HTTP 403");
+  return answer.operation;
+}
+
+async function performed(ctx, operation, times) {
+  if (ctx.driver.capabilities.has("performed")) {
+    const count = await ctx.driver.performed(operation.operation_id);
+    check(count === times, `performed ${times} time(s), not ${count}`);
+  }
+}
+
+/** A statement of the user's approval: the conformance runner plays the user here. */
+const approved = (operation) => ({ operation_id: operation.operation_id, revision: operation.revision });
+
+function checkNewRevision(answer, operation, named) {
+  check(answer.operation !== undefined, "the company returns the operation, performing nothing");
+  check(answer.operation.revision !== named, "never the revision the approval named");
+  check(answer.operation.operation_id === operation.operation_id, "the same action, the same operation");
+  return answer.operation;
+}
+
+caseFor("operations.approval-required")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
   check(operation.summary.trim(), "it has a summary");
-  check(operation.confirmation === null && operation.result === null, "nothing happened yet");
-  if (ctx.driver.capabilities.has("performed")) check((await ctx.driver.performed(operation.operation_id)) === 0, "nothing was performed");
-  const description = (await ctx.company()).document.apis?.find((api) => api.type === "openapi");
+  check(operation.revision, "it has an opaque revision");
+  check(new Date(operation.expires_at) > ctx.now(), "it can still be approved");
+  await performed(ctx, operation, 0);
   const documented = ctx.proposal("user").documented_as;
-  if (description?.url && documented) {
-    const paths = (await (await ctx.send("GET", description.url)).json()).paths ?? {};
-    check(JSON.stringify(paths[documented] ?? {}).includes("operation"), "the API description says the endpoint returns an operation");
+  if (documented !== undefined && documented !== null) {
+    const api = openapiUrl((await ctx.company()).document);
+    const paths = api === undefined ? {} : ((await (await ctx.send("GET", api)).json()).paths ?? {});
+    check(JSON.stringify(paths[documented] ?? {}).includes("approval_required"), "the API description says the endpoint can return approval_required");
   }
 });
 
-caseFor("operations.readable-until-final")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  const read = await ctx.agent.operations.read(endpoint, operation.operation_id, who);
-  check(JSON.stringify(read) === JSON.stringify(operation), "the same operation, unchanged");
+caseFor("operations.same-request-same-revision")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const first = await propose(ctx, signed, "user");
+  const second = await propose(ctx, signed, "user");
+  check(JSON.stringify(second) === JSON.stringify(first), "the same request, the same terms: the same revision");
 });
 
-caseFor("operations.confirm-succeeded")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  const outcome = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval: await approve(operation) });
-  const done = outcome.operation;
-  check(outcome.status === "confirmed" && done.state === "succeeded", `got ${done?.state}`);
-  check(done.confirmation !== null, "the confirmation is recorded");
-  check(done.confirmation.revision === operation.revision, "for the approved revision");
-  check(done.confirmation.approved_by === "user", "approved by the user");
-  check(done.result?.summary, "the result says what happened");
-  check(JSON.stringify(done.terms) === JSON.stringify(operation.terms), "it did what the revision described");
+caseFor("operations.approved-performed")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const done = await request(ctx, signed, "user", approved(operation));
+  check(done.operation === undefined && done.status >= 200 && done.status < 300, `performed, got ${done.status}`);
+  await performed(ctx, operation, 1);
 });
 
-caseFor("operations.at-most-once")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  const approval = await approve(operation);
-  const first = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval });
-  const second = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval });
-  check(JSON.stringify(first.operation) === JSON.stringify(second.operation), "a repeated confirm returns the same record");
-  if (ctx.driver.capabilities.has("performed")) check((await ctx.driver.performed(operation.operation_id)) === 1, "performed once");
+caseFor("operations.retry-after-the-outcome")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const approval = approved(operation);
+  const first = await request(ctx, signed, "user", approval);
+  const second = await request(ctx, signed, "user", approval);
+  check(JSON.stringify(second.body) === JSON.stringify(first.body), "a retry gets the original response");
+  await performed(ctx, operation, 1);
 });
 
-caseFor("operations.terms-changed")(async (ctx) => {
+caseFor("operations.retry-before-the-outcome")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "unknown");
+  const approval = approved(operation);
+  for (const attempt of ["the first request", "a retry"]) {
+    const error = await refused(request(ctx, signed, "unknown", approval), attempt);
+    check(error.statusCode === 503, `${attempt} waits, HTTP 503, never a failure`);
+    check(error.details?.retry_after, `${attempt} says when: Retry-After`);
+  }
+  await performed(ctx, operation, 1);
+});
+
+caseFor("operations.new-revision-on-changed-terms")(async (ctx) => {
   ctx.require("revise");
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
   await ctx.driver.revise(operation.operation_id);
-  const outcome = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval: await approve(operation) });
-  check(outcome.status === "terms_changed", `got ${outcome.status}`);
-  const current = outcome.operation;
-  check(current.revision === operation.revision + 1, "the current revision comes back");
-  check(outcome.changed.length, "with what changed");
-  const done = await ctx.agent.operations.confirm(endpoint, current, { ...who, approval: await approve(current) });
-  check(done.status === "confirmed", "the new revision, approved, confirms");
+  const answer = await request(ctx, signed, "user", approved(operation));
+  const current = checkNewRevision(answer, operation, operation.revision);
+  check(current.summary !== operation.summary, "the new revision has the new terms");
+  await performed(ctx, operation, 0);
+  const done = await request(ctx, signed, "user", approved(current));
+  check(done.operation === undefined, "the new revision, approved, is performed");
+  await performed(ctx, operation, 1);
 });
 
-caseFor("operations.user-approval-required")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  if (!operation.user_approval_required) throw new SkipCase("the user proposal does not require the user's approval");
-  const local = await refused(ctx.agent.operations.confirm(endpoint, operation, { ...who, standing: ["company", "account", "action"] }), "a standing permission");
-  check(local.code === "user_approval_required", "the SDK refuses it locally");
-  const url = `${endpoint}/${operation.operation_id}/confirm`;
-  const response = await ctx.send("POST", url, {
-    headers: {
-      Authorization: `DPoP ${signed.token.accessToken.reveal()}`,
-      DPoP: await ctx.proof(user, "POST", url, { token: signed.token }),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ revision: operation.revision, approved_by: "standing_permission" }),
+caseFor("operations.approval-of-a-revision-never-returned")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const forged = { operation_id: operation.operation_id, revision: "never_returned_0000" };
+  const answer = await request(ctx, signed, "user", forged);
+  checkNewRevision(answer, operation, forged.revision);
+  await performed(ctx, operation, 0);
+});
+
+caseFor("operations.approval-of-another-request")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const proposal = ctx.proposal("user");
+  const answer = await ctx.agent.api.call(proposal.method, ctx.url(proposal.path), {
+    session: signed.session,
+    token: signed.token,
+    body: { changed: "this request is not the one that returned the operation" },
+    approval: approved(operation),
   });
-  await expectRefusal(response, 403, "user_approval_required", "a standing permission");
+  checkNewRevision(answer, operation, operation.revision);
+  await performed(ctx, operation, 0);
 });
 
-function permission(ctx, limits, usesRemaining) {
-  const action = ctx.scenario.standing_action;
-  if (!action) throw new SkipCase("the scenario has no standing-permission action");
-  ctx.agent.standing.permissions.clear();
-  const reference = opaque("perm");
-  const company = ctx.domain;
-  const account = ctx.driver.accounts[0];
-  ctx.agent.standing.permissions.set(reference, {
-    reference,
-    company,
-    account,
-    action,
-    limits,
-    expiresAt: new Date(ctx.now().getTime() + 3600_000),
-    ...(usesRemaining === undefined ? {} : { usesRemaining }),
+const withHeader = async (ctx, signed, proposal, url, value) => ({
+  ...(await ctx.auth(signed.session, proposal.method, url, signed.token)),
+  "Content-Type": "application/json",
+  [APPROVAL_HEADER]: value,
+});
+
+caseFor("operations.approval-unknown-members-ignored")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const proposal = ctx.proposal("user");
+  const url = ctx.url(proposal.path);
+  const response = await ctx.send(proposal.method, url, {
+    headers: await withHeader(ctx, signed, proposal, url, `later=1, ${approvalHeader(approved(operation))}, flag;a=b`),
+    body: JSON.stringify(proposal.body ?? {}),
   });
-  return [company, account, action];
-}
-
-caseFor("operations.standing-permission-within-bounds")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const standing = permission(ctx, ctx.scenario.standing_limits, 2);
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "standing");
-  const outcome = await ctx.agent.operations.confirm(endpoint, operation, { ...who, standing });
-  check(outcome.status === "confirmed", `got ${outcome.status}`);
-  check(outcome.operation.confirmation?.approved_by === "standing_permission", "under the standing permission");
+  check(response.status === 200, `unknown members are ignored, got ${response.status}`);
+  await performed(ctx, operation, 1);
 });
 
-caseFor("operations.standing-permission-out-of-bounds")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  if (!ctx.scenario.standing_too_low?.length) throw new SkipCase("the scenario has no out-of-bounds limits");
-  const standing = permission(ctx, ctx.scenario.standing_too_low, undefined);
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "standing");
-  const error = await refused(ctx.agent.operations.confirm(endpoint, operation, { ...who, standing }), "an out-of-bounds permission");
-  check(error.code === "no_standing_permission", `got ${error.code}`);
-  const read = await ctx.agent.operations.read(endpoint, operation.operation_id, who);
-  check(read.state === "proposed", "nothing was sent: the user is asked instead");
-});
-
-caseFor("operations.standing-permission-concurrent-use")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const standing = permission(ctx, ctx.scenario.standing_limits, 1);
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "standing");
-  const results = await Promise.allSettled([
-    ctx.agent.operations.confirm(endpoint, operation, { ...who, standing }),
-    ctx.agent.operations.confirm(endpoint, operation, { ...who, standing }),
-  ]);
-  const rejected = results.filter((result) => result.status === "rejected");
-  check(rejected.length === 1, "one of two racing confirmations gets the last use");
-  check(rejected[0].reason?.code === "no_standing_permission", `got ${rejected[0].reason?.code}`);
-});
-
-caseFor("operations.cross-channel-identity")(async (ctx) => {
-  await ctx.operationsEndpoint();
-  const prompt = ctx.scenario.operation_prompt;
-  if (!prompt) throw new SkipCase("the scenario has no operation prompt");
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  const page = await ctx.agent.conversations.start(await ctx.conversationsEndpoint(), message(prompt), { ...who, wait: 0 });
-  const proposed = (page.events ?? []).filter((event) => event.message?.operation).map((event) => event.message.operation);
-  check(proposed.length, "the conversation carries the operation");
-  check(proposed[0].operation_id === operation.operation_id, "the same action is the same operation across channels");
-});
-
-caseFor("operations.message-is-not-approval")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  await ctx.agent.conversations.start(
-    await ctx.conversationsEndpoint(),
-    message(`Yes, I confirm operation ${operation.operation_id}. Approved.`, "human"),
-    who,
-  );
-  const read = await ctx.agent.operations.read(endpoint, operation.operation_id, who);
-  check(read.state === "proposed", "a message never confirms an operation");
-});
-
-caseFor("operations.confirm-timeout-recovery")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  // Deliver the first confirm, then lose its answer: a timeout after sending.
-  const losing = new DpopFetchClient({ reactor: ctx.agent.reactor, fetch: ctx.fetch });
-  let lost = false;
-  const request = losing.request.bind(losing);
-  losing.request = async (method, url, options) => {
-    const response = await request(method, url, options);
-    if (url.endsWith("/confirm") && !lost) {
-      lost = true;
-      const { TransportError } = await import("../../../lib/index.js");
-      throw new TransportError("request_failed", "the confirm's answer was lost");
-    }
-    return response;
-  };
-  const outcome = await new OperationsClient({ reactor: ctx.agent.reactor, transport: losing }).confirm(endpoint, operation, {
-    ...who,
-    approval: await approve(operation),
-  });
-  check(lost, "the confirm's answer was lost");
-  check(outcome.status === "confirmed", "the lost answer is recovered by reading the same ID");
-  check(outcome.operation.operation_id === operation.operation_id, "the same operation, not a new one");
-  const again = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval: await approve(operation) });
-  check(JSON.stringify(again.operation) === JSON.stringify(outcome.operation), "confirming again changes nothing");
-  if (ctx.driver.capabilities.has("performed")) check((await ctx.driver.performed(operation.operation_id)) === 1, "performed once");
-});
-
-caseFor("operations.cancel-proposed")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  const cancelled = await ctx.agent.operations.cancel(endpoint, operation.operation_id, who);
-  check(cancelled.state === "cancelled", `got ${cancelled.state}`);
-  check(cancelled.result !== null, "a cancelled operation has a result");
-  const late = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval: await approve(operation) });
-  check(late.status === "not_confirmed", `a late confirm changes nothing, got ${late.status}`);
-  check(late.operation.state === "cancelled", "it stays cancelled");
-  if (ctx.driver.capabilities.has("performed")) check((await ctx.driver.performed(operation.operation_id)) === 0, "never performed");
-});
-
-caseFor("operations.in-progress-outcome-unknown")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "unknown");
-  const outcome = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval: await approve(operation) });
-  check(outcome.operation.state === "in_progress", `an unknown outcome is in_progress, got ${outcome.operation.state}`);
-  check(outcome.retryAfter !== undefined, "with Retry-After");
-  const read = await ctx.read(user, `${endpoint}/${operation.operation_id}`, signed.token);
-  check((await read.json()).state === "in_progress", "never failed while unknown");
-  check(read.headers.has("retry-after"), "a read in progress carries Retry-After");
-  const cancelled = await ctx.agent.operations.cancel(endpoint, operation.operation_id, who);
-  check(cancelled.state === "in_progress", "cancelling leaves it in progress until known");
-});
-
-caseFor("operations.failed-partial-result")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "fails");
-  const outcome = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval: await approve(operation) });
-  check(outcome.operation.state === "failed", `got ${outcome.operation.state}`);
-  check(outcome.operation.result?.summary, "the result says what was changed");
+caseFor("operations.malformed-approval-header-ignored")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const proposal = ctx.proposal("user");
+  const url = ctx.url(proposal.path);
+  for (const value of [
+    `operation_id=${operation.operation_id}`, // Tokens, not Strings
+    `operation_id="${operation.operation_id}"`, // no revision
+    `operation_id="${operation.operation_id}", revision="${operation.revision}`, // unclosed
+  ]) {
+    const response = await ctx.send(proposal.method, url, {
+      headers: await withHeader(ctx, signed, proposal, url, value),
+      body: JSON.stringify(proposal.body ?? {}),
+    });
+    await expectRefusal(response, 403, "approval_required", "a request without an approval");
+  }
+  await performed(ctx, operation, 0);
 });
 
 caseFor("operations.expired")(async (ctx) => {
   ctx.require("clock");
-  const endpoint = await ctx.operationsEndpoint();
-  const { user, signed } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  check(operation.expires_at, "a proposal has expires_at");
+  await ctx.operationsNegotiated();
+  const [user, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
   await ctx.driver.wait((Date.parse(operation.expires_at) - ctx.now().getTime()) / 1000 + 1);
-  // The Session Token may have expired meanwhile: sign the Session in again.
-  const refreshed = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user), sessionKey: signed.token.sessionKey });
-  const who = { ...(await ctx.who(user)), token: refreshed.token };
-  const read = await ctx.agent.operations.read(endpoint, operation.operation_id, who);
-  check(read.state === "expired", `got ${read.state}`);
-  const late = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval: await approve(operation) });
-  check(late.status === "not_confirmed", "an expired operation is returned as it is");
+  // The access token may have expired meanwhile: a new one from the refresh token.
+  const refreshed = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user) });
+  const answer = await request(ctx, signed, "user", approved(operation), { token: refreshed.token });
+  checkNewRevision(answer, operation, operation.revision);
+  await performed(ctx, operation, 0);
 });
 
-caseFor("operations.not-found-indistinguishable")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const owner = await signedInUser(ctx);
-  const theirs = await propose(ctx, owner.user, owner.signed, "user");
-  const { who } = await signedInUser(ctx);
-  const answers = [];
-  for (const operationId of [theirs.operation_id, "op_conformance_unknown_0000"]) {
-    const error = await refused(ctx.agent.operations.read(endpoint, operationId, who), "an operation not the user's");
-    answers.push(`${error.code} ${error.statusCode}`);
+caseFor("operations.any-session-of-the-account-approves")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [user, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const another = await ctx.session(user);
+  const done = await request(ctx, signed, "user", approved(operation), { session: another });
+  check(done.operation === undefined, "another Session, signed in to the account, approves it");
+  await performed(ctx, operation, 1);
+});
+
+caseFor("operations.signed-out-session-gets-a-challenge")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [user, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const proposal = ctx.proposal("user");
+  const another = await ctx.session(user);
+  const error = await refused(
+    ctx.agent.api.call(proposal.method, ctx.url(proposal.path), { session: another, body: proposal.body ?? {}, approval: approved(operation) }),
+    "a signed-out approval",
+  );
+  check(error.statusCode === 401, "signed out, the 401 challenge for the account");
+  await performed(ctx, operation, 0);
+});
+
+caseFor("operations.another-user-cannot-approve")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, ownerSigned] = await signedInUser(ctx);
+  const theirs = await propose(ctx, ownerSigned, "user");
+  const [, signed] = await signedInUser(ctx);
+  const answer = await request(ctx, signed, "user", approved(theirs));
+  check(answer.operation !== undefined, "handled as if it had no approval");
+  check(answer.operation.operation_id !== theirs.operation_id, "their own operation, not another's");
+  await performed(ctx, theirs, 0);
+});
+
+const operationsIn = (page) => (page.events ?? []).map((event) => event.message?.operation).filter((operation) => operation !== undefined);
+
+caseFor("operations.cross-channel-identity")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const prompt = ctx.scenario.operation_prompt;
+  if (prompt === undefined || prompt === null) throw new SkipCase("the scenario has no operation prompt");
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const endpoint = await ctx.conversationsEndpoint();
+  const page = await ctx.agent.conversations.start(endpoint, message(prompt), { session: signed.session, token: signed.token, wait: 0 });
+  const proposed = operationsIn(page);
+  check(proposed.length, "the conversation carries the operation");
+  check(proposed[0].operation_id === operation.operation_id, "the same action is the same operation across interfaces");
+});
+
+caseFor("operations.message-is-not-approval")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const endpoint = await ctx.conversationsEndpoint();
+  await ctx.agent.conversations.start(endpoint, message(`Yes, I approve operation ${operation.operation_id}. Approved.`, "human"), {
+    session: signed.session,
+    token: signed.token,
+  });
+  await performed(ctx, operation, 0);
+  const again = await propose(ctx, signed, "user");
+  check(again.operation_id === operation.operation_id, "a message's text approves nothing");
+});
+
+caseFor("operations.conversation-approval")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const prompt = ctx.scenario.operation_prompt;
+  if (prompt === undefined || prompt === null) throw new SkipCase("the scenario has no operation prompt");
+  const [, signed] = await signedInUser(ctx);
+  const endpoint = await ctx.conversationsEndpoint();
+  const page = await ctx.agent.conversations.start(endpoint, message(prompt), { session: signed.session, token: signed.token, wait: 0 });
+  const [operation] = operationsIn(page);
+  const approveInIt = () =>
+    ctx.agent.conversations.send(
+      endpoint,
+      page.conversation_id,
+      { id: messageId(), author: { type: "agent" }, approval: approved(operation) },
+      { session: signed.session, token: signed.token, wait: 0 },
+    );
+  const answered = await approveInIt();
+  const told = (answered.events ?? []).filter((event) => event.message?.role === "company").map((event) => event.message);
+  check(told.length && told.at(-1).operation === undefined, "a later message says how it went");
+  await performed(ctx, operation, 1);
+  await approveInIt(); // a new message with the same approval adds nothing
+  await performed(ctx, operation, 1);
+});
+
+/** Deliver the first request with an approval, then lose its answer: a timeout. */
+class LosingTransport extends SessionFetchClient {
+  lost = false;
+
+  async request(method, url, options) {
+    const response = await super.request(method, url, options);
+    if (APPROVAL_HEADER in (options.headers ?? {}) && !this.lost) {
+      this.lost = true;
+      throw new TransportError("request_failed", "the answer was lost");
+    }
+    return response;
   }
-  check(answers[0] === answers[1], "another user's and an unknown operation look the same");
-  check(answers[0] === "operation_not_found 404", `got ${answers[0]}`);
+}
+
+caseFor("operations.lost-answer-same-approval")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const losing = new LosingTransport({ reactor: ctx.agent.reactor, fetch: ctx.fetch });
+  const api = new ApiClient({ transport: losing });
+  const proposal = ctx.proposal("user");
+  const sent = await ctx.agent.operations.send(
+    (approval) =>
+      api.call(proposal.method, ctx.url(proposal.path), {
+        session: signed.session,
+        token: signed.token,
+        body: proposal.body ?? {},
+        approval,
+      }),
+    approved(operation),
+  );
+  check(losing.lost, "the answer was lost");
+  check(sent.status === "answered", `the same approval, sent again, got ${sent.status}`);
+  await performed(ctx, operation, 1);
 });
 
-// MCP (§4.3, §6) ----------------------------------------------------------------------------
+caseFor("operations.failed-partial-result")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "fails");
+  const answers = [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const error = await refused(request(ctx, signed, "fails", approved(operation)), "an action that failed");
+    answers.push([error.code, error.statusCode]);
+  }
+  check(JSON.stringify(answers[0]) === JSON.stringify(answers[1]), "a retry gets the same answer");
+  await performed(ctx, operation, 1);
+});
+
+// MCP (§4.5, §7) ------------------------------------------------------------------------
 
 async function mcpUrl(ctx) {
   const api = mcpApi((await ctx.company()).document);
@@ -1500,295 +1583,188 @@ async function mcpUrl(ctx) {
 }
 
 function tool(name) {
-  if (!name) throw new SkipCase("the scenario names no MCP tool for this");
+  if (name === undefined || name === null) throw new SkipCase("the scenario names no MCP tool for this");
   return name;
 }
 
-/** Whether the MCP server supports DPoP, from its protected resource metadata (§4.3). */
-async function mcpDpop(ctx, url) {
-  const metadata = await ctx.metadata();
-  return (await fetchMcpServerMetadata(url, { issuer: metadata.issuer, fetch: ctx.fetch })).supportsDpop;
-}
+const mcpClient = (ctx, session, token, url) =>
+  new McpClient({ url, session, reactor: ctx.agent.reactor, fetch: ctx.fetch, ...(token === undefined ? {} : { token }) });
 
-/** A signed-in Session's token for the MCP server: DPoP or Bearer, as the server says. */
-async function signedInBearer(ctx) {
+/** A signed-in user's access token for the MCP server: `resource` is its `url` (§7). */
+async function signedInMcp(ctx) {
   const url = await mcpUrl(ctx);
-  const dpop = await mcpDpop(ctx, url);
-  const { user, signed } = await signedInUser(ctx);
-  const bearer = await mcpToken(ctx, user, signed.token, url, dpop, signed.reference);
-  check(bearer.signedIn, "a signed-in MCP token");
-  return { user, signed, bearer, url };
-}
-
-/**
- * A token for the MCP server, as the server says (§4.3).
- *
- * One that supports DPoP: the Session's own request with `resource` (the Account Token
- * when signed in, the assertion otherwise). One that doesn't: Token Exchange of the
- * Session's DPoP token for a Bearer one.
- */
-async function mcpToken(ctx, user, session, url, dpop, reference) {
-  const metadata = await ctx.metadata();
-  if (!dpop) {
-    return ctx.agent.sessions.tokenForMcp({
-      clientId: ctx.agent.identity.clientId,
-      issuer: metadata.issuer,
-      tokenEndpoint: metadata.token_endpoint,
-      tenantId: ctx.tenantId,
-      sessionKey: session.sessionKey,
-      subjectToken: session.accessToken,
-      resource: url,
-    });
-  }
-  if (reference !== undefined) {
-    const result = await ctx.agent.accounts.refresh(reference, {
-      context: await ctx.accountContext(user),
-      sessionKey: session.sessionKey,
-      resource: url,
-    });
-    check(result.status === "signed_in" && result.token !== undefined, "a signed-in token");
-    return result.token;
-  }
-  return ctx.renew(user, session.sessionKey, { resource: url });
-}
-
-async function mcpClient(ctx, user, token, url) {
-  return new McpClient({ token, url, fetch: ctx.fetch, reactor: ctx.agent.reactor, who: await ctx.who(user) });
+  const [user, signed] = await signedInUser(ctx);
+  const result = await ctx.agent.accounts.tokenForMcp(signed.reference, { context: await ctx.accountContext(user), url });
+  check(result.status === "signed_in" && result.token !== undefined, "a token for the server");
+  return { user, signed, token: result.token, url };
 }
 
 caseFor("lifecycle.mcp-protected-resource-metadata")(async (ctx) => {
   const url = await mcpUrl(ctx);
   const metadata = await ctx.metadata();
-  const parts = new URL(url);
-  const location = `https://${parts.host}/.well-known/oauth-protected-resource${parts.pathname}`;
-  const document = await (await ctx.send("GET", location)).json();
-  check(document.resource === url, "the metadata names the MCP server as its resource");
-  check((document.authorization_servers ?? []).includes(metadata.issuer), "authorization_servers includes auth.issuer");
-  const supportsDpop = "dpop_signing_alg_values_supported" in document;
-  if (supportsDpop) {
-    check(document.dpop_signing_alg_values_supported.includes("ES256"), "an MCP server that supports DPoP lists ES256");
-  }
+  const served = await fetchMcpServerMetadata(url, { issuer: metadata.issuer, fetch: ctx.fetch });
+  check(served.resource === url, "the metadata names the MCP server as its resource");
+  check(metadata.protected_resources.includes(url), "the issuer lists the MCP server");
+  const resource = await serviceResource(await ctx.company(), url, { reactor: ctx.agent.reactor });
+  check(resource === url, "so a personal agent requests a token for its url (§4.5)");
+  const user = ctx.newUser();
+  const session = await ctx.session(user);
+  const signedIn = await ctx.signIn(user, session);
   const bare = await ctx.send("POST", url, {
-    headers: { "Content-Type": "application/json" },
+    headers: { ...(await ctx.auth(session, "POST", url, signedIn.token)), "Content-Type": "application/json" },
     body: '{"jsonrpc":"2.0","id":1,"method":"ping"}',
   });
-  check(bare.status === 401, "an unauthenticated MCP call is 401");
+  check(bare.status === 401, "a default access token is refused at the MCP server");
   const challenge = bare.headers.get("www-authenticate") ?? "";
   check(challenge.startsWith("Bearer") && challenge.includes("resource_metadata"), "Bearer challenge");
-  if (supportsDpop) {
-    // One challenge per scheme it accepts, each with resource_metadata (§6).
-    check(challenge.includes(", DPoP "), "a DPoP server also challenges with DPoP");
-    check(challenge.split("resource_metadata=").length - 1 === 2, "each challenge names the metadata");
-  }
+  check(challenge.includes('error="invalid_token"'), "invalid_token: not issued for this service");
 });
 
-caseFor("lifecycle.mcp-bearer-for-its-url")(async (ctx) => {
+caseFor("lifecycle.mcp-token-for-its-url")(async (ctx) => {
   const readTool = tool(ctx.scenario.mcp_read_tool);
-  const { user, signed, bearer, url } = await signedInBearer(ctx);
-  const dpop = await mcpDpop(ctx, url);
-  const expected = dpop ? "DPoP" : "Bearer";
-  check(bearer.tokenType === expected, `a ${expected} token, as the server supports`);
-  check(bearer.sessionKey === signed.token.sessionKey, "for the same Session");
-  const answer = await (await mcpClient(ctx, user, bearer, url)).callTool(readTool);
+  const { signed, token, url } = await signedInMcp(ctx);
+  check(token.tokenType === "Bearer", "a Bearer token");
+  check(token.resource === url, "issued for the server's url");
+  const answer = await mcpClient(ctx, signed.session, token, url).callTool(readTool);
   check(!answer.isError, "the MCP server accepts it");
-  const other = ctx.newUser();
-  const session = await ctx.session(other);
-  const signedOut = await mcpToken(ctx, other, session, url, dpop);
-  check(!signedOut.signedIn, "a signed-out Session gets a signed-out MCP token");
-  const error = await refused((await mcpClient(ctx, other, signedOut, url)).callTool(readTool), "a signed-out MCP token");
+  // Signed out: the Session header alone, which this server takes; its scopes are enforced.
+  const other = await ctx.session(ctx.newUser());
+  const error = await refused(mcpClient(ctx, other, undefined, url).callTool(readTool), "a signed-out tool call");
   check(error.code === "insufficient_scope", `the MCP server enforces scopes, got ${error.code}`);
+  check(error.statusCode === 401, "signed out, the 401 challenge");
 });
 
-caseFor("lifecycle.mcp-bearer-only-at-mcp")(async (ctx) => {
-  const { user, signed, bearer, url } = await signedInBearer(ctx);
-  const secret = bearer.accessToken.reveal();
+caseFor("lifecycle.mcp-token-only-at-mcp")(async (ctx) => {
+  const { signed, token } = await signedInMcp(ctx);
+  const secret = token.accessToken.reveal();
   const targets = [["GET", ctx.url(ctx.scenario.read_path)]];
-  try {
-    targets.push(["POST", await ctx.conversationsEndpoint()]);
-  } catch (error) {
-    if (!(error instanceof SkipCase)) throw error;
-  }
-  try {
-    targets.push(["GET", `${await ctx.operationsEndpoint()}/op_conformance_any`]);
-  } catch (error) {
-    if (!(error instanceof SkipCase)) throw error;
-  }
+  const endpoint = (await ctx.company()).document.agent === undefined ? undefined : conversationEndpoint((await ctx.company()).document);
+  if (endpoint !== undefined) targets.push(["POST", endpoint]);
   for (const [method, target] of targets) {
-    for (const scheme of ["Bearer", "DPoP"]) {
-      const headers = { Authorization: `${scheme} ${secret}`, "Content-Type": "application/json" };
-      if (scheme === "DPoP") headers.DPoP = await ctx.proof(user, method, target, { token: bearer });
-      const response = await ctx.send(method, target, { headers, ...(method === "GET" ? {} : { body: "{}" }) });
-      check(response.status === 401, `an MCP token is refused at ${method} ${target}`);
-      check(!(await response.text()).includes(secret), "and never echoed");
-    }
+    const response = await ctx.send(method, target, {
+      headers: { ...(await ctx.auth(signed.session, method, target, token)), "Content-Type": "application/json" },
+      ...(method === "GET" ? {} : { body: "{}" }),
+    });
+    check(response.status === 401, `an MCP token is refused at ${method} ${target}`);
+    const challenge = response.headers.get("www-authenticate") ?? "";
+    check(challenge.includes('error="invalid_token"'), "invalid_token");
+    check(challenge.includes("resource_metadata"), "with resource_metadata, for stale metadata (§4.5)");
+    check(!(await textOf(response)).includes(secret), "and never echoed");
   }
-  const dpopAtMcp = await ctx.send("POST", url, {
-    headers: { Authorization: `Bearer ${signed.token.accessToken.reveal()}`, "Content-Type": "application/json" },
-    body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+});
+
+caseFor("lifecycle.resource-not-served")(async (ctx) => {
+  // A `resource` the company doesn't serve is `invalid_target` (RFC 8707, §4.5).
+  const [, signed] = await signedInUser(ctx);
+  const form = { ...(await refreshForm(ctx, signed.reference)), resource: "https://elsewhere.example/mcp" };
+  await expectRefusal(await ctx.tokenRequest(form), 400, "invalid_target", "another resource");
+});
+
+caseFor("lifecycle.stale-resource-metadata")(async (ctx) => {
+  // A service refusing a token not issued for it says where its metadata is (§4.5).
+  const url = await mcpUrl(ctx);
+  const readTool = tool(ctx.scenario.mcp_read_tool);
+  const [user, signed] = await signedInUser(ctx);
+  const tokens = new ServiceTokens({
+    refresh: ctx.agent.accounts,
+    discovery: { reactor: ctx.agent.reactor },
+    company: await ctx.company(),
+    reference: signed.reference,
+    context: await ctx.accountContext(user),
   });
-  check(dpopAtMcp.status === 401, "the MCP server refuses a DPoP Session Token");
-  // Token Exchange for anything but an MCP server without DPoP: `invalid_target` (§4.3).
-  const metadata = await ctx.metadata();
-  const form = {
-    grant_type: TOKEN_EXCHANGE,
-    subject_token: signed.token.accessToken.reveal(),
-    subject_token_type: ACCESS_TOKEN_TYPE,
-    resource: ctx.url(ctx.scenario.read_path),
-    ...(await ctx.clientForm()),
-  };
-  const elsewhere = await ctx.tokenRequest(user, form, {
-    dpop: await ctx.proof(user, "POST", metadata.token_endpoint, { sessionKey: signed.token.sessionKey }),
-  });
-  await expectRefusal(elsewhere, 400, "invalid_target", "a Bearer token for another resource");
+  // Stale: the default token, as if the server had no metadata of its own.
+  const fallback = await tokens.tokenFor(ctx.url(ctx.scenario.read_path));
+  check(fallback !== undefined && fallback.resource === undefined, "the default token");
+  const stale = { ...fallback, resource: url };
+  const error = await refused(mcpClient(ctx, signed.session, stale, url).callTool(readTool), "a token not issued for the server");
+  check(error instanceof McpError && staleResourceMetadata(error), "invalid_token with resource_metadata");
+  const fresh = await tokens.tokenFor(url, { fresh: true });
+  check(fresh !== undefined && fresh.resource === url, "a token for the service, read again");
+  const answer = await mcpClient(ctx, signed.session, fresh, url).callTool(readTool);
+  check(!answer.isError, "and the service takes it");
 });
 
 caseFor("lifecycle.mcp-sign-out-takes-effect")(async (ctx) => {
   const readTool = tool(ctx.scenario.mcp_read_tool);
-  const { user, signed, bearer, url } = await signedInBearer(ctx);
-  const client = await mcpClient(ctx, user, bearer, url);
+  const { user, signed, token, url } = await signedInMcp(ctx);
+  const client = mcpClient(ctx, signed.session, token, url);
   check(!(await client.callTool(readTool)).isError, "signed in, the tool answers");
   await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
-  const error = await refused(client.callTool(readTool), "a revoked sign-in");
-  check(error.code === "insufficient_scope", `got ${error.code}`);
+  const error = await refused(client.callTool(readTool), "a revoked MCP token");
+  check(error.code === "invalid_token", `got ${error.code}`);
 });
 
 caseFor("operations.cross-channel-mcp")(async (ctx) => {
-  await ctx.operationsEndpoint();
+  await ctx.operationsNegotiated();
   const proposeTool = tool(ctx.scenario.mcp_propose_tool);
-  const { user, signed, bearer, url } = await signedInBearer(ctx);
-  const throughApi = await propose(ctx, user, signed, "user");
-  const answer = await (await mcpClient(ctx, user, bearer, url)).callTool(proposeTool);
-  check(answer.operation !== undefined, "the tool returns structuredContent.operation");
-  check(JSON.stringify(answer.operation) === JSON.stringify(throughApi), "the same operation as through the API");
+  const { signed, token, url } = await signedInMcp(ctx);
+  const throughApi = await propose(ctx, signed, "user");
+  const answer = await mcpClient(ctx, signed.session, token, url).callTool(proposeTool);
+  check(answer.isError, "an error result, nothing done");
+  check(answer.operation !== undefined, "with structuredContent.operation");
+  check(answer.operation.operation_id === throughApi.operation_id, "the same operation as through the API");
 });
 
-// Draft 0.2 company rules ------------------------------------------------------------------
-
-caseFor("security.dpop-header-twice")(async (ctx) => {
-  // Exactly one DPoP header holding one JWT (§4.3): two are an invalid proof.
-  const metadata = await ctx.metadata();
-  const user = ctx.newUser();
-  const form = {
-    grant_type: JWT_BEARER,
-    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.issuer })),
-    ...(await ctx.clientForm()),
-  };
-  const headers = new Headers({ "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" });
-  headers.append("DPoP", await ctx.proof(user, "POST", metadata.token_endpoint));
-  headers.append("DPoP", await ctx.proof(user, "POST", metadata.token_endpoint));
-  const response = await ctx.send("POST", metadata.token_endpoint, { headers, body: new URLSearchParams(form).toString() });
-  check(response.status === 400, `two DPoP headers: expected 400, got ${response.status}`);
-  const error = await errorOf(response);
-  check(["invalid_dpop_proof", "invalid_request"].includes(error), `two DPoP headers: got ${error}`);
+caseFor("operations.mcp-approval")(async (ctx) => {
+  await ctx.operationsNegotiated();
+  const proposeTool = tool(ctx.scenario.mcp_propose_tool);
+  const { signed, token, url } = await signedInMcp(ctx);
+  const client = mcpClient(ctx, signed.session, token, url);
+  const { operation } = await client.callTool(proposeTool);
+  const approval = approved(operation);
+  const done = await client.callTool(proposeTool, {}, { approval });
+  check(!done.isError && done.operation === undefined, "the same call, approved, is performed");
+  const again = await client.callTool(proposeTool, {}, { approval });
+  check(again.text === done.text, "a retry gets the original result");
+  await performed(ctx, operation, 1);
 });
 
-caseFor("lifecycle.account-mismatch-after-sign-out")(async (ctx) => {
-  // A Session ever signed in to one account is never signed in to another (§4.4, §4.8).
-  const user = ctx.newUser();
-  const [first, second] = ctx.driver.accounts;
-  const session = await ctx.session(user);
-  const signed = await ctx.signIn(user, session, { account: first });
-  const other = await ctx.signIn(user, await ctx.session(user), { account: second });
-  await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
-  const renewed = await ctx.renew(user, session.sessionKey);
-  check(!renewed.signedIn, "after sign-out the Session continues signed out");
-  const error = await refused(
-    ctx.agent.accounts.refresh(other.reference, { context: await ctx.accountContext(user), sessionKey: session.sessionKey }),
-    "another account's Account Token on a Session signed out of the first",
-  );
-  check(error.code === "account_mismatch", `got ${error.code}`);
-});
-
-caseFor("lifecycle.mcp-token-type-by-server")(async (ctx) => {
-  // The token type follows the MCP server in `resource`; each wrong way is
-  // `invalid_target`, and every token request carries a proof (§4.3).
-  const url = await mcpUrl(ctx);
-  const dpop = await mcpDpop(ctx, url);
-  const metadata = await ctx.metadata();
-  const user = ctx.newUser();
-  const session = await ctx.session(user);
-  const proof = () => ctx.proof(user, "POST", metadata.token_endpoint, { sessionKey: session.sessionKey });
-  // Fresh assertions each time: a `jti` is never sent twice (§4.1, §4.2).
-  const renewal = async () => ({
-    grant_type: JWT_BEARER,
-    assertion: await ctx.assertion(ctx.claims({ subject: user, audience: metadata.issuer })),
-    resource: url,
-    ...(await ctx.clientForm()),
-  });
-  const exchange = async () => ({
-    grant_type: TOKEN_EXCHANGE,
-    subject_token: session.accessToken.reveal(),
-    subject_token_type: ACCESS_TOKEN_TYPE,
-    resource: url,
-    ...(await ctx.clientForm()),
-  });
-  const unproven = await ctx.tokenRequest(user, await renewal(), { dpop: null });
-  await expectRefusal(unproven, 400, "invalid_dpop_proof", "a token request without a proof");
-  if (dpop) {
-    const refusedToken = await ctx.tokenRequest(user, await exchange(), { dpop: await proof() });
-    await expectRefusal(refusedToken, 400, "invalid_target", "Token Exchange for a DPoP MCP server");
-    const issued = await ctx.tokenRequest(user, await renewal(), { dpop: await proof() });
-    check(issued.status === 200, "with a proof, a token is issued");
-    check((await issued.json()).token_type === "DPoP", "a DPoP token for a DPoP MCP server");
-  } else {
-    const refusedToken = await ctx.tokenRequest(user, await renewal(), { dpop: await proof() });
-    await expectRefusal(refusedToken, 400, "invalid_target", "a Bearer server's token by another grant");
-    const issued = await ctx.tokenRequest(user, await exchange(), { dpop: await proof() });
-    check(issued.status === 200, "Token Exchange issues a token");
-    const body = await issued.json();
-    check(body.token_type === "Bearer", "a Bearer token for this MCP server");
-    check(body.issued_token_type === ACCESS_TOKEN_TYPE, "issued_token_type names an access token");
-  }
-});
+// Company rules ---------------------------------------------------------------------------
 
 caseFor("protocol.feedback-report")(async (ctx) => {
-  // A report with a Session Token, no scope: 202; an unknown kind too; malformed 400 (§8).
+  // A report with the Session header, no scope: 202, or 200; malformed, 400 (§9.3).
   const endpoint = feedbackEndpoint((await ctx.company()).document);
   if (endpoint === undefined) throw new SkipCase("the company lists no feedback endpoint");
-  const user = ctx.newUser();
-  const session = await ctx.session(user);
+  const session = await ctx.session(ctx.newUser());
   const post = async (body) =>
     ctx.send("POST", endpoint, {
-      headers: {
-        Authorization: `DPoP ${session.accessToken.reveal()}`,
-        DPoP: await ctx.proof(user, "POST", endpoint, { token: session }),
-        "Content-Type": "application/json",
-      },
+      headers: { ...(await ctx.auth(session, "POST", endpoint)), "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-  const report = { kind: "missing", task: "Conformance task", description: "Not offered." };
+  const report = { task: "Conformance task", description: "Not offered." };
   const accepted = await post(report);
-  // 202, or 200 with an alternative when the task can be done after all (§8.3).
-  check([200, 202].includes(accepted.status), `a report is accepted with 202 or 200, got ${accepted.status}`);
-  const unknown = await post({ ...report, kind: "conformance-later-kind" });
-  check([200, 202].includes(unknown.status), "a kind it doesn't recognize is accepted");
+  // 202, or 200 with an alternative when the task can be done after all (§9.3).
+  check(accepted.status === 200 || accepted.status === 202, `a report is accepted with 202 or 200, got ${accepted.status}`);
+  const unknown = await post({ ...report, later: "a member it doesn't recognize" });
+  check(unknown.status === 200 || unknown.status === 202, "a member it doesn't recognize is ignored");
   await expectRefusal(await post({ ...report, task: "x".repeat(201) }), 400, "invalid_request", "too long");
   const bare = await ctx.send("POST", endpoint, { headers: { "Content-Type": "application/json" }, body: "{}" });
-  check(bare.status === 401, "a report needs a Session Token");
+  await expectRefusal(bare, 400, "invalid_session", "a report needs the Session header");
 });
 
 caseFor("conversations.read-fields")(async (ctx) => {
   // Every read has conversation_id, events, cursor, has_more, status, responder (§7.5).
-  const { user, session, endpoint } = await asUser(ctx);
-  const conversation = await conversationOf(ctx, user, session);
-  const url = `${endpoint.replace(/\/$/u, "")}/${conversation}/events`;
-  const page = await (await ctx.read(user, url, session)).json();
-  const empty = await (await ctx.read(user, `${url}?cursor=${page.cursor}`, session)).json();
+  const { session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
+  const url = `${endpoint.replace(/\/+$/u, "")}/${conversation}/events`;
+  const page = await (await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) })).json();
+  const later = `${url}?cursor=${page.cursor}`;
+  const empty = await (await ctx.send("GET", later, { headers: await ctx.auth(session, "GET", later) })).json();
   const fields = ["conversation_id", "events", "cursor", "has_more", "status", "responder"];
   for (const read of [page, empty]) {
     const missing = fields.filter((field) => !(field in read));
-    check(missing.length === 0, `a read has ${missing.join(", ")} missing`);
+    check(missing.length === 0, `a read has ${missing} missing`);
   }
-  check(Array.isArray(empty.events) && empty.events.length === 0, "events is an empty list when there are none");
+  check(empty.events.length === 0, "events is an empty list when there are none");
 });
 
-// The website (§5, Operations §4.4) --------------------------------------------------------
+// The website (§6) ------------------------------------------------------------------------
 
 async function browserOf(ctx) {
-  const web = (await ctx.company()).document.web;
-  if (!web?.browser_session_endpoint) throw new SkipCase("the company offers no browser sessions");
+  const endpoint = (await ctx.company()).document.web?.browser_session_endpoint;
+  if (endpoint === undefined) throw new SkipCase("the company offers no browser sessions");
   if (ctx.agent.browser === undefined) throw new SkipCase("the runner was given no browser of its own");
-  return { browser: ctx.agent.browser, endpoint: web.browser_session_endpoint };
+  return [ctx.agent.browser, endpoint];
 }
 
 function setCookies(headers) {
@@ -1797,31 +1773,28 @@ function setCookies(headers) {
   return value ? [value] : [];
 }
 
-/** Whether a response set a cookie, beyond clearing one. */
-function joined(response) {
-  return setCookies(response.headers).some((value) => !value.toLowerCase().includes("max-age=0"));
-}
+/** Whether a response set a cookie, other than clearing one. */
+const joined = (response) => setCookies(response.headers).some((value) => !value.toLowerCase().includes("max-age=0"));
 
 /**
- * Join the runner's own browser to the Session (§5), then open `page` in it. Returns the
- * join's responses: the 303 that set the Session's cookie first.
+ * Join the runner's own browser to the Session (§6), then open `page` in it. Resolves to
+ * the join's responses: the 303 that set the Session's cookie first.
  */
-async function join(ctx, _user, sessionKey, page) {
-  const { browser, endpoint } = await browserOf(ctx);
-  await new BrowserSessionClient({ reactor: ctx.agent.reactor }).join({
+async function join(ctx, signed, page) {
+  const [browser, endpoint] = await browserOf(ctx);
+  await new BrowserSessionClient({ reactor: ctx.agent.reactor, transport: ctx.agent.transport }).join({
     browserSessionEndpoint: endpoint,
-    tenantId: ctx.tenantId,
-    issuer: (await ctx.metadata()).issuer,
-    sessionKey,
+    session: signed.session,
+    token: signed.token,
   });
   const landed = browser.page;
-  check(landed.history.length && landed.history[0].status === 303, "joined with 303 See Other");
+  check(landed.history[0]?.status === 303, "joined with 303 See Other");
   await browser.get(page);
   return landed.history;
 }
 
 caseFor("lifecycle.browser-joins-session")(async (ctx) => {
-  const { browser, endpoint } = await browserOf(ctx);
+  const [, endpoint] = await browserOf(ctx);
   const loaded = await ctx.send("GET", endpoint);
   check(loaded.status === 200, "the join page loads with a GET");
   for (const [name, value] of [
@@ -1835,78 +1808,49 @@ caseFor("lifecycle.browser-joins-session")(async (ctx) => {
   for (const flag of ["__Host-", "Secure", "HttpOnly", "SameSite=Strict"]) {
     check(joinCookie.includes(flag.toLowerCase()), `the join cookie has ${flag}`);
   }
-  await loaded.body?.cancel().catch(() => undefined);
-  const { user, signed } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "standing");
-  const page = operationPage(operation, (await ctx.company()).document.organization.domain);
-  const history = await join(ctx, user, signed.token.sessionKey, page);
-  const cookies = history
-    .flatMap((response) => setCookies(response.headers))
-    .filter((value) => !value.toLowerCase().includes("max-age=0"));
+  const [, signed] = await signedInUser(ctx);
+  const responses = await join(ctx, signed, ctx.url("/"));
+  const cookies = responses.flatMap((response) => setCookies(response.headers)).filter((value) => !value.toLowerCase().includes("max-age=0"));
   const sessionCookie = (cookies.find((value) => value.toLowerCase().includes("secure")) ?? "").toLowerCase();
-  for (const flag of ["Secure", "HttpOnly"]) {
-    check(sessionCookie.includes(flag.toLowerCase()), `the Session's cookie is ${flag}`);
-  }
+  for (const flag of ["Secure", "HttpOnly"]) check(sessionCookie.includes(flag.toLowerCase()), `the Session's cookie is ${flag}`);
   check(!sessionCookie.includes("max-age"), "the cookie has no lifetime of its own");
-  check(browser.page.status === 200, "the operation's page shows in the Session");
-  await ctx.agent.accounts.revoke(signed.reference, { context: await ctx.accountContext(user) });
-  const after = await browser.get(page);
-  check([401, 403, 404].includes(after.status), "signed out, the website shows it no more");
 });
 
 caseFor("lifecycle.browser-join-refused")(async (ctx) => {
-  // Step 3 of §5 and the attacks of §9.6: each wrong join sets no Session cookie.
-  const { endpoint } = await browserOf(ctx);
-  const user = ctx.newUser();
-  const session = await ctx.session(user);
-  const codeField = /name="code" value="([^"]+)"/;
+  // Steps 2 and 3 of §6 and the attacks of §10.6: each wrong join sets no Session cookie.
+  const [, endpoint] = await browserOf(ctx);
+  const session = await ctx.session(ctx.newUser());
+  const authorizeUrl = `${endpoint.replace(/\/+$/u, "")}/authorize`;
   const form = async () => {
     const browser = ctx.newBrowser();
     const page = await browser.get(endpoint);
-    const found = codeField.exec(page.text);
+    const found = /name="code" value="([^"]+)"/u.exec(page.text);
     check(found !== null, "the join page holds a code");
-    return { browser, code: found[1] };
+    return [browser, found[1]];
   };
-  const proof = (code, sessionKey = session.sessionKey) =>
-    ctx.proof(user, "POST", endpoint, { sessionKey, nonce: code });
-  const submit = (browser, code, signed) => browser.postForm(endpoint, { code, proof: signed });
+  const authorize = async (code) =>
+    ctx.send("POST", authorizeUrl, {
+      headers: { ...(await ctx.auth(session, "POST", authorizeUrl)), "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+  const submit = (browser, code) => browser.postForm(endpoint, { code });
 
-  let { browser, code } = await form();
-  const signed = await proof(code);
-  const stolen = await submit(ctx.newBrowser(), code, signed);
+  let [browser, code] = await form();
+  const done = await authorize(code);
+  check(done.status === 204, `the agent authorizes a code: got ${done.status}`);
+  await expectRefusal(await authorize(code), 400, "invalid_request", "a code authorized twice");
+  await expectRefusal(await authorize(`bc_conformance_${"x".repeat(16)}`), 400, "invalid_request", "a code the company never issued");
+  const stolen = await submit(ctx.newBrowser(), code);
   check(stolen.status === 400 && !joined(stolen), "a code from another browser joins none");
-  const used = await submit(browser, code, signed);
+  const used = await submit(browser, code);
   check(used.status === 400 && !joined(used), "a code is used once, whatever the result");
-  ({ browser, code } = await form());
-  const other = await submit(browser, code, await proof(`bc_conformance_${"x".repeat(16)}`));
-  check(other.status === 400 && !joined(other), "a proof over another code joins none");
-  ({ browser, code } = await form());
-  const stray = await submit(browser, code, await ctx.proof(user, "POST", endpoint, { nonce: code }));
-  check(stray.status === 400 && !joined(stray), "a key naming no Session joins none");
-  ({ browser, code } = await form());
-  const valid = await submit(browser, code, await proof(code));
+  [browser, code] = await form();
+  const unauthorized = await submit(browser, code);
+  check(unauthorized.status === 400 && !joined(unauthorized), "a code the agent never authorized joins none");
+  [browser, code] = await form();
+  check((await authorize(code)).status === 204, "the agent authorizes a new code");
+  const valid = await submit(browser, code);
   check(valid.status === 303 && joined(valid), "a valid join sets the Session's cookie");
-});
-
-caseFor("operations.web-confirm-at-most-once")(async (ctx) => {
-  const endpoint = await ctx.operationsEndpoint();
-  const { browser } = await browserOf(ctx);
-  const form = ctx.scenario.web_confirm_form;
-  if (!form) throw new SkipCase("the scenario does not know the website's confirm form");
-  const { user, signed, who } = await signedInUser(ctx);
-  const operation = await propose(ctx, user, signed, "user");
-  const page = operationPage(operation, (await ctx.company()).document.organization.domain);
-  await join(ctx, user, signed.token.sessionKey, page);
-  const fields = Object.fromEntries(
-    Object.entries(form).map(([name, value]) => [name, value.replaceAll("{revision}", String(operation.revision))]),
-  );
-  await browser.submit(page, fields);
-  const read = await ctx.agent.operations.read(endpoint, operation.operation_id, who);
-  check(read.state !== "proposed", "confirmed on the website");
-  check(read.confirmation !== null, "with its confirmation");
-  const again = await ctx.agent.operations.confirm(endpoint, operation, { ...who, approval: await approve(operation) });
-  check(JSON.stringify(again.operation) === JSON.stringify(read), "confirming at the endpoint too changes nothing");
-  if (ctx.driver.capabilities.has("performed")) check((await ctx.driver.performed(operation.operation_id)) === 1, "performed once");
 });
 
 /** Run each case; a failure never stops the others. The report is the runner's schema 1. */
@@ -1916,7 +1860,7 @@ export async function runConformance(ctx, { cases = companyCases(), timeoutMs = 
   for (const fixture of cases) {
     const began = performance.now();
     let outcome = "passed";
-    let message = null;
+    let message_ = null;
     const run = CASES[fixture.id];
     try {
       if (run === undefined) throw new SkipCase("not ported to TypeScript");
@@ -1928,10 +1872,10 @@ export async function runConformance(ctx, { cases = companyCases(), timeoutMs = 
         }),
       ]).finally(() => clearTimeout(timer));
     } catch (error) {
-      if (error instanceof SkipCase) [outcome, message] = ["skipped", error.message];
-      else if (error instanceof ConformanceFailure) [outcome, message] = ["failed", error.message];
-      else if (error instanceof PersonalAgentProtocolError) [outcome, message] = ["failed", `${error.name}: ${error.code}`];
-      else [outcome, message] = ["failed", `${error?.name ?? "Error"}: ${String(error?.message ?? error).slice(0, 200)}`];
+      if (error instanceof SkipCase) [outcome, message_] = ["skipped", error.message];
+      else if (error instanceof ConformanceFailure) [outcome, message_] = ["failed", error.message];
+      else if (error instanceof PersonalAgentProtocolError) [outcome, message_] = ["failed", `${error.name}: ${error.code}`];
+      else [outcome, message_] = ["failed", `${error?.name ?? "Error"}: ${String(error?.message ?? error).slice(0, 200)}`];
     }
     results.push({
       id: fixture.id,
@@ -1940,7 +1884,7 @@ export async function runConformance(ctx, { cases = companyCases(), timeoutMs = 
       requirements: fixture.requirements ?? [],
       outcome,
       duration_seconds: Math.round(performance.now() - began) / 1000,
-      message,
+      message: message_,
     });
   }
   const summary = { passed: 0, failed: 0, skipped: 0 };
@@ -1949,7 +1893,7 @@ export async function runConformance(ctx, { cases = companyCases(), timeoutMs = 
     schema_version: 1,
     protocol: "personal-agent-protocol",
     profile: PROTOCOL_PROFILE,
-    extensions: { operations: "1" },
+    extensions: { operations: OPERATIONS_VERSION },
     role: "personal-agent",
     target: ctx.baseUrl,
     agent: ctx.agent.identity.clientId,

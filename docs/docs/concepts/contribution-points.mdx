@@ -10,10 +10,7 @@ TypeScript define the same points, with the same ids and contracts (members
 spelled `snake_case` in Python, `camelCase` in TypeScript), listed in
 [`protocol/reactor-points.json`](https://github.com/datalayer/personal-agent-protocol/blob/main/protocol/reactor-points.json).
 Each SDK's tests hold it to that file, so a point added to one SDK and not the
-other fails CI. One point is for Python hosts only, and the file says so
-(`typescript: null`): `pap.approvalSurface` gates the [live-session
-actions](/guides/cli/#live-session-actions), which only the Python SDK
-registers.
+other fails CI.
 
 ## Resolution
 
@@ -55,7 +52,7 @@ registers.
 | `pap.retryPolicy` | `RETRY_POLICIES` | `RetryPolicies` | When a refused request is retried | `default` |  |
 | `pap.rateLimitBudget` | `RATE_LIMIT_BUDGETS` | `RateLimitBudgets` | Per-company request budget shared across tasks | `in-process` |  |
 | `pap.telemetry` | `TELEMETRY_SINKS` | `TelemetrySinks` | Receives each finished protocol stage, [redacted by construction](/guides/telemetry/) | — (feature off) |  |
-| `pap.approvalSurface` | `APPROVAL_SURFACES` | — (Python hosts) | The user's approval of an operation or a destructive live-session action | — (refused without) |  |
+| `pap.approvalSurface` | `APPROVAL_SURFACES` | `ApprovalSurfaces` | The user's approval of an operation, and in Python of a destructive [live-session action](/guides/cli/#live-session-actions) | — (refused without) |  |
 
 The discovery transport follows each language's HTTP idiom: Python's gets one
 approved URL within its `MetadataFetch` bounds and connects only to the

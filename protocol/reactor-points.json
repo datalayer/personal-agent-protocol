@@ -265,7 +265,7 @@
       "id": "pap.approvalSurface",
       "role": "personal-agent",
       "python": "APPROVAL_SURFACES",
-      "typescript": null,
+      "typescript": "ApprovalSurfaces",
       "contract": "ApprovalSurface",
       "members": [
         "approve"
@@ -273,7 +273,7 @@
       "default": null,
       "resolution": "optional",
       "tenant": null,
-      "note": "Python hosts for now: it asks the user about every operation (OperationsClient.ask_user), and gates the live-session actions (actions.py) that Studio, a REPL and `pap commands run` invoke through Reactor's command registries. Without one, nothing is approved and a destructive action is refused."
+      "note": "It asks the user about every operation (OperationsClient.ask_user, askUser in TypeScript). Python also gates the live-session actions (actions.py) that Studio, a REPL and `pap commands run` invoke through Reactor's command registries. Without one, nothing is approved and a destructive action is refused."
     },
     {
       "id": "pap.company.store",

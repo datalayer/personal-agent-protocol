@@ -97,7 +97,7 @@ if the company can stop it. Closing a conversation does not cancel anything.
 A host that asks the person in a page, not only in its own interface, sends
 the operation as a [Reactor](https://github.com/datalayer/reactor) display:
 `PapConfirm` (`personal_agent_protocol.ui`, the `ui` extra), of type
-`application/vnd.datalayer.pap.confirm+json`, version 1. An MCP tool puts it
+`application/vnd.datalayer.pap.confirm+json`, version 2. An MCP tool puts it
 in its result's `_meta["reactor.ui/display"]`; any page with a renderer for
 the type draws the card, and a page without one shows its text.
 
@@ -109,19 +109,20 @@ display = PapConfirm(
     summary=operation.summary,                  # the company's words, verbatim
     terms=operation.terms or {},
     operation_ref=operation.operation_id,
-    revision=operation.revision,
+    revision=str(operation.revision),
     does="buy",                                 # what it does, as the application's Rules class it
     session=PapSessionShown.of(session_key, signed_in=True),
     expires_at=operation.expires_at,
-    only_the_person=operation.user_approval_required,
 )
 meta = display.tool_meta()   # an MCP result's `_meta`: the page draws the card
 said = display.text()        # what a page without a renderer, a transcript and a model read
 ```
 
-- `text()` is *shop.example asks you to confirm: … (version 1)*, and
-  *Changed since version 1.* after it when `was` names the revision a newer
-  one replaced.
+- `text()` is *shop.example asks you to approve: … (revision …, until …)*, and
+  *The terms changed since you saw them.* after it when `was` names the revision
+  a newer one replaced. Links, images and HTML in the summary show as text
+  (`inert_summary`): a page shows `summary` as text too, with at most emphasis,
+  paragraphs and lists.
 - The Session is a one-way reference (`PapSessionShown.of`: 12 hex digits of
   the SHA-256 of its Session Key), never the key or a token, and only the page sees even
   that: `model_view()` tells a model the company's words, the terms, what it
@@ -141,27 +142,6 @@ const asked = isPapConfirm(display) ? display.data : null; // PapConfirmData, or
 `isPapConfirm` refuses another type or version, a missing or unknown field,
 and a Session given by anything but its reference. Both SDKs are checked
 against one committed example, `protocol/fixtures/pap-confirm-display.json`.
-
-## Show what it came to: `PapOutcome`
-
-Once an operation is confirmed, the host shows what the company says it came
-to, in the company's words: `PapOutcome` (`personal_agent_protocol.ui`), of
-type `application/vnd.datalayer.pap.outcome+json`, version 1, made with
-`PapOutcome.of(company, operation, approved_by=...)` from the operation the
-company answered.
-
-- `result` is the company's final `result.summary`, verbatim — a failed
-  operation's partial effects included — never a model's paraphrase. A final
-  state (`succeeded`, `failed`, `cancelled`, `expired`) requires it.
-- A confirmation sent whose answer was lost reads back as `proposed`: the
-  display says `in_progress` with no result, *The outcome is not known yet*,
-  until reading the operation again tells it. It is never sent twice.
-- `text()` is *Done at shop.example: … (version 2)*, *Failed at …*,
-  *Cancelled at …*, *Expired at …* or *Still in progress at …*.
-
-The TypeScript SDK types it (`PapOutcomeData`) and checks it with
-`isPapOutcome`, against the committed example
-`protocol/fixtures/pap-outcome-display.json`.
 
 ## Security boundary
 

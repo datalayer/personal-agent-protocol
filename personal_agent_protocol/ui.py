@@ -4,11 +4,10 @@
 
 """PAP's displays for ``reactor.ui``: what a page draws for a PAP answer.
 
-Four displays: :class:`PapSignIn`, a sign-in waiting for the person;
-:class:`PapConfirm`, an operation a company proposed, waiting for the person to
-confirm it; :class:`PapOutcome`, what a confirmed operation came to, in the
-company's own words; and :class:`PapReplies`, what a company answered in a
-conversation, each reply with who wrote it there.
+Three displays: :class:`PapSignIn`, a sign-in waiting for the person;
+:class:`PapConfirm`, an operation a company returned, waiting for the person's
+approval; and :class:`PapReplies`, what a company answered in a conversation,
+each reply with who wrote it there.
 
 A tool that starts a sign-in answers with a :class:`PapSignIn` beside its
 result — in an MCP result's ``_meta["reactor.ui/display"]`` — and any page with
@@ -31,6 +30,7 @@ page sees even that.
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime
 from typing import Annotated, Any, Literal, cast
 from urllib.parse import urlsplit
@@ -54,11 +54,8 @@ from .models import _domain, known_responder, known_status
 #: The display type of a sign-in waiting for the person.
 PAP_SIGN_IN_TYPE = "application/vnd.datalayer.pap.sign-in+json"
 
-#: The display type of an operation waiting for the person to confirm it.
+#: The display type of an operation waiting for the person's approval.
 PAP_CONFIRM_TYPE = "application/vnd.datalayer.pap.confirm+json"
-
-#: The display type of what a confirmed operation came to.
-PAP_OUTCOME_TYPE = "application/vnd.datalayer.pap.outcome+json"
 
 #: The display type of what a company answered in a conversation.
 PAP_REPLIES_TYPE = "application/vnd.datalayer.pap.replies+json"
@@ -66,13 +63,40 @@ PAP_REPLIES_TYPE = "application/vnd.datalayer.pap.replies+json"
 #: What confirming an operation does, as an application's Rules class it.
 PapActionClass = Literal["read", "write", "send", "buy", "delete", "publish"]
 
+#: An operation ID or revision (Operations 3).
+_IDENTIFIER = r"^[A-Za-z0-9_-]{1,256}$"
+
+#: What makes a link, an image or HTML of a summary, in CommonMark and its autolinks.
+_ACTIVE = re.compile(r"[\\\[\]<>@]|://|www\.")
+
+
+def inert_summary(summary: str) -> str:
+    """A summary whose links, images and HTML show as text, wherever it is rendered.
+
+    A summary can't send the User elsewhere or load content while they decide
+    (Operations 3): their markup is escaped, in the Markdown a chat renders.
+    Emphasis, paragraphs and lists stay. Text a host shows as text needs none of
+    this: it shows the summary as it is.
+    """
+
+    return _ACTIVE.sub(lambda found: _escaped(found.group()), summary)
+
+
+def _escaped(active: str) -> str:
+    if active == "://":
+        return r"\://"
+    if active == "www.":
+        return r"www\."
+    return f"\\{active}"
+
+
 #: The status a sign-in tool answers while the person has something to do.
 WAITING_FOR_THE_PERSON = "waiting_for_the_person"
 
 
 @display_type(PAP_SIGN_IN_TYPE, version=1)
 class PapSignIn(Display):
-    """A sign-in waiting for the person (PAP_DATALAYER P-03).
+    """A sign-in waiting for the person.
 
     ``direct``: the company's page, then back. ``device``: the company's page
     and a code to enter there. ``mediated``: Datalayer's own page, where the
@@ -204,7 +228,7 @@ class PapSignIn(Display):
 
 
 class PapSessionShown(BaseModel):
-    """The Session an operation is confirmed in, as the person's card names it.
+    """The Session an operation is approved in, as the person's card names it.
 
     ``ref`` is one-way — the first 12 hex digits of the SHA-256 of the
     Session's ID: enough to tell two Sessions apart, never the ID, and never
@@ -228,172 +252,79 @@ class PapSessionShown(BaseModel):
 
 
 class PapTermsWas(BaseModel):
-    """The revision a revised operation replaced, and its terms."""
+    """The revision a new one replaced, and its terms: to show what changed."""
 
     model_config = ConfigDict(extra="forbid")
 
-    revision: int = Field(ge=1)
+    revision: str = Field(pattern=_IDENTIFIER)
     terms: dict[str, Any] = Field(default_factory=dict)
 
 
-@display_type(PAP_CONFIRM_TYPE, version=1)
+@display_type(PAP_CONFIRM_TYPE, version=2)
 class PapConfirm(Display):
-    """An operation a company proposed, waiting for the person to confirm it (Operations).
+    """An operation a company returned, waiting for the person's approval (Operations 5).
 
-    What the person approves is exactly this revision: the company's own
-    ``summary``, verbatim, and its ``terms``. ``does`` is what confirming it
-    does, as an application's Rules class it (``buy`` when a term moves money);
-    ``session`` the Session it is confirmed in, by a one-way reference;
-    ``was`` the revision it replaced, when the company changed its terms;
-    ``only_the_person`` that the company (or the application's Rule) wants the
-    person's own decision, so no approval given in advance covers it.
+    What the person approves is exactly this revision: ``company``, the Company's
+    name; its ``summary``, verbatim and shown as text, so links, images and HTML in
+    it don't work (:func:`inert_summary`, which :meth:`text` applies); ``revision``
+    and ``expires_at``. ``terms`` are the company's own, for values worth showing;
+    ``differences`` what the personal agent's terms check found, to point out.
+    ``does`` is what approving it does, as an application's Rules class it (``buy``
+    when a term moves money); ``session`` the Session it is approved in, by a
+    one-way reference; ``was`` the revision it replaced, when the terms changed.
 
     The buttons are the host's own: a display says what is asked, and the
-    person answers where the host asks them.
+    person answers where the host asks them. Every operation is asked about.
     """
 
-    #: The company, as the person knows it (its domain or its name).
+    #: The Company's name (`organization.name`), or its domain.
     company: str = Field(min_length=1)
-    #: The company's own words, shown verbatim, never rephrased.
+    #: The company's own words, shown verbatim as text, never rephrased.
     summary: str = Field(min_length=1)
     terms: dict[str, Any] = Field(default_factory=dict)
-    #: The operation's reference at the company; with ``revision``, what is confirmed.
+    #: The operation's ID at the company; with ``revision``, what is approved.
     operation_ref: str = Field(min_length=1)
-    revision: int = Field(ge=1)
+    revision: str = Field(pattern=_IDENTIFIER)
+    #: The last time an approval of this revision is accepted.
+    expires_at: datetime
+    #: Where the terms disagree with the summary or with what was asked for.
+    differences: list[str] = Field(default_factory=list)
     does: PapActionClass | None = None
     session: PapSessionShown | None = None
-    #: Until when the company holds these terms.
-    expires_at: datetime | None = None
     was: PapTermsWas | None = None
-    only_the_person: bool = False
 
     @field_validator("company")
     @classmethod
     def _company(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("an operation to confirm names its company")
+            raise ValueError("an operation to approve names its company")
         return value.strip()
 
     @field_validator("summary")
     @classmethod
     def _summary(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("an operation to confirm says what it is, in the company's words")
+            raise ValueError("an operation to approve says what it is, in the company's words")
         return value
 
     @model_validator(mode="after")
     def _was_earlier(self) -> PapConfirm:
-        if self.was is not None and self.was.revision >= self.revision:
-            raise ValueError("the revision an operation replaced comes before it")
+        if self.was is not None and self.was.revision == self.revision:
+            raise ValueError("the revision an operation replaced is another one")
         return self
 
     def text(self) -> str:
         # Neither the Session's reference nor anything of the page's alone:
         # the text is also what a model and a transcript read.
-        said = f"{self.company} asks you to confirm: {self.summary} (version {self.revision})"
+        said = (
+            f"{self.company} asks you to approve: {inert_summary(self.summary)} "
+            f"(revision {self.revision}, until {self.expires_at.isoformat()})"
+        )
         if self.was is not None:
-            said += f" Changed since version {self.was.revision}."
+            said += " The terms changed since you saw them."
+        for difference in self.differences:
+            said += f" Check: {difference}"
         return said
-
-    def tool_meta(self) -> dict[str, Any]:
-        """The ``_meta`` an MCP tool result carries this display in."""
-        return {DISPLAY_META_KEY: self.wire().model_dump(mode="json")}
-
-
-#: What a confirmed operation came to: every state but ``proposed``.
-PapOutcomeState = Literal["in_progress", "succeeded", "failed", "cancelled", "expired"]
-
-_OUTCOME_LEADS: dict[str, str] = {
-    "succeeded": "Done at",
-    "failed": "Failed at",
-    "in_progress": "Still in progress at",
-    "cancelled": "Cancelled at",
-    "expired": "Expired at",
-}
-
-
-@display_type(PAP_OUTCOME_TYPE, version=1)
-class PapOutcome(Display):
-    """What a confirmed operation came to, in the company's own words (Operations).
-
-    ``result`` is the company's final ``result.summary``, verbatim — partial
-    effects of a failed operation included — never a model's paraphrase;
-    ``summary`` is what was confirmed (the company's words for the operation).
-    ``in_progress`` is said until the outcome is known: a confirmation sent
-    whose answer was lost is read back, never sent again. A proposal not yet
-    confirmed has no outcome. Make one from the company's operation with
-    :meth:`of`.
-    """
-
-    #: The company, as the person knows it (its domain or its name).
-    company: str = Field(min_length=1)
-    #: What was confirmed, in the company's words.
-    summary: str = Field(min_length=1)
-    operation_ref: str = Field(min_length=1)
-    revision: int = Field(ge=1)
-    state: PapOutcomeState
-    #: The company's ``result.summary``, verbatim: required once final, ``None`` while in progress.
-    result: str | None = None
-    #: Who confirmed it: the person, or a standing permission they gave; ``None`` when read back.
-    approved_by: Literal["user", "standing_permission"] | None = None
-
-    @field_validator("company")
-    @classmethod
-    def _company(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("an outcome names its company")
-        return value.strip()
-
-    @field_validator("result")
-    @classmethod
-    def _result(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("a result says what was done, in the company's words, or is absent")
-        return value
-
-    @model_validator(mode="after")
-    def _known_once_done(self) -> PapOutcome:
-        if self.state == "in_progress" and self.result is not None:
-            raise ValueError("an operation still in progress has no result yet")
-        if self.state != "in_progress" and self.result is None:
-            raise ValueError("a final operation says what it came to: the company's result")
-        return self
-
-    @classmethod
-    def of(
-        cls,
-        company: str,
-        operation: Any,
-        *,
-        approved_by: Literal["user", "standing_permission"] | None = None,
-    ) -> PapOutcome:
-        """The outcome of a company's :class:`~personal_agent_protocol.models.Operation`.
-
-        A ``proposed`` operation whose confirmation was sent is ``in_progress``:
-        its outcome is not known yet.
-        """
-        state = "in_progress" if operation.state == "proposed" else operation.state
-        result = (
-            operation.result.summary
-            if operation.result is not None and state != "in_progress"
-            else None
-        )
-        return cls(
-            id=f"{operation.operation_id}-{operation.revision}-outcome",
-            company=company,
-            summary=operation.summary,
-            operation_ref=operation.operation_id,
-            revision=operation.revision,
-            state=state,
-            result=result,
-            approved_by=approved_by,
-        )
-
-    def text(self) -> str:
-        lead = f"{_OUTCOME_LEADS[self.state]} {self.company}"
-        if self.result is None:
-            return f"{lead}: {self.summary} (version {self.revision}) The outcome is not known yet."
-        return f"{lead}: {self.result} (version {self.revision})"
 
     def tool_meta(self) -> dict[str, Any]:
         """The ``_meta`` an MCP tool result carries this display in."""
@@ -518,18 +449,16 @@ class PapReplies(Display):
 
 __all__ = [
     "PAP_CONFIRM_TYPE",
-    "PAP_OUTCOME_TYPE",
     "PAP_REPLIES_TYPE",
     "PAP_SIGN_IN_TYPE",
     "WAITING_FOR_THE_PERSON",
     "PapActionClass",
     "PapConfirm",
     "PapConversationStatus",
-    "PapOutcome",
-    "PapOutcomeState",
     "PapReplies",
     "PapReply",
     "PapSessionShown",
     "PapSignIn",
     "PapTermsWas",
+    "inert_summary",
 ]

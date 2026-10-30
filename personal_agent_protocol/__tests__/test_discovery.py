@@ -281,7 +281,7 @@ async def test_metadata_fetches_carry_no_cookie_or_credential() -> None:
 
 @pytest.mark.asyncio
 async def test_an_alias_publishes_the_companys_discovery_and_its_issuer_lists_it() -> None:
-    """A company on a domain of its owner's (PAP_DATALAYER D-02): the alias names itself as the
+    """A company on a domain of its owner's: the alias names itself as the
     organization's domain, the issuer stays the company's own and lists it in `poppy_domains`,
     so a personal agent discovering the alias finds the same company; nothing else answers there."""
     from dataclasses import replace

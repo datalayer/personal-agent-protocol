@@ -56,6 +56,7 @@ import sys
 from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
@@ -534,7 +535,8 @@ def _sign_in_views(harvest: Harvest) -> list[tuple[str, str]]:
             company="manzanita.example",
             summary="Exchange the Ridge Jacket (M) for the Alpine Parka (M).",
             operation_ref="op_canary",
-            revision=1,
+            revision="rev_canary",
+            expires_at=datetime(2026, 10, 12, 18, tzinfo=timezone.utc),
             does="buy",
             session=PapSessionShown.of(token, signed_in=True),
         )

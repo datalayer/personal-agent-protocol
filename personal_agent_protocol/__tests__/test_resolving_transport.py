@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Everything sent to a company goes through the resolving transport (PAP_DATALAYER V-06).
+"""Everything sent to a company goes through the resolving transport.
 
 Metadata was always fetched on the safe path; `create_resolving_client` puts
 the rest there too — Sessions, conversations, API calls, Operations, MCP: the

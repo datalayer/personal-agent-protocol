@@ -12,7 +12,6 @@ import {
   AuthorizationError,
   BrowserHandoffs,
   DirectSignInClient,
-  DpopProofProviders,
   Signers,
   TokenStores,
   buildPapReactor,
@@ -21,7 +20,6 @@ import {
 } from "../../lib/index.js";
 
 const fixedRandom = (length) => Uint8Array.from({ length }, (_, index) => index);
-const KEY = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
 
 async function request() {
   return buildDirectSignInRequest({
@@ -30,7 +28,6 @@ async function request() {
     clientId: "https://agent.example/agent.json",
     redirectUri: "https://agent.example/oauth/callback",
     scopes: ["orders:read", "orders:write"],
-    sessionKey: KEY,
     randomBytes: fixedRandom,
   });
 }
@@ -42,8 +39,9 @@ test("builds Direct Sign-In state and S256 PKCE", async () => {
   assert.equal(url.searchParams.get("response_type"), "code");
   assert.equal(url.searchParams.get("scope"), "orders:read orders:write");
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");
-  // The code is bound to the Session Key (§4.5, RFC 9449 §10).
-  assert.equal(url.searchParams.get("dpop_jkt"), KEY);
+  // Plain OAuth: the sign-in names no Session (§4.2, §5.4).
+  assert.equal(url.searchParams.has("dpop_jkt"), false);
+  assert.equal(url.searchParams.has("session_key"), false);
   assert.equal(signIn.codeVerifier.reveal().length, 43);
   assert.equal(JSON.stringify(signIn).includes(signIn.state.reveal()), false);
 });
@@ -66,7 +64,6 @@ test("a loopback redirect matches with any port", async () => {
     clientId: "https://agent.example/agent.json",
     redirectUri: "http://127.0.0.1/callback",
     scopes: ["orders:read"],
-    sessionKey: KEY,
     randomBytes: fixedRandom,
   });
   const values = new URLSearchParams({ code: "c", state: signIn.state.reveal(), iss: signIn.issuer });
@@ -111,8 +108,7 @@ test("rejects weak authorization entropy", async () => {
       clientId: "https://agent.example/agent.json",
       redirectUri: "https://agent.example/oauth/callback",
       scopes: ["orders:read"],
-      sessionKey: KEY,
-      randomBytes: () => new Uint8Array(4),
+        randomBytes: () => new Uint8Array(4),
     }),
     (error) => error instanceof AuthorizationError && error.code === "weak_entropy",
   );
@@ -149,7 +145,6 @@ function orchestrationPlugin() {
   const values = new Map();
   const tokens = new Map();
   const browserUrls = [];
-  const proofRequests = [];
   const purposes = [];
   const claims = [];
   let signature = 0;
@@ -198,21 +193,6 @@ function orchestrationPlugin() {
           options: { id: "signer" },
         },
         {
-          point: DpopProofProviders,
-          value: {
-            async create(proofRequest) {
-              proofRequests.push(proofRequest);
-              const value = `dpop-${proofRequests.length}`;
-              return {
-                reveal: () => value,
-                toString: () => "[REDACTED]",
-                toJSON: () => "[REDACTED]",
-              };
-            },
-          },
-          options: { id: "dpop" },
-        },
-        {
           point: TokenStores,
           value: {
             async put(reference, token) {
@@ -231,7 +211,6 @@ function orchestrationPlugin() {
     },
     tokens,
     browserUrls,
-    proofRequests,
     purposes,
     claims,
   };
@@ -245,7 +224,6 @@ const orchestrationOptions = {
   redirectUri: "https://agent.example/oauth/callback",
   scopes: ["orders:read", "orders:write"],
   tenantId: "application-one",
-  sessionKey: KEY,
 };
 
 function browserCallback(browserUrl, overrides = {}) {
@@ -261,34 +239,24 @@ function browserCallback(browserUrl, overrides = {}) {
   return callback.toString();
 }
 
-test("orchestrates one-use Direct Sign-In with nonce and partial scopes", async () => {
+test("orchestrates one-use Direct Sign-In with partial scopes", async () => {
   const orchestration = orchestrationPlugin();
   const forms = [];
   const signals = [];
-  let calls = 0;
   const fetch = async (_input, init) => {
-    calls += 1;
     forms.push(new URLSearchParams(init.body));
     signals.push(init.signal);
-    assert.equal(init.headers.DPoP, `dpop-${calls}`);
+    const headers = Object.keys(init.headers).map((name) => name.toLowerCase());
+    assert.ok(!headers.includes("dpop") && !headers.includes("poppy-session"));
     // A redirect is answered, never followed: nothing goes to a new URL (§3).
     assert.equal(init.redirect, "manual");
-    if (calls === 1) {
-      return new Response(JSON.stringify({ error: "use_dpop_nonce" }), {
-        status: 400,
-        headers: {
-          "content-type": "application/json",
-          "DPoP-Nonce": "company-nonce",
-        },
-      });
-    }
     return new Response(
       JSON.stringify({
-        access_token: "signed-in-session-token",
-        token_type: "DPoP",
+        access_token: "signed-in-access-token",
+        token_type: "Bearer",
         expires_in: 300,
         scope: "orders:read",
-        refresh_token: "account-token",
+        refresh_token: "private-refresh-token",
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
@@ -310,27 +278,41 @@ test("orchestrates one-use Direct Sign-In with nonce and partial scopes", async 
   assert.deepEqual(started.requestedScopes, ["orders:read", "orders:write"]);
   assert.deepEqual(result.grantedScopes, ["orders:read"]);
   assert.deepEqual(result.missingScopes, ["orders:write"]);
-  assert.equal(result.token.accessToken.reveal(), "signed-in-session-token");
-  // The Account Token never stays in the result (§4.8): only its opaque reference.
-  assert.equal(result.token.accountToken, undefined);
-  assert.match(result.accountTokenReference, /^account_/);
-  assert.equal(orchestration.tokens.get(result.accountTokenReference).reveal(), "account-token");
-  assert.ok(!JSON.stringify(result).includes("account-token"));
-  assert.deepEqual(
-    orchestration.proofRequests.map((proof) => proof.nonce),
-    [undefined, "company-nonce"],
-  );
-  assert.deepEqual(orchestration.purposes, ["client_assertion", "client_assertion"]);
+  assert.equal(result.token.accessToken.reveal(), "signed-in-access-token");
+  assert.equal(result.token.tokenType, "Bearer");
+  // The refresh token never stays in the result (§4.4): only its opaque reference.
+  assert.match(result.refreshTokenReference, /^refresh_/);
+  assert.equal(orchestration.tokens.get(result.refreshTokenReference).reveal(), "private-refresh-token");
+  assert.ok(!JSON.stringify(result).includes("private-refresh-token"));
+  assert.deepEqual(orchestration.purposes, ["client_assertion"]);
   // The client assertion names the issuer, never the token endpoint (§4.1).
-  assert.deepEqual(orchestration.claims.map((claims) => claims.aud), ["https://auth.example.com", "https://auth.example.com"]);
-  // Both attempts are signed with the key the code is bound to; no Session is named.
-  assert.deepEqual(orchestration.proofRequests.map((proof) => proof.sessionKey), [KEY, KEY]);
-  assert.ok(forms.every((form) => !form.has("session_id")));
-  assert.equal(result.token.sessionKey, KEY);
-  assert.equal(result.token.signedIn, true);
-  assert.equal(forms[0].get("code_verifier"), forms[1].get("code_verifier"));
-  assert.notEqual(forms[0].get("client_assertion"), forms[1].get("client_assertion"));
-  assert.deepEqual(signals, [controller.signal, controller.signal]);
+  assert.deepEqual(orchestration.claims.map((claims) => claims.aud), ["https://auth.example.com"]);
+  assert.equal(forms.length, 1);
+  assert.equal(forms[0].get("grant_type"), "authorization_code");
+  assert.equal(forms[0].get("code"), "one-time-code");
+  assert.ok(forms[0].get("code_verifier"));
+  assert.equal(forms[0].get("client_assertion"), "client-assertion-1");
+  // No Session is named (§5.4).
+  assert.ok(!forms[0].has("session_id") && !forms[0].has("session_key"));
+  assert.deepEqual(signals, [controller.signal]);
+});
+
+test("a DPoP token type at the end of Direct Sign-In is refused", async () => {
+  const orchestration = orchestrationPlugin();
+  const fetch = async () =>
+    new Response(JSON.stringify({ access_token: "t", token_type: "DPoP", scope: "orders:read", refresh_token: "r" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  const reactor = buildPapReactor({ fetch }, [orchestration.plugin]);
+  const client = new DirectSignInClient({ reactor, fetch });
+  await client.begin(orchestrationOptions);
+  await assert.rejects(
+    client.complete({ callbackUrl: browserCallback(orchestration.browserUrls[0]) }),
+    (error) => error instanceof AuthorizationError && error.code === "unsupported_token_type",
+  );
+  reactor.stop();
+  assert.equal(orchestration.tokens.size, 0);
 });
 
 test("Direct Sign-In denial consumes state without exposing remote text", async () => {

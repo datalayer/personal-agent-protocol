@@ -39,6 +39,8 @@ from personal_agent_protocol.demo.kit import (
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
 from personal_agent_protocol.demo.manzanita import CONFIG as MANZANITA
+from personal_agent_protocol.demo.northwind import ACCOUNT_NUMBER, ACCOUNT_PIN, northwind
+from personal_agent_protocol.demo.northwind import DOMAIN as NORTHWIND
 from personal_agent_protocol.mediated import (
     MEDIATED_GRANT,
     MediatedSignInClient,
@@ -371,6 +373,38 @@ async def test_an_extension_used_by_the_request_needs_no_client_metadata_entry()
     # The company lists the grant and the extension, and no such refusal exists for it.
     assert MEDIATED_GRANT in company.oauth_metadata.grant_types_supported  # type: ignore[union-attr]
     assert "mediated-sign-in" in company.document.extensions
+
+
+@pytest.mark.asyncio
+async def test_northwind_publishes_the_extension_with_less_than_its_other_sign_ins() -> None:
+    """An account number and PIN, no one-time code, and only what Mediated Sign-In can grant."""
+
+    world = World()
+    bank, _ = northwind(world.network, world.clock)
+    company = await DiscoveryClient(reactor=world.reactor, http_client=world.http).discover(
+        NORTHWIND
+    )
+    offered = mediated_sign_in(company)
+    assert offered is not None and offered.scopes == ["accounts:read"]
+    assert [field.name for field in offered.fields] == ["account_number", "pin"]
+    assert MEDIATED_GRANT in company.oauth_metadata.grant_types_supported  # type: ignore[union-attr]
+    assert bank.discovery_document()["extensions"]["mediated-sign-in"]["version"] == "1"
+    world.host.protected_input.answers.extend(
+        [
+            {"account_number": ACCOUNT_NUMBER, "pin": ACCOUNT_PIN},
+            {"account_number": ACCOUNT_NUMBER, "pin": "0000"},
+        ]
+    )
+    client = MediatedSignInClient(reactor=world.reactor, http_client=world.http)
+    done = await client.sign_in(
+        company=company, client_id=world.atlas.client_id, scopes=("accounts:read",)
+    )
+    assert done.status == "complete" and done.granted_scopes == ("accounts:read",)
+    with pytest.raises(AuthorizationError) as wrong:
+        await client.sign_in(
+            company=company, client_id=world.atlas.client_id, scopes=("accounts:read",)
+        )
+    assert wrong.value.code == "invalid_grant"
 
 
 def test_a_company_cannot_publish_a_reserved_mediated_field() -> None:

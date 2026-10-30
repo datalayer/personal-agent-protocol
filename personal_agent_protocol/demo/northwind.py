@@ -5,11 +5,14 @@
 """Northwind Bank: a fictional bank whose company agent returns payments to approve.
 
 A payment is an operation (`payments.transfer`): the bank performs it only with
-the user's approval of its exact terms, and at most once.
+the user's approval of its exact terms, and at most once. Its users sign in on its
+own page (Device Sign-In); the Mediated Sign-In extension, an account number and a
+PIN, grants only reading the accounts.
 """
 
 from __future__ import annotations
 
+import hmac
 import re
 from collections.abc import Sequence
 
@@ -36,6 +39,8 @@ from .kit import ClockPlugin, InProcessNetwork, MutableClock
 
 DOMAIN = "northwind.example"
 ACCOUNT = "acct_ada_northwind"
+ACCOUNT_NUMBER = "0532013000"
+ACCOUNT_PIN = "4917"
 IBAN = "DE89 3704 0044 0532 0130 00"
 
 CONFIG = CompanyConfig(
@@ -43,6 +48,8 @@ CONFIG = CompanyConfig(
     domain=DOMAIN,
     scopes=("accounts:read", "payments:write"),
     write_scopes=("payments:write",),
+    mediated_fields=(("account_number", "Account number", False), ("pin", "PIN", True)),
+    mediated_scopes=("accounts:read",),
     scope_descriptions={
         "accounts:read": "See your accounts, balances and transactions",
         "payments:write": "Make payments from your accounts",
@@ -67,12 +74,21 @@ _PAY = re.compile(
 
 
 class NorthwindAccounts:
-    """Northwind signs its users in on its own page (Device Sign-In): nothing mediated."""
+    """Ada's account: its number and PIN, for Mediated Sign-In, with no one-time code."""
 
     async def authenticate(
         self, credentials: dict[str, SecretStr], context: SignInContext
     ) -> Authenticated | None:
-        return None
+        number = credentials.get("account_number")
+        pin = credentials.get("pin")
+        if (
+            number is None
+            or pin is None
+            or number.get_secret_value() != ACCOUNT_NUMBER
+            or not hmac.compare_digest(pin.get_secret_value(), ACCOUNT_PIN)
+        ):
+            return None
+        return Authenticated(account_id=ACCOUNT)
 
     async def check_code(self, code_reference: str, code: SecretStr) -> bool:
         return False

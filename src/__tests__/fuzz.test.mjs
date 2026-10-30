@@ -4,15 +4,22 @@
  * BSD 3-Clause License
  */
 
-// Seeded fuzzing of strict JSON and URL safety (the TypeScript side of test_fuzz.py).
+// Seeded fuzzing of strict JSON, URL safety and the operation state machine (the TypeScript
+// side of test_fuzz.py).
 // fast-check is not a dependency of this repository: a seeded PRNG keeps every run
 // reproducible; PAP_FUZZ_SEED and PAP_FUZZ_ITERATIONS widen a local run.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import test from "node:test";
 
-import { parseJsonStrict } from "../../lib/index.js";
+import { exportJWK, generateKeyPair } from "jose";
+
+import { PersonalAgentProtocolError, parseJsonStrict } from "../../lib/index.js";
+import { manzanita } from "../../lib/demo/manzanita.js";
 import { NodeUrlSafetyPolicy, isGlobalAddress } from "../../lib/server.js";
+import { Context, identityFrom } from "./support/conformance.mjs";
+import { MutableClock, inProcessFetch } from "./support/world.mjs";
 
 const SEED = Number(process.env.PAP_FUZZ_SEED ?? 20261011);
 const ITERATIONS = Number(process.env.PAP_FUZZ_ITERATIONS ?? 300);
@@ -119,7 +126,7 @@ test("strict JSON survives random text", () => {
 const ADDRESSES = [
   "93.184.216.34", "8.8.8.8", "2606:4700:4700::1111", "127.0.0.1", "10.1.2.3", "172.16.0.9",
   "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::5", "fe80::1",
-  "::ffff:127.0.0.1", "224.0.0.1", "255.255.255.255", "2001:db8::1",
+  "::ffff:127.0.0.1", "::ffff:93.184.216.34", "224.0.0.1", "255.255.255.255", "2001:db8::1",
 ];
 
 function url(rng) {
@@ -155,4 +162,104 @@ test("URL safety approves only HTTPS URLs whose every address is public", async 
     const checked = isIP(host) ? [host] : answer;
     assert.ok(checked.every(isGlobalAddress), `${text} ${checked}`);
   }
+});
+
+// The operation state machine -------------------------------------------------------------
+
+/** What the company's operator is told: too late to revise an operation. */
+const OPERATOR_REFUSALS = new Set(["only an operation not yet approved can be revised"]);
+
+async function identity(domain, name) {
+  const pair = await generateKeyPair("ES256", { extractable: true });
+  return identityFrom({ domain, name, privateJwk: await exportJWK(pair.privateKey) });
+}
+
+test("random operation histories keep at most once", async () => {
+  // Approvals, stale approvals, revisions and time passing, in any order. An operation is
+  // performed at most once, whatever is sent; a revision the company replaced never performs
+  // it; the company never answers an approval with the revision it named.
+  const rng = generator(SEED + 3);
+  const clock = new MutableClock();
+  const sites = {};
+  const fetch = inProcessFetch(sites);
+  const { service, plugin } = manzanita({ fetch, clock });
+  sites["manzanita.example"] = service;
+  const atlas = await identity("atlas.example", "Atlas");
+  sites[atlas.domain] = { "/agent.json": atlas.metadata, "/jwks.json": atlas.jwks };
+  const executors = [plugin.executor, plugin.giftWrap, plugin.returns, plugin.repairs];
+  const driver = {
+    capabilities: new Set(["revise", "performed", "clock"]),
+    accounts: ["acct_ada", "acct_ada_business"],
+    async approveDevice(userCode, { account }) {
+      await service.approveDevice(userCode, { accountId: account });
+    },
+    async wait(seconds) {
+      clock.advance(seconds);
+    },
+    async revise(operationId) {
+      const current = (await service.operationRecord(operationId)).revisions.at(-1);
+      await service.revise(operationId, {
+        summary: `${current.summary} Ships in 5 days instead of 2.`,
+        terms: { ...(current.terms ?? {}), ships_in_days: 5 },
+      });
+    },
+    async performed(operationId) {
+      return executors.flatMap((executor) => executor.performed).filter((id) => id === operationId).length;
+    },
+  };
+  const scenario = JSON.parse(readFileSync(new URL("../../protocol/scenarios/manzanita-conformance.json", import.meta.url), "utf8"));
+  const ctx = new Context({ baseUrl: "https://manzanita.example", identity: atlas, fetch, scenario, clock, driver });
+  await ctx.operationsNegotiated();
+  const request = (signed, kind, approval) => {
+    const proposal = ctx.proposal(kind);
+    return ctx.agent.api.call(proposal.method, ctx.url(proposal.path), {
+      session: signed.session,
+      token: signed.token,
+      body: proposal.body ?? {},
+      ...(approval === undefined ? {} : { approval }),
+    });
+  };
+  const named = ({ operation_id, revision }) => ({ operation_id, revision });
+  const histories = Math.max(8, Math.floor(ITERATIONS / 30));
+  let approvals = 0;
+  for (let history = 0; history < histories; history += 1) {
+    const user = ctx.newUser();
+    const signed = await ctx.signIn(user, await ctx.session(user));
+    const kind = rng.pick(["user", "user", "fails", "unknown"]);
+    const first = (await request(signed, kind)).operation;
+    assert.ok(first, "the action is refused with its operation");
+    let latest = first;
+    for (let step = rng.int(1, 6); step > 0; step -= 1) {
+      const action = rng.pick(["approve", "approve_stale", "ask", "revise", "wait"]);
+      try {
+        if (action === "approve" || action === "approve_stale") {
+          const sent = action === "approve" ? latest : first;
+          const answer = await request(signed, kind, named(sent));
+          approvals += 1;
+          if (answer.operation !== undefined) {
+            assert.notEqual(answer.operation.revision, sent.revision);
+            latest = answer.operation;
+          } else if (action === "approve_stale" && first.revision !== latest.revision) {
+            const record = await service.operationRecord(first.operation_id);
+            assert.ok(record.approved !== first.revision || !record.revisions.at(-1).withdrawn);
+          }
+        } else if (action === "ask") {
+          latest = (await request(signed, kind)).operation ?? latest;
+        } else if (action === "revise") {
+          await driver.revise(first.operation_id);
+        } else {
+          clock.advance(rng.pick([1, 60, 600, 1200]));
+        }
+      } catch (error) {
+        // A refusal is fine; the invariant below is what matters.
+        if (!(error instanceof PersonalAgentProtocolError) && !OPERATOR_REFUSALS.has(error.message)) throw error;
+      }
+      if (action === "wait") {
+        const refreshed = await ctx.agent.accounts.refresh(signed.reference, { context: await ctx.accountContext(user) });
+        if (refreshed.token !== undefined) signed.token = refreshed.token;
+      }
+      assert.ok((await driver.performed(first.operation_id)) <= 1);
+    }
+  }
+  assert.ok(approvals > 0);
 });

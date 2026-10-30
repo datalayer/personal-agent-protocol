@@ -14,6 +14,7 @@ import test from "node:test";
 
 import * as pap from "../../lib/index.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
+import { CompanyRateLimits } from "../../lib/server.js";
 import { runJourney } from "./support/journey.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
@@ -241,6 +242,40 @@ test("a forged Session JWT is no identity check, and names no agent", async () =
   const [event] = sink.events.filter((item) => item.name === "pap.company.refused");
   assert.equal(event.attributes["pap.error"], "invalid_session");
   assert.equal("pap.client.id" in event.attributes, false);
+});
+
+test("a rate limit is reported with its code", async () => {
+  // A 429 has no body (§5.6), so its report's code is the company's alone to name.
+  const sink = new pap.RecordingTelemetrySink();
+  const clock = new MutableClock();
+  const sites = {};
+  const fetch = inProcessFetch(sites);
+  const limit = { point: CompanyRateLimits, value: { admit: async () => 30 }, options: { id: "limit" } };
+  const { service } = manzanita({
+    fetch,
+    clock,
+    plugins: [sinkPlugin("company-tests", sink), { name: "limit", version: "1", contributes: [limit] }],
+  });
+  sites["manzanita.example"] = service;
+  const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
+  sites["atlas.example"] = identity.documents;
+  const host = await agentHost({ identity, fetch, clock });
+  const session = await new pap.SessionClient({ reactor: host.reactor, fetch }).start({
+    clientId: identity.clientId,
+    pairwiseUserId: "usr_ada_at_manzanita_000000",
+    issuer: "https://manzanita.example",
+    tenantId: "atlas-demo",
+  });
+  const url = "https://manzanita.example/poppy/conversations";
+  const refused = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await pap.sessionHeaders(host.reactor, "POST", url, { session })) },
+    body: "{}",
+  });
+  assert.equal(refused.status, 429);
+  const [event] = sink.events.filter((item) => item.name === "pap.company.refused");
+  assert.equal(event.attributes["pap.error"], "rate_limited");
+  assert.equal(event.attributes["pap.http.status"], 429);
 });
 
 test("a refusal is an error event carrying its code only", async () => {

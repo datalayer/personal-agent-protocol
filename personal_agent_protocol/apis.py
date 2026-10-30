@@ -29,7 +29,7 @@ import httpx
 from .errors import PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
 from .models import ApiDescriptor, Approval, DiscoveryDocument, Operation, ProtocolModel
-from .operations import APPROVAL_HEADER, approval_header
+from .operations import ACTION_FAILED, APPROVAL_HEADER, approval_header
 from .refusals import refusal_code, refusal_details
 from .sessions import AccessToken, PapSession
 from .transport import SessionHttpClient
@@ -39,9 +39,13 @@ class ApiError(PersonalAgentProtocolError):
     """The company refused an API call; `code` is its error, never its body.
 
     `idempotency_key` is the key a write was sent with, to send again on a retry.
+    `body` is what the company said of an action that failed (`action_failed`):
+    its `summary` of every change made and its `data`, content from the company
+    (§10.1) for the host to show. `str(error)` never carries it.
     """
 
     idempotency_key: str | None = None
+    body: dict[str, object] | None = None
 
 
 class ApiResponse(ProtocolModel):
@@ -182,12 +186,15 @@ class ApiClient:
         error = refusal_code(response, payload, "api_request_failed")
         # `scope`, `extension`, and on a 429 `retry_after`: never retried here (§4.3).
         details = refusal_details(response, payload)
-        raise ApiError(
+        refusal = ApiError(
             error if isinstance(error, str) else "api_request_failed",
             "the company refused the API call",
             status_code=response.status_code,
             details=details or None,
         )
+        if error == ACTION_FAILED and isinstance(payload, dict):
+            refusal.body = payload
+        raise refusal
 
     def _payload(self, response: httpx.Response) -> object:
         if len(response.content) > self.max_response_bytes:

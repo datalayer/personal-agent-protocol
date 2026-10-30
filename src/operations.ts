@@ -60,6 +60,8 @@ import { operationResult, traced } from "./telemetry.js";
 
 export const OPERATIONS_EXTENSION = "operations";
 export const OPERATIONS_VERSION = "2";
+/** An approved action that didn't finish: an API error saying every change made (Operations 7). */
+export const ACTION_FAILED = "action_failed";
 /** The header that carries an approval to an API (Operations 6). */
 export const APPROVAL_HEADER = "Poppy-Approval";
 /** The `_meta` key that carries an approval to an MCP tool (Operations 6). */

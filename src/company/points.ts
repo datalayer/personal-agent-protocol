@@ -289,6 +289,8 @@ export interface ApiCall {
   readonly accountId?: string;
   readonly scopes: readonly string[];
   readonly clientId: string;
+  /** The request came with an approval (Operations 6): a company tells a retry from a first ask. */
+  readonly carriesApproval?: boolean;
 }
 
 /** The API's answer: a JSON body, or an operation (`403 approval_required`). */

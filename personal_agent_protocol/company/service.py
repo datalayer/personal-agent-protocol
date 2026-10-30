@@ -100,6 +100,7 @@ from ..models import (
     redirect_uri_matches,
 )
 from ..operations import (
+    ACTION_FAILED,
     APPROVAL_HEADER,
     OPERATIONS_EXTENSION,
     OPERATIONS_VERSION,
@@ -546,7 +547,7 @@ class OpenWork:
 
 
 #: How long a request for an operation being performed waits before trying again.
-_PERFORMING_RETRY_AFTER = "1"
+_PERFORMING_RETRY_AFTER = "5"
 
 
 @dataclass(frozen=True)
@@ -711,6 +712,8 @@ def _with(items: tuple[str, ...], item: str | None) -> tuple[str, ...]:
 
 #: The device flow's progress: answered as errors by OAuth, never refusals (RFC 8628 §3.5).
 _PROGRESS = frozenset({"authorization_pending", "slow_down"})
+#: The code a refusal without a body is reported under (§5.6).
+_NO_BODY_CODES = {429: "rate_limited"}
 
 #: The route a request took, for telemetry: its path's first part, never an ID.
 _NAMED_ROUTES = frozenset(
@@ -857,7 +860,7 @@ class CompanyService:
 
         body = response.body if isinstance(response.body, dict) else {}
         error = body.get("error")
-        code = error if isinstance(error, str) else "refused"
+        code = error if isinstance(error, str) else _NO_BODY_CODES.get(response.status, "refused")
         if code in _PROGRESS or (response.status == 404 and code == "not_found"):
             return  # progress, or a path the company does not serve
         exchange = _EXCHANGE.get()
@@ -1958,6 +1961,7 @@ class CompanyService:
                 account_id=session.account_id,
                 scopes=session.scopes,
                 client_id=session.client_id,
+                carries_approval=approval is not None,
             )
         )
         if result.operation is None:
@@ -1999,7 +2003,7 @@ class CompanyService:
         if outcome.succeeded:
             return CompanyResponse(200, body)
         # It didn't finish: an API error, saying every change that was made.
-        return CompanyResponse(422, {"error": "action_failed", **body})
+        return CompanyResponse(422, {"error": ACTION_FAILED, **body})
 
     # Resource requests ---------------------------------------------------------------
 
@@ -3416,6 +3420,7 @@ class CompanyService:
                 account_id=session.account_id,
                 scopes=session.scopes,
                 client_id=session.client_id,
+                carries_approval=approval is not None,
             ),
         )
         if answer.refusal is not None:

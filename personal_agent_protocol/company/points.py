@@ -330,7 +330,11 @@ class StoreReplayCache:
 
 @dataclass(frozen=True)
 class ApiCall:
-    """One verified call to the company's API: who, with what authority."""
+    """One verified call to the company's API: who, with what authority.
+
+    `carries_approval` says the request came with an approval (Operations 6), so
+    a company can tell a retry from a first ask.
+    """
 
     method: str
     path: str
@@ -339,6 +343,7 @@ class ApiCall:
     account_id: str | None
     scopes: tuple[str, ...]
     client_id: str
+    carries_approval: bool = False
 
 
 @dataclass(frozen=True)

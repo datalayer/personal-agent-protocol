@@ -115,6 +115,7 @@ from .models import (
     redirect_uri_matches,
 )
 from .operations import (
+    ACTION_FAILED,
     APPROVAL_HEADER,
     APPROVAL_META_KEY,
     OPERATIONS_EXTENSION,
@@ -204,6 +205,7 @@ from .telemetry import (
 from .transport import SessionHttpClient
 
 __all__ = [
+    "ACTION_FAILED",
     "APPROVAL_HEADER",
     "APPROVAL_META_KEY",
     "APPROVAL_SURFACES",

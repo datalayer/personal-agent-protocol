@@ -41,10 +41,11 @@ from personal_agent_protocol.company import (
     ActionResult,
     ProposedOperation,
 )
-from personal_agent_protocol.company.points import OPERATION_EXECUTORS
+from personal_agent_protocol.company.points import COMPANY_MCP, OPERATION_EXECUTORS
 from personal_agent_protocol.demo.kit import ScriptedApprovals
 from personal_agent_protocol.mcp import McpClient
 from personal_agent_protocol.models import Author
+from personal_agent_protocol.reactor import RATE_LIMIT_BUDGETS, first_contribution
 
 from .test_company_end_to_end import World
 from .test_company_refusals import signed_in
@@ -641,6 +642,44 @@ async def test_a_new_request_after_the_action_is_a_new_operation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_call_says_whether_it_carries_an_approval() -> None:
+    """A company's API and tools tell a retry from a first ask, without reading the header."""
+
+    world, session, token, api = await _world()
+    company_api = world.shop._api()  # type: ignore[attr-defined]
+    answer_api = company_api.handle
+    seen: list[bool] = []
+
+    async def handle(call: Any) -> Any:
+        seen.append(call.carries_approval)
+        return await answer_api(call)
+
+    company_api.handle = handle
+    operation = await _ask(api, session, token)
+    await api.call(
+        "POST", EXCHANGE, session=session, token=token, body={}, approval=_approval(operation)
+    )
+    assert seen == [False, True]
+
+    company_mcp = first_contribution(world.shop.reactor, COMPANY_MCP, "MCP server")
+    answer_tool = company_mcp.call
+    tools: list[bool] = []
+
+    async def call(name: str, arguments: dict[str, Any], details: Any) -> Any:
+        tools.append(details.carries_approval)
+        return await answer_tool(name, arguments, details)
+
+    company_mcp.call = call
+    client = await _mcp(world, session)
+    asked = await client.call_tool("exchange_jacket", {"order_id": "ord_other"})
+    assert asked.operation is not None
+    await client.call_tool(
+        "exchange_jacket", {"order_id": "ord_other"}, approval=_approval(asked.operation)
+    )
+    assert tools == [False, True]
+
+
+@pytest.mark.asyncio
 async def test_a_failed_action_says_what_changed_and_a_retry_gets_the_same_answer() -> None:
     world, session, token, api = await _world()
     operation = await _ask(api, session, token, RETURNS)
@@ -657,6 +696,10 @@ async def test_a_failed_action_says_what_changed_and_a_retry_gets_the_same_answe
             )
         errors.append((raised.value.code, raised.value.status_code))
     assert errors == [("action_failed", 422)] * 2
+    # The company's own words, for the host to show; never in the error's text.
+    told = raised.value.body
+    assert told is not None and told["error"] == "action_failed"
+    assert told["data"]["return_label"] and told["summary"] not in str(raised.value)
     assert world.plugin.returns.performed == [operation.operation_id]
 
 
@@ -664,6 +707,12 @@ async def test_a_failed_action_says_what_changed_and_a_retry_gets_the_same_answe
 async def test_while_it_is_performed_a_retry_gets_503_and_retry_after_never_a_failure() -> None:
     world, session, token, api = await _world()
     operation = await _ask(api, session, token, REPAIRS)
+
+    async def no_pause(key: str, seconds: float) -> None:
+        """The shared budget would hold each retry for the 503's `Retry-After`."""
+
+    budget = first_contribution(world.reactor, RATE_LIMIT_BUDGETS, "budget")
+    budget.defer = no_pause  # type: ignore[attr-defined]
     for _ in range(2):
         with pytest.raises(ApiError) as raised:
             await api.call(
@@ -675,7 +724,7 @@ async def test_while_it_is_performed_a_retry_gets_503_and_retry_after_never_a_fa
                 approval=_approval(operation),
             )
         assert raised.value.status_code == 503
-        assert raised.value.details == {"retry_after": "1"}
+        assert raised.value.details == {"retry_after": "5"}
     assert world.plugin.repairs.performed == [operation.operation_id]
     await world.shop.settle(
         operation.operation_id, ActionResult(summary="The repair is booked."), succeeded=True
@@ -927,7 +976,7 @@ async def test_a_tool_still_being_performed_answers_503() -> None:
     world.plugin.executor.perform = Unknown().perform  # type: ignore[method-assign,assignment]
     with pytest.raises(McpError) as raised:
         await client.call_tool("exchange_jacket", approval=_approval(asked.operation))
-    assert raised.value.status_code == 503 and raised.value.details == {"retry_after": "1"}
+    assert raised.value.status_code == 503 and raised.value.details == {"retry_after": "5"}
 
 
 async def _exchange_in_a_conversation(world: World, session: Any, token: Any) -> tuple[str, Any]:

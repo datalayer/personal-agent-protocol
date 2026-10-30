@@ -30,9 +30,12 @@ from personal_agent_protocol import (
     TransportError,
     build_pap_reactor,
 )
+from personal_agent_protocol.apis import ApiClient
 from personal_agent_protocol.caching import CacheBounds, cache_lifetime
 from personal_agent_protocol.company import IdentityClientResolver
 from personal_agent_protocol.demo.kit import MutableClock
+from personal_agent_protocol.models import Approval
+from personal_agent_protocol.operations import OperationsClient
 from personal_agent_protocol.reactor import (
     RATE_LIMIT_BUDGETS,
     RETRY_POLICIES,
@@ -301,6 +304,39 @@ async def test_safe_requests_retry_after_retry_after_with_fresh_session_jwts() -
     assert len(time.slept) == 2
     assert 2.0 <= time.slept[0] <= 2.5
     assert 1.0 <= time.slept[1] <= 1.5
+
+
+@pytest.mark.asyncio
+async def test_a_send_waits_out_a_503_once_with_the_budget_sharing_it() -> None:
+    """The budget and `send` both honour `Retry-After`: they overlap, and never add up."""
+
+    answers = [
+        httpx.Response(503, headers={"Retry-After": "5"}),
+        httpx.Response(200, json={"summary": "Exchanged."}),
+    ]
+    time = FakeTime()
+    budget = SharedRateLimitBudget(sleep=time.sleep, monotonic=time.monotonic)
+    host = Host(MutableClock(NOW))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: answers.pop(0))) as http:
+        reactor = reactor_with(http, host, (RATE_LIMIT_BUDGETS, budget))
+        api = ApiClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
+
+        async def request(approval: Approval) -> Any:
+            return await api.call(
+                "POST",
+                "https://shop.example/api/orders",
+                session=session(),
+                token=token(),
+                body={},
+                approval=approval,
+            )
+
+        sent = await OperationsClient(reactor=reactor, sleep=time.sleep).send(
+            request, Approval(operation_id="exc_1", revision="r1")
+        )
+    assert sent.status == "answered"
+    assert time.slept == [5.0]
+    assert time.now == 1005.0
 
 
 @pytest.mark.asyncio

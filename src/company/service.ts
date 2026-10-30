@@ -85,6 +85,7 @@ import {
 } from "../models.js";
 import {
   APPROVAL_HEADER,
+  ACTION_FAILED,
   OPERATIONS_EXTENSION,
   OPERATIONS_VERSION,
   approvalFromMeta,
@@ -549,6 +550,8 @@ const NO_STORE = { "Cache-Control": "no-store" } as const;
 
 /** The device flow's progress: answered as errors by OAuth, never refusals (RFC 8628 §3.5). */
 const PROGRESS = new Set(["authorization_pending", "slow_down"]);
+/** The code a refusal without a body is reported under (§5.6). */
+const NO_BODY_CODES: Readonly<Record<number, string>> = { 429: "rate_limited" };
 
 /** The routes a request may be reported under: never a path's own words or an ID. */
 const NAMED_ROUTES = new Set([
@@ -925,7 +928,7 @@ export class CompanyService {
   /** A request answered with an error: the protocol's code, never the body's text. */
   #reportRefusal(response: CompanyResponse): void {
     const body: Readonly<Record<string, unknown>> = isObject(response.body) ? response.body : {};
-    const code = typeof body.error === "string" ? body.error : "refused";
+    const code = typeof body.error === "string" ? body.error : (NO_BODY_CODES[response.status] ?? "refused");
     // Progress, or a path the company does not serve.
     if (PROGRESS.has(code) || (response.status === 404 && code === "not_found")) return;
     this.#report("pap.company.refused", "error", {
@@ -2074,6 +2077,7 @@ export class CompanyService {
       ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
       scopes: session.scopes,
       clientId: session.clientId,
+      carriesApproval: approval !== undefined,
     });
     if (result.operation === undefined) {
       const answer = isObject(result.body) ? result.body : {};
@@ -2232,6 +2236,7 @@ export class CompanyService {
       ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
       scopes: session.scopes,
       clientId: session.clientId,
+      carriesApproval: approval !== undefined,
     });
     if (answer.refusal !== undefined) {
       const [status, error, scope] = answer.refusal;
@@ -3800,7 +3805,7 @@ function apiDecision(decision: Decision): CompanyResponse {
   const body = { summary: outcome.summary, ...(outcome.data === undefined ? {} : { data: outcome.data }) };
   if (outcome.succeeded) return { status: 200, body, headers: {} };
   // It didn't finish: an API error, saying every change that was made.
-  return { status: 422, body: { error: "action_failed", ...body }, headers: {} };
+  return { status: 422, body: { error: ACTION_FAILED, ...body }, headers: {} };
 }
 
 /** The tool's result: the operation, what it came to, or `503` while it is performed. */

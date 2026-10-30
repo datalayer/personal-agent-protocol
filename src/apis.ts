@@ -29,7 +29,7 @@ import {
   type DiscoveryDocument,
   type Operation,
 } from "./models.js";
-import { APPROVAL_HEADER, approvalHeader } from "./operations.js";
+import { ACTION_FAILED, APPROVAL_HEADER, approvalHeader } from "./operations.js";
 import type { AccessToken, PapSession } from "./sessions.js";
 import type { SessionFetchClient } from "./transport.js";
 import { readLimited } from "./limits.js";
@@ -71,6 +71,12 @@ export function newIdempotencyKey(): string {
  */
 export class ApiError extends PersonalAgentProtocolError {
   idempotencyKey: string | undefined;
+  /**
+   * What the company said of an action that failed (`action_failed`): its `summary` of every
+   * change made and its `data`, content from the company (§10.1) for the host to show.
+   * `toString()` never carries it.
+   */
+  readonly body: Readonly<Record<string, unknown>> | undefined;
 
   constructor(
     code: string,
@@ -80,9 +86,11 @@ export class ApiError extends PersonalAgentProtocolError {
       details?: Readonly<Record<string, unknown>>;
       cause?: unknown;
       idempotencyKey?: string;
+      body?: Readonly<Record<string, unknown>>;
     } = {},
   ) {
     super(code, message, options);
+    this.body = options.body;
     this.name = "ApiError";
     this.idempotencyKey = options.idempotencyKey;
   }
@@ -196,9 +204,11 @@ export class ApiClient {
     // `scope`, `extension`, and on a 429 `retry_after`: never retried here (§4.3).
     const details = refusalDetails(response, payload);
     // In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
-    throw new ApiError(refusalCode(response, payload, "api_request_failed"), "the company refused the API call", {
+    const code = refusalCode(response, payload, "api_request_failed");
+    throw new ApiError(code, "the company refused the API call", {
       statusCode: response.status,
       ...(Object.keys(details).length ? { details } : {}),
+      ...(code === ACTION_FAILED && typeof payload === "object" && payload !== null ? { body: payload as Readonly<Record<string, unknown>> } : {}),
     });
   }
 

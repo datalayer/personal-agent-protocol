@@ -37,7 +37,7 @@ import {
   sessionHeaders,
   tokenHash,
 } from "../../lib/index.js";
-import { CompanyAccounts, CompanyRateLimits, StaleConversationError } from "../../lib/server.js";
+import { CompanyAccounts, CompanyApis, CompanyMcps, CompanyRateLimits, StaleConversationError } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
 import { runJourney } from "./support/journey.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -546,12 +546,51 @@ test("a stale, expired, or other-request approval gets a new revision, and nothi
   assert.equal((await malformed.json()).error, "approval_required");
 });
 
+test("a call says whether it carries an approval", async () => {
+  // A company's API and tools tell a retry from a first ask, without reading the header.
+  const w = await world();
+  const session = await w.start();
+  const { result } = await directSignIn(w);
+  const token = result.token;
+  const companyApi = w.shop.reactor.getContributions(CompanyApis).at(0).value;
+  const answerApi = companyApi.handle.bind(companyApi);
+  const seen = [];
+  companyApi.handle = async (call) => {
+    seen.push(call.carriesApproval);
+    return answerApi(call);
+  };
+  const operation = await operationAt(w, session, token, "exchanges");
+  assert.equal((await post(w, session, token, "exchanges", approvalOf(operation))).status, 200);
+  assert.deepEqual(seen, [false, true]);
+
+  const companyMcp = w.shop.reactor.getContributions(CompanyMcps).at(0).value;
+  const answerTool = companyMcp.call.bind(companyMcp);
+  const tools = [];
+  companyMcp.call = async (name, args, call) => {
+    tools.push(call.carriesApproval);
+    return answerTool(name, args, call);
+  };
+  const url = mcpApi(w.company.document).url;
+  const mcpToken = await w.tokens.tokenForMcp(result.refreshTokenReference, { context: w.context, url });
+  const client = new McpClient({ url, session, reactor: w.host.reactor, fetch: w.fetch, token: mcpToken.token });
+  const asked = await client.callTool("exchange_jacket", { order_id: "ord_other" });
+  await client.callTool("exchange_jacket", { order_id: "ord_other" }, { approval: approvalOf(asked.operation) });
+  assert.deepEqual(tools, [false, true]);
+});
+
 test("a failure says what changed, an unknown outcome is 503 until settled", async () => {
   const w = await world();
   const session = await w.start();
   const { result } = await directSignIn(w);
   const token = result.token;
   const returned = await operationAt(w, session, token, "returns");
+  const refused = await w.api
+    .call("POST", `${ORDER}/returns`, { session, token, body: {}, approval: approvalOf(returned) })
+    .catch((error) => error);
+  // The company's own words, for the host to show; never in the error's text.
+  assert.deepEqual([refused.code, refused.statusCode], ["action_failed", 422]);
+  assert.equal(refused.body.data.return_label, "rtn_8Lp3");
+  assert.ok(!String(refused).includes(refused.body.summary));
   const failed = await post(w, session, token, "returns", approvalOf(returned));
   assert.equal(failed.status, 422);
   const told = await failed.json();

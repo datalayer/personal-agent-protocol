@@ -33,6 +33,8 @@ from personal_agent_protocol import (
     TelemetryEvent,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
+from personal_agent_protocol.company import COMPANY_RATE_LIMITS
+from personal_agent_protocol.conversations import ConversationError
 from personal_agent_protocol.demo.kit import AgentIdentity
 from personal_agent_protocol.reactor import PapCorePlugin
 from personal_agent_protocol.telemetry import safe_attributes
@@ -266,6 +268,31 @@ async def test_a_session_jwt_verified_first_names_the_agent_in_its_identity_chec
     assert await session_accepted(world, world.atlas)
     (checked,) = [e for e in recorded.events if e.name == "pap.company.identity.check"]
     assert checked.attributes["pap.client.id"] == world.atlas.client_id
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limit_is_reported_with_its_code(
+    recorded: RecordingTelemetrySink,
+) -> None:
+    """A 429 has no body (§5.6), so its report's code is the company's alone to name."""
+
+    class Limit:
+        async def admit(self, client_id: str, account_id: str | None) -> int | None:
+            return 30
+
+    class Plugin:
+        def provide_contributions(self, contributions: Any) -> None:
+            contributions.contribute(COMPANY_RATE_LIMITS, Limit(), contribution_id="limit")
+
+    world = World()
+    world.shop.reactor.register_plugin(PluginManifest(name="limit", version="1"), Plugin())
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    with pytest.raises(ConversationError):
+        await world.conversations.start(endpoint, world.message("Hi"), session=session)
+    (refused,) = [e for e in recorded.events if e.name == "pap.company.refused"]
+    assert refused.attributes["pap.error"] == "rate_limited"
+    assert refused.attributes["pap.http.status"] == 429
 
 
 @pytest.mark.asyncio

@@ -12,10 +12,12 @@ import test from "node:test";
 
 import {
   AgentIdentityClient,
+  ApiClient,
   Clocks,
   DEFAULT_CACHE_BOUNDS,
   Caches,
   MetadataCache,
+  OperationsClient,
   PapSession,
   RateLimitBudgets,
   RetryPolicies,
@@ -246,6 +248,24 @@ test("safe requests retry after Retry-After with fresh Session JWTs", async () =
   assert.equal(time.slept.length, 2);
   assert.ok(time.slept[0] >= 2 && time.slept[0] <= 2.5);
   assert.ok(time.slept[1] >= 1 && time.slept[1] <= 1.5);
+  reactor.stop();
+});
+
+test("a send waits out a 503 once, the budget sharing it", async () => {
+  // The budget and `send` both honour `Retry-After`: they overlap, and never add up.
+  const answers = [new Response(null, { status: 503, headers: { "retry-after": "5" } }), json({ summary: "Exchanged." })];
+  const fetch = async () => answers.shift();
+  const time = fakeTime();
+  const budget = new SharedRateLimitBudget({ sleep: time.sleep, monotonic: time.monotonic });
+  const reactor = buildPapReactor({ fetch }, [host(mutableClock(), [[RateLimitBudgets, budget]]).plugin]);
+  const api = new ApiClient({ transport: new SessionFetchClient({ reactor, fetch }) });
+  const sent = await new OperationsClient({ reactor, sleep: time.sleep }).send(
+    (approval) => api.call("POST", "https://shop.example/api/orders", { ...who, body: {}, approval }),
+    { operation_id: "exc_1", revision: "r1" },
+  );
+  assert.equal(sent.status, "answered");
+  assert.deepEqual(time.slept, [5]);
+  assert.equal(time.now, 1005);
   reactor.stop();
 });
 

@@ -66,6 +66,8 @@ from .telemetry import operation_result, traced
 
 OPERATIONS_EXTENSION = "operations"
 OPERATIONS_VERSION = "2"
+#: An approved action that didn't finish: an API error saying every change made (Operations 7).
+ACTION_FAILED = "action_failed"
 #: The header that carries an approval to an API (Operations 6).
 APPROVAL_HEADER = "Poppy-Approval"
 #: The `_meta` key that carries an approval to an MCP tool (Operations 6).
@@ -520,6 +522,7 @@ class OperationsClient:
 
 
 __all__ = [
+    "ACTION_FAILED",
     "APPROVAL_HEADER",
     "APPROVAL_META_KEY",
     "OPERATIONS_EXTENSION",

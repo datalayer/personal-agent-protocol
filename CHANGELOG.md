@@ -188,8 +188,7 @@ the source of [personalagentprotocol.org](https://personalagentprotocol.org)).
 
 ## 0.24.0 (2026-10-14)
 
-- **An MCP server's `429` is `rate_limited`, with its `Retry-After`**
-  (PAP_DATALAYER release gates, decided 2026-10-14): `McpClient` raises
+- **An MCP server's `429` is `rate_limited`, with its `Retry-After`** (decided 2026-10-14): `McpClient` raises
   `McpError("rate_limited")` with `status_code` 429 and
   `details["retry_after"]` (the header as sent), as the API, conversation and
   Session clients do, where it raised `http_error: MCP request failed`. Never
@@ -207,12 +206,11 @@ the source of [personalagentprotocol.org](https://personalagentprotocol.org)).
   `StaleConversationError` — and returns the event written, whose ID is their
   next `after`; `conversation_record()` (`conversationRecord()`) reads the
   conversation as the company keeps it. A closed conversation, one not handed
-  to people, or one with a Direct Conversation open takes none
-  (PAP_DATALAYER P-08).
+  to people, or one with a Direct Conversation open takes none.
 - **A sign-in names what the company said it needs**: `PapSignIn` gains
   `needs` (scope tokens, optional), the scope the company's `authorization`
   event named; the card and the model's text say it (*It needs: …*), so a
-  person signing in sees what they are asked to allow (PAP_DATALAYER P-02).
+  person signing in sees what they are asked to allow.
 
 ## 0.22.0 (2026-10-13)
 
@@ -221,8 +219,7 @@ the source of [personalagentprotocol.org](https://personalagentprotocol.org)).
   company's discovery document under its own name, the issuer's metadata
   listing it in `poppy_domains`, every endpoint staying on the company's
   domain and anything else on an alias answering `404 not_found`;
-  `discovery_document(domain)` (`discoveryDocument(domain)`) for one of them
-  (PAP_DATALAYER D-02).
+  `discovery_document(domain)` (`discoveryDocument(domain)`) for one of them.
 
 ## 0.21.0 (2026-10-13)
 
@@ -230,7 +227,7 @@ the source of [personalagentprotocol.org](https://personalagentprotocol.org)).
   (a domain, optional) and `at` (the company, or the page's own domain): a host
   that hands the person its own one-use link to the company's page — binding
   their browser, and taking the redirect back only from it — names where they
-  sign in; the text says the page is the host's (PAP_DATALAYER P-04).
+  sign in; the text says the page is the host's.
 - **The release gates pass again for 0.20.0's code**: the Python code style
   (lines over 100 characters, `ruff format`), the TypeScript API reference
   regenerated (`PAP_REPLIES_VERSION`'s summary), and the examples workflow
@@ -245,7 +242,7 @@ the source of [personalagentprotocol.org](https://personalagentprotocol.org)).
   once a request's Session is verified — conversations, the API, operations
   and the MCP server — with its personal agent and its signed-in account; a
   number of seconds refuses it as `429 rate_limited` with `Retry-After`,
-  nothing done for it. None by default (PAP_DATALAYER B-06).
+  nothing done for it. None by default.
 
 ## 0.19.0 (2026-10-13)
 
@@ -254,7 +251,7 @@ the source of [personalagentprotocol.org](https://personalagentprotocol.org)).
   with `conversation`, the company's id of the conversation the replies are
   in, in both languages (`PapRepliesData.conversation`), so the page that
   draws them can open a Direct Conversation under it for the person's own
-  words (PAP_DATALAYER P-08). Version 1 is refused: it named none.
+  words. Version 1 is refused: it named none.
 
 ## 0.18.0 (2026-10-13)
 
@@ -268,8 +265,7 @@ the source of [personalagentprotocol.org](https://personalagentprotocol.org)).
   operation as `cancelled` saying why and, for one in progress, that whatever
   it changed until then stands (`cancel_open_operations` /
   `cancelOpenOperations`), and ends every sign-in as `disconnect` does
-  (`end_sign_ins` / `endSignIns`) — what its owner does before its records go
-  (PAP_DATALAYER D-06).
+  (`end_sign_ins` / `endSignIns`) — what its owner does before its records go.
 
 ## 0.17.0 (2026-10-13)
 

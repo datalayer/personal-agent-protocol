@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""A user with a company, both sides from this SDK, over HTTP in one process (K-06)."""
+"""A user with a company, both sides from this SDK, over HTTP in one process."""
 
 from __future__ import annotations
 

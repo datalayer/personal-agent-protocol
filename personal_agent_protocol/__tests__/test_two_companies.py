@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Two companies working together (K-07): Ledgerly acts for Ada at Northwind Bank."""
+"""Two companies working together: Ledgerly acts for Ada at Northwind Bank."""
 
 from __future__ import annotations
 

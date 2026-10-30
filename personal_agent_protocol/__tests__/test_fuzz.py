@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Seeded fuzzing: strict JSON, URL safety, and the operation state machine (PAP plan §5).
+"""Seeded fuzzing: strict JSON, URL safety, and the operation state machine.
 
 Hypothesis is not a dependency of this repository, so the generators here are
 plain seeded `random.Random`: every run is reproducible, and

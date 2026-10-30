@@ -1,7 +1,7 @@
 # Copyright (c) 2023-2026 Datalayer, Inc.
 # Distributed under the terms of the Modified BSD License.
 
-# Every public code example runs (PAP plan, documentation): the README's and the docs'
+# Every public code example runs: the README's and the docs'
 # Python and TypeScript blocks against reference companies, every tool of every Pydantic
 # AI example, and every Agent Runtimes PAP application built by the latest Agent
 # Runtimes release.

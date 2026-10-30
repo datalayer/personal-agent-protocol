@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""The language pairings over real TCP and TLS (PAP plan §5), one shared scenario.
+"""The language pairings over real TCP and TLS, one shared scenario.
 
 - TypeScript agent ↔ Python company: the Python Manzanita is served with
   `served_over_tls`; the TypeScript agent runs in node and asks this test to play
@@ -336,7 +336,6 @@ def _served(network: InProcessNetwork) -> tuple[int, str]:
     return port, "".join(ssl.DER_cert_to_PEM_cert(cert) for cert in der)
 
 
-@pytest.mark.xfail(reason="TypeScript port pending", strict=True)
 @pytest.mark.asyncio
 async def test_typescript_agent_with_the_python_company(tmp_path: Path) -> None:
     clock = SystemClock()
@@ -382,7 +381,6 @@ async def test_typescript_agent_with_the_python_company(tmp_path: Path) -> None:
 # Python agent ↔ TypeScript company ------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="TypeScript port pending", strict=True)
 @pytest.mark.asyncio
 async def test_python_agent_with_the_typescript_company(tmp_path: Path) -> None:
     company_domain = SCENARIO["company"]["domain"]

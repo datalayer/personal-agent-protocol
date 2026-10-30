@@ -41,7 +41,7 @@ jobs:
       run-tests: true
       test-command: pytest personal_agent_protocol/__tests__/ --cov=personal_agent_protocol --cov-report term-missing
 
-  # The load tests at size, and the canary suite with the examples' tools (PAP plan §5).
+  # The load tests at size, and the canary suite with the examples' tools.
   load-and-canaries:
     runs-on: ubuntu-latest
     env:

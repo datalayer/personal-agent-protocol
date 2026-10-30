@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Credentials never reach logs, errors, model input, URLs, traces, or analytics (K-08, gates).
+"""Credentials never reach logs, errors, model input, URLs, traces, or analytics.
 
 The demo worlds — Manzanita (Device, Direct, and Mediated Sign-In, refresh
 tokens, conversations, operations, MCP with a Bearer token, the website),

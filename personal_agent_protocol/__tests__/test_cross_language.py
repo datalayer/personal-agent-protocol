@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""The conformance suite across languages, over real TCP and TLS (PAP plan §5).
+"""The conformance suite across languages, over real TCP and TLS.
 
 - Python agent ↔ TypeScript company: the Python conformance runner, every
   positive, negative and recovery case, against the TypeScript Manzanita on
@@ -124,7 +124,6 @@ def _print(title: str, report: ConformanceReport) -> None:
         print(f"  {result.outcome:7} {result.id} {result.message or ''}")  # noqa: T201
 
 
-@pytest.mark.xfail(reason="TypeScript port pending", strict=True)
 @pytest.mark.asyncio
 async def test_python_runner_against_the_typescript_company(tmp_path: Path) -> None:
     from reactor import PluginManifest  # noqa: F401 - the runner's host needs Reactor
@@ -247,7 +246,6 @@ async def _answer(driver: DemoDriver, line: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True}
 
 
-@pytest.mark.xfail(reason="TypeScript port pending", strict=True)
 @pytest.mark.asyncio
 async def test_typescript_runner_against_the_python_company(tmp_path: Path) -> None:
     world = ManzanitaConformance()

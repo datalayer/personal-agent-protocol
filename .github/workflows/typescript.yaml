@@ -45,7 +45,7 @@ jobs:
         env:
           PAP_LOAD_SIZE: '512'
 
-  # Every language pairing runs the conformance suite over TLS (PAP plan §5), and the
+  # Every language pairing runs the conformance suite over TLS, and the
   # compatibility report is generated from their JSON reports.
   pairings:
     runs-on: ubuntu-latest

@@ -248,7 +248,7 @@ export interface JsonWebKey extends UnknownFields {
   readonly kty: "EC" | "RSA";
   readonly kid?: string;
   readonly use?: "sig";
-  readonly alg?: "ES256" | "RS256";
+  readonly alg?: "ES256" | "PS384";
   readonly crv?: "P-256";
   readonly x?: string;
   readonly y?: string;
@@ -873,7 +873,7 @@ function parseJsonWebKey(value: unknown): JsonWebKey {
   const alg =
     source.alg === undefined
       ? undefined
-      : oneOf(source.alg, ["ES256", "RS256"] as const, "alg");
+      : oneOf(source.alg, ["ES256", "PS384"] as const, "alg");
 
   if (kty === "EC") {
     const crv = oneOf(source.crv, ["P-256"] as const, "EC key crv");
@@ -899,10 +899,10 @@ function parseJsonWebKey(value: unknown): JsonWebKey {
 
   const n = string(source.n, "RSA key n");
   const e = string(source.e, "RSA key e");
-  if (alg !== undefined && alg !== "RS256") {
+  if (alg !== undefined && alg !== "PS384") {
     throw new ProtocolValidationError(
       "invalid_jwk_algorithm",
-      "RSA signing keys may advertise only RS256",
+      "RSA signing keys may advertise only PS384",
     );
   }
   return {

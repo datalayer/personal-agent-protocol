@@ -9,21 +9,22 @@
 //
 // The TypeScript demo (Manzanita, the reference company) runs the shared journey (Direct
 // Sign-In through the consent page, conversations, an operation), Mediated Sign-In with a
-// one-time code, and the conformance runner's cases in one process, with canaries: every
-// random value of 12 bytes or more the parties mint carries a counter and `CANARY`, and
-// Ada's password is a canary. Every credential exchanged on the wire is harvested by kind,
+// one-time code, and the conformance runner's cases (MCP and the browser join among them)
+// in one process, with canaries: every random value of 12 bytes or more the parties mint
+// carries a counter and `CANARY`, and Ada's password is a canary. Every credential exchanged on the wire is harvested by kind,
 // and none may appear in a console line, an error an SDK client or the company's methods
 // throw (its message, `String`, and `util.inspect`), a requested URL, or what a model reads
 // (every response body but the token and device endpoints', and each message's text), or
 // a telemetry event: every agent Reactor of the run has a `pap.telemetry` sink keeping each
 // event as the JSON an analytics pipeline gets and as the span `openTelemetrySink` starts.
-// The TypeScript company has no MCP server, so no Bearer token is exchanged here.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { inspect } from "node:util";
+
+import { decodeProtectedHeader } from "jose";
 
 import * as pap from "../../lib/index.js";
 import { CompanyService } from "../../lib/server.js";
@@ -37,6 +38,8 @@ const SHORTEST = 8;
 /** The demo's one-time code is a six-digit constant: searched for all the same. */
 const SHORT_KINDS = new Set(["one-time code"]);
 const CREDENTIAL_ENDPOINTS = new Set(["/oauth/token", "/oauth/device"]);
+/** The browser join page (§6): its one-time code is read by the host's code, never a model. */
+const JOIN_PAGE = "/poppy/browser-session";
 const LIB = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "lib");
 
 class Harvest {
@@ -94,6 +97,15 @@ function cookies(header) {
     .map(([name, ...value]) => [name, value.join("=")]);
 }
 
+/** The delegation in a Session JWT's header; a probe's malformed one holds none. */
+function delegationOf(sessionJwt) {
+  try {
+    return decodeProtectedHeader(sessionJwt).pap_dlg;
+  } catch {
+    return undefined;
+  }
+}
+
 /** `fetch` on the in-process network, recording every request and its answer. */
 function recordingFetch(sites, harvest) {
   const fetch = inProcessFetch(sites);
@@ -103,23 +115,22 @@ function recordingFetch(sites, harvest) {
     const headers = new Headers(init.headers);
     const [scheme, token] = (headers.get("authorization") ?? "").split(" ");
     if (token) harvest.secret(`${scheme} access token`, token);
-    harvest.secret("DPoP proof", headers.get("dpop") ?? undefined);
+    const sessionJwt = headers.get("poppy-session") ?? undefined;
+    harvest.secret("Session JWT", sessionJwt);
+    if (sessionJwt !== undefined) harvest.secret("delegation", delegationOf(sessionJwt));
     for (const [name, value] of cookies(headers.get("cookie"))) harvest.secret(`cookie ${name}`, value);
     const body = init.body === undefined || init.body === null ? "" : String(init.body);
     const type = headers.get("content-type") ?? (init.body instanceof URLSearchParams ? "application/x-www-form-urlencoded" : "");
     if (type.startsWith("application/x-www-form-urlencoded")) {
       const form = Object.fromEntries(new URLSearchParams(body));
       harvest.secret("client assertion", form.client_assertion);
-      harvest.secret("Session or browser assertion", form.assertion);
       harvest.secret("authorization code", form.code);
       harvest.secret("PKCE verifier", form.code_verifier);
       harvest.secret("device code", form.device_code);
-      harvest.secret("Account Token", form.refresh_token);
+      harvest.secret("refresh token", form.refresh_token);
       harvest.secret("revoked token", form.token);
-    } else if (type.startsWith("application/json") && url.pathname.startsWith("/poppy/sign-in")) {
-      const sent = JSON.parse(body || "{}");
-      harvest.secret("mediated password", sent.credentials?.password);
-      harvest.secret("one-time code", sent.code);
+      harvest.secret("mediated password", form.password);
+      harvest.secret("one-time code", form.one_time_code);
     }
     const response = await fetch(input, init);
     const text = await response.clone().text();
@@ -129,14 +140,14 @@ function recordingFetch(sites, harvest) {
       const answer = JSON.parse(text);
       if (CREDENTIAL_ENDPOINTS.has(url.pathname)) {
         harvest.secret(`${answer.token_type ?? ""} access token`, answer.access_token);
-        harvest.secret("Account Token", answer.refresh_token);
+        harvest.secret("refresh token", answer.refresh_token);
         harvest.secret("device code", answer.device_code);
         harvest.secret("user code", answer.user_code);
         return response;
       }
       for (const event of answer?.events ?? []) harvest.chatTexts.push([`a message in ${where}`, String(event.message?.text)]);
     }
-    harvest.modelTexts.push([where, text]);
+    if (url.pathname !== JOIN_PAGE) harvest.modelTexts.push([where, text]);
     return response;
   };
 }
@@ -226,28 +237,11 @@ async function mediatedSignIn(fetch, clock, sites, harvest) {
   const host = await agentHost({ identity, fetch, clock, answers: [{ ...ADA }, { code: "975313" }, { code: ADA_CODE }] });
   await host.reactor.install(harvest.telemetryPlugin("mediated-telemetry"));
   const company = await pap.discoverCompany("manzanita.example", { reactor: host.reactor });
-  const issuer = company.oauthMetadata.issuer;
-  const who = { tenantId: "atlas-demo", pairwiseUserId: "usr_ada_at_manzanita_000000", issuer };
-  const session = await new pap.SessionClient({ reactor: host.reactor, fetch }).start({
-    clientId: identity.clientId,
-    pairwiseUserId: who.pairwiseUserId,
-    issuer,
-    tokenEndpoint: company.oauthMetadata.token_endpoint,
-    tenantId: who.tenantId,
-  });
   const mediated = new pap.MediatedSignInClient({ reactor: host.reactor, fetch });
-  const started = await mediated.signIn({
-    mediated: company.document.auth.mediated,
-    organization: company.document.organization,
-    issuer,
-    scopes: ["orders:read"],
-    token: session,
-    tenantId: who.tenantId,
-    pairwiseUserId: who.pairwiseUserId,
-  });
+  const started = await mediated.signIn({ company, clientId: identity.clientId, scopes: ["orders:read"] });
   assert.equal(started.status, "code_required");
-  assert.equal((await mediated.submitCode(started.reference, { token: session, ...who })).status, "code_required");
-  assert.equal((await mediated.submitCode(started.reference, { token: session, ...who })).status, "complete");
+  assert.equal((await mediated.submitCode(started.reference)).status, "code_required");
+  assert.equal((await mediated.submitCode(started.reference)).status, "complete");
 }
 
 test("no credential reaches a console line, an error, a URL, a trace, analytics, or model text", async () => {
@@ -282,7 +276,7 @@ test("no credential reaches a console line, an error, a URL, a trace, analytics,
       // Mediated Sign-In: the password and the one-time code.
       await mediatedSignIn(fetch, clock, sites, harvest);
 
-      // The conformance cases, in process, but the probe that puts a Session Token in a
+      // The conformance cases, in process, but the probe that puts an access token in a
       // URL on purpose to see the company refuse it; a company of their own.
       const { service: conformant, plugin: conformantPlugin } = manzanita({ fetch, clock });
       sites["manzanita.example"] = conformant;
@@ -297,6 +291,7 @@ test("no credential reaches a console line, an error, a URL, a trace, analytics,
         identity: atlas,
         otherIdentity: plainIdentity,
         fetch,
+        browserFetch: fetch,
         scenario,
         clock,
         driver: {
@@ -309,7 +304,7 @@ test("no credential reaches a console line, an error, a URL, a trace, analytics,
             clock.advance(seconds);
           },
           async revise(operationId) {
-            const current = (await conformant.operationRecord(operationId)).operation;
+            const current = (await conformant.operationRecord(operationId)).revisions.at(-1);
             await conformant.revise(operationId, { summary: `${current.summary} Ships in 5 days instead of 2.`, terms: { ...(current.terms ?? {}), ships_in_days: 5 } });
           },
           async forgetEvents(conversationId) {
@@ -328,7 +323,7 @@ test("no credential reaches a console line, an error, a URL, a trace, analytics,
       const cases = companyCases().filter((item) => item.id !== "security.token-in-url-refused");
       const report = await runConformance(context, { cases });
       assert.deepEqual(report.cases.filter((item) => item.outcome === "failed").map((item) => `${item.id}: ${item.message}`), []);
-      assert.ok(report.summary.passed >= 70, JSON.stringify(report.summary));
+      assert.deepEqual(report.summary, { passed: cases.length, failed: 0, skipped: 0 });
       harvest.modelTexts.push(["the conformance report", JSON.stringify(report)]);
     });
   } finally {
@@ -337,18 +332,20 @@ test("no credential reaches a console line, an error, a URL, a trace, analytics,
 
   const kinds = new Set(harvest.secrets.keys());
   for (const kind of [
-    "DPoP access token",
-    "Account Token",
-    "DPoP proof",
+    "Bearer access token",
+    "refresh token",
+    "Session JWT",
+    "delegation",
     "private key",
     "client assertion",
-    "Session or browser assertion",
     "authorization code",
     "PKCE verifier",
     "device code",
     "user code",
     "mediated password",
     "one-time code",
+    "cookie __Host-poppy_session",
+    "cookie __Host-poppy_consent",
   ]) {
     assert.ok(kinds.has(kind), `no ${kind} was exchanged: the canary run is incomplete`);
   }

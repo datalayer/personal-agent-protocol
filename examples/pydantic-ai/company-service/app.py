@@ -13,7 +13,7 @@ page, the renewal proposed, Ada's approval of that exact revision, and the renew
 performed once however often the confirmation is sent.
 
 The tool hands the model the steps, the library's summaries, and counts; no token,
-code, or proof enters it.
+code, or Session JWT enters it.
 """
 
 from __future__ import annotations
@@ -33,9 +33,9 @@ from personal_agent_protocol import (
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
     SessionClient,
+    SessionHttpClient,
     generate_message_id,
 )
 from personal_agent_protocol.company import (
@@ -135,7 +135,7 @@ agent = Agent(
     instructions=(
         "Use run_company_service to show how a company is built with the PAP SDK and "
         "how a personal agent uses it. Say what Ada approved and what the library did. "
-        "Never expose tokens, codes, or proofs."
+        "Never expose tokens, codes, or Session JWTs."
     ),
 )
 
@@ -173,7 +173,7 @@ async def run_company_service() -> dict[str, Any]:
     reactor = personal_agent_reactor(
         PersonalAgentHost(atlas, clock), network=network, http_client=http
     )
-    transport = DpopHttpClient(reactor=reactor, http_client=http)
+    transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
 
     company = await DiscoveryClient(reactor=reactor, http_client=http).discover(DOMAIN)
@@ -181,23 +181,19 @@ async def run_company_service() -> dict[str, Any]:
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
     steps.append(f"discovered {company.document.organization.name}")
-    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
-    steps.append("started a signed-out Session, named by a new Session Key")
+    steps.append("started a signed-out Session, its ID chosen here")
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     def say(text: str) -> Message:
         return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
 
-    page = await conversations.start(
-        endpoint, say("When is my book due?"), token=session, wait=0, **who
-    )
+    page = await conversations.start(endpoint, say("When is my book due?"), session=session, wait=0)
     asked = [e for e in page.events if e.type != "state"][-1]
     steps.append(f"the library asked for more scope ({asked.type}: {asked.error} {asked.scope})")
 
@@ -209,7 +205,6 @@ async def run_company_service() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("loans:read", "loans:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -224,10 +219,10 @@ async def run_company_service() -> dict[str, Any]:
         endpoint,
         page.conversation_id,
         say("Please renew it"),
+        session=session,
         token=signed_in,
         cursor=page.cursor,
         wait=0,
-        **who,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     ops = operations_endpoint(company.document, ClientMetadata.model_validate(atlas.metadata))
@@ -237,8 +232,12 @@ async def run_company_service() -> dict[str, Any]:
 
     operations = OperationsClient(transport=transport)
     approval = approve(proposal)
-    confirmed = await operations.confirm(ops, proposal, approval=approval, token=signed_in, **who)
-    again = await operations.confirm(ops, proposal, approval=approval, token=signed_in, **who)
+    confirmed = await operations.confirm(
+        ops, proposal, approval=approval, session=session, token=signed_in
+    )
+    again = await operations.confirm(
+        ops, proposal, approval=approval, session=session, token=signed_in
+    )
     record = confirmed.operation
     if record is None or again.operation is None:
         raise RuntimeError("the example world is incomplete")
@@ -262,7 +261,7 @@ async def run_company_service() -> dict[str, Any]:
         "second_confirmation": again.operation.state,
         "same_operation": again.operation.operation_id == record.operation_id,
         "times_performed": len(plugin.executor.performed),
-        "tokens_codes_and_proofs_withheld": True,
+        "tokens_codes_and_session_jwts_withheld": True,
     }
 
 

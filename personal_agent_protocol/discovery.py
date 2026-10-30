@@ -221,6 +221,52 @@ class DiscoveryClient:
             )
         return named
 
+    async def resource_metadata(
+        self, url: str, *, fresh: bool = False
+    ) -> ProtectedResourceMetadata | None:
+        """The protected resource metadata of the service at `url` (RFC 9728 §3.1), if any.
+
+        `None` when the service publishes none (404). Cached as its headers allow;
+        `fresh` reads it again, after a service said the agent's view is stale (§4.5).
+        """
+
+        metadata_url = protected_resource_metadata_url(url)
+        if fresh:
+            await self._cache.delete(f"pap.metadata:{metadata_url}")
+        try:
+            data, _ = await self._get_json(metadata_url)
+        except DiscoveryError as exc:
+            if exc.code == "http_error" and exc.status_code == 404:
+                return None
+            raise
+        try:
+            return ProtectedResourceMetadata.model_validate(data)
+        except ValidationError as exc:
+            raise ProtocolValidationError(
+                "invalid_resource_metadata", "Protected resource metadata failed validation"
+            ) from exc
+
+    async def service_resource(
+        self, company: DiscoveredCompany, url: str, *, fresh: bool = False
+    ) -> str | None:
+        """The `resource` to request a token for before calling `url`, or `None` (§4.5).
+
+        A service whose protected resource metadata names a `resource` other than
+        `https://{organization.domain}` accepts only tokens issued for it, and its
+        `authorization_servers` include the Company's issuer. Without metadata, or
+        with the domain's own, the default token works there.
+        """
+
+        metadata = await self.resource_metadata(url, fresh=fresh)
+        if metadata is None or metadata.resource == company.resource:
+            return None
+        if company.issuer is None or company.issuer not in metadata.authorization_servers:
+            raise DiscoveryError(
+                "invalid_resource_metadata",
+                "The service's protected resource metadata names another authorization server",
+            )
+        return metadata.resource
+
     async def excluded_tasks(self, company: DiscoveredCompany) -> ExcludedTasks | None:
         """The tasks the company chose not to offer through the protocol (§8.1).
 

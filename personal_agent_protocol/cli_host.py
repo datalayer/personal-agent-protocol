@@ -12,7 +12,7 @@ replaceable parts are contributions, defaulting to local files under
   behind opaque references (`secrets.json`). A keyring plugin replaces it
   with a lower `order`.
 - `pap.signer` and `pap.dpopProofProvider` — `FileKeyStore`: the agent's
-  signing key (imported once, from protected input) and one DPoP key per
+  signing key (imported once, from protected input) and one delegated key per
   user and company (`keys.json`).
 - `pap.pairwiseUserIdStore` — SQLite (`pairwise.sqlite3`).
 - `pap.protectedInput` — `TerminalInput`: a hidden prompt, stdin, or a file
@@ -53,7 +53,13 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from pydantic import SecretStr
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 
-from .crypto import DpopKeyMaterial, JoseDpopProofProvider, JoseSigner
+from .crypto import (
+    ContributedSigner,
+    DelegatedKey,
+    DelegatedSessionSigner,
+    JoseSigner,
+    jwk_thumbprint,
+)
 from .errors import PersonalAgentProtocolError
 from .json import loads_strict
 from .pairwise import SqlitePairwiseUserIdStore
@@ -61,9 +67,9 @@ from .reactor import (
     AUTHORIZATION_STATE_STORES,
     BROWSER_HANDOFFS,
     CLOCKS,
-    DPOP_PROOF_PROVIDERS,
     PAIRWISE_USER_ID_STORES,
     PROTECTED_INPUTS,
+    SESSION_SIGNERS,
     SIGNERS,
     TOKEN_STORES,
     AddressResolver,
@@ -73,9 +79,9 @@ from .reactor import (
     first_contribution,
     resolve_addresses,
 )
+from .sessions import PapSession
 
 HOST_PLUGIN_GROUP = "personal_agent_protocol.plugins"
-_DPOP = "DPoP"  # the OAuth token type of a proof-bound Session Token
 
 
 class InputRequiredError(PersonalAgentProtocolError):
@@ -199,7 +205,7 @@ class MemoryStateStore:
 
 
 class FileKeyStore:
-    """The agent's signing key and its per-user DPoP keys, private to the owner."""
+    """The agent's signing key and its per-user delegated keys, private to the owner."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -211,7 +217,7 @@ class FileKeyStore:
         if isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1):
             algorithm = "ES256"
         elif isinstance(key, rsa.RSAPrivateKey) and key.key_size >= 2048:
-            algorithm = "RS256"
+            algorithm = "PS384"
         else:
             raise ValueError("the signing key must be P-256 (ES256) or RSA of 2048 bits or more")
         with _locked(self.path):
@@ -242,35 +248,46 @@ class FileKeyStore:
             self._private(signing["pem"]), algorithm=signing["alg"], key_id=signing["kid"]
         )
 
-    # `SessionKeyCustody` (crypto.py): a new P-256 Session Key for each Session (§4.3),
-    # kept in the key file under tenant, issuer and thumbprint until it is discarded.
+    # `DelegatedKeyCustody` (crypto.py): one delegated key per User ID (§5.2), kept in the
+    # key file under tenant, issuer and User ID until it rotates.
 
-    async def generate(self, *, tenant_id: str, issuer: str) -> DpopKeyMaterial:
-        private = ec.generate_private_key(ec.SECP256R1())
-        public = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(private.public_key()))
-        name = f"{tenant_id}|{issuer}|{_thumbprint(public)}"
-        with _locked(self.path):
-            document = _read(self.path)
-            document.setdefault("dpop", {})[name] = private.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.PKCS8,
-                serialization.NoEncryption(),
-            ).decode()
-            _write_private(self.path, document)
-        return DpopKeyMaterial(private_key=private, public_jwk=public)
-
-    async def get(self, *, tenant_id: str, issuer: str, thumbprint: str) -> DpopKeyMaterial | None:
-        pem = _read(self.path).get("dpop", {}).get(f"{tenant_id}|{issuer}|{thumbprint}")
-        if pem is None:
+    async def current(self, *, tenant_id: str, issuer: str, sub: str) -> DelegatedKey | None:
+        stored = _read(self.path).get("delegated", {}).get(f"{tenant_id}|{issuer}|{sub}")
+        if stored is None:
             return None
-        private = cast(ec.EllipticCurvePrivateKey, self._private(pem))
+        private = cast(ec.EllipticCurvePrivateKey, self._private(stored["pem"]))
         public = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(private.public_key()))
-        return DpopKeyMaterial(private_key=private, public_jwk=public)
+        return DelegatedKey(
+            private_key=private,
+            public_jwk=public,
+            thumbprint=jwk_thumbprint(public),
+            delegation=SecretStr(stored["delegation"]),
+            client_id=stored["client_id"],
+            issued_at=datetime.fromisoformat(stored["issued_at"]),
+            expires_at=datetime.fromisoformat(stored["expires_at"]),
+        )
 
-    async def discard(self, *, tenant_id: str, issuer: str, thumbprint: str) -> None:
+    async def replace(self, *, tenant_id: str, issuer: str, sub: str, key: DelegatedKey) -> None:
         with _locked(self.path):
             document = _read(self.path)
-            if document.get("dpop", {}).pop(f"{tenant_id}|{issuer}|{thumbprint}", None) is not None:
+            document.setdefault("delegated", {})[f"{tenant_id}|{issuer}|{sub}"] = {
+                "pem": key.private_key.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.PKCS8,
+                    serialization.NoEncryption(),
+                ).decode(),
+                "delegation": key.delegation.get_secret_value(),
+                "client_id": key.client_id,
+                "issued_at": key.issued_at.isoformat(),
+                "expires_at": key.expires_at.isoformat(),
+            }
+            _write_private(self.path, document)
+
+    async def forget(self, *, tenant_id: str, issuer: str, sub: str) -> None:
+        with _locked(self.path):
+            document = _read(self.path)
+            name = f"{tenant_id}|{issuer}|{sub}"
+            if document.get("delegated", {}).pop(name, None) is not None:
                 _write_private(self.path, document)
 
     @staticmethod
@@ -285,9 +302,7 @@ def _public_jwk(key: Any) -> dict[str, Any]:
 
 
 def _thumbprint(jwk_value: dict[str, Any]) -> str:
-    from .crypto import _thumbprint as thumbprint
-
-    return thumbprint(jwk_value)
+    return jwk_thumbprint(jwk_value)
 
 
 @dataclass
@@ -358,11 +373,12 @@ class UserBrowser:
 class SessionRecord:
     """A Session the CLI holds: everything but its tokens, which are in the token store.
 
-    `id` is the CLI's handle for it, `ses_` and the Session Key's thumbprint.
+    `id` is the CLI's handle for it, `ses_` and its first `sid`. `token_reference`
+    is where its access token is kept once signed in.
     """
 
     id: str
-    session_key: str
+    sid: str
     domain: str
     company: str
     issuer: str
@@ -376,8 +392,8 @@ class SessionRecord:
     signed_in: bool
     scope: str
     expires_at: str
-    account_reference: str | None = None
-    token_type: str = _DPOP
+    refresh_reference: str | None = None
+    agent_id: str | None = None
 
     def public(self) -> dict[str, Any]:
         """What may be printed: opaque references, never a token or the User ID."""
@@ -464,6 +480,8 @@ class CliRuntime:
     tenant_id: str = "pap-cli"
     #: How a command waits (Device Sign-In polling); a test or demo may move a clock.
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    #: The Sessions this command used: a new `sid` after `invalid_session` is kept.
+    live: dict[str, PapSession] = field(default_factory=dict)
 
     def expires_at(self, expires_in: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
@@ -480,6 +498,34 @@ class CliRuntime:
         """The Sessions of this runtime's tenant only."""
 
         return [r for r in self.state.sessions.values() if r.tenant_id == self.tenant_id]
+
+    def session_of(self, record: SessionRecord) -> PapSession:
+        """The record's Session; a new `sid` from `invalid_session` (§5.5) is saved at the end."""
+
+        session = self.live.get(record.id)
+        if session is None:
+            session = PapSession(
+                sid=record.sid,
+                sub=record.pairwise_user_id,
+                issuer=record.issuer,
+                client_id=record.client_id,
+                tenant_id=record.tenant_id,
+                agent_id=record.agent_id,
+            )
+            self.live[record.id] = session
+        return session
+
+    def keep_restarted_sessions(self) -> None:
+        """Save the `sid` of each Session the company made the agent start again."""
+
+        changed = False
+        for handle, session in self.live.items():
+            record = self.state.sessions.get(handle)
+            if record is not None and record.sid != session.sid:
+                record.sid = session.sid
+                changed = True
+        if changed:
+            self.state.save()
 
 
 class CliHostPlugin:
@@ -502,8 +548,10 @@ class CliHostPlugin:
             AUTHORIZATION_STATE_STORES, MemoryStateStore(now), contribution_id="memory", order=100
         )
         contribute(
-            DPOP_PROOF_PROVIDERS,
-            JoseDpopProofProvider(runtime.keys, now=now),
+            SESSION_SIGNERS,
+            DelegatedSessionSigner(
+                runtime.keys, signer=ContributedSigner(runtime.reactor), now=now
+            ),
             contribution_id="file",
             order=100,
         )

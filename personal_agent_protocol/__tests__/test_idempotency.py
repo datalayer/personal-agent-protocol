@@ -22,13 +22,13 @@ import httpx
 import pytest
 from reactor import PluginManifest  # type: ignore[import-untyped]
 
-from personal_agent_protocol import DpopHttpClient, build_pap_reactor, new_idempotency_key
+from personal_agent_protocol import SessionHttpClient, build_pap_reactor, new_idempotency_key
 from personal_agent_protocol.apis import WRITE_METHODS, ApiClient, ApiError
 from personal_agent_protocol.demo.manzanita import CONFIG, manzanita
 from personal_agent_protocol.operations import OperationsClient, approve
 
 from .test_direct_and_api import begin, direct_world
-from .test_operations import Host, token
+from .test_operations import Host, session, token
 
 FIXTURE = json.loads(
     (
@@ -37,7 +37,6 @@ FIXTURE = json.loads(
 )
 UUID_V4 = re.compile(FIXTURE["uuid_v4"])
 URL = "https://api.shop.example/orders"
-WHO = {"tenant_id": "tenant", "issuer": "https://auth.shop.example"}
 
 
 def scripted(answer: httpx.Response) -> tuple[ApiClient, list[httpx.Request]]:
@@ -50,7 +49,7 @@ def scripted(answer: httpx.Response) -> tuple[ApiClient, list[httpx.Request]]:
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     reactor, _ = build_pap_reactor(http_client=http)
     reactor.register_plugin(PluginManifest(name="host", version="1"), Host(None))
-    return ApiClient(transport=DpopHttpClient(reactor=reactor, http_client=http)), sent
+    return ApiClient(transport=SessionHttpClient(reactor=reactor, http_client=http)), sent
 
 
 def test_the_sdks_write_methods_are_the_fixtures() -> None:
@@ -66,11 +65,11 @@ async def test_every_write_carries_a_random_uuid_v4_and_a_read_none() -> None:
     api, sent = scripted(httpx.Response(200, json={"ok": True}))
     keys = []
     for method in FIXTURE["write_methods"]:
-        answer = await api.call(method.lower(), URL, token=token(), body={}, **WHO)
+        answer = await api.call(method.lower(), URL, session=session(), token=token(), body={})
         keys.append(sent[-1].headers["Idempotency-Key"])
         assert UUID_V4.fullmatch(keys[-1]) and answer.idempotency_key == keys[-1]
     assert len(set(keys)) == len(keys)
-    read = await api.call("GET", URL, token=token(), **WHO)
+    read = await api.call("GET", URL, session=session(), token=token())
     assert "Idempotency-Key" not in sent[-1].headers and read.idempotency_key is None
 
 
@@ -78,13 +77,15 @@ async def test_every_write_carries_a_random_uuid_v4_and_a_read_none() -> None:
 async def test_a_retry_sends_the_callers_key_and_a_refusal_carries_it() -> None:
     api, sent = scripted(httpx.Response(503, json={"error": "temporarily_unavailable"}))
     with pytest.raises(ApiError) as raised:
-        await api.call("POST", URL, token=token(), body={"size": "M"}, **WHO)
+        await api.call("POST", URL, session=session(), token=token(), body={"size": "M"})
     key = raised.value.idempotency_key
     assert key is not None and sent[-1].headers["Idempotency-Key"] == key
     with pytest.raises(ApiError):
-        await api.call("POST", URL, token=token(), body={"size": "M"}, idempotency_key=key, **WHO)
+        await api.call(
+            "POST", URL, session=session(), token=token(), body={"size": "M"}, idempotency_key=key
+        )
     assert sent[-1].headers["Idempotency-Key"] == key
-    assert sent[-2].headers["DPoP"] and len(sent) == 2
+    assert sent[-2].headers["Poppy-Session"] and len(sent) == 2
 
 
 @pytest.mark.asyncio
@@ -92,9 +93,13 @@ async def test_a_bad_key_or_a_key_on_a_read_is_the_callers_mistake() -> None:
     api, sent = scripted(httpx.Response(200, json={}))
     for bad in FIXTURE["invalid_keys"]:
         with pytest.raises(ValueError):
-            await api.call("POST", URL, token=token(), body={}, idempotency_key=bad, **WHO)
+            await api.call(
+                "POST", URL, session=session(), token=token(), body={}, idempotency_key=bad
+            )
     with pytest.raises(ValueError):
-        await api.call("GET", URL, token=token(), idempotency_key=new_idempotency_key(), **WHO)
+        await api.call(
+            "GET", URL, session=session(), token=token(), idempotency_key=new_idempotency_key()
+        )
     assert sent == []
 
 
@@ -110,12 +115,13 @@ async def test_the_reference_company_keeps_each_key_per_session_for_its_lifetime
         world.network, world.clock, config=replace(CONFIG, idempotency_lifetime=lifetime)
     )
     tokens = {}
+    sessions = {}
     for name in ("first", "second"):
-        session = await world.signed_out_session()
-        client = await begin(world, browser, session, ("orders:read", "orders:write"))
+        sessions[name] = await world.signed_out_session()
+        client = await begin(world, browser, sessions[name], ("orders:read", "orders:write"))
         callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
         tokens[name] = (await client.complete(callback)).token
-    assert tokens["first"].session_key != tokens["second"].session_key
+    assert sessions["first"].sid != sessions["second"].sid
     api = ApiClient(transport=world.transport)
     answers: dict[str, Any] = {}
     for step in FIXTURE["steps"]:
@@ -125,18 +131,18 @@ async def test_the_reference_company_keeps_each_key_per_session_for_its_lifetime
                 world.shop.config.operations_endpoint,
                 operation,
                 approval=approve(operation),
+                session=sessions["first"],
                 token=tokens["first"],
-                **world.who,
             )
             continue
         world.clock.advance(step.get("advance_seconds", 0))
         call = api.call(
             "POST",
             f"https://manzanita.example{step['path']}",
+            session=sessions[step.get("session", "first")],
             token=tokens[step.get("session", "first")],
             body=step["body"],
             idempotency_key=step["key"],
-            **world.who,
         )
         expect = step["expect"]
         if "error" in expect:
@@ -168,28 +174,27 @@ async def test_the_reference_company_keeps_each_key_per_session_for_its_lifetime
 @pytest.mark.asyncio
 async def test_a_bad_key_is_invalid_request_and_a_refusal_is_not_remembered() -> None:
     world, browser = direct_world()
-    session = await world.signed_out_session()
+    current = await world.signed_out_session()
     api = ApiClient(transport=world.transport)
     exchanges = "https://manzanita.example/api/orders/ord_7Hk2/exchanges"
     for bad in (key for key in FIXTURE["invalid_keys"] if key.isascii()):
         response = await world.transport.request(
             "POST",
             exchanges,
-            token=session,
+            session=current,
             headers={"Idempotency-Key": bad, "Content-Type": "application/json"},
             content=b"{}",
-            **world.who,
         )
         assert (response.status_code, response.json()["error"]) == (400, "invalid_request")
     key = new_idempotency_key()
     with pytest.raises(ApiError) as raised:
-        await api.call("POST", exchanges, token=session, body={}, idempotency_key=key, **world.who)
+        await api.call("POST", exchanges, session=current, body={}, idempotency_key=key)
     assert raised.value.code == "insufficient_scope"
     # Signed in, the same key is a new request: the refusal was not kept.
-    client = await begin(world, browser, session, ("orders:read", "orders:write"))
+    client = await begin(world, browser, current, ("orders:read", "orders:write"))
     callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
     signed_in = (await client.complete(callback)).token
     answer = await api.call(
-        "POST", exchanges, token=signed_in, body={}, idempotency_key=key, **world.who
+        "POST", exchanges, session=current, token=signed_in, body={}, idempotency_key=key
     )
     assert answer.status == 202 and answer.operation is not None

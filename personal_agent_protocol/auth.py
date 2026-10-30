@@ -21,22 +21,20 @@ import httpx
 from pydantic import SecretStr, field_validator
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .errors import AuthorizationError, ProtocolValidationError
+from .errors import AuthorizationError
 from .models import ProtocolModel, is_loopback_redirect
 from .reactor import (
     AUTHORIZATION_STATE_STORES,
     BROWSER_HANDOFFS,
     CLOCKS,
     RANDOM_SOURCES,
-    TOKEN_STORES,
     AuthorizationStateStore,
     BrowserHandoff,
     Clock,
     RandomSource,
-    TokenStore,
     first_contribution,
 )
-from .sessions import SessionClient, SessionToken, TokenResponse, _opaque_id
+from .sessions import SessionClient, SignInResult, TokenResponse, finish_sign_in
 from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
 RandomBytes = Callable[[int], bytes]
@@ -49,7 +47,6 @@ _AUTHORIZATION_PARAMETERS = {
     "state",
     "code_challenge",
     "code_challenge_method",
-    "dpop_jkt",
 }
 
 
@@ -94,7 +91,6 @@ class DirectSignInRequest(ProtocolModel):
     scopes: tuple[str, ...]
     state: SecretStr
     code_verifier: SecretStr
-    session_key: str
 
     @field_validator("issuer", "client_id")
     @classmethod
@@ -115,13 +111,12 @@ def build_direct_sign_in_request(
     client_id: str,
     redirect_uri: str,
     scopes: Iterable[str],
-    session_key: str,
     random_bytes: RandomBytes = secrets.token_bytes,
 ) -> DirectSignInRequest:
-    """Build a user-browser authorization URL with random state and S256 PKCE.
+    """Build a user-browser authorization URL with random state and S256 PKCE (§4.2).
 
-    `dpop_jkt` is the Session Key's thumbprint: the company binds the code to it, so
-    the code signs in that Session and no other key can redeem it (§4.5, RFC 9449 §10).
+    Plain OAuth: the sign-in names no Session, and any of the User's Sessions uses
+    the tokens it returns (§5.4).
     """
 
     endpoint = _https_url(authorization_endpoint, "authorization endpoint")
@@ -144,7 +139,6 @@ def build_direct_sign_in_request(
             ("state", state),
             ("code_challenge", challenge),
             ("code_challenge_method", "S256"),
-            ("dpop_jkt", session_key),
         ]
     )
     authorization_url = urlunsplit(
@@ -158,7 +152,6 @@ def build_direct_sign_in_request(
         scopes=validated_scopes,
         state=SecretStr(state),
         code_verifier=SecretStr(verifier),
-        session_key=session_key,
     )
 
 
@@ -216,17 +209,8 @@ class DirectSignInStart(ProtocolModel):
     requested_scopes: tuple[str, ...]
 
 
-class DirectSignInResult(ProtocolModel):
-    """Signed-in Session plus any scopes the company did not grant.
-
-    The Account Token (the response's `refresh_token`) never stays in `token`:
-    it is moved into `pap.tokenStore` behind `account_token_reference` (§4.8).
-    """
-
-    token: SessionToken
-    granted_scopes: tuple[str, ...]
-    missing_scopes: tuple[str, ...]
-    account_token_reference: str | None = None
+class DirectSignInResult(SignInResult):
+    """A completed Direct Sign-In: the access token, and the refresh token's reference."""
 
 
 @dataclass(frozen=True)
@@ -288,20 +272,14 @@ class DirectSignInClient:
         redirect_uri: str,
         scopes: Iterable[str],
         tenant_id: str,
-        session_key: str,
         lifetime_seconds: int = 600,
     ) -> DirectSignInStart:
-        """Store one-use state, then open the authorization URL for the user.
-
-        `session_key` names the Session the sign-in is for: the code is bound to it.
-        """
+        """Store one-use state, then open the authorization URL for the user (§4.2)."""
 
         if not 0 < lifetime_seconds <= 900:
             raise ValueError("Direct Sign-In state lifetime must be between 1 and 900 seconds")
         if not tenant_id or len(tenant_id) > 256:
             raise ValueError("tenant_id must contain between 1 and 256 characters")
-        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", session_key):
-            raise ValueError("session_key must be a JWK SHA-256 thumbprint")
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
         random_source = cast(
             RandomSource,
@@ -325,7 +303,6 @@ class DirectSignInClient:
             client_id=client_id,
             redirect_uri=redirect_uri,
             scopes=scopes,
-            session_key=session_key,
             random_bytes=random_source.bytes,
         )
         expires_at = clock.now() + timedelta(seconds=lifetime_seconds)
@@ -384,13 +361,10 @@ class DirectSignInClient:
             "redirect_uri": request.redirect_uri,
             "code_verifier": request.code_verifier.get_secret_value(),
         }
-        # The proof is signed with the key the code is bound to, the Session's (§4.5).
         response = await self.sessions.token_request(
             client_id=request.client_id,
             issuer=request.issuer,
             token_endpoint=pending.token_endpoint,
-            tenant_id=pending.tenant_id,
-            session_key=request.session_key,
             form=lambda: form,
             error=AuthorizationError,
         )
@@ -401,37 +375,7 @@ class DirectSignInClient:
         response: TokenResponse,
         pending: _PendingDirectSignIn,
     ) -> DirectSignInResult:
-        requested = pending.request.scopes
-        if response.token_type != "DPoP":  # noqa: S105 - token type
-            raise AuthorizationError(
-                "invalid_token_response", "Direct Sign-In must return a DPoP Session Token"
-            )
-        try:
-            token = SessionToken.from_response(
-                response,
-                session_key=pending.request.session_key,
-                signed_in=True,
-                requested_scopes=requested,
-            )
-        except ProtocolValidationError as exc:
-            raise AuthorizationError("invalid_token_response", exc.message) from exc
-        granted = token.scopes
-        if any(scope not in requested for scope in granted):
-            raise AuthorizationError(
-                "scope_escalation", "Company returned a scope that was not requested"
-            )
-        account_reference: str | None = None
-        if token.refresh_token is not None:
-            # The Account Token is a secret (§4.8): behind an opaque reference, never returned.
-            random_source = cast(
-                RandomSource, first_contribution(self.reactor, RANDOM_SOURCES, "random source")
-            )
-            account_reference = _opaque_id("account", random_source.bytes)
-            store = cast(TokenStore, first_contribution(self.reactor, TOKEN_STORES, "token store"))
-            await store.put(account_reference, token.refresh_token)
-        return DirectSignInResult(
-            token=token.model_copy(update={"refresh_token": None}),
-            granted_scopes=granted,
-            missing_scopes=tuple(scope for scope in requested if scope not in granted),
-            account_token_reference=account_reference,
+        result = await finish_sign_in(
+            self.reactor, response, pending.request.scopes, error=AuthorizationError
         )
+        return DirectSignInResult(**dict(result))

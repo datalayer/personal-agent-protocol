@@ -18,7 +18,7 @@ MAX_BODY_BYTES = 1 << 20
 
 #: Headers a request carries at most once: a second is refused (`400`).
 #: One credential per request: a repeated one is never merged or picked from (RFC 6750 §2).
-#: A repeated `DPoP` header is joined, so its proof fails as `invalid_dpop_proof` (§4.3).
+#: A repeated `Poppy-Session` header is joined, so it fails as `invalid_session` (§5.3).
 _SINGLE_HEADERS = ("authorization",)
 
 Scope = MutableMapping[str, Any]
@@ -48,12 +48,12 @@ def _encoded(headers: Mapping[str, str]) -> list[tuple[bytes, bytes]]:
 
 
 def _headers(raw: list[tuple[bytes, bytes]]) -> dict[str, str]:
-    """Lower-case names; a repeated `DPoP` header is joined, so its proof fails (§4.3)."""
+    """Lower-case names; a repeated `Poppy-Session` header is joined, so it fails (§5.3)."""
 
     headers: dict[str, str] = {}
     for raw_name, raw_value in raw:
         name, value = raw_name.decode().lower(), raw_value.decode()
-        joined = name == "dpop" and name in headers
+        joined = name == "poppy-session" and name in headers
         headers[name] = f"{headers[name]}, {value}" if joined else value
     return headers
 
@@ -62,7 +62,7 @@ def company_app(service: CompanyService) -> Callable[[Scope, Receive, Send], Awa
     """An ASGI application answering at the company's own HTTPS origin.
 
     The request URL is rebuilt on `service.config.base`, the origin the
-    company publishes, so DPoP `htu` checks compare against what the
+    company publishes, so Session JWT `htu` checks compare against what the
     personal agent signed whatever proxy or test transport is in front.
     """
 

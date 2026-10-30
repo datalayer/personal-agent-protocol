@@ -20,12 +20,13 @@ from reactor import PluginManifest  # type: ignore[import-untyped]
 
 from personal_agent_protocol import (
     CLOCKS,
-    DPOP_PROOF_PROVIDERS,
+    SESSION_SIGNERS,
+    AccessToken,
     AgentIdentityClient,
     DiscoveryClient,
-    DpopHttpClient,
-    DpopProofRequest,
-    SessionToken,
+    PapSession,
+    SessionHttpClient,
+    SessionJwtRequest,
     TransportError,
     build_pap_reactor,
 )
@@ -54,20 +55,20 @@ async def public(_: str) -> list[str]:
 
 
 class Host:
-    """A personal agent's contributions for these tests: a clock and DPoP proofs."""
+    """A personal agent's contributions for these tests: a clock and Session JWTs."""
 
     def __init__(self, clock: MutableClock) -> None:
         self.clock = clock
-        self.proofs: list[DpopProofRequest] = []
+        self.jwts: list[SessionJwtRequest] = []
 
-    async def create(self, request: DpopProofRequest) -> SecretStr:
-        self.proofs.append(request)
-        return SecretStr(f"proof-{len(self.proofs)}")
+    async def sign(self, request: SessionJwtRequest) -> SecretStr:
+        self.jwts.append(request)
+        return SecretStr(f"jwt-{len(self.jwts)}")
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         contribute(CLOCKS, self.clock, contribution_id="test-clock")
-        contribute(DPOP_PROOF_PROVIDERS, self, contribution_id="proofs")
+        contribute(SESSION_SIGNERS, self, contribution_id="session-jwts")
 
 
 def reactor_with(http: httpx.AsyncClient, host: Host, *extra: tuple[object, object]) -> Any:
@@ -255,22 +256,22 @@ class FakeTime:
         self.now += seconds
 
 
-def session() -> SessionToken:
-    return SessionToken(
-        access_token=SecretStr("session-secret"),
-        token_type="DPoP",  # noqa: S106 - the OAuth token type
-        expires_in=300,
-        session_key="K" * 43,
-        signed_in=True,
-        scope="orders:read",
+def session() -> PapSession:
+    return PapSession(
+        sid="S" * 22,
+        sub="usr_pairwise",
+        issuer="https://shop.example",
+        client_id=CLIENT_ID,
+        tenant_id="t",
     )
 
 
-WHO = {"tenant_id": "t", "issuer": "https://shop.example"}
+def token() -> AccessToken:
+    return AccessToken(access_token=SecretStr("access-secret"), expires_in=300, scope="orders:read")
 
 
 @pytest.mark.asyncio
-async def test_safe_requests_retry_after_retry_after_with_fresh_proofs() -> None:
+async def test_safe_requests_retry_after_retry_after_with_fresh_session_jwts() -> None:
     answers = [
         httpx.Response(503, headers={"Retry-After": "2"}),
         httpx.Response(429, headers={"Retry-After": "1"}),
@@ -279,7 +280,7 @@ async def test_safe_requests_retry_after_retry_after_with_fresh_proofs() -> None
     seen: list[str] = []
 
     def company(request: httpx.Request) -> httpx.Response:
-        seen.append(request.headers["dpop"])
+        seen.append(request.headers["poppy-session"])
         return answers.pop(0)
 
     time = FakeTime()
@@ -292,11 +293,11 @@ async def test_safe_requests_retry_after_retry_after_with_fresh_proofs() -> None
             (RATE_LIMIT_BUDGETS, budget),
             (RETRY_POLICIES, RetryPolicy(base_delay=0.5, max_attempts=3)),
         )
-        response = await DpopHttpClient(reactor=reactor, http_client=http).request(
-            "GET", "https://shop.example/api/orders", token=session(), **WHO
+        response = await SessionHttpClient(reactor=reactor, http_client=http).request(
+            "GET", "https://shop.example/api/orders", session=session(), token=token()
         )
     assert response.status_code == 200
-    assert seen == ["proof-1", "proof-2", "proof-3"]  # a fresh proof for every attempt
+    assert seen == ["jwt-1", "jwt-2", "jwt-3"]  # a fresh Session JWT for every attempt
     assert len(time.slept) == 2
     assert 2.0 <= time.slept[0] <= 2.5
     assert 1.0 <= time.slept[1] <= 1.5
@@ -316,9 +317,13 @@ async def test_writes_and_long_pauses_go_back_to_the_caller_and_are_shared() -> 
     budget = SharedRateLimitBudget(sleep=time.sleep, monotonic=time.monotonic, max_wait=10)
     async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
         reactor = reactor_with(http, Host(MutableClock(NOW)), (RATE_LIMIT_BUDGETS, budget))
-        client = DpopHttpClient(reactor=reactor, http_client=http)
+        client = SessionHttpClient(reactor=reactor, http_client=http)
         refused = await client.request(
-            "POST", "https://shop.example/api/orders", token=session(), content=b"{}", **WHO
+            "POST",
+            "https://shop.example/api/orders",
+            session=session(),
+            token=token(),
+            content=b"{}",
         )
         assert refused.status_code == 429
         assert calls == 1  # a write is never retried on its own
@@ -328,7 +333,7 @@ async def test_writes_and_long_pauses_go_back_to_the_caller_and_are_shared() -> 
         # Told to wait longer than the policy's maximum: reported, not waited for.
         retry_after.append("30")
         refused = await client.request(
-            "GET", "https://shop.example/api/orders", token=session(), **WHO
+            "GET", "https://shop.example/api/orders", session=session(), token=token()
         )
         assert refused.status_code == 429
         assert calls == 2

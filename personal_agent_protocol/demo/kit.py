@@ -11,7 +11,7 @@
   SSRF policy applies unchanged. Requests are real HTTP over ASGI in one
   process; nothing leaves it.
 - `personal_agent_reactor` assembles the personal agent's Reactor host: its
-  signer, DPoP keys, clock, token and state stores, protected input, and
+  signer, delegated keys (its Session signer), clock, token and state stores, protected input, and
   standing permissions, each a contribution.
 """
 
@@ -31,7 +31,7 @@ from pydantic import SecretStr
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 
 from ..company.points import COMPANY_STORES, CompanyStore
-from ..crypto import InMemorySessionKeys, JoseDpopProofProvider, JoseSigner
+from ..crypto import DelegatedSessionSigner, InMemoryDelegatedKeys, JoseSigner
 from ..errors import BrowserSessionError, DiscoveryError
 from ..operations import STANDING_PERMISSION_STORES, InMemoryStandingPermissionStore
 from ..reactor import (
@@ -39,8 +39,8 @@ from ..reactor import (
     BROWSER_HANDOFFS,
     BROWSER_JOINS,
     CLOCKS,
-    DPOP_PROOF_PROVIDERS,
     PROTECTED_INPUTS,
+    SESSION_SIGNERS,
     SIGNERS,
     TOKEN_STORES,
     ProtectedInputRequest,
@@ -217,11 +217,11 @@ class ScriptedBrowser:
 
 
 class ControlledBrowser:
-    """The personal agent's own browser (`pap.browserJoin`), never the user's (§5).
+    """The personal agent's own browser (`pap.browserJoin`), never the user's (§6).
 
     It has its own cookie jar: it loads the join form, reads the one-time code from
-    that page alone, submits the code with the agent's proof, follows the company's
-    redirect, and remembers the page it landed on.
+    that page alone, submits the form (the code alone) once the agent authorized it,
+    follows the company's redirect, and remembers the page it landed on.
     """
 
     def __init__(self, http: httpx.AsyncClient) -> None:
@@ -238,16 +238,12 @@ class ControlledBrowser:
         self._join = (endpoint, code)
         return SecretStr(code)
 
-    async def submit_join_form(self, proof: SecretStr) -> None:
+    async def submit_join_form(self) -> None:
         if self._join is None:
             raise BrowserSessionError("invalid_join_form", "No join form was loaded")
         endpoint, code = self._join
         self._join = None
-        self.page = await self.http.post(
-            endpoint,
-            data={"code": code, "proof": proof.get_secret_value()},
-            follow_redirects=True,
-        )
+        self.page = await self.http.post(endpoint, data={"code": code}, follow_redirects=True)
 
     async def get(self, url: str) -> httpx.Response:
         self.page = await self.http.get(url, follow_redirects=True)
@@ -284,17 +280,18 @@ class PersonalAgentHost:
     )
     browser: ScriptedBrowser | None = None
     controlled_browser: ControlledBrowser | None = None
-    #: The Session Keys: the host's, so a Reactor built again keeps them (§4.3).
-    session_keys: InMemorySessionKeys = field(default_factory=InMemorySessionKeys)
+    #: The delegated keys, one per User ID: the host's, so a Reactor built again keeps them.
+    delegated_keys: InMemoryDelegatedKeys = field(default_factory=InMemoryDelegatedKeys)
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         contribute(CLOCKS, self.clock, contribution_id="demo-clock")
-        contribute(SIGNERS, self.identity.signer(), contribution_id="agent-key")
+        signer = self.identity.signer()
+        contribute(SIGNERS, signer, contribution_id="agent-key")
         contribute(
-            DPOP_PROOF_PROVIDERS,
-            JoseDpopProofProvider(self.session_keys, now=self.clock.now),
-            contribution_id="dpop-keys",
+            SESSION_SIGNERS,
+            DelegatedSessionSigner(self.delegated_keys, signer=signer, now=self.clock.now),
+            contribution_id="delegated-keys",
         )
         contribute(TOKEN_STORES, self.vault, contribution_id="vault")
         contribute(AUTHORIZATION_STATE_STORES, self.vault, contribution_id="vault")

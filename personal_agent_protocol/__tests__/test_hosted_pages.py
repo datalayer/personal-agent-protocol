@@ -60,7 +60,7 @@ def test_hosted_page_templates_are_checked() -> None:
     with pytest.raises(ValueError, match="HTTPS"):
         CompanyConfig(**base, device_page="http://pap.shop.example/device")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="company's domain"):
-        # A device page off the company's domains is a link personal agents refuse (§4.6).
+        # A device page off the company's domains is a link personal agents refuse (§4.3).
         CompanyConfig(**base, device_page="https://datalayer.ai/pap/device")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="HTTPS"):
         CompanyConfig(**base, consent_page="https://x.example/c?r={request_id}#frag")  # type: ignore[arg-type]
@@ -69,7 +69,7 @@ def test_hosted_page_templates_are_checked() -> None:
 @pytest.mark.asyncio
 async def test_device_sign_in_points_at_the_hosted_device_page() -> None:
     world, _ = hosted_world(device_page=DEVICE_PAGE)
-    session = await world.signed_out_session()
+    await world.signed_out_session()
     metadata = world.company.oauth_metadata
     assert metadata is not None and metadata.device_authorization_endpoint is not None
     started = await DeviceSignInClient(reactor=world.reactor, http_client=world.http).begin(
@@ -79,7 +79,6 @@ async def test_device_sign_in_points_at_the_hosted_device_page() -> None:
         client_id=world.atlas.client_id,
         scopes=("orders:read",),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=world.company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -123,7 +122,7 @@ async def test_authorize_redirects_to_the_hosted_consent_page_which_reads_the_re
     # The user allows on the hosted page; the sign-in completes as before.
     callback = await world.shop.approve_authorization(request_id, account_id="acct_ada")
     result = await client.complete(callback)
-    assert result.token.signed_in is True
+    assert result.token.scopes == ("orders:read", "orders:write")
     with pytest.raises(KeyError):
         await world.shop.authorization_request(request_id)
     with pytest.raises(KeyError):

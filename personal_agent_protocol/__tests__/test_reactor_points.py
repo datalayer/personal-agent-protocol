@@ -27,10 +27,10 @@ from reactor.contributions import ContributionPoint  # type: ignore[import-untyp
 import personal_agent_protocol
 import personal_agent_protocol.company as company
 from personal_agent_protocol import (
-    DPOP_PROOF_PROVIDERS,
     PAIRWISE_USER_ID_STORES,
-    DpopHttpClient,
-    SessionToken,
+    SESSION_SIGNERS,
+    PapSession,
+    SessionHttpClient,
     SqlitePairwiseUserIdStore,
     build_pap_reactor,
     resolve_pairwise_user_id,
@@ -193,7 +193,7 @@ def test_each_point_follows_its_plugins_lifecycle(entry: dict[str, Any]) -> None
 
 def test_the_tenant_scoped_points_are_the_inventorys() -> None:
     scoped = {entry["id"] for entry in POINTS if entry["tenant"] is not None}
-    assert scoped == {PAIRWISE_USER_ID_STORES.id, DPOP_PROOF_PROVIDERS.id}
+    assert scoped == {PAIRWISE_USER_ID_STORES.id, SESSION_SIGNERS.id}
 
 
 @pytest.mark.asyncio
@@ -232,18 +232,18 @@ async def test_pairwise_ids_are_resolved_per_tenant_and_never_cross(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_each_dpop_proof_is_asked_for_the_requests_own_tenant() -> None:
+async def test_each_session_jwt_is_asked_for_the_sessions_own_tenant() -> None:
     asked: list[tuple[str, str]] = []
 
-    class Proofs:
-        async def create(self, request: Any) -> SecretStr:
-            asked.append((request.tenant_id, request.session_key))
-            return SecretStr(f"proof-for-{request.tenant_id}")
+    class Jwts:
+        async def sign(self, request: Any) -> SecretStr:
+            asked.append((request.tenant_id, request.sub))
+            return SecretStr(f"jwt-for-{request.tenant_id}")
 
     seen: list[str] = []
 
     def answer(request: httpx.Request) -> httpx.Response:
-        seen.append(request.headers["dpop"])
+        seen.append(request.headers["poppy-session"])
         return httpx.Response(200, json={})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
@@ -251,32 +251,29 @@ async def test_each_dpop_proof_is_asked_for_the_requests_own_tenant() -> None:
             http_client=http,
             plugins=[
                 (
-                    PluginManifest(name="proofs", version="1"),
-                    _Contributor(DPOP_PROOF_PROVIDERS, Proofs(), 10),
+                    PluginManifest(name="session-jwts", version="1"),
+                    _Contributor(SESSION_SIGNERS, Jwts(), 10),
                 )
             ],
         )
         try:
-            client = DpopHttpClient(reactor=platform, http_client=http)
-            token = SessionToken(
-                access_token=SecretStr("sat"),
-                token_type="DPoP",  # noqa: S106 - OAuth token type
-                expires_in=60,
-                session_key="K" * 43,
-                signed_in=False,
-            )
+            client = SessionHttpClient(reactor=platform, http_client=http)
             for tenant in ("tenant-one", "tenant-two"):
                 await client.request(
                     "GET",
                     "https://shop.example/api/orders",
-                    token=token,
-                    tenant_id=tenant,
-                    issuer="https://shop.example",
+                    session=PapSession(
+                        sid="S" * 22,
+                        sub="usr_pairwise",
+                        issuer="https://shop.example",
+                        client_id="https://agent.example/agent.json",
+                        tenant_id=tenant,
+                    ),
                 )
         finally:
             platform.stop()
-    assert asked == [("tenant-one", "K" * 43), ("tenant-two", "K" * 43)]
-    assert seen == ["proof-for-tenant-one", "proof-for-tenant-two"]
+    assert asked == [("tenant-one", "usr_pairwise"), ("tenant-two", "usr_pairwise")]
+    assert seen == ["jwt-for-tenant-one", "jwt-for-tenant-two"]
 
 
 def test_the_docs_list_every_point() -> None:

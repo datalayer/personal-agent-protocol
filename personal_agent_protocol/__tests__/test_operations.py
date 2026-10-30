@@ -18,13 +18,14 @@ from reactor import PluginManifest
 
 from personal_agent_protocol import (
     CLOCKS,
-    DPOP_PROOF_PROVIDERS,
+    SESSION_SIGNERS,
+    AccessToken,
     ClientMetadata,
     DiscoveryDocument,
-    DpopHttpClient,
-    DpopProofRequest,
     Operation,
-    SessionToken,
+    PapSession,
+    SessionHttpClient,
+    SessionJwtRequest,
     build_pap_reactor,
 )
 from personal_agent_protocol.operations import (
@@ -41,7 +42,6 @@ from personal_agent_protocol.operations import (
 FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
 ENDPOINT = "https://api.shop.example/poppy/operations"
 NOW = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
-WHO = {"tenant_id": "tenant", "issuer": "https://auth.shop.example"}
 
 
 def proposed(**changes: object) -> Operation:
@@ -63,9 +63,9 @@ def confirmed(operation: Operation, approved_by: str = "user") -> dict[str, obje
     }
 
 
-class Proofs:
-    async def create(self, request: DpopProofRequest) -> SecretStr:
-        return SecretStr("proof")
+class SessionJwts:
+    async def sign(self, request: SessionJwtRequest) -> SecretStr:
+        return SecretStr("session-jwt")
 
 
 class Clock:
@@ -79,27 +79,31 @@ class Host:
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
-        contribute(DPOP_PROOF_PROVIDERS, Proofs(), contribution_id="proofs")
+        contribute(SESSION_SIGNERS, SessionJwts(), contribution_id="session-jwts")
         contribute(CLOCKS, Clock(), contribution_id="fixed", order=10)
         if self.store is not None:
             contribute(STANDING_PERMISSION_STORES, self.store, contribution_id="memory")
 
 
-def token() -> SessionToken:
-    return SessionToken(
-        access_token=SecretStr("s"),
-        token_type="DPoP",  # noqa: S106 - OAuth token type
-        expires_in=300,
-        session_key="K" * 43,
-        signed_in=True,
+def session() -> PapSession:
+    return PapSession(
+        sid="S" * 22,
+        sub="usr_1",
+        issuer="https://auth.shop.example",
+        client_id="https://agent.example/agent.json",
+        tenant_id="tenant",
     )
+
+
+def token() -> AccessToken:
+    return AccessToken(access_token=SecretStr("s"), expires_in=300, scope="orders:write")
 
 
 def client_for(handler, store: InMemoryStandingPermissionStore | None = None):  # type: ignore[no-untyped-def]
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     reactor, _ = build_pap_reactor(http_client=http)
     reactor.register_plugin(PluginManifest(name="host", version="1"), Host(store))
-    return OperationsClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+    return OperationsClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
 
 
 def permission(**changes: object) -> StandingPermission:
@@ -152,7 +156,7 @@ async def test_the_user_approves_one_revision_and_it_is_confirmed_once() -> None
         return httpx.Response(200, json=confirmed(operation))
 
     outcome = await client_for(company).confirm(
-        ENDPOINT, operation, approval=approve(operation), token=token(), **WHO
+        ENDPOINT, operation, approval=approve(operation), session=session(), token=token()
     )
     assert bodies == [{"revision": 1, "approved_by": "user"}]
     assert outcome.status == "confirmed"
@@ -165,7 +169,7 @@ async def test_an_approval_of_another_revision_is_refused_locally() -> None:
     second = proposed(revision=2, summary="Exchange the jacket for USD 90.00 more.")
     with pytest.raises(OperationError) as raised:
         await client_for(lambda _: httpx.Response(500)).confirm(
-            ENDPOINT, second, approval=approve(first), token=token(), **WHO
+            ENDPOINT, second, approval=approve(first), session=session(), token=token()
         )
     assert raised.value.code == "approval_mismatch"
 
@@ -182,7 +186,7 @@ async def test_terms_changed_returns_the_new_revision_and_what_changed() -> None
         lambda _: httpx.Response(
             409, json={"error": "terms_changed", "operation": newer.model_dump(mode="json")}
         )
-    ).confirm(ENDPOINT, operation, approval=approve(operation), token=token(), **WHO)
+    ).confirm(ENDPOINT, operation, approval=approve(operation), session=session(), token=token())
     assert outcome.status == "terms_changed"
     assert outcome.operation.revision == 2  # type: ignore[union-attr]
     assert outcome.changed == ("price_difference.amount",)
@@ -194,7 +198,7 @@ async def test_a_standing_permission_covers_every_term_and_spends_one_use() -> N
     store = InMemoryStandingPermissionStore((permission(),))
     outcome = await client_for(
         lambda _: httpx.Response(200, json=confirmed(operation, "standing_permission")), store
-    ).confirm(ENDPOINT, operation, standing=STANDING, token=token(), **WHO)
+    ).confirm(ENDPOINT, operation, standing=STANDING, session=session(), token=token())
     assert outcome.status == "confirmed"
     assert store.permissions["perm_exchanges"].uses_remaining == 0
 
@@ -235,7 +239,7 @@ async def test_a_standing_permission_that_does_not_cover_it_asks_the_user(
     store = InMemoryStandingPermissionStore((permission(**permission_changes),))
     with pytest.raises(OperationError) as raised:
         await client_for(lambda _: httpx.Response(500), store).confirm(
-            ENDPOINT, operation, standing=STANDING, token=token(), **WHO
+            ENDPOINT, operation, standing=STANDING, session=session(), token=token()
         )
     assert raised.value.code in {"no_standing_permission", "user_approval_required"}
 
@@ -246,7 +250,7 @@ async def test_a_refused_confirmation_gives_the_use_back() -> None:
     store = InMemoryStandingPermissionStore((permission(),))
     outcome = await client_for(
         lambda _: httpx.Response(403, json={"error": "user_approval_required"}), store
-    ).confirm(ENDPOINT, operation, standing=STANDING, token=token(), **WHO)
+    ).confirm(ENDPOINT, operation, standing=STANDING, session=session(), token=token())
     assert outcome.status == "approval_required"
     assert store.permissions["perm_exchanges"].uses_remaining == 1
 
@@ -265,7 +269,7 @@ async def test_a_lost_answer_is_read_back_by_the_same_id_never_assumed_failed() 
         )
 
     outcome = await client_for(company).confirm(
-        ENDPOINT, operation, approval=approve(operation), token=token(), **WHO
+        ENDPOINT, operation, approval=approve(operation), session=session(), token=token()
     )
     assert calls == ["POST /poppy/operations/exc_5Rt2/confirm", "GET /poppy/operations/exc_5Rt2"]
     assert outcome.status == "confirmed" and outcome.operation.state == "in_progress"  # type: ignore[union-attr]
@@ -288,9 +292,9 @@ async def test_cancel_and_extension_required() -> None:
         return httpx.Response(403, json={"error": "extension_required", "extension": "operations"})
 
     client = client_for(company)
-    cancelled = await client.cancel(ENDPOINT, "exc_5Rt2", token=token(), **WHO)
+    cancelled = await client.cancel(ENDPOINT, "exc_5Rt2", session=session(), token=token())
     assert cancelled.state == "cancelled" and cancelled.result.summary == "Nothing was changed."  # type: ignore[union-attr]
     with pytest.raises(OperationError) as raised:
-        await client.read(ENDPOINT, "exc_5Rt2", token=token(), **WHO)
+        await client.read(ENDPOINT, "exc_5Rt2", session=session(), token=token())
     assert raised.value.code == "extension_required"
     assert raised.value.details == {"extension": "operations"}

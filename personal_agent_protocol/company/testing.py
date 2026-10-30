@@ -41,16 +41,15 @@ from typing import Any
 from ..models import Operation, OperationConfirmation, OperationResult
 from .points import ReplayCache
 from .store import (
+    ACCESS_TOKEN,
     ACCOUNT_AGENT,
     ACCOUNT_FAMILY,
-    ACCOUNT_TOKEN,
     AUTHORIZATION,
     BROWSER_COOKIE,
     CLIENT,
     CODE,
     CONVERSATION,
     DEVICE,
-    DPOP_NONCE,
     FEEDBACK,
     IDEMPOTENCY,
     JOIN_CODE,
@@ -60,9 +59,9 @@ from .store import (
     PROPOSAL,
     RECORD_KINDS,
     RECORD_TYPES,
+    REFRESH_TOKEN,
     REPLAY,
     SESSION,
-    SESSION_TOKEN,
     SIGN_IN_ATTEMPTS,
     USER_CODE,
     AccountAgent,
@@ -70,9 +69,8 @@ from .store import (
     AccountGrant,
     CompanyStore,
     IdempotencyRecord,
+    IssuedAccessToken,
     IssuedCode,
-    IssuedNonce,
-    IssuedSession,
     JoinCode,
     KnownClient,
     MessageReceipt,
@@ -81,7 +79,6 @@ from .store import (
     PendingDevice,
     PendingMediated,
     ReplayMark,
-    SessionPointer,
     SignInAttempts,
     StoredConversation,
     StoredEvent,
@@ -89,6 +86,7 @@ from .store import (
     StoredOperation,
     StoredSession,
     UserCode,
+    WebSession,
 )
 
 _CONCURRENCY = 16
@@ -107,17 +105,23 @@ def record_samples(now: datetime) -> dict[str, Any]:
     """One record of every kind the company keeps, each field set, for round trips."""
 
     later = now + timedelta(minutes=5)
-    signed_in = IssuedSession(
-        session_key="ses_1",
+    access = IssuedAccessToken(
         client_id="https://atlas.example",
-        pairwise_user_id="usr_1",
-        key_thumbprint="thumb",
-        expires_at=later,
         account_id="acct_1",
         scopes=("orders:read", "orders:write"),
-        account_token="digest_1",  # noqa: S106 - a digest in a sample record
-        token_type="Bearer",  # noqa: S106 - an OAuth token type
+        expires_at=later,
+        family="fam_1",
         resource="https://shop.example/mcp",
+    )
+    web = WebSession(
+        client_id="https://atlas.example",
+        sid="Yx2b7Qd_Kp8mR3vT1nWc4A",
+        pairwise_user_id="usr_1",
+        expires_at=later,
+        agent_id="agt_1",
+        account_id="acct_1",
+        scopes=("orders:read",),
+        family="fam_1",
     )
     operation = Operation(
         operation_id="op_1",
@@ -133,26 +137,24 @@ def record_samples(now: datetime) -> dict[str, Any]:
     )
     return {
         SESSION: StoredSession(
-            session_key="ses_1",
             client_id="https://atlas.example",
+            sid="Yx2b7Qd_Kp8mR3vT1nWc4A",
             pairwise_user_id="usr_1",
-            tokens={"tok_1": signed_in, "tok_2": IssuedSession("ses_1", "c", "u", "k", now)},
-            latest="tok_1",
-            account_id="acct_1",
+            ends_at=later,
+            agent_id="agt_1",
+            ended=True,
         ),
-        SESSION_TOKEN: SessionPointer("ses_1"),
-        ACCOUNT_TOKEN: AccountGrant("acct_1", "c", "u", ("a", "b"), later, True, "fam_1"),
-        ACCOUNT_FAMILY: AccountFamily("c", "acct_1", ("t1", "t2"), ("ses_1",), True),
+        ACCESS_TOKEN: access,
+        REFRESH_TOKEN: AccountGrant("acct_1", "c", ("a", "b"), later, True, "fam_1", now),
+        ACCOUNT_FAMILY: AccountFamily("c", "acct_1", ("t1", "t2"), ("a1",), True),
         ACCOUNT_AGENT: AccountAgent(("fam_1", "fam_2")),
         CLIENT: KnownClient(("operations",)),
         DEVICE: PendingDevice("c", ("a",), "ABCD-EFGH", later, 10, now, "acct_1", ("a",), True),
         USER_CODE: UserCode("dev_digest"),
         AUTHORIZATION: PendingAuthorization(
-            "c", "https://atlas.example/cb", ("a",), "st", "chal", "jkt", later, "Atlas", "bind"
+            "c", "https://atlas.example/cb", ("a",), "st", "chal", later, "Atlas", "bind"
         ),
-        CODE: IssuedCode(
-            "c", "https://atlas.example/cb", "chal", "jkt", ("a",), "acct_1", ("a",), later
-        ),
+        CODE: IssuedCode("c", "https://atlas.example/cb", "chal", ("a",), "acct_1", ("a",), later),
         MEDIATED: PendingMediated(
             "ses_1", "acct_1", ("a",), "ref", later, ("k1", "k2"), 2, "failed"
         ),
@@ -172,14 +174,13 @@ def record_samples(now: datetime) -> dict[str, Any]:
             operation, "exchange", ("c", "u"), "acct_1", ("orders:write",), True
         ),
         PROPOSAL: OperationProposal("op_1"),
-        BROWSER_COOKIE: SessionPointer("ses_1"),
-        JOIN_CODE: JoinCode("browser_digest"),
+        BROWSER_COOKIE: web,
+        JOIN_CODE: JoinCode("browser_digest", web),
         REPLAY: ReplayMark(),
         SIGN_IN_ATTEMPTS: SignInAttempts(3, later),
         FEEDBACK: StoredFeedback(
             "fb_1", "Pay with a gift card", "No gift card field.", "c", "u", now
         ),
-        DPOP_NONCE: IssuedNonce(),
         IDEMPOTENCY: IdempotencyRecord("digest", 202, {"operation": {"operation_id": "op_1"}}),
     }
 

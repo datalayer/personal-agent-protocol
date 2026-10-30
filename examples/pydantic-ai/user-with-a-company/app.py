@@ -5,7 +5,7 @@
 
 Ada asks her personal agent, Atlas, to exchange a jacket at Manzanita Outfitters:
 discovery, a signed-out Session, sign-in mid-conversation, an exact approval, a
-confirmed exchange, and finally narrowing and revoking the Account Token.
+confirmed exchange, and finally narrowing and revoking the refresh token.
 """
 
 from __future__ import annotations
@@ -23,12 +23,12 @@ from personal_agent_protocol import (
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
     SessionClient,
+    SessionHttpClient,
     generate_message_id,
 )
-from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
+from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
@@ -46,7 +46,7 @@ agent = Agent(
     instructions=(
         "Use run_manzanita_journey to show how Ada's personal agent exchanges a jacket "
         "with Manzanita over PAP. Say what Ada approved and what the company did. Never "
-        "expose tokens, codes, or proofs."
+        "expose tokens, codes, or Session JWTs."
     ),
 )
 
@@ -65,7 +65,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
     reactor = personal_agent_reactor(
         PersonalAgentHost(atlas, clock), network=network, http_client=http
     )
-    transport = DpopHttpClient(reactor=reactor, http_client=http)
+    transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
 
     def say(text: str) -> Message:
@@ -76,22 +76,19 @@ async def run_manzanita_journey() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    # Resource calls name the tenant and issuer; the Session Key in the proof names the Session.
-    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
     name = company.document.organization.name
-    steps.append(f"discovered {name}; signed-out Session under a new Session Key")
+    steps.append(f"discovered {name}; signed-out Session, its ID chosen here")
 
     # A question only a signed-in user can have answered.
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     page = await conversations.start(
-        endpoint, say("Where is my jacket order?"), token=session, wait=0, **who
+        endpoint, say("Where is my jacket order?"), session=session, wait=0
     )
     asked = [e for e in page.events if e.type != "state"][-1]
     conversation_id = page.conversation_id
@@ -106,7 +103,6 @@ async def run_manzanita_journey() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -115,7 +111,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
     clock.advance(started.poll_interval)
     done = await device.poll(started.reference)
     signed_in = done.token
-    if not (signed_in is not None and done.account_token_reference is not None):
+    if not (signed_in is not None and done.refresh_token_reference is not None):
         raise RuntimeError("the example world is incomplete")
     steps.append(f"same Session signed in with {', '.join(done.granted_scopes)}")
 
@@ -124,10 +120,10 @@ async def run_manzanita_journey() -> dict[str, Any]:
         endpoint,
         page.conversation_id,
         say("Exchange it for something warmer"),
+        session=session,
         token=signed_in,
         cursor=page.cursor,
         wait=0,
-        **who,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     if not (proposal is not None):
@@ -142,32 +138,30 @@ async def run_manzanita_journey() -> dict[str, Any]:
         raise RuntimeError("the example world is incomplete")
     operations = OperationsClient(transport=transport)
     outcome = await operations.confirm(
-        operations_url, proposal, approval=approve(proposal), token=signed_in, **who
+        operations_url, proposal, approval=approve(proposal), session=session, token=signed_in
     )
     again = await operations.confirm(
-        operations_url, proposal, approval=approve(proposal), token=signed_in, **who
+        operations_url, proposal, approval=approve(proposal), session=session, token=signed_in
     )
     result = outcome.operation.result if outcome.operation else None
     steps.append(f"Ada approved; Manzanita: {result.summary if result else 'pending'}")
 
-    # The Account Token: narrowed for read-only follow-up, then revoked.
-    accounts = AccountTokenClient(reactor=reactor, http_client=http)
-    context = AccountTokenContext(
+    # The refresh token: narrowed for read-only follow-up, then revoked.
+    accounts = RefreshTokenClient(reactor=reactor, http_client=http)
+    context = RefreshTokenContext(
         token_endpoint=metadata.token_endpoint,
         revocation_endpoint=metadata.revocation_endpoint,
         issuer=metadata.issuer,
         client_id=atlas.client_id,
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
     )
     narrowed = await accounts.refresh(
-        done.account_token_reference,
+        done.refresh_token_reference,
         context=context,
-        session_key=session.session_key,
         scopes=("orders:read",),
     )
-    revoked = await accounts.revoke(done.account_token_reference, context=context)
-    steps.append("Ada signed out: Account Token revoked")
+    revoked = await accounts.revoke(done.refresh_token_reference, context=context)
+    steps.append("Ada signed out: refresh token revoked")
     await http.aclose()
 
     return {
@@ -182,7 +176,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
         "exchanges_performed": len(shop_plugin.executor.performed),
         "narrowed_to": narrowed.granted_scopes,
         "revoked": revoked.revoked,
-        "tokens_codes_and_proofs_withheld": True,
+        "tokens_codes_and_session_jwts_withheld": True,
     }
 
 

@@ -21,10 +21,10 @@ from .errors import ConversationError, ProtocolValidationError
 from .json import loads_strict
 from .models import ConversationEvent, ConversationEventPage, Message, ProtocolModel
 from .reactor import RANDOM_SOURCES, RandomSource, first_contribution
-from .refusals import challenge_parameters, refusal_details
-from .sessions import SessionToken
+from .refusals import refusal_code, refusal_details
+from .sessions import AccessToken, PapSession
 from .telemetry import by_endpoint, conversation_result, traced
-from .transport import DpopHttpClient
+from .transport import SessionHttpClient
 
 
 class ConversationReceipt(ProtocolModel):
@@ -78,7 +78,9 @@ def generate_message_id(reactor: PluginPlatform) -> str:
 class ConversationClient:
     """Start and continue PAP conversations through a proof-bound transport."""
 
-    def __init__(self, *, transport: DpopHttpClient, max_response_bytes: int = 1024 * 1024) -> None:
+    def __init__(
+        self, *, transport: SessionHttpClient, max_response_bytes: int = 1024 * 1024
+    ) -> None:
         if max_response_bytes <= 0:
             raise ValueError("max_response_bytes must be positive")
         self.transport = transport
@@ -90,9 +92,8 @@ class ConversationClient:
         endpoint: str,
         message: Message,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
         parent_conversation_id: str | None = None,
         cursor: str | None = None,
         wait: int | None = None,
@@ -107,9 +108,8 @@ class ConversationClient:
             endpoint,
             body,
             expected_status=201,
+            session=session,
             token=token,
-            tenant_id=tenant_id,
-            issuer=issuer,
             cursor=cursor,
             wait=wait,
         )
@@ -121,9 +121,8 @@ class ConversationClient:
         conversation_id: str,
         message: Message,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
         cursor: str | None = None,
         wait: int | None = None,
     ) -> ConversationResponse:
@@ -135,9 +134,8 @@ class ConversationClient:
             url,
             {"message": self._outgoing_message(message)},
             expected_status=202,
+            session=session,
             token=token,
-            tenant_id=tenant_id,
-            issuer=issuer,
             cursor=cursor,
             wait=wait,
         )
@@ -148,9 +146,8 @@ class ConversationClient:
         endpoint: str,
         conversation_id: str,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
         cursor: str | None = None,
         wait: int | None = None,
     ) -> ConversationEventPage:
@@ -165,9 +162,8 @@ class ConversationClient:
         response = await self.transport.request(
             "GET",
             target,
+            session=session,
             token=token,
-            tenant_id=tenant_id,
-            issuer=issuer,
             headers={"Accept": "application/json"},
         )
         page = self._parse_page(response, expected_status=200)
@@ -183,9 +179,8 @@ class ConversationClient:
         endpoint: str,
         conversation_id: str,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
         cursor: str | None = None,
         wait: int = 30,
         on_cursor_expired: CursorExpiredHandler | None = None,
@@ -210,9 +205,8 @@ class ConversationClient:
                 page = await self.read_events(
                     endpoint,
                     conversation_id,
+                    session=session,
                     token=token,
-                    tenant_id=tenant_id,
-                    issuer=issuer,
                     cursor=current_cursor,
                     wait=0 if drain_backlog else wait,
                 )
@@ -251,9 +245,8 @@ class ConversationClient:
         parent_conversation_id: str,
         message: Message,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
     ) -> ConversationResponse:
         """Open a Direct Conversation under an open parent (§7.10).
 
@@ -266,9 +259,8 @@ class ConversationClient:
         return await self.start(
             endpoint,
             message,
+            session=session,
             token=token,
-            tenant_id=tenant_id,
-            issuer=issuer,
             parent_conversation_id=parent_conversation_id,
         )
 
@@ -278,15 +270,12 @@ class ConversationClient:
         endpoint: str,
         conversation_id: str,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
     ) -> ConversationReceipt:
         """Ask for a person at the company (§7.9): `queued` while one is found."""
 
-        return await self._control(
-            endpoint, conversation_id, "handoff", 202, token, tenant_id, issuer
-        )
+        return await self._control(endpoint, conversation_id, "handoff", 202, session, token)
 
     @traced("pap.conversation.close", before=by_endpoint, after=conversation_result)
     async def close(
@@ -294,24 +283,20 @@ class ConversationClient:
         endpoint: str,
         conversation_id: str,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
     ) -> ConversationReceipt:
         """Close the conversation (§7.12); what it started is not cancelled."""
 
-        return await self._control(
-            endpoint, conversation_id, "close", 200, token, tenant_id, issuer
-        )
+        return await self._control(endpoint, conversation_id, "close", 200, session, token)
 
     async def stream(  # noqa: C901 - one SSE reader with its reconnect rules
         self,
         endpoint: str,
         conversation_id: str,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
         last_event_id: str | None = None,
         max_reconnects: int = 5,
         max_seen_event_ids: int = 10_000,
@@ -339,9 +324,8 @@ class ConversationClient:
             async with self.transport.stream(
                 "GET",
                 url,
+                session=session,
                 token=token,
-                tenant_id=tenant_id,
-                issuer=issuer,
                 headers=headers,
             ) as response:
                 content_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
@@ -411,17 +395,15 @@ class ConversationClient:
         conversation_id: str,
         action: str,
         expected_status: int,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
     ) -> ConversationReceipt:
         self._identifier(conversation_id, "conversation ID")
         response = await self.transport.request(
             "POST",
             f"{endpoint.rstrip('/')}/{conversation_id}/{action}",
+            session=session,
             token=token,
-            tenant_id=tenant_id,
-            issuer=issuer,
             headers={"Content-Type": "application/json"},
             content=b"{}",
         )
@@ -437,10 +419,8 @@ class ConversationClient:
 
     @staticmethod
     def _rejected(response: httpx.Response, payload: object) -> ConversationError:
-        code = payload.get("error") if isinstance(payload, dict) else None
-        if not isinstance(code, str):
-            # A token error may come only in WWW-Authenticate (§6).
-            code = challenge_parameters(response.headers.get("www-authenticate", "")).get("error")
+        # In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
+        code = refusal_code(response, payload, "conversation_request_failed")
         # `extension` of `extension_required` (§3.3), `scope`, and on a 429 `retry_after`,
         # never retried here: the caller waits at least this long (§4.3).
         details = refusal_details(response, payload)
@@ -461,9 +441,8 @@ class ConversationClient:
         body: dict[str, object],
         *,
         expected_status: int,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
         cursor: str | None,
         wait: int | None,
     ) -> ConversationResponse:
@@ -471,9 +450,8 @@ class ConversationClient:
         response = await self.transport.request(
             "POST",
             target,
+            session=session,
             token=token,
-            tenant_id=tenant_id,
-            issuer=issuer,
             headers={"Content-Type": "application/json"},
             content=json.dumps(body, separators=(",", ":")).encode(),
         )
@@ -493,6 +471,9 @@ class ConversationClient:
         content = response.content
         if len(content) > self.max_response_bytes:
             raise ConversationError("response_too_large", "conversation response exceeded limit")
+        if not content and not response.is_success:
+            # A challenge alone: its error is in WWW-Authenticate (§7), a 429 has no body (§5.6).
+            return None
         try:
             return loads_strict(content)
         except (UnicodeDecodeError, ValueError) as exc:

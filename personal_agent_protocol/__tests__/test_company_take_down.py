@@ -10,12 +10,12 @@ from datetime import timedelta
 
 import pytest
 
-from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
+from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.company.store import OPERATION, StoredOperation
 from personal_agent_protocol.device import DeviceSignInClient
 from personal_agent_protocol.models import OperationResult
 
-from .test_company_end_to_end import PAIRWISE, TENANT, World
+from .test_company_end_to_end import TENANT, World
 
 TAKEN_DOWN = "The company was taken down."
 
@@ -32,14 +32,13 @@ async def _signed_in(world: World):  # type: ignore[no-untyped-def]
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=world.company.document.organization,
         protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
     done = await device.poll(started.reference)
-    assert done.token is not None and done.account_token_reference is not None
+    assert done.token is not None and done.refresh_token_reference is not None
     return session, done
 
 
@@ -57,23 +56,27 @@ async def _copy(world: World, stored: StoredOperation, operation_id: str, **upda
 
 @pytest.mark.asyncio
 async def test_taking_a_company_down_settles_its_operations_and_ends_its_sign_ins() -> None:
-    """PAP_DATALAYER D-06: open operations settled as cancelled, saying so; final ones
+    """Open operations settled as cancelled, saying so; final ones
     untouched; every sign-in ended whole; nothing open after, and doing it again is nothing."""
 
     world = World(durable=True)
     session, done = await _signed_in(world)
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     page = await world.conversations.start(
-        endpoint, world.message("Where is my jacket order?"), token=done.token, wait=0, **world.who
+        endpoint,
+        world.message("Where is my jacket order?"),
+        session=session,
+        token=done.token,
+        wait=0,
     )
     page = await world.conversations.send(
         endpoint,
         page.conversation_id,
         world.message("Exchange it for something warmer"),
+        session=session,
         token=done.token,  # type: ignore[arg-type]
         cursor=page.cursor,
         wait=0,
-        **world.who,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert proposal is not None and proposal.state == "proposed"
@@ -108,21 +111,18 @@ async def test_taking_a_company_down_settles_its_operations_and_ends_its_sign_in
 
     assert await world.shop.end_sign_ins() == 1
     assert (await world.shop.open_work()).empty
-    # The personal agent's sign-in is over: its Account Token is refused.
+    # The personal agent's sign-in is over: its refresh token is refused.
     metadata = world.company.oauth_metadata
     assert metadata is not None
-    accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
-    context = AccountTokenContext(
+    accounts = RefreshTokenClient(reactor=world.reactor, http_client=world.http)
+    context = RefreshTokenContext(
         token_endpoint=metadata.token_endpoint,
         revocation_endpoint=metadata.revocation_endpoint,
         issuer=metadata.issuer,
         client_id=world.atlas.client_id,
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
     )
-    refreshed = await accounts.refresh(
-        done.account_token_reference, context=context, session_key=session.session_key
-    )
+    refreshed = await accounts.refresh(done.refresh_token_reference, context=context)
     assert refreshed.status == "signed_out"
 
     # Again: nothing left to settle or end.

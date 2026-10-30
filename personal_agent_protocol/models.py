@@ -27,20 +27,14 @@ _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
 #: The `protocol_version` values this SDK uses a document of (§3.1): before 1.0 every
 #: version can break the one before, so only its own `major.minor`.
 SUPPORTED_PROTOCOL_VERSIONS = frozenset({"0.3"})
-#: The DPoP algorithm every company accepts (§3.2): a list a company publishes includes it.
-DPOP_REQUIRED_ALGORITHM = "ES256"
 _EXTENSION_VERSION = re.compile(r"^(0|[1-9][0-9]*)$")
 #: OAuth scope syntax (RFC 6749 §3.3): one scope token.
 _SCOPE = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]+$")
-#: The grants a Company's token endpoint MUST accept (§3.2): starting and renewing Sessions,
-#: and Account Tokens.
-JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+#: The grant a Company's token endpoint MUST accept (§3.2, §4.4).
 REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - an OAuth token or grant type, not a credential
 #: The grants that say the Company offers Direct and Device Sign-In (§3.2, §4.4).
 AUTHORIZATION_CODE_GRANT = "authorization_code"
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
-#: The grant for a Bearer token at an MCP server that doesn't support DPoP (§4.3).
-TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"  # noqa: S105 - an OAuth token or grant type, not a credential
 #: `changes` values a scope hint may give (§4.4); any other is read as `irreversible`.
 SCOPE_CHANGES = ("none", "reversible", "irreversible")
 _DOMAIN = re.compile(
@@ -368,12 +362,6 @@ class OAuthServerMetadata(ProtocolModel):
 
         return DEVICE_CODE_GRANT in self.grant_types_supported
 
-    @property
-    def offers_token_exchange(self) -> bool:
-        """Whether Bearer tokens for MCP servers without DPoP can be had (§4.3)."""
-
-        return TOKEN_EXCHANGE_GRANT in self.grant_types_supported
-
     def lists_resource(self, domain: str) -> bool:
         """Whether `protected_resources` names `https://{domain}` (§3.2).
 
@@ -395,13 +383,6 @@ class OAuthServerMetadata(ProtocolModel):
     def validate_issuer(cls, value: str) -> str:
         # Compared with `auth.issuer` character for character (§3.2): never normalized.
         return _https_url(value, "issuer")
-
-    @field_validator("dpop_signing_alg_values_supported")
-    @classmethod
-    def validate_dpop_algorithms(cls, value: list[str] | None) -> list[str] | None:
-        if value is not None and DPOP_REQUIRED_ALGORITHM not in value:
-            raise ValueError("dpop_signing_alg_values_supported must include ES256")
-        return value
 
     @field_validator(
         "token_endpoint",
@@ -496,7 +477,7 @@ class JsonWebKey(ProtocolModel):
     kty: Literal["EC", "RSA"]
     kid: str | None = None
     use: Literal["sig"] | None = None
-    alg: Literal["ES256", "RS256"] | None = None
+    alg: Literal["ES256", "PS384"] | None = None
     crv: str | None = None
     x: str | None = None
     y: str | None = None
@@ -519,8 +500,9 @@ class JsonWebKey(ProtocolModel):
                 raise ValueError("P-256 signing keys may advertise only ES256")
         elif not self.n or not self.e:
             raise ValueError("RSA signing keys must include public modulus and exponent")
-        elif self.alg not in {None, "RS256"}:
-            raise ValueError("RSA signing keys may advertise only RS256")
+        elif self.alg not in {None, "PS384"}:
+            # PS384 lets a key sign blindly (§4.1, §10.7).
+            raise ValueError("RSA signing keys may advertise only PS384")
         return self
 
 

@@ -25,23 +25,22 @@ from .reactor import (
     CLOCKS,
     RANDOM_SOURCES,
     SIGNERS,
-    TOKEN_STORES,
     AuthorizationStateStore,
     Clock,
     RandomSource,
     Signer,
-    TokenStore,
     first_contribution,
     send_bounded,
 )
-from .refusals import refusal_details, refuse_redirect
+from .refusals import refusal_code, refusal_details, refuse_redirect, refused_without_body
 from .sessions import (
     JWT_CLIENT_ASSERTION,
+    AccessToken,
     SessionClient,
-    SessionToken,
     TokenResponse,
     _opaque_id,
     build_client_assertion_claims,
+    finish_sign_in,
 )
 from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
@@ -108,8 +107,8 @@ class DeviceSignInPoll(ProtocolModel):
 
     status: Literal["pending", "complete"]
     retry_at: datetime | None = None
-    token: SessionToken | None = None
-    account_token_reference: str | None = None
+    token: AccessToken | None = None
+    refresh_token_reference: str | None = None
     granted_scopes: tuple[str, ...] = ()
     missing_scopes: tuple[str, ...] = ()
 
@@ -121,7 +120,6 @@ class _PendingDeviceSignIn:
     issuer: str
     client_id: str
     tenant_id: str
-    session_key: str
     scopes: tuple[str, ...]
     expires_at: datetime
     next_poll_at: datetime
@@ -157,15 +155,13 @@ class DeviceSignInClient:
         client_id: str,
         scopes: tuple[str, ...],
         tenant_id: str,
-        session_key: str,
         organization: Organization,
         protected_resources: Sequence[str],
     ) -> DeviceSignInStart:
-        """Request a device code and retain it behind an opaque state reference.
+        """Request a device code and retain it behind an opaque state reference (§4.3).
 
-        `session_key` names the Session to sign in: the polls carry its proofs, and
-        the company binds the device code to the key of the first (§4.6).
-        `organization` is the company's, from its poppy.json, and
+        Plain OAuth: the sign-in names no Session. `organization` is the company's, from its
+        poppy.json, and
         `protected_resources` its issuer's (OAuth metadata): the verification link
         is refused (`unsafe_verification_uri`) unless its host is the issuer's or
         one of those resources', or a subdomain of either (§4.6).
@@ -178,7 +174,7 @@ class DeviceSignInClient:
         client_url = _https_url(client_id, "client ID")
         issuer_url = _https_url(issuer, "issuer")
         requested_scopes = _scopes(scopes)
-        self._validate_context(tenant_id, session_key)
+        self._validate_context(tenant_id)
         assertion = await signer.sign(
             build_client_assertion_claims(
                 client_id=client_url, issuer=issuer_url, now=now, random_bytes=random_source.bytes
@@ -206,7 +202,12 @@ class DeviceSignInClient:
                 "request_failed", "Device authorization request failed"
             ) from exc
         refuse_redirect(response, AuthorizationError)
-        payload = self._decode(response, "device authorization")
+        # A 429 has `Retry-After` and no body (§5.6).
+        payload = (
+            None
+            if refused_without_body(response)
+            else self._decode(response, "device authorization")
+        )
         if not response.is_success:
             raise self._remote_error(response, payload, "Company refused Device Sign-In")
         try:
@@ -234,7 +235,6 @@ class DeviceSignInClient:
             issuer=issuer_url,
             client_id=client_url,
             tenant_id=tenant_id,
-            session_key=session_key,
             scopes=requested_scopes,
             expires_at=expires_at,
             next_poll_at=now + timedelta(seconds=authorization.interval),
@@ -278,8 +278,6 @@ class DeviceSignInClient:
                 client_id=pending.client_id,
                 issuer=pending.issuer,
                 token_endpoint=pending.token_endpoint,
-                tenant_id=pending.tenant_id,
-                session_key=pending.session_key,
                 form=lambda: {
                     "grant_type": DEVICE_CODE_GRANT,
                     "device_code": pending.device_code.get_secret_value(),
@@ -313,43 +311,14 @@ class DeviceSignInClient:
         pending: _PendingDeviceSignIn,
         random_source: RandomSource,
     ) -> DeviceSignInPoll:
-        if response.token_type != "DPoP":  # noqa: S105 - OAuth token type, not a credential
+        if response.refresh_token is None:
             raise AuthorizationError(
-                "invalid_token_response", "Device Sign-In must return a DPoP Session Token"
+                "missing_refresh_token", "Device Sign-In did not return a refresh token"
             )
-        try:
-            token = SessionToken.from_response(
-                response,
-                session_key=pending.session_key,
-                signed_in=True,
-                requested_scopes=pending.scopes,
-            )
-        except ProtocolValidationError as exc:
-            raise AuthorizationError("invalid_token_response", exc.message) from exc
-        if any(scope not in pending.scopes for scope in token.scopes):
-            raise AuthorizationError(
-                "scope_escalation", "Company returned a scope that was not requested"
-            )
-        if token.refresh_token is None:
-            raise AuthorizationError(
-                "missing_account_token", "Device Sign-In did not return an Account Token"
-            )
-        token_reference = _opaque_id("account", random_source.bytes)
-        token_store = cast(
-            TokenStore,
-            first_contribution(self.reactor, TOKEN_STORES, "token store"),
+        result = await finish_sign_in(
+            self.reactor, response, pending.scopes, error=AuthorizationError
         )
-        await token_store.put(token_reference, token.refresh_token)
-        public_token = token.model_copy(update={"refresh_token": None})
-        return DeviceSignInPoll(
-            status="complete",
-            token=public_token,
-            account_token_reference=token_reference,
-            granted_scopes=public_token.scopes,
-            missing_scopes=tuple(
-                scope for scope in pending.scopes if scope not in public_token.scopes
-            ),
-        )
+        return DeviceSignInPoll(status="complete", **dict(result))
 
     def _proof_inputs(self) -> tuple[Clock, RandomSource, Signer]:
         return (
@@ -367,13 +336,9 @@ class DeviceSignInClient:
         )
 
     @staticmethod
-    def _validate_context(tenant_id: str, session_key: str) -> None:
-        import re
-
+    def _validate_context(tenant_id: str) -> None:
         if not tenant_id or len(tenant_id) > 256:
             raise ValueError("tenant_id must contain between 1 and 256 characters")
-        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", session_key):
-            raise ValueError("session_key must be a JWK SHA-256 thumbprint")
 
     def _decode(self, response: httpx.Response, label: str) -> object:
         if len(response.content) > self.max_response_bytes:
@@ -401,9 +366,8 @@ class DeviceSignInClient:
     def _remote_error(
         response: httpx.Response, payload: object, message: str
     ) -> AuthorizationError:
-        remote = payload.get("error") if isinstance(payload, dict) else None
         return AuthorizationError(
-            remote if isinstance(remote, str) else "http_error",
+            refusal_code(response, payload, "http_error"),
             message,
             status_code=response.status_code,
             details=refusal_details(response, payload) or None,

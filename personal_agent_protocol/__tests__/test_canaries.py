@@ -4,22 +4,22 @@
 
 """Credentials never reach logs, errors, model input, URLs, traces, or analytics (K-08, gates).
 
-The demo worlds — Manzanita (Device, Direct, and Mediated Sign-In, Account
-Tokens, conversations, operations, MCP with a Bearer token, the website),
+The demo worlds — Manzanita (Device, Direct, and Mediated Sign-In, refresh
+tokens, conversations, operations, MCP with a Bearer token, the website),
 Northwind with Ledgerly (two companies), the conformance runner's positive,
 negative, and recovery cases, and the Pydantic AI examples' tools — run with
 recognisable canaries:
 
-- every opaque value the SDK and the companies mint (Session and Account
-  Tokens, device codes, authorization codes, PKCE verifiers, assertion and
-  proof IDs) comes from a `pap.randomSource` that writes `CANARY` and a counter
+- every opaque value the SDK and the companies mint (access and refresh
+  tokens, device codes, authorization codes, PKCE verifiers, assertion and
+  Session JWT IDs) comes from a `pap.randomSource` that writes `CANARY` and a counter
   into it;
 - Ada's mediated password and one-time code are canary strings.
 
 Every credential the parties exchange is then harvested from the wire, by kind
-(Session and Bearer tokens, Account Tokens, DPoP proofs and private keys,
-client, Session, and browser assertions, authorization and device codes, PKCE
-verifiers, mediated passwords and one-time codes, website cookies), and none
+(access and refresh tokens, Session JWTs, delegations and delegated private
+keys, client assertions, authorization and device codes, PKCE verifiers,
+mediated passwords and one-time codes, website cookies), and none
 may appear in:
 
 - a log record of any logger at DEBUG, with its traceback;
@@ -86,11 +86,13 @@ ONE_TIME_CODE = "CANARY-code-5521"
 #: Values shorter than this are not searched for (a six-digit code would match anywhere).
 SHORTEST = 8
 #: The examples' tools that take arguments, and what a model would pass them.
-EXAMPLE_ARGUMENTS = {"explain_dpop_proof": ("POST", "https://manzanita.example/oauth/token")}
+EXAMPLE_ARGUMENTS = {
+    "explain_session_jwt": ("POST", "https://manzanita.example/poppy/conversations")
+}
 #: Response bodies that carry credentials by design, to the agent's code alone.
 CREDENTIAL_ENDPOINTS = ("/oauth/token", "/oauth/device")
-#: The browser join page (§5): its one-time code is read by the host's code from the
-#: agent's own browser, never by a model (§9.2). The code is harvested when submitted.
+#: The browser join page (§6): its one-time code is read by the host's code from the
+#: agent's own browser, never by a model (§10.2). The code is harvested when submitted.
 JOIN_PAGE = "/poppy/browser-session"
 
 
@@ -135,7 +137,10 @@ class Harvest:
         scheme, _, token = request.headers.get("authorization", "").partition(" ")
         if token:
             self.secret(f"{scheme} access token", token)
-        self.secret("DPoP proof", request.headers.get("dpop"))
+        session_jwt = request.headers.get("poppy-session")
+        self.secret("Session JWT", session_jwt)
+        if session_jwt is not None:
+            self.secret("delegation", jwt.get_unverified_header(session_jwt).get("pap_dlg"))
         for name, value in _cookies(request.headers.get("cookie", "")):
             self.secret(f"cookie {name}", value)
         body = request.content
@@ -144,11 +149,10 @@ class Harvest:
         if kind.startswith("application/x-www-form-urlencoded"):
             form = dict(parse_qsl(body.decode()))
             self.secret("client assertion", form.get("client_assertion"))
-            self.secret("Session or browser assertion", form.get("assertion"))
             self.secret("authorization code", form.get("code"))
             self.secret("PKCE verifier", form.get("code_verifier"))
             self.secret("device code", form.get("device_code"))
-            self.secret("Account Token", form.get("refresh_token"))
+            self.secret("refresh token", form.get("refresh_token"))
             self.secret("revoked token", form.get("token"))
         elif kind.startswith("application/json") and path.startswith("/poppy/sign-in"):
             sent = json.loads(body or b"{}")
@@ -167,7 +171,7 @@ class Harvest:
         if request.url.path in CREDENTIAL_ENDPOINTS:
             answer = response.json()
             self.secret(f"{answer.get('token_type', '')} access token", answer.get("access_token"))
-            self.secret("Account Token", answer.get("refresh_token"))
+            self.secret("refresh token", answer.get("refresh_token"))
             self.secret("device code", answer.get("device_code"))
             self.secret("user code", answer.get("user_code"))
             return
@@ -293,16 +297,16 @@ def _record_telemetry(monkeypatch: pytest.MonkeyPatch, found: Harvest) -> None:
 
 
 def _record_private_keys(monkeypatch: pytest.MonkeyPatch, found: Harvest) -> None:
-    """The DPoP keys and the agents' signing keys."""
+    """The delegated keys and the agents' signing keys."""
 
-    generate = kit.InMemorySessionKeys.generate
+    new_key = kit.DelegatedSessionSigner._new_key
 
-    async def session_keys(self: Any, **where: Any) -> Any:
-        material = await generate(self, **where)
-        found.secret("DPoP private key", _private(material.private_key))
-        return material
+    async def delegated_key(self: Any, client_id: str, now: Any) -> Any:
+        key = await new_key(self, client_id, now)
+        found.secret("delegated private key", _private(key.private_key))
+        return key
 
-    monkeypatch.setattr(kit.InMemorySessionKeys, "generate", session_keys)
+    monkeypatch.setattr(kit.DelegatedSessionSigner, "_new_key", delegated_key)
     signer = kit.AgentIdentity.signer
 
     def identity_signer(self: kit.AgentIdentity) -> Any:
@@ -400,14 +404,13 @@ def _assert_nothing_leaked(harvest: Harvest) -> None:
     kinds = set(harvest.secrets)
     # Every kind of credential was seen, so the search is not vacuous.
     for kind in (
-        "DPoP access token",
         "Bearer access token",
-        "Account Token",
-        "DPoP proof",
-        "DPoP private key",
+        "refresh token",
+        "Session JWT",
+        "delegation",
+        "delegated private key",
         "agent signing key",
         "client assertion",
-        "Session or browser assertion",
         "authorization code",
         "PKCE verifier",
         "device code",
@@ -461,7 +464,7 @@ async def test_no_credential_reaches_logs_errors_urls_or_model_text(harvest: Har
     from personal_agent_protocol.conformance import CASES, run_conformance, select_cases
     from personal_agent_protocol.demo.conformance import ManzanitaConformance
 
-    # Manzanita: Device Sign-In, conversations, operations, Account Tokens.
+    # Manzanita: Device Sign-In, conversations, operations, refresh tokens.
     await test_company_end_to_end.test_a_user_and_a_company_from_question_to_confirmed_exchange()
     await test_company_end_to_end.test_mediated_sign_in_with_a_one_time_code()
     await test_company_end_to_end.test_the_conversation_streams_and_a_stranger_cannot_read_it()
@@ -470,24 +473,21 @@ async def test_no_credential_reaches_logs_errors_urls_or_model_text(harvest: Har
     await direct.test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchange()
     await direct.test_a_code_works_once()
     await test_guide_security.test_the_consent_form_is_bound_to_the_browser_that_was_shown_it()
-    # MCP with a DPoP token and with a Bearer one, and the website with its cookie.
-    for dpop in (True, False):
-        await test_mcp_and_web.test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation(
-            dpop
-        )
-        await test_mcp_and_web.test_an_mcp_token_is_refused_everywhere_but_its_mcp_server(dpop)
+    # MCP with a token for its url, and the website with its cookie.
+    await test_mcp_and_web.test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation()
+    await test_mcp_and_web.test_an_mcp_token_is_refused_everywhere_but_its_mcp_server()
     await test_mcp_and_web.test_the_operation_confirmed_on_the_website_is_the_same_operation_once()
     await test_mcp_and_web.test_the_website_follows_the_session_and_refuses_bad_assertions()
     await test_guide_security.test_the_operation_page_refuses_cross_site_and_another_browsers_form()
     # Refusals: replays, other keys, polling too fast, conflicts.
     await test_company_refusals.test_a_replayed_token_request_is_refused()
-    await test_company_refusals.test_a_session_token_with_another_key_is_refused()
+    await test_company_refusals.test_a_session_jwt_signed_with_another_key_is_refused()
     await test_company_refusals.test_polling_too_fast_is_slow_down()
     # Northwind and Ledgerly: two companies, Ledgerly a personal agent at the bank.
     two = test_two_companies
     await two.test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_her_bounds()
     # The conformance runner: every positive, negative, and recovery case but the one
-    # whose probe puts a Session Token in a URL on purpose, to see the company refuse it.
+    # whose probe puts an access token in a URL on purpose, to see the company refuse it.
     world = ManzanitaConformance()
     cases = tuple(case for case in select_cases() if case.id != "security.token-in-url-refused")
     report = await run_conformance(world.context(), cases=cases)
@@ -530,9 +530,9 @@ def _sign_in_views(harvest: Harvest) -> list[tuple[str, str]]:
     views.append(("PapSignIn(mediated).model_view()", json.dumps(mediated.model_view())))
     assert user_codes and len(views) > len(user_codes) + 1
     # An operation to confirm names its Session by a one-way reference: even one a host
-    # derived from a Session Token tells a model neither the token nor the reference.
-    session_tokens = sorted(harvest.secrets["DPoP access token"])
-    for token in session_tokens:
+    # derived from an access token tells a model neither the token nor the reference.
+    access_tokens = sorted(harvest.secrets["Bearer access token"])
+    for token in access_tokens:
         display = PapConfirm(
             company="manzanita.example",
             summary="Exchange the Ridge Jacket (M) for the Alpine Parka (M).",
@@ -544,7 +544,7 @@ def _sign_in_views(harvest: Harvest) -> list[tuple[str, str]]:
         assert display.session is not None
         assert display.session.ref not in json.dumps(display.model_view())
         views.append(("PapConfirm(session).model_view()", json.dumps(display.model_view())))
-    assert session_tokens
+    assert access_tokens
     return views
 
 

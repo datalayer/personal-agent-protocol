@@ -22,10 +22,10 @@ PAR request's DPoP proof.
 :::caution Host services remain mandatory
 
 The orchestrator resolves `pap.authorizationStateStore`, `pap.browserHandoff`,
-`pap.signer`, and `pap.dpopProofProvider` from Reactor. The core installs no
+and `pap.signer` from Reactor. The core installs no
 in-memory fallback. The state store must provide atomic `take`; the browser
-handoff must open the URL only for the user; signing and DPoP providers must
-keep private keys in protected custody.
+handoff must open the URL only for the user; the signer must keep private keys
+in protected custody.
 
 :::
 
@@ -34,9 +34,7 @@ keep private keys in protected custody.
 ```python
 import httpx
 
-from personal_agent_protocol import (
-    DirectSignInClient,
-)
+from personal_agent_protocol import DirectSignInClient
 
 async with httpx.AsyncClient() as http:
     sign_in = DirectSignInClient(reactor=reactor, http_client=http)
@@ -48,15 +46,13 @@ async with httpx.AsyncClient() as http:
         redirect_uri="https://agent.example/oauth/callback",
         scopes=("orders:read",),  # the company's own scopes, from `auth.scopes`
         tenant_id="application-42",
-        # The Session to sign in: its Session Key goes in the URL as `dpop_jkt`.
-        session_key=signed_out_session.session_key,
     )
 
     # Later, at the registered callback route. Never pass this URL to a model.
     result = await sign_in.complete(incoming_callback_url)
     print(result.granted_scopes, result.missing_scopes)
-    # The Account Token is already in `pap.tokenStore`; only its reference is here.
-    account_reference = result.account_token_reference
+    # The refresh token is already in `pap.tokenStore`; only its reference is here.
+    refresh_reference = result.refresh_token_reference
 ```
 
 `begin()` stores the redacted pending request under a SHA-256 reference to its
@@ -65,19 +61,16 @@ consumes that state before validating the exact redirect and issuer, so a
 callback cannot be replayed. Expired, unknown, and already-used states produce
 the same safe error class.
 
-The exchange signs a fresh client assertion and creates a fresh DPoP proof for
-every attempt. It follows no redirects and retries one `use_dpop_nonce`
-challenge. Its proof is signed with the Session Key the code is bound to. A
-successful response must be a DPoP token for the existing Session; the
-response names no Session, and the SDK marks the token signed in because the
-grant was a sign-in. Extra scopes are rejected; omitted scopes are returned in
-`missing_scopes` so the application can continue with reduced authority or ask
-the user what to do. If the response includes an Account Token (its
-`refresh_token`), `complete()` moves it into the Reactor `pap.tokenStore`
-contribution behind an opaque `account_…` reference before returning (§4.8):
-the result's `token` never carries it, and `account_token_reference` names it.
-Refresh, narrowing, and revocation take that reference
-(`AccountTokenClient`), exactly as after Device and Mediated Sign-In.
+The exchange signs a fresh client assertion for every attempt and follows no
+redirects. It names no Session: the access token belongs to the account, and a
+Session is signed in by carrying it. Extra scopes are rejected; omitted scopes
+are returned in `missing_scopes` so the application can continue with reduced
+authority or ask the user what to do. If the response includes a refresh token,
+`complete()` moves it into the Reactor `pap.tokenStore` contribution behind an
+opaque `refresh_…` reference before returning (§4.8): the result's `token` never
+carries it, and `refresh_token_reference` names it. Refresh, narrowing, and
+revocation take that reference (`RefreshTokenClient`), exactly as after Device
+and Mediated Sign-In.
 Denial consumes state and exposes no remote description; recovery starts a new
 flow.
 

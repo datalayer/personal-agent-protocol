@@ -42,12 +42,12 @@ from personal_agent_protocol import (
     RATE_LIMIT_BUDGETS,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     MediatedSignInClient,
     OperationsClient,
     ProtectedInputField,
     ProtectedInputRequest,
     SessionClient,
+    SessionHttpClient,
     SqlitePairwiseUserIdStore,
     StreamReconnected,
     TextDelta,
@@ -194,7 +194,7 @@ class Docs:
                 )
             ],
         )
-        self.transport = DpopHttpClient(reactor=self.reactor, http_client=self.http)
+        self.transport = SessionHttpClient(reactor=self.reactor, http_client=self.http)
 
     def _company(self, domain: str, name: str) -> Any:
         config = CompanyConfig(
@@ -222,15 +222,8 @@ class Docs:
     async def discovered(self, domain: str) -> Any:
         return await DiscoveryClient(reactor=self.reactor, http_client=self.http).discover(domain)
 
-    async def who(self, domain: str) -> dict[str, str]:
-        """What a resource request names: the tenant and the issuer (the proof's key names
-        the Session)."""
-
-        company = await self.discovered(domain)
-        return {"tenant_id": TENANT, "issuer": company.oauth_metadata.issuer}
-
     async def pairwise(self, domain: str) -> str:
-        """The User ID at the company, for its Session assertions."""
+        """The User ID at the company, which names the user in its Sessions."""
 
         issuer = (await self.discovered(domain)).oauth_metadata.issuer
         return await resolve_pairwise_user_id(
@@ -243,12 +236,11 @@ class Docs:
             client_id=self.agent.client_id,
             pairwise_user_id=await self.pairwise(domain),
             issuer=company.oauth_metadata.issuer,
-            token_endpoint=company.oauth_metadata.token_endpoint,
             tenant_id=TENANT,
         )
 
-    async def signed_in(self, domain: str, scopes: tuple[str, ...]) -> tuple[Any, str]:
-        """A Session signed in with Device Sign-In: the token and its Account Token reference."""
+    async def signed_in(self, domain: str, scopes: tuple[str, ...]) -> tuple[Any, Any, str]:
+        """A Session and a Device Sign-In: its access token and refresh token reference."""
 
         metadata = (await self.discovered(domain)).oauth_metadata
         session = await self.signed_out(domain)
@@ -260,7 +252,6 @@ class Docs:
             client_id=self.agent.client_id,
             scopes=scopes,
             tenant_id=TENANT,
-            session_key=session.session_key,
             organization=(await self.discovered(domain)).document.organization,
             protected_resources=metadata.protected_resources,
         )
@@ -269,7 +260,7 @@ class Docs:
         self.clock.advance(started.poll_interval)
         done = await device.poll(started.reference)
         assert done.status == "complete" and done.token is not None
-        return done.token, str(done.account_token_reference)
+        return session, done.token, str(done.refresh_token_reference)
 
 
 Check = Callable[[dict[str, Any], str], Awaitable[None]]
@@ -364,21 +355,22 @@ async def _shared_budget(docs: Docs) -> tuple[dict[str, Any], Check]:
 
 
 @case("docs/docs/guides/personal-agent.mdx#1", "docs/docs/sdk/python.mdx#2")
-async def _session_assertion(docs: Docs) -> tuple[dict[str, Any], Check]:
+async def _session_start(docs: Docs) -> tuple[dict[str, Any], Check]:
     company = await docs.discovered("example.com")
 
     async def check(namespace: dict[str, Any], out: str) -> None:
-        assert namespace["claims"].iss == "https://agent.example/agent.json"
-        assert namespace["claims"].sub.startswith("usr_")
+        assert namespace["session"].client_id == "https://agent.example/agent.json"
+        assert namespace["session"].sub.startswith("usr_")
 
-    return {"reactor": docs.reactor, "company": company}, check
+    return {"reactor": docs.reactor, "http": docs.http, "company": company}, check
 
 
 @case("docs/docs/guides/sessions.mdx#0")
 async def _sessions(docs: Docs) -> tuple[dict[str, Any], Check]:
     async def check(namespace: dict[str, Any], out: str) -> None:
-        token, renewed = namespace["token"], namespace["renewed"]
-        assert not token.signed_in and renewed.session_key == token.session_key
+        session = namespace["session"]
+        assert session.handle == f"ses_{session.sid}"
+        assert session.issuer == "https://auth.company.example"
 
     return {"reactor": docs.reactor}, check
 
@@ -390,13 +382,9 @@ async def _sessions(docs: Docs) -> tuple[dict[str, Any], Check]:
 async def _direct_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
     async def check(namespace: dict[str, Any], out: str) -> None:
         assert "('orders:read',) ()" in out
-        assert namespace["account_reference"].startswith("account_")
+        assert namespace["refresh_reference"]
 
-    return {
-        "reactor": docs.reactor,
-        "pairwise_user_id": await docs.pairwise("auth.example.com"),
-        "signed_out_session": await docs.signed_out("auth.example.com"),
-    }, check
+    return {"reactor": docs.reactor}, check
 
 
 @case("docs/docs/guides/device-sign-in.mdx#0")
@@ -418,8 +406,6 @@ async def _device_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
         "http": docs.http,
         "metadata": company.oauth_metadata,
         "company": company,
-        "pairwise_user_id": await docs.pairwise("shop.example"),
-        "signed_out_session": await docs.signed_out("shop.example"),
         "show_to_user": shown.append,
         "schedule_at": scheduled.append,
     }, check
@@ -450,7 +436,7 @@ async def _mediated_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
 
     async def check(namespace: dict[str, Any], out: str) -> None:
         assert namespace["result"].status == "complete"
-        assert namespace["result"].token.signed_in
+        assert namespace["result"].token.scopes == ("orders:read",)
 
     return {
         "MediatedSignInClient": MediatedSignInClient,
@@ -458,7 +444,6 @@ async def _mediated_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
         "http": docs.http,
         "document": company.document,
         "issuer": company.oauth_metadata.issuer,
-        "pairwise_user_id": await docs.pairwise("shop.example"),
         "signed_out_session": await docs.signed_out("shop.example"),
     }, check
 
@@ -466,20 +451,18 @@ async def _mediated_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
 @case("docs/docs/guides/account-tokens.mdx#0")
 async def _account_tokens(docs: Docs) -> tuple[dict[str, Any], Check]:
     company = await docs.discovered("shop.example")
-    session, reference = await docs.signed_in("shop.example", ("orders:read",))
+    _, _, reference = await docs.signed_in("shop.example", ("orders:read",))
     asked: list[str] = []
 
     async def check(namespace: dict[str, Any], out: str) -> None:
         assert namespace["result"].status == "signed_in" and asked == []
-        assert namespace["session"].signed_in
+        assert namespace["result"].token.scopes == ("orders:read",)
 
     return {
         "reactor": docs.reactor,
         "http": docs.http,
         "metadata": company.oauth_metadata,
-        "pairwise_user_id": await docs.pairwise("shop.example"),
-        "account_token_reference": reference,
-        "session": session,
+        "refresh_token_reference": reference,
         "ask_the_user_to_sign_in_again": lambda: asked.append("again"),
         "continue_signed_out": lambda: asked.append("signed out"),
     }, check
@@ -491,15 +474,14 @@ async def _account_tokens(docs: Docs) -> tuple[dict[str, Any], Check]:
 @case("docs/docs/guides/conversations.mdx#0")
 async def _stream(docs: Docs) -> tuple[dict[str, Any], Check]:
     company = await docs.discovered("shop.example")
-    who = await docs.who("shop.example")
-    token = await docs.signed_out("shop.example")
+    session = await docs.signed_out("shop.example")
     endpoint = company.document.agent.protocols[0].endpoint
     conversations = ConversationClient(transport=docs.transport)
     message = Message(
         id=generate_message_id(docs.reactor), author=Author(type="human"), text="Hello"
     )
-    page = await conversations.start(endpoint, message, token=token, wait=0, **who)
-    await conversations.close(endpoint, page.conversation_id, token=token, **who)
+    page = await conversations.start(endpoint, message, session=session, wait=0)
+    await conversations.close(endpoint, page.conversation_id, session=session)
     handled: list[Any] = []
 
     class Ui:
@@ -514,8 +496,7 @@ async def _stream(docs: Docs) -> tuple[dict[str, Any], Check]:
         "conversations": conversations,
         "endpoint": endpoint,
         "conversation_id": page.conversation_id,
-        "token": token,
-        "who": who,
+        "session": session,
         "ui": Ui(),
         "handle_event": handled.append,
         "TextDelta": TextDelta,
@@ -526,12 +507,15 @@ async def _stream(docs: Docs) -> tuple[dict[str, Any], Check]:
 async def _proposed(docs: Docs, domain: str) -> dict[str, Any]:
     """A signed-in Session and an operation its company proposed (an exchange)."""
 
-    who = await docs.who(domain)
-    token, _ = await docs.signed_in(domain, ("orders:read", "orders:write"))
+    session, token, _ = await docs.signed_in(domain, ("orders:read", "orders:write"))
     proposed = await ApiClient(transport=docs.transport).call(
-        "POST", f"https://{domain}/api/orders/ord_7Hk2/exchanges", token=token, body={}, **who
+        "POST",
+        f"https://{domain}/api/orders/ord_7Hk2/exchanges",
+        session=session,
+        token=token,
+        body={},
     )
-    return {"token": token, "who": who, "operation": proposed.operation}
+    return {"session": session, "token": token, "operation": proposed.operation}
 
 
 @case("docs/docs/guides/operations.mdx#0")
@@ -543,7 +527,7 @@ async def _operations_client(docs: Docs) -> tuple[dict[str, Any], Check]:
     return {
         "discovered": await docs.discovered("shop.example"),
         "my_client_metadata": ClientMetadata.model_validate(docs.agent.metadata),
-        "DpopHttpClient": DpopHttpClient,
+        "SessionHttpClient": SessionHttpClient,
         "reactor": docs.reactor,
         "http": docs.http,
     }, check
@@ -592,8 +576,7 @@ async def _confirm_display(docs: Docs) -> tuple[dict[str, Any], Check]:
 @case("docs/docs/guides/operations.mdx#2")
 async def _standing(docs: Docs) -> tuple[dict[str, Any], Check]:
     domain = northwind_demo.DOMAIN
-    who = await docs.who(domain)
-    token, _ = await docs.signed_in(domain, ("accounts:read", "payments:write"))
+    session, token, _ = await docs.signed_in(domain, ("accounts:read", "payments:write"))
     endpoint = (await docs.discovered(domain)).document.agent.protocols[0].endpoint
     conversations = ConversationClient(transport=docs.transport)
     message = Message(
@@ -601,7 +584,7 @@ async def _standing(docs: Docs) -> tuple[dict[str, Any], Check]:
         author=Author(type="human"),
         text="Pay INV-1042: EUR 120.00 to Ledgerly",
     )
-    page = await conversations.start(endpoint, message, token=token, wait=0, **who)
+    page = await conversations.start(endpoint, message, session=session, token=token, wait=0)
     operation = next(
         event.message.operation
         for event in page.events
@@ -625,8 +608,8 @@ async def _standing(docs: Docs) -> tuple[dict[str, Any], Check]:
         "endpoint": f"https://{domain}/poppy/operations",
         "operation": operation,
         "account": "current account",
+        "session": session,
         "token": token,
-        "who": who,
     }, check
 
 
@@ -832,7 +815,7 @@ EXAMPLES = sorted((ROOT / "examples" / "pydantic-ai").glob("*/app.py"))
 TOOL_ARGUMENTS = {
     "discover_pap_company": ("example.com",),
     "inspect_pap_agent": ("https://agent.example/agent.json",),
-    "explain_dpop_proof": ("POST", "https://shop.example/oauth/token"),
+    "explain_session_jwt": ("POST", "https://shop.example/poppy/conversations"),
 }
 
 

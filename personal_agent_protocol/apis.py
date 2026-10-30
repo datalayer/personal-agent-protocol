@@ -28,9 +28,9 @@ import httpx
 from .errors import PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
 from .models import ApiDescriptor, DiscoveryDocument, Operation, ProtocolModel
-from .refusals import challenge_parameters, refusal_details
-from .sessions import SessionToken
-from .transport import DpopHttpClient
+from .refusals import refusal_code, refusal_details
+from .sessions import AccessToken, PapSession
+from .transport import SessionHttpClient
 
 
 class ApiError(PersonalAgentProtocolError):
@@ -98,7 +98,9 @@ def openapi_url(document: DiscoveryDocument) -> str | None:
 class ApiClient:
     """Read and change through a company's API, the credentials host-owned."""
 
-    def __init__(self, *, transport: DpopHttpClient, max_response_bytes: int = 1024 * 1024) -> None:
+    def __init__(
+        self, *, transport: SessionHttpClient, max_response_bytes: int = 1024 * 1024
+    ) -> None:
         if max_response_bytes <= 0:
             raise ValueError("max_response_bytes must be positive")
         self.transport = transport
@@ -109,9 +111,8 @@ class ApiClient:
         method: str,
         url: str,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
         body: Any = None,
         idempotency_key: str | None = None,
     ) -> ApiResponse:
@@ -138,9 +139,8 @@ class ApiClient:
         response = await self.transport.request(
             method,
             url,
+            session=session,
             token=token,
-            tenant_id=tenant_id,
-            issuer=issuer,
             headers=headers,
             content=content,
         )
@@ -166,11 +166,8 @@ class ApiClient:
                 ) from exc
         if response.is_success:
             return ApiResponse(status=response.status_code, body=payload, idempotency_key=key)
-        error = payload.get("error") if isinstance(payload, dict) else None
-        if not isinstance(error, str):
-            # Token errors, and `extension_required` with its `extension` attribute,
-            # come in WWW-Authenticate at an API (§3.3, §6).
-            error = challenge_parameters(response.headers.get("www-authenticate", "")).get("error")
+        # In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
+        error = refusal_code(response, payload, "api_request_failed")
         # `scope`, `extension`, and on a 429 `retry_after`: never retried here (§4.3).
         details = refusal_details(response, payload)
         raise ApiError(

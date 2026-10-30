@@ -1,0 +1,21 @@
+{
+  "header": {
+    "alg": "ES256",
+    "typ": "pap-delegation+jwt",
+    "kid": "qijAJ9BUDC4h-e0ACwvoePoD599MZschC3kfU5kvQPE"
+  },
+  "payload": {
+    "iss": "https://agent.example/agent.json",
+    "cnf": {
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "B484TQp7695xQfzTcW5Rf8HUNC3a-Bt9zYTlgxtJUeU",
+        "y": "5ji2Z0dKOVQLXZJ2yzHiryVoopigNfpEVr_D36MPgwM"
+      }
+    },
+    "iat": 1790899200,
+    "exp": 1790920800,
+    "jti": "Dl1x7yQbX1m3Jk0aT9cWvA"
+  }
+}

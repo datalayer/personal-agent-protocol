@@ -31,13 +31,13 @@ from ..reactor import Clock, SystemClock
 #: A record as stored: a JSON object (strings, numbers, booleans, null, lists, objects).
 JsonObject = dict[str, Any]
 
-#: The OAuth token type of a proof-bound Session Token.
-DPOP: Literal["DPoP"] = "DPoP"
-
 # The kinds of record a company keeps.
+#: A Session by `client_id` and `sid` (§5.3), remembered a while after it ends (§5.5).
 SESSION = "session"
-SESSION_TOKEN = "session_token"  # noqa: S105 - a record kind, not a secret
-ACCOUNT_TOKEN = "account_token"  # noqa: S105 - a record kind, not a secret
+#: An access token the company issued, by digest (§4.5).
+ACCESS_TOKEN = "access_token"  # noqa: S105 - a record kind, not a secret
+#: A refresh token the company issued, by digest (§4.4).
+REFRESH_TOKEN = "refresh_token"  # noqa: S105 - a record kind, not a secret
 ACCOUNT_FAMILY = "account_family"
 ACCOUNT_AGENT = "account_agent"
 CLIENT = "client"
@@ -58,15 +58,13 @@ REPLAY = "replay"
 SIGN_IN_ATTEMPTS = "sign_in_attempts"
 #: A feedback report a personal agent sent (§8), kept for the company's operator.
 FEEDBACK = "feedback"
-#: A DPoP nonce the company issued, until it stops accepting it (§4.3).
-DPOP_NONCE = "dpop_nonce"
 #: An API write's `Idempotency-Key` in one Session, and its original response (guides, *Retries*).
 IDEMPOTENCY = "idempotency"
 
 RECORD_KINDS = (
     SESSION,
-    SESSION_TOKEN,
-    ACCOUNT_TOKEN,
+    ACCESS_TOKEN,
+    REFRESH_TOKEN,
     ACCOUNT_FAMILY,
     ACCOUNT_AGENT,
     CLIENT,
@@ -84,7 +82,6 @@ RECORD_KINDS = (
     REPLAY,
     SIGN_IN_ATTEMPTS,
     FEEDBACK,
-    DPOP_NONCE,
     IDEMPOTENCY,
 )
 
@@ -264,113 +261,92 @@ def _maybe_parse(value: str | None) -> datetime | None:
 
 
 @dataclass(frozen=True)
-class IssuedSession:
-    """One token of a Session, as issued; the token is bound to a DPoP key (or Bearer)."""
+class IssuedAccessToken:
+    """An access token the company issued: for whom, which account, which service (§4.5).
 
-    session_key: str
+    `resource` is the service it was issued for, or `None` for the default token
+    that works at every service that doesn't ask for its own. `family` is the
+    sign-in it comes from, whose sign-out ends it (§5.5).
+    """
+
     client_id: str
-    pairwise_user_id: str
-    key_thumbprint: str
+    account_id: str
+    scopes: tuple[str, ...]
     expires_at: datetime
-    account_id: str | None = None
-    scopes: tuple[str, ...] = ()
-    account_token: str | None = None
-    token_type: Literal["DPoP", "Bearer"] = DPOP
+    family: str
     resource: str | None = None
-    #: The Agent ID the Session started with, kept for its life (§4.2).
-    agent_id: str | None = None
-
-    @property
-    def signed_in(self) -> bool:
-        return self.account_id is not None
 
     def to_json(self) -> JsonObject:
         return {
-            "session_key": self.session_key,
             "client_id": self.client_id,
-            "pairwise_user_id": self.pairwise_user_id,
-            "key_thumbprint": self.key_thumbprint,
-            "expires_at": _time(self.expires_at),
             "account_id": self.account_id,
             "scopes": list(self.scopes),
-            "account_token": self.account_token,
-            "token_type": self.token_type,
+            "expires_at": _time(self.expires_at),
+            "family": self.family,
             "resource": self.resource,
-            "agent_id": self.agent_id,
         }
 
     @classmethod
-    def from_json(cls, value: JsonObject) -> IssuedSession:
+    def from_json(cls, value: JsonObject) -> IssuedAccessToken:
         return cls(
-            session_key=value["session_key"],
             client_id=value["client_id"],
-            pairwise_user_id=value["pairwise_user_id"],
-            key_thumbprint=value["key_thumbprint"],
-            expires_at=_parse(value["expires_at"]),
             account_id=value["account_id"],
             scopes=tuple(value["scopes"]),
-            account_token=value["account_token"],
-            token_type=value["token_type"],
+            expires_at=_parse(value["expires_at"]),
+            family=value["family"],
             resource=value["resource"],
-            agent_id=value["agent_id"],
         )
 
 
 @dataclass(frozen=True)
 class StoredSession:
-    """A Session by its key's thumbprint: each live token's state by digest, the latest.
+    """A Session, by `client_id` and `sid` (§5.3): its User ID and Agent ID, for its life.
 
-    `account_id` is the account the Session was ever signed in to: kept after
-    it signs out, so it is never signed in to another (§4.4, §4.8). `ends_at` is
-    when the Session ends; its record is kept a while after, so its key is refused
-    (`invalid_grant`) rather than starting a new Session (§4.2).
+    A request whose `sid` is unknown starts one; one that names a known `sid`
+    keeps its `sub` and `agent_id`. Once `ends_at` passes, or the company ends it
+    (`ended`), the record is kept for `ended_session_memory`, so a request naming
+    it gets `invalid_session` instead of silently starting it again (§5.5).
     """
 
-    session_key: str
     client_id: str
+    sid: str
     pairwise_user_id: str
-    tokens: dict[str, IssuedSession]
-    latest: str
-    account_id: str | None = None
-    ends_at: datetime | None = None
-
-    @property
-    def current(self) -> IssuedSession:
-        return self.tokens[self.latest]
+    ends_at: datetime
+    agent_id: str | None = None
+    ended: bool = False
 
     def to_json(self) -> JsonObject:
         return {
-            "session_key": self.session_key,
             "client_id": self.client_id,
+            "sid": self.sid,
             "pairwise_user_id": self.pairwise_user_id,
-            "tokens": {digest: token.to_json() for digest, token in self.tokens.items()},
-            "latest": self.latest,
-            "account_id": self.account_id,
-            "ends_at": None if self.ends_at is None else _time(self.ends_at),
+            "ends_at": _time(self.ends_at),
+            "agent_id": self.agent_id,
+            "ended": self.ended,
         }
 
     @classmethod
     def from_json(cls, value: JsonObject) -> StoredSession:
         return cls(
-            session_key=value["session_key"],
             client_id=value["client_id"],
+            sid=value["sid"],
             pairwise_user_id=value["pairwise_user_id"],
-            tokens={
-                digest: IssuedSession.from_json(token) for digest, token in value["tokens"].items()
-            },
-            latest=value["latest"],
-            account_id=value["account_id"],
-            ends_at=None if value["ends_at"] is None else _parse(value["ends_at"]),
+            ends_at=_parse(value["ends_at"]),
+            agent_id=value["agent_id"],
+            ended=value["ended"],
         )
 
 
 @dataclass(frozen=True)
 class AccountGrant:
-    """What an Account Token is: one account, one agent, one user, some scopes."""
+    """What a refresh token is: one account, one agent, some scopes (§4.4).
+
+    Not tied to a Session or a User ID: any of the User's Sessions uses the
+    access tokens it gives (§4.4, §5.4).
+    """
 
     account_id: str
     client_id: str
-    pairwise_user_id: str
     scopes: tuple[str, ...]
     expires_at: datetime
     revoked: bool = False
@@ -385,7 +361,6 @@ class AccountGrant:
         return {
             "account_id": self.account_id,
             "client_id": self.client_id,
-            "pairwise_user_id": self.pairwise_user_id,
             "scopes": list(self.scopes),
             "expires_at": _time(self.expires_at),
             "revoked": self.revoked,
@@ -398,7 +373,6 @@ class AccountGrant:
         return cls(
             account_id=value["account_id"],
             client_id=value["client_id"],
-            pairwise_user_id=value["pairwise_user_id"],
             scopes=tuple(value["scopes"]),
             expires_at=_parse(value["expires_at"]),
             revoked=value["revoked"],
@@ -409,13 +383,13 @@ class AccountGrant:
 
 @dataclass(frozen=True)
 class AccountFamily:
-    """One sign-in: every Account Token rotated from it, and the Sessions signed in with them."""
+    """One sign-in: every refresh token rotated from it, and the access tokens it gave."""
 
     client_id: str
     account_id: str
     tokens: tuple[str, ...] = ()
-    sessions: tuple[str, ...] = ()
-    #: Revoked (§4.9) or disconnected: no token joins it any more.
+    access_tokens: tuple[str, ...] = ()
+    #: Revoked (§4.6) or disconnected: no token joins it any more.
     revoked: bool = False
 
     def to_json(self) -> JsonObject:
@@ -423,7 +397,7 @@ class AccountFamily:
             "client_id": self.client_id,
             "account_id": self.account_id,
             "tokens": list(self.tokens),
-            "sessions": list(self.sessions),
+            "access_tokens": list(self.access_tokens),
             "revoked": self.revoked,
         }
 
@@ -433,7 +407,7 @@ class AccountFamily:
             client_id=value["client_id"],
             account_id=value["account_id"],
             tokens=tuple(value["tokens"]),
-            sessions=tuple(value["sessions"]),
+            access_tokens=tuple(value["access_tokens"]),
             revoked=value["revoked"],
         )
 
@@ -483,14 +457,11 @@ class PendingDevice:
     account_id: str | None = None
     granted: tuple[str, ...] = ()
     denied: bool = False
-    #: The Session Key of the first poll: the device code is bound to it (§4.6).
-    session_key: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
             "client_id": self.client_id,
             "scopes": list(self.scopes),
-            "session_key": self.session_key,
             "user_code": self.user_code,
             "expires_at": _time(self.expires_at),
             "interval": self.interval,
@@ -512,7 +483,6 @@ class PendingDevice:
             account_id=value["account_id"],
             granted=tuple(value["granted"]),
             denied=value["denied"],
-            session_key=value["session_key"],
         )
 
 
@@ -539,7 +509,6 @@ class PendingAuthorization:
     scopes: tuple[str, ...]
     state: str
     code_challenge: str
-    dpop_jkt: str
     expires_at: datetime
     client_name: str = ""
     #: The digest of the consent cookie of the browser the company's own page was
@@ -548,7 +517,6 @@ class PendingAuthorization:
 
     def to_json(self) -> JsonObject:
         return {
-            "dpop_jkt": self.dpop_jkt,
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "scopes": list(self.scopes),
@@ -562,7 +530,6 @@ class PendingAuthorization:
     @classmethod
     def from_json(cls, value: JsonObject) -> PendingAuthorization:
         return cls(
-            dpop_jkt=value["dpop_jkt"],
             client_id=value["client_id"],
             redirect_uri=value["redirect_uri"],
             scopes=tuple(value["scopes"]),
@@ -581,7 +548,6 @@ class IssuedCode:
     client_id: str
     redirect_uri: str
     code_challenge: str
-    dpop_jkt: str
     requested: tuple[str, ...]
     account_id: str
     scopes: tuple[str, ...]
@@ -590,7 +556,6 @@ class IssuedCode:
     def to_json(self) -> JsonObject:
         return {
             "requested": list(self.requested),
-            "dpop_jkt": self.dpop_jkt,
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "code_challenge": self.code_challenge,
@@ -603,7 +568,6 @@ class IssuedCode:
     def from_json(cls, value: JsonObject) -> IssuedCode:
         return cls(
             requested=tuple(value["requested"]),
-            dpop_jkt=value["dpop_jkt"],
             client_id=value["client_id"],
             redirect_uri=value["redirect_uri"],
             code_challenge=value["code_challenge"],
@@ -772,31 +736,74 @@ class OperationProposal:
 
 
 @dataclass(frozen=True)
-class SessionPointer:
-    """The Session a token or a browser cookie stands for (by digest)."""
+class WebSession:
+    """What a browser joined (§6): its Session, and the account and scopes it acts with.
 
-    session_key: str
+    Set by the agent's authorization of a join code, and then the cookie's: the
+    account is `None` signed out; `family` is the sign-in whose end signs the
+    cookie out (§5.5, §6); `expires_at` is when the Session ends, which the cookie
+    never outlives.
+    """
+
+    client_id: str
+    sid: str
+    pairwise_user_id: str
+    expires_at: datetime
+    agent_id: str | None = None
+    account_id: str | None = None
+    scopes: tuple[str, ...] = ()
+    family: str | None = None
 
     def to_json(self) -> JsonObject:
-        return {"session_key": self.session_key}
+        return {
+            "client_id": self.client_id,
+            "sid": self.sid,
+            "pairwise_user_id": self.pairwise_user_id,
+            "expires_at": _time(self.expires_at),
+            "agent_id": self.agent_id,
+            "account_id": self.account_id,
+            "scopes": list(self.scopes),
+            "family": self.family,
+        }
 
     @classmethod
-    def from_json(cls, value: JsonObject) -> SessionPointer:
-        return cls(session_key=value["session_key"])
+    def from_json(cls, value: JsonObject) -> WebSession:
+        return cls(
+            client_id=value["client_id"],
+            sid=value["sid"],
+            pairwise_user_id=value["pairwise_user_id"],
+            expires_at=_parse(value["expires_at"]),
+            agent_id=value["agent_id"],
+            account_id=value["account_id"],
+            scopes=tuple(value["scopes"]),
+            family=value["family"],
+        )
 
 
 @dataclass(frozen=True)
 class JoinCode:
-    """A browser-session join code (§5): the digest of the cookie that ties it to a browser."""
+    """A browser-session join code (§6): the digest of the cookie that ties it to a browser.
+
+    `authorized` is set once, by the personal agent's request in step 2: the
+    Session (and account) the browser joins.
+    """
 
     browser: str
+    authorized: WebSession | None = None
 
     def to_json(self) -> JsonObject:
-        return {"browser": self.browser}
+        return {
+            "browser": self.browser,
+            "authorized": None if self.authorized is None else self.authorized.to_json(),
+        }
 
     @classmethod
     def from_json(cls, value: JsonObject) -> JoinCode:
-        return cls(browser=value["browser"])
+        authorized = value["authorized"]
+        return cls(
+            browser=value["browser"],
+            authorized=None if authorized is None else WebSession.from_json(authorized),
+        )
 
 
 @dataclass(frozen=True)
@@ -869,20 +876,6 @@ class StoredFeedback:
 
 
 @dataclass(frozen=True)
-class IssuedNonce:
-    """A DPoP nonce the company issued: accepted in a proof until the record expires."""
-
-    def to_json(self) -> JsonObject:
-        return {}
-
-    @classmethod
-    def from_json(cls, value: JsonObject) -> IssuedNonce:
-        if value:
-            raise ValueError("an issued nonce has no members")
-        return cls()
-
-
-@dataclass(frozen=True)
 class IdempotencyRecord:
     """An API write's `Idempotency-Key` in one Session: the request's digest, and its answer.
 
@@ -906,8 +899,8 @@ class IdempotencyRecord:
 #: Each kind's record type: `to_json()` writes it, `from_json()` reads it back.
 RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     SESSION: StoredSession.from_json,
-    SESSION_TOKEN: SessionPointer.from_json,
-    ACCOUNT_TOKEN: AccountGrant.from_json,
+    ACCESS_TOKEN: IssuedAccessToken.from_json,
+    REFRESH_TOKEN: AccountGrant.from_json,
     ACCOUNT_FAMILY: AccountFamily.from_json,
     ACCOUNT_AGENT: AccountAgent.from_json,
     CLIENT: KnownClient.from_json,
@@ -920,11 +913,10 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     MESSAGE_ID: MessageReceipt.from_json,
     OPERATION: StoredOperation.from_json,
     PROPOSAL: OperationProposal.from_json,
-    BROWSER_COOKIE: SessionPointer.from_json,
+    BROWSER_COOKIE: WebSession.from_json,
     JOIN_CODE: JoinCode.from_json,
     REPLAY: ReplayMark.from_json,
     SIGN_IN_ATTEMPTS: SignInAttempts.from_json,
     FEEDBACK: StoredFeedback.from_json,
-    DPOP_NONCE: IssuedNonce.from_json,
     IDEMPOTENCY: IdempotencyRecord.from_json,
 }

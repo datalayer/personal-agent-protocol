@@ -12,38 +12,38 @@ from pydantic import SecretStr
 from reactor import PluginManifest
 
 from personal_agent_protocol import (
-    DPOP_PROOF_PROVIDERS,
+    SESSION_SIGNERS,
     Author,
     ConversationClient,
     ConversationError,
-    DpopHttpClient,
-    DpopProofRequest,
     Message,
-    SessionToken,
+    PapSession,
+    SessionHttpClient,
+    SessionJwtRequest,
     build_pap_reactor,
     generate_message_id,
 )
 
 
-class Proofs:
-    async def create(self, request: DpopProofRequest) -> SecretStr:
-        return SecretStr(f"proof-for-{request.method.lower()}")
+class Jwts:
+    async def sign(self, request: SessionJwtRequest) -> SecretStr:
+        return SecretStr(f"jwt-for-{request.method.lower()}")
 
 
 class Plugin:
     def provide_contributions(self, contributions: object) -> None:
         contributions.contribute(  # type: ignore[attr-defined]
-            DPOP_PROOF_PROVIDERS, Proofs(), contribution_id="proofs"
+            SESSION_SIGNERS, Jwts(), contribution_id="jwts"
         )
 
 
-def token() -> SessionToken:
-    return SessionToken(
-        access_token=SecretStr("session-secret"),
-        token_type="DPoP",  # noqa: S106 - OAuth token type
-        expires_in=300,
-        session_key="K" * 43,
-        signed_in=False,
+def session() -> PapSession:
+    return PapSession(
+        sid="s" * 22,
+        sub="usr_ada",
+        issuer="https://auth.example",
+        client_id="https://agent.example/agent.json",
+        tenant_id="tenant",
     )
 
 
@@ -75,16 +75,14 @@ async def test_start_and_continue_preserve_message_ids_and_parse_waited_events()
     async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
         reactor, _ = build_pap_reactor(http_client=http)
         reactor.register_plugin(PluginManifest(name="conversations-test", version="1"), Plugin())
-        client = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+        client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
         first = Message(
             id=generate_message_id(reactor), author=Author(type="agent"), text="Return the jacket"
         )
         page = await client.start(
             "https://api.example/conversations",
             first,
-            token=token(),
-            tenant_id="tenant",
-            issuer="https://auth.example",
+            session=session(),
             wait=10,
         )
         follow_up = Message(
@@ -96,9 +94,7 @@ async def test_start_and_continue_preserve_message_ids_and_parse_waited_events()
             "https://api.example/conversations",
             "cnv_one",
             follow_up,
-            token=token(),
-            tenant_id="tenant",
-            issuer="https://auth.example",
+            session=session(),
             cursor="evt_zero",
             wait=10,
         )
@@ -118,14 +114,12 @@ async def test_surfaces_message_id_conflict_without_response_body() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
         reactor, _ = build_pap_reactor(http_client=http)
         reactor.register_plugin(PluginManifest(name="conversations-test", version="1"), Plugin())
-        client = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+        client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
         with pytest.raises(ConversationError) as caught:
             await client.start(
                 "https://api.example/conversations",
                 Message(id="msg_same", author=Author(type="agent"), text="different content"),
-                token=token(),
-                tenant_id="tenant",
-                issuer="https://auth.example",
+                session=session(),
             )
         reactor.stop()
 
@@ -193,15 +187,13 @@ async def test_events_recover_cursor_drain_backlog_and_suppress_duplicates() -> 
                 )
             ],
         )
-        client = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+        client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
         events = [
             item
             async for item in client.events(
                 "https://api.example/conversations",
                 "cnv_one",
-                token=token(),
-                tenant_id="tenant",
-                issuer="https://auth.example",
+                session=session(),
                 cursor="evt_saved",
                 wait=30,
                 on_cursor_expired=on_cursor_expired,
@@ -241,13 +233,11 @@ async def test_read_events_rejects_conversation_mismatch() -> None:
                 )
             ],
         )
-        client = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+        client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
         with pytest.raises(ConversationError, match="different conversation"):
             await client.read_events(
                 "https://api.example/conversations",
                 "cnv_one",
-                token=token(),
-                tenant_id="tenant",
-                issuer="https://auth.example",
+                session=session(),
             )
         reactor.stop()

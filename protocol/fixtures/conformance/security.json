@@ -7,7 +7,9 @@
       "id": "security.duplicate-json-members",
       "kind": "negative",
       "role": "both",
-      "requirements": ["GUIDE-json-01"],
+      "requirements": [
+        "GUIDE-json-01"
+      ],
       "check": "strict_json",
       "input": [
         "{\"issuer\":\"https://a.example\",\"issuer\":\"https://b.example\"}",
@@ -15,479 +17,886 @@
         "[{\"id\":\"evt_1\",\"id\":\"evt_2\"}]",
         "{\"a\":1,\"\\u0061\":2}"
       ],
-      "expect": {"error": "duplicate_json_member"}
+      "expect": {
+        "error": "duplicate_json_member"
+      }
     },
     {
       "id": "security.ssrf-loopback",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-03"],
+      "requirements": [
+        "GUIDE-fetch-03"
+      ],
       "check": "url_safety",
-      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["127.0.0.1"]},
-      "expect": {"error": "unsafe_address"}
+      "input": {
+        "url": "https://company.example/.well-known/poppy.json",
+        "addresses": [
+          "127.0.0.1"
+        ]
+      },
+      "expect": {
+        "error": "unsafe_address"
+      }
     },
     {
       "id": "security.ssrf-private",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-03"],
+      "requirements": [
+        "GUIDE-fetch-03"
+      ],
       "check": "url_safety",
-      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["10.0.0.7"]},
-      "expect": {"error": "unsafe_address"}
+      "input": {
+        "url": "https://company.example/.well-known/poppy.json",
+        "addresses": [
+          "10.0.0.7"
+        ]
+      },
+      "expect": {
+        "error": "unsafe_address"
+      }
     },
     {
       "id": "security.ssrf-link-local-metadata",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-03"],
+      "requirements": [
+        "GUIDE-fetch-03"
+      ],
       "check": "url_safety",
-      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["169.254.169.254"]},
-      "expect": {"error": "unsafe_address"}
+      "input": {
+        "url": "https://company.example/.well-known/poppy.json",
+        "addresses": [
+          "169.254.169.254"
+        ]
+      },
+      "expect": {
+        "error": "unsafe_address"
+      }
     },
     {
       "id": "security.ssrf-ipv6-loopback-and-unique-local",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-03"],
+      "requirements": [
+        "GUIDE-fetch-03"
+      ],
       "check": "url_safety",
-      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["::1", "fd00::5"]},
-      "expect": {"error": "unsafe_address"}
+      "input": {
+        "url": "https://company.example/.well-known/poppy.json",
+        "addresses": [
+          "::1",
+          "fd00::5"
+        ]
+      },
+      "expect": {
+        "error": "unsafe_address"
+      }
     },
     {
       "id": "security.ssrf-ipv4-mapped",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-03"],
+      "requirements": [
+        "GUIDE-fetch-03"
+      ],
       "check": "url_safety",
-      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["::ffff:127.0.0.1"]},
-      "expect": {"error": "unsafe_address"}
+      "input": {
+        "url": "https://company.example/.well-known/poppy.json",
+        "addresses": [
+          "::ffff:127.0.0.1"
+        ]
+      },
+      "expect": {
+        "error": "unsafe_address"
+      }
     },
     {
       "id": "security.dns-rebinding-mixed-answers",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-03"],
+      "requirements": [
+        "GUIDE-fetch-03"
+      ],
       "check": "url_safety",
-      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["93.184.216.34", "192.168.1.1"]},
-      "expect": {"error": "unsafe_address"}
+      "input": {
+        "url": "https://company.example/.well-known/poppy.json",
+        "addresses": [
+          "93.184.216.34",
+          "192.168.1.1"
+        ]
+      },
+      "expect": {
+        "error": "unsafe_address"
+      }
     },
     {
       "id": "security.dns-rebinding-after-check",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-03"],
+      "requirements": [
+        "GUIDE-fetch-03"
+      ],
       "description": "The host resolves to a public address when checked, then to loopback: the connection goes to the checked address, and the host is never resolved again.",
-      "sdk": ["python"],
+      "sdk": [
+        "python"
+      ],
       "check": "pinned_connect",
-      "input": {"url": "https://company.example/.well-known/poppy.json", "answers": [["93.184.216.34"], ["127.0.0.1"]]},
-      "expect": {"connects_to": ["93.184.216.34"], "resolutions": 1}
+      "input": {
+        "url": "https://company.example/.well-known/poppy.json",
+        "answers": [
+          [
+            "93.184.216.34"
+          ],
+          [
+            "127.0.0.1"
+          ]
+        ]
+      },
+      "expect": {
+        "connects_to": [
+          "93.184.216.34"
+        ],
+        "resolutions": 1
+      }
     },
     {
       "id": "security.public-address-allowed",
       "kind": "positive",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-03"],
+      "requirements": [
+        "GUIDE-fetch-03"
+      ],
       "check": "url_safety",
-      "input": {"url": "https://company.example/.well-known/poppy.json", "addresses": ["93.184.216.34"]},
-      "expect": {"safe": true}
+      "input": {
+        "url": "https://company.example/.well-known/poppy.json",
+        "addresses": [
+          "93.184.216.34"
+        ]
+      },
+      "expect": {
+        "safe": true
+      }
     },
     {
       "id": "security.discovery-redirect-to-http",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["PAP-3-03"],
+      "requirements": [
+        "PAP-3-03"
+      ],
       "check": "discovery",
       "input": {
         "domain": "example.com",
         "responses": {
-          "https://example.com/.well-known/poppy.json": {"status": 301, "headers": {"location": "http://example.com/poppy.json"}}
+          "https://example.com/.well-known/poppy.json": {
+            "status": 301,
+            "headers": {
+              "location": "http://example.com/poppy.json"
+            }
+          }
         }
       },
-      "expect": {"error": "unsafe_url"}
+      "expect": {
+        "error": "unsafe_url"
+      }
     },
     {
       "id": "security.discovery-redirect-followed",
       "kind": "positive",
       "role": "personal-agent",
-      "requirements": ["PAP-3-02", "PAP-3-03"],
+      "requirements": [
+        "PAP-3-02",
+        "PAP-3-03"
+      ],
       "check": "discovery",
       "input": {
         "domain": "www.example.com",
         "responses": {
-          "https://www.example.com/.well-known/poppy.json": {"status": 302, "headers": {"location": "https://example.com/.well-known/poppy.json"}},
-          "https://example.com/.well-known/poppy.json": {"status": 200, "json": {
-            "protocol_version": "0.3",
-            "organization": {"name": "Example", "domain": "example.com"},
-            "web": {}
-          }}
+          "https://www.example.com/.well-known/poppy.json": {
+            "status": 302,
+            "headers": {
+              "location": "https://example.com/.well-known/poppy.json"
+            }
+          },
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {}
+            }
+          }
         }
       },
-      "expect": {"organization_domain": "example.com", "discovery_url": "https://example.com/.well-known/poppy.json"}
+      "expect": {
+        "organization_domain": "example.com",
+        "discovery_url": "https://example.com/.well-known/poppy.json"
+      }
     },
     {
       "id": "security.discovery-redirect-limit",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-01"],
+      "requirements": [
+        "GUIDE-fetch-01"
+      ],
       "check": "discovery",
       "input": {
         "domain": "example.com",
         "responses": {
-          "https://example.com/.well-known/poppy.json": {"status": 302, "headers": {"location": "https://example.com/r1"}},
-          "https://example.com/r1": {"status": 302, "headers": {"location": "https://example.com/r2"}},
-          "https://example.com/r2": {"status": 302, "headers": {"location": "https://example.com/r3"}},
-          "https://example.com/r3": {"status": 302, "headers": {"location": "https://example.com/r4"}},
-          "https://example.com/r4": {"status": 200, "json": {}}
+          "https://example.com/.well-known/poppy.json": {
+            "status": 302,
+            "headers": {
+              "location": "https://example.com/r1"
+            }
+          },
+          "https://example.com/r1": {
+            "status": 302,
+            "headers": {
+              "location": "https://example.com/r2"
+            }
+          },
+          "https://example.com/r2": {
+            "status": 302,
+            "headers": {
+              "location": "https://example.com/r3"
+            }
+          },
+          "https://example.com/r3": {
+            "status": 302,
+            "headers": {
+              "location": "https://example.com/r4"
+            }
+          },
+          "https://example.com/r4": {
+            "status": 200,
+            "json": {}
+          }
         }
       },
-      "expect": {"error": "too_many_redirects"}
+      "expect": {
+        "error": "too_many_redirects"
+      }
     },
     {
       "id": "security.oversized-metadata",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-01"],
+      "requirements": [
+        "GUIDE-fetch-01"
+      ],
       "check": "discovery",
       "input": {
         "domain": "example.com",
         "responses": {
-          "https://example.com/.well-known/poppy.json": {"status": 200, "padding_bytes": 102401, "json": {
-            "protocol_version": "0.3",
-            "organization": {"name": "Example", "domain": "example.com"},
-            "web": {}
-          }}
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "padding_bytes": 102401,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {}
+            }
+          }
         }
       },
-      "expect": {"error": "response_too_large"}
+      "expect": {
+        "error": "response_too_large"
+      }
     },
     {
       "id": "security.slow-metadata",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-01"],
+      "requirements": [
+        "GUIDE-fetch-01"
+      ],
       "description": "The server sends the document a few bytes at a time, each read well within any read timeout: the fetch is abandoned when its total time limit passes.",
       "check": "discovery",
       "input": {
         "domain": "example.com",
         "timeout_seconds": 0.3,
         "responses": {
-          "https://example.com/.well-known/poppy.json": {"status": 200, "trickle": {"chunk_bytes": 8, "interval_seconds": 0.05}, "json": {
-            "protocol_version": "0.3",
-            "organization": {"name": "Example", "domain": "example.com"},
-            "web": {}
-          }}
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "trickle": {
+              "chunk_bytes": 8,
+              "interval_seconds": 0.05
+            },
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {}
+            }
+          }
         }
       },
-      "expect": {"error": "metadata_timeout"}
+      "expect": {
+        "error": "metadata_timeout"
+      }
     },
     {
       "id": "security.metadata-not-json",
       "kind": "negative",
       "role": "personal-agent",
-      "requirements": ["GUIDE-fetch-01"],
+      "requirements": [
+        "GUIDE-fetch-01"
+      ],
       "check": "discovery",
       "input": {
         "domain": "example.com",
         "responses": {
-          "https://example.com/.well-known/poppy.json": {"status": 200, "content_type": "text/html", "text": "<html></html>"}
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "content_type": "text/html",
+            "text": "<html></html>"
+          }
         }
       },
-      "expect": {"error": "invalid_content_type"}
+      "expect": {
+        "error": "invalid_content_type"
+      }
     },
     {
       "id": "security.client-assertion-alg-none",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-02", "PAP-4.1-02"],
+      "requirements": [
+        "GUIDE-jwt-02",
+        "PAP-4.1-02"
+      ],
       "target": "client_assertion",
-      "mutation": {"alg": "none"},
-      "expect": {"status": 401, "error": "invalid_client"}
+      "mutation": {
+        "alg": "none"
+      },
+      "expect": {
+        "status": 401,
+        "error": "invalid_client"
+      }
     },
     {
       "id": "security.client-assertion-hs256-public-key",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-02"],
+      "requirements": [
+        "GUIDE-jwt-02"
+      ],
       "target": "client_assertion",
-      "mutation": {"alg": "HS256"},
-      "expect": {"status": 401, "error": "invalid_client"}
+      "mutation": {
+        "alg": "HS256"
+      },
+      "expect": {
+        "status": 401,
+        "error": "invalid_client"
+      }
     },
     {
-      "id": "security.client-assertion-rs256-header-on-ec-key",
+      "id": "security.client-assertion-ps384-header-on-ec-key",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-01", "GUIDE-jwt-02"],
+      "requirements": [
+        "GUIDE-jwt-01",
+        "GUIDE-jwt-02"
+      ],
       "target": "client_assertion",
-      "mutation": {"alg": "RS256"},
-      "expect": {"status": 401, "error": "invalid_client"}
+      "mutation": {
+        "alg": "PS384"
+      },
+      "expect": {
+        "status": 401,
+        "error": "invalid_client"
+      },
+      "description": "An EC key's signature under a PS384 header: refused, the algorithm is the key's."
     },
     {
       "id": "security.client-assertion-embedded-key-ignored",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-03"],
+      "requirements": [
+        "GUIDE-jwt-03"
+      ],
       "target": "client_assertion",
-      "mutation": {"signer": "stranger", "embed_jwk": true},
-      "expect": {"status": 401, "error": "invalid_client"}
+      "mutation": {
+        "signer": "stranger",
+        "embed_jwk": true
+      },
+      "expect": {
+        "status": 401,
+        "error": "invalid_client"
+      }
     },
     {
       "id": "security.client-assertion-bad-audience",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-04", "PAP-4.8-02"],
+      "requirements": [
+        "GUIDE-jwt-04",
+        "PAP-4.8-02"
+      ],
       "target": "client_assertion",
-      "mutation": {"aud": "https://other-company.example/oauth/token"},
-      "expect": {"status": 401, "error": "invalid_client"}
+      "mutation": {
+        "aud": "https://other-company.example/oauth/token"
+      },
+      "expect": {
+        "status": 401,
+        "error": "invalid_client"
+      }
     },
     {
       "id": "security.client-assertion-audience-array",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-04"],
+      "requirements": [
+        "GUIDE-jwt-04"
+      ],
       "target": "client_assertion",
-      "mutation": {"aud_array": true},
-      "expect": {"status": 401, "error": "invalid_client"}
+      "mutation": {
+        "aud_array": true
+      },
+      "expect": {
+        "status": 401,
+        "error": "invalid_client"
+      }
     },
     {
       "id": "security.client-assertion-token-endpoint-audience",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.1-05"],
+      "requirements": [
+        "PAP-4.1-05"
+      ],
       "target": "client_assertion",
-      "mutation": {"aud": "token_endpoint"},
-      "expect": {"status": 401, "error": "invalid_client"}
+      "mutation": {
+        "aud": "token_endpoint"
+      },
+      "expect": {
+        "status": 401,
+        "error": "invalid_client"
+      }
     },
     {
-      "id": "security.session-assertion-bad-audience",
+      "id": "security.session-jwt-alg-none",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-04", "PAP-4.2-07"],
-      "target": "session_assertion",
-      "mutation": {"aud": "https://other-company.example/oauth/token"},
-      "expect": {"status": 400, "error": "invalid_grant"}
+      "requirements": [
+        "PAP-4.3-02",
+        "GUIDE-jwt-02"
+      ],
+      "description": "A Session JWT with alg none is refused: alg MUST be ES256 (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "alg": "none"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.session-assertion-token-endpoint-audience",
+      "id": "security.session-jwt-wrong-signature",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.2-07"],
-      "target": "session_assertion",
-      "mutation": {"aud": "token_endpoint"},
-      "expect": {"status": 400, "error": "invalid_grant"}
+      "requirements": [
+        "PAP-4.3-02"
+      ],
+      "description": "A Session JWT whose signature doesn't verify with its delegated key (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "tamper_signature": true
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.session-assertion-five-minutes",
-      "kind": "positive",
-      "role": "company",
-      "requirements": ["PAP-4.2-08"],
-      "target": "session_assertion",
-      "mutation": {"lifetime": 300},
-      "expect": {"status": 200}
-    },
-    {
-      "id": "security.session-assertion-wrong-issuer",
+      "id": "security.session-jwt-wrong-typ",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-03"],
-      "target": "session_assertion",
-      "mutation": {"iss": "https://stranger.example/agent.json"},
-      "expect": {"status": 400, "error": "invalid_grant"}
+      "requirements": [
+        "PAP-4.3-02"
+      ],
+      "description": "typ MUST be poppy-session+jwt, so a client assertion can't pass for one (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "typ": "JWT"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.session-assertion-clock-skew-tolerated",
-      "kind": "positive",
-      "role": "company",
-      "requirements": ["GUIDE-jwt-04"],
-      "target": "session_assertion",
-      "mutation": {"iat_offset": 10},
-      "expect": {"status": 200}
-    },
-    {
-      "id": "security.session-assertion-from-the-future",
+      "id": "security.session-jwt-wrong-kid",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-04"],
-      "target": "session_assertion",
-      "mutation": {"iat_offset": 300},
-      "expect": {"status": 400, "error": "invalid_grant"}
+      "requirements": [
+        "PAP-4.3-03"
+      ],
+      "description": "kid is the delegated key's thumbprint (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "kid": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.session-assertion-expired",
+      "id": "security.session-jwt-signed-with-jwks-key",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-04"],
-      "target": "session_assertion",
-      "mutation": {"iat_offset": -600},
-      "expect": {"status": 400, "error": "invalid_grant"}
+      "requirements": [
+        "PAP-4.3-03"
+      ],
+      "description": "A Session JWT signed directly with a key from jwks_uri, without a delegation, is refused (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "no_delegation": true
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.session-assertion-long-lived",
+      "id": "security.session-jwt-expired-delegation",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-04", "PAP-4.2-08"],
-      "target": "session_assertion",
-      "mutation": {"lifetime": 3600},
-      "expect": {"status": 400, "error": "invalid_grant"}
+      "requirements": [
+        "PAP-4.3-03"
+      ],
+      "description": "A delegation past its exp (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "delegation_iat_offset": -7200,
+        "delegation_lifetime": 3600
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.session-assertion-replay",
+      "id": "security.session-jwt-delegation-over-24-hours",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-jwt-05", "PAP-4.2-09"],
-      "target": "session_assertion",
-      "mutation": {"replay": true},
-      "expect": {"status": 400, "error": "invalid_grant"}
+      "requirements": [
+        "PAP-4.3-03"
+      ],
+      "description": "A delegation's exp is at most 24 hours after its iat (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "delegation_lifetime": 90000
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.browser-assertion-at-token-endpoint",
+      "id": "security.session-jwt-delegation-wrong-typ",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-5-05"],
-      "target": "session_assertion",
-      "mutation": {"typ": "poppy-browser+jwt"},
-      "expect": {"status": 400, "error": "invalid_grant"}
+      "requirements": [
+        "PAP-4.3-03"
+      ],
+      "description": "A delegation's typ is pap-delegation+jwt (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "delegation_typ": "JWT"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.token-request-without-dpop",
+      "id": "security.session-jwt-delegation-stranger-key",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-11"],
-      "target": "token_dpop",
-      "mutation": {"omit": true},
-      "expect": {"status": 400, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-03"
+      ],
+      "description": "A delegation not signed by the key its kid names in jwks_uri (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "delegation_signer": "stranger"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.token-dpop-with-ath",
+      "id": "security.session-jwt-other-audience",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-07"],
-      "target": "token_dpop",
-      "mutation": {"ath": "some-token"},
-      "expect": {"status": 400, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "GUIDE-jwt-04",
+        "PAP-4.3-04"
+      ],
+      "description": "aud is the Company's issuer (§5.3, §10.4).",
+      "target": "session_jwt",
+      "mutation": {
+        "aud": "https://other-company.example"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-alg-none",
+      "id": "security.session-jwt-token-endpoint-audience",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-02", "GUIDE-jwt-02", "PAP-4.3-20"],
-      "target": "resource_dpop",
-      "mutation": {"alg": "none"},
-      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-04"
+      ],
+      "description": "aud is the issuer, compared character for character, never an endpoint (§5.3, §10.4).",
+      "target": "session_jwt",
+      "mutation": {
+        "aud": "token_endpoint"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-wrong-signature",
+      "id": "security.session-jwt-method-mismatch",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-02"],
-      "target": "resource_dpop",
-      "mutation": {"tamper_signature": true},
-      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-04"
+      ],
+      "description": "htm is the request's method (§5.3).",
+      "target": "session_jwt",
+      "mutation": {
+        "htm": "POST"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-other-key",
+      "id": "security.session-jwt-url-mismatch",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-03"],
-      "target": "resource_dpop",
-      "mutation": {"key": "other"},
-      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-04"
+      ],
+      "description": "htu is the request's URL (§5.3).",
+      "target": "session_jwt",
+      "mutation": {
+        "htu": "https://elsewhere.example/api/orders"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-method-mismatch",
+      "id": "security.session-jwt-stale",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-04"],
-      "target": "resource_dpop",
-      "mutation": {"htm": "POST"},
-      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-05"
+      ],
+      "description": "iat is within the acceptance window (§5.3).",
+      "target": "session_jwt",
+      "mutation": {
+        "iat_offset": -300
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-url-mismatch",
+      "id": "security.session-jwt-from-the-future",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-04"],
-      "target": "resource_dpop",
-      "mutation": {"htu": "https://elsewhere.example/api/orders"},
-      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-05"
+      ],
+      "description": "iat is within the acceptance window (§5.3).",
+      "target": "session_jwt",
+      "mutation": {
+        "iat_offset": 300
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-stale",
+      "id": "security.session-jwt-ath-mismatch",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-05"],
-      "target": "resource_dpop",
-      "mutation": {"iat_offset": -300},
-      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-07"
+      ],
+      "description": "ath is the hash of the access token (§5.3).",
+      "target": "session_jwt",
+      "mutation": {
+        "ath": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-header-twice",
+      "id": "security.session-jwt-ath-missing",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-19"],
-      "description": "A token request with two DPoP headers is refused (HTTP 400): exactly one DPoP header holding one JWT."
+      "requirements": [
+        "PAP-4.3-07"
+      ],
+      "description": "A request with an access token carries ath (§5.2).",
+      "target": "session_jwt",
+      "mutation": {
+        "drop_ath": true
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-replay",
+      "id": "security.session-jwt-ath-without-token",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-06"],
-      "target": "resource_dpop",
-      "mutation": {"replay": true},
-      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-07"
+      ],
+      "description": "Without an access token, ath MUST be absent (§5.3).",
+      "target": "session_jwt",
+      "mutation": {
+        "ath": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "signed_out": true
+      },
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-token-hash-mismatch",
+      "id": "security.session-header-missing",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-07"],
-      "target": "resource_dpop",
-      "mutation": {"ath": "another-token"},
-      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-01",
+        "PAP-4.3-11"
+      ],
+      "description": "A request without the Session header is refused, and a company's own access token without it too (§5.3).",
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-missing",
+      "id": "security.session-jwt-replay",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-01", "PAP-4.3-11"],
-      "target": "resource_dpop",
-      "mutation": {"omit": true},
-      "expect": {"status": 401, "error": "invalid_dpop_proof"}
+      "requirements": [
+        "PAP-4.3-06"
+      ],
+      "description": "A Company MAY reject a reused jti (§5.3); the reference company does.",
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
-      "id": "security.dpop-token-as-bearer",
+      "id": "security.session-header-twice",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-10", "PAP-4.3-11"],
-      "target": "resource_dpop",
-      "mutation": {"scheme": "Bearer"},
-      "expect": {"status": 401, "error": "invalid_token"}
+      "requirements": [
+        "PAP-4.3-19"
+      ],
+      "description": "Exactly one Poppy-Session header, one JWT (§5.2).",
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
+    },
+    {
+      "id": "security.session-sub-stays-the-same",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-4.3-03"
+      ],
+      "description": "A known sid keeps its sub (§5.3).",
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
+    },
+    {
+      "id": "security.access-token-of-another-agent",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-4.3-03"
+      ],
+      "description": "The access token was issued to the same client_id as iss (§5.3).",
+      "expect": {
+        "status": 400,
+        "error": "invalid_session"
+      }
     },
     {
       "id": "security.token-in-url-refused",
       "kind": "negative",
       "role": "company",
-      "requirements": ["PAP-4.3-17", "PAP-4.3-16"],
+      "requirements": [
+        "PAP-4.3-17",
+        "PAP-4.3-16"
+      ],
       "description": "A Session Token in the query string, with no Authorization header, is not accepted."
     },
     {
       "id": "security.authorization-header-without-cookies",
       "kind": "positive",
       "role": "company",
-      "requirements": ["PAP-4.3-12"],
+      "requirements": [
+        "PAP-4.3-12"
+      ],
       "description": "A request carrying only Authorization and DPoP, no cookie, is served."
     },
     {
       "id": "security.token-responses-not-cached",
       "kind": "positive",
       "role": "company",
-      "requirements": ["GUIDE-secrets-03"],
+      "requirements": [
+        "GUIDE-secrets-03"
+      ],
       "description": "Every response carrying a token or code has Cache-Control: no-store."
     },
     {
       "id": "security.refusals-disclose-no-credential",
       "kind": "negative",
       "role": "company",
-      "requirements": ["GUIDE-secrets-01", "PAP-4.7-03"],
+      "requirements": [
+        "GUIDE-secrets-01",
+        "PAP-4.7-03"
+      ],
       "description": "A refused request's body never echoes the token, assertion, or credential it carried."
     }
   ]

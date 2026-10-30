@@ -9,7 +9,7 @@ extra). The page gets the whole display — in an MCP result's
 `_meta["reactor.ui/display"]` — with the sign-in page to open and the code to
 enter there. The model gets `model_view()`: the display's text, which names only
 the company's domain, and neither the link (a verification URL may carry the code)
-nor the code. Ada then approves on Manzanita's page, and the Session is signed in.
+nor the code. Ada then approves on Manzanita's page, and Atlas is signed in.
 
 The tool hands the model the model view as is, and of the page's display only its
 shape: field names, the page's host, and whether the link and the code are there.
@@ -26,7 +26,7 @@ from typing import Any
 from pydantic_ai import Agent
 from reactor.ui import DISPLAY_META_KEY
 
-from personal_agent_protocol import DeviceSignInClient, DiscoveryClient, SessionClient
+from personal_agent_protocol import DeviceSignInClient, DiscoveryClient
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
@@ -38,7 +38,6 @@ from personal_agent_protocol.demo.manzanita import DOMAIN, manzanita
 from personal_agent_protocol.ui import WAITING_FOR_THE_PERSON, PapSignIn
 
 TENANT = "atlas-example"
-PAIRWISE = "usr_ada_at_manzanita_000000"
 
 agent = Agent(
     instructions=(
@@ -67,13 +66,6 @@ async def read_sign_in_display() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    session = await SessionClient(reactor=reactor, http_client=http).start(
-        client_id=atlas.client_id,
-        pairwise_user_id=PAIRWISE,
-        issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
-        tenant_id=TENANT,
-    )
     device = DeviceSignInClient(reactor=reactor, http_client=http)
     started = await device.begin(
         device_authorization_endpoint=metadata.device_authorization_endpoint,
@@ -82,7 +74,6 @@ async def read_sign_in_display() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -131,7 +122,7 @@ async def read_sign_in_display() -> dict[str, Any]:
         },
         "after_approval": {
             "status": done.status,
-            "signed_in": bool(done.token and done.token.signed_in),
+            "signed_in": done.token is not None,
         },
     }
 

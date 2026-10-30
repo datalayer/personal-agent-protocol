@@ -61,16 +61,16 @@ async def test_a_signed_out_and_a_signed_in_session_report_with_no_scope() -> No
     endpoint = feedback_endpoint(world.company.document)
     assert endpoint == FEEDBACK
     client = FeedbackClient(transport=world.transport)
-    # The task can be done after all: 200 and an alternative, content from the company (§8.3).
-    alternative = await client.report(endpoint, GIFT_CARD, token=session, **world.who)
+    # The task can be done after all: 200 and an alternative, content from the company (§9.3).
+    alternative = await client.report(endpoint, GIFT_CARD, session=session)
     assert alternative is not None and alternative.instructions
     assert [r.type for r in alternative.usable_references(world.company.document)] == ["web"]
     token = await signed_in(world)
     await client.report(
         endpoint,
         FeedbackReport(task="Return a jacket", description="No return option in any channel."),
+        session=world.session,
         token=token,
-        **world.who,
     )
     reports = await world.shop.feedback_reports()
     assert [report.task for report in reports] == ["Pay with a gift card", "Return a jacket"]
@@ -88,10 +88,9 @@ async def test_the_company_ignores_unknown_members_and_refuses_a_malformed_repor
         return await world.transport.request(
             "POST",
             FEEDBACK,
-            token=session,
+            session=session,
             headers={"Content-Type": "application/json"},
             content=json.dumps(body).encode(),
-            **world.who,
         )
 
     # A member it doesn't recognize, such as the withdrawn `kind`, is ignored (§9.3).
@@ -107,9 +106,9 @@ async def test_the_company_ignores_unknown_members_and_refuses_a_malformed_repor
     ):
         refused = await post(body)
         assert refused.status_code == 400 and refused.json() == {"error": "invalid_request"}
-    # Only with a Session Token.
+    # Only with the Session header.
     bare = await world.http.post(FEEDBACK, json=GIFT_CARD.model_dump())
-    assert bare.status_code == 401
+    assert (bare.status_code, bare.json()) == (400, {"error": "invalid_session"})
     assert len(await world.shop.feedback_reports()) == 1
 
 
@@ -127,9 +126,7 @@ async def test_feedback_refusals_carry_their_code_and_retry_after() -> None:
     session = await world.signed_out_session()
     world.shop.reactor.register_plugin(PluginManifest(name="limit", version="1"), Limit())
     with pytest.raises(FeedbackError) as raised:
-        await FeedbackClient(transport=world.transport).report(
-            FEEDBACK, GIFT_CARD, token=session, **world.who
-        )
+        await FeedbackClient(transport=world.transport).report(FEEDBACK, GIFT_CARD, session=session)
     assert (raised.value.code, raised.value.status_code) == ("rate_limited", 429)
     assert raised.value.details == {"retry_after": "30"}
 
@@ -141,7 +138,5 @@ async def test_a_company_without_feedback_neither_lists_nor_accepts_it() -> None
     session = await world.signed_out_session()
     assert feedback_endpoint(world.company.document) is None
     with pytest.raises(FeedbackError) as raised:
-        await FeedbackClient(transport=world.transport).report(
-            FEEDBACK, GIFT_CARD, token=session, **world.who
-        )
+        await FeedbackClient(transport=world.transport).report(FEEDBACK, GIFT_CARD, session=session)
     assert raised.value.status_code == 404

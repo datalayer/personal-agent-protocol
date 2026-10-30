@@ -47,10 +47,10 @@ from .errors import PersonalAgentProtocolError, ProtocolValidationError, Transpo
 from .json import loads_strict
 from .models import ClientMetadata, DiscoveryDocument, Message, Operation, ProtocolModel
 from .reactor import CLOCKS, STANDING_PERMISSION_STORES, Clock, first_contribution
-from .refusals import challenge_parameters, refusal_details
-from .sessions import SessionToken
+from .refusals import refusal_code, refusal_details
+from .sessions import AccessToken, PapSession
 from .telemetry import by_endpoint, operation_result, traced
-from .transport import DpopHttpClient
+from .transport import SessionHttpClient
 
 OPERATIONS_EXTENSION = "operations"
 OPERATIONS_VERSION = "1"
@@ -298,7 +298,9 @@ class ConfirmOutcome(ProtocolModel):
 class OperationsClient:
     """Read, confirm, and cancel operations at a negotiated endpoint."""
 
-    def __init__(self, *, transport: DpopHttpClient, max_response_bytes: int = 256 * 1024) -> None:
+    def __init__(
+        self, *, transport: SessionHttpClient, max_response_bytes: int = 256 * 1024
+    ) -> None:
         if max_response_bytes <= 0:
             raise ValueError("max_response_bytes must be positive")
         self.transport = transport
@@ -311,13 +313,10 @@ class OperationsClient:
         endpoint: str,
         operation_id: str,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
     ) -> Operation:
-        response = await self._request(
-            "GET", endpoint, operation_id, None, token, tenant_id, issuer
-        )
+        response = await self._request("GET", endpoint, operation_id, None, session, token)
         payload = self._payload(response)
         if response.status_code != 200:
             raise self._error(response, payload)
@@ -331,9 +330,8 @@ class OperationsClient:
         *,
         approval: UserApproval | None = None,
         standing: tuple[str, str, str] | None = None,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
     ) -> ConfirmOutcome:
         """Confirm the revision the user approved, or one a standing permission covers.
 
@@ -352,18 +350,16 @@ class OperationsClient:
                 endpoint,
                 f"{operation.operation_id}/confirm",
                 body,
+                session,
                 token,
-                tenant_id,
-                issuer,
             )
         except TransportError:
             # The answer was lost: the company may have performed it. Read it back.
             current = await self.read(
                 endpoint,
                 operation.operation_id,
+                session=session,
                 token=token,
-                tenant_id=tenant_id,
-                issuer=issuer,
             )
             await _settle(held, spent=current.state != "proposed")
             if current.state == "proposed":
@@ -455,9 +451,8 @@ class OperationsClient:
         endpoint: str,
         operation_id: str,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
     ) -> Operation:
         """Cancel: a proposal becomes `cancelled`; one in progress stops if it can."""
 
@@ -466,9 +461,8 @@ class OperationsClient:
             endpoint,
             f"{operation_id}/cancel",
             b"{}",
+            session,
             token,
-            tenant_id,
-            issuer,
         )
         payload = self._payload(response)
         if response.status_code != 200:
@@ -481,9 +475,8 @@ class OperationsClient:
         endpoint: str,
         path: str,
         body: bytes | None,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
     ) -> httpx.Response:
         if not _IDENTIFIER.fullmatch(path.split("/", 1)[0]):
             raise ProtocolValidationError("invalid_identifier", "operation ID is invalid")
@@ -493,9 +486,8 @@ class OperationsClient:
         return await self.transport.request(
             method,
             f"{endpoint.rstrip('/')}/{path}",
+            session=session,
             token=token,
-            tenant_id=tenant_id,
-            issuer=issuer,
             headers=headers,
             content=body,
         )
@@ -521,10 +513,8 @@ class OperationsClient:
 
     @staticmethod
     def _error(response: httpx.Response, payload: object) -> OperationError:
-        code = payload.get("error") if isinstance(payload, dict) else None
-        if not isinstance(code, str):
-            # A token error may come only in WWW-Authenticate (spec §6).
-            code = challenge_parameters(response.headers.get("www-authenticate", "")).get("error")
+        # In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
+        code = refusal_code(response, payload, "operation_request_failed")
         details = refusal_details(response, payload)
         return OperationError(
             code if isinstance(code, str) else "operation_request_failed",

@@ -14,7 +14,7 @@ handoff, and closing.
 ## Streaming over SSE (§7.6)
 
 ```python
-async for item in conversations.stream(endpoint, conversation_id, token=token, **who):
+async for item in conversations.stream(endpoint, conversation_id, session=session):
     if isinstance(item, TextDelta):
         ui.show_typing(item.message_id, item.text)   # display only
     elif isinstance(item, StreamReconnected):

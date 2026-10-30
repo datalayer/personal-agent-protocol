@@ -56,7 +56,6 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
     auth = company.document.auth
     if not (auth is not None and auth.mediated is not None and company.oauth_metadata):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "issuer": auth.issuer}
     sessions = SessionClient(reactor=reactor, http_client=http)
 
     async def signed_out_session():  # type: ignore[no-untyped-def]
@@ -64,7 +63,6 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
             client_id=atlas.client_id,
             pairwise_user_id=PAIRWISE,
             issuer=auth.issuer,
-            token_endpoint=company.oauth_metadata.token_endpoint,  # type: ignore[union-attr]
             tenant_id=TENANT,
         )
 
@@ -81,8 +79,7 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
             organization=company.document.organization,
             issuer=auth.issuer,
             scopes=("orders:read",),
-            token=session,
-            tenant_id=TENANT,
+            session=session,
         )
         off_domain_refused = "not refused"
     except AuthorizationError as error:
@@ -95,23 +92,21 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
         organization=company.document.organization,
         issuer=auth.issuer,
         scopes=("orders:read", "orders:write"),
-        token=session,
-        tenant_id=TENANT,
+        session=session,
     )
     if not (started.reference is not None):
         raise RuntimeError("the example world is incomplete")
 
-    # Only the Session that started the sign-in may finish it: another Session Key is
-    # another Session.
+    # Only the Session that started the sign-in may finish it.
     stranger = await signed_out_session()
     try:
-        await mediated.submit_code(started.reference, token=stranger, **who)
+        await mediated.submit_code(started.reference, session=stranger)
         other_session = "accepted"
     except AuthorizationError as error:
         other_session = error.code
 
-    wrong = await mediated.submit_code(started.reference, token=session, **who)
-    done = await mediated.submit_code(started.reference, token=session, **who)
+    wrong = await mediated.submit_code(started.reference, session=session)
+    done = await mediated.submit_code(started.reference, session=session)
     await http.aclose()
 
     return {
@@ -126,11 +121,9 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
         "wrong_code": wrong.status,
         "same_reference_after_wrong_code": wrong.reference == started.reference,
         "final_status": done.status,
-        "same_session_signed_in": done.token is not None
-        and done.token.signed_in
-        and done.token.session_key == session.session_key,
+        "signed_in": done.token is not None,
         "granted_scopes": done.granted_scopes,
-        "account_token_stored_by_reference": done.account_token_reference in host.vault.values,
+        "refresh_token_stored_by_reference": done.refresh_token_reference in host.vault.values,
         "protected_input_purposes": [request.purpose for request in typed.asked],
         "credentials_and_codes_withheld": True,
         "tokens_withheld": True,

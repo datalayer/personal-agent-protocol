@@ -12,23 +12,23 @@ from pydantic_ai import Agent
 from reactor import PluginManifest
 
 from personal_agent_protocol import (
-    DPOP_PROOF_PROVIDERS,
+    SESSION_SIGNERS,
     ConversationClient,
-    DpopHttpClient,
-    SessionToken,
+    SessionClient,
+    SessionHttpClient,
     build_pap_reactor,
 )
 
 
-class Proofs:
-    async def create(self, request: object) -> SecretStr:
-        return SecretStr("host-only-proof")
+class SessionJwts:
+    async def sign(self, request: object) -> SecretStr:
+        return SecretStr("host-only-session-jwt")
 
 
 class Plugin:
     def provide_contributions(self, contributions: object) -> None:
         contributions.contribute(  # type: ignore[attr-defined]
-            DPOP_PROOF_PROVIDERS, Proofs(), contribution_id="protected-dpop"
+            SESSION_SIGNERS, SessionJwts(), contribution_id="protected-session-signer"
         )
 
 
@@ -87,23 +87,20 @@ async def read_conversation_events() -> dict[str, object]:
                 )
             ],
         )
-        client = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
-        token = SessionToken(
-            access_token=SecretStr("host-only-token"),
-            token_type="DPoP",  # noqa: S106 - OAuth token type
-            expires_in=300,
-            # The Session Key's JWK thumbprint names the Session; it stays in the host.
-            session_key="NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
-            signed_in=False,
+        client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
+        # A Session is local: signed out, and with no request sent.
+        session = await SessionClient(reactor=reactor, http_client=http).start(
+            client_id="https://assistant.example/agent.json",
+            pairwise_user_id="usr_host_only_example",
+            issuer="https://auth.shop.example",
+            tenant_id="demo",
         )
         events = [
             event
             async for event in client.events(
                 "https://api.shop.example/poppy/conversations",
                 "cnv_demo",
-                token=token,
-                tenant_id="demo",
-                issuer="https://auth.shop.example",
+                session=session,
                 wait=30,
             )
         ]

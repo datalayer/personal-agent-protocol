@@ -182,17 +182,18 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
 
     started = pap("sessions", "start", "--json")["session"]
     session = started["id"]
-    assert (
-        started["signed_in"] is False
-        and started["token_reference"] == f"session:{started['session_key']}"
-    )
+    # A Session is local: its handle is `ses_` and its `sid`, and it holds no token yet.
+    assert session == f"ses_{started['sid']}"
+    assert started["signed_in"] is False and started["refresh_reference"] is None
+    assert started["token_reference"] == f"session:{started['sid']}"
+    assert not (pap.state / "secrets.json").exists()
     assert "pairwise_user_id" not in started
 
     # Mediated Sign-In: credentials and the one-time code from stdin, never as options.
     lines = f"{ADA['email']}\n{ADA['password']}\n{ADA_CODE}\n"
     signed = pap("auth", "mediated", session, *SCOPES, "--stdin", "--json", input=lines)["session"]
     assert signed["signed_in"] and signed["scope"] == "orders:read orders:write"
-    assert signed["account_reference"].startswith("account")
+    assert signed["refresh_reference"]
 
     orders = pap("api", "openapi", session, "GET", "/api/orders", "--json")
     assert orders["body"]["orders"][0]["order_id"] == "ord_7Hk2"
@@ -243,7 +244,7 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
     current = pap("operations", "show", session, operation, "--json")["operation"]
     # The right digest of the right revision: only the binding to the token store is missing.
     real = approve(Operation.model_validate(current)).model_dump(mode="json")
-    forged = {**real, "session_key": session, "mac": "forged"}
+    forged = {**real, "session": session, "mac": "forged"}
     state["approvals"] = {operation: forged}
     (pap.state / "state.json").write_text(json.dumps(state))
     pap("operations", "confirm", session, operation, "--revision", "1", code=6)
@@ -284,9 +285,13 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
     pap("conversations", "close", session, direct, "--json")
     assert pap("conversations", "close", session, conversation, "--json")["status"] == "closed"
 
-    # Sign out: the Session continues signed out; renewal is signed out.
+    # A new access token from the refresh token.
+    renewed = pap("sessions", "renew", session, "--json")["session"]
+    assert renewed["signed_in"] is True and renewed["scope"] == "orders:read orders:write"
+
+    # Sign out: the Session continues signed out, with no refresh token to renew from.
     assert pap("auth", "disconnect", session, "--json")["session"]["signed_in"] is False
-    assert pap("sessions", "renew", session, "--json")["session"]["signed_in"] is False
+    assert "not_signed_in" in pap("sessions", "renew", session, code=3).output
     pap("api", "openapi", session, "GET", "/api/orders", code=1)
     listed = pap("sessions", "show", "--json")["sessions"]
     assert [item["id"] for item in listed] == [session]
@@ -315,6 +320,25 @@ def test_device_sign_in_waits_for_the_user_and_times_out(tmp_path: Path) -> None
     other = waiting("sessions", "start", "--json")["session"]["id"]
     result = waiting("auth", "device", other, *SCOPES, "--timeout", "12", code=5)
     assert "authorization_pending" in result.output
+
+
+def test_disconnect_revokes_every_refresh_token_held_for_that_user(tmp_path: Path) -> None:
+    pap = Pap(tmp_path)
+    pap.set_up()
+    first = pap("sessions", "start", "--json")["session"]["id"]
+    second = pap("sessions", "start", "--json")["session"]["id"]
+    other_user = pap("sessions", "start", "--user", "grace", "--json")["session"]["id"]
+    for session in (first, second, other_user):
+        pap("auth", "device", session, "--scope", "orders:read", "--json")
+    assert first != second
+
+    pap("auth", "disconnect", first, "--json")
+
+    assert pap("sessions", "show", second, "--json")["session"]["signed_in"] is False
+    pap("api", "openapi", second, "GET", "/api/orders", code=1)
+    # Another user of this agent keeps theirs.
+    assert pap("sessions", "renew", other_user, "--json")["session"]["signed_in"] is True
+    assert pap("api", "openapi", other_user, "GET", "/api/orders", "--json")["body"]["orders"]
 
 
 def test_exit_codes_for_setup_input_refusals_and_usage(tmp_path: Path) -> None:

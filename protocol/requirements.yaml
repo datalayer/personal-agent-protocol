@@ -115,10 +115,10 @@ requirements:
   - personal_agent_protocol.models:_https_url
   - personal_agent_protocol.device:DeviceAuthorizationResponse
   - personal_agent_protocol.mcp:McpServerMetadata
-  - personal_agent_protocol.transport:DpopHttpClient
+  - personal_agent_protocol.transport:SessionHttpClient
   tests:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_token_type_is_chosen_by_the_mcp_server
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url
   conformance:
   - protocol.feedback-endpoint-https
 - id: PAP-3-07
@@ -144,14 +144,14 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.refusals:refuse_redirect
-  - personal_agent_protocol.transport:DpopHttpClient
+  - personal_agent_protocol.transport:SessionHttpClient
   - personal_agent_protocol.sessions:SessionClient
-  - personal_agent_protocol.accounts:AccountTokenClient
+  - personal_agent_protocol.accounts:RefreshTokenClient
   - personal_agent_protocol.device:DeviceSignInClient
   - personal_agent_protocol.auth:DirectSignInClient
   - personal_agent_protocol.mcp:McpClient
   tests:
-  - personal_agent_protocol/__tests__/test_transport.py::test_nonce_retry_uses_a_fresh_proof_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_transport.py::test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
   - personal_agent_protocol/__tests__/test_transport.py::test_refuses_cross_origin_redirect_and_protected_headers
   - personal_agent_protocol/__tests__/test_sessions.py::test_a_redirect_at_the_token_endpoint_gets_nothing
   - personal_agent_protocol/__tests__/test_mediated.py::test_a_redirect_never_carries_the_credentials_elsewhere
@@ -336,10 +336,10 @@ requirements:
     that works at every Company.
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
-  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.verify:verify_session_jwt
+  - personal_agent_protocol.company.service:CompanyService._caller
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
 - id: PAP-3.2-10
   section: '3.2'
@@ -360,11 +360,10 @@ requirements:
     an MCP server, where the list in the server's protected resource metadata applies (4.3).
   status: partial
   implementation:
-  - personal_agent_protocol.crypto:JoseDpopProofProvider
-  - personal_agent_protocol.crypto:InMemorySessionKeys
-  - personal_agent_protocol.cli_host:FileKeyStore.generate
+  - personal_agent_protocol.crypto:DelegatedSessionSigner
+  - personal_agent_protocol.crypto:InMemoryDelegatedKeys
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   reason: The SDK's DPoP keys are P-256 and sign ES256, which every company and DPoP MCP server accepts;
     a host that contributes an RS256 DPoP key is not checked against the company's list.
@@ -490,12 +489,12 @@ requirements:
   implementation:
   - personal_agent_protocol.sessions:build_client_assertion_claims
   - personal_agent_protocol.sessions:SessionClient
-  - personal_agent_protocol.accounts:AccountTokenClient
+  - personal_agent_protocol.accounts:RefreshTokenClient
   - personal_agent_protocol.device:DeviceSignInClient
   - personal_agent_protocol.auth:DirectSignInClient
   tests:
   - personal_agent_protocol/__tests__/test_sessions.py::test_a_client_assertion_names_the_issuer_and_lives_at_most_five_minutes
-  - personal_agent_protocol/__tests__/test_sessions.py::test_both_assertions_name_the_issuer_and_live_one_minute
+  - personal_agent_protocol/__tests__/test_sessions.py::test_a_client_assertion_names_the_issuer_and_lives_one_minute
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
 - id: PAP-4.1-05
   section: '4.1'
@@ -546,7 +545,7 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._issue
-  - personal_agent_protocol.sessions:SessionToken
+  - personal_agent_protocol.sessions:AccessToken
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
@@ -570,9 +569,9 @@ requirements:
   text: Personal Agents MUST NOT depend on their contents; everything they need is in the response.
   status: implemented
   implementation:
-  - personal_agent_protocol.sessions:SessionToken
+  - personal_agent_protocol.sessions:AccessToken
   tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_parses_session_token_as_opaque_secret
+  - personal_agent_protocol/__tests__/test_sessions.py::test_parses_an_access_token_as_opaque_secret
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - lifecycle.signed-out-session
@@ -597,14 +596,9 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.company.verify:verify_assertion
-  - personal_agent_protocol.company.service:CompanyService._session_grant
-  - personal_agent_protocol.sessions:build_session_assertion_claims
+  - personal_agent_protocol.company.service:CompanyService._session
   tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_builds_short_lived_session_assertion_claims
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - security.session-assertion-token-endpoint-audience
-  - security.session-assertion-bad-audience
 - id: PAP-4.2-08
   section: '4.2'
   level: MUST
@@ -613,16 +607,12 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.sessions:ASSERTION_MAX_LIFETIME_SECONDS
-  - personal_agent_protocol.sessions:SessionAssertionClaims
   - personal_agent_protocol.sessions:ClientAssertionClaims
   - personal_agent_protocol.company.verify:verify_assertion
   tests:
   - personal_agent_protocol/__tests__/test_sessions.py::test_a_client_assertion_names_the_issuer_and_lives_at_most_five_minutes
   - personal_agent_protocol/__tests__/test_security_review.py::test_o7_an_assertion_lives_at_most_five_minutes_and_names_a_long_jti
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - security.session-assertion-five-minutes
-  - security.session-assertion-long-lived
 - id: PAP-4.2-09
   section: '4.2'
   level: MUST
@@ -636,8 +626,6 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_replayed_token_request_is_refused
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - security.session-assertion-replay
 - id: PAP-4.2-10
   section: '4.2'
   level: MUST NOT
@@ -683,10 +671,8 @@ requirements:
   status: partial
   reason: The SDK checks the Agent ID's form (an opaque URL-safe identifier); the host chooses it and
     owns keeping personal information out of it, as for User IDs.
-  implementation:
-  - personal_agent_protocol.sessions:SessionAssertionClaims
   tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_an_agent_id_rides_in_the_session_assertion
+  - personal_agent_protocol/__tests__/test_sessions.py::test_an_agent_id_rides_in_the_session
 - id: PAP-4.2-21
   section: '4.2'
   level: MUST
@@ -695,8 +681,8 @@ requirements:
     MUST send the same Agent ID, or none if it started without one.'
   status: implemented
   implementation:
-  - personal_agent_protocol.sessions:SessionClient.renew
-  - personal_agent_protocol.company.service:CompanyService._session_grant
+  - personal_agent_protocol.sessions:SessionClient.start
+  - personal_agent_protocol.company.service:CompanyService._session
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_a_session_keeps_the_agent_id_it_started_with
 - id: PAP-4.2-22
@@ -706,10 +692,8 @@ requirements:
   text: A Company SHOULD remember the keys of the Sessions it ended, for as long as it chooses, and reject
     them with invalid_grant.
   status: implemented
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService._session_by_key
   tests:
-  - personal_agent_protocol/__tests__/test_draft_03.py::test_an_ended_sessions_key_is_refused_not_a_new_session
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_an_ended_sessions_sid_is_refused_not_a_new_session
 - id: PAP-4.2-23
   section: '4.2'
   level: MUST NOT
@@ -718,12 +702,11 @@ requirements:
     a new Session with a new key.
   status: implemented
   implementation:
-  - personal_agent_protocol.sessions:SessionClient.renew
-  - personal_agent_protocol.crypto:JoseDpopProofProvider.discard_session_key
+  - personal_agent_protocol.sessions:SessionClient.start
   tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_invalid_grant_on_a_renewal_discards_the_key_for_good
-  - personal_agent_protocol/__tests__/test_accounts.py::test_invalid_grant_on_both_means_the_session_ended
-  - personal_agent_protocol/__tests__/test_draft_03.py::test_an_ended_sessions_key_is_refused_not_a_new_session
+  - personal_agent_protocol/__tests__/test_sessions.py::test_a_new_session_replaces_an_ended_one_for_the_same_user
+  - personal_agent_protocol/__tests__/test_accounts.py::test_invalid_grant_forgets_the_token_and_the_sessions_go_on_signed_out
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_an_ended_sessions_sid_is_refused_not_a_new_session
 - id: PAP-4.2-24
   section: '4.2'
   level: MUST
@@ -745,13 +728,13 @@ requirements:
     DPoP scheme, together with a DPoP Proof (RFC 9449).
   status: implemented
   implementation:
-  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.transport:SessionHttpClient.request
   tests:
-  - personal_agent_protocol/__tests__/test_transport.py::test_nonce_retry_uses_a_fresh_proof_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_transport.py::test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - conversations.start-and-reply
-  - security.dpop-missing
+  - security.session-header-missing
 - id: PAP-4.3-02
   section: '4.3'
   level: MUST
@@ -760,16 +743,15 @@ requirements:
     proof''s signature verifies with the key in its header.'
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
-  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.verify:verify_session_jwt
   - personal_agent_protocol.company.service:CompanyService._caller
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
-  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
+  - personal_agent_protocol/__tests__/test_security_review.py::test_a_copied_access_token_is_worth_nothing_without_the_agents_session_jwt
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - security.dpop-alg-none
-  - security.dpop-wrong-signature
+  - security.session-jwt-alg-none
+  - security.session-jwt-wrong-signature
 - id: PAP-4.3-03
   section: '4.3'
   level: MUST
@@ -778,15 +760,12 @@ requirements:
     requests with a Session Token, the key is the one the token is bound to.'
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
-  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.verify:verify_session_jwt
   - personal_agent_protocol.company.service:CompanyService._caller
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
-  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
+  - personal_agent_protocol/__tests__/test_security_review.py::test_a_copied_access_token_is_worth_nothing_without_the_agents_session_jwt
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - security.dpop-other-key
 - id: PAP-4.3-04
   section: '4.3'
   level: MUST
@@ -795,16 +774,15 @@ requirements:
     and htu match the request.'
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
-  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.verify:verify_session_jwt
   - personal_agent_protocol.company.service:CompanyService._caller
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
-  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
+  - personal_agent_protocol/__tests__/test_security_review.py::test_a_copied_access_token_is_worth_nothing_without_the_agents_session_jwt
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - security.dpop-method-mismatch
-  - security.dpop-url-mismatch
+  - security.session-jwt-method-mismatch
+  - security.session-jwt-url-mismatch
 - id: PAP-4.3-05
   section: '4.3'
   level: MUST
@@ -814,15 +792,14 @@ requirements:
     by iat, or by when it issued the proof''s nonce.'
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
-  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.verify:verify_session_jwt
   - personal_agent_protocol.company.service:CompanyService._caller
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
-  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
+  - personal_agent_protocol/__tests__/test_security_review.py::test_a_copied_access_token_is_worth_nothing_without_the_agents_session_jwt
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - security.dpop-stale
+  - security.session-jwt-stale
 - id: PAP-4.3-06
   section: '4.3'
   level: MUST
@@ -831,17 +808,16 @@ requirements:
     the acceptance window, because a replayed proof there could get a new token.
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
-  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.verify:verify_session_jwt
   - personal_agent_protocol.company.service:CompanyService._caller
   - personal_agent_protocol.company.points:StoreReplayCache
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
-  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
+  - personal_agent_protocol/__tests__/test_security_review.py::test_a_copied_access_token_is_worth_nothing_without_the_agents_session_jwt
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_replayed_token_request_is_refused
   conformance:
-  - security.dpop-replay
+  - security.session-jwt-replay
 - id: PAP-4.3-07
   section: '4.3'
   level: MUST
@@ -850,16 +826,14 @@ requirements:
     requests with a Session Token, ath matches the token.'
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
-  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.verify:verify_session_jwt
   - personal_agent_protocol.company.service:CompanyService._caller
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
-  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
+  - personal_agent_protocol/__tests__/test_security_review.py::test_a_copied_access_token_is_worth_nothing_without_the_agents_session_jwt
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - security.token-dpop-with-ath
-  - security.dpop-token-hash-mismatch
+  - security.session-jwt-ath-mismatch
 - id: PAP-4.3-08
   section: '4.3'
   level: MUST
@@ -867,17 +841,13 @@ requirements:
   text: Personal Agents MUST support nonces.
   status: implemented
   implementation:
-  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.transport:SessionHttpClient.request
   - personal_agent_protocol.sessions:SessionClient.token_request
-  - personal_agent_protocol.mcp:McpDpopAuth
   - personal_agent_protocol.device:DeviceSignInClient.poll
   tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_retries_once_with_a_fresh_dpop_nonce_and_assertions
-  - personal_agent_protocol/__tests__/test_transport.py::test_nonce_retry_uses_a_fresh_proof_and_a_redirect_gets_nothing
-  - personal_agent_protocol/__tests__/test_accounts.py::test_one_dpop_nonce_retry_with_a_fresh_proof
-  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_company_requiring_nonces_and_the_personal_agent_retrying_with_them
-  - personal_agent_protocol/__tests__/test_device.py::test_the_device_poll_retries_once_with_the_token_endpoints_nonce
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_dpop_mcp_server_retries_once_with_its_nonce
+  - personal_agent_protocol/__tests__/test_transport.py::test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_company_ending_a_session_and_the_personal_agent_starting_a_new_one
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_an_mcp_server_that_ends_the_session_gets_a_new_one_once
 - id: PAP-4.3-09
   section: '4.3'
   level: MUST
@@ -886,14 +856,14 @@ requirements:
     url from poppy.json, as MCP authorization requires.
   status: implemented
   implementation:
-  - personal_agent_protocol.sessions:SessionClient.renew
-  - personal_agent_protocol.sessions:SessionClient.token_for_mcp
-  - personal_agent_protocol.accounts:AccountTokenClient.refresh
+  - personal_agent_protocol.sessions:SessionClient.start
+  - personal_agent_protocol.accounts:RefreshTokenClient.token_for_mcp
+  - personal_agent_protocol.accounts:RefreshTokenClient.refresh
   tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_a_bearer_token_for_an_mcp_server_comes_from_token_exchange
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_token_type_is_chosen_by_the_mcp_server
+  - personal_agent_protocol/__tests__/test_accounts.py::test_a_token_for_an_mcp_server_names_it_as_the_resource
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url
   conformance:
-  - lifecycle.mcp-bearer-for-its-url
+  - lifecycle.mcp-token-for-its-url
 - id: PAP-4.3-10
   section: '4.3'
   level: MUST
@@ -905,14 +875,12 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._caller
   - personal_agent_protocol.company.service:CompanyService._mcp_caller
   - personal_agent_protocol.company.service:CompanyService._token
-  - personal_agent_protocol.mcp:McpBearerAuth
   tests:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_an_mcp_token_is_refused_everywhere_but_its_mcp_server
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  - personal_agent_protocol/__tests__/test_conformance.py::test_the_mcp_cases_pass_against_an_mcp_server_without_dpop
+  - personal_agent_protocol/__tests__/test_conformance.py::test_the_mcp_cases_pass_with_a_token_for_the_servers_url
   conformance:
-  - lifecycle.mcp-bearer-only-at-mcp
-  - security.dpop-token-as-bearer
+  - lifecycle.mcp-token-only-at-mcp
 - id: PAP-4.3-11
   section: '4.3'
   level: MUST
@@ -928,11 +896,8 @@ requirements:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_an_mcp_token_is_refused_everywhere_but_its_mcp_server
   conformance:
-  - security.token-request-without-dpop
-  - security.dpop-missing
-  - security.dpop-token-as-bearer
-  - lifecycle.mcp-bearer-only-at-mcp
-  - lifecycle.mcp-token-type-by-server
+  - security.session-header-missing
+  - lifecycle.mcp-token-only-at-mcp
 - id: PAP-4.3-12
   section: '4.3'
   level: MUST
@@ -953,7 +918,7 @@ requirements:
     leave it out to appear to the Company as a person on their own.
   status: implemented
   implementation:
-  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.transport:SessionHttpClient.request
   - personal_agent_protocol.conversations:ConversationClient
   - personal_agent_protocol.apis:ApiClient.call
   tests:
@@ -966,7 +931,7 @@ requirements:
     leave it out to appear to the Company as a person on their own.
   status: implemented
   implementation:
-  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.transport:SessionHttpClient.request
   tests:
   - personal_agent_protocol/__tests__/test_conversations.py::test_start_and_continue_preserve_message_ids_and_parse_waited_events
 - id: PAP-4.3-15
@@ -977,12 +942,10 @@ requirements:
     from then on.
   status: implemented
   implementation:
-  - personal_agent_protocol.sessions:SessionClient.renew
-  - personal_agent_protocol.accounts:AccountTokenClient.refresh
+  - personal_agent_protocol.sessions:SessionClient.start
+  - personal_agent_protocol.accounts:RefreshTokenClient.refresh
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - lifecycle.renew-signed-out
 - id: PAP-4.3-16
   section: '4.3'
   level: MUST NOT
@@ -990,10 +953,10 @@ requirements:
   text: Personal Agents MUST NOT send tokens in a URL, and Companies MUST NOT accept them from one.
   status: implemented
   implementation:
-  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.transport:SessionHttpClient.request
   - personal_agent_protocol.conversations:ConversationClient._query
   tests:
-  - personal_agent_protocol/__tests__/test_transport.py::test_nonce_retry_uses_a_fresh_proof_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_transport.py::test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - security.token-in-url-refused
@@ -1034,14 +997,14 @@ requirements:
     request has exactly one DPoP header, holding a well-formed JWT with the claims above.'
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
+  - personal_agent_protocol.company.verify:verify_session_jwt
   - personal_agent_protocol.company.asgi:_headers
-  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.service:CompanyService._caller
   tests:
-  - personal_agent_protocol/__tests__/test_security_review.py::test_finding_10_a_repeated_dpop_header_is_an_invalid_proof
+  - personal_agent_protocol/__tests__/test_security_review.py::test_finding_10_a_repeated_session_header_is_invalid_session
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - security.dpop-header-twice
+  - security.session-header-twice
 - id: PAP-4.3-20
   section: '4.3'
   level: MUST
@@ -1051,14 +1014,12 @@ requirements:
     public key and no private key.'
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
-  - personal_agent_protocol.company.service:CompanyService._dpop
+  - personal_agent_protocol.company.verify:verify_session_jwt
+  - personal_agent_protocol.company.service:CompanyService._caller
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_private_dpop_jwk_in_protected_header
-  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_dpop_request_or_token_mismatch
+  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_private_material_in_a_public_jwk
+  - personal_agent_protocol/__tests__/test_security_review.py::test_a_copied_access_token_is_worth_nothing_without_the_agents_session_jwt
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - security.dpop-alg-none
 - id: PAP-4.3-21
   section: '4.3'
   level: MUST
@@ -1067,12 +1028,10 @@ requirements:
     matches one the Company issued, if it requires nonces.'
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._dpop
-  - personal_agent_protocol.company.service:CompanyService._issue_nonce
-  - personal_agent_protocol.company.service:CompanyService._nonce_issued
+  - personal_agent_protocol.company.service:CompanyService._caller
   - personal_agent_protocol.company.service:CompanyConfig
   tests:
-  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_company_requiring_nonces_and_the_personal_agent_retrying_with_them
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_company_ending_a_session_and_the_personal_agent_starting_a_new_one
 - id: PAP-4.3-22
   section: '4.3'
   level: MUST
@@ -1081,14 +1040,12 @@ requirements:
     use it for any other Session, so Companies can't link Sessions or Users by their keys.
   status: implemented
   implementation:
-  - personal_agent_protocol.reactor:DpopProofProvider
-  - personal_agent_protocol.crypto:JoseDpopProofProvider.new_session_key
-  - personal_agent_protocol.crypto:InMemorySessionKeys
-  - personal_agent_protocol.cli_host:FileKeyStore.generate
+  - personal_agent_protocol.reactor:SessionSigner
+  - personal_agent_protocol.crypto:InMemoryDelegatedKeys
   - personal_agent_protocol.sessions:SessionClient.start
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_each_session_has_a_key_of_its_own_until_it_is_discarded
-  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_new_key_starts_a_session_and_the_same_key_renews_it
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_each_user_id_has_its_own_key_and_delegation
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_new_sid_starts_a_session_and_the_same_sid_continues_it
 - id: PAP-4.3-23
   section: '4.3'
   level: MUST NOT
@@ -1100,13 +1057,10 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._token
-  - personal_agent_protocol.company.service:CompanyService._exchange_grant
-  - personal_agent_protocol.sessions:SessionClient.token_for_mcp
+  - personal_agent_protocol.accounts:RefreshTokenClient.token_for_mcp
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_token_type_is_chosen_by_the_mcp_server
-  - personal_agent_protocol/__tests__/test_sessions.py::test_a_bearer_token_for_an_mcp_server_comes_from_token_exchange
-  conformance:
-  - lifecycle.mcp-token-type-by-server
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url
+  - personal_agent_protocol/__tests__/test_accounts.py::test_a_token_for_an_mcp_server_names_it_as_the_resource
 - id: PAP-4.3-24
   section: '4.3'
   level: MUST
@@ -1114,15 +1068,13 @@ requirements:
   text: The Personal Agent MUST use the scheme that token_type names.
   status: implemented
   implementation:
-  - personal_agent_protocol.sessions:SessionClient.token_for_mcp
+  - personal_agent_protocol.accounts:RefreshTokenClient.token_for_mcp
   - personal_agent_protocol.mcp:McpClient
-  - personal_agent_protocol.mcp:McpDpopAuth
-  - personal_agent_protocol.mcp:McpBearerAuth
   tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_a_bearer_token_for_an_mcp_server_comes_from_token_exchange
+  - personal_agent_protocol/__tests__/test_accounts.py::test_a_token_for_an_mcp_server_names_it_as_the_resource
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation
   conformance:
-  - lifecycle.mcp-bearer-for-its-url
+  - lifecycle.mcp-token-for-its-url
 - id: PAP-4.3-25
   section: '4.3'
   level: SHOULD
@@ -1143,7 +1095,6 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService.protected_resource_metadata
-  - personal_agent_protocol.mcp:McpServerMetadata.validate_algorithms
   tests:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_company_advertises_its_mcp_server_and_its_issuer
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
@@ -1157,12 +1108,9 @@ requirements:
     and list urn:ietf:params:oauth:grant-type:token-exchange in grant_types_supported (3.2).
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._exchange_grant
   - personal_agent_protocol.company.service:CompanyService.oauth_metadata
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_token_type_is_chosen_by_the_mcp_server
-  conformance:
-  - lifecycle.mcp-token-type-by-server
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url
 - id: PAP-4.3-31
   section: '4.3'
   level: MUST
@@ -1174,7 +1122,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._authorize
   - personal_agent_protocol.company.service:CompanyService._code_grant
   tests:
-  - personal_agent_protocol/__tests__/test_draft_03.py::test_an_authorization_code_needs_dpop_jkt_and_the_key_it_names
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_an_authorization_request_needs_pkce
   - personal_agent_protocol/__tests__/test_direct_and_api.py::test_a_code_works_once
 - id: PAP-4.3-32
   section: '4.3'
@@ -1188,7 +1136,7 @@ requirements:
   - personal_agent_protocol.auth:DirectSignInClient.begin
   tests:
   - personal_agent_protocol/__tests__/test_auth.py::test_builds_direct_sign_in_url_with_s256_pkce
-  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes
+  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_partial_scopes
 - id: PAP-4.3-33
   section: '4.3'
   level: MUST
@@ -1199,7 +1147,7 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._device_grant
   tests:
-  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_device_code_is_bound_to_the_key_of_its_first_poll
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_device_code_works_only_for_the_agent_it_was_issued_to
 - id: PAP-4.4-01
   section: '4.4'
   level: MUST
@@ -1253,7 +1201,7 @@ requirements:
   text: The new Account Token replaces the old one, which the Personal Agent SHOULD revoke (4.9).
   status: open
   implementation:
-  - personal_agent_protocol.accounts:AccountTokenClient.revoke
+  - personal_agent_protocol.accounts:RefreshTokenClient.revoke
   reason: No helper replaces and revokes the previous Account Token after a wider sign-in; the host calls
     revoke().
 - id: PAP-4.4-05
@@ -1425,7 +1373,7 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService.approve_device
   tests:
-  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_device_code_is_bound_to_the_key_of_its_first_poll
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_device_code_works_only_for_the_agent_it_was_issued_to
 - id: PAP-4.7-01
   section: '4.7'
   level: MUST
@@ -1501,7 +1449,7 @@ requirements:
   - personal_agent_protocol.reactor:ProtectedInputRequest
   - personal_agent_protocol.mediated:MediatedSignInClient.sign_in
   tests:
-  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_of_a_session_tied_to_another_account_is_account_mismatch
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_in_a_session_another_account_used_signs_in
 - id: PAP-4.7-07
   section: '4.7'
   level: MUST
@@ -1513,7 +1461,7 @@ requirements:
   - personal_agent_protocol.reactor:ProtectedInputRequest
   - personal_agent_protocol.ui:PapSignIn
   tests:
-  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_of_a_session_tied_to_another_account_is_account_mismatch
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_in_a_session_another_account_used_signs_in
   - personal_agent_protocol/__tests__/test_ui.py::test_direct_and_mediated_answers
   - personal_agent_protocol/__tests__/test_ui.py::test_a_device_or_mediated_sign_in_names_its_company
 - id: PAP-4.7-08
@@ -1575,9 +1523,9 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - lifecycle.account-token-signs-in-new-session
+  - lifecycle.refresh-token-serves-any-session
   - lifecycle.narrower-scopes
-  - lifecycle.account-token-at-api
+  - lifecycle.refresh-token-at-api
 - id: PAP-4.8-02
   section: '4.8'
   level: MUST
@@ -1591,7 +1539,7 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - lifecycle.account-token-from-another-client
+  - lifecycle.refresh-token-from-another-client
   - security.client-assertion-bad-audience
 - id: PAP-4.8-03
   section: '4.8'
@@ -1604,9 +1552,6 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._refresh_grant
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - lifecycle.renew-for-another-user
-  - lifecycle.account-token-for-another-users-session
 - id: PAP-4.8-04
   section: '4.8'
   level: MUST NOT
@@ -1617,16 +1562,11 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._refresh_grant
   - personal_agent_protocol.company.service:CompanyService._sign_in
-  - personal_agent_protocol.company.service:CompanyService._check_account
-  - personal_agent_protocol.company.service:CompanyService._record_token
   - personal_agent_protocol.company.service:CompanyService._mediated
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_signed_out_session_is_never_signed_in_to_another_account
-  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_of_a_session_tied_to_another_account_is_account_mismatch
-  conformance:
-  - lifecycle.account-mismatch
-  - lifecycle.account-mismatch-after-sign-out
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_signed_out_session_can_use_another_accounts_token
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_in_a_session_another_account_used_signs_in
 - id: PAP-4.8-05
   section: '4.8'
   level: MUST
@@ -1635,14 +1575,14 @@ requirements:
     new one from then on.
   status: implemented
   implementation:
-  - personal_agent_protocol.accounts:AccountTokenClient.refresh
+  - personal_agent_protocol.accounts:RefreshTokenClient.refresh
   tests:
-  - personal_agent_protocol/__tests__/test_accounts.py::test_refresh_signs_the_session_in_and_rotates_the_stored_token
+  - personal_agent_protocol/__tests__/test_accounts.py::test_refresh_gets_an_access_token_and_rotates_the_stored_token
   - personal_agent_protocol/__tests__/test_accounts.py::test_concurrent_refreshes_rotate_one_after_the_other
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - lifecycle.rotated-token
-  - lifecycle.sign-out-every-session
+  - lifecycle.sign-out-revokes-every-refresh-token
 - id: PAP-4.8-06
   section: '4.8'
   level: MUST
@@ -1657,7 +1597,7 @@ requirements:
   - personal_agent_protocol.mediated:MediatedSignInClient._complete
   tests:
   - personal_agent_protocol/__tests__/test_device.py::test_device_sign_in_paces_polling_and_protects_tokens
-  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes
+  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_partial_scopes
 - id: PAP-4.8-07
   section: '4.8'
   level: MUST NOT
@@ -1666,14 +1606,14 @@ requirements:
     conversation messages, logs, or URLs.
   status: partial
   implementation:
-  - personal_agent_protocol.accounts:AccountTokenClient
-  - personal_agent_protocol.accounts:AccountRefreshResult
+  - personal_agent_protocol.accounts:RefreshTokenClient
+  - personal_agent_protocol.accounts:RefreshResult
   - personal_agent_protocol.auth:DirectSignInClient._result
   - personal_agent_protocol.device:DeviceSignInClient._complete
   - personal_agent_protocol.mediated:MediatedSignInClient._complete
   tests:
-  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_account_token
-  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes
+  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_refresh_token
+  - personal_agent_protocol/__tests__/test_auth.py::test_orchestrates_one_use_direct_sign_in_with_partial_scopes
   reason: Results and errors never carry the token, but no test yet proves logs and traces stay free of
     credentials (plan §2).
 - id: PAP-4.9-01
@@ -1693,7 +1633,7 @@ requirements:
   conformance:
   - lifecycle.sign-out-takes-effect
   - lifecycle.sign-out-session-continues
-  - lifecycle.sign-out-every-session
+  - lifecycle.sign-out-revokes-every-refresh-token
   - lifecycle.mcp-sign-out-takes-effect
 - id: PAP-4.9-02
   section: '4.9'
@@ -1713,10 +1653,10 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.actions:disconnect
-  - personal_agent_protocol.accounts:AccountTokenClient.revoke
+  - personal_agent_protocol.accounts:RefreshTokenClient.revoke
   tests:
   - personal_agent_protocol/__tests__/test_accounts.py::test_revocation_forgets_the_token_once_the_company_answers
-  - personal_agent_protocol/__tests__/test_accounts.py::test_invalid_grant_then_a_renewal_that_works_means_the_account_token_ended
+  - personal_agent_protocol/__tests__/test_accounts.py::test_invalid_grant_forgets_the_token_and_the_sessions_go_on_signed_out
 - id: PAP-5-01
   section: '5'
   level: MUST
@@ -1727,7 +1667,7 @@ requirements:
   implementation:
   - personal_agent_protocol.browser:BrowserSessionClient.join
   tests:
-  - personal_agent_protocol/__tests__/test_browser.py::test_signs_the_pages_code_with_the_session_key_and_submits_it
+  - personal_agent_protocol/__tests__/test_browser.py::test_the_agent_authorizes_the_pages_code_and_the_browser_submits_the_form
   conformance:
   - lifecycle.browser-joins-session
 - id: PAP-5-02
@@ -1754,7 +1694,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._join_page
   tests:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_join_page_is_one_time_tied_to_its_browser_and_never_framed
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_sessions_key
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_session
   conformance:
   - lifecycle.browser-joins-session
   - lifecycle.browser-join-refused
@@ -1796,7 +1736,7 @@ requirements:
   - personal_agent_protocol.browser:BrowserSessionClient.join
   - personal_agent_protocol.reactor:BrowserJoin
   tests:
-  - personal_agent_protocol/__tests__/test_browser.py::test_signs_the_pages_code_with_the_session_key_and_submits_it
+  - personal_agent_protocol/__tests__/test_browser.py::test_the_agent_authorizes_the_pages_code_and_the_browser_submits_the_form
 - id: PAP-5-07
   section: '5'
   level: MUST
@@ -1808,7 +1748,7 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_sessions_key
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_session
   conformance:
   - lifecycle.browser-join-refused
 - id: PAP-5-08
@@ -1822,8 +1762,8 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_sessions_key
-  - personal_agent_protocol/__tests__/test_browser.py::test_a_proof_over_another_code_is_refused
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_session
+  - personal_agent_protocol/__tests__/test_browser.py::test_a_code_the_company_refuses_is_never_submitted
   conformance:
   - lifecycle.browser-join-refused
 - id: PAP-5-09
@@ -1835,7 +1775,7 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_sessions_key
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_session
   conformance:
   - lifecycle.browser-join-refused
 - id: PAP-5-10
@@ -1847,7 +1787,6 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._web_session
-  - personal_agent_protocol.company.service:CompanyService._live_session
   tests:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
@@ -1877,7 +1816,7 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_sessions_key
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_join_needs_its_own_browser_its_code_once_and_a_live_session
   - personal_agent_protocol/__tests__/test_security_review.py::test_finding_17_the_web_cookie_is_a_host_cookie
   conformance:
   - lifecycle.browser-joins-session
@@ -1927,7 +1866,7 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_direct_and_api.py::test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchange
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation
-  - personal_agent_protocol/__tests__/test_conformance.py::test_the_mcp_cases_pass_against_an_mcp_server_without_dpop
+  - personal_agent_protocol/__tests__/test_conformance.py::test_the_mcp_cases_pass_with_a_token_for_the_servers_url
   conformance:
   - lifecycle.mcp-protected-resource-metadata
 - id: PAP-6-04
@@ -1941,11 +1880,11 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._mcp_tool
   - personal_agent_protocol.company.points:ToolResult
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_token_type_is_chosen_by_the_mcp_server
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_signing_out_reaches_the_mcp_server_at_once
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - lifecycle.mcp-bearer-for-its-url
+  - lifecycle.mcp-token-for-its-url
   - lifecycle.mcp-sign-out-takes-effect
 - id: PAP-6-05
   section: '6'
@@ -1959,7 +1898,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_an_mcp_token_is_refused_everywhere_but_its_mcp_server
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - lifecycle.mcp-bearer-only-at-mcp
+  - lifecycle.mcp-token-only-at-mcp
 - id: PAP-6-06
   section: '6'
   level: MUST
@@ -1988,7 +1927,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - conversations.not-found-indistinguishable
-  - conversations.signed-out-token-on-account-conversation
+  - conversations.signed-out-on-account-conversation
 - id: PAP-7.2-02
   section: '7.2'
   level: SHOULD
@@ -2422,8 +2361,6 @@ requirements:
   text: A Personal Agent MUST NOT act at one Company, or send it information, because content from another
     Company asked it to.
   status: not-applicable
-  implementation:
-  - personal_agent_protocol.sessions:Who
   reason: Every SDK call is scoped to one company (its issuer, Session, and keys) and made by the host;
     deciding what to do from another company's content is the host's model policy.
 - id: PAP-9.1-03
@@ -2456,14 +2393,14 @@ requirements:
     private keys, authorization codes and PKCE code verifiers (4.5), and device codes (4.6).'
   status: implemented
   implementation:
-  - personal_agent_protocol.accounts:AccountTokenClient
-  - personal_agent_protocol.sessions:SessionToken
+  - personal_agent_protocol.accounts:RefreshTokenClient
+  - personal_agent_protocol.sessions:AccessToken
   - personal_agent_protocol.auth:DirectSignInClient
   - personal_agent_protocol.device:DeviceSignInClient
   - personal_agent_protocol.ui:PapSignIn
   tests:
   - personal_agent_protocol/__tests__/test_canaries.py::test_no_credential_reaches_logs_errors_urls_or_model_text
-  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_account_token
+  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_refresh_token
 - id: PAP-9.2-02
   section: '9.2'
   level: SHOULD
@@ -2598,9 +2535,7 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService.oauth_metadata
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_token_type_is_chosen_by_the_mcp_server
-  conformance:
-  - lifecycle.mcp-token-type-by-server
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url
 - id: PAP-3.2-22
   section: '3.2'
   level: MUST
@@ -2831,7 +2766,7 @@ guide:
   implementation:
   - personal_agent_protocol.errors:PersonalAgentProtocolError
   tests:
-  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_account_token
+  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_refresh_token
   - personal_agent_protocol/__tests__/test_sessions.py::test_session_error_never_includes_remote_error_description
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
@@ -2875,7 +2810,7 @@ guide:
   - personal_agent_protocol/__tests__/test_crypto.py::test_signs_and_verifies_only_asymmetric_pap_assertions
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
-  - security.client-assertion-rs256-header-on-ec-key
+  - security.client-assertion-ps384-header-on-ec-key
   reason: RSA key size is not checked.
 - id: GUIDE-jwt-02
   source: guide
@@ -2893,8 +2828,8 @@ guide:
   conformance:
   - security.client-assertion-alg-none
   - security.client-assertion-hs256-public-key
-  - security.client-assertion-rs256-header-on-ec-key
-  - security.dpop-alg-none
+  - security.client-assertion-ps384-header-on-ec-key
+  - security.session-jwt-alg-none
 - id: GUIDE-jwt-03
   source: guide
   section: Signing and verifying JWTs
@@ -2909,7 +2844,6 @@ guide:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - security.client-assertion-embedded-key-ignored
-  - security.session-assertion-wrong-issuer
 - id: GUIDE-jwt-04
   source: guide
   section: Signing and verifying JWTs
@@ -2926,11 +2860,6 @@ guide:
   conformance:
   - security.client-assertion-bad-audience
   - security.client-assertion-audience-array
-  - security.session-assertion-bad-audience
-  - security.session-assertion-clock-skew-tolerated
-  - security.session-assertion-from-the-future
-  - security.session-assertion-expired
-  - security.session-assertion-long-lived
 - id: GUIDE-jwt-05
   source: guide
   section: Signing and verifying JWTs
@@ -2941,10 +2870,7 @@ guide:
   implementation:
   - personal_agent_protocol.sessions:_opaque_id
   tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_builds_short_lived_session_assertion_claims
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - security.session-assertion-replay
 - id: GUIDE-keys-01
   source: guide
   section: Rotating keys
@@ -3066,12 +2992,11 @@ guide:
   level: SHOULD
   role: personal-agent
   text: Each retry needs a new DPoP proof, and a retried token request needs a new assertion.
-  status: implemented
+  status: not-applicable
   implementation:
-  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.transport:SessionHttpClient.request
   - personal_agent_protocol.sessions:SessionClient.token_request
-  tests:
-  - personal_agent_protocol/__tests__/test_sessions.py::test_retries_once_with_a_fresh_dpop_nonce_and_assertions
+  reason: Withdrawn or reshaped upstream at 3e9bada; this entry is rewritten when the ledger is regenerated from that commit.
 - id: GUIDE-retry-03
   source: guide
   section: Retries
@@ -3081,10 +3006,10 @@ guide:
   status: implemented
   implementation:
   - personal_agent_protocol.reactor:RetryPolicy
-  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.transport:SessionHttpClient.request
   tests:
   - personal_agent_protocol/__tests__/test_guidance.py::test_retry_policy_honours_retry_after_backs_off_with_jitter_and_caps
-  - personal_agent_protocol/__tests__/test_guidance.py::test_safe_requests_retry_after_retry_after_with_fresh_proofs
+  - personal_agent_protocol/__tests__/test_guidance.py::test_safe_requests_retry_after_retry_after_with_fresh_session_jwts
 - id: GUIDE-retry-04
   source: guide
   section: Retries
@@ -3119,7 +3044,7 @@ guide:
   implementation:
   - personal_agent_protocol.reactor:RateLimitBudget
   - personal_agent_protocol.reactor:SharedRateLimitBudget
-  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.transport:SessionHttpClient.request
   tests:
   - personal_agent_protocol/__tests__/test_guidance.py::test_shared_budget_paces_tasks_and_refuses_long_waits
   - personal_agent_protocol/__tests__/test_guidance.py::test_writes_and_long_pauses_go_back_to_the_caller_and_are_shared
@@ -3159,8 +3084,8 @@ guide:
   text: Generate a DPoP key pair for each user ID (MUST, 4.3), so each user at each company has its own.
   status: implemented
   implementation:
-  - personal_agent_protocol.reactor:DpopProofRequest
-  - personal_agent_protocol.crypto:InMemorySessionKeys
+  - personal_agent_protocol.reactor:SessionJwtRequest
+  - personal_agent_protocol.crypto:InMemoryDelegatedKeys
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
 - id: GUIDE-pa-dpop-02
@@ -3172,10 +3097,10 @@ guide:
     lists it in dpop_signing_alg_values_supported.
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:JoseDpopProofProvider
-  - personal_agent_protocol.crypto:InMemorySessionKeys
+  - personal_agent_protocol.crypto:DelegatedSessionSigner
+  - personal_agent_protocol.crypto:InMemoryDelegatedKeys
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_creates_and_verifies_bound_dpop_proof_once
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
 - id: GUIDE-pa-discovery-01
   source: guide
   section: Finding a company
@@ -3244,14 +3169,13 @@ guide:
     by resource.
   status: implemented
   implementation:
-  - personal_agent_protocol.mcp:McpBearerAuth
-  - personal_agent_protocol.transport:DpopHttpClient.request
+  - personal_agent_protocol.transport:SessionHttpClient.request
   tests:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_an_mcp_token_is_refused_everywhere_but_its_mcp_server
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  - personal_agent_protocol/__tests__/test_sessions.py::test_a_bearer_token_for_an_mcp_server_comes_from_token_exchange
+  - personal_agent_protocol/__tests__/test_accounts.py::test_a_token_for_an_mcp_server_names_it_as_the_resource
   conformance:
-  - lifecycle.mcp-bearer-for-its-url
+  - lifecycle.mcp-token-for-its-url
 - id: GUIDE-pa-tokens-02
   source: guide
   section: Storing tokens
@@ -3260,9 +3184,9 @@ guide:
   text: On invalid_grant for an account token, delete it and continue signed out.
   status: implemented
   implementation:
-  - personal_agent_protocol.accounts:AccountTokenClient.refresh
+  - personal_agent_protocol.accounts:RefreshTokenClient.refresh
   tests:
-  - personal_agent_protocol/__tests__/test_accounts.py::test_invalid_grant_then_a_renewal_that_works_means_the_account_token_ended
+  - personal_agent_protocol/__tests__/test_accounts.py::test_invalid_grant_forgets_the_token_and_the_sessions_go_on_signed_out
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
 - id: GUIDE-pa-tokens-03
   source: guide
@@ -3273,10 +3197,10 @@ guide:
     hosted by a provider is never sent to another.
   status: partial
   implementation:
-  - personal_agent_protocol.accounts:AccountTokenContext
+  - personal_agent_protocol.accounts:RefreshTokenContext
   - personal_agent_protocol.cli_host:SessionRecord
   tests:
-  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_account_token
+  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_refresh_token
   reason: Account Tokens sit behind opaque references kept with their Session's record and its issuer;
     the TokenStore contract itself is not keyed by issuer.
 - id: GUIDE-pa-device-01
@@ -3303,7 +3227,7 @@ guide:
   implementation:
   - personal_agent_protocol.reactor:ProtectedInputRequest
   tests:
-  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_of_a_session_tied_to_another_account_is_account_mismatch
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_in_a_session_another_account_used_signs_in
 - id: GUIDE-pa-mediated-02
   source: guide
   section: Mediated sign-in
@@ -3430,10 +3354,9 @@ guide:
     (3.2), and that jwk holds only a public key.
   status: implemented
   implementation:
-  - personal_agent_protocol.crypto:verify_dpop_proof
-  - personal_agent_protocol.company.service:DPOP_ALGORITHMS
+  - personal_agent_protocol.company.verify:verify_session_jwt
   tests:
-  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_private_dpop_jwk_in_protected_header
+  - personal_agent_protocol/__tests__/test_crypto.py::test_rejects_private_material_in_a_public_jwk
 - id: GUIDE-co-dpop-02
   source: guide
   section: DPoP proofs
@@ -3473,7 +3396,7 @@ guide:
   - personal_agent_protocol.company.service:CompanyService._mcp_caller
   - personal_agent_protocol.company.service:CompanyService._token
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_token_type_is_chosen_by_the_mcp_server
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_an_mcp_token_is_refused_everywhere_but_its_mcp_server
 - id: GUIDE-co-sessions-01
   source: guide

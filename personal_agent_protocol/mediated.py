@@ -7,7 +7,7 @@
 Mediated Sign-In is the mode a company offers when its users cannot leave for
 a browser: the personal agent collects the fields the company declares
 (`auth.mediated.fields`) and sends them to `auth.mediated.endpoint`, with the
-Session's DPoP token. It is the one mode where a password passes through the
+Session header. It is the one mode where a password passes through the
 agent's host, so this client narrows what the host can do with it:
 
 - The values are collected through the Reactor `pap.protectedInput`
@@ -18,7 +18,7 @@ agent's host, so this client narrows what the host can do with it:
 - They are sent once. A `code_required` answer continues with the one-time
   code alone, at `…/{sign_in_id}`, from the Session that started it.
 - They are dropped as soon as the request is sent; no result, error, or log
-  carries them, and the Account Token is kept behind an opaque reference.
+  carries them, and the refresh token is kept behind an opaque reference.
 """
 
 from __future__ import annotations
@@ -42,19 +42,17 @@ from .reactor import (
     AUTHORIZATION_STATE_STORES,
     PROTECTED_INPUTS,
     RANDOM_SOURCES,
-    TOKEN_STORES,
     AuthorizationStateStore,
     ProtectedInput,
     ProtectedInputField,
     ProtectedInputRequest,
     RandomSource,
-    TokenStore,
     first_contribution,
 )
-from .refusals import refusal_details
-from .sessions import SessionToken, TokenResponse, _opaque_id
+from .refusals import refusal_code, refusal_details, refused_without_body
+from .sessions import AccessToken, PapSession, TokenResponse, _opaque_id, finish_sign_in
 from .telemetry import sign_in_result, signed_in_as, traced
-from .transport import DpopHttpClient
+from .transport import SessionHttpClient
 
 _SIGN_IN_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
@@ -74,8 +72,8 @@ class MediatedSignInResult(ProtocolModel):
     reference: str | None = None
     sent_to: str | None = None
     expires_at: datetime | None = None
-    token: SessionToken | None = None
-    account_token_reference: str | None = None
+    token: AccessToken | None = None
+    refresh_token_reference: str | None = None
     granted_scopes: tuple[str, ...] = ()
     missing_scopes: tuple[str, ...] = ()
 
@@ -91,7 +89,7 @@ class _CodeRequired(ProtocolModel):
 class _PendingCode:
     endpoint: str
     sign_in_id: str
-    session_key: str
+    sid: str
     scopes: tuple[str, ...]
     company_name: str
     company_domain: str
@@ -113,7 +111,7 @@ class MediatedSignInClient:
             raise ValueError("max_response_bytes must be positive")
         self.reactor = reactor
         # Credentials go to one URL: a redirect is refused, never followed (§3).
-        self.transport = DpopHttpClient(
+        self.transport = SessionHttpClient(
             reactor=reactor,
             http_client=http_client,
             max_response_bytes=max_response_bytes,
@@ -128,10 +126,9 @@ class MediatedSignInClient:
         organization: Organization,
         issuer: str,
         scopes: tuple[str, ...],
-        token: SessionToken,
-        tenant_id: str,
+        session: PapSession,
     ) -> MediatedSignInResult:
-        """Collect the declared fields from the user and sign the Session in."""
+        """Collect the declared fields from the user and sign in, in `session`."""
 
         endpoint = self._endpoint_on_company_domain(mediated.endpoint, organization.domain, issuer)
         requested = _scopes(scopes)
@@ -159,13 +156,13 @@ class MediatedSignInClient:
             )
         finally:
             credentials.clear()
-        response = await self._post(endpoint, body, token, tenant_id, issuer)
+        response = await self._post(endpoint, body, session)
         return await self._result(
             response,
             pending=_PendingCode(
                 endpoint=endpoint,
                 sign_in_id="",
-                session_key=token.session_key,
+                sid=session.sid,
                 scopes=requested,
                 company_name=organization.name,
                 company_domain=organization.domain,
@@ -181,9 +178,7 @@ class MediatedSignInClient:
         self,
         reference: str,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
     ) -> MediatedSignInResult:
         """Continue a `code_required` sign-in with the code the user received."""
 
@@ -194,7 +189,7 @@ class MediatedSignInClient:
                 "invalid_or_expired_sign_in",
                 "Mediated Sign-In is unknown, expired, or already complete",
             )
-        if token.session_key != pending.session_key:
+        if session.sid != pending.sid:
             # Only the Session that started a sign-in can finish it (§4.7).
             await store.put(reference, pending, expires_at=pending.expires_at)
             raise AuthorizationError(
@@ -205,7 +200,7 @@ class MediatedSignInClient:
                 purpose="one_time_code",
                 company_name=pending.company_name,
                 company_domain=pending.company_domain,
-                issuer=issuer,
+                issuer=session.issuer,
                 fields=(ProtectedInputField(name="code", label="Code", secret=True),),
                 sent_to=pending.sent_to,
             ),
@@ -218,9 +213,7 @@ class MediatedSignInClient:
         response = await self._post(
             f"{pending.endpoint.rstrip('/')}/{pending.sign_in_id}",
             body,
-            token,
-            tenant_id,
-            issuer,
+            session,
         )
         return await self._result(response, pending=pending, reference=reference)
 
@@ -231,13 +224,12 @@ class MediatedSignInClient:
         pending: _PendingCode,
         reference: str | None = None,
     ) -> MediatedSignInResult:
-        payload = self._decode(response)
+        payload = None if refused_without_body(response) else self._decode(response)
         if not response.is_success:
-            # Request problems are JSON errors (§4.7): `invalid_scope`, `account_mismatch`,
-            # `sign_in_not_found`, and `rate_limited` with its `Retry-After`.
-            error = payload.get("error") if isinstance(payload, dict) else None
+            # Request problems are JSON errors: `invalid_scope`, `sign_in_not_found`; and a
+            # 429 has `Retry-After` and no body (§5.6).
             raise AuthorizationError(
-                error if isinstance(error, str) else "http_error",
+                refusal_code(response, payload, "http_error"),
                 "Company refused the Mediated Sign-In",
                 status_code=response.status_code,
                 details=refusal_details(response, payload) or None,
@@ -280,7 +272,7 @@ class MediatedSignInClient:
         continued = _PendingCode(
             endpoint=pending.endpoint,
             sign_in_id=challenge.sign_in_id,
-            session_key=pending.session_key,
+            sid=pending.sid,
             scopes=pending.scopes,
             company_name=pending.company_name,
             company_domain=pending.company_domain,
@@ -306,45 +298,17 @@ class MediatedSignInClient:
         fields.pop("status", None)
         try:
             response_fields = TokenResponse.model_validate(fields)
-            if response_fields.token_type != "DPoP":  # noqa: S105 - OAuth token type
-                raise ProtocolValidationError(
-                    "invalid_token_response", "Mediated Sign-In must return a DPoP Session Token"
-                )
-            # `scope` as at the token endpoint: left out only when exactly as requested (§4.7).
-            token = SessionToken.from_response(
-                response_fields,
-                session_key=pending.session_key,
-                signed_in=True,
-                requested_scopes=pending.scopes,
-            )
         except (ValueError, ProtocolValidationError) as exc:
             raise AuthorizationError(
                 "invalid_token_response",
                 "Mediated Sign-In token response is malformed",
                 status_code=response.status_code,
             ) from exc
-        if any(scope not in pending.scopes for scope in token.scopes):
-            raise AuthorizationError(
-                "scope_escalation",
-                "Company returned a scope that was not requested",
-                status_code=response.status_code,
-            )
-        account_reference: str | None = None
-        if token.refresh_token is not None:
-            random_source = cast(
-                RandomSource, first_contribution(self.reactor, RANDOM_SOURCES, "random source")
-            )
-            account_reference = _opaque_id("account", random_source.bytes)
-            store = cast(TokenStore, first_contribution(self.reactor, TOKEN_STORES, "token store"))
-            await store.put(account_reference, token.refresh_token)
-        public = token.model_copy(update={"refresh_token": None})
-        return MediatedSignInResult(
-            status="complete",
-            token=public,
-            account_token_reference=account_reference,
-            granted_scopes=public.scopes,
-            missing_scopes=tuple(scope for scope in pending.scopes if scope not in public.scopes),
+        # `scope` as at the token endpoint: left out only when exactly as requested (§4.7).
+        result = await finish_sign_in(
+            self.reactor, response_fields, pending.scopes, error=AuthorizationError
         )
+        return MediatedSignInResult(status="complete", **dict(result))
 
     async def _collect(
         self, request: ProtectedInputRequest, *, expected: set[str]
@@ -368,17 +332,13 @@ class MediatedSignInClient:
         self,
         url: str,
         body: bytes,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
     ) -> httpx.Response:
         try:
             response = await self.transport.request(
                 "POST",
                 url,
-                token=token,
-                tenant_id=tenant_id,
-                issuer=issuer,
+                session=session,
                 headers={"Content-Type": "application/json", "Accept": "application/json"},
                 content=body,
             )

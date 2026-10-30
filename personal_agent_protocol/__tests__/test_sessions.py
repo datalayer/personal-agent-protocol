@@ -2,9 +2,11 @@
 #
 # BSD 3-Clause License
 
-import json
+"""Sessions, client assertions, and plain OAuth token responses (§4, §5)."""
+
+from __future__ import annotations
+
 from datetime import datetime, timezone
-from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
@@ -13,25 +15,36 @@ from pydantic import SecretStr
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 
 from personal_agent_protocol import (
-    DPOP_PROOF_PROVIDERS,
-    JWT_BEARER_GRANT,
+    SESSION_SIGNERS,
     SIGNERS,
-    DpopProofRequest,
+    AccessToken,
+    PapSession,
     SessionClient,
     SessionError,
-    SessionToken,
+    SessionHttpClient,
+    SessionJwtRequest,
     TokenResponse,
     build_client_assertion_claims,
-    build_session_assertion_claims,
     generate_pairwise_user_id,
 )
 from personal_agent_protocol.errors import ProtocolValidationError
 from personal_agent_protocol.reactor import build_pap_reactor
-from personal_agent_protocol.sessions import ClientAssertionClaims
+from personal_agent_protocol.sessions import (
+    JWT_CLIENT_ASSERTION,
+    ClientAssertionClaims,
+    new_session_id,
+)
 
-FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
-#: A Session Key's thumbprint: 43 base64url characters (RFC 7638, SHA-256).
-KEY = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+CLIENT_ID = "https://agent.example/agent.json"
+ISSUER = "https://auth.example.com"
+TOKEN_ENDPOINT = "https://auth.example.com/oauth/token"
+PAIRWISE = "usr_AAECAwQFBgcICQoLDA0ODw"
+WHO = {
+    "client_id": CLIENT_ID,
+    "pairwise_user_id": PAIRWISE,
+    "issuer": ISSUER,
+    "tenant_id": "tenant-one",
+}
 
 
 def fixed_random(length: int) -> bytes:
@@ -44,84 +57,80 @@ def test_generates_random_pairwise_identifier_without_personal_data() -> None:
     assert identifier == "usr_AAECAwQFBgcICQoLDA0ODw"
 
 
-def test_builds_short_lived_session_assertion_claims() -> None:
-    claims = build_session_assertion_claims(
-        client_id="https://agent.example/agent.json",
-        pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-        issuer="https://auth.example.com",
-        now=datetime(2026, 10, 10, tzinfo=timezone.utc),
-        random_bytes=fixed_random,
-    )
-
-    assert claims.iss == "https://agent.example/agent.json"
-    # The company's auth.issuer, one string, never its token endpoint (§4.2, §9.4).
-    assert claims.aud == "https://auth.example.com"
-    assert claims.exp - claims.iat == 60
-    assert claims.jti == "jti_AAECAwQFBgcICQoLDA0ODw"
-
-
 def test_a_client_assertion_names_the_issuer_and_lives_at_most_five_minutes() -> None:
     now = datetime(2026, 10, 10, tzinfo=timezone.utc)
     claims = build_client_assertion_claims(
-        client_id="https://agent.example/agent.json",
+        client_id=CLIENT_ID,
         issuer="https://auth.provider.example/shop-a",
         now=now,
         random_bytes=fixed_random,
     )
-    assert (claims.iss, claims.sub) == ("https://agent.example/agent.json",) * 2
+    assert (claims.iss, claims.sub) == (CLIENT_ID, CLIENT_ID)
     assert claims.aud == "https://auth.provider.example/shop-a"
     assert claims.exp - claims.iat == 60
+    assert claims.jti == "AAECAwQFBgcICQoLDA0ODw"
     longest = build_client_assertion_claims(
-        client_id="https://agent.example/agent.json",
-        issuer="https://auth.example.com",
-        now=now,
-        lifetime_seconds=300,
+        client_id=CLIENT_ID, issuer=ISSUER, now=now, lifetime_seconds=300
     )
     assert longest.exp - longest.iat == 300
-    for build in (build_client_assertion_claims, build_session_assertion_claims):
-        extra = {"pairwise_user_id": "usr_x"} if build is build_session_assertion_claims else {}
-        with pytest.raises(ValueError, match="300"):
-            build(  # type: ignore[operator]
-                client_id="https://agent.example/agent.json",
-                issuer="https://auth.example.com",
-                now=now,
-                lifetime_seconds=301,
-                **extra,
-            )
+    with pytest.raises(ValueError, match="300"):
+        build_client_assertion_claims(
+            client_id=CLIENT_ID, issuer=ISSUER, now=now, lifetime_seconds=301
+        )
     with pytest.raises(ValueError, match="five minutes"):
         ClientAssertionClaims(
-            iss="https://agent.example/agent.json",
-            sub="https://agent.example/agent.json",
-            aud="https://auth.example.com",
+            iss=CLIENT_ID,
+            sub=CLIENT_ID,
+            aud=ISSUER,
             iat=1000,
             exp=1301,
             jti="jti_AAECAwQFBgcICQoLDA0ODw",
         )
 
 
-def test_parses_session_token_as_opaque_secret() -> None:
-    payload = json.loads((FIXTURES / "session-token-valid.json").read_text())
-    response = TokenResponse.model_validate(payload)
-    token = SessionToken.from_response(response, session_key=KEY, signed_in=False)
+def test_parses_an_access_token_as_opaque_secret() -> None:
+    response = TokenResponse.model_validate(
+        {
+            "access_token": "opaque-access-token",
+            "token_type": "bearer",
+            "expires_in": 3600,
+            "scope": "orders:read orders:write",
+        }
+    )
+    token = AccessToken.from_response(response)
 
-    assert token.access_token.get_secret_value() == "opaque-session-token"
-    # Signed out: no `scope` in the response, and none granted (§4.2).
-    assert token.scopes == () and not token.signed_in
-    assert "opaque-session-token" not in repr(token)
-    assert "opaque-session-token" not in token.model_dump_json()
+    # `token_type` is compared ignoring case (RFC 6749 §5.1).
+    assert token.token_type == "Bearer"
+    assert token.access_token.get_secret_value() == "opaque-access-token"
+    assert token.scopes == ("orders:read", "orders:write")
+    assert token.resource is None
+    assert "opaque-access-token" not in repr(token)
+    assert "opaque-access-token" not in token.model_dump_json()
 
 
 def test_a_signed_in_response_without_scope_granted_exactly_what_was_asked() -> None:
     response = TokenResponse.model_validate(
-        {"access_token": "t", "token_type": "DPoP", "expires_in": 60, "refresh_token": "r"}
+        {"access_token": "t", "token_type": "Bearer", "expires_in": 60, "refresh_token": "r"}
     )
-    token = SessionToken.from_response(
-        response, session_key=KEY, signed_in=True, requested_scopes=("orders:read",)
-    )
+    token = AccessToken.from_response(response, requested_scopes=("orders:read",))
     assert token.scopes == ("orders:read",)
-    # A sign-in grants at least one scope (§4.4).
+    # A sign-in grants at least one scope (§4.7).
     with pytest.raises(ProtocolValidationError):
-        SessionToken.from_response(response, session_key=KEY, signed_in=True)
+        AccessToken.from_response(response)
+
+
+def test_an_access_token_remembers_the_service_it_was_issued_for() -> None:
+    response = TokenResponse.model_validate(
+        {"access_token": "t", "token_type": "Bearer", "scope": "orders:read"}
+    )
+    mcp = "https://mcp.example.com/mcp"
+    assert AccessToken.from_response(response, resource=mcp).resource == mcp
+
+
+@pytest.mark.parametrize("token_type", ["DPoP", "dpop", "mac"])
+def test_a_token_response_is_bearer(token_type: str) -> None:
+    with pytest.raises(ValueError):
+        TokenResponse.model_validate({"access_token": "t", "token_type": token_type})
 
 
 class FakeSigner:
@@ -135,128 +144,163 @@ class FakeSigner:
         return SecretStr(f"signed-{purpose}-{len(self.purposes)}")
 
 
-class FakeDpopProvider:
+class FakeSessionSigner:
     def __init__(self) -> None:
-        self.requests: list[DpopProofRequest] = []
-        self.made: list[str] = []
-        self.discarded: list[str] = []
+        self.requests: list[SessionJwtRequest] = []
 
-    async def new_session_key(self, *, tenant_id: str, issuer: str) -> str:
-        self.made.append(f"{'k' * 42}{len(self.made)}")
-        return self.made[-1]
-
-    async def create(self, request: DpopProofRequest) -> SecretStr:
+    async def sign(self, request: SessionJwtRequest) -> SecretStr:
         self.requests.append(request)
-        return SecretStr(f"proof-{len(self.requests)}")
-
-    async def discard_session_key(self, *, tenant_id: str, issuer: str, session_key: str) -> None:
-        self.discarded.append(session_key)
+        return SecretStr(f"session-jwt-{len(self.requests)}")
 
 
 class SecurityPlugin:
-    def __init__(self, signer: FakeSigner, dpop: FakeDpopProvider) -> None:
+    def __init__(self, signer: FakeSigner, session_signer: FakeSessionSigner) -> None:
         self.signer = signer
-        self.dpop = dpop
+        self.session_signer = session_signer
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         contribute(SIGNERS, self.signer, contribution_id="test-signer")
-        contribute(DPOP_PROOF_PROVIDERS, self.dpop, contribution_id="test-dpop")
+        contribute(SESSION_SIGNERS, self.session_signer, contribution_id="test-session-signer")
 
 
 def session_reactor(
     http: httpx.AsyncClient,
-) -> tuple[PluginPlatform, FakeSigner, FakeDpopProvider]:
+) -> tuple[PluginPlatform, FakeSigner, FakeSessionSigner]:
     signer = FakeSigner()
-    dpop = FakeDpopProvider()
+    session_signer = FakeSessionSigner()
     reactor, owned = build_pap_reactor(http_client=http)
     assert owned is None
     reactor.register_plugin(
         PluginManifest(name="pap-test-security", version="1"),
-        SecurityPlugin(signer, dpop),
+        SecurityPlugin(signer, session_signer),
     )
-    return reactor, signer, dpop
+    return reactor, signer, session_signer
 
 
 def token_response() -> dict[str, object]:
-    return json.loads((FIXTURES / "session-token-valid.json").read_text())
+    return {"access_token": "opaque-access-token", "token_type": "Bearer", "expires_in": 3600}
+
+
+async def refresh(client: SessionClient) -> TokenResponse:
+    """One grant at the token endpoint, as a sign-in or a refresh sends it."""
+
+    return await client.token_request(
+        client_id=CLIENT_ID,
+        issuer=ISSUER,
+        token_endpoint=TOKEN_ENDPOINT,
+        form=lambda: {"grant_type": "refresh_token", "refresh_token": "refresh-secret"},
+        error=SessionError,
+    )
 
 
 @pytest.mark.asyncio
-async def test_starts_and_renews_session_over_http() -> None:
-    forms: list[dict[str, list[str]]] = []
+async def test_a_session_starts_with_no_request_and_a_new_random_sid() -> None:
+    sent: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "POST"
-        assert request.headers["dpop"].startswith("proof-")
-        forms.append(parse_qs(request.content.decode()))
-        return httpx.Response(200, json=token_response())
+        sent.append(request)
+        return httpx.Response(500)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        reactor, signer, dpop = session_reactor(http)
+        reactor, signer, session_signer = session_reactor(http)
         client = SessionClient(reactor=reactor, http_client=http)
-        started = await client.start(
-            client_id="https://agent.example/agent.json",
-            pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-            issuer="https://auth.example.com",
-            token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
-            tenant_id="tenant-one",
-        )
-        renewed = await client.renew(
-            client_id="https://agent.example/agent.json",
-            pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-            issuer="https://auth.example.com",
-            token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
-            tenant_id="tenant-one",
-            session_key=started.session_key,
-        )
+        first = await client.start(**WHO)
+        second = await client.start(**WHO)
         reactor.stop()
 
-    # A new key starts the Session; the renewal is signed with the same key, which names
-    # the Session: nothing else does (§4.3).
-    assert started.session_key == renewed.session_key == dpop.made[0]
-    assert [request.session_key for request in dpop.requests] == [dpop.made[0]] * 2
-    assert all("session_id" not in form and "session_key" not in form for form in forms)
-    assert forms[0]["grant_type"] == [JWT_BEARER_GRANT]
-    assert not started.signed_in and started.scopes == ()
-    assert signer.purposes == [
-        "session_assertion",
-        "client_assertion",
-        "session_assertion",
-        "client_assertion",
-    ]
-    assert all(request.tenant_id == "tenant-one" for request in dpop.requests)
+    # Local: nothing is asked of the company, and nothing is signed yet (§5.2).
+    assert sent == [] and signer.purposes == [] and session_signer.requests == []
+    assert first.sid != second.sid and len(first.sid) >= 22
+    assert (first.sub, first.issuer, first.client_id) == (PAIRWISE, ISSUER, CLIENT_ID)
+    assert first.tenant_id == "tenant-one" and first.agent_id is None
+    assert first.handle == f"ses_{first.sid}"
+    assert PapSession.from_json(first.to_json()) == first
+
+
+def test_a_session_id_is_at_least_128_random_bits() -> None:
+    assert new_session_id(fixed_random) == "AAECAwQFBgcICQoLDA0ODw"
+    with pytest.raises(ValueError, match="128 random bits"):
+        new_session_id(lambda _: b"short")
+    with pytest.raises(ValueError, match="Session ID"):
+        PapSession(
+            sid="short", sub=PAIRWISE, issuer=ISSUER, client_id=CLIENT_ID, tenant_id="tenant-one"
+        )
 
 
 @pytest.mark.asyncio
-async def test_retries_once_with_a_fresh_dpop_nonce_and_assertions() -> None:
-    calls = 0
+async def test_a_new_session_replaces_an_ended_one_for_the_same_user() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(500))
+    ) as http:
+        reactor, _, _ = session_reactor(http)
+        session = await SessionClient(reactor=reactor, http_client=http).start(
+            **WHO, agent_id="agt_shopping"
+        )
+        reactor.stop()
+    ended = session.sid
+    session.restart(fixed_random)
+    # The Session has ended: its `sid` is never used again (§5.5).
+    assert session.sid == "AAECAwQFBgcICQoLDA0ODw" != ended
+    assert (session.sub, session.agent_id) == (PAIRWISE, "agt_shopping")
 
-    def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return httpx.Response(
-                400,
-                json={"error": "use_dpop_nonce"},
-                headers={"DPoP-Nonce": "company-nonce"},
-            )
+
+@pytest.mark.asyncio
+async def test_the_token_endpoint_gets_a_client_assertion_and_no_session() -> None:
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
         return httpx.Response(200, json=token_response())
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        reactor, signer, dpop = session_reactor(http)
-        token = await SessionClient(reactor=reactor, http_client=http).start(
-            client_id="https://agent.example/agent.json",
-            pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-            issuer="https://auth.example.com",
-            token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
-            tenant_id="tenant-one",
-        )
+        reactor, _, session_signer = session_reactor(http)
+        client = SessionClient(reactor=reactor, http_client=http)
+        response = await refresh(client)
+        await refresh(client)
         reactor.stop()
 
-    assert token.session_key == dpop.made[0]
-    assert [request.nonce for request in dpop.requests] == [None, "company-nonce"]
-    assert len(signer.purposes) == 4
+    assert response.access_token.get_secret_value() == "opaque-access-token"
+    forms = [parse_qs(request.content.decode()) for request in sent]
+    assert forms[0]["grant_type"] == ["refresh_token"]
+    assert forms[0]["client_id"] == [CLIENT_ID]
+    assert forms[0]["client_assertion_type"] == [JWT_CLIENT_ASSERTION]
+    # A fresh assertion for each request; no Session header at an OAuth endpoint (§5.2).
+    assert [form["client_assertion"] for form in forms] == [
+        ["signed-client_assertion-1"],
+        ["signed-client_assertion-2"],
+    ]
+    assert session_signer.requests == []
+    assert all("poppy-session" not in request.headers for request in sent)
+    assert all("dpop" not in request.headers for request in sent)
+
+
+@pytest.mark.asyncio
+async def test_a_dpop_token_type_is_refused_at_the_token_endpoint() -> None:
+    answer = {"access_token": "key-bound-secret", "token_type": "DPoP", "expires_in": 60}
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=answer))
+    ) as http:
+        reactor, _, _ = session_reactor(http)
+        with pytest.raises(SessionError) as refused:
+            await refresh(SessionClient(reactor=reactor, http_client=http))
+        reactor.stop()
+    assert refused.value.code == "unsupported_token_type"
+    assert refused.value.status_code == 200
+    assert "key-bound-secret" not in str(refused.value)
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_token_response_is_not_a_token_type_refusal() -> None:
+    answer = {"access_token": "t", "token_type": "mac"}
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=answer))
+    ) as http:
+        reactor, _, _ = session_reactor(http)
+        with pytest.raises(SessionError) as refused:
+            await refresh(SessionClient(reactor=reactor, http_client=http))
+        reactor.stop()
+    assert refused.value.code == "invalid_token_response"
 
 
 @pytest.mark.asyncio
@@ -270,13 +314,7 @@ async def test_session_error_never_includes_remote_error_description() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         reactor, _, _ = session_reactor(http)
         with pytest.raises(SessionError) as caught:
-            await SessionClient(reactor=reactor, http_client=http).start(
-                client_id="https://agent.example/agent.json",
-                pairwise_user_id="usr_AAECAwQFBgcICQoLDA0ODw",
-                issuer="https://auth.example.com",
-                token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
-                tenant_id="tenant-one",
-            )
+            await refresh(SessionClient(reactor=reactor, http_client=http))
         reactor.stop()
 
     assert caught.value.code == "invalid_client"
@@ -284,25 +322,16 @@ async def test_session_error_never_includes_remote_error_description() -> None:
     assert "secret-token" not in str(caught.value)
 
 
-WHO = {
-    "client_id": "https://agent.example/agent.json",
-    "pairwise_user_id": "usr_AAECAwQFBgcICQoLDA0ODw",
-    "issuer": "https://auth.example.com",
-    "token_endpoint": "https://auth.example.com/oauth/token",
-    "tenant_id": "tenant-one",
-}
-
-
 @pytest.mark.asyncio
-async def test_both_assertions_name_the_issuer_and_live_one_minute() -> None:
+async def test_a_client_assertion_names_the_issuer_and_lives_one_minute() -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _: httpx.Response(200, json=token_response()))
     ) as http:
         reactor, signer, _ = session_reactor(http)
-        await SessionClient(reactor=reactor, http_client=http).start(**WHO)
+        await refresh(SessionClient(reactor=reactor, http_client=http))
         reactor.stop()
-    # aud is the company's auth.issuer, one string, never its token endpoint (§4.1, §4.2).
-    assert [claims["aud"] for claims in signer.claims] == ["https://auth.example.com"] * 2
+    # aud is the company's issuer, one string, never its token endpoint (§4.1).
+    assert [claims["aud"] for claims in signer.claims] == [ISSUER]
     assert all(claims["exp"] - claims["iat"] == 60 for claims in signer.claims)  # type: ignore[operator]
 
 
@@ -317,27 +346,28 @@ async def test_a_redirect_at_the_token_endpoint_gets_nothing() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         reactor, _, _ = session_reactor(http)
         with pytest.raises(SessionError) as refused:
-            await SessionClient(reactor=reactor, http_client=http).start(**WHO)
+            await refresh(SessionClient(reactor=reactor, http_client=http))
         reactor.stop()
-    # Nothing is sent to the new URL: no assertion, no proof (§3).
+    # Nothing is sent to the new URL: no assertion, no refresh token (§3).
     assert refused.value.code == "redirect_refused" and refused.value.status_code == 307
-    assert [str(request.url) for request in sent] == ["https://auth.example.com/oauth/token"]
+    assert [str(request.url) for request in sent] == [TOKEN_ENDPOINT]
 
 
 @pytest.mark.asyncio
 async def test_extension_required_and_rate_limited_at_the_token_endpoint_are_read() -> None:
     answers = [
         httpx.Response(403, json={"error": "extension_required", "extension": "operations"}),
-        httpx.Response(429, json={"error": "rate_limited"}, headers={"Retry-After": "7"}),
+        # A 429 has `Retry-After` and no body (§5.6).
+        httpx.Response(429, headers={"Retry-After": "7"}),
     ]
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: answers.pop(0))) as http:
         reactor, _, _ = session_reactor(http)
         client = SessionClient(reactor=reactor, http_client=http)
         with pytest.raises(SessionError) as required:
-            await client.start(**WHO)
+            await refresh(client)
         with pytest.raises(SessionError) as limited:
-            await client.start(**WHO)
+            await refresh(client)
         reactor.stop()
     assert (required.value.code, required.value.status_code) == ("extension_required", 403)
     assert required.value.details == {"extension": "operations"}
@@ -345,88 +375,25 @@ async def test_extension_required_and_rate_limited_at_the_token_endpoint_are_rea
 
 
 @pytest.mark.asyncio
-async def test_invalid_grant_on_a_renewal_discards_the_key_for_good() -> None:
-    answers = [
-        httpx.Response(200, json=token_response()),
-        httpx.Response(400, json={"error": "invalid_grant"}),
-    ]
-    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: answers.pop(0))) as http:
-        reactor, _, dpop = session_reactor(http)
-        client = SessionClient(reactor=reactor, http_client=http)
-        started = await client.start(**WHO)
-        with pytest.raises(SessionError) as ended:
-            await client.renew(**WHO, session_key=started.session_key)
-        reactor.stop()
-    # The Session has ended: its key is never used again (§4.2).
-    assert ended.value.code == "invalid_grant"
-    assert dpop.discarded == [started.session_key]
-
-
-@pytest.mark.asyncio
-async def test_an_agent_id_rides_in_the_session_assertion() -> None:
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=token_response()))
-    ) as http:
-        reactor, signer, _ = session_reactor(http)
-        client = SessionClient(reactor=reactor, http_client=http)
-        await client.start(**WHO, agent_id="agt_shopping")
-        await client.start(**WHO)
-        reactor.stop()
-    sessions = [
-        claims
-        for claims, purpose in zip(signer.claims, signer.purposes, strict=True)
-        if purpose == "session_assertion"
-    ]
-    assert sessions[0]["agent_id"] == "agt_shopping"
-    assert "agent_id" not in sessions[1]  # an agent with one agent leaves it out (§4.2)
-
-
-@pytest.mark.asyncio
-async def test_a_bearer_token_for_an_mcp_server_comes_from_token_exchange() -> None:
-    forms: list[dict[str, list[str]]] = []
-    proofs: list[bool] = []
-    answers = [
-        {**token_response()},
-        {
-            "access_token": "bearer",
-            "token_type": "Bearer",
-            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
-            "expires_in": 60,
-        },
-        {"access_token": "dpop", "token_type": "DPoP", "expires_in": 60},
-    ]
+async def test_an_agent_id_rides_in_the_session() -> None:
+    seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        forms.append(parse_qs(request.content.decode()))
-        proofs.append("dpop" in request.headers)
-        return httpx.Response(200, json=answers.pop(0))
+        seen.append(request)
+        return httpx.Response(200, json={})
 
-    mcp = "https://mcp.example.com/mcp"
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        reactor, _, _ = session_reactor(http)
+        reactor, _, session_signer = session_reactor(http)
         client = SessionClient(reactor=reactor, http_client=http)
-        session = await client.start(**WHO)
-        exchange = {key: value for key, value in WHO.items() if key != "pairwise_user_id"}
-        bearer = await client.token_for_mcp(
-            **exchange,
-            session_key=session.session_key,
-            subject_token=session.access_token,
-            resource=mcp,
-        )
-        with pytest.raises(SessionError) as wrong:
-            # Token Exchange answers with a Bearer token, or it is refused (§4.3).
-            await client.token_for_mcp(
-                **exchange,
-                session_key=session.session_key,
-                subject_token=session.access_token,
-                resource=mcp,
-            )
+        transport = SessionHttpClient(reactor=reactor, http_client=http)
+        for agent_id in ("agt_shopping", None):
+            session = await client.start(**WHO, agent_id=agent_id)
+            await transport.request("GET", "https://shop.example/api/orders", session=session)
         reactor.stop()
-    assert bearer.token_type == "Bearer" and bearer.session_key == session.session_key
-    assert wrong.value.code == "unexpected_token_type"
-    # Every token request carries a proof, Token Exchange included (§4.3).
-    assert proofs == [True, True, True]
-    assert forms[1]["grant_type"] == ["urn:ietf:params:oauth:grant-type:token-exchange"]
-    assert forms[1]["subject_token"] == ["opaque-session-token"]
-    assert forms[1]["subject_token_type"] == ["urn:ietf:params:oauth:token-type:access_token"]
-    assert forms[1]["resource"] == [mcp]
+    # An agent with one agent leaves it out (§5.2).
+    assert [request.agent_id for request in session_signer.requests] == ["agt_shopping", None]
+    assert [request.sub for request in session_signer.requests] == [PAIRWISE, PAIRWISE]
+    assert [request.headers["poppy-session"] for request in seen] == [
+        "session-jwt-1",
+        "session-jwt-2",
+    ]

@@ -14,18 +14,14 @@ from reactor import PluginManifest  # type: ignore[import-untyped]
 from personal_agent_protocol import (
     AUTHORIZATION_STATE_STORES,
     BROWSER_HANDOFFS,
-    DPOP_PROOF_PROVIDERS,
     SIGNERS,
     AuthorizationError,
     DirectSignInClient,
     DirectSignInRequest,
-    DpopProofRequest,
     build_direct_sign_in_request,
     validate_direct_sign_in_callback,
 )
 from personal_agent_protocol.reactor import TOKEN_STORES, build_pap_reactor
-
-KEY = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
 
 
 def fixed_random(length: int) -> bytes:
@@ -39,7 +35,6 @@ def request() -> DirectSignInRequest:
         client_id="https://agent.example/agent.json",
         redirect_uri="https://agent.example/oauth/callback",
         scopes=("orders:read", "orders:write"),
-        session_key=KEY,
         random_bytes=fixed_random,
     )
 
@@ -62,8 +57,8 @@ def test_builds_direct_sign_in_url_with_s256_pkce() -> None:
     assert values["response_type"] == ["code"]
     assert values["scope"] == ["orders:read orders:write"]
     assert values["code_challenge_method"] == ["S256"]
-    # The code is bound to the Session Key (§4.5, RFC 9449 §10).
-    assert values["dpop_jkt"] == [KEY]
+    # Plain OAuth: the sign-in names no Session (§4.2, §5.4).
+    assert "dpop_jkt" not in values and "session_key" not in values
     assert len(sign_in.code_verifier.get_secret_value()) == 43
     assert sign_in.state.get_secret_value() not in repr(sign_in)
 
@@ -83,7 +78,6 @@ def test_a_loopback_redirect_matches_with_any_port() -> None:
         client_id="https://agent.example/agent.json",
         redirect_uri="http://127.0.0.1/callback",
         scopes=("orders:read",),
-        session_key=KEY,
         random_bytes=fixed_random,
     )
     values = {"code": "c", "state": sign_in.state.get_secret_value(), "iss": sign_in.issuer}
@@ -122,7 +116,6 @@ def test_rejects_weak_entropy() -> None:
             client_id="https://agent.example/agent.json",
             redirect_uri="https://agent.example/oauth/callback",
             scopes=("orders:read",),
-            session_key=KEY,
             random_bytes=lambda _: b"short",
         )
 
@@ -176,15 +169,6 @@ class Signer:
         return SecretStr(f"client-assertion-{self.calls}")
 
 
-class Dpop:
-    def __init__(self) -> None:
-        self.requests: list[DpopProofRequest] = []
-
-    async def create(self, request: DpopProofRequest) -> SecretStr:
-        self.requests.append(request)
-        return SecretStr(f"dpop-{len(self.requests)}")
-
-
 class MemoryTokenStore:
     def __init__(self) -> None:
         self.values: dict[str, SecretStr] = {}
@@ -205,14 +189,12 @@ class DirectSignInPlugin:
         self.state = MemoryAuthorizationStateStore()
         self.browser = Browser()
         self.signer = Signer()
-        self.dpop = Dpop()
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         contribute(AUTHORIZATION_STATE_STORES, self.state, contribution_id="memory")
         contribute(BROWSER_HANDOFFS, self.browser, contribution_id="browser")
         contribute(SIGNERS, self.signer, contribution_id="signer")
-        contribute(DPOP_PROOF_PROVIDERS, self.dpop, contribution_id="dpop")
         contribute(TOKEN_STORES, self.tokens, contribution_id="memory")
 
 
@@ -240,7 +222,6 @@ async def begin_direct_sign_in(
         redirect_uri="https://agent.example/oauth/callback",
         scopes=("orders:read", "orders:write"),
         tenant_id="application-one",
-        session_key=KEY,
     )
     assert started.expires_at > datetime.now(timezone.utc)
     assert started.requested_scopes == ("orders:read", "orders:write")
@@ -248,30 +229,21 @@ async def begin_direct_sign_in(
     return callback_from_browser(plugin.browser)
 
 
-def test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes() -> None:
+def test_orchestrates_one_use_direct_sign_in_with_partial_scopes() -> None:
     async def scenario() -> None:
         forms: list[dict[str, str]] = []
-        calls = 0
 
         def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
             forms.append(dict(parse_qsl(request.content.decode())))
-            assert request.headers["dpop"] == f"dpop-{calls}"
-            if calls == 1:
-                return httpx.Response(
-                    400,
-                    json={"error": "use_dpop_nonce"},
-                    headers={"DPoP-Nonce": "company-nonce"},
-                )
+            assert "dpop" not in request.headers and "poppy-session" not in request.headers
             return httpx.Response(
                 200,
                 json={
-                    "access_token": "signed-in-session-token",
-                    "token_type": "DPoP",
+                    "access_token": "signed-in-access-token",
+                    "token_type": "Bearer",
                     "expires_in": 300,
                     "scope": "orders:read",
-                    "refresh_token": "account-token",
+                    "refresh_token": "private-refresh-token",
                 },
             )
 
@@ -291,23 +263,22 @@ def test_orchestrates_one_use_direct_sign_in_with_nonce_and_partial_scopes() -> 
             reactor.stop()
 
         assert reused.value.code == "invalid_or_expired_state"
-        assert result.token.access_token.get_secret_value() == "signed-in-session-token"
+        assert result.token.access_token.get_secret_value() == "signed-in-access-token"
         assert result.granted_scopes == ("orders:read",)
         assert result.missing_scopes == ("orders:write",)
-        # The Account Token never stays in the result (§4.8): only its opaque reference.
-        assert result.token.refresh_token is None
-        assert result.account_token_reference is not None
-        assert result.account_token_reference.startswith("account_")
-        assert "account-token" not in result.model_dump_json()
-        stored = plugin.tokens.values[result.account_token_reference]
-        assert stored.get_secret_value() == "account-token"
-        assert [item.nonce for item in plugin.dpop.requests] == [None, "company-nonce"]
-        # Both attempts are signed with the key the code is bound to; no Session is named.
-        assert [item.session_key for item in plugin.dpop.requests] == [KEY, KEY]
-        assert all("session_id" not in form for form in forms)
-        assert result.token.session_key == KEY and result.token.signed_in
-        assert forms[0]["code_verifier"] == forms[1]["code_verifier"]
-        assert forms[0]["client_assertion"] != forms[1]["client_assertion"]
+        # The refresh token never stays in the result (§4.4): only its opaque reference.
+        assert result.refresh_token_reference is not None
+        assert result.refresh_token_reference.startswith("refresh_")
+        assert "private-refresh-token" not in result.model_dump_json()
+        stored = plugin.tokens.values[result.refresh_token_reference]
+        assert stored.get_secret_value() == "private-refresh-token"
+        assert len(forms) == 1
+        assert forms[0]["grant_type"] == "authorization_code"
+        assert forms[0]["code"] == "one-time-code"
+        assert forms[0]["code_verifier"]
+        assert forms[0]["client_assertion"] == "client-assertion-1"
+        # No Session is named (§5.4).
+        assert "session_id" not in forms[0] and "session_key" not in forms[0]
 
     asyncio.run(scenario())
 

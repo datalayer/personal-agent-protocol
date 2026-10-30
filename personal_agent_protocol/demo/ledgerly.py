@@ -67,8 +67,8 @@ from ..operations import (
     approve,
     operations_endpoint,
 )
-from ..sessions import SessionClient, SessionToken, Who, generate_pairwise_user_id
-from ..transport import DpopHttpClient
+from ..sessions import AccessToken, PapSession, SessionClient, generate_pairwise_user_id
+from ..transport import SessionHttpClient
 from .kit import (
     AgentIdentity,
     ClockPlugin,
@@ -108,10 +108,11 @@ class NorthwindLink:
     """Ledgerly's connection to Northwind for one of its users."""
 
     pairwise_user_id: str
-    session: SessionToken | None = None
+    session: PapSession | None = None
+    token: AccessToken | None = None
     device_reference: str | None = None
     user_code: str | None = None
-    account_token_reference: str | None = None
+    refresh_token_reference: str | None = None
 
 
 class LedgerlyAsPersonalAgent:
@@ -125,7 +126,7 @@ class LedgerlyAsPersonalAgent:
         self.reactor: PluginPlatform = personal_agent_reactor(
             self.host, network=network, http_client=self.http
         )
-        transport = DpopHttpClient(reactor=self.reactor, http_client=self.http)
+        transport = SessionHttpClient(reactor=self.reactor, http_client=self.http)
         self.conversations = ConversationClient(transport=transport)
         self.operations = OperationsClient(transport=transport)
         self.links: dict[str, NorthwindLink] = {}
@@ -138,12 +139,6 @@ class LedgerlyAsPersonalAgent:
                 reactor=self.reactor, http_client=self.http
             ).discover(NORTHWIND)
         return self.company
-
-    def who(self, link: NorthwindLink, company: DiscoveredCompany) -> Who:
-        return {
-            "tenant_id": TENANT,
-            "issuer": company.oauth_metadata.issuer,  # type: ignore[union-attr]
-        }
 
     async def connect(self, account_id: str) -> NorthwindLink:
         """Start (or continue) Device Sign-In at Northwind for this Ledgerly user."""
@@ -160,11 +155,10 @@ class LedgerlyAsPersonalAgent:
                 client_id=self.identity.client_id,
                 pairwise_user_id=link.pairwise_user_id,
                 issuer=metadata.issuer,
-                token_endpoint=metadata.token_endpoint,
                 tenant_id=TENANT,
             )
         device = DeviceSignInClient(reactor=self.reactor, http_client=self.http)
-        if link.device_reference is None and link.account_token_reference is None:
+        if link.device_reference is None and link.refresh_token_reference is None:
             started = await device.begin(
                 device_authorization_endpoint=cast(str, metadata.device_authorization_endpoint),
                 token_endpoint=metadata.token_endpoint,
@@ -172,7 +166,6 @@ class LedgerlyAsPersonalAgent:
                 client_id=self.identity.client_id,
                 scopes=("accounts:read", "payments:write"),
                 tenant_id=TENANT,
-                session_key=link.session.session_key,
                 organization=company.document.organization,
                 protected_resources=metadata.protected_resources,
             )
@@ -181,8 +174,8 @@ class LedgerlyAsPersonalAgent:
         if link.device_reference is not None:
             polled = await device.poll(link.device_reference)
             if polled.status == "complete":
-                link.session = polled.token
-                link.account_token_reference = polled.account_token_reference
+                link.token = polled.token
+                link.refresh_token_reference = polled.refresh_token_reference
                 link.device_reference = None
         return link
 
@@ -199,9 +192,9 @@ class LedgerlyAsPersonalAgent:
                 author=Author(type="agent"),
                 text=f"Pay {reference}: {currency} {amount} to {payee}",
             ),
-            token=link.session,  # type: ignore[arg-type]
+            session=link.session,  # type: ignore[arg-type]
+            token=link.token,
             wait=0,
-            **self.who(link, company),
         )
         for event in reversed(page.events):  # type: ignore[union-attr]
             if event.message is not None and event.message.operation is not None:
@@ -241,7 +234,7 @@ class LedgerlyAgent:
             return [Reply(authorization=("insufficient_scope", "books:read payments:write"))]
         text = turn.text or ""
         link = await self.at.connect(turn.account_id)
-        if link.account_token_reference is None:
+        if link.refresh_token_reference is None:
             return [
                 Reply(
                     # The code is for the person's page alone (`data`), as in a PapSignIn
@@ -287,8 +280,8 @@ class LedgerlyAgent:
                 self.at.endpoint(company),
                 proposal,
                 standing=("Northwind Bank", link.pairwise_user_id, "payments.transfer"),
-                token=link.session,  # type: ignore[arg-type]
-                **self.at.who(link, company),
+                session=link.session,  # type: ignore[arg-type]
+                token=link.token,
             )
         except OperationError as error:
             if error.code != "no_standing_permission":
@@ -342,8 +335,8 @@ class NorthwindPaymentExecutor:
             self.at.endpoint(company),
             proposal,
             approval=approve(proposal),
-            token=link.session,  # type: ignore[arg-type]
-            **self.at.who(link, company),
+            session=link.session,  # type: ignore[arg-type]
+            token=link.token,
         )
         result = outcome.operation.result if outcome.operation else None
         if result is None:

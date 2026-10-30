@@ -21,11 +21,11 @@ from personal_agent_protocol import (
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
     OAuthServerMetadata,
     Operation,
     SessionClient,
+    SessionHttpClient,
     generate_message_id,
 )
 from personal_agent_protocol.demo.kit import (
@@ -98,18 +98,15 @@ async def without_the_extension(
             client_id=plain.client_id,
             pairwise_user_id=PAIRWISE,
             issuer=metadata.issuer,
-            token_endpoint=metadata.token_endpoint,
             tenant_id=TENANT,
         )
         try:
             await OperationsClient(
-                transport=DpopHttpClient(reactor=reactor, http_client=http)
+                transport=SessionHttpClient(reactor=reactor, http_client=http)
             ).read(
                 endpoint,
                 operation.operation_id,
-                token=session,
-                tenant_id=TENANT,
-                issuer=metadata.issuer,
+                session=session,
             )
         except OperationError as error:
             return error.code
@@ -120,7 +117,7 @@ agent = Agent(
     instructions=(
         "Use explain_operations to explain PAP Operations. A chat message is never "
         "approval: only the user's approval of an exact revision, or a standing "
-        "permission they granted, confirms an operation. Never expose tokens or proofs."
+        "permission they granted, confirms an operation. Never expose tokens or Session JWTs."
     ),
 )
 
@@ -144,14 +141,12 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
 
     # Ada signs Atlas in at Northwind (Device Sign-In on the bank's own page).
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
     device = DeviceSignInClient(reactor=reactor, http_client=http)
@@ -162,7 +157,6 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
         client_id=atlas.client_id,
         scopes=("accounts:read", "payments:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -177,7 +171,7 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
     without = operations_endpoint(company.document, ClientMetadata.model_validate(plain.metadata))
     if not (endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    transport = DpopHttpClient(reactor=reactor, http_client=http)
+    transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
     operations = OperationsClient(transport=transport)
     chat = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
@@ -186,9 +180,9 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
         page = await conversations.start(
             chat,
             Message(id=generate_message_id(reactor), author=Author(type="agent"), text=text),
+            session=session,
             token=token,
             wait=0,
-            **who,
         )
         proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
         if not (proposal is not None):
@@ -197,7 +191,7 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
 
     async def refused(**confirm: Any) -> str:
         try:
-            await operations.confirm(endpoint, token=token, **confirm, **who)
+            await operations.confirm(endpoint, session=session, token=token, **confirm)
         except OperationError as error:
             return error.code
         return "confirmed"
@@ -213,7 +207,9 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
         summary=first.summary.replace("1250.00", "1262.50") + " Includes a EUR 12.50 fee.",
         terms={**(first.terms or {}), "amount": {"amount": "1262.50", "currency": "EUR"}},
     )
-    changed = await operations.confirm(endpoint, first, approval=approval, token=token, **who)
+    changed = await operations.confirm(
+        endpoint, first, approval=approval, session=session, token=token
+    )
     revised = changed.operation
     if not (revised is not None):
         raise RuntimeError("the example world is incomplete")
@@ -223,10 +219,10 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
     #    the same operation back, never re-proposed or assumed failed.
     wire.armed = True
     recovered = await operations.confirm(
-        endpoint, revised, approval=approve(revised), token=token, **who
+        endpoint, revised, approval=approve(revised), session=session, token=token
     )
     retried = await operations.confirm(
-        endpoint, revised, approval=approve(revised), token=token, **who
+        endpoint, revised, approval=approve(revised), session=session, token=token
     )
     performed_for_first = len(bank_plugin.executor.performed)
 
@@ -246,12 +242,14 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
         uses_remaining=1,
     )
     second = await propose("Pay INV-0043: EUR 980.00 to Acme GmbH")
-    within = await operations.confirm(endpoint, second, standing=STANDING, token=token, **who)
+    within = await operations.confirm(
+        endpoint, second, standing=STANDING, session=session, token=token
+    )
     beyond = await propose("Pay INV-0044: EUR 3400.00 to Acme GmbH")
     beyond_bounds = await refused(operation=beyond, standing=STANDING)
 
     # 5. Cancelling a proposal: nothing is changed.
-    cancelled = await operations.cancel(endpoint, beyond.operation_id, token=token, **who)
+    cancelled = await operations.cancel(endpoint, beyond.operation_id, session=session, token=token)
 
     # 6. An agent that does not list the extension gets no operations from the bank.
     extension = await without_the_extension(network, clock, plain, metadata, endpoint, beyond)
@@ -279,7 +277,7 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
         "cancel_result": cancelled.result.summary if cancelled.result else None,
         "result_summary_as_written": recorded(recovered).model_dump()["result"]["summary"],
         "agent_without_extension": extension,
-        "tokens_and_proofs_withheld": True,
+        "tokens_and_session_jwts_withheld": True,
     }
 
 

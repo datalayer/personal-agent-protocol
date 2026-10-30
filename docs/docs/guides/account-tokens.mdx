@@ -5,8 +5,8 @@ title: Account Tokens
 # Account Tokens
 
 A Direct, Device, or Mediated Sign-In returns an Account Token: the OAuth
-`refresh_token` that keeps the user signed in after the short-lived Session
-Token expires (PAP draft 0.3 §4.8, §4.9). It is the most valuable credential a
+`refresh_token` that keeps the user signed in after the short-lived access
+token expires (PAP draft 0.3 §4.8, §4.9). It is the most valuable credential a
 personal agent holds for a user, so the SDK never hands it to a caller. It is
 written straight into the Reactor `pap.tokenStore` by the sign-in client and
 used only at the company's `token_endpoint` and `revocation_endpoint`.
@@ -14,30 +14,21 @@ used only at the company's `token_endpoint` and `revocation_endpoint`.
 ## Refresh
 
 ```python
-from personal_agent_protocol import AccountTokenClient, AccountTokenContext
+from personal_agent_protocol import RefreshTokenClient, RefreshTokenContext
 
-accounts = AccountTokenClient(reactor=reactor, http_client=http)
-context = AccountTokenContext(
+accounts = RefreshTokenClient(reactor=reactor, http_client=http)
+context = RefreshTokenContext(
     token_endpoint=metadata.token_endpoint,
     revocation_endpoint=metadata.revocation_endpoint,
     issuer=metadata.issuer,
     client_id="https://agent.example/agent.json",
     tenant_id="application-42",
-    pairwise_user_id=pairwise_user_id,
 )
-# With a Session Key: a token for that Session, signing it in if it was signed out.
-# Without one, a new Session Key starts a new Session already signed in.
-result = await accounts.refresh(
-    account_token_reference, context=context, session_key=session.session_key
-)
+result = await accounts.refresh(refresh_token_reference, context=context)
 if result.status == "signed_in":
-    session = result.token  # signed in again; refresh_token removed
+    token = result.token  # a new access token; the refresh token stays in the store
 elif result.status == "re_consent_required":
     ask_the_user_to_sign_in_again()
-elif result.status == "session_ended":
-    # The Session has ended, not the Account Token: start a new Session with it.
-    result = await accounts.refresh(account_token_reference, context=context)
-    session = result.token
 else:  # "signed_out"
     continue_signed_out()
 ```
@@ -51,20 +42,10 @@ const result = await accounts.refresh(accountTokenReference, {
 });
 ```
 
-A refresh is a `refresh_token` grant with a fresh client assertion and a fresh
-DPoP proof (one nonce retry). The proof's key says which Session: signed with
-an existing Session's key, the company signs **that Session** in; signed with
-a new Session Key (no `session_key` passed), it starts a new Session already
-signed in. The company doesn't bind the Account Token to a Session Key, so one
-Account Token can start Sessions with different keys (RFC 9449 §5 binds refresh
-tokens only for public clients, and personal agents are confidential clients).
-The Session must belong to the same `client_id` and User ID as the Account
-Token, and must never have been signed in to another account
-(`account_mismatch`). A Bearer token is `invalid_token_response`.
-
-Signing a Session in, or refreshing it, doesn't revoke the Session's earlier
-Session Tokens: each keeps working until it expires, reflecting the Session as
-it was when issued, since several tasks can share one Session (§4.4).
+A refresh is a `refresh_token` grant with a fresh client assertion. It names no
+Session: the access token it returns belongs to the account, and a Session is
+signed in by carrying that token. A `DPoP` token type is
+`unsupported_token_type`: this SDK does not send DPoP proofs yet.
 
 ## Rotation is serialized
 

@@ -161,7 +161,7 @@
       "description": "An unknown conversation and another user's conversation give the same conversation_not_found (404) body."
     },
     {
-      "id": "conversations.signed-out-token-on-account-conversation",
+      "id": "conversations.signed-out-on-account-conversation",
       "kind": "negative",
       "role": "company",
       "requirements": [

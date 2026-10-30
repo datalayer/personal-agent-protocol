@@ -232,7 +232,7 @@ def test_destructive_actions_are_refused_without_an_approval_surface(tmp_path: P
         assert "approval_required" in out
     # Nothing was done: the Session is held and signed in, the operation still proposed.
     held = world.pap("sessions", "show", session, "--json")["session"]
-    assert held["signed_in"] is True and held["account_reference"]
+    assert held["signed_in"] is True and held["refresh_reference"]
     shown = world.pap("operations", "show", session, operation, "--json")["operation"]
     assert shown["state"] == "proposed"
     # The same actions stay available as CLI-only commands.

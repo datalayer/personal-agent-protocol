@@ -128,16 +128,13 @@ Register it as `pap.pairwiseUserIdStore`, or contribute a transactional
 platform store with the aligned contract. `resolve_pairwise_user_id` fails
 closed when no unambiguous store is active.
 
-Assertion claim builders do not sign tokens. Signing remains behind a
-key-custody contribution so private keys never enter application or model
-context. The assertion names the agent in `iss` and the User ID in `sub`, and
-its `aud` is the company's `auth.issuer` alone.
+A Session is local: `start` signs nothing and sends nothing. Signing remains
+behind a key-custody contribution so private keys never enter application or
+model context. The Session names the agent in `client_id` and the User ID in
+`sub`, for the company's `auth.issuer` alone.
 
 ```python
-from personal_agent_protocol import (
-    build_session_assertion_claims,
-    resolve_pairwise_user_id,
-)
+from personal_agent_protocol import SessionClient, resolve_pairwise_user_id
 
 pairwise_user_id = await resolve_pairwise_user_id(
     reactor,
@@ -145,20 +142,19 @@ pairwise_user_id = await resolve_pairwise_user_id(
     local_user_id="local-user-42",
     company_issuer="https://auth.example.com",
 )
-claims = build_session_assertion_claims(
+session = await SessionClient(reactor=reactor, http_client=http).start(
     client_id="https://agent.example/agent.json",
     pairwise_user_id=pairwise_user_id,
     issuer="https://auth.example.com",
+    tenant_id="application-42",
 )
-# Signing is intentionally not performed here: `SessionClient` signs through the
-# host's `pap.signer` and proves the request with a new Session Key.
+# No request is sent here: `SessionHttpClient` sends a Session JWT with each request,
+# signed through the host's `pap.sessionSigner`.
 ```
 
-For the implemented network flow, construct `SessionClient` with an existing
-Reactor platform and HTTPX client. `start()` makes a new Session Key and
-`renew()` proves an existing one; both resolve the signer and DPoP provider,
-create fresh assertions and proofs, send the form, and parse the opaque token
-response. See [Signed-out sessions](/guides/sessions/) for
+Construct `SessionClient` with an existing Reactor platform and HTTPX client.
+`start()` draws a new `sid`; `SessionHttpClient` then asks `pap.sessionSigner` for
+a fresh Session JWT for each request. See [Signed-out sessions](/guides/sessions/) for
 usage and the exact security boundary.
 
 The maintained `PyJWT[crypto]` dependency backs local JOSE operations. Only

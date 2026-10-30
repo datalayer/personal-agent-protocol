@@ -15,12 +15,13 @@ from personal_agent_protocol import (
     ConversationError,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
+    PapSession,
     SessionClient,
+    SessionHttpClient,
     generate_message_id,
 )
-from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
+from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.company import MemoryCompanyStore, StaleConversationError
 from personal_agent_protocol.conversations import StreamReconnected, TextDelta
 from personal_agent_protocol.demo.kit import (
@@ -56,8 +57,11 @@ class World:
         self.reactor = personal_agent_reactor(
             self.host, network=self.network, http_client=self.http
         )
-        self.transport = DpopHttpClient(reactor=self.reactor, http_client=self.http)
+        self.transport = SessionHttpClient(reactor=self.reactor, http_client=self.http)
         self.conversations = ConversationClient(transport=self.transport)
+        #: The Session `test_company_refusals.signed_in` signed in, and its refresh token.
+        self.session: PapSession | None = None
+        self.refresh_reference: str | None = None
 
     async def signed_out_session(self):  # type: ignore[no-untyped-def]
         company = await DiscoveryClient(reactor=self.reactor, http_client=self.http).discover(
@@ -70,7 +74,6 @@ class World:
             client_id=self.atlas.client_id,
             pairwise_user_id=PAIRWISE,
             issuer=company.oauth_metadata.issuer,
-            token_endpoint=company.oauth_metadata.token_endpoint,
             tenant_id=TENANT,
         )
 
@@ -87,12 +90,11 @@ class World:
 async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> None:
     world = World()
     session = await world.signed_out_session()
-    assert session.signed_in is False
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     # A question the company can only answer for a signed-in user.
     page = await world.conversations.start(
-        endpoint, world.message("Where is my jacket order?"), token=session, wait=0, **world.who
+        endpoint, world.message("Where is my jacket order?"), session=session, wait=0
     )
     kinds = [event.type for event in page.events]
     assert kinds == ["message", "state", "message", "authorization", "state"]
@@ -108,7 +110,6 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=world.company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -119,17 +120,17 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
     done = await device.poll(started.reference)
     assert done.status == "complete" and done.token is not None
     signed_in = done.token
-    assert signed_in.signed_in and signed_in.session_key == session.session_key
+    assert signed_in.scopes == ("orders:read", "orders:write")
 
     # The same conversation continues, signed in.
     page = await world.conversations.send(
         endpoint,
         page.conversation_id,
         world.message("Exchange it for something warmer"),
+        session=session,
         token=signed_in,
         cursor=page.cursor,
         wait=0,
-        **world.who,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert proposal is not None and proposal.state == "proposed"
@@ -140,48 +141,44 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
     assert ops_endpoint is not None
     operations = OperationsClient(transport=world.transport)
     outcome = await operations.confirm(
-        ops_endpoint, proposal, approval=approve(proposal), token=signed_in, **world.who
+        ops_endpoint, proposal, approval=approve(proposal), session=session, token=signed_in
     )
     assert outcome.status == "confirmed"
     assert outcome.operation.state == "succeeded"  # type: ignore[union-attr]
     assert outcome.operation.result.summary.startswith("Exchanged the Ridge Jacket")  # type: ignore[union-attr]
     again = await operations.confirm(
-        ops_endpoint, proposal, approval=approve(proposal), token=signed_in, **world.who
+        ops_endpoint, proposal, approval=approve(proposal), session=session, token=signed_in
     )
     assert again.operation.state == "succeeded"  # type: ignore[union-attr]
     assert world.plugin.executor.performed == [proposal.operation_id]
 
     # The Account Token: narrower refresh, then revocation signs the Session out.
-    accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
-    context = AccountTokenContext(
+    accounts = RefreshTokenClient(reactor=world.reactor, http_client=world.http)
+    context = RefreshTokenContext(
         token_endpoint=metadata.token_endpoint,  # type: ignore[union-attr]
         revocation_endpoint=metadata.revocation_endpoint,  # type: ignore[union-attr]
         issuer=metadata.issuer,  # type: ignore[union-attr]
         client_id=world.atlas.client_id,
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
     )
     narrowed = await accounts.refresh(
-        done.account_token_reference,
+        done.refresh_token_reference,
         context=context,  # type: ignore[arg-type]
-        session_key=session.session_key,
         scopes=("orders:read",),
     )
     assert narrowed.status == "signed_in" and narrowed.rotated
     assert narrowed.granted_scopes == ("orders:read",)
     wider = await accounts.refresh(
-        done.account_token_reference,
+        done.refresh_token_reference,
         context=context,  # type: ignore[arg-type]
-        session_key=session.session_key,
         scopes=("orders:read", "orders:admin"),
     )
     assert wider.status == "re_consent_required"
-    revoked = await accounts.revoke(done.account_token_reference, context=context)  # type: ignore[arg-type]
+    revoked = await accounts.revoke(done.refresh_token_reference, context=context)  # type: ignore[arg-type]
     assert revoked.revoked
     after = await accounts.refresh(
-        done.account_token_reference,
-        context=context,
-        session_key=session.session_key,  # type: ignore[arg-type]
+        done.refresh_token_reference,
+        context=context,  # type: ignore[arg-type]
     )
     assert after.status == "signed_out"
 
@@ -195,15 +192,14 @@ async def test_mediated_sign_in_with_a_one_time_code() -> None:
     started = await mediated.sign_in(
         mediated=auth.mediated,  # type: ignore[union-attr,arg-type]
         organization=world.company.document.organization,
-        issuer=auth.issuer,  # type: ignore[union-attr]
+        issuer=session.issuer,
         scopes=("orders:read",),
-        token=session,
-        tenant_id=TENANT,
+        session=session,
     )
     assert started.status == "code_required" and started.sent_to == "a•••@example.com"
-    wrong = await mediated.submit_code(started.reference, token=session, **world.who)  # type: ignore[arg-type]
+    wrong = await mediated.submit_code(started.reference, session=session)  # type: ignore[arg-type]
     assert wrong.status == "code_required"
-    done = await mediated.submit_code(started.reference, token=session, **world.who)  # type: ignore[arg-type]
+    done = await mediated.submit_code(started.reference, session=session)  # type: ignore[arg-type]
     assert done.status == "complete" and done.granted_scopes == ("orders:read",)
     assert [request.purpose for request in world.host.protected_input.asked] == [
         "credentials",
@@ -218,13 +214,13 @@ async def test_the_conversation_streams_and_a_stranger_cannot_read_it() -> None:
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     page = await world.conversations.start(
-        endpoint, world.message("Hello"), token=session, wait=0, **world.who
+        endpoint, world.message("Hello"), session=session, wait=0
     )
-    await world.conversations.close(endpoint, page.conversation_id, token=session, **world.who)
+    await world.conversations.close(endpoint, page.conversation_id, session=session)
     items = [
         item
         async for item in world.conversations.stream(
-            endpoint, page.conversation_id, token=session, **world.who
+            endpoint, page.conversation_id, session=session
         )
     ]
     deltas = [item for item in items if isinstance(item, TextDelta)]
@@ -235,17 +231,14 @@ async def test_the_conversation_streams_and_a_stranger_cannot_read_it() -> None:
     other = await SessionClient(reactor=world.reactor, http_client=world.http).start(
         client_id=world.atlas.client_id,
         pairwise_user_id="usr_somebody_else_000000",
-        issuer=world.who["issuer"],
-        token_endpoint=world.company.oauth_metadata.token_endpoint,  # type: ignore[union-attr]
+        issuer=session.issuer,
         tenant_id=TENANT,
     )
     with pytest.raises(ConversationError) as raised:
         await world.conversations.read_events(
             endpoint,
             page.conversation_id,
-            token=other,
-            tenant_id=TENANT,
-            issuer=world.who["issuer"],
+            session=other,
         )
     assert raised.value.code == "conversation_not_found"
 
@@ -262,14 +255,14 @@ async def test_one_of_the_companys_people_answers_over_what_they_read() -> None:
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     page = await world.conversations.start(
-        endpoint, world.message("Hello"), token=session, wait=0, **world.who
+        endpoint, world.message("Hello"), session=session, wait=0
     )
     conversation_id = page.conversation_id
     read = await world.shop.conversation_record(conversation_id)
     with pytest.raises(ValueError, match="not handed"):
         await world.shop.staff_reply(conversation_id, after=read.events[-1].id, text="Marta here.")
 
-    await world.conversations.handoff(endpoint, conversation_id, token=session, **world.who)
+    await world.conversations.handoff(endpoint, conversation_id, session=session)
     read = await world.shop.conversation_record(conversation_id)
     assert read.responder == "human"
     took = await world.shop.staff_reply(
@@ -280,7 +273,7 @@ async def test_one_of_the_companys_people_answers_over_what_they_read() -> None:
 
     # The person writes while Marta answers from what she read before: hers is refused.
     await world.conversations.send(
-        endpoint, conversation_id, world.message("Is it shipped?"), token=session, **world.who
+        endpoint, conversation_id, world.message("Is it shipped?"), session=session
     )
     with pytest.raises(StaleConversationError):
         await world.shop.staff_reply(conversation_id, after=took.id, text="Anything else?")
@@ -289,9 +282,7 @@ async def test_one_of_the_companys_people_answers_over_what_they_read() -> None:
         conversation_id, after=read.events[-1].id, text="It is.", data={"order_id": "ord_7Hk2"}
     )
 
-    seen = await world.conversations.read_events(
-        endpoint, conversation_id, token=session, **world.who
-    )
+    seen = await world.conversations.read_events(endpoint, conversation_id, session=session)
     written = [
         (event.message.author.type, event.message.role, event.message.text)
         for event in seen.events
@@ -305,7 +296,7 @@ async def test_one_of_the_companys_people_answers_over_what_they_read() -> None:
     assert seen.events[-1].id == answered.id
     assert (seen.status, seen.responder) == ("idle", "human")
 
-    await world.conversations.close(endpoint, conversation_id, token=session, **world.who)
+    await world.conversations.close(endpoint, conversation_id, session=session)
     read = await world.shop.conversation_record(conversation_id)
     with pytest.raises(ValueError, match="closed"):
         await world.shop.staff_reply(conversation_id, after=read.events[-1].id, text="Bye.")

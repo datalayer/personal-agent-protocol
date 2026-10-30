@@ -11,9 +11,9 @@ from personal_agent_protocol import (
     BROWSER_HANDOFFS,
     CACHES,
     CLOCKS,
-    DPOP_PROOF_PROVIDERS,
     PAIRWISE_USER_ID_STORES,
     RANDOM_SOURCES,
+    SESSION_SIGNERS,
     SIGNERS,
     TOKEN_STORES,
     build_pap_reactor,
@@ -27,7 +27,7 @@ SECURITY_POINTS = [
     PAIRWISE_USER_ID_STORES,
     CACHES,
     BROWSER_HANDOFFS,
-    DPOP_PROOF_PROVIDERS,
+    SESSION_SIGNERS,
 ]
 
 
@@ -66,7 +66,7 @@ def test_cross_language_infrastructure_point_ids_are_stable() -> None:
     assert PAIRWISE_USER_ID_STORES.id == "pap.pairwiseUserIdStore"
     assert CACHES.id == "pap.cache"
     assert BROWSER_HANDOFFS.id == "pap.browserHandoff"
-    assert DPOP_PROOF_PROVIDERS.id == "pap.dpopProofProvider"
+    assert SESSION_SIGNERS.id == "pap.sessionSigner"
 
 
 @pytest.mark.parametrize("point", SECURITY_POINTS, ids=lambda point: point.id)

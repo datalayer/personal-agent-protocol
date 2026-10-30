@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Any, cast
 import typer
 from pydantic import SecretStr
 
-from .accounts import AccountTokenClient
+from .accounts import RefreshTokenClient
 from .actions import (
     ActionUsageError,
     ApprovalRequiredError,
@@ -51,6 +51,7 @@ from .actions import (
     cancel_operation,
     company_of,
     conversation_client,
+    credentials,
     disconnect,
     end_session,
     follow_events,
@@ -58,12 +59,10 @@ from .actions import (
     operation_view,
     operations_client,
     read_events,
-    session_token,
     session_view,
     show_operation,
     show_requirement,
     show_sessions,
-    who_of,
 )
 from .apis import ApiClient
 from .auth import DirectSignInClient
@@ -94,8 +93,8 @@ from .reactor import (
     first_contribution,
     optional_contribution,
 )
-from .sessions import SessionClient, SessionToken
-from .transport import DpopHttpClient
+from .sessions import AccessToken, SessionClient
+from .transport import SessionHttpClient
 
 if TYPE_CHECKING:
     from .cli_plugin import PapCliPlugin
@@ -214,7 +213,10 @@ class Runner:
             async with self.plugin.host(source) as runtime:
                 # Every command sees and makes only its tenant's Sessions.
                 runtime.tenant_id = tenant
-                return await work(runtime)
+                try:
+                    return await work(runtime)
+                finally:
+                    runtime.keep_restarted_sessions()
 
         try:
             payload = asyncio.run(main())
@@ -240,21 +242,18 @@ class Runner:
 async def _keep(
     runtime: CliRuntime,
     record: SessionRecord,
-    token: SessionToken,
+    token: AccessToken,
     *,
-    account_reference: str | None = None,
+    refresh_reference: str | None = None,
 ) -> None:
-    """The new token replaces the old from now on (§4.3); the record says what it is."""
+    """A new access token replaces the old from now on (§5.4); the record says what it is."""
 
     await runtime.secrets.put(record.token_reference, token.access_token)
-    if token.refresh_token is not None:
-        account_reference = account_reference or f"account:{record.session_key}"
-        await runtime.secrets.put(account_reference, token.refresh_token)
-    if account_reference is not None:
-        record.account_reference = account_reference
-    record.signed_in = token.signed_in
+    if refresh_reference is not None:
+        record.refresh_reference = refresh_reference
+    record.signed_in = True
     record.scope = token.scope
-    record.expires_at = runtime.expires_at(token.expires_in)
+    record.expires_at = runtime.expires_at(token.expires_in or 3600)
     runtime.state.sessions[record.id] = record
     runtime.state.save()
 
@@ -266,8 +265,8 @@ def _render_session(payload: dict) -> None:
     if session["scope"]:
         typer.echo(f"scope: {session['scope']}")
     typer.echo(f"token: {session['token_reference']}")
-    if session.get("account_reference"):
-        typer.echo(f"account token: {session['account_reference']}")
+    if session.get("refresh_reference"):
+        typer.echo(f"refresh token: {session['refresh_reference']}")
 
 
 def _scopes(scope: list[str] | None, company: DiscoveredCompany, kind: str) -> tuple[str, ...]:
@@ -384,17 +383,15 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 local_user_id=user,
                 company_issuer=metadata.issuer,
             )
-            token = await SessionClient(reactor=runtime.reactor, http_client=runtime.http).start(
+            started = await SessionClient(reactor=runtime.reactor, http_client=runtime.http).start(
                 client_id=str(client_id),
                 pairwise_user_id=pairwise,
                 issuer=metadata.issuer,
-                token_endpoint=metadata.token_endpoint,
                 tenant_id=runtime.tenant_id,
             )
             record = SessionRecord(
-                # The CLI's handle: the Session Key's thumbprint can start with "-", an option.
-                id=f"ses_{token.session_key}",
-                session_key=token.session_key,
+                id=started.handle,
+                sid=started.sid,
                 domain=company.document.organization.domain,
                 company=company.document.organization.name,
                 issuer=metadata.issuer,
@@ -404,12 +401,13 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 tenant_id=runtime.tenant_id,
                 user=user,
                 pairwise_user_id=pairwise,
-                token_reference=f"session:{token.session_key}",
-                signed_in=token.signed_in,
-                scope=token.scope,
-                expires_at=runtime.expires_at(token.expires_in),
+                token_reference=f"session:{started.sid}",
+                signed_in=False,
+                scope="",
+                expires_at="",
             )
-            await _keep(runtime, record, token)
+            runtime.state.sessions[record.id] = record
+            runtime.state.save()
             return session_view(record)
 
         run(work, json_output=json_output, render=_render_session, no_input=no_input)
@@ -420,39 +418,24 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         json_output: bool = JSON,
         no_input: bool = NO_INPUT,
     ) -> None:
-        """Get a new Session Token: with the Account Token when signed in (§4.2, §4.8)."""
+        """Get a new access token with the Session's refresh token (§4.4)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session)
-            if record.account_reference is not None:
-                result = await AccountTokenClient(
-                    reactor=runtime.reactor, http_client=runtime.http
-                ).refresh(
-                    record.account_reference,
-                    context=account_context(record),
-                    session_key=record.session_key,
-                )
-                if result.status == "signed_in" and result.token is not None:
-                    await _keep(runtime, record, result.token)
-                    return session_view(record)
-                if result.status == "session_ended":
-                    # Its key is discarded: the Account Token starts a new Session (§4.8).
-                    raise NotConfiguredError(
-                        "session_ended", "The Session has ended: start a new one"
-                    )
-                record.account_reference = None  # gone at the company: continue signed out
-                if result.token is not None:
-                    await _keep(runtime, record, result.token)
-                    return session_view(record)
-            token = await SessionClient(reactor=runtime.reactor, http_client=runtime.http).renew(
-                client_id=record.client_id,
-                pairwise_user_id=record.pairwise_user_id,
-                issuer=record.issuer,
-                token_endpoint=record.token_endpoint,
-                tenant_id=record.tenant_id,
-                session_key=record.session_key,
-            )
-            await _keep(runtime, record, token)
+            if record.refresh_reference is None:
+                raise NotConfiguredError("not_signed_in", "This Session holds no refresh token")
+            result = await RefreshTokenClient(
+                reactor=runtime.reactor, http_client=runtime.http
+            ).refresh(record.refresh_reference, context=account_context(record))
+            if result.status == "signed_in" and result.token is not None:
+                await _keep(runtime, record, result.token)
+                return session_view(record)
+            # Gone at the company: the Session continues signed out (§5.5).
+            await runtime.secrets.delete(record.token_reference)
+            record.refresh_reference = None
+            record.signed_in = False
+            record.scope = ""
+            runtime.state.save()
             return session_view(record)
 
         run(work, json_output=json_output, render=_render_session, no_input=no_input)
@@ -478,15 +461,15 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @sessions.command("end")
     def sessions_end(session: str = typer.Argument(...), json_output: bool = JSON) -> None:
-        """Stop using a Session; its Account Token is kept for new ones (§4.9)."""
+        """Stop using a Session; its refresh token is kept for new ones (§5.5)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             return await end_session(runtime, session)
 
         def render(payload: dict) -> None:
             typer.echo(f"Ended {payload['ended']}.")
-            if payload["account_reference"]:
-                typer.echo(f"Account token kept: {payload['account_reference']}")
+            if payload["refresh_reference"]:
+                typer.echo(f"Refresh token kept: {payload['refresh_reference']}")
 
         run(work, json_output=json_output, render=render)
 
@@ -530,12 +513,11 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 redirect_uri=target,
                 scopes=_scopes(scope, company, "direct"),
                 tenant_id=record.tenant_id,
-                session_key=record.session_key,
             )
             callback = runtime.input.read("Callback URL", secret=True)
             result = await client.complete(callback.get_secret_value())
             await _keep(
-                runtime, record, result.token, account_reference=result.account_token_reference
+                runtime, record, result.token, refresh_reference=result.refresh_token_reference
             )
             return {**session_view(record), "missing_scopes": list(result.missing_scopes)}
 
@@ -572,7 +554,6 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 client_id=record.client_id,
                 scopes=_scopes(scope, company, "device"),
                 tenant_id=record.tenant_id,
-                session_key=record.session_key,
                 organization=company.document.organization,
                 protected_resources=metadata.protected_resources,
             )
@@ -593,7 +574,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                         runtime,
                         record,
                         polled.token,
-                        account_reference=polled.account_token_reference,
+                        refresh_reference=polled.refresh_token_reference,
                     )
                     return {**session_view(record), "missing_scopes": list(polled.missing_scopes)}
             raise PendingError("authorization_pending", "The user has not signed in yet")
@@ -622,23 +603,22 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             if auth_document is None or auth_document.mediated is None:
                 raise NotConfiguredError("no_mediated", "The company offers no Mediated Sign-In")
             client = MediatedSignInClient(reactor=runtime.reactor, http_client=runtime.http)
-            token = await session_token(runtime, record)
+            live = runtime.session_of(record)
             result = await client.sign_in(
                 mediated=auth_document.mediated,
                 organization=company.document.organization,
                 issuer=record.issuer,
                 scopes=_scopes(scope, company, "mediated"),
-                token=token,
-                tenant_id=record.tenant_id,
+                session=live,
             )
             while result.status == "code_required" and result.reference is not None:
-                result = await client.submit_code(result.reference, token=token, **who_of(record))
+                result = await client.submit_code(result.reference, session=live)
             if result.status != "complete" or result.token is None:
                 raise PersonalAgentProtocolError(
                     f"sign_in_{result.status}", "Mediated Sign-In did not complete"
                 )
             await _keep(
-                runtime, record, result.token, account_reference=result.account_token_reference
+                runtime, record, result.token, refresh_reference=result.refresh_token_reference
             )
             return {**session_view(record), "missing_scopes": list(result.missing_scopes)}
 
@@ -653,7 +633,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
     @auth.command("disconnect")
     def auth_disconnect(session: str = typer.Argument(...), json_output: bool = JSON) -> None:
-        """Sign out: revoke the Account Token; Sessions continue signed out (§4.9)."""
+        """Sign out: revoke the refresh tokens held; Sessions continue signed out (§5.5)."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             return await disconnect(runtime, session)
@@ -675,7 +655,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         ),
         json_output: bool = JSON,
     ) -> None:
-        """Call the company's OpenAPI API with the Session's DPoP token (§6).
+        """Call the company's OpenAPI API in the Session, with its access token if any (§7).
 
         A write sends an `Idempotency-Key` (a new random one unless given) and prints it.
         """
@@ -688,14 +668,13 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 raw = sys.stdin.read() if str(body_file) == "-" else body_file.read_text()
                 body = json.loads(raw)
             answer = await ApiClient(
-                transport=DpopHttpClient(reactor=runtime.reactor, http_client=runtime.http)
+                transport=SessionHttpClient(reactor=runtime.reactor, http_client=runtime.http)
             ).call(
                 method.upper(),
                 url,
-                token=await session_token(runtime, record),
                 body=body if body is not None or method.upper() == "GET" else {},
                 idempotency_key=idempotency_key,
-                **who_of(record),
+                **await credentials(runtime, record),
             )
             sent = (
                 {}
@@ -722,10 +701,9 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         arguments: str = typer.Option("{}", "--arguments", help="The tool's JSON arguments."),
         json_output: bool = JSON,
     ) -> None:
-        """Call the company's MCP server with a token issued for its url only (§4.3).
+        """Call the company's MCP server in the Session: a token issued for its url only (§7).
 
-        DPoP with proofs when its protected resource metadata says it supports
-        DPoP, a Bearer token otherwise.
+        Signed out, the Session header alone, which the server may allow.
         """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
@@ -734,47 +712,21 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             server = mcp_api(company.document)
             if server is None:
                 raise NotConfiguredError("no_mcp", "The company lists no MCP server")
-            served = await fetch_mcp_server_metadata(runtime.http, server.url, issuer=record.issuer)
-            sessions = SessionClient(reactor=runtime.reactor, http_client=runtime.http)
-            token: SessionToken | None = None
-            if not served.supports_dpop:
-                # A Bearer token for this server alone, by Token Exchange (§4.3).
-                token = await sessions.token_for_mcp(
-                    client_id=record.client_id,
-                    issuer=record.issuer,
-                    token_endpoint=record.token_endpoint,
-                    tenant_id=record.tenant_id,
-                    session_key=record.session_key,
-                    subject_token=(await session_token(runtime, record)).access_token,
-                    resource=server.url,
-                )
-            elif record.account_reference is not None:
-                result = await AccountTokenClient(
+            await fetch_mcp_server_metadata(runtime.http, server.url, issuer=record.issuer)
+            token: AccessToken | None = None
+            if record.refresh_reference is not None:
+                result = await RefreshTokenClient(
                     reactor=runtime.reactor, http_client=runtime.http
-                ).refresh(
-                    record.account_reference,
-                    context=account_context(record),
-                    session_key=record.session_key,
-                    resource=server.url,
+                ).token_for_mcp(
+                    record.refresh_reference, context=account_context(record), url=server.url
                 )
                 token = result.token
-            if token is None:
-                token = await sessions.renew(
-                    client_id=record.client_id,
-                    pairwise_user_id=record.pairwise_user_id,
-                    issuer=record.issuer,
-                    token_endpoint=record.token_endpoint,
-                    tenant_id=record.tenant_id,
-                    session_key=record.session_key,
-                    resource=server.url,
-                )
-            await runtime.secrets.put(f"mcp:{record.session_key}", token.access_token)
             client = McpClient(
                 http_client=runtime.http,
-                token=token,
                 url=server.url,
+                session=runtime.session_of(record),
                 reactor=runtime.reactor,
-                who=who_of(record),
+                token=token,
             )
             if tool is None:
                 return {"tools": await client.list_tools()}
@@ -819,9 +771,8 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             answer = await client.start(
                 endpoint,
                 _message(runtime.reactor, text, human),
-                token=await session_token(runtime, record),
                 wait=wait,
-                **who_of(record),
+                **await credentials(runtime, record),
             )
             return answer.model_dump(mode="json")
 
@@ -845,9 +796,8 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 endpoint,
                 conversation_id,
                 _message(runtime.reactor, text, human),
-                token=await session_token(runtime, record),
                 wait=wait,
-                **who_of(record),
+                **await credentials(runtime, record),
             )
             return answer.model_dump(mode="json")
 
@@ -910,8 +860,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             receipt = await client.handoff(
                 endpoint,
                 conversation_id,
-                token=await session_token(runtime, record),
-                **who_of(record),
+                **await credentials(runtime, record),
             )
             return receipt.model_dump(mode="json")
 
@@ -933,8 +882,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 endpoint,
                 parent_id,
                 _message(runtime.reactor, text, True),
-                token=await session_token(runtime, record),
-                **who_of(record),
+                **await credentials(runtime, record),
             )
             return answer.model_dump(mode="json")
 
@@ -954,8 +902,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             receipt = await client.close(
                 endpoint,
                 conversation_id,
-                token=await session_token(runtime, record),
-                **who_of(record),
+                **await credentials(runtime, record),
             )
             return receipt.model_dump(mode="json")
 
@@ -994,7 +941,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             record = runtime.session(session)
             client, endpoint, company_name = await operations_client(runtime, record)
             operation = await client.read(
-                endpoint, operation_id, token=await session_token(runtime, record), **who_of(record)
+                endpoint, operation_id, **await credentials(runtime, record)
             )
             if operation.revision != revision:
                 raise NotApprovedError(
@@ -1072,15 +1019,13 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                     "not_approved", "This approval was not made here: approve at the prompt"
                 )
             client, endpoint, _ = await operations_client(runtime, record)
-            token = await session_token(runtime, record)
-            operation = await client.read(endpoint, operation_id, token=token, **who_of(record))
+            held = await credentials(runtime, record)
+            operation = await client.read(endpoint, operation_id, **held)
             approval = UserApproval.model_validate(
                 {key: approved[key] for key in ("operation_id", "revision", "digest")}
             )
             try:
-                outcome = await client.confirm(
-                    endpoint, operation, approval=approval, token=token, **who_of(record)
-                )
+                outcome = await client.confirm(endpoint, operation, approval=approval, **held)
             except PersonalAgentProtocolError as error:
                 if error.code in {"approval_mismatch", "not_proposed"}:
                     raise NotApprovedError(error.code, "Approve the current revision") from error

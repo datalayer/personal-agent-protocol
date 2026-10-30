@@ -8,7 +8,7 @@ Every test is marked `load` and sized by `PAP_LOAD_SIZE` (64 by default, so the
 default run stays quick; the `load` CI job runs them at 512). Each prints its
 numbers (`-s` shows them); `docs/docs/protocol/load-tests.mdx` records a run.
 
-- **Replay.** `PAP_LOAD_SIZE` concurrent verifications of one DPoP proof, of one
+- **Replay.** `PAP_LOAD_SIZE` concurrent verifications of one Session JWT, of one
   client assertion, and of one whole token request at the company: exactly one
   is accepted. The memory store and replay cache pass their conformance kits
   (`check_store`, `check_replay_cache`) at the same concurrency, and the replay
@@ -42,33 +42,33 @@ import pytest
 
 from personal_agent_protocol import (
     DeviceSignInClient,
-    InMemorySessionKeys,
     Message,
-    SessionClient,
     generate_message_id,
 )
+from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.company import MemoryCompanyStore, MemoryReplayCache
 from personal_agent_protocol.company.store import DEVICE, PendingDevice
 from personal_agent_protocol.company.testing import check_replay_cache, check_store
-from personal_agent_protocol.company.verify import verify_assertion
+from personal_agent_protocol.company.verify import verify_assertion, verify_session_jwt
 from personal_agent_protocol.conversations import StreamReconnected, TextDelta
-from personal_agent_protocol.crypto import JoseDpopProofProvider, verify_dpop_proof
+from personal_agent_protocol.crypto import DelegatedSessionSigner, InMemoryDelegatedKeys
 from personal_agent_protocol.demo.kit import MutableClock
 from personal_agent_protocol.errors import (
     PersonalAgentProtocolError,
-    ProofError,
     SessionError,
     TransportError,
 )
-from personal_agent_protocol.models import Author, JsonWebKeySet
-from personal_agent_protocol.reactor import DpopProofRequest, SharedRateLimitBudget
+from personal_agent_protocol.models import Author, ClientMetadata, JsonWebKeySet
+from personal_agent_protocol.reactor import SessionJwtRequest, SharedRateLimitBudget
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
+from .test_company_refusals import signed_in
 
 pytestmark = pytest.mark.load
 
 SIZE = int(os.environ.get("PAP_LOAD_SIZE", "64"))
 TOKEN = "https://manzanita.example/oauth/token"
+ORDERS = "https://manzanita.example/api/orders"
 
 
 def report(name: str, **numbers: object) -> None:
@@ -91,28 +91,50 @@ async def test_concurrent_replays_of_one_proof_and_one_assertion_accept_exactly_
     clock = world.clock
     now = clock.now()
 
-    # One DPoP proof, verified by SIZE callers at once.
-    provider = JoseDpopProofProvider(InMemorySessionKeys(), now=clock.now)
-    key = await provider.new_session_key(tenant_id=TENANT, issuer="https://m")
-    proof = await provider.create(
-        DpopProofRequest(
-            method="POST", url=TOKEN, tenant_id=TENANT, issuer="https://m", session_key=key
+    # One Session JWT, verified by SIZE callers at once.
+    issuer = "https://manzanita.example"
+    signer = DelegatedSessionSigner(
+        InMemoryDelegatedKeys(), signer=world.atlas.signer(), now=clock.now
+    )
+    session_jwt = await signer.sign(
+        SessionJwtRequest(
+            method="GET",
+            url=ORDERS,
+            tenant_id=TENANT,
+            issuer=issuer,
+            client_id=world.atlas.client_id,
+            sid="s" * 22,
+            sub=PAIRWISE,
         )
     )
+    metadata = ClientMetadata.model_validate(world.atlas.metadata)
+    published = JsonWebKeySet.model_validate(world.atlas.jwks)
+
+    async def resolve(client_id: str, kid: str | None) -> tuple[ClientMetadata, JsonWebKeySet]:
+        return metadata, published
+
     cache = MemoryReplayCache(clock)
     start = time.perf_counter()
     outcomes = await asyncio.gather(
         *(
-            verify_dpop_proof(proof, method="POST", url=TOKEN, replay_cache=cache, now=now)
+            verify_session_jwt(
+                session_jwt.get_secret_value(),
+                issuer=issuer,
+                method="GET",
+                url=ORDERS,
+                resolve=resolve,
+                replay_cache=cache,
+                now=now,
+            )
             for _ in range(SIZE)
         ),
         return_exceptions=True,
     )
     proof_time = _ms(start)
     accepted = [o for o in outcomes if not isinstance(o, BaseException)]
-    refused = [o for o in outcomes if isinstance(o, ProofError)]
+    refused = [o for o in outcomes if isinstance(o, SessionError)]
     assert len(accepted) == 1 and len(refused) == SIZE - 1
-    assert {error.code for error in refused} == {"invalid_dpop_proof"}
+    assert {error.code for error in refused} == {"invalid_session"}
 
     # One client assertion, verified by SIZE callers at once.
     claims = {
@@ -162,7 +184,10 @@ async def test_concurrent_replays_of_one_proof_and_one_assertion_accept_exactly_
 @pytest.mark.asyncio
 async def test_one_token_request_replayed_concurrently_is_accepted_once() -> None:
     world = World()
-    await world.signed_out_session()
+    await signed_in(world)
+    assert world.refresh_reference is not None
+    metadata = world.company.oauth_metadata
+    assert metadata is not None
     captured: dict[str, Any] = {}
     company = world.network.apps["manzanita.example"]
 
@@ -182,18 +207,20 @@ async def test_one_token_request_replayed_concurrently_is_accepted_once() -> Non
 
     world.network.add("manzanita.example", capture_first)
     with pytest.raises(PersonalAgentProtocolError):
-        await SessionClient(reactor=world.reactor, http_client=world.http).start(
-            client_id=world.atlas.client_id,
-            pairwise_user_id=PAIRWISE,
-            issuer=world.who["issuer"],
-            token_endpoint=TOKEN,
-            tenant_id=TENANT,
+        await RefreshTokenClient(reactor=world.reactor, http_client=world.http).refresh(
+            world.refresh_reference,
+            context=RefreshTokenContext(
+                token_endpoint=TOKEN,
+                issuer=metadata.issuer,
+                client_id=world.atlas.client_id,
+                tenant_id=TENANT,
+            ),
         )
     world.network.add("manzanita.example", company)
     headers = {
         name: value
         for name, value in captured["headers"].items()
-        if name in {"dpop", "content-type", "accept"}
+        if name in {"content-type", "accept"}
     }
     start = time.perf_counter()
     answers = await asyncio.gather(
@@ -203,7 +230,7 @@ async def test_one_token_request_replayed_concurrently_is_accepted_once() -> Non
     errors = Counter(answer.json()["error"] for answer in answers if answer.status_code != 200)
     assert statuses[200] == 1, statuses
     assert sum(errors.values()) == SIZE - 1
-    assert set(errors) <= {"invalid_dpop_proof", "invalid_client"}
+    assert set(errors) <= {"invalid_grant", "invalid_client"}
     report("token request replay", accepted=1, refused=dict(errors), time=_ms(start))
 
 
@@ -216,14 +243,14 @@ async def test_the_memory_replay_cache_holds_only_live_identifiers() -> None:
     for round_ in range(rounds):
         until = clock.now() + timedelta(seconds=60)
         for n in range(per_round):
-            assert await cache.mark_once(f"proof:{round_}:{n}", expires_at=until)
+            assert await cache.mark_once(f"jti:{round_}:{n}", expires_at=until)
         largest = max(largest, len(cache))
         clock.advance(61)  # every identifier of this round has expired
     # Never every identifier ever seen: about twice those of one round.
     assert largest <= 2 * per_round + 1
     live = clock.now() + timedelta(seconds=60)
-    assert await cache.mark_once("proof:live", expires_at=live)
-    assert not await cache.mark_once("proof:live", expires_at=live)
+    assert await cache.mark_once("jti:live", expires_at=live)
+    assert not await cache.mark_once("jti:live", expires_at=live)
     report("replay cache", identifiers=rounds * per_round, largest=largest)
 
 
@@ -335,18 +362,9 @@ async def test_many_device_pollers_respect_interval_and_slow_down() -> None:
     counting = _counting_device_polls(world.network.apps["manzanita.example"], polls)
     world.network.add("manzanita.example", counting)
     device = DeviceSignInClient(reactor=world.reactor, http_client=world.http)
-    sessions = SessionClient(reactor=world.reactor, http_client=world.http)
-    users = [f"usr_poller_{n:06d}_padding_0000" for n in range(SIZE)]
     start = time.perf_counter()
 
-    async def begin(user: str) -> Any:
-        session = await sessions.start(
-            client_id=world.atlas.client_id,
-            pairwise_user_id=user,
-            issuer=metadata.issuer,
-            token_endpoint=metadata.token_endpoint,
-            tenant_id=TENANT,
-        )
+    async def begin() -> Any:
         return await device.begin(
             device_authorization_endpoint=metadata.device_authorization_endpoint,  # type: ignore[arg-type]
             token_endpoint=metadata.token_endpoint,
@@ -354,12 +372,11 @@ async def test_many_device_pollers_respect_interval_and_slow_down() -> None:
             client_id=world.atlas.client_id,
             scopes=("orders:read",),
             tenant_id=TENANT,
-            session_key=session.session_key,
             organization=world.company.document.organization,
             protected_resources=metadata.protected_resources,
         )
 
-    started = await asyncio.gather(*(begin(user) for user in users))
+    started = await asyncio.gather(*(begin() for _ in range(SIZE)))
     begun = _ms(start)
     interval = started[0].poll_interval
 
@@ -439,13 +456,13 @@ async def test_one_conversation_fans_out_to_many_subscribers_from_their_cursors(
             id=generate_message_id(world.reactor), author=Author(type="human"), text=text
         )
 
-    page = await conversations.start(endpoint, message("Hello"), token=session, wait=0, **world.who)
+    page = await conversations.start(endpoint, message("Hello"), session=session, wait=0)
     conversation_id = page.conversation_id
     for n in range(4):
         await conversations.send(
-            endpoint, conversation_id, message(f"Before {n}"), token=session, wait=0, **world.who
+            endpoint, conversation_id, message(f"Before {n}"), session=session, wait=0
         )
-    initial = await conversations.read_events(endpoint, conversation_id, token=session, **world.who)
+    initial = await conversations.read_events(endpoint, conversation_id, session=session)
     cursors = [None, *(event.id for event in initial.events)]
     reconnects: Counter[str] = Counter()
 
@@ -455,10 +472,9 @@ async def test_one_conversation_fans_out_to_many_subscribers_from_their_cursors(
         async for item in conversations.stream(
             endpoint,
             conversation_id,
-            token=session,
+            session=session,
             last_event_id=cursor,
             max_reconnects=1_000_000,
-            **world.who,
         ):
             if isinstance(item, StreamReconnected):
                 reconnects["reconnects"] += 1
@@ -473,12 +489,11 @@ async def test_one_conversation_fans_out_to_many_subscribers_from_their_cursors(
                 endpoint,
                 conversation_id,
                 message(f"During {n}"),
-                token=session,
+                session=session,
                 wait=0,
-                **world.who,
             )
             await asyncio.sleep(0.002)
-        await conversations.close(endpoint, conversation_id, token=session, **world.who)
+        await conversations.close(endpoint, conversation_id, session=session)
 
     start = time.perf_counter()
     results, _ = await asyncio.gather(
@@ -487,9 +502,7 @@ async def test_one_conversation_fans_out_to_many_subscribers_from_their_cursors(
     elapsed = _ms(start)
     everything = [
         event.id
-        async for event in conversations.events(
-            endpoint, conversation_id, token=session, wait=0, **world.who
-        )
+        async for event in conversations.events(endpoint, conversation_id, session=session, wait=0)
     ]
     assert len(everything) == len(set(everything))
     delivered = 0

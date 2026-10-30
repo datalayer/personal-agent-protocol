@@ -5,6 +5,7 @@
 """Mediated Sign-In: credentials to one endpoint, once, never to a model (§4.7)."""
 
 import asyncio
+import dataclasses
 import json
 
 import httpx
@@ -14,11 +15,11 @@ from reactor import PluginManifest  # type: ignore[import-untyped]
 
 from personal_agent_protocol import (
     AUTHORIZATION_STATE_STORES,
-    DPOP_PROOF_PROVIDERS,
+    SESSION_SIGNERS,
     TOKEN_STORES,
     AuthorizationError,
-    DpopProofRequest,
-    SessionToken,
+    PapSession,
+    SessionJwtRequest,
 )
 from personal_agent_protocol.mediated import MediatedSignInClient
 from personal_agent_protocol.models import MediatedSignIn, Organization
@@ -38,12 +39,12 @@ MEDIATED = MediatedSignIn(
     ],
     scopes=["orders:read"],
 )
-SIGNED_OUT = SessionToken(
-    access_token=SecretStr("session-token"),
-    token_type="DPoP",  # noqa: S106
-    expires_in=300,
-    session_key="K" * 43,
-    signed_in=False,
+SESSION = PapSession(
+    sid="S" * 22,
+    sub="usr_pairwise",
+    issuer="https://auth.shop.example",
+    client_id="https://agent.example/agent.json",
+    tenant_id="tenant",
 )
 
 
@@ -76,10 +77,10 @@ class Memory:
         self.values.pop(reference, None)
 
 
-class Dpop:
-    async def create(self, request: DpopProofRequest) -> SecretStr:
-        assert request.access_token is not None
-        return SecretStr("proof")
+class SessionJwts:
+    async def sign(self, request: SessionJwtRequest) -> SecretStr:
+        assert request.access_token is None  # a sign-in starts signed out
+        return SecretStr("session-jwt")
 
 
 class Host:
@@ -93,7 +94,7 @@ class Host:
         contribute(PROTECTED_INPUTS, self.answers, contribution_id="trusted-surface")
         contribute(AUTHORIZATION_STATE_STORES, self.state, contribution_id="memory")
         contribute(TOKEN_STORES, self.tokens, contribution_id="memory")
-        contribute(DPOP_PROOF_PROVIDERS, Dpop(), contribution_id="dpop")
+        contribute(SESSION_SIGNERS, SessionJwts(), contribution_id="session-signer")
 
 
 def arrange(handler, *answers: dict[str, str]):  # type: ignore[no-untyped-def]
@@ -108,10 +109,10 @@ def complete(**extra: object) -> dict[str, object]:
     return {
         "status": "complete",
         "access_token": "signed-in-token",
-        "token_type": "DPoP",
+        "token_type": "Bearer",
         "expires_in": 300,
         "scope": "orders:read",
-        "refresh_token": "account-token",
+        "refresh_token": "private-refresh-token",
         **extra,
     }
 
@@ -123,8 +124,7 @@ def sign_in(client: MediatedSignInClient):  # type: ignore[no-untyped-def]
             organization=COMPANY,
             issuer="https://auth.shop.example",
             scopes=("orders:read", "orders:return"),
-            token=SIGNED_OUT,
-            tenant_id="tenant",
+            session=SESSION,
         )
     )
 
@@ -143,7 +143,8 @@ def test_the_declared_fields_go_to_the_endpoint_and_the_session_is_signed_in() -
     result = sign_in(client)
 
     assert str(seen[0].url) == ENDPOINT
-    assert seen[0].headers["authorization"] == "DPoP session-token"
+    assert seen[0].headers["poppy-session"] == "session-jwt"
+    assert "authorization" not in seen[0].headers
     assert json.loads(seen[0].content) == {
         "scope": "orders:read orders:return",
         "credentials": CREDENTIALS,
@@ -152,8 +153,10 @@ def test_the_declared_fields_go_to_the_endpoint_and_the_session_is_signed_in() -
     assert [field.name for field in host.answers.asked[0].fields] == ["email", "password"]
     assert result.status == "complete"
     assert result.missing_scopes == ("orders:return",)
-    assert result.token is not None and result.token.refresh_token is None
-    assert host.tokens.values[result.account_token_reference].get_secret_value() == "account-token"  # type: ignore[index, union-attr]
+    assert result.token is not None
+    stored = host.tokens.values[result.refresh_token_reference]  # type: ignore[index]
+    assert stored.get_secret_value() == "private-refresh-token"  # type: ignore[attr-defined]
+    assert "private-refresh-token" not in result.model_dump_json()
     assert "correct horse" not in result.model_dump_json()
 
 
@@ -179,14 +182,7 @@ def test_a_one_time_code_continues_without_the_credentials() -> None:
     assert started.status == "code_required" and started.sent_to == "a•••@example.com"
     assert started.reference is not None
 
-    finished = asyncio.run(
-        client.submit_code(
-            started.reference,
-            token=SIGNED_OUT,
-            tenant_id="tenant",
-            issuer="https://auth.shop.example",
-        )
-    )
+    finished = asyncio.run(client.submit_code(started.reference, session=SESSION))
     assert str(seen[1].url) == f"{ENDPOINT}/si_1"
     assert json.loads(seen[1].content) == {"code": "246810"}
     assert host.answers.asked[1].purpose == "one_time_code"
@@ -219,23 +215,9 @@ def test_a_wrong_code_asks_again_and_failed_ends_it() -> None:
         {"code": "2"},
     )
     started = sign_in(client)
-    again = asyncio.run(
-        client.submit_code(
-            started.reference,
-            token=SIGNED_OUT,
-            tenant_id="t",
-            issuer="https://auth.shop.example",
-        )
-    )
+    again = asyncio.run(client.submit_code(started.reference, session=SESSION))
     assert again.status == "code_required" and again.reference == started.reference
-    failed = asyncio.run(
-        client.submit_code(
-            started.reference,
-            token=SIGNED_OUT,
-            tenant_id="t",
-            issuer="https://auth.shop.example",
-        )
-    )
+    failed = asyncio.run(client.submit_code(started.reference, session=SESSION))
     assert failed.status == "failed"
     assert host.state.values == {}
 
@@ -254,16 +236,9 @@ def test_only_the_session_that_started_it_can_finish_it() -> None:
         CREDENTIALS,
     )
     started = sign_in(client)
-    other = SIGNED_OUT.model_copy(update={"session_key": "ses_2"})
+    other = dataclasses.replace(SESSION, sid="T" * 22)
     with pytest.raises(AuthorizationError) as raised:
-        asyncio.run(
-            client.submit_code(
-                started.reference,
-                token=other,
-                tenant_id="t",
-                issuer="https://auth.shop.example",
-            )
-        )
+        asyncio.run(client.submit_code(started.reference, session=other))
     assert raised.value.code == "session_mismatch"
 
 
@@ -290,8 +265,7 @@ def test_an_endpoint_off_the_company_domain_is_refused_before_asking() -> None:
                 organization=COMPANY,
                 issuer="https://auth.shop.example",
                 scopes=("orders:read",),
-                token=SIGNED_OUT,
-                tenant_id="t",
+                session=SESSION,
             )
         )
     assert raised.value.code == "unsafe_mediated_endpoint"
@@ -307,9 +281,8 @@ def test_answers_must_be_exactly_the_declared_fields() -> None:
 
 def test_rate_limited_is_reported_with_retry_after_and_no_credential() -> None:
     client, _ = arrange(
-        lambda _: httpx.Response(
-            429, json={"error": "rate_limited"}, headers={"Retry-After": "30"}
-        ),
+        # A 429 has `Retry-After` and no body (§5.6).
+        lambda _: httpx.Response(429, headers={"Retry-After": "30"}),
         CREDENTIALS,
     )
     with pytest.raises(AuthorizationError) as raised:
@@ -319,9 +292,9 @@ def test_rate_limited_is_reported_with_retry_after_and_no_credential() -> None:
     assert "correct horse" not in repr(raised.value.__dict__)
 
 
-def test_a_bearer_answer_to_a_mediated_sign_in_is_refused() -> None:
+def test_a_dpop_answer_to_a_mediated_sign_in_is_refused() -> None:
     client, _ = arrange(
-        lambda _: httpx.Response(200, json=complete(token_type="Bearer")),  # noqa: S106 - a token type
+        lambda _: httpx.Response(200, json=complete(token_type="DPoP")),  # noqa: S106 - a token type
         CREDENTIALS,
     )
     with pytest.raises(AuthorizationError) as raised:

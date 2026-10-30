@@ -19,9 +19,8 @@ from typing import Any
 import httpcore
 import httpx
 import pytest
-from pydantic import SecretStr
 
-from personal_agent_protocol import DiscoveryClient, DpopHttpClient, SessionClient, SessionToken
+from personal_agent_protocol import DiscoveryClient, SessionClient, SessionHttpClient
 from personal_agent_protocol.apis import ApiClient, conversation_endpoint, known_apis
 from personal_agent_protocol.conformance import load_fixture_cases
 from personal_agent_protocol.demo.kit import (
@@ -31,7 +30,11 @@ from personal_agent_protocol.demo.kit import (
     PersonalAgentHost,
     personal_agent_reactor,
 )
-from personal_agent_protocol.errors import PersonalAgentProtocolError, ProtocolValidationError
+from personal_agent_protocol.errors import (
+    PersonalAgentProtocolError,
+    ProtocolValidationError,
+    SessionError,
+)
 from personal_agent_protocol.extensions import (
     extension_name_kind,
     extension_required,
@@ -47,11 +50,7 @@ from personal_agent_protocol.models import (
     Message,
     Operation,
 )
-from personal_agent_protocol.reactor import (
-    DPOP_PROOF_PROVIDERS,
-    PublicUrlSafetyPolicy,
-    first_contribution,
-)
+from personal_agent_protocol.reactor import PublicUrlSafetyPolicy
 
 LOCAL = [case for case in load_fixture_cases() if case.check is not None]
 
@@ -244,34 +243,27 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         reactor = personal_agent_reactor(
             PersonalAgentHost(identity, MutableClock()), network=network, http_client=http
         )
+        sessions = SessionClient(reactor=reactor, http_client=http)
         with pytest.raises(PersonalAgentProtocolError) as raised:
-            await SessionClient(reactor=reactor, http_client=http).start(
+            await sessions.token_request(
                 client_id=identity.client_id,
-                pairwise_user_id="usr_rate_limited_0000000",
                 issuer="https://shop.example",
                 token_endpoint="https://shop.example/oauth/token",  # noqa: S106 - a URL
-                tenant_id="t",
+                form=lambda: {"grant_type": "refresh_token", "refresh_token": "rt_rate_limited"},
+                error=SessionError,
             )
         assert raised.value.code == expect["error"]
         assert raised.value.details == {"retry_after": expect["retry_after"]}
         # An API call is not retried either: the caller is told how long to wait.
-        provider = first_contribution(reactor, DPOP_PROOF_PROVIDERS, "DPoP proof provider")
-        token = SessionToken(
-            access_token=SecretStr("sat_rate_limited"),
-            token_type="DPoP",  # noqa: S106 - the OAuth token type
-            expires_in=60,
-            session_key=await provider.new_session_key(
-                tenant_id="t", issuer="https://shop.example"
-            ),
-            signed_in=False,
+        session = await sessions.start(
+            client_id=identity.client_id,
+            pairwise_user_id="usr_rate_limited_0000000",
+            issuer="https://shop.example",
+            tenant_id="t",
         )
         with pytest.raises(PersonalAgentProtocolError) as refused:
-            await ApiClient(transport=DpopHttpClient(reactor=reactor, http_client=http)).call(
-                "GET",
-                "https://shop.example/api/orders",
-                token=token,
-                tenant_id="t",
-                issuer="https://shop.example",
+            await ApiClient(transport=SessionHttpClient(reactor=reactor, http_client=http)).call(
+                "GET", "https://shop.example/api/orders", session=session
             )
         await http.aclose()
         assert refused.value.code == expect["error"]

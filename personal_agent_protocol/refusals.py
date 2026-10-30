@@ -54,10 +54,42 @@ def refusal_details(response: httpx.Response, payload: object) -> dict[str, obje
     scope = body.get("scope", challenge.get("scope"))
     if isinstance(scope, str) and scope:
         details["scope"] = scope
+    metadata = challenge.get("resource_metadata")
+    if metadata:
+        # A token not issued for this service: its metadata, to read again (§4.5).
+        details["resource_metadata"] = metadata
     retry_after = response.headers.get("retry-after")
     if response.status_code == 429 and retry_after:
         details["retry_after"] = retry_after
     return details
+
+
+def refusal_code(response: httpx.Response, payload: object, default: str) -> str:
+    """The error a refusal names: in its JSON body, else its `WWW-Authenticate` challenge.
+
+    A 401 challenge with no error code and a `scope` is a signed-out request for
+    something that needs the account: read as `insufficient_scope` (§7). A 429
+    has no body: `rate_limited` (§5.6).
+    """
+
+    body = payload if isinstance(payload, dict) else {}
+    error = body.get("error")
+    if isinstance(error, str):
+        return error
+    challenge = challenge_parameters(response.headers.get("www-authenticate", ""))
+    if "error" in challenge:
+        return challenge["error"]
+    if response.status_code == 401 and challenge.get("scope"):
+        return "insufficient_scope"
+    if response.status_code == 429:
+        return "rate_limited"
+    return default
+
+
+def refused_without_body(response: httpx.Response) -> bool:
+    """A refusal with nothing to parse, such as a 429 (§5.6) or a challenge alone (§7)."""
+
+    return not response.is_success and not response.content
 
 
 def refuse_redirect(
@@ -78,4 +110,11 @@ def refuse_redirect(
         )
 
 
-__all__ = ["REDIRECT_STATUSES", "challenge_parameters", "refusal_details", "refuse_redirect"]
+__all__ = [
+    "REDIRECT_STATUSES",
+    "challenge_parameters",
+    "refusal_code",
+    "refusal_details",
+    "refuse_redirect",
+    "refused_without_body",
+]

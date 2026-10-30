@@ -44,22 +44,22 @@ async def test_discovery_sign_in_read_and_operation_over_tls() -> None:
         ).token
         api = ApiClient(transport=world.transport)
         orders = await api.call(
-            "GET", "https://manzanita.example/api/orders", token=signed_in, **world.who
+            "GET", "https://manzanita.example/api/orders", session=session, token=signed_in
         )
         assert orders.body["orders"][0]["order_id"] == "ord_7Hk2"
         proposed = await api.call(
             "POST",
             "https://manzanita.example/api/orders/ord_7Hk2/exchanges",
+            session=session,
             token=signed_in,
             body={},
-            **world.who,
         )
         done = await OperationsClient(transport=world.transport).confirm(
             world.shop.config.operations_endpoint,
             proposed.operation,  # type: ignore[arg-type]
             approval=approve(proposed.operation),
+            session=session,
             token=signed_in,
-            **world.who,  # type: ignore[arg-type]
         )
         assert done.operation.state == "succeeded"  # type: ignore[union-attr]
         # The company verified the agent by fetching its metadata over TLS too.

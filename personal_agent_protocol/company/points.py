@@ -7,7 +7,7 @@
 A company assembles its PAP service from contributions, each replaceable
 without touching the service:
 
-- `pap.company.store` keeps Sessions, Account Tokens, sign-ins,
+- `pap.company.store` keeps Sessions, access and refresh tokens, sign-ins,
   conversations, and operations as versioned JSON records (`store`; in
   memory by default, a database in production).
 - `pap.company.accounts` checks a user's credentials and second factor for
@@ -18,18 +18,18 @@ without touching the service:
 - `pap.company.clientPolicy` allows or blocks personal agents by `client_id`.
 - `pap.company.clientResolver` fetches a personal agent's client metadata
   and JWKS (over HTTPS through `AgentIdentityClient` by default).
-- `pap.company.replayCache` remembers assertion and proof IDs once: by
+- `pap.company.replayCache` remembers client assertion and Session JWT IDs once: by
   default in the contributed store (`StoreReplayCache`), so every replica
   sharing a durable store shares the cache.
 - `pap.company.api` answers the company's OpenAPI API (`/api/…`), its
   consequential calls proposing operations (`202`, Operations §4.1).
 - `pap.company.mcp` answers the company's MCP server (`/mcp`): its tools,
-  called with resource-bound Bearer Session Tokens (§4.3, §6), a
+  called with the Session header and access tokens issued for its url (§7), a
   consequential tool proposing an operation in `structuredContent`
   (Operations §4.2).
 - `pap.company.rateLimit` says how often the company answers one personal
   agent and one signed-in account: once a request's Session is verified, a
-  refusal is `429 rate_limited` with `Retry-After`. None by default.
+  refusal is HTTP 429 with `Retry-After` and no body (§5.6). None by default.
 """
 
 from __future__ import annotations
@@ -46,12 +46,11 @@ from reactor import define_contribution_point  # type: ignore[import-untyped]
 from ..models import ClientMetadata, JsonWebKeySet, Operation, OperationResult
 from ..reactor import Clock, SystemClock
 from .store import (
-    DPOP,
     REPLAY,
     AccountGrant,
     CompanyStore,
+    IssuedAccessToken,
     IssuedCode,
-    IssuedSession,
     MemoryCompanyStore,
     PendingAuthorization,
     PendingDevice,
@@ -227,7 +226,7 @@ class RateLimit(Protocol):
 
     Asked once a request's Session is verified, before anything is done for
     it: `None` lets it through; a number of seconds refuses it as
-    `rate_limited` (`429`), with `Retry-After` saying when to ask again. The
+    HTTP 429 with `Retry-After` saying when to ask again, and no body. The
     host keeps the counts — shared by every replica answering for the company.
     None contributed: no limit beyond the protocol's own.
     """
@@ -258,7 +257,7 @@ _FIRST_SWEEP = 1024
 class MemoryReplayCache:
     """A replay cache in one process, entries dropped after expiry (not the default).
 
-    For a verifier used on its own (`verify_assertion`, `verify_dpop_proof`);
+    For a verifier used on its own (`verify_assertion`, `verify_session_jwt`);
     a company's default is `StoreReplayCache` over its store.
 
     An identifier is refused until its `expires_at` by `clock` (the
@@ -391,7 +390,6 @@ __all__ = [
     "COMPANY_APIS",
     "COMPANY_MCP",
     "COMPANY_STORES",
-    "DPOP",
     "OPERATION_EXECUTORS",
     "REPLAY_CACHES",
     "AccountDirectory",
@@ -406,8 +404,8 @@ __all__ = [
     "CompanyApi",
     "CompanyMcp",
     "CompanyStore",
+    "IssuedAccessToken",
     "IssuedCode",
-    "IssuedSession",
     "MemoryCompanyStore",
     "MemoryReplayCache",
     "OperationExecutor",

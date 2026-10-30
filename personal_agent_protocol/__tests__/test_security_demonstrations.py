@@ -16,6 +16,7 @@ once. `docs/docs/security/demonstrations.mdx` lists them; the TypeScript twin is
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from dataclasses import replace
 from typing import Any
 
@@ -29,13 +30,11 @@ from personal_agent_protocol import (
     ConversationError,
     DeviceSignInClient,
     Message,
-    PersonalAgentProtocolError,
-    ProofError,
+    PapSession,
     SessionClient,
-    SessionToken,
     TokenStore,
 )
-from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
+from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.apis import ApiClient, ApiError
 from personal_agent_protocol.company import (
     build_company,
@@ -46,11 +45,13 @@ from personal_agent_protocol.demo import manzanita as manzanita_demo
 from personal_agent_protocol.demo.kit import ClockPlugin, StorePlugin
 from personal_agent_protocol.operations import OperationError, OperationsClient, approve
 from personal_agent_protocol.reactor import TOKEN_STORES, first_contribution
+from personal_agent_protocol.sessions import AccessToken
+from personal_agent_protocol.transport import session_headers
 
-from .test_company_end_to_end import PAIRWISE, TENANT, World
+from .test_company_end_to_end import TENANT, World
 from .test_company_refusals import signed_in
 from .test_direct_and_api import begin, direct_world
-from .test_guide_security import RotatingSite, same_agent_with, start_session
+from .test_guide_security import RotatingSite, same_agent_with, session_accepted
 
 ORDERS = "https://manzanita.example/api/orders"
 
@@ -87,34 +88,33 @@ class Wire:
         return await world.http.send(copy)
 
 
-async def probe(world: World, token: SessionToken, **who: str) -> int:
+async def probe(world: World, session: PapSession, token: AccessToken | None = None) -> int:
     """Read Ada's orders: 200, or the status the company refused with."""
 
     try:
         return (
             await ApiClient(transport=world.transport).call(
-                "GET", ORDERS, token=token, **(who or world.who)
+                "GET", ORDERS, session=session, token=token
             )
         ).status
     except ApiError as refused:
         return int(refused.status_code or 0)
 
 
-def context(world: World) -> AccountTokenContext:
+def context(world: World) -> RefreshTokenContext:
     metadata = world.company.oauth_metadata
     assert metadata is not None
-    return AccountTokenContext(
+    return RefreshTokenContext(
         token_endpoint=metadata.token_endpoint,
         revocation_endpoint=metadata.revocation_endpoint,
         issuer=metadata.issuer,
         client_id=world.atlas.client_id,
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
     )
 
 
-async def device_sign_in(world: World, session: SessionToken) -> tuple[SessionToken, str]:
-    """Device Sign-In for `session`, Ada approving: the token and its Account Token reference."""
+async def device_sign_in(world: World) -> tuple[AccessToken, str]:
+    """Device Sign-In, Ada approving: the access token and its refresh token's reference."""
 
     metadata = world.company.oauth_metadata
     assert metadata is not None and metadata.device_authorization_endpoint is not None
@@ -126,25 +126,27 @@ async def device_sign_in(world: World, session: SessionToken) -> tuple[SessionTo
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=world.company.document.organization,
         protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
     done = await device.poll(started.reference)
-    assert done.token is not None and done.account_token_reference is not None
-    return done.token, done.account_token_reference
+    assert done.token is not None and done.refresh_token_reference is not None
+    return done.token, done.refresh_token_reference
 
 
-async def proposal(world: World, token: SessionToken) -> Any:
+async def proposal(world: World, session: PapSession, token: AccessToken) -> Any:
     """Ada asks for a warmer jacket: Manzanita proposes the exchange, performing nothing."""
 
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     page = await world.conversations.start(
-        endpoint, world.message("Exchange it for something warmer"), token=token, wait=0,
-        **world.who,
-    )  # fmt: skip
+        endpoint,
+        world.message("Exchange it for something warmer"),
+        session=session,
+        token=token,
+        wait=0,
+    )
     operation = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert operation is not None and operation.state == "proposed"
     return operation
@@ -157,27 +159,29 @@ async def test_replay_is_refused() -> None:
     world = World()
     wire = Wire(world)
     token = await signed_in(world)
-    assert await probe(world, token) == 200
+    session = world.session
+    assert session is not None
+    assert await probe(world, session, token) == 200
 
-    # The token request (client and Session assertions, DPoP proof): each is one-time.
+    # The token request (its client assertion, its device code): each is one-time.
     replayed = await wire.resend(world, wire.last("POST", "/oauth/token"))
     assert replayed.status_code in {400, 401}
-    assert replayed.json()["error"] in {"invalid_client", "invalid_dpop_proof", "invalid_grant"}
-    # The API call: its DPoP proof's ID was seen.
+    assert replayed.json()["error"] in {"invalid_client", "invalid_grant"}
+    # The API call: its Session JWT's ID was seen.
     replayed = await wire.resend(world, wire.last("GET", "/api/orders"))
-    assert replayed.status_code == 401
+    assert replayed.status_code == 400 and replayed.json()["error"] == "invalid_session"
     assert "orders" not in replayed.text
     # An operation's confirmation, replayed, performs nothing more.
-    operation = await proposal(world, token)
+    operation = await proposal(world, session, token)
     ops = world.shop.config.operations_endpoint
     await OperationsClient(transport=world.transport).confirm(
-        ops, operation, approval=approve(operation), token=token, **world.who
+        ops, operation, approval=approve(operation), session=session, token=token
     )
     confirm = wire.last("POST", f"/poppy/operations/{operation.operation_id}/confirm")
-    assert (await wire.resend(world, confirm)).status_code == 401
+    assert (await wire.resend(world, confirm)).status_code == 400
     assert world.plugin.executor.performed == [operation.operation_id]
-    # The agent itself carries on: fresh proofs every time.
-    assert await probe(world, token) == 200
+    # The agent itself carries on: a fresh Session JWT every time.
+    assert await probe(world, session, token) == 200
 
 
 @pytest.mark.asyncio
@@ -205,13 +209,13 @@ async def test_issuer_mix_up_is_refused() -> None:
     with pytest.raises(AuthorizationError) as spent:
         await client.complete(callback)
     assert spent.value.code == "invalid_or_expired_state"
-    assert await probe(world, session) == 403  # still signed out
+    assert await probe(world, session) == 401  # still signed out
 
     # Starting again works: the user signs in at the issuer the agent discovered.
     client = await begin(world, browser, session, ("orders:read",))
     callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
     result = await client.complete(callback)
-    assert await probe(world, result.token) == 200
+    assert await probe(world, session, result.token) == 200
 
 
 @pytest.mark.asyncio
@@ -220,41 +224,41 @@ async def test_cross_tenant_access_is_refused() -> None:
 
     world = World()
     token = await signed_in(world)
+    session = world.session
+    assert session is not None
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     page = await world.conversations.start(
-        endpoint, world.message("Where is my jacket order?"), token=token, wait=0, **world.who
+        endpoint, world.message("Where is my jacket order?"), session=session, token=token, wait=0
     )
-    assert await probe(world, token) == 200
+    assert await probe(world, session, token) == 200
 
-    # Another tenant of Atlas presents the token: its key custody holds no Session Key
-    # of Ada's, so it cannot even make the proof the token needs (§4.3).
-    other = {**world.who, "tenant_id": "another-tenant"}
-    with pytest.raises(ProofError):
-        await probe(world, token, **other)
-    with pytest.raises(ProofError):
-        await world.conversations.read_events(endpoint, page.conversation_id, token=token, **other)
-    # Another user of the same tenant gets a Session of their own, which sees nothing of Ada's.
+    # Another tenant of Atlas has another User ID, and another delegated key (§5.2). Naming
+    # Ada's `sid` it is another User in her Session: `invalid_session`, not a way in (§5.3).
     stranger = "usr_somebody_else_000000"
+    other = dataclasses.replace(session, sub=stranger, tenant_id="another-tenant")
+    refused = await world.http.get(
+        ORDERS,
+        headers=await session_headers(world.reactor, "GET", ORDERS, session=other, token=None),
+    )
+    assert refused.status_code == 400 and refused.json()["error"] == "invalid_session"
+    keys = world.host.delegated_keys
+    theirs = await keys.current(tenant_id="another-tenant", issuer=session.issuer, sub=stranger)
+    ours = await keys.current(tenant_id=TENANT, issuer=session.issuer, sub=session.sub)
+    assert theirs is not None and ours is not None and theirs.thumbprint != ours.thumbprint
+    # Another user of the same tenant gets a Session of their own, which sees nothing of Ada's.
     metadata = world.company.oauth_metadata
     assert metadata is not None
     strangers = await SessionClient(reactor=world.reactor, http_client=world.http).start(
         client_id=world.atlas.client_id,
         pairwise_user_id=stranger,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
     with pytest.raises(ConversationError) as hidden:
-        await world.conversations.read_events(
-            endpoint,
-            page.conversation_id,
-            token=strangers,
-            tenant_id=TENANT,
-            issuer=metadata.issuer,
-        )
+        await world.conversations.read_events(endpoint, page.conversation_id, session=strangers)
     assert hidden.value.code == "conversation_not_found"
     # Ada's own tenant is unaffected.
-    assert await probe(world, token) == 200
+    assert await probe(world, session, token) == 200
 
 
 @pytest.mark.asyncio
@@ -263,7 +267,9 @@ async def test_stale_approval_is_refused() -> None:
 
     world = World()
     token = await signed_in(world)
-    operation = await proposal(world, token)
+    session = world.session
+    assert session is not None
+    operation = await proposal(world, session, token)
     stale = approve(operation)
     await world.shop.revise(
         operation.operation_id,
@@ -273,24 +279,26 @@ async def test_stale_approval_is_refused() -> None:
     operations = OperationsClient(transport=world.transport)
     ops = world.shop.config.operations_endpoint
 
-    outcome = await operations.confirm(ops, operation, approval=stale, token=token, **world.who)
+    outcome = await operations.confirm(ops, operation, approval=stale, session=session, token=token)
     assert outcome.status == "terms_changed"
     assert outcome.changed == ("summary", "price_difference.amount")
     newer = outcome.operation
     assert newer is not None and newer.revision == 2
     # The stale approval does not fit the new revision, locally, before anything is sent.
     with pytest.raises(OperationError) as refused:
-        await operations.confirm(ops, newer, approval=stale, token=token, **world.who)
+        await operations.confirm(ops, newer, approval=stale, session=session, token=token)
     assert refused.value.code == "approval_mismatch"
     assert world.plugin.executor.performed == []
 
-    done = await operations.confirm(ops, newer, approval=approve(newer), token=token, **world.who)
+    done = await operations.confirm(
+        ops, newer, approval=approve(newer), session=session, token=token
+    )
     assert done.status == "confirmed" and done.operation.state == "succeeded"  # type: ignore[union-attr]
     # The stale approval of the first revision, presented once more, performs nothing.
     # Manzanita answers with the record as it is (revision 2, succeeded), which the agent
     # refuses to take as a confirmation of revision 1.
     with pytest.raises(OperationError) as late:
-        await operations.confirm(ops, operation, approval=stale, token=token, **world.who)
+        await operations.confirm(ops, operation, approval=stale, session=session, token=token)
     assert late.value.code == "invalid_operation"
     assert world.plugin.executor.performed == [operation.operation_id]
 
@@ -302,32 +310,34 @@ async def test_retries_are_safe() -> None:
     world = World()
     wire = Wire(world)
     token = await signed_in(world)
+    session = world.session
+    assert session is not None
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     # The same message ID, sent twice: one conversation, one message.
     message = Message(id="msg_retry_demo_0000000001", author=Author(type="human"), text="Hello")
-    first = await world.conversations.start(endpoint, message, token=token, **world.who)
-    again = await world.conversations.start(endpoint, message, token=token, **world.who)
+    first = await world.conversations.start(endpoint, message, session=session, token=token)
+    again = await world.conversations.start(endpoint, message, session=session, token=token)
     assert again.conversation_id == first.conversation_id
     page = await world.conversations.read_events(
-        endpoint, first.conversation_id, token=token, **world.who
+        endpoint, first.conversation_id, session=session, token=token
     )
     sent = [e for e in page.events if e.message is not None and e.message.id == message.id]
     assert len(sent) == 1
 
     # The confirmation reaches Manzanita, which performs it; its answer is lost on the way back.
-    operation = await proposal(world, token)
+    operation = await proposal(world, session, token)
     operations = OperationsClient(transport=world.transport)
     ops = world.shop.config.operations_endpoint
     wire.lose = f"/{operation.operation_id}/confirm"
     recovered = await operations.confirm(
-        ops, operation, approval=approve(operation), token=token, **world.who
+        ops, operation, approval=approve(operation), session=session, token=token
     )
     assert recovered.status == "confirmed"
     assert recovered.operation.state == "succeeded"  # type: ignore[union-attr]
     # Read back by the same ID, never assumed failed; retried, it is not performed twice.
     retried = await operations.confirm(
-        ops, operation, approval=approve(operation), token=token, **world.who
+        ops, operation, approval=approve(operation), session=session, token=token
     )
     assert retried.operation.state == "succeeded"  # type: ignore[union-attr]
     assert world.plugin.executor.performed == [operation.operation_id]
@@ -340,28 +350,28 @@ async def test_restart_is_safe() -> None:
     world = World(durable=True)
     wire = Wire(world)
     session = await world.signed_out_session()
-    token, _ = await device_sign_in(world, session)
-    operation = await proposal(world, token)
-    assert await probe(world, token) == 200
+    token, _ = await device_sign_in(world)
+    operation = await proposal(world, session, token)
+    assert await probe(world, session, token) == 200
     captured = wire.last("GET", "/api/orders")
 
     world.restart()
 
-    # A proof seen before the restart is still refused after it.
-    assert (await wire.resend(world, captured)).status_code == 401
+    # A Session JWT seen before the restart is still refused after it.
+    assert (await wire.resend(world, captured)).status_code == 400
     # The Session, the proposal and its single performance carry over.
-    assert await probe(world, token) == 200
+    assert await probe(world, session, token) == 200
     ops = world.shop.config.operations_endpoint
     operations = OperationsClient(transport=world.transport)
     done = await operations.confirm(
-        ops, operation, approval=approve(operation), token=token, **world.who
+        ops, operation, approval=approve(operation), session=session, token=token
     )
     assert done.operation.state == "succeeded"  # type: ignore[union-attr]
     performed = list(world.plugin.executor.performed)
 
     world.restart()
     again = await operations.confirm(
-        ops, operation, approval=approve(operation), token=token, **world.who
+        ops, operation, approval=approve(operation), session=session, token=token
     )
     assert again.operation.state == "succeeded"  # type: ignore[union-attr]
     assert performed == [operation.operation_id] and world.plugin.executor.performed == []
@@ -373,21 +383,19 @@ async def test_rollback_is_safe() -> None:
 
     world = World(durable=True)
     session = await world.signed_out_session()
-    _, reference = await device_sign_in(world, session)
-    accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
+    _, reference = await device_sign_in(world)
+    accounts = RefreshTokenClient(reactor=world.reactor, http_client=world.http)
     tokens = first_contribution(world.reactor, TOKEN_STORES, "token store")
     assert isinstance(tokens, TokenStore)
     before = await tokens.get(reference)
-    refreshed = await accounts.refresh(
-        reference, context=context(world), session_key=session.session_key
-    )
+    refreshed = await accounts.refresh(reference, context=context(world))
     assert refreshed.rotated and refreshed.token is not None
     rotated = await tokens.get(reference)
-    operation = await proposal(world, refreshed.token)
+    operation = await proposal(world, session, refreshed.token)
     ops = world.shop.config.operations_endpoint
     operations = OperationsClient(transport=world.transport)
     done = await operations.confirm(
-        ops, operation, approval=approve(operation), token=refreshed.token, **world.who
+        ops, operation, approval=approve(operation), session=session, token=refreshed.token
     )
     assert done.operation.state == "succeeded"  # type: ignore[union-attr]
     assert world.store is not None and world.store.keys(DEVICE) == []  # the code was taken
@@ -408,85 +416,75 @@ async def test_rollback_is_safe() -> None:
     world.plugin = plugin
     world.network.add(manzanita_demo.DOMAIN, company_app(world.shop))
 
-    # The rotated-away Account Token stays refused; the current one works.
+    # The rotated-away refresh token stays refused; the current one works.
     assert before is not None and rotated is not None
     await tokens.put(reference, before)
-    stale = await accounts.refresh(
-        reference, context=context(world), session_key=session.session_key
-    )
+    stale = await accounts.refresh(reference, context=context(world))
     assert stale.status == "signed_out"
     await tokens.put(reference, rotated)
-    current = await accounts.refresh(
-        reference, context=context(world), session_key=session.session_key
-    )
+    current = await accounts.refresh(reference, context=context(world))
     assert current.status == "signed_in" and current.token is not None
     # The confirmed operation is not performed again by the earlier release.
     again = await operations.confirm(
-        ops, operation, approval=approve(operation), token=current.token, **world.who
+        ops, operation, approval=approve(operation), session=session, token=current.token
     )
     assert again.operation.state == "succeeded"  # type: ignore[union-attr]
     assert plugin.executor.performed == []
     # The earlier release serves what it has: no website, the same API and Sessions.
     assert world.company.document.web is not None  # what the agent discovered before
-    assert await probe(world, current.token) == 200
+    assert await probe(world, session, current.token) == 200
 
 
 @pytest.mark.asyncio
 async def test_revocation_is_safe() -> None:
-    """Signing out takes effect at once: every signed-in token reads as signed out."""
+    """Signing out takes effect at once: every access token of the sign-in stops working."""
 
     world = World()
     session = await world.signed_out_session()
-    token, reference = await device_sign_in(world, session)
-    assert await probe(world, token) == 200
-    accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
+    token, reference = await device_sign_in(world)
+    assert await probe(world, session, token) == 200
+    accounts = RefreshTokenClient(reactor=world.reactor, http_client=world.http)
     second = await world.signed_out_session()
-    other = await accounts.refresh(
-        reference, context=context(world), session_key=second.session_key
-    )
+    other = await accounts.refresh(reference, context=context(world))
     assert other.status == "signed_in" and other.token is not None
+    assert await probe(world, second, other.token) == 200
 
     revoked = await accounts.revoke(reference, context=context(world))
     assert revoked.revoked and revoked.deleted_locally
-    # Both Sessions signed in from that sign-in are signed out right away, not at expiry.
-    assert await probe(world, token) == 403
-    assert await probe(world, other.token) == 403
-    # The Account Token is gone locally and refused at the company; Sessions continue signed out.
-    after = await accounts.refresh(
-        reference, context=context(world), session_key=session.session_key
-    )
+    # Both tokens of that sign-in stop right away, not at expiry: `invalid_token`.
+    for session_used, stopped in ((session, token), (second, other.token)):
+        with pytest.raises(ApiError) as refused:
+            await ApiClient(transport=world.transport).call(
+                "GET", ORDERS, session=session_used, token=stopped
+            )
+        assert (refused.value.code, refused.value.status_code) == ("invalid_token", 401)
+    # The refresh token is gone locally and refused at the company.
+    after = await accounts.refresh(reference, context=context(world))
     assert after.status == "signed_out"
-    metadata = world.company.oauth_metadata
-    assert metadata is not None
-    renewed = await SessionClient(reactor=world.reactor, http_client=world.http).renew(
-        client_id=world.atlas.client_id,
-        pairwise_user_id=PAIRWISE,
-        issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
-        tenant_id=TENANT,
-        session_key=session.session_key,
-    )
-    assert renewed.signed_in is False and await probe(world, renewed) == 403
+    # The Sessions continue signed out, sending no token: asked to sign in, not refused.
+    with pytest.raises(ApiError) as signed_out:
+        await ApiClient(transport=world.transport).call("GET", ORDERS, session=session)
+    assert signed_out.value.code == "insufficient_scope"
 
 
 @pytest.mark.asyncio
 async def test_rotation_is_safe() -> None:
-    """Account Tokens rotate one refresh at a time; the agent's signing key rotates with overlap."""
+    """Refresh tokens rotate one refresh at a time; the agent's key rotates with overlap."""
 
     world = World()
     site = RotatingSite(world.atlas, max_age=600)
     world.network.add(world.atlas.domain, site)
-    session = await world.signed_out_session()
-    _, reference = await device_sign_in(world, session)
-    accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
+    await world.signed_out_session()
+    _, reference = await device_sign_in(world)
+    accounts = RefreshTokenClient(reactor=world.reactor, http_client=world.http)
     tokens = first_contribution(world.reactor, TOKEN_STORES, "token store")
     assert isinstance(tokens, TokenStore)
     first = await tokens.get(reference)
 
     # Two refreshes at once: serialized, each rotating; the last token is the live one.
     results = await asyncio.gather(
-        accounts.refresh(reference, context=context(world), session_key=session.session_key),
-        accounts.refresh(reference, context=context(world), session_key=session.session_key),
+        accounts.refresh(reference, context=context(world)),
+        accounts.refresh(reference, context=context(world)),
     )
     assert [r.status for r in results] == ["signed_in", "signed_in"]
     assert all(r.rotated for r in results)
@@ -495,23 +493,17 @@ async def test_rotation_is_safe() -> None:
     assert live.get_secret_value() != first.get_secret_value()
     # The first token, rotated away, is refused; the live one works.
     await tokens.put(reference, first)
-    refused = await accounts.refresh(
-        reference, context=context(world), session_key=session.session_key
-    )
+    refused = await accounts.refresh(reference, context=context(world))
     assert refused.status == "signed_out"
     await tokens.put(reference, live)
-    assert (
-        await accounts.refresh(reference, context=context(world), session_key=session.session_key)
-    ).status == "signed_in"
+    assert (await accounts.refresh(reference, context=context(world))).status == "signed_in"
 
     # The agent's signing key: both keys published during the overlap, then the old retired.
     newer = same_agent_with(world, "key-2")
     site.keys = [*world.atlas.jwks["keys"], *newer.jwks["keys"]]
-    assert (await start_session(world, newer)).signed_in is False
-    assert (await start_session(world, world.atlas)).signed_in is False
+    assert await session_accepted(world, newer)
+    assert await session_accepted(world, world.atlas)
     site.keys = list(newer.jwks["keys"])
     world.clock.advance(601)  # the company's cached key set expires
-    with pytest.raises(PersonalAgentProtocolError) as retired:
-        await start_session(world, world.atlas)
-    assert retired.value.code == "invalid_client"
-    assert (await start_session(world, newer)).signed_in is False
+    assert not await session_accepted(world, world.atlas)
+    assert await session_accepted(world, newer)

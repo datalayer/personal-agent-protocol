@@ -147,60 +147,56 @@ class BrowserHandoff(Protocol):
 
 @runtime_checkable
 class BrowserJoin(Protocol):
-    """The personal agent's own browser, joining a Session through the company's form (§5).
+    """The personal agent's own browser, joining a Session through the company's page (§6).
 
     `load_join_form` opens the endpoint with a GET, as a top-level navigation, and
-    returns the form's one-time `code`, read from that page only; `submit_join_form`
-    puts the proof in the form's `proof` field and submits it from the same browser,
-    whose cookie ties the code to it.
+    returns the form's one-time `code`, read from that page only; once the agent has
+    authorized the code, `submit_join_form` submits the same form from the same
+    browser, whose cookie ties the code to it.
     """
 
     async def load_join_form(self, endpoint: str) -> SecretStr: ...
 
-    async def submit_join_form(self, proof: SecretStr) -> None: ...
+    async def submit_join_form(self) -> None: ...
 
 
 @dataclass(frozen=True)
-class DpopProofRequest:
-    """Inputs for one fresh proof-of-possession JWT.
+class SessionJwtRequest:
+    """What one Session JWT is signed for (§5.2): a request, its Session, its User.
 
-    `session_key` is the Session Key's JWK thumbprint (RFC 7638), which names the
-    Session at the company (§4.3): the provider signs with that key, and no other.
+    `method` and `url` are the request's (`htm`, `htu`); `sid`, `sub` and the
+    optional `agent_id` name the Session and its User; `issuer` is the Company's
+    (`aud`), `client_id` the personal agent's (`iss`); `access_token`, when the
+    request carries one, is hashed into `ath`. `tenant_id` says whose keys sign.
     """
 
     method: str
     url: str
     tenant_id: str
     issuer: str
-    session_key: str
+    client_id: str
+    sid: str
+    sub: str
+    agent_id: str | None = None
     access_token: SecretStr | None = None
-    nonce: str | None = None
 
 
 @runtime_checkable
-class DpopProofProvider(Protocol):
-    """Create fresh DPoP proofs with Session Keys whose private halves it keeps (§4.3).
+class SessionSigner(Protocol):
+    """Sign the Session JWT of one request with a delegated key (§5.2).
 
-    Each Session has its own key: `new_session_key` makes one and returns its JWK
-    thumbprint, which names the Session; `create` signs with the key a thumbprint
-    names; `discard_session_key` forgets one whose Session has ended, never to be
-    used again (§4.2).
+    A delegated key signs for one User ID only, and every JWT carries the
+    delegation that vouches for its key, issued by a key in the agent's `jwks_uri`.
     """
 
-    async def new_session_key(self, *, tenant_id: str, issuer: str) -> str: ...
-
-    async def create(self, request: DpopProofRequest) -> SecretStr: ...
-
-    async def discard_session_key(
-        self, *, tenant_id: str, issuer: str, session_key: str
-    ) -> None: ...
+    async def sign(self, request: SessionJwtRequest) -> SecretStr: ...
 
 
 @runtime_checkable
-class AccountTokenLock(Protocol):
-    """Serialize every use of one Account Token (PAP §4.8 rotation).
+class RefreshTokenLock(Protocol):
+    """Serialize every use of one refresh token (§4.4 rotation).
 
-    A rotated Account Token invalidates the one it replaces, so two refreshes
+    A rotated refresh token invalidates the one it replaces, so two refreshes
     racing on the same reference would leave one of them holding a revoked
     credential. A multi-process host contributes a distributed lock here.
     """
@@ -208,8 +204,8 @@ class AccountTokenLock(Protocol):
     def hold(self, reference: str) -> AbstractAsyncContextManager[None]: ...
 
 
-class InProcessAccountTokenLock:
-    """Default Account Token lock for a single process."""
+class InProcessRefreshTokenLock:
+    """Default refresh token lock for a single process."""
 
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
@@ -508,8 +504,8 @@ AUTHORIZATION_STATE_STORES = define_contribution_point("pap.authorizationStateSt
 CACHES = define_contribution_point("pap.cache")
 BROWSER_HANDOFFS = define_contribution_point("pap.browserHandoff")
 BROWSER_JOINS = define_contribution_point("pap.browserJoin")
-DPOP_PROOF_PROVIDERS = define_contribution_point("pap.dpopProofProvider")
-ACCOUNT_TOKEN_LOCKS = define_contribution_point("pap.accountTokenLock")
+SESSION_SIGNERS = define_contribution_point("pap.sessionSigner")
+REFRESH_TOKEN_LOCKS = define_contribution_point("pap.refreshTokenLock")
 PROTECTED_INPUTS = define_contribution_point("pap.protectedInput")
 RETRY_POLICIES = define_contribution_point("pap.retryPolicy")
 RATE_LIMIT_BUDGETS = define_contribution_point("pap.rateLimitBudget")
@@ -846,7 +842,7 @@ class HttpxDiscoveryTransport:
     async def _get(self, url: str, fetch: MetadataFetch) -> DiscoveryResponse:
         request = self.client.build_request("GET", url, headers={"Accept": "application/json"})
         # Never the host client's cookies, nor any credential header (Guides, fetching).
-        for name in ("cookie", "authorization", "dpop"):
+        for name in ("cookie", "authorization", "dpop", "poppy-session"):
             if name in request.headers:
                 del request.headers[name]
         try:
@@ -935,8 +931,8 @@ class PapCorePlugin:
             order=100,
         )
         contribute(
-            ACCOUNT_TOKEN_LOCKS,
-            InProcessAccountTokenLock(),
+            REFRESH_TOKEN_LOCKS,
+            InProcessRefreshTokenLock(),
             contribution_id="in-process",
             order=100,
         )
@@ -992,8 +988,8 @@ def build_pap_reactor(
                 CACHES.id,
                 BROWSER_HANDOFFS.id,
                 BROWSER_JOINS.id,
-                DPOP_PROOF_PROVIDERS.id,
-                ACCOUNT_TOKEN_LOCKS.id,
+                SESSION_SIGNERS.id,
+                REFRESH_TOKEN_LOCKS.id,
                 PROTECTED_INPUTS.id,
                 RETRY_POLICIES.id,
                 RATE_LIMIT_BUDGETS.id,

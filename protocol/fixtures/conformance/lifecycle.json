@@ -15,6 +15,33 @@
       "description": "A Session starts signed out: a DPoP token with expires_in > 0 (hours, not days), no scope, no Session named: its key names it."
     },
     {
+      "id": "lifecycle.signed-out-challenge",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-4.3-15"
+      ],
+      "description": "An account request with no access token gets a 401 challenge with scope and no error code, read as insufficient_scope (§7)."
+    },
+    {
+      "id": "lifecycle.resource-not-served",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-6-04"
+      ],
+      "description": "A resource the company doesn't serve is invalid_target (RFC 8707, §4.5)."
+    },
+    {
+      "id": "lifecycle.stale-resource-metadata",
+      "kind": "recovery",
+      "role": "both",
+      "requirements": [
+        "PAP-6-04"
+      ],
+      "description": "A service refusing a token not issued for it answers invalid_token with resource_metadata, and the agent reads it again (§4.5)."
+    },
+    {
       "id": "lifecycle.parallel-sessions",
       "kind": "positive",
       "role": "company",
@@ -22,24 +49,6 @@
         "PAP-4.2-01"
       ],
       "description": "The same user runs two Sessions at once; each has its own Session Key and both are served."
-    },
-    {
-      "id": "lifecycle.renew-signed-out",
-      "kind": "positive",
-      "role": "company",
-      "requirements": [
-        "PAP-4.3-15"
-      ],
-      "description": "Renewing with a proof from the same Session Key returns a new token for the same Session; the agent uses it from then on; the earlier token reflects the Session as it was when issued (§4.4)."
-    },
-    {
-      "id": "lifecycle.renew-for-another-user",
-      "kind": "negative",
-      "role": "company",
-      "requirements": [
-        "PAP-4.8-03"
-      ],
-      "description": "Renewing another user's Session with this user's assertion is invalid_session."
     },
     {
       "id": "lifecycle.sign-in-scopes",
@@ -61,7 +70,7 @@
       "description": "A sign-in asking for a scope the company does not offer is invalid_scope."
     },
     {
-      "id": "lifecycle.account-token-signs-in-new-session",
+      "id": "lifecycle.refresh-token-serves-any-session",
       "kind": "positive",
       "role": "company",
       "requirements": [
@@ -97,7 +106,7 @@
       "description": "A refresh asking for a scope the Account Token does not hold is invalid_scope."
     },
     {
-      "id": "lifecycle.account-token-from-another-client",
+      "id": "lifecycle.refresh-token-from-another-client",
       "kind": "negative",
       "role": "company",
       "requirements": [
@@ -106,40 +115,13 @@
       "description": "Another client_id presenting the Account Token gets invalid_grant."
     },
     {
-      "id": "lifecycle.account-token-at-api",
+      "id": "lifecycle.refresh-token-at-api",
       "kind": "negative",
       "role": "company",
       "requirements": [
         "PAP-4.8-01"
       ],
       "description": "An Account Token presented at an API as an access token is refused (invalid_token)."
-    },
-    {
-      "id": "lifecycle.account-mismatch",
-      "kind": "negative",
-      "role": "company",
-      "requirements": [
-        "PAP-4.8-04"
-      ],
-      "description": "A Session signed in to one account refuses an Account Token for another: account_mismatch."
-    },
-    {
-      "id": "lifecycle.account-mismatch-after-sign-out",
-      "kind": "negative",
-      "role": "company",
-      "requirements": [
-        "PAP-4.8-04"
-      ],
-      "description": "A Session signed in to one account and signed out since still refuses an Account Token for another account: account_mismatch, and nothing is issued."
-    },
-    {
-      "id": "lifecycle.account-token-for-another-users-session",
-      "kind": "negative",
-      "role": "company",
-      "requirements": [
-        "PAP-4.8-03"
-      ],
-      "description": "An Account Token used for another user's Session is invalid_session."
     },
     {
       "id": "lifecycle.sign-out-takes-effect",
@@ -160,7 +142,7 @@
       "description": "After revocation, renewal returns a signed-out token for the same Session, and the revoked token is invalid_grant."
     },
     {
-      "id": "lifecycle.sign-out-every-session",
+      "id": "lifecycle.sign-out-revokes-every-refresh-token",
       "kind": "positive",
       "role": "company",
       "requirements": [
@@ -213,7 +195,7 @@
       "description": "The MCP server's protected resource metadata names it as the resource and the company's issuer among its authorization servers; a server that supports DPoP lists ES256. An unauthenticated call is 401 with one challenge per scheme it accepts, each pointing there."
     },
     {
-      "id": "lifecycle.mcp-bearer-for-its-url",
+      "id": "lifecycle.mcp-token-for-its-url",
       "kind": "positive",
       "role": "company",
       "requirements": [
@@ -225,7 +207,7 @@
       "description": "A Session's token request with resource set to the MCP url returns a token for the same Session, DPoP for a server that supports DPoP and Bearer otherwise; the MCP server accepts it and enforces its scopes."
     },
     {
-      "id": "lifecycle.mcp-bearer-only-at-mcp",
+      "id": "lifecycle.mcp-token-only-at-mcp",
       "kind": "negative",
       "role": "company",
       "requirements": [
@@ -234,18 +216,6 @@
         "PAP-6-05"
       ],
       "description": "The MCP server's token is refused at every API, conversation, and operations endpoint; the MCP server refuses the Session's own DPoP token; no token is issued without a proof for another resource."
-    },
-    {
-      "id": "lifecycle.mcp-token-type-by-server",
-      "kind": "negative",
-      "role": "company",
-      "requirements": [
-        "PAP-4.3-23",
-        "PAP-4.3-11",
-        "PAP-4.3-30",
-        "PAP-3.2-21"
-      ],
-      "description": "For an MCP server that supports DPoP, a token request without a proof is invalid_dpop_proof and one with a proof gets a DPoP token; for one that doesn't, a request with a proof still gets a Bearer token."
     },
     {
       "id": "lifecycle.mcp-sign-out-takes-effect",

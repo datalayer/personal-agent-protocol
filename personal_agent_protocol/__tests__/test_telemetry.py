@@ -5,7 +5,7 @@
 """The SDK's telemetry: one event per protocol stage, attributes from an allowlist.
 
 Manzanita's journeys (Device and Mediated Sign-In, a conversation, an operation,
-Account Tokens, a stranger refused) run with a `pap.telemetry` sink on every
+refresh tokens, a stranger refused) run with a `pap.telemetry` sink on every
 Reactor; the events name each stage and its outcome, an error carries only its
 code, and the OpenTelemetry adapter makes the same events spans. What no event may
 carry, whatever a test passes, is checked against the allowlist itself; that no
@@ -15,6 +15,7 @@ credential of a real run reaches an event is `test_canaries.py`'s.
 from __future__ import annotations
 
 import functools
+import json
 import logging
 from collections.abc import Iterator
 from typing import Any
@@ -31,11 +32,13 @@ from personal_agent_protocol import (
     RecordingTelemetrySink,
     TelemetryEvent,
 )
+from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.reactor import PapCorePlugin
 from personal_agent_protocol.telemetry import safe_attributes
 
 from . import test_company_end_to_end as journeys
 from .test_company_end_to_end import PAIRWISE, TENANT, World
+from .test_company_refusals import signed_in
 
 FORBIDDEN = (
     "token",
@@ -100,8 +103,8 @@ async def test_each_stage_of_a_journey_is_one_event(recorded: RecordingTelemetry
         "pap.sign_in.device.poll",
         "pap.sign_in.mediated.sign_in",
         "pap.sign_in.mediated.submit_code",
-        "pap.sign_in.account_token.refresh",
-        "pap.sign_in.account_token.revoke",
+        "pap.sign_in.refresh_token.refresh",
+        "pap.sign_in.refresh_token.revoke",
         "pap.conversation.start",
         "pap.conversation.send",
         "pap.conversation.close",
@@ -140,7 +143,7 @@ async def test_each_stage_of_a_journey_is_one_event(recorded: RecordingTelemetry
         "pap.operation.state": "succeeded",
         "pap.operation.revision": 1,
     }
-    refreshes = [e for e in recorded.events if e.name == "pap.sign_in.account_token.refresh"]
+    refreshes = [e for e in recorded.events if e.name == "pap.sign_in.refresh_token.refresh"]
     assert [e.attributes["pap.sign_in.status"] for e in refreshes] == [
         "signed_in",
         "re_consent_required",
@@ -160,44 +163,7 @@ async def test_a_company_reports_what_it_did_and_refused(
 
     import httpx
 
-    from personal_agent_protocol import SessionClient
-
     world = World()
-    session = await world.signed_out_session()
-    metadata = world.company.oauth_metadata
-    assert metadata is not None
-    sessions = SessionClient(reactor=world.reactor, http_client=world.http)
-    who = {
-        "client_id": world.atlas.client_id,
-        "issuer": metadata.issuer,
-        "token_endpoint": metadata.token_endpoint,
-        "tenant_id": TENANT,
-        "session_key": session.session_key,
-    }
-    await sessions.renew(**who, pairwise_user_id=PAIRWISE)
-    await sessions.renew(**who, pairwise_user_id=PAIRWISE, resource="https://manzanita.example/mcp")
-    company = [e for e in recorded.events if e.stage == "company"]
-    by_name = {e.name: e for e in company}
-    agent = world.atlas.client_id
-    checked = by_name["pap.company.identity.check"]
-    assert checked.attributes == {
-        "pap.company.issuer": "https://manzanita.example",
-        "pap.company.domain": "manzanita.example",
-        "pap.company.route": "oauth_token",
-        "pap.client.id": agent,
-    }
-    # Verified once: later requests of the same agent are not checks again.
-    assert [e.name for e in company].count("pap.company.identity.check") == 1
-    started = by_name["pap.company.session.start"]
-    assert started.attributes["pap.session.signed_in"] is False
-    renewed = by_name["pap.company.session.renew"]
-    assert renewed.attributes["pap.session.signed_in"] is False
-    # A token for its MCP server moves the Session there.
-    switched = by_name["pap.company.interface.switch"]
-    assert switched.attributes["pap.interface"] == "mcp"
-    assert not [e for e in company if e.name == "pap.company.refused"]
-
-    # The same token request sent again: refused, and said to be a replay.
     captured: list[httpx.Request] = []
     original = world.http._transport.handle_async_request  # type: ignore[attr-defined]
 
@@ -206,7 +172,55 @@ async def test_a_company_reports_what_it_did_and_refused(
         return await original(request)
 
     world.http._transport.handle_async_request = spy  # type: ignore[attr-defined,method-assign]
-    await world.signed_out_session()
+    token = await signed_in(world)
+    metadata = world.company.oauth_metadata
+    assert metadata is not None and world.refresh_reference is not None
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    await world.conversations.start(
+        endpoint, world.message("Hi"), session=world.session, token=token, wait=0
+    )
+    mcp = world.shop.config.mcp_url
+    tokens = RefreshTokenClient(reactor=world.reactor, http_client=world.http)
+    for_mcp = await tokens.token_for_mcp(
+        world.refresh_reference,
+        context=RefreshTokenContext(
+            token_endpoint=metadata.token_endpoint,
+            issuer=metadata.issuer,
+            client_id=world.atlas.client_id,
+            tenant_id=TENANT,
+        ),
+        url=mcp,
+    )
+    assert for_mcp.status == "signed_in"
+    await world.transport.request(
+        "POST",
+        mcp,
+        session=world.session,  # type: ignore[arg-type]
+        token=for_mcp.token,
+        headers={"Content-Type": "application/json"},
+        content=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}).encode(),
+    )
+    company = [e for e in recorded.events if e.stage == "company"]
+    by_name = {e.name: e for e in company}
+    agent = world.atlas.client_id
+    checked = by_name["pap.company.identity.check"]
+    assert checked.attributes == {
+        "pap.company.issuer": "https://manzanita.example",
+        "pap.company.domain": "manzanita.example",
+        "pap.company.route": "oauth_device",
+        "pap.client.id": agent,
+    }
+    # Verified once: later requests of the same agent are not checks again.
+    assert [e.name for e in company].count("pap.company.identity.check") == 1
+    # A Session starts on its first request, whatever account that request is signed in to.
+    started = by_name["pap.company.session.start"]
+    assert started.attributes["pap.session.signed_in"] is False
+    # A token for its MCP server moves the Session there.
+    switched = by_name["pap.company.interface.switch"]
+    assert switched.attributes["pap.interface"] == "mcp"
+    assert not [e for e in company if e.name == "pap.company.refused"]
+
+    # The same token request sent again: refused, and said to be a replay.
     token_request = next(r for r in captured if r.url.path == "/oauth/token")
     replay = await world.http.post(
         str(token_request.url), content=token_request.content, headers=dict(token_request.headers)
@@ -230,7 +244,7 @@ async def test_a_company_reports_what_it_did_and_refused(
 async def test_without_a_sink_nothing_is_emitted_and_nothing_changes() -> None:
     world = World()
     session = await world.signed_out_session()
-    assert session.signed_in is False
+    assert session.sub == PAIRWISE
 
 
 def test_no_allowlisted_attribute_names_a_secret() -> None:
@@ -292,7 +306,7 @@ async def test_a_failing_sink_never_fails_the_protocol(
     contribute_to_every_reactor(monkeypatch, Broken())
     with caplog.at_level(logging.WARNING, logger="personal_agent_protocol.telemetry"):
         session = await World().signed_out_session()
-    assert session.session_key
+    assert session.sid
     assert caplog.messages and set(caplog.messages) == {"The telemetry sink failed: RuntimeError"}
 
 

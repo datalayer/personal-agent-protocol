@@ -1,0 +1,19 @@
+{
+  "header": {
+    "typ": "poppy-session+jwt",
+    "alg": "ES256",
+    "kid": "9E421cSqd5UfAq5slDKYxXQd8Zmm8B3CIsT9cDxRHx8",
+    "pap_dlg": "eyJhbGciOiJFUzI1NiIsInR5cCI6InBhcC1kZWxlZ2F0aW9uK2p3dCJ9.e30.c2ln"
+  },
+  "payload": {
+    "iss": "https://agent.example/agent.json",
+    "aud": "https://auth.example.com",
+    "sid": "Yx2b7Qd_Kp8mR3vT1nWc4A",
+    "sub": "usr_Q7c1vK",
+    "htm": "POST",
+    "htu": "https://api.example.com/orders/ord_7Hk2/exchanges",
+    "iat": 1790900000,
+    "jti": "e1j3V_bKic8-LAEBq7Rw2g",
+    "ath": "fUHyO2r2Z3DZ53EsNrWBb0xWXoaNy59IiKCAqksmQEo"
+  }
+}

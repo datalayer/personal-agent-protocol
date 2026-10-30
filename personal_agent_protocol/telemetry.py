@@ -61,15 +61,14 @@ STAGES: tuple[Stage, ...] = (
 TELEMETRY_EVENTS: dict[str, Stage] = {
     "pap.discovery.discover": "discovery",
     "pap.session.start": "session",
-    "pap.session.renew": "session",
     "pap.sign_in.direct.begin": "sign_in",
     "pap.sign_in.direct.complete": "sign_in",
     "pap.sign_in.device.begin": "sign_in",
     "pap.sign_in.device.poll": "sign_in",
     "pap.sign_in.mediated.sign_in": "sign_in",
     "pap.sign_in.mediated.submit_code": "sign_in",
-    "pap.sign_in.account_token.refresh": "sign_in",
-    "pap.sign_in.account_token.revoke": "sign_in",
+    "pap.sign_in.refresh_token.refresh": "sign_in",
+    "pap.sign_in.refresh_token.revoke": "sign_in",
     "pap.conversation.start": "conversation",
     "pap.conversation.send": "conversation",
     "pap.conversation.read_events": "conversation",
@@ -82,7 +81,6 @@ TELEMETRY_EVENTS: dict[str, Stage] = {
     # What a company built on `personal_agent_protocol.company` did and refused.
     "pap.company.identity.check": "company",
     "pap.company.session.start": "company",
-    "pap.company.session.renew": "company",
     "pap.company.interface.switch": "company",
     "pap.company.sign_out": "company",
     "pap.company.refused": "company",
@@ -143,7 +141,7 @@ TELEMETRY_ATTRIBUTES: dict[str, Callable[[object], bool]] = {
     "pap.error": _identifier,
     "pap.company.domain": _domain,
     "pap.company.issuer": _issuer,
-    "pap.sign_in.method": _one_of("direct", "device", "mediated", "account_token"),
+    "pap.sign_in.method": _one_of("direct", "device", "mediated", "refresh_token"),
     "pap.sign_in.status": _identifier,
     "pap.session.signed_in": _flag,
     "pap.scopes.granted": _count,
@@ -393,7 +391,8 @@ def company_result(result: Any) -> dict[str, object]:
 
 
 def session_result(result: Any) -> dict[str, object]:
-    return {"pap.session.signed_in": getattr(result, "signed_in", None)}
+    # A new Session is signed out: it is signed in on each request with an access token.
+    return {"pap.session.signed_in": False}
 
 
 def sign_in_result(result: Any) -> dict[str, object]:
@@ -405,7 +404,7 @@ def sign_in_result(result: Any) -> dict[str, object]:
         status = "revoked" if result.revoked else "not_revoked"
     return {
         "pap.sign_in.status": status if status is not None else "started",
-        "pap.session.signed_in": getattr(token, "signed_in", None),
+        "pap.session.signed_in": True if token is not None else None,
         "pap.scopes.granted": len(granted) if granted is not None else None,
         "pap.scopes.missing": len(missing) if missing is not None else None,
     }

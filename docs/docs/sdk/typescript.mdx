@@ -77,7 +77,7 @@ a thumbprint names, and forgets a discarded one (`discardSessionKey`);
 `DpopFetchClient` owns `Authorization` and `DPoP` headers for API and
 conversation requests. It generates a fresh proof for every nonce retry and
 refuses every redirect (`redirect_refused`): under draft 0.3 §3 no token,
-proof or body goes to the URL a protocol endpoint redirects to. See the [DPoP transport flow](/examples/dpop-transport/).
+proof or body goes to the URL a protocol endpoint redirects to. See the [Session transport flow](/examples/session-transport/).
 
 `ConversationClient` composes that transport to start and continue PAP
 conversations. `generateMessageId()` uses Reactor's cryptographic random source

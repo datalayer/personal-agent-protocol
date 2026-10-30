@@ -26,7 +26,7 @@ Do not send credentials during discovery. Python rejects private, loopback,
 link-local, and otherwise non-public resolved addresses by default. Server-side
 TypeScript callers should contribute a DNS-aware URL safety policy.
 
-## Available now: start or renew a signed-out session
+## Available now: start a signed-out session
 
 Resolve one pairwise identifier, the User ID, for each tenant, internal user,
 and exact verified company issuer: a pairwise subject identifier that the
@@ -35,10 +35,7 @@ from personal information. The store creates a random value atomically and
 returns the same mapping across restarts.
 
 ```python
-from personal_agent_protocol import (
-    build_session_assertion_claims,
-    resolve_pairwise_user_id,
-)
+from personal_agent_protocol import SessionClient, resolve_pairwise_user_id
 
 user_id = await resolve_pairwise_user_id(
     reactor,
@@ -46,10 +43,11 @@ user_id = await resolve_pairwise_user_id(
     local_user_id="local-user-42",
     company_issuer=company.oauth_metadata.issuer,
 )
-claims = build_session_assertion_claims(
+session = await SessionClient(reactor=reactor, http_client=http).start(
     client_id="https://agent.example/agent.json",
     pairwise_user_id=user_id,
     issuer=company.oauth_metadata.issuer,
+    tenant_id="application-42",
 )
 ```
 
@@ -57,12 +55,11 @@ Python provides `SqlitePairwiseUserIdStore` for local file-backed deployments.
 Distributed hosts contribute a transactional implementation through
 `pap.pairwiseUserIdStore`; TypeScript exposes the same Reactor contract.
 
-The lower-level result is unsigned. `SessionClient` uses Reactor signer and
-DPoP-proof contributions to make a new Session Key for each Session (its
-thumbprint names the Session), create fresh proofs, and send the real token
-request. Those host services must keep private keys outside model context and
-tool arguments. See [Signed-out sessions](/guides/sessions/) for the complete
-implemented boundary.
+A Session is local: `start` sends no request. Each request then carries a
+Session JWT from the Reactor `pap.sessionSigner` contribution, signed with a
+delegated key that `pap.signer` vouches for. Those host services must keep
+private keys outside model context and tool arguments. See [Signed-out
+sessions](/guides/sessions/) for the complete implemented boundary.
 
 ## Choosing scopes and how to sign in
 

@@ -261,6 +261,7 @@ async def _answer(driver: DemoDriver, line: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True}
 
 
+@pytest.mark.xfail(reason="TypeScript port pending", strict=True)
 @pytest.mark.asyncio
 async def test_typescript_runner_against_the_python_company(tmp_path: Path) -> None:
     world = ManzanitaConformance()

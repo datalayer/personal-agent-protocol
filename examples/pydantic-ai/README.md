@@ -8,14 +8,14 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | --------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------- |
 | [`company-discovery`](./company-discovery/)               | HTTPS company discovery and validation                          | Public capability summary         |
 | [`agent-identity`](./agent-identity/)                     | Client metadata and same-domain JWKS                            | Identity and signing policy       |
-| [`session-assertion`](./session-assertion/)               | Pairwise subject and short-lived claims                         | Policy only; identifiers withheld |
-| [`direct-sign-in-boundary`](./direct-sign-in-boundary/)   | OAuth state, S256 PKCE, code bound by `dpop_jkt`                | Security properties only          |
-| [`direct-sign-in-lifecycle`](./direct-sign-in-lifecycle/) | Complete Session upgrade and consent                            | Lifecycle evidence only           |
+| [`delegation`](./delegation/)                             | Short-lived claims naming no User and no Company                | Policy only; identifiers withheld |
+| [`direct-sign-in-boundary`](./direct-sign-in-boundary/)   | OAuth state, S256 PKCE, no Session named                        | Security properties only          |
+| [`direct-sign-in-lifecycle`](./direct-sign-in-lifecycle/) | Complete sign-in, consent and token custody                     | Lifecycle evidence only           |
 | [`device-sign-in`](./device-sign-in/)                     | Device code, paced polling and token custody                    | Lifecycle evidence only           |
-| [`dpop-proof`](./dpop-proof/)                             | Session Keys, request binding, replay rejection                 | Verified policy; secrets withheld |
-| [`session-lifecycle`](./session-lifecycle/)               | Start, nonce retry, renewal, end; one key per Session           | Lifecycle evidence only           |
-| [`browser-session`](./browser-session/)                   | Join form: one-time code proved with the Session Key            | Browser policy only               |
-| [`dpop-transport`](./dpop-transport/)                     | Nonce retry and safe redirect proofs                            | Transport policy only             |
+| [`session-jwt`](./session-jwt/)                           | A delegated key, request binding, replay rejection              | Verified policy; secrets withheld |
+| [`session-lifecycle`](./session-lifecycle/)               | Start, a Session JWT per request, restart; one key per User ID  | Lifecycle evidence only           |
+| [`browser-session`](./browser-session/)                   | Join form: one-time code authorized with the Session header     | Browser policy only               |
+| [`session-transport`](./session-transport/)               | The Session header, restart and refused redirects               | Transport policy only             |
 | [`conversation-messages`](./conversation-messages/)       | Start and continue with idempotent IDs                          | Conversation state only           |
 | [`conversation-events`](./conversation-events/)           | Long poll, drain, recover, de-duplicate                         | Safe event content only           |
 | [`conversation-streaming`](./conversation-streaming/)     | SSE, `Last-Event-ID`, display-only deltas                       | Counts and complete messages      |
@@ -23,11 +23,11 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | [`account-tokens`](./account-tokens/)                     | Refresh, rotation, narrowing, expiry, revocation                | Statuses and scopes only          |
 | [`mediated-sign-in`](./mediated-sign-in/)                 | Protected input, one endpoint, one-time code                    | Labels and statuses only          |
 | [`operations`](./operations/)                             | Exact approval, `terms_changed`, recovery, standing permissions | States and company summaries      |
-| [`user-with-a-company`](./user-with-a-company/)           | The whole K-06 journey with Manzanita                           | Steps in plain words              |
+| [`user-with-a-company`](./user-with-a-company/)           | The whole journey with Manzanita                                | Steps in plain words              |
 | [`two-companies`](./two-companies/)                       | Ledgerly at Northwind for Ada (composition)                     | Summaries and approvers           |
 | [`live-session-actions`](./live-session-actions/)         | Actions by ID, as Studio, a REPL and `pap commands run` invoke  | Answers and refusal codes         |
 | [`telemetry`](./telemetry/)                               | One allowlisted event per protocol stage, OpenTelemetry-ready   | Stage events only                 |
-| [`company-apis`](./company-apis/)                         | OpenAPI with DPoP; MCP with DPoP or Token Exchange              | Orders, statuses, summaries       |
+| [`company-apis`](./company-apis/)                         | OpenAPI and MCP, each with its own access token                 | Orders, statuses, summaries       |
 | [`company-service`](./company-service/)                   | A company built with the SDK, used end to end                   | Steps and a count                 |
 | [`sign-in-display`](./sign-in-display/)                   | `PapSignIn`: the page's display vs `model_view()`               | Model view; page shape only       |
 

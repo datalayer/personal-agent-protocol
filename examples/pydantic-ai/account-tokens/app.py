@@ -1,7 +1,7 @@
 # Copyright (c) 2025-2026 Datalayer, Inc.
 # BSD 3-Clause License
 
-"""A Pydantic AI agent demonstrating PAP Account Tokens against a real PAP company."""
+"""A Pydantic AI agent demonstrating PAP refresh tokens against a real PAP company."""
 
 from __future__ import annotations
 
@@ -13,17 +13,19 @@ from typing import Any
 from pydantic_ai import Agent
 
 from personal_agent_protocol import (
+    AccessToken,
     Author,
     ConversationClient,
+    ConversationError,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
+    PapSession,
     SessionClient,
-    SessionToken,
+    SessionHttpClient,
     generate_message_id,
 )
-from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
+from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
@@ -38,15 +40,15 @@ PAIRWISE = "usr_ada_at_manzanita_000000"
 
 agent = Agent(
     instructions=(
-        "Use explain_account_tokens to explain PAP Account Tokens. Never ask for or "
-        "expose an Account Token, Session Token, Session Key, assertion, or DPoP proof."
+        "Use explain_account_tokens to explain PAP refresh tokens. Never ask for or "
+        "expose a refresh token, access token, delegated key, assertion, or Session JWT."
     ),
 )
 
 
 @agent.tool_plain
 async def explain_account_tokens() -> dict[str, Any]:
-    """Refresh, rotate, narrow, expire, and revoke Account Tokens; return safe evidence."""
+    """Refresh, rotate, narrow, expire, and revoke refresh tokens; return safe evidence."""
 
     # Manzanita Outfitters (the reference company) and Atlas (Ada's personal agent),
     # both on an in-process network: real HTTP, real keys, nothing leaves the process.
@@ -62,18 +64,16 @@ async def explain_account_tokens() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     sessions = SessionClient(reactor=reactor, http_client=http)
     device = DeviceSignInClient(reactor=reactor, http_client=http)
 
-    async def signed_in_session() -> tuple[SessionToken, str]:
+    async def signed_in_session() -> tuple[PapSession, AccessToken, str]:
         """A signed-out Session, then Device Sign-In Ada approves on Manzanita's page."""
 
         session = await sessions.start(
             client_id=atlas.client_id,
             pairwise_user_id=PAIRWISE,
             issuer=metadata.issuer,
-            token_endpoint=metadata.token_endpoint,
             tenant_id=TENANT,
         )
         started = await device.begin(
@@ -83,107 +83,109 @@ async def explain_account_tokens() -> dict[str, Any]:
             client_id=atlas.client_id,
             scopes=("orders:read", "orders:write"),
             tenant_id=TENANT,
-            session_key=session.session_key,
             organization=company.document.organization,
             protected_resources=metadata.protected_resources,
         )
         await shop.approve_device(started.user_code, account_id="acct_ada")
         clock.advance(started.poll_interval)
         done = await device.poll(started.reference)
-        if not (done.token is not None and done.account_token_reference is not None):
+        if not (done.token is not None and done.refresh_token_reference is not None):
             raise RuntimeError("the example world is incomplete")
-        return done.token, done.account_token_reference
+        return session, done.token, done.refresh_token_reference
 
-    accounts = AccountTokenClient(reactor=reactor, http_client=http)
-    context = AccountTokenContext(
+    accounts = RefreshTokenClient(reactor=reactor, http_client=http)
+    context = RefreshTokenContext(
         token_endpoint=metadata.token_endpoint,
         revocation_endpoint=metadata.revocation_endpoint,
         issuer=metadata.issuer,
         client_id=atlas.client_id,
         tenant_id=TENANT,
+    )
+    conversations = ConversationClient(
+        transport=SessionHttpClient(reactor=reactor, http_client=http)
+    )
+    endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+
+    def question() -> Message:
+        return Message(
+            id=generate_message_id(reactor), author=Author(type="human"), text="Where is my order?"
+        )
+
+    # 1. A refresh names no Session: it gets a new access token for the account, and the
+    #    company rotates the refresh token. Any of the User's Sessions uses the new token.
+    _, token, reference = await signed_in_session()
+    stored_before = host.vault.values[reference]
+    refreshed = await accounts.refresh(reference, context=context)
+    rotated_in_place = host.vault.values[reference] is not stored_before
+    another_session = await sessions.start(
+        client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
+        issuer=metadata.issuer,
+        tenant_id=TENANT,
+    )
+    answered = await conversations.start(
+        endpoint, question(), session=another_session, token=refreshed.token, wait=0
     )
 
-    # 1. Refresh with the Session Key signs that same Session in again; the company
-    #    rotates the Account Token.
-    token, reference = await signed_in_session()
-    stored_before = host.vault.values[reference]
-    refreshed = await accounts.refresh(reference, context=context, session_key=token.session_key)
-    rotated_in_place = host.vault.values[reference] is not stored_before
-    same_session = refreshed.token is not None and refreshed.token.session_key == token.session_key
-
-    # 2. Two refreshes at once: the Reactor `pap.accountTokenLock` serializes them, so the
+    # 2. Two refreshes at once: the Reactor `pap.refreshTokenLock` serializes them, so the
     #    second presents the token the first rotated in, never the one it revoked.
     racing = await asyncio.gather(
-        accounts.refresh(reference, context=context, session_key=token.session_key),
-        accounts.refresh(reference, context=context, session_key=token.session_key),
+        accounts.refresh(reference, context=context),
+        accounts.refresh(reference, context=context),
     )
 
     # 3. Narrower is allowed; wider is the user's decision, not a retry.
-    narrowed = await accounts.refresh(
-        reference, context=context, session_key=token.session_key, scopes=("orders:read",)
-    )
+    narrowed = await accounts.refresh(reference, context=context, scopes=("orders:read",))
     wider = await accounts.refresh(
-        reference,
-        context=context,
-        session_key=token.session_key,
-        scopes=("orders:read", "orders:admin"),
+        reference, context=context, scopes=("orders:read", "orders:admin")
     )
 
-    # 4. Ninety-one days later the Session has ended too: its Session Key is refused and
-    #    discarded (`session_ended`). Without a key, the Account Token would start a new
-    #    Session; the company answers `invalid_grant`, so the stored copy is deleted.
+    # 4. Ninety-one days later the refresh token has expired: the company answers
+    #    `invalid_grant`, so the stored copy is deleted and the Sessions go on signed out.
     clock.advance(91 * 24 * 3600)
-    session_ended = await accounts.refresh(
-        reference, context=context, session_key=token.session_key
-    )
     expired = await accounts.refresh(reference, context=context)
     expired_deleted = reference not in host.vault.values
 
-    # 5. Revocation (RFC 7009) signs out every Session signed in with the token.
-    token, reference = await signed_in_session()
+    # 5. Revocation (RFC 7009) deletes the sign-in's access tokens: one still in hand is
+    #    `invalid_token`, and the Session goes on signed out by sending no token.
+    session, token, reference = await signed_in_session()
     revoked = await accounts.revoke(reference, context=context)
-    conversations = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
-    endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
-    page = await conversations.start(
-        endpoint,
-        Message(
-            id=generate_message_id(reactor), author=Author(type="human"), text="Where is my order?"
-        ),
-        token=token,
-        wait=0,
-        **who,
-    )
-    after_revocation = await accounts.refresh(
-        reference, context=context, session_key=token.session_key
-    )
+    try:
+        await conversations.start(endpoint, question(), session=session, token=token, wait=0)
+        refused_with = "accepted"
+    except ConversationError as error:
+        refused_with = error.code
+    page = await conversations.start(endpoint, question(), session=session, wait=0)
+    after_revocation = await accounts.refresh(reference, context=context)
     await http.aclose()
 
     return {
         "refresh_status": refreshed.status,
-        "same_session": same_session,
+        "another_session_used_the_new_token": not any(
+            event.type == "authorization" for event in answered.events
+        ),
         "rotated": refreshed.rotated,
         "rotated_token_replaced_the_stored_one": rotated_in_place,
         "concurrent_refreshes_serialized": [result.status for result in racing],
         "narrowed_granted_scopes": narrowed.granted_scopes,
         "wider_request": wider.status,
-        "old_session_after_91_days": session_ended.status,
         "expired_token": expired.status,
         "expired_token_deleted_locally": expired_deleted,
         "revoked_at_company": revoked.revoked,
         "revoked_token_deleted_locally": revoked.deleted_locally,
+        "token_after_revocation": refused_with,
         "session_after_revocation": [event.type for event in page.events][-1]
         + ": "
         + str([e for e in page.events if e.type != "state"][-1].error),
         "refresh_after_revocation": after_revocation.status,
-        "account_token_withheld": True,
-        "session_tokens_and_proofs_withheld": True,
+        "refresh_token_withheld": True,
+        "access_tokens_and_session_jwts_withheld": True,
     }
 
 
 async def main() -> None:
     result = await agent.run(
-        "Explain how a personal agent keeps a user signed in with a PAP Account Token: "
+        "Explain how a personal agent keeps a user signed in with a PAP refresh token: "
         "refresh, rotation, narrowing, expiry, and revocation.",
         model=os.getenv("PAP_EXAMPLE_MODEL", "openai:gpt-4o-mini"),
     )

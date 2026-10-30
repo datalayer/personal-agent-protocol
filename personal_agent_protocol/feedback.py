@@ -36,9 +36,9 @@ from pydantic import ConfigDict, Field
 from .errors import PersonalAgentProtocolError
 from .json import loads_strict
 from .models import Alternative, DiscoveryDocument, ProtocolModel
-from .refusals import challenge_parameters, refusal_details
-from .sessions import SessionToken
-from .transport import DpopHttpClient
+from .refusals import refusal_code, refusal_details
+from .sessions import AccessToken, PapSession
+from .transport import SessionHttpClient
 
 #: The longest `task` a report carries (§8).
 FEEDBACK_TASK_MAX_LENGTH = 200
@@ -71,7 +71,9 @@ def feedback_endpoint(document: DiscoveryDocument) -> str | None:
 class FeedbackClient:
     """Send feedback reports with a Session Token, signed in or out, and a DPoP proof."""
 
-    def __init__(self, *, transport: DpopHttpClient, max_response_bytes: int = 16 * 1024) -> None:
+    def __init__(
+        self, *, transport: SessionHttpClient, max_response_bytes: int = 16 * 1024
+    ) -> None:
         if max_response_bytes <= 0:
             raise ValueError("max_response_bytes must be positive")
         self.transport = transport
@@ -82,9 +84,8 @@ class FeedbackClient:
         endpoint: str,
         report: FeedbackReport,
         *,
-        token: SessionToken,
-        tenant_id: str,
-        issuer: str,
+        session: PapSession,
+        token: AccessToken | None = None,
     ) -> Alternative | None:
         """`POST {feedback.endpoint}`: accepted, or answered with a way to do it (§8.3).
 
@@ -100,9 +101,8 @@ class FeedbackClient:
         response = await self.transport.request(
             "POST",
             endpoint,
+            session=session,
             token=token,
-            tenant_id=tenant_id,
-            issuer=issuer,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             content=json.dumps(report.model_dump(mode="json"), separators=(",", ":")).encode(),
         )
@@ -118,10 +118,8 @@ class FeedbackClient:
                     "the company answered with a malformed alternative",
                     status_code=200,
                 ) from exc
-        code = payload.get("error") if isinstance(payload, dict) else None
-        if not isinstance(code, str):
-            # A token error may come only in WWW-Authenticate (§6).
-            code = challenge_parameters(response.headers.get("www-authenticate", "")).get("error")
+        # In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
+        code = refusal_code(response, payload, "feedback_request_failed")
         raise FeedbackError(
             code if isinstance(code, str) else "feedback_request_failed",
             "the company refused the feedback report",

@@ -12,14 +12,14 @@ import pytest
 from pydantic import SecretStr
 
 from personal_agent_protocol import DeviceSignInClient
-from personal_agent_protocol.accounts import AccountTokenClient, AccountTokenContext
+from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.company import MemoryCompanyStore
-from personal_agent_protocol.company.store import ACCOUNT_TOKEN, AccountGrant, JsonObject
+from personal_agent_protocol.company.store import REFRESH_TOKEN, AccountGrant, JsonObject
 from personal_agent_protocol.company.testing import StoreConformanceError, check_store
 from personal_agent_protocol.operations import OperationsClient, approve
 from personal_agent_protocol.reactor import TOKEN_STORES, TokenStore, first_contribution
 
-from .test_company_end_to_end import PAIRWISE, TENANT, World
+from .test_company_end_to_end import TENANT, World
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,7 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
 
     # Before: a conversation with events, and a Device Sign-In the user has not approved.
     page = await world.conversations.start(
-        endpoint, world.message("Where is my jacket order?"), token=session, wait=0, **world.who
+        endpoint, world.message("Where is my jacket order?"), session=session, wait=0
     )
     device = DeviceSignInClient(reactor=world.reactor, http_client=world.http)
     started = await device.begin(
@@ -95,7 +95,6 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
         client_id=world.atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=world.company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -109,25 +108,23 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
     world.clock.advance(started.poll_interval)
     done = await device.poll(started.reference)
     assert done.status == "complete" and done.token is not None
-    assert done.token.session_key == session.session_key
-    reference = done.account_token_reference
+    reference = done.refresh_token_reference
     assert reference is not None
 
-    # The Account Token rotates before the next restart.
-    accounts = AccountTokenClient(reactor=world.reactor, http_client=world.http)
-    context = AccountTokenContext(
+    # The refresh token rotates before the next restart.
+    accounts = RefreshTokenClient(reactor=world.reactor, http_client=world.http)
+    context = RefreshTokenContext(
         token_endpoint=metadata.token_endpoint,
         revocation_endpoint=metadata.revocation_endpoint,
         issuer=metadata.issuer,
         client_id=world.atlas.client_id,
         tenant_id=TENANT,
-        pairwise_user_id=PAIRWISE,
     )
     tokens = first_contribution(world.reactor, TOKEN_STORES, "token store")
     assert isinstance(tokens, TokenStore)
     before = await tokens.get(reference)
     assert before is not None
-    refreshed = await accounts.refresh(reference, context=context, session_key=session.session_key)
+    refreshed = await accounts.refresh(reference, context=context)
     assert refreshed.status == "signed_in" and refreshed.rotated
     rotated = await tokens.get(reference)
     assert rotated is not None and rotated.get_secret_value() != before.get_secret_value()
@@ -137,10 +134,10 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
         endpoint,
         page.conversation_id,
         world.message("Exchange it for something warmer"),
+        session=session,
         token=refreshed.token,  # type: ignore[arg-type]
         cursor=page.cursor,
         wait=0,
-        **world.who,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert proposal is not None and proposal.state == "proposed"
@@ -149,33 +146,31 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
     world.restart()
 
     # The rotated-away token stays refused after the restart; the new one works.
-    old = await world.store.get(ACCOUNT_TOKEN, _sha256(before))  # type: ignore[union-attr]
+    old = await world.store.get(REFRESH_TOKEN, _sha256(before))  # type: ignore[union-attr]
     assert old is not None and AccountGrant.from_json(old.value).revoked
     await tokens.put(reference, before)
-    assert (
-        await accounts.refresh(reference, context=context, session_key=session.session_key)
-    ).status == "signed_out"
+    assert (await accounts.refresh(reference, context=context)).status == "signed_out"
     await tokens.put(reference, rotated)
-    again = await accounts.refresh(reference, context=context, session_key=session.session_key)
+    again = await accounts.refresh(reference, context=context)
     assert again.status == "signed_in" and again.token is not None
 
     # The operation proposed before the restart is confirmed once after it.
     operations = OperationsClient(transport=world.transport)
     ops = world.shop.config.operations_endpoint
     outcome = await operations.confirm(
-        ops, proposal, approval=approve(proposal), token=again.token, **world.who
+        ops, proposal, approval=approve(proposal), session=session, token=again.token
     )
     assert outcome.status == "confirmed"
     assert outcome.operation.state == "succeeded"  # type: ignore[union-attr]
     retried = await operations.confirm(
-        ops, proposal, approval=approve(proposal), token=again.token, **world.who
+        ops, proposal, approval=approve(proposal), session=session, token=again.token
     )
     assert retried.operation.state == "succeeded"  # type: ignore[union-attr]
     assert world.plugin.executor.performed == [proposal.operation_id]
 
     # The event cursor taken before the restart resumes after it: nothing is lost or repeated.
     resumed = await world.conversations.read_events(
-        endpoint, page.conversation_id, token=again.token, cursor=cursor, **world.who
+        endpoint, page.conversation_id, session=session, token=again.token, cursor=cursor
     )
     assert all(event.id != cursor for event in resumed.events)
     assert resumed.cursor == (resumed.events[-1].id if resumed.events else cursor)

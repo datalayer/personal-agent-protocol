@@ -2,7 +2,14 @@
 #
 # BSD 3-Clause License
 
-"""Safe wire primitives for PAP session creation and renewal."""
+"""Sessions, client assertions, and plain OAuth token responses (§4, §5).
+
+A Session is local: `SessionClient.start` chooses its `sid` at random and asks
+the company nothing (§5.2). Every request then carries a Session JWT the
+`pap.sessionSigner` signs for it (`transport.SessionHttpClient`). Account access
+is plain OAuth: sign-in and refresh return an access token and a refresh token
+(§4.4, §4.5, §4.7); the token endpoint gets a client assertion and nothing else.
+"""
 
 from __future__ import annotations
 
@@ -10,49 +17,52 @@ import base64
 import inspect
 import secrets
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal, TypedDict, cast
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 import httpx
 from pydantic import Field, SecretStr, field_validator, model_validator
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
+from .crypto import SESSION_ID
 from .errors import PersonalAgentProtocolError, ProtocolValidationError, SessionError
 from .json import loads_strict
 from .models import ProtocolModel
 from .reactor import (
     CLOCKS,
-    DPOP_PROOF_PROVIDERS,
     RANDOM_SOURCES,
     SIGNERS,
+    TOKEN_STORES,
     Clock,
-    DpopProofProvider,
-    DpopProofRequest,
     RandomSource,
     Signer,
+    TokenStore,
     first_contribution,
     send_bounded,
 )
-from .refusals import refusal_details, refuse_redirect
+from .refusals import refusal_code, refusal_details, refuse_redirect, refused_without_body
 from .telemetry import by_issuer, session_result, traced
 
-JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 JWT_CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
 RandomBytes = Callable[[int], bytes]
-#: A client or Session assertion's `exp` is at most this long after its `iat` (§4.1, §4.2).
+#: A client assertion's `exp` is at most this long after its `iat` (§4.1).
 ASSERTION_MAX_LIFETIME_SECONDS = 300
 
 
 def _opaque_id(prefix: str, random_bytes: RandomBytes = secrets.token_bytes) -> str:
     """Generate a URL-safe identifier with at least 128 random bits."""
 
+    return f"{prefix}_{_random_id(random_bytes)}"
+
+
+def _random_id(random_bytes: RandomBytes) -> str:
     entropy = random_bytes(16)
     if len(entropy) < 16:
         raise ValueError("identifier generation requires at least 128 random bits")
-    encoded = base64.urlsafe_b64encode(entropy).decode().rstrip("=")
-    return f"{prefix}_{encoded}"
+    return base64.urlsafe_b64encode(entropy).decode().rstrip("=")
 
 
 def generate_pairwise_user_id(random_bytes: RandomBytes = secrets.token_bytes) -> str:
@@ -61,30 +71,10 @@ def generate_pairwise_user_id(random_bytes: RandomBytes = secrets.token_bytes) -
     return _opaque_id("usr", random_bytes)
 
 
-class SessionAssertionClaims(ProtocolModel):
-    """Claims signed by the personal agent when starting or renewing a session."""
+def new_session_id(random_bytes: RandomBytes = secrets.token_bytes) -> str:
+    """A new `sid`: 128 random bits, 22 URL-safe characters, never used again (§5.2)."""
 
-    iss: str
-    sub: str = Field(pattern=r"^[A-Za-z0-9_-]{1,256}$")
-    aud: str
-    iat: int = Field(ge=0)
-    exp: int = Field(gt=0)
-    jti: str = Field(pattern=r"^[A-Za-z0-9_-]{22,256}$")
-    #: Which of the User's agents the Session is for (§4.2): User-ID rules, kept for life.
-    agent_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,256}$")
-
-    @field_validator("iss", "aud")
-    @classmethod
-    def validate_https_url(cls, value: str) -> str:
-        parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-            raise ValueError("assertion issuer and audience must be HTTPS URLs")
-        return value
-
-    @model_validator(mode="after")
-    def validate_lifetime(self) -> SessionAssertionClaims:
-        _check_lifetime(self.iat, self.exp)
-        return self
+    return _random_id(random_bytes)
 
 
 def _check_lifetime(iat: int, exp: int) -> None:
@@ -103,172 +93,8 @@ def _issued_at(now: datetime | None, lifetime_seconds: int) -> int:
     return int(issued_at.timestamp())
 
 
-def build_session_assertion_claims(
-    *,
-    client_id: str,
-    pairwise_user_id: str,
-    issuer: str,
-    now: datetime | None = None,
-    lifetime_seconds: int = 60,
-    random_bytes: RandomBytes = secrets.token_bytes,
-    agent_id: str | None = None,
-) -> SessionAssertionClaims:
-    """Build unsigned PAP 4.2 claims; a key-custody provider signs them.
-
-    `aud` is the company's `auth.issuer`, one string, never an endpoint (§4.2, §9.4).
-    `agent_id`, when the User has several agents, says which one; left out otherwise.
-    """
-
-    issued_at_seconds = _issued_at(now, lifetime_seconds)
-    return SessionAssertionClaims(
-        iss=client_id,
-        sub=pairwise_user_id,
-        aud=issuer,
-        iat=issued_at_seconds,
-        exp=issued_at_seconds + lifetime_seconds,
-        jti=_opaque_id("jti", random_bytes),
-        agent_id=agent_id,
-    )
-
-
-def build_client_assertion_claims(
-    *,
-    client_id: str,
-    issuer: str,
-    now: datetime | None = None,
-    lifetime_seconds: int = 60,
-    random_bytes: RandomBytes = secrets.token_bytes,
-) -> ClientAssertionClaims:
-    """Build unsigned `private_key_jwt` claims for any request to the company's OAuth server.
-
-    `aud` is the company's `auth.issuer`, one string, whichever endpoint the
-    assertion goes to: token, revocation, or device authorization (§4.1, §9.4).
-    """
-
-    issued_at_seconds = _issued_at(now, lifetime_seconds)
-    return ClientAssertionClaims(
-        iss=client_id,
-        sub=client_id,
-        aud=issuer,
-        iat=issued_at_seconds,
-        exp=issued_at_seconds + lifetime_seconds,
-        jti=_opaque_id("jti", random_bytes),
-    )
-
-
-class SessionGrant(ProtocolModel):
-    """Redacted form values for a PAP JWT-bearer session request."""
-
-    grant_type: Literal["urn:ietf:params:oauth:grant-type:jwt-bearer"] = (
-        "urn:ietf:params:oauth:grant-type:jwt-bearer"
-    )
-    assertion: SecretStr
-    client_id: str
-    client_assertion_type: Literal["urn:ietf:params:oauth:client-assertion-type:jwt-bearer"] = (
-        "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-    )
-    client_assertion: SecretStr
-    resource: str | None = None
-
-    @field_validator("client_id")
-    @classmethod
-    def validate_client_id(cls, value: str) -> str:
-        parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-            raise ValueError("client ID must be an HTTPS URL")
-        return value
-
-    def as_form(self) -> dict[str, str]:
-        """Reveal assertions only at the final HTTP serialization boundary."""
-
-        values = {
-            "grant_type": self.grant_type,
-            "assertion": self.assertion.get_secret_value(),
-            "client_id": self.client_id,
-            "client_assertion_type": self.client_assertion_type,
-            "client_assertion": self.client_assertion.get_secret_value(),
-        }
-        if self.resource is not None:
-            values["resource"] = self.resource
-        return values
-
-
-class Who(TypedDict):
-    """Whose Session a request is for: the keyword arguments every client call takes."""
-
-    tenant_id: str
-    issuer: str
-
-
-class TokenResponse(ProtocolModel):
-    """A token endpoint's answer, as on the wire (§4.2, §4.4): no Session named in it."""
-
-    access_token: SecretStr
-    token_type: Literal["DPoP", "Bearer"]
-    expires_in: int = Field(gt=0)
-    scope: str | None = None
-    refresh_token: SecretStr | None = None
-    refresh_token_expires_in: int | None = Field(default=None, gt=0)
-    issued_token_type: str | None = None
-
-
-class SessionToken(ProtocolModel):
-    """A Session Token, with what the SDK knows of it beside the wire response.
-
-    `session_key` is the Session Key's thumbprint, which names the Session (§4.3).
-    `signed_in` comes from the grant, never from the response (§4.2): the JWT bearer
-    grant always answers signed out, a sign-in or an Account Token signed in. `scope`
-    is what was granted: a signed-in response that leaves it out granted exactly the
-    scopes requested (RFC 6749 §5.1), a signed-out one has none.
-    """
-
-    access_token: SecretStr
-    token_type: Literal["DPoP", "Bearer"]
-    expires_in: int = Field(gt=0)
-    scope: str = ""
-    session_key: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
-    signed_in: bool
-    refresh_token: SecretStr | None = None
-    refresh_token_expires_in: int | None = None
-
-    @property
-    def scopes(self) -> tuple[str, ...]:
-        """Granted scopes as an immutable collection."""
-
-        return tuple(scope for scope in self.scope.split(" ") if scope)
-
-    @classmethod
-    def from_response(
-        cls,
-        response: TokenResponse,
-        *,
-        session_key: str,
-        signed_in: bool,
-        requested_scopes: tuple[str, ...] = (),
-    ) -> SessionToken:
-        if signed_in:
-            scope = response.scope if response.scope is not None else " ".join(requested_scopes)
-            if not scope.strip():
-                # A sign-in grants at least one scope; approving none is a decline (§4.4).
-                raise ProtocolValidationError(
-                    "invalid_token_response", "A signed-in token response grants no scope"
-                )
-        else:
-            scope = response.scope or ""
-        return cls(
-            access_token=response.access_token,
-            token_type=response.token_type,
-            expires_in=response.expires_in,
-            scope=scope,
-            session_key=session_key,
-            signed_in=signed_in,
-            refresh_token=response.refresh_token,
-            refresh_token_expires_in=response.refresh_token_expires_in,
-        )
-
-
 class ClientAssertionClaims(ProtocolModel):
-    """OAuth private-key JWT claims signed by the personal agent."""
+    """OAuth private-key JWT claims signed by the personal agent (§4.1)."""
 
     iss: str
     sub: str
@@ -291,27 +117,215 @@ class ClientAssertionClaims(ProtocolModel):
         return self
 
 
-TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"  # noqa: S105 - an OAuth token or grant type, not a credential
-ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"  # noqa: S105 - an OAuth token or grant type, not a credential
+def build_client_assertion_claims(
+    *,
+    client_id: str,
+    issuer: str,
+    now: datetime | None = None,
+    lifetime_seconds: int = 60,
+    random_bytes: RandomBytes = secrets.token_bytes,
+) -> ClientAssertionClaims:
+    """Build unsigned `private_key_jwt` claims for any request to the company's OAuth server.
+
+    `aud` is the company's issuer, one string, whichever endpoint the assertion goes
+    to: token, revocation, or device authorization (§4.1, §10.4). `jti` is drawn
+    here, on the device, so a blind signer never chooses it (§10.7).
+    """
+
+    issued_at_seconds = _issued_at(now, lifetime_seconds)
+    return ClientAssertionClaims(
+        iss=client_id,
+        sub=client_id,
+        aud=issuer,
+        iat=issued_at_seconds,
+        exp=issued_at_seconds + lifetime_seconds,
+        jti=_random_id(random_bytes),
+    )
 
 
-def _mcp_resource(value: str) -> str:
-    """An MCP server's `url` as a `resource` indicator: HTTPS, no fragment (RFC 8707)."""
+@dataclass
+class PapSession:
+    """One Session: a User at one Company through this personal agent (§5).
 
-    parsed = urlsplit(value)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.fragment
-    ):
-        raise ValueError("an MCP resource must be an HTTPS URL without a fragment")
-    return value
+    Local: `sid` names it, chosen at random; `sub` is the User ID for the Company's
+    `issuer`, `agent_id` the optional Agent ID, both the same for its whole life.
+    When the company answers `invalid_session`, `restart` gives it a new `sid` once
+    (§5.5, §7); its handle for a person is `ses_` and the `sid`.
+    """
+
+    sid: str
+    sub: str
+    issuer: str
+    client_id: str
+    tenant_id: str
+    agent_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not SESSION_ID.fullmatch(self.sid):
+            raise ValueError("a Session ID is 22 to 256 URL-safe characters")
+        if not self.sub:
+            raise ValueError("a Session names its User ID")
+        for name in ("issuer", "client_id"):
+            parsed = urlsplit(getattr(self, name))
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ValueError(f"a Session's {name} is an HTTPS URL")
+        if not self.tenant_id or len(self.tenant_id) > 256:
+            raise ValueError("tenant_id must contain between 1 and 256 characters")
+
+    @property
+    def handle(self) -> str:
+        """The Session's name for a person or a CLI: `ses_` and its `sid`."""
+
+        return f"ses_{self.sid}"
+
+    @property
+    def pairwise_user_id(self) -> str:
+        return self.sub
+
+    def restart(self, random_bytes: RandomBytes = secrets.token_bytes) -> str:
+        """Start a new Session in its place: a new `sid`, the same User and Agent ID."""
+
+        self.sid = new_session_id(random_bytes)
+        return self.sid
+
+    def to_json(self) -> dict[str, str | None]:
+        return {
+            "sid": self.sid,
+            "sub": self.sub,
+            "issuer": self.issuer,
+            "client_id": self.client_id,
+            "tenant_id": self.tenant_id,
+            "agent_id": self.agent_id,
+        }
+
+    @classmethod
+    def from_json(cls, value: dict[str, str | None]) -> PapSession:
+        return cls(
+            sid=str(value["sid"]),
+            sub=str(value["sub"]),
+            issuer=str(value["issuer"]),
+            client_id=str(value["client_id"]),
+            tenant_id=str(value["tenant_id"]),
+            agent_id=value.get("agent_id"),
+        )
+
+
+class TokenResponse(ProtocolModel):
+    """A token endpoint's answer, as on the wire (§4.7): plain OAuth.
+
+    `token_type` is compared ignoring case (RFC 6749 §5.1). This SDK does not
+    send DPoP proofs yet (§4.5: a SHOULD), so a `DPoP` token is refused.
+    """
+
+    access_token: SecretStr
+    token_type: str
+    expires_in: int | None = Field(default=None, gt=0)
+    scope: str | None = None
+    refresh_token: SecretStr | None = None
+
+    @field_validator("token_type")
+    @classmethod
+    def validate_token_type(cls, value: str) -> str:
+        if value.lower() == "dpop":
+            raise ValueError("DPoP-bound access tokens are not supported by this SDK yet")
+        if value.lower() != "bearer":
+            raise ValueError("an access token is Bearer")
+        return "Bearer"
+
+
+class AccessToken(ProtocolModel):
+    """An access token for one account, kept beside what the SDK knows of it (§4.5).
+
+    `resource` is the service it was issued for, or `None` for the default token
+    that works at all of the Company's services but one that asks for its own.
+    `scope` is what was granted: a response that leaves it out granted exactly the
+    scopes requested (RFC 6749 §5.1). Never the refresh token: that one stays in
+    `pap.tokenStore`.
+    """
+
+    access_token: SecretStr
+    token_type: Literal["Bearer"] = "Bearer"  # noqa: S105 - an OAuth token type
+    expires_in: int | None = None
+    scope: str = ""
+    resource: str | None = None
+
+    @property
+    def scopes(self) -> tuple[str, ...]:
+        """Granted scopes as an immutable collection."""
+
+        return tuple(scope for scope in self.scope.split(" ") if scope)
+
+    @classmethod
+    def from_response(
+        cls,
+        response: TokenResponse,
+        *,
+        requested_scopes: tuple[str, ...] = (),
+        resource: str | None = None,
+    ) -> AccessToken:
+        scope = response.scope if response.scope is not None else " ".join(requested_scopes)
+        if not scope.strip():
+            # A sign-in grants at least one scope; approving none is a decline (§4.7).
+            raise ProtocolValidationError(
+                "invalid_token_response", "A token response grants no scope"
+            )
+        return cls(
+            access_token=response.access_token,
+            expires_in=response.expires_in,
+            scope=scope,
+            resource=resource,
+        )
+
+
+class SignInResult(ProtocolModel):
+    """A completed sign-in (§4.7): the access token, and the refresh token's reference.
+
+    The refresh token never stays in `token`: it is moved into `pap.tokenStore`
+    behind `refresh_token_reference`. `missing_scopes` are requested scopes the
+    User didn't approve.
+    """
+
+    token: AccessToken
+    granted_scopes: tuple[str, ...]
+    missing_scopes: tuple[str, ...]
+    refresh_token_reference: str | None = None
+
+
+async def finish_sign_in(
+    reactor: PluginPlatform,
+    response: TokenResponse,
+    requested: tuple[str, ...],
+    *,
+    error: type[PersonalAgentProtocolError],
+) -> SignInResult:
+    """Check a sign-in's token response and keep its refresh token behind a reference.
+
+    At least one scope is granted, and none beyond those requested (§4.7).
+    """
+
+    try:
+        token = AccessToken.from_response(response, requested_scopes=requested)
+    except ProtocolValidationError as exc:
+        raise error("invalid_token_response", exc.message) from exc
+    granted = token.scopes
+    if any(scope not in requested for scope in granted):
+        raise error("scope_escalation", "Company returned a scope that was not requested")
+    reference: str | None = None
+    if response.refresh_token is not None:
+        random = cast(RandomSource, first_contribution(reactor, RANDOM_SOURCES, "random source"))
+        reference = _opaque_id("refresh", random.bytes)
+        store = cast(TokenStore, first_contribution(reactor, TOKEN_STORES, "token store"))
+        await store.put(reference, response.refresh_token)
+    return SignInResult(
+        token=token,
+        granted_scopes=granted,
+        missing_scopes=tuple(scope for scope in requested if scope not in granted),
+        refresh_token_reference=reference,
+    )
 
 
 class SessionClient:
-    """Start and renew signed-out PAP Sessions, each named by its own key (§4.2, §4.3)."""
+    """Start Sessions, and send grants to the company's token endpoint (§4, §5)."""
 
     def __init__(
         self,
@@ -333,162 +347,23 @@ class SessionClient:
         client_id: str,
         pairwise_user_id: str,
         issuer: str,
-        token_endpoint: str,
         tenant_id: str,
         agent_id: str | None = None,
-        resource: str | None = None,
-    ) -> SessionToken:
-        """Start a new signed-out Session with a new Session Key (§4.2).
+    ) -> PapSession:
+        """A new Session, signed out, with a new random `sid` (§5.2): no request is sent.
 
-        `resource` asks for a token for one service, such as an MCP server that
-        supports DPoP (§4.3).
+        `pairwise_user_id` is the User ID for the Company's `issuer` (§5.1);
+        `agent_id`, when the User has several agents, says which one.
         """
 
-        session_key = await self._prover().new_session_key(tenant_id=tenant_id, issuer=issuer)
-        return await self._assert(
-            client_id=client_id,
-            pairwise_user_id=pairwise_user_id,
+        return PapSession(
+            sid=new_session_id(self._random().bytes),
+            sub=pairwise_user_id,
             issuer=issuer,
-            token_endpoint=token_endpoint,
+            client_id=client_id,
             tenant_id=tenant_id,
-            session_key=session_key,
             agent_id=agent_id,
-            resource=resource,
         )
-
-    @traced("pap.session.renew", before=by_issuer, after=session_result)
-    async def renew(
-        self,
-        *,
-        client_id: str,
-        pairwise_user_id: str,
-        issuer: str,
-        token_endpoint: str,
-        tenant_id: str,
-        session_key: str,
-        agent_id: str | None = None,
-        resource: str | None = None,
-    ) -> SessionToken:
-        """Renew a signed-out Session: fresh assertions, a proof from its own key (§4.2).
-
-        `agent_id` is the one the Session started with, or none. `invalid_grant` means
-        the Session has ended: its key is discarded, never used again, and the caller
-        starts a new Session.
-        """
-
-        return await self._assert(
-            client_id=client_id,
-            pairwise_user_id=pairwise_user_id,
-            issuer=issuer,
-            token_endpoint=token_endpoint,
-            tenant_id=tenant_id,
-            session_key=session_key,
-            agent_id=agent_id,
-            resource=resource,
-        )
-
-    async def token_for_mcp(
-        self,
-        *,
-        client_id: str,
-        issuer: str,
-        token_endpoint: str,
-        tenant_id: str,
-        session_key: str,
-        subject_token: SecretStr,
-        resource: str,
-        scope: str | None = None,
-    ) -> SessionToken:
-        """A Bearer Session Token for one MCP server without DPoP, by Token Exchange (§4.3).
-
-        `subject_token` is a current DPoP Session Token of the Session `session_key`
-        names; the answer is a Bearer token for the same Session, working only at the
-        MCP server whose `url` is `resource`, with the subject token's scopes or the
-        fewer `scope` asks for. For a server that supports DPoP, start or renew with
-        `resource` instead: a DPoP token, used with proofs.
-        """
-
-        form = {
-            "grant_type": TOKEN_EXCHANGE_GRANT,
-            "subject_token": subject_token.get_secret_value(),
-            "subject_token_type": ACCESS_TOKEN_TYPE,
-            "resource": _mcp_resource(resource),
-        }
-        if scope is not None:
-            form["scope"] = scope
-        response = await self.token_request(
-            client_id=client_id,
-            issuer=issuer,
-            token_endpoint=token_endpoint,
-            tenant_id=tenant_id,
-            session_key=session_key,
-            form=lambda: form,
-            error=SessionError,
-        )
-        if response.token_type != "Bearer" or response.issued_token_type != ACCESS_TOKEN_TYPE:  # noqa: S105 - an OAuth token or grant type, not a credential
-            raise SessionError(
-                "unexpected_token_type", "Token Exchange answered with another token type"
-            )
-        return SessionToken.from_response(
-            response, session_key=session_key, signed_in=response.scope is not None
-        )
-
-    async def _assert(
-        self,
-        *,
-        client_id: str,
-        pairwise_user_id: str,
-        issuer: str,
-        token_endpoint: str,
-        tenant_id: str,
-        session_key: str,
-        agent_id: str | None,
-        resource: str | None,
-    ) -> SessionToken:
-        signer = cast(Signer, first_contribution(self.reactor, SIGNERS, "signer"))
-        random_source = self._random()
-
-        async def form() -> dict[str, str]:
-            claims = build_session_assertion_claims(
-                client_id=client_id,
-                pairwise_user_id=pairwise_user_id,
-                issuer=issuer,
-                now=self._clock().now(),
-                random_bytes=random_source.bytes,
-                agent_id=agent_id,
-            )
-            assertion = await signer.sign(
-                claims.model_dump(exclude_none=True), purpose="session_assertion"
-            )
-            values = {"grant_type": JWT_BEARER_GRANT, "assertion": assertion.get_secret_value()}
-            if resource is not None:
-                values["resource"] = _mcp_resource(resource)
-            return values
-
-        try:
-            response = await self.token_request(
-                client_id=client_id,
-                issuer=issuer,
-                token_endpoint=token_endpoint,
-                tenant_id=tenant_id,
-                session_key=session_key,
-                form=form,
-                error=SessionError,
-            )
-        except SessionError as exc:
-            if exc.code == "invalid_grant":
-                # The Session has ended or isn't this User's: never this key again (§4.2).
-                await self._prover().discard_session_key(
-                    tenant_id=tenant_id, issuer=issuer, session_key=session_key
-                )
-            raise
-        if response.token_type != "DPoP":  # noqa: S105 - an OAuth token or grant type, not a credential
-            # Bearer Session Tokens come from Token Exchange alone (§4.3).
-            raise SessionError(
-                "unexpected_token_type", "The Session request returned another token type"
-            )
-        # The JWT bearer grant always answers signed out (§4.2).
-        return SessionToken.from_response(response, session_key=session_key, signed_in=False)
 
     async def token_request(
         self,
@@ -496,106 +371,75 @@ class SessionClient:
         client_id: str,
         issuer: str,
         token_endpoint: str,
-        tenant_id: str,
-        session_key: str,
         form: Callable[[], dict[str, str] | Awaitable[dict[str, str]]],
         error: type[PersonalAgentProtocolError],
     ) -> TokenResponse:
-        """POST one grant to the token endpoint with the Session Key's proof (§4.2 to §4.8).
+        """POST one grant to the token endpoint with a fresh client assertion (§4.1, §4.4).
 
-        `form` gives the grant's own fields, made again for a `use_dpop_nonce` retry so
-        no assertion is sent twice; the client assertion and a fresh proof signed with
-        `session_key`, the Session's name, go with every attempt. Raises `error` with the
-        company's OAuth error code.
+        `form` gives the grant's own fields. No Session header goes to an OAuth
+        endpoint (§5.2). Raises `error` with the company's OAuth error code.
         """
 
-        signer = cast(Signer, first_contribution(self.reactor, SIGNERS, "signer"))
-        prover = self._prover()
-        random_source = self._random()
-        nonce: str | None = None
-        for attempt in range(2):
-            fields = form()
-            if inspect.isawaitable(fields):
-                fields = await fields
-            client_claims = build_client_assertion_claims(
-                client_id=client_id,
-                issuer=issuer,
-                now=self._clock().now(),
-                random_bytes=random_source.bytes,
+        fields = form()
+        if inspect.isawaitable(fields):
+            fields = await fields
+        data = {**fields, **(await self.client_authentication(client_id=client_id, issuer=issuer))}
+        try:
+            response = await send_bounded(
+                self.http,
+                self.http.build_request(
+                    "POST", token_endpoint, data=data, headers={"Accept": "application/json"}
+                ),
+                max_bytes=self.max_response_bytes,
             )
-            client_assertion = await signer.sign(
-                client_claims.model_dump(), purpose="client_assertion"
-            )
-            proof = await prover.create(
-                DpopProofRequest(
-                    method="POST",
-                    url=token_endpoint,
-                    tenant_id=tenant_id,
-                    issuer=issuer,
-                    session_key=session_key,
-                    nonce=nonce,
-                )
-            )
-            data = {
-                **fields,
-                "client_id": client_id,
-                "client_assertion_type": JWT_CLIENT_ASSERTION,
-                "client_assertion": client_assertion.get_secret_value(),
-            }
-            try:
-                response = await send_bounded(
-                    self.http,
-                    self.http.build_request(
-                        "POST",
-                        token_endpoint,
-                        data=data,
-                        headers={"Accept": "application/json", "DPoP": proof.get_secret_value()},
-                    ),
-                    max_bytes=self.max_response_bytes,
-                )
-            except httpx.HTTPError as exc:
-                raise error("request_failed", "Token request failed") from exc
-            refuse_redirect(response, error)
-            if len(response.content) > self.max_response_bytes:
-                raise error(
-                    "response_too_large",
-                    "Token response exceeds size limit",
-                    status_code=response.status_code,
-                )
-            payload = self._decode(response, error)
-            if response.is_success:
-                try:
-                    return TokenResponse.model_validate(payload)
-                except (ValueError, ProtocolValidationError) as exc:
-                    raise error(
-                        "invalid_token_response",
-                        "Token response is malformed",
-                        status_code=response.status_code,
-                    ) from exc
-            error_code = payload.get("error") if isinstance(payload, dict) else None
-            safe_code = error_code if isinstance(error_code, str) else "http_error"
-            if safe_code == "use_dpop_nonce" and attempt == 0:
-                nonce = response.headers.get("dpop-nonce")
-                if not nonce:
-                    raise error(
-                        "missing_dpop_nonce",
-                        "Company requested a DPoP nonce but did not send one",
-                        status_code=response.status_code,
-                    )
-                continue
+        except httpx.HTTPError as exc:
+            raise error("request_failed", "Token request failed") from exc
+        refuse_redirect(response, error)
+        if len(response.content) > self.max_response_bytes:
             raise error(
-                safe_code,
-                "Company refused the token request",
+                "response_too_large",
+                "Token response exceeds size limit",
                 status_code=response.status_code,
-                details=refusal_details(response, payload) or None,
             )
-        raise error("use_dpop_nonce", "Company rejected the refreshed DPoP proof")
-
-    def _prover(self) -> DpopProofProvider:
-        return cast(
-            DpopProofProvider,
-            first_contribution(self.reactor, DPOP_PROOF_PROVIDERS, "DPoP proof provider"),
+        # A 429 has `Retry-After` and no body (§5.6).
+        payload = None if refused_without_body(response) else self._decode(response, error)
+        if response.is_success:
+            try:
+                return TokenResponse.model_validate(payload)
+            except (ValueError, ProtocolValidationError) as exc:
+                dpop = (
+                    isinstance(payload, dict) and str(payload.get("token_type")).lower() == "dpop"
+                )
+                raise error(
+                    "unsupported_token_type" if dpop else "invalid_token_response",
+                    "The company issued a DPoP-bound token, which this SDK doesn't support yet"
+                    if dpop
+                    else "Token response is malformed",
+                    status_code=response.status_code,
+                ) from exc
+        raise error(
+            refusal_code(response, payload, "http_error"),
+            "Company refused the token request",
+            status_code=response.status_code,
+            details=refusal_details(response, payload) or None,
         )
+
+    async def client_authentication(self, *, client_id: str, issuer: str) -> dict[str, str]:
+        """`client_id` and a fresh client assertion, as form fields (§4.1)."""
+
+        signer = cast(Signer, first_contribution(self.reactor, SIGNERS, "signer"))
+        claims = build_client_assertion_claims(
+            client_id=client_id,
+            issuer=issuer,
+            now=self._clock().now(),
+            random_bytes=self._random().bytes,
+        )
+        assertion = await signer.sign(claims.model_dump(), purpose="client_assertion")
+        return {
+            "client_id": client_id,
+            "client_assertion_type": JWT_CLIENT_ASSERTION,
+            "client_assertion": assertion.get_secret_value(),
+        }
 
     def _clock(self) -> Clock:
         return cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
@@ -617,6 +461,23 @@ class SessionClient:
         except ProtocolValidationError as exc:
             raise error(
                 "invalid_json",
-                "Session token endpoint returned invalid JSON",
+                "Token endpoint returned invalid JSON",
                 status_code=response.status_code,
             ) from exc
+
+
+__all__ = [
+    "ASSERTION_MAX_LIFETIME_SECONDS",
+    "JWT_CLIENT_ASSERTION",
+    "AccessToken",
+    "ClientAssertionClaims",
+    "PapSession",
+    "SessionClient",
+    "SessionError",
+    "SignInResult",
+    "TokenResponse",
+    "build_client_assertion_claims",
+    "finish_sign_in",
+    "generate_pairwise_user_id",
+    "new_session_id",
+]

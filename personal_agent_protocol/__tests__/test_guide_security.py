@@ -30,15 +30,16 @@ from personal_agent_protocol.demo.kit import (
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import CONFIG
-from personal_agent_protocol.errors import PersonalAgentProtocolError
 from personal_agent_protocol.operations import OperationsClient, operation_page
 from personal_agent_protocol.reactor import BROWSER_HANDOFFS
+from personal_agent_protocol.transport import session_headers
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
 from .test_company_refusals import signed_in
 from .test_mcp_and_web import join, web_world
 
 AUTHORIZE = "https://manzanita.example/oauth/authorize"
+ORDERS = "https://manzanita.example/api/orders"
 _HIDDEN = re.compile(r'<input type="hidden" name="([^"]+)" value="([^"]*)">')
 
 
@@ -79,18 +80,32 @@ def same_agent_with(world: World, kid: str) -> AgentIdentity:
     return AgentIdentity(domain=world.atlas.domain, name=world.atlas.name, kid=kid)
 
 
-async def start_session(world: World, identity: AgentIdentity) -> Any:
+async def session_accepted(world: World, identity: AgentIdentity) -> bool:
+    """One signed-out request in a new Session, whose delegation `identity`'s key signed.
+
+    Each call is a new host, so a new delegated key and delegation: a delegation is
+    verified against the agent's keys when it is first seen (§5.2).
+    """
+
     reactor = personal_agent_reactor(
         PersonalAgentHost(identity, world.clock), network=world.network, http_client=world.http
     )
     metadata = world.company.oauth_metadata
-    return await SessionClient(reactor=reactor, http_client=world.http).start(
+    session = await SessionClient(reactor=reactor, http_client=world.http).start(
         client_id=identity.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
+    answer = await world.http.get(
+        ORDERS, headers=await session_headers(reactor, "GET", ORDERS, session=session, token=None)
+    )
+    if answer.status_code == 400:
+        assert answer.json()["error"] == "invalid_session"
+        return False
+    # Signed out: the Session is good, and the account needs a sign-in (§7).
+    assert answer.status_code == 401
+    return True
 
 
 @pytest.mark.asyncio
@@ -98,29 +113,28 @@ async def test_overlapping_jwks_verify_either_key_then_refuse_the_retired_one() 
     world = World()
     site = RotatingSite(world.atlas, max_age=600)
     world.network.add(world.atlas.domain, site)
-    await world.signed_out_session()  # signed with key-1: the company caches [key-1]
+    await world.signed_out_session()
+    assert await session_accepted(world, world.atlas)  # the company caches [key-1]
     assert site.jwks_fetches == 1
     newer = same_agent_with(world, "key-2")
 
-    # The overlap: both keys are published; the agent signs with the new one.
+    # The overlap: both keys are published; the agent signs delegations with the new one.
     site.keys = [*world.atlas.jwks["keys"], *newer.jwks["keys"]]
-    assert (await start_session(world, newer)).signed_in is False
+    assert await session_accepted(world, newer)
     assert site.jwks_fetches == 2  # the unknown kid fetched the set again, at once
-    # Assertions signed with the old key still verify during the overlap, from the cache.
-    assert (await start_session(world, world.atlas)).signed_in is False
-    assert (await start_session(world, newer)).signed_in is False
+    # Delegations signed with the old key still verify during the overlap, from the cache.
+    assert await session_accepted(world, world.atlas)
+    assert await session_accepted(world, newer)
     assert site.jwks_fetches == 2
 
     # The old key is retired. Until the cached set expires (its max-age) it still verifies…
     site.keys = list(newer.jwks["keys"])
     world.clock.advance(599)
-    assert (await start_session(world, world.atlas)).signed_in is False
+    assert await session_accepted(world, world.atlas)
     # …and once it has, the retired key is refused and the new one still verifies.
     world.clock.advance(2)
-    with pytest.raises(PersonalAgentProtocolError) as refused:
-        await start_session(world, world.atlas)
-    assert refused.value.code == "invalid_client"
-    assert (await start_session(world, newer)).signed_in is False
+    assert not await session_accepted(world, world.atlas)
+    assert await session_accepted(world, newer)
 
 
 @pytest.mark.asyncio
@@ -129,23 +143,21 @@ async def test_unknown_kids_refetch_the_set_at_most_once_a_minute() -> None:
     site = RotatingSite(world.atlas, max_age=3600)
     world.network.add(world.atlas.domain, site)
     await world.signed_out_session()
+    assert await session_accepted(world, world.atlas)
     assert site.jwks_fetches == 1
 
-    # Assertions naming keys that were never published: refused, one fetch for all of them.
+    # Delegations naming keys that were never published: refused, one fetch for all of them.
     for index in range(20):
-        with pytest.raises(PersonalAgentProtocolError) as refused:
-            await start_session(world, same_agent_with(world, f"forged-{index}"))
-        assert refused.value.code == "invalid_client"
+        assert not await session_accepted(world, same_agent_with(world, f"forged-{index}"))
     assert site.jwks_fetches == 2
 
     # A real rotation inside that minute waits for the next refetch: then it verifies.
     newer = same_agent_with(world, "key-2")
     site.keys = [*world.atlas.jwks["keys"], *newer.jwks["keys"]]
-    with pytest.raises(PersonalAgentProtocolError):
-        await start_session(world, newer)
+    assert not await session_accepted(world, newer)
     assert site.jwks_fetches == 2
     world.clock.advance(61)
-    assert (await start_session(world, newer)).signed_in is False
+    assert await session_accepted(world, newer)
     assert site.jwks_fetches == 3
 
 
@@ -172,7 +184,7 @@ async def consent_world() -> tuple[World, DirectSignInClient, str]:
     world.reactor = personal_agent_reactor(
         world.host, network=world.network, http_client=world.http
     )
-    session = await world.signed_out_session()
+    await world.signed_out_session()
     metadata = world.company.oauth_metadata
     client = DirectSignInClient(reactor=world.reactor, http_client=world.http)
     await client.begin(
@@ -183,7 +195,6 @@ async def consent_world() -> tuple[World, DirectSignInClient, str]:
         redirect_uri=f"https://{world.atlas.domain}/oauth/callback",
         scopes=("orders:read",),
         tenant_id=TENANT,
-        session_key=session.session_key,
     )
     assert handoff.url is not None
     return world, client, handoff.url
@@ -262,7 +273,7 @@ async def test_the_consent_form_is_bound_to_the_browser_that_was_shown_it() -> N
     decision = await world.shop.consent_decision(post(allow, cookie=mine))
     assert decision == ConsentDecision(request_id=form["request_id"], allow=True)
     callback = await world.shop.approve_authorization(decision.request_id, account_id="acct_ada")
-    assert (await client.complete(callback)).token.signed_in
+    assert (await client.complete(callback)).token.scopes == ("orders:read",)
     with pytest.raises(PermissionError):  # decided: the request is gone
         await world.shop.consent_decision(post(allow, cookie=mine))
     # A browser that already has the cookie keeps it for its next request.
@@ -304,17 +315,19 @@ async def test_a_hosted_consent_page_gets_no_binding_and_no_built_in_decision() 
 async def test_the_operation_page_refuses_cross_site_and_another_browsers_form() -> None:
     world, browser = web_world()
     token = await signed_in(world)
+    session = world.session
+    assert session is not None
     proposed = await ApiClient(transport=world.transport).call(
         "POST",
         "https://manzanita.example/api/orders/ord_7Hk2/exchanges",
+        session=session,
         token=token,
         body={},
-        **world.who,
     )
     operation = proposed.operation
     assert operation is not None
     page_url = operation_page(operation, "manzanita.example")
-    await join(world, browser, token.session_key, page_url)
+    await join(world, browser, session, token, page_url)
     assert browser.page is not None
     form = dict(_HIDDEN.findall(browser.page.text))
     assert set(form) == {"revision", "approved_by", "csrf"}
@@ -325,7 +338,7 @@ async def test_the_operation_page_refuses_cross_site_and_another_browsers_form()
     world.reactor = personal_agent_reactor(
         world.host, network=world.network, http_client=world.http
     )
-    await join(world, second, token.session_key, page_url)
+    await join(world, second, session, token, page_url)
     assert second.page is not None and second.page.status_code == 200
     second_form = dict(_HIDDEN.findall(second.page.text))
     assert second_form["csrf"] != form["csrf"]
@@ -344,7 +357,7 @@ async def test_the_operation_page_refuses_cross_site_and_another_browsers_form()
         assert answer.headers["x-frame-options"] == "DENY", what
     assert world.plugin.executor.performed == []
     read = await OperationsClient(transport=world.transport).read(
-        world.shop.config.operations_endpoint, operation.operation_id, token=token, **world.who
+        world.shop.config.operations_endpoint, operation.operation_id, session=session, token=token
     )
     assert read.state == "proposed"
 

@@ -54,8 +54,6 @@ async def discover_pap_company(domain: str) -> dict[str, Any]:
         "scopes": dict(document.auth.scopes) if document.auth is not None else {},
         # The resources the issuer's tokens are for (its `protected_resources`).
         "protected_resources": list(metadata.protected_resources) if metadata else [],
-        # Bearer tokens for MCP servers without DPoP come by Token Exchange.
-        "token_exchange": bool(metadata and metadata.offers_token_exchange),
         "interfaces": interfaces,
         "extensions": {
             name: descriptor.version for name, descriptor in document.extensions.items()

@@ -1,0 +1,7 @@
+{
+  "access_token": "opaque-access-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "opaque-refresh-token",
+  "scope": "orders:read orders:write"
+}

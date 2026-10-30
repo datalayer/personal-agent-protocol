@@ -51,14 +51,10 @@ result = await client.sign_in(
     organization=document.organization,
     issuer=document.auth.issuer,
     scopes=("orders:read",),
-    token=signed_out_session,  # its Session Key names the Session to sign in
-    tenant_id="application-42",
+    session=signed_out_session,  # the Session that sends the request
 )
 if result.status == "code_required":
-    result = await client.submit_code(
-        result.reference, token=signed_out_session,
-        tenant_id="application-42", issuer=issuer,
-    )
+    result = await client.submit_code(result.reference, session=signed_out_session)
 ```
 
 ```typescript

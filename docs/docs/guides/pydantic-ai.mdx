@@ -16,14 +16,14 @@ lists every one. Among them:
 | --------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------- |
 | [Company discovery](/examples/company-discovery/)               | HTTPS discovery, version/domain/issuer validation            | Public company capability summary        |
 | [Agent identity](/examples/agent-identity/)                     | Client metadata and same-domain JWKS                         | Client identity and signing policy       |
-| [Session assertion](/examples/session-assertion/)               | Pairwise subject, audience, lifetime and unique request ID   | Assertion policy; identifiers withheld   |
+| [Delegation](/examples/delegation/)                             | A delegation's claims, naming no User and no Company         | Claim names; identifiers withheld        |
 | [Direct Sign-In boundary](/examples/direct-sign-in-boundary/)   | Random state, S256 PKCE and browser handoff                  | Scopes and security properties only      |
-| [Direct Sign-In lifecycle](/examples/direct-sign-in-lifecycle/) | Callback, exchange, nonce retry, partial consent, continuity | Lifecycle evidence; all secrets withheld |
-| [DPoP proof](/examples/dpop-proof/)                             | Method, URL, token, nonce and replay binding                 | Verification policy; secrets withheld    |
-| [DPoP transport](/examples/dpop-transport/)                     | Nonce retry, refused redirects, protected headers            | Transport policy; secrets withheld       |
-| [Session lifecycle](/examples/session-lifecycle/)               | Start, DPoP nonce retry, and renewal over HTTP               | Lifecycle evidence; secrets withheld     |
-| [Browser Session](/examples/browser-session/)                   | Signed assertion, form POST, verification, replay rejection  | Browser policy; secrets withheld         |
-| [Company APIs](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis) | OpenAPI with DPoP, MCP with a Bearer for its URL alone | Orders, statuses, and summaries |
+| [Direct Sign-In lifecycle](/examples/direct-sign-in-lifecycle/) | Callback, exchange, partial consent, refresh token custody   | Lifecycle evidence; all secrets withheld |
+| [Session JWT](/examples/session-jwt/)                           | Method, URL, token, company and replay binding               | Verification policy; secrets withheld    |
+| [Session transport](/examples/session-transport/)               | `invalid_session` restart, refused redirects, protected headers | Transport policy; secrets withheld    |
+| [Session lifecycle](/examples/session-lifecycle/)               | Start, a Session JWT per request, and restart over HTTP      | Lifecycle evidence; secrets withheld     |
+| [Browser Session](/examples/browser-session/)                   | One-time code, Session header, form POST, replay rejection   | Browser policy; secrets withheld         |
+| [Company APIs](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis) | OpenAPI with a Bearer token and the Session header, MCP with a Bearer for its URL alone | Orders, statuses, and summaries |
 | [Company service](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-service) | A company built with the SDK, used end to end | Steps and how often it performed |
 | [Sign-in display](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/sign-in-display) | `PapSignIn`: the page's whole display vs `model_view()` | Model view; the page's shape only |
 

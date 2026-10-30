@@ -18,7 +18,7 @@ from personal_agent_protocol import OperationsClient, approve, operations_endpoi
 endpoint = operations_endpoint(discovered.document, my_client_metadata)
 if endpoint is None:
     ...  # one side does not list operations version 1: do not use Operations
-operations = OperationsClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+operations = OperationsClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
 ```
 
 A company answers an agent that did not negotiate the extension with
@@ -29,7 +29,9 @@ A company answers an agent that did not negotiate the extension with
 ```python
 show_to_user(operation.summary, operation.terms)        # the host's own interface
 approval = approve(operation)                           # revision + digest of summary and terms
-outcome = await operations.confirm(endpoint, operation, approval=approval, token=token, **who)
+outcome = await operations.confirm(
+    endpoint, operation, approval=approval, session=session, token=token
+)
 if outcome.status == "terms_changed":
     show_changes(outcome.operation, outcome.changed)    # e.g. ("summary", "amount.amount")
     # ask again; the old approval cannot confirm the new revision
@@ -67,7 +69,7 @@ decimal `maximum` or a set of `allowed` values), an expiry, and optional uses.
 outcome = await operations.confirm(
     endpoint, operation,
     standing=("Northwind Bank", account, "payments.transfer"),
-    token=token, **who,
+    session=session, token=token,
 )
 ```
 

@@ -6,9 +6,10 @@ title: Signed-out sessions
 
 The runnable
 [`session-lifecycle` Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/session-lifecycle)
-drives the real `SessionClient` through start, one DPoP nonce retry, and
-renewal over a deterministic local HTTP transport. It returns only lifecycle
-evidence to the model; identifiers and credentials remain inside the host.
+drives the real `SessionClient` through start, a Session JWT on each request, and
+one restart after `invalid_session` over a deterministic local HTTP transport. It
+returns only lifecycle evidence to the model; identifiers and credentials remain
+inside the host.
 
 The Python and TypeScript `SessionClient` implementations cover the PAP 4.2
 personal-agent side of signed-out session creation and renewal. They send the
@@ -77,27 +78,17 @@ async with httpx.AsyncClient() as http:
         company_issuer="https://auth.company.example",
     )
     sessions = SessionClient(reactor=reactor, http_client=http)
-    token = await sessions.start(
+    session = await sessions.start(
         client_id="https://agent.example/agent.json",
         pairwise_user_id=pairwise_user_id,
         issuer="https://auth.company.example",
-        token_endpoint="https://auth.company.example/oauth/token",
         tenant_id="application-42",
-    )
-
-    renewed = await sessions.renew(
-        client_id="https://agent.example/agent.json",
-        pairwise_user_id=pairwise_user_id,
-        issuer="https://auth.company.example",
-        token_endpoint="https://auth.company.example/oauth/token",
-        tenant_id="application-42",
-        session_key=token.session_key,  # the same Session Key: the same Session
     )
 ```
 
-The application owns an injected HTTPX client's lifecycle. Keep
-`token.access_token` as a secret and persist it only through protected token
-storage.
+The application owns an injected HTTPX client's lifecycle. `start` sends no
+request: a Session is local, its `sid` chosen at random, and it starts signed
+out. Each request then carries a Session JWT from `pap.sessionSigner`.
 
 ## TypeScript
 

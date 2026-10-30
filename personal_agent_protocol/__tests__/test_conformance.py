@@ -51,35 +51,39 @@ async def test_python_agent_python_company_over_tls() -> None:
 @pytest.mark.asyncio
 async def test_reports_as_json_and_junit_and_a_failure_does_not_stop_the_suite() -> None:
     world = ManzanitaConformance()
-    selected = select_cases(suites=["lifecycle"], requirements=["PAP-4.8-04", "PAP-4.9-01"])
+    selected = select_cases(
+        suites=["lifecycle"], requirements=["GUIDE-co-account-01", "PAP-4.9-01"]
+    )
     assert {case.id for case in selected} == {
-        "lifecycle.account-mismatch",
-        "lifecycle.account-mismatch-after-sign-out",
+        "lifecycle.disconnect-from-account-settings",
         "lifecycle.sign-out-takes-effect",
         "lifecycle.sign-out-session-continues",
-        "lifecycle.sign-out-every-session",
+        "lifecycle.sign-out-revokes-every-refresh-token",
         "lifecycle.mcp-sign-out-takes-effect",
     }
-    # A driver with one account twice: the account-mismatch case cannot pass.
-    world.driver.accounts = ("acct_ada", "acct_ada")
+
+    # A driver whose disconnect does nothing: that case cannot pass.
+    async def no_disconnect(client_id: str, account: str) -> None:
+        return None
+
+    world.driver.disconnect = no_disconnect  # type: ignore[method-assign]
     report = await run_conformance(world.context(), cases=selected)
     outcomes = {r.id: r.outcome for r in report.results}
-    assert outcomes["lifecycle.account-mismatch"] == "failed"
-    assert outcomes["lifecycle.account-mismatch-after-sign-out"] == "failed"
+    assert outcomes["lifecycle.disconnect-from-account-settings"] == "failed"
     assert outcomes["lifecycle.sign-out-takes-effect"] == "passed"
 
     payload = report.to_json()
     assert payload["schema_version"] == 1 and payload["profile"] == "0.3"
-    assert payload["summary"] == {"passed": 4, "failed": 2, "skipped": 0}
+    assert payload["summary"] == {"passed": 4, "failed": 1, "skipped": 0}
     text = json.dumps(payload)
-    assert "acct_" not in text.replace("acct_ada", "")  # no Account Token in the report
+    assert "rt_" not in text  # no refresh token in the report
     junit = ElementTree.fromstring(report.to_junit())  # noqa: S314 - our own report
     suite = junit.find("testsuite")
-    assert suite is not None and suite.get("failures") == "2"
+    assert suite is not None and suite.get("failures") == "1"
     names = [case.get("name") for case in junit.iter("testcase")]
-    assert "lifecycle.account-mismatch" in names
+    assert "lifecycle.disconnect-from-account-settings" in names
     requirements = [p.get("value") for p in junit.iter("property")]
-    assert "PAP-4.8-04" in requirements
+    assert "PAP-4.9-01" in requirements
 
 
 @pytest.mark.asyncio
@@ -95,14 +99,18 @@ async def test_a_driver_without_a_capability_skips_rather_than_passes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_mcp_cases_pass_against_an_mcp_server_without_dpop() -> None:
-    """The same MCP cases against Manzanita with a non-DPoP MCP server: Bearer tokens (§4.3)."""
-
-    import dataclasses
+async def test_the_mcp_cases_pass_with_a_token_for_the_servers_url() -> None:
+    """The MCP cases on their own: tokens by `resource`, the server's `url` (§4.5, §7)."""
 
     world = ManzanitaConformance()
-    world.service.config = dataclasses.replace(world.service.config, mcp_dpop=False)
     mcp = [case for case in CASES if ".mcp-" in case or case == "operations.cross-channel-mcp"]
     report = await run_conformance(world.context(), cases=select_cases(ids=mcp))
-    assert len(report.results) == len(mcp) >= 6
+    assert sorted(result.id for result in report.results) == sorted(mcp)
+    assert sorted(mcp) == [
+        "lifecycle.mcp-protected-resource-metadata",
+        "lifecycle.mcp-sign-out-takes-effect",
+        "lifecycle.mcp-token-for-its-url",
+        "lifecycle.mcp-token-only-at-mcp",
+        "operations.cross-channel-mcp",
+    ]
     assert _failures(report) == []

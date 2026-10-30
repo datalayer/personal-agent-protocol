@@ -17,9 +17,9 @@ from personal_agent_protocol import (
     Author,
     ConversationClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
     SessionClient,
+    SessionHttpClient,
     generate_message_id,
 )
 from personal_agent_protocol.conversations import StreamReconnected, TextDelta
@@ -69,7 +69,7 @@ class DroppedConnection(httpx.AsyncBaseTransport):
 agent = Agent(
     instructions=(
         "Use explain_conversation_streaming to explain PAP conversation streaming. "
-        "Text deltas are for display only: never act on one. Never expose tokens or proofs."
+        "Text deltas are for display only: never act on one. Never expose tokens or Session JWTs."
     ),
 )
 
@@ -92,21 +92,20 @@ async def explain_conversation_streaming() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
-    conversations = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+    conversations = ConversationClient(
+        transport=SessionHttpClient(reactor=reactor, http_client=http)
+    )
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     receipt = await conversations.start(
         endpoint,
         Message(id=generate_message_id(reactor), author=Author(type="human"), text="Hello"),
-        token=session,
-        **who,
+        session=session,
     )
 
     deltas: list[TextDelta] = []
@@ -114,14 +113,14 @@ async def explain_conversation_streaming() -> dict[str, Any]:
     delivered: list[str] = []
     final_text: list[str] = []
     last_state = None
-    async for item in conversations.stream(endpoint, receipt.conversation_id, token=session, **who):
+    async for item in conversations.stream(endpoint, receipt.conversation_id, session=session):
         if isinstance(item, TextDelta):
             deltas.append(item)  # display only: shown while typing, never acted on
         elif isinstance(item, StreamReconnected):
             reconnects.append(item)
             if len(reconnects) == 2:
                 # Everything is delivered; the user is done, so the agent closes it.
-                await conversations.close(endpoint, receipt.conversation_id, token=session, **who)
+                await conversations.close(endpoint, receipt.conversation_id, session=session)
         else:
             delivered.append(item.id)
             last_state = item.status if item.type == "state" else last_state
@@ -142,7 +141,7 @@ async def explain_conversation_streaming() -> dict[str, Any]:
         "events_delivered": len(delivered),
         "company_reply_from_the_complete_message": final_text,
         "stopped_on_state": last_state,
-        "session_token_and_proofs_withheld": True,
+        "session_jwts_withheld": True,
     }
 
 

@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .accounts import AccountTokenClient, AccountTokenContext
+from .accounts import RefreshTokenClient, RefreshTokenContext
 from .apis import conversation_endpoint
 from .cli_host import CliRuntime, InputSource, NotConfiguredError, SessionRecord
 from .conversations import ConversationClient, StreamReconnected, TextDelta
@@ -46,8 +46,8 @@ from .models import ConversationEvent, DiscoveredCompany, Operation
 from .operations import OperationsClient, operations_endpoint
 from .reactor import APPROVAL_SURFACES, ApprovalRequest, ApprovalSurface, optional_contribution
 from .requirements import load_ledger
-from .sessions import SessionToken, Who
-from .transport import DpopHttpClient
+from .sessions import AccessToken, PapSession
+from .transport import SessionHttpClient
 
 if TYPE_CHECKING:
     from .cli_host import HostFactory
@@ -109,25 +109,21 @@ async def company_of(runtime: CliRuntime, domain: str) -> DiscoveredCompany:
     return await DiscoveryClient(reactor=runtime.reactor).discover(domain)
 
 
-def who_of(record: SessionRecord) -> Who:
-    return {
-        "tenant_id": record.tenant_id,
-        "issuer": record.issuer,
-    }
+async def credentials(runtime: CliRuntime, record: SessionRecord) -> dict[str, Any]:
+    """`session=` and `token=` for a client call: the record's Session, and its access token.
 
+    Signed out, no token: the Session header alone (§5.1). Signed in, the access
+    token kept beside it; `pap sessions renew` gets a new one.
+    """
 
-async def session_token(runtime: CliRuntime, record: SessionRecord) -> SessionToken:
-    secret = await runtime.secrets.get(record.token_reference)
-    if secret is None:
-        raise NotConfiguredError("no_session_token", "The Session's token is gone: renew it")
-    return SessionToken(
-        access_token=secret,
-        token_type=cast(Any, record.token_type),
-        expires_in=3600,
-        scope=record.scope,
-        session_key=record.session_key,
-        signed_in=record.signed_in,
-    )
+    session: PapSession = runtime.session_of(record)
+    token: AccessToken | None = None
+    if record.signed_in:
+        secret = await runtime.secrets.get(record.token_reference)
+        if secret is None:
+            raise NotConfiguredError("no_access_token", "The Session's token is gone: renew it")
+        token = AccessToken(access_token=secret, scope=record.scope)
+    return {"session": session, "token": token}
 
 
 def session_view(record: SessionRecord) -> dict[str, Any]:
@@ -138,13 +134,12 @@ def operation_view(operation: Operation) -> dict[str, Any]:
     return {"operation": operation.model_dump(mode="json")}
 
 
-def account_context(record: SessionRecord) -> AccountTokenContext:
-    return AccountTokenContext(
+def account_context(record: SessionRecord) -> RefreshTokenContext:
+    return RefreshTokenContext(
         token_endpoint=record.token_endpoint,
         issuer=record.issuer,
         client_id=record.client_id,
         tenant_id=record.tenant_id,
-        pairwise_user_id=record.pairwise_user_id,
         revocation_endpoint=record.revocation_endpoint,
     )
 
@@ -157,7 +152,7 @@ async def conversation_client(
     if endpoint is None:
         raise NotConfiguredError("no_conversations", "The company lists no poppy agent")
     client = ConversationClient(
-        transport=DpopHttpClient(reactor=runtime.reactor, http_client=runtime.http)
+        transport=SessionHttpClient(reactor=runtime.reactor, http_client=runtime.http)
     )
     return client, endpoint
 
@@ -172,7 +167,7 @@ async def operations_client(
     if endpoint is None:
         raise NotConfiguredError("no_operations", "Operations v1 is not negotiated")
     client = OperationsClient(
-        transport=DpopHttpClient(reactor=runtime.reactor, http_client=runtime.http)
+        transport=SessionHttpClient(reactor=runtime.reactor, http_client=runtime.http)
     )
     return client, endpoint, company.document.organization.name
 
@@ -189,30 +184,39 @@ async def show_sessions(runtime: CliRuntime, session: str | None = None) -> dict
 
 
 async def end_session(runtime: CliRuntime, session: str) -> dict[str, Any]:
-    """`pap sessions end`: forget a Session; its Account Token is kept (§4.9)."""
+    """`pap sessions end`: stop using a Session; its refresh token is kept (§5.5)."""
 
     record = runtime.session(session)
     await runtime.secrets.delete(record.token_reference)
-    await runtime.secrets.delete(f"mcp:{record.session_key}")
     del runtime.state.sessions[session]
     runtime.state.save()
-    return {"ended": session, "account_reference": record.account_reference}
+    return {"ended": session, "refresh_reference": record.refresh_reference}
 
 
 async def disconnect(runtime: CliRuntime, session: str) -> dict[str, Any]:
-    """`pap auth disconnect`: revoke the Account Token; Sessions continue signed out."""
+    """`pap auth disconnect`: sign out: revoke every refresh token held for the account (§5.5).
+
+    The CLI holds a user's sign-ins at a company by Session: every one of them is
+    revoked, and those Sessions continue signed out.
+    """
 
     record = runtime.session(session)
-    if record.account_reference is None:
-        raise NotConfiguredError("not_signed_in", "This Session holds no Account Token")
-    await AccountTokenClient(reactor=runtime.reactor, http_client=runtime.http).revoke(
-        record.account_reference, context=account_context(record)
+    if record.refresh_reference is None:
+        raise NotConfiguredError("not_signed_in", "This Session holds no refresh token")
+    held = [
+        other
+        for other in runtime.sessions()
+        if other.refresh_reference is not None
+        and (other.domain, other.user) == (record.domain, record.user)
+    ]
+    await RefreshTokenClient(reactor=runtime.reactor, http_client=runtime.http).sign_out(
+        [cast(str, other.refresh_reference) for other in held], context=account_context(record)
     )
-    for other in runtime.sessions():
-        if other.account_reference == record.account_reference:
-            other.account_reference = None
-            other.signed_in = False
-            other.scope = ""
+    for other in held:
+        await runtime.secrets.delete(other.token_reference)
+        other.refresh_reference = None
+        other.signed_in = False
+        other.scope = ""
     runtime.state.save()
     return session_view(record)
 
@@ -227,9 +231,8 @@ async def read_events(
     page = await client.read_events(
         endpoint,
         conversation_id,
-        token=await session_token(runtime, record),
         cursor=cursor,
-        **who_of(record),
+        **await credentials(runtime, record),
     )
     return page.model_dump(mode="json")
 
@@ -253,10 +256,9 @@ async def follow_events(
     stream = client.stream(
         endpoint,
         conversation_id,
-        token=await session_token(runtime, record),
         last_event_id=last_event_id,
         max_reconnects=0,
-        **who_of(record),
+        **await credentials(runtime, record),
     )
     with contextlib.suppress(PersonalAgentProtocolError):
         async with contextlib.aclosing(stream) as items:
@@ -278,9 +280,7 @@ async def show_operation(runtime: CliRuntime, session: str, operation_id: str) -
 
     record = runtime.session(session)
     client, endpoint, _ = await operations_client(runtime, record)
-    operation = await client.read(
-        endpoint, operation_id, token=await session_token(runtime, record), **who_of(record)
-    )
+    operation = await client.read(endpoint, operation_id, **await credentials(runtime, record))
     return operation_view(operation)
 
 
@@ -289,9 +289,7 @@ async def cancel_operation(runtime: CliRuntime, session: str, operation_id: str)
 
     record = runtime.session(session)
     client, endpoint, _ = await operations_client(runtime, record)
-    operation = await client.cancel(
-        endpoint, operation_id, token=await session_token(runtime, record), **who_of(record)
-    )
+    operation = await client.cancel(endpoint, operation_id, **await credentials(runtime, record))
     runtime.state.approvals.pop(operation_id, None)
     runtime.state.save()
     return operation_view(operation)
@@ -482,7 +480,7 @@ ACTIONS: dict[str, SessionAction] = {
         SessionAction(
             "pap.sessions.end",
             "End a PAP Session",
-            "Stop using a Session and forget its token; its Account Token is kept.",
+            "Stop using a Session and forget its token; its refresh token is kept.",
             lambda runtime, values: end_session(runtime, values["session"]),
             (SESSION,),
             needs_approval=True,
@@ -492,11 +490,11 @@ ACTIONS: dict[str, SessionAction] = {
         SessionAction(
             "pap.auth.disconnect",
             "Sign out of a company",
-            "Revoke the Account Token: every Session using it continues signed out.",
+            "Revoke the refresh token: every Session using it continues signed out.",
             lambda runtime, values: disconnect(runtime, values["session"]),
             (SESSION,),
             needs_approval=True,
-            summary="Sign out: revoke the Account Token of Session {session}.",
+            summary="Sign out: revoke the refresh token of Session {session}.",
             emoji="🔒",
         ),
     )

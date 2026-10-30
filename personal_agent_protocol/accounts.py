@@ -2,104 +2,105 @@
 #
 # BSD 3-Clause License
 
-"""PAP Account Tokens: refresh, rotation, narrowing, and revocation (§4.8, §4.9).
+"""Refresh tokens: access tokens, rotation, narrowing, tokens for one service, sign-out.
 
-An Account Token is the `refresh_token` a sign-in returns. It is used only at
-the company's `token_endpoint` and `revocation_endpoint`, always behind an
-opaque reference in a Reactor `TokenStore`, and never reaches a model, a
-conversation, a log, or a URL.
+A refresh token is what a sign-in returns (§4.4). It is used only at the
+company's `token_endpoint` and `revocation_endpoint`, always behind an opaque
+reference in a Reactor `TokenStore`, and never reaches a model, a conversation,
+a log, or a URL.
 
-- **Refresh** signs a Session in: `grant_type=refresh_token`, a fresh client
-  assertion, and a fresh DPoP proof signed with the Session's key, which names it;
-  a new key starts a new Session already signed in.
-- **Rotation** is serialized per reference through the Reactor
-  `pap.accountTokenLock` contribution: when the company returns a new
-  `refresh_token`, it replaces the old one before the call returns.
-- **Narrowing** asks for fewer scopes (or an RFC 8707 `resource`); a wider
-  request is the company's `invalid_scope`, reported as `re_consent_required`
-  so the host signs the user in again rather than retrying.
-- **`invalid_grant`** means the Account Token or the Session ended; renewing the
-  Session with its assertion tells which (`signed_out` or `session_ended`).
-- **Revocation** (RFC 7009) signs out every Session signed in with the token;
-  the local copy is deleted once the company has answered.
+- **Refresh** gets an access token: `grant_type=refresh_token` and a fresh client
+  assertion. No Session is named: any of the User's Sessions uses the access
+  token with its Session header (§4.4, §5.4).
+- **Rotation** is serialized per reference through `pap.refreshTokenLock`: when
+  the company returns a new `refresh_token`, it replaces the old one before the
+  call returns.
+- **Narrowing** asks for fewer scopes; a wider request is the company's
+  `invalid_scope`, reported as `re_consent_required` so the host signs the user
+  in again rather than retrying.
+- **Tokens for one service** ask with `resource` (RFC 8707) for a service whose
+  protected resource metadata names a resource other than the Company's domain,
+  such as an MCP server (§4.5, §7). `ServiceTokens` reads that metadata before
+  the first signed-in call to a service, and again when a service says it is stale.
+- **`invalid_grant`** means the refresh token is no longer valid: the stored copy
+  is deleted and the Sessions continue signed out (§5.5).
+- **Sign-out** revokes every refresh token held for the account (RFC 7009, §4.6,
+  §5.5); each local copy is deleted once the company has answered.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal, cast
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Literal, cast
 
 import httpx
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .auth import _https_url, _scopes
-from .errors import AuthorizationError, ProtocolValidationError, SessionError
+from .errors import AuthorizationError, PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
-from .models import ProtocolModel
+from .models import DiscoveredCompany, ProtocolModel
 from .reactor import (
-    ACCOUNT_TOKEN_LOCKS,
-    CLOCKS,
-    RANDOM_SOURCES,
-    SIGNERS,
+    REFRESH_TOKEN_LOCKS,
     TOKEN_STORES,
-    AccountTokenLock,
-    Clock,
-    RandomSource,
-    Signer,
+    RefreshTokenLock,
     TokenStore,
     first_contribution,
     send_bounded,
 )
-from .refusals import refusal_details, refuse_redirect
-from .sessions import (
-    JWT_CLIENT_ASSERTION,
-    SessionClient,
-    SessionToken,
-    build_client_assertion_claims,
-)
+from .refusals import refusal_code, refusal_details, refuse_redirect, refused_without_body
+from .sessions import AccessToken, SessionClient
 from .telemetry import sign_in_result, signed_in_as, traced
+
+if TYPE_CHECKING:
+    from .discovery import DiscoveryClient
 
 REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - OAuth grant type, not a credential
 
 
-class AccountRefreshResult(ProtocolModel):
-    """What a refresh did, without the Account Token itself.
+class RefreshResult(ProtocolModel):
+    """What a refresh did, without the refresh token itself.
 
-    `token` is the signed-in Session Token on `signed_in` (its `refresh_token`
-    always removed); `rotated` says the stored Account Token was replaced;
-    `missing_scopes` are requested scopes the company left out. `session_ended`
-    means the Session the refresh named has ended while the Account Token still
-    works: start a new Session with it (§4.8).
+    `token` is the access token on `signed_in`; `rotated` says the stored refresh
+    token was replaced; `missing_scopes` are requested scopes the company left out.
+    `signed_out`: no valid refresh token is held any more (§5.5).
     """
 
-    status: Literal["signed_in", "signed_out", "session_ended", "re_consent_required"]
-    token: SessionToken | None = None
+    status: Literal["signed_in", "signed_out", "re_consent_required"]
+    token: AccessToken | None = None
     rotated: bool = False
     granted_scopes: tuple[str, ...] = ()
     missing_scopes: tuple[str, ...] = ()
 
 
-class AccountRevocationResult(ProtocolModel):
+class RevocationResult(ProtocolModel):
     """A revocation the company acknowledged; the local copy is gone."""
 
     revoked: bool
     deleted_locally: bool
 
 
+class SignOutResult(ProtocolModel):
+    """Sign-out (§5.5): how many refresh tokens were revoked, and whether all were."""
+
+    revoked: int
+    signed_out: bool
+
+
 @dataclass(frozen=True)
-class AccountTokenContext:
-    """Where an Account Token is used, and for whom (all non-secret)."""
+class RefreshTokenContext:
+    """Where a refresh token is used, and for whom (all non-secret)."""
 
     token_endpoint: str
     issuer: str
     client_id: str
     tenant_id: str
-    pairwise_user_id: str
     revocation_endpoint: str | None = None
 
 
-class AccountTokenClient:
-    """Use a stored Account Token without ever handing it to a caller."""
+class RefreshTokenClient:
+    """Use a stored refresh token without ever handing it to a caller."""
 
     def __init__(
         self,
@@ -118,48 +119,40 @@ class AccountTokenClient:
         )
 
     @traced(
-        "pap.sign_in.account_token.refresh",
-        before=signed_in_as("account_token"),
+        "pap.sign_in.refresh_token.refresh",
+        before=signed_in_as("refresh_token"),
         after=sign_in_result,
     )
     async def refresh(
         self,
         reference: str,
         *,
-        context: AccountTokenContext,
-        session_key: str | None = None,
+        context: RefreshTokenContext,
         scopes: tuple[str, ...] | None = None,
         resource: str | None = None,
-    ) -> AccountRefreshResult:
-        """A signed-in Session Token from the Account Token behind `reference` (§4.8).
+    ) -> RefreshResult:
+        """An access token from the refresh token behind `reference` (§4.4).
 
-        With `session_key`, for that Session, signing it in if it was signed out;
-        without, a new Session Key starts a new Session already signed in. `scopes`
-        narrows the request; omitted, the company grants what the token holds. A
-        `resource` asks for a token for one service, such as an MCP server that
-        supports DPoP; one without DPoP takes Token Exchange
-        (`SessionClient.token_for_mcp`).
+        `scopes` narrows the request; omitted, the company grants what the token
+        holds. `resource` asks for a token for one service (RFC 8707, §4.5), used
+        only there.
         """
 
         requested = _scopes(scopes) if scopes is not None else None
         resource_url = _https_url(resource, "resource") if resource is not None else None
         token_url = _https_url(context.token_endpoint, "token endpoint")
-        new_session = session_key is None
-        key = session_key or await self.sessions._prover().new_session_key(
-            tenant_id=context.tenant_id, issuer=context.issuer
-        )
         lock = cast(
-            AccountTokenLock,
-            first_contribution(self.reactor, ACCOUNT_TOKEN_LOCKS, "Account Token lock"),
+            RefreshTokenLock,
+            first_contribution(self.reactor, REFRESH_TOKEN_LOCKS, "refresh token lock"),
         )
         store = self._store()
         async with lock.hold(reference):
-            account_token = await store.get(reference)
-            if account_token is None:
-                return AccountRefreshResult(status="signed_out")
+            refresh_token = await store.get(reference)
+            if refresh_token is None:
+                return RefreshResult(status="signed_out")
             form = {
                 "grant_type": REFRESH_TOKEN_GRANT,
-                "refresh_token": account_token.get_secret_value(),
+                "refresh_token": refresh_token.get_secret_value(),
                 **({"scope": " ".join(requested)} if requested is not None else {}),
                 **({"resource": resource_url} if resource_url is not None else {}),
             }
@@ -168,28 +161,21 @@ class AccountTokenClient:
                     client_id=context.client_id,
                     issuer=context.issuer,
                     token_endpoint=token_url,
-                    tenant_id=context.tenant_id,
-                    session_key=key,
                     form=lambda: form,
                     error=AuthorizationError,
                 )
             except AuthorizationError as exc:
                 if exc.code == "invalid_scope":
-                    return AccountRefreshResult(status="re_consent_required")
+                    return RefreshResult(status="re_consent_required")
                 if exc.code != "invalid_grant":
                     raise
-                return await self._invalid_grant(reference, context, key, new_session, store)
-            if response.token_type != "DPoP":  # noqa: S105 - an OAuth token or grant type, not a credential
-                raise AuthorizationError(
-                    "invalid_token_response",
-                    "An Account Token request answers with a DPoP Session Token",
-                )
+                # Expired, revoked, or the User disconnected the agent: the stored copy
+                # is useless and must go; the Sessions continue signed out (§5.5).
+                await store.delete(reference)
+                return RefreshResult(status="signed_out")
             try:
-                token = SessionToken.from_response(
-                    response,
-                    session_key=key,
-                    signed_in=True,
-                    requested_scopes=requested or (),
+                token = AccessToken.from_response(
+                    response, requested_scopes=requested or (), resource=resource_url
                 )
             except ProtocolValidationError as exc:
                 raise AuthorizationError("invalid_token_response", exc.message) from exc
@@ -197,98 +183,52 @@ class AccountTokenClient:
                 raise AuthorizationError(
                     "scope_escalation", "Company returned a scope that was not requested"
                 )
-            rotated = token.refresh_token is not None
-            if token.refresh_token is not None:
-                # The new token replaces the old before anyone can use either again.
-                await store.put(reference, token.refresh_token)
-        public = token.model_copy(update={"refresh_token": None})
-        return AccountRefreshResult(
+            rotated = response.refresh_token is not None
+            if response.refresh_token is not None:
+                # The new token replaces the old before anyone can use either again (§4.4).
+                await store.put(reference, response.refresh_token)
+        return RefreshResult(
             status="signed_in",
-            token=public,
+            token=token,
             rotated=rotated,
-            granted_scopes=public.scopes,
-            missing_scopes=tuple(
-                scope for scope in (requested or ()) if scope not in public.scopes
-            ),
+            granted_scopes=token.scopes,
+            missing_scopes=tuple(scope for scope in (requested or ()) if scope not in token.scopes),
         )
 
-    async def _invalid_grant(
+    async def token_for_mcp(
         self,
         reference: str,
-        context: AccountTokenContext,
-        key: str,
-        new_session: bool,
-        store: TokenStore,
-    ) -> AccountRefreshResult:
-        """Tell an ended Account Token from an ended Session (§4.8).
+        *,
+        context: RefreshTokenContext,
+        url: str,
+        scopes: tuple[str, ...] | None = None,
+    ) -> RefreshResult:
+        """An access token for one MCP server: `resource` is its `url` from poppy.json (§7)."""
 
-        With a new key only the Account Token can be at fault. With an existing
-        Session's key, renewing that Session with its assertion tells them apart:
-        refused there, the Session has ended (its key is discarded); accepted, the
-        Account Token is what ended, and the Session carries on signed out.
-        """
-
-        if not new_session:
-            try:
-                renewed = await self.sessions.renew(
-                    client_id=context.client_id,
-                    pairwise_user_id=context.pairwise_user_id,
-                    issuer=context.issuer,
-                    token_endpoint=context.token_endpoint,
-                    tenant_id=context.tenant_id,
-                    session_key=key,
-                )
-            except SessionError as exc:
-                if exc.code == "invalid_grant":
-                    return AccountRefreshResult(status="session_ended")
-                raise
-            await store.delete(reference)
-            return AccountRefreshResult(status="signed_out", token=renewed)
-        await self.sessions._prover().discard_session_key(
-            tenant_id=context.tenant_id, issuer=context.issuer, session_key=key
-        )
-        # Expired or revoked: the stored copy is useless and must go.
-        await store.delete(reference)
-        return AccountRefreshResult(status="signed_out")
+        return await self.refresh(reference, context=context, scopes=scopes, resource=url)
 
     @traced(
-        "pap.sign_in.account_token.revoke",
-        before=signed_in_as("account_token"),
+        "pap.sign_in.refresh_token.revoke",
+        before=signed_in_as("refresh_token"),
         after=sign_in_result,
     )
-    async def revoke(
-        self, reference: str, *, context: AccountTokenContext
-    ) -> AccountRevocationResult:
-        """Revoke the Account Token at the company (RFC 7009), then forget it.
-
-        Revocation carries no proof (§4.3): no Session Token, no token request.
-        """
+    async def revoke(self, reference: str, *, context: RefreshTokenContext) -> RevocationResult:
+        """Revoke the refresh token at the company (RFC 7009, §4.6), then forget it."""
 
         if context.revocation_endpoint is None:
             raise ValueError("Revocation needs the company's revocation_endpoint")
         endpoint = _https_url(context.revocation_endpoint, "revocation endpoint")
         lock = cast(
-            AccountTokenLock,
-            first_contribution(self.reactor, ACCOUNT_TOKEN_LOCKS, "Account Token lock"),
+            RefreshTokenLock,
+            first_contribution(self.reactor, REFRESH_TOKEN_LOCKS, "refresh token lock"),
         )
         store = self._store()
         async with lock.hold(reference):
-            account_token = await store.get(reference)
-            if account_token is None:
-                return AccountRevocationResult(revoked=False, deleted_locally=False)
-            clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
-            random_source = cast(
-                RandomSource, first_contribution(self.reactor, RANDOM_SOURCES, "random source")
-            )
-            signer = cast(Signer, first_contribution(self.reactor, SIGNERS, "signer"))
-            assertion = await signer.sign(
-                build_client_assertion_claims(
-                    client_id=context.client_id,
-                    issuer=context.issuer,
-                    now=clock.now(),
-                    random_bytes=random_source.bytes,
-                ).model_dump(),
-                purpose="client_assertion",
+            refresh_token = await store.get(reference)
+            if refresh_token is None:
+                return RevocationResult(revoked=False, deleted_locally=False)
+            client = await self.sessions.client_authentication(
+                client_id=context.client_id, issuer=context.issuer
             )
             try:
                 response = await send_bounded(
@@ -297,25 +237,42 @@ class AccountTokenClient:
                         "POST",
                         endpoint,
                         data={
-                            "token": account_token.get_secret_value(),
+                            "token": refresh_token.get_secret_value(),
                             "token_type_hint": REFRESH_TOKEN_GRANT,
-                            "client_id": context.client_id,
-                            "client_assertion_type": JWT_CLIENT_ASSERTION,
-                            "client_assertion": assertion.get_secret_value(),
+                            **client,
                         },
                         headers={"Accept": "application/json"},
                     ),
                     max_bytes=self.max_response_bytes,
                 )
             except httpx.HTTPError as exc:
-                raise AuthorizationError("request_failed", "Account Token request failed") from exc
+                raise AuthorizationError("request_failed", "Revocation request failed") from exc
             refuse_redirect(response, AuthorizationError)
-            payload = self._decode(response, required=not response.is_success)
+            required = not response.is_success and not refused_without_body(response)
+            payload = self._decode(response, required=required)
             if not response.is_success:
                 # Kept so the host can retry: a token it believes revoked must be.
                 raise self._remote_error(response, payload, "Company refused the revocation")
             await store.delete(reference)
-        return AccountRevocationResult(revoked=True, deleted_locally=True)
+        return RevocationResult(revoked=True, deleted_locally=True)
+
+    async def sign_out(
+        self, references: Iterable[str], *, context: RefreshTokenContext
+    ) -> SignOutResult:
+        """Sign out of an account: revoke every refresh token held for it (§4.6, §5.5).
+
+        `references` are all the refresh tokens the agent holds for the account,
+        from every sign-in. The account is signed out once none is valid; the
+        Sessions continue signed out, sending the Session header alone.
+        """
+
+        revoked = 0
+        for reference in dict.fromkeys(references):
+            result = await self.revoke(reference, context=context)
+            revoked += result.revoked
+        store = self._store()
+        remaining = [ref for ref in dict.fromkeys(references) if await store.get(ref) is not None]
+        return SignOutResult(revoked=revoked, signed_out=not remaining)
 
     def _store(self) -> TokenStore:
         return cast(TokenStore, first_contribution(self.reactor, TOKEN_STORES, "token store"))
@@ -324,7 +281,7 @@ class AccountTokenClient:
         if len(response.content) > self.max_response_bytes:
             raise AuthorizationError(
                 "response_too_large",
-                "Account Token response exceeds size limit",
+                "Revocation response exceeds size limit",
                 status_code=response.status_code,
             )
         if not response.content and not required:
@@ -334,7 +291,7 @@ class AccountTokenClient:
                 return {}
             raise AuthorizationError(
                 "invalid_content_type",
-                "Account Token endpoint must return JSON",
+                "Revocation endpoint must return JSON",
                 status_code=response.status_code,
             )
         try:
@@ -342,7 +299,7 @@ class AccountTokenClient:
         except ProtocolValidationError as exc:
             raise AuthorizationError(
                 "invalid_json",
-                "Account Token endpoint returned invalid JSON",
+                "Revocation endpoint returned invalid JSON",
                 status_code=response.status_code,
             ) from exc
 
@@ -350,10 +307,80 @@ class AccountTokenClient:
     def _remote_error(
         response: httpx.Response, payload: object, message: str
     ) -> AuthorizationError:
-        remote = payload.get("error") if isinstance(payload, dict) else None
         return AuthorizationError(
-            remote if isinstance(remote, str) else "http_error",
+            refusal_code(response, payload, "http_error"),
             message,
             status_code=response.status_code,
             details=refusal_details(response, payload) or None,
         )
+
+
+def stale_resource_metadata(error: PersonalAgentProtocolError) -> bool:
+    """Whether a service refused a token not issued for it (§4.5).
+
+    `invalid_token` with `resource_metadata` in its challenge: the agent's view of
+    which resource the service asks tokens for is stale; read it again.
+    """
+
+    return error.code == "invalid_token" and bool(error.details.get("resource_metadata"))
+
+
+@dataclass
+class ServiceTokens:
+    """The access tokens of one account, one per service that asks for its own (§4.5).
+
+    Before the first signed-in call to a service (an MCP server's `url`, the URL in
+    an OpenAPI description's `servers`, a conversation `endpoint`), `token_for`
+    reads the service's protected resource metadata: a `resource` other than
+    `https://{organization.domain}` gets a token requested for it, used only there;
+    otherwise the default token serves. After a service answers `invalid_token`
+    with `resource_metadata`, `token_for(url, fresh=True)` reads it again.
+    """
+
+    refresh: RefreshTokenClient
+    discovery: DiscoveryClient
+    company: DiscoveredCompany
+    reference: str
+    context: RefreshTokenContext
+    scopes: tuple[str, ...] | None = None
+    _tokens: dict[str | None, AccessToken] = field(default_factory=dict)
+
+    async def resource_for(self, service_url: str, *, fresh: bool = False) -> str | None:
+        """The `resource` to request for `service_url`, or `None` for the default token."""
+
+        return await self.discovery.service_resource(self.company, service_url, fresh=fresh)
+
+    async def token_for(self, service_url: str, *, fresh: bool = False) -> AccessToken | None:
+        """The access token to call `service_url` with, or `None` once signed out."""
+
+        resource = await self.resource_for(service_url, fresh=fresh)
+        if fresh:
+            self._tokens.pop(resource, None)
+        known = self._tokens.get(resource)
+        if known is not None:
+            return known
+        result = await self.refresh.refresh(
+            self.reference, context=self.context, scopes=self.scopes, resource=resource
+        )
+        if result.status != "signed_in" or result.token is None:
+            self._tokens.clear()
+            return None
+        self._tokens[resource] = result.token
+        return result.token
+
+    def forget(self) -> None:
+        """Drop every access token held: signed out, or a new sign-in replaces them."""
+
+        self._tokens.clear()
+
+
+__all__ = [
+    "REFRESH_TOKEN_GRANT",
+    "RefreshResult",
+    "RefreshTokenClient",
+    "RefreshTokenContext",
+    "RevocationResult",
+    "ServiceTokens",
+    "SignOutResult",
+    "stale_resource_metadata",
+]

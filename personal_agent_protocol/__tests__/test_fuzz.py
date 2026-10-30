@@ -236,7 +236,6 @@ async def test_random_operation_histories_keep_the_state_machine() -> None:  # n
     histories = max(8, ITERATIONS // 30)
     for _ in range(histories):
         user, signed = await _signed_in_user(ctx)
-        who = await ctx.who(user)
         kind = rng.choice(["user", "user", "fails", "unknown"])
         first = await _propose(ctx, user, signed, kind)
         latest = first
@@ -246,17 +245,25 @@ async def test_random_operation_histories_keep_the_state_machine() -> None:  # n
             try:
                 if action == "confirm":
                     await ctx.agent.operations.confirm(
-                        endpoint, latest, approval=approve(latest), token=signed.token, **who
+                        endpoint,
+                        latest,
+                        approval=approve(latest),
+                        session=signed.session,
+                        token=signed.token,
                     )
                 elif action == "confirm_stale":
                     outcome = await ctx.agent.operations.confirm(
-                        endpoint, first, approval=approve(first), token=signed.token, **who
+                        endpoint,
+                        first,
+                        approval=approve(first),
+                        session=signed.session,
+                        token=signed.token,
                     )
                     if first.revision != latest.revision and outcome.status == "confirmed":
                         raise AssertionError("a stale revision confirmed")
                 elif action == "cancel":
                     await ctx.agent.operations.cancel(
-                        endpoint, first.operation_id, token=signed.token, **who
+                        endpoint, first.operation_id, session=signed.session, token=signed.token
                     )
                 elif action == "revise":
                     await world.driver.revise(first.operation_id)
@@ -268,12 +275,11 @@ async def test_random_operation_histories_keep_the_state_machine() -> None:  # n
                 refreshed = await ctx.agent.accounts.refresh(
                     signed.reference,
                     context=await ctx.account_context(user),
-                    session_key=signed.token.session_key,
                 )
                 if refreshed.token is not None:
                     signed.token = refreshed.token
             current = await ctx.agent.operations.read(
-                endpoint, first.operation_id, token=signed.token, **who
+                endpoint, first.operation_id, session=signed.session, token=signed.token
             )
             if current.state == "proposed":
                 latest = current

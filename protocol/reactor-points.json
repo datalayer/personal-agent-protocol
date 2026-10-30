@@ -7,9 +7,16 @@
       "python": "DISCOVERY_TRANSPORTS",
       "typescript": "DiscoveryTransports",
       "contract": "DiscoveryTransport",
-      "members": ["get"],
-      "typescript_members": ["fetch"],
-      "default": {"python": "httpx", "typescript": "fetch"},
+      "members": [
+        "get"
+      ],
+      "typescript_members": [
+        "fetch"
+      ],
+      "default": {
+        "python": "httpx",
+        "typescript": "fetch"
+      },
       "resolution": "single",
       "tenant": null,
       "note": "Each language's HTTP idiom: Python's transport gets one approved URL within its MetadataFetch bounds (connecting only to the approved addresses); TypeScript's is a fetch, the URL safety policy approving each URL first."
@@ -20,8 +27,13 @@
       "python": "URL_SAFETY_POLICIES",
       "typescript": "UrlSafetyPolicies",
       "contract": "UrlSafetyPolicy",
-      "members": ["assert_safe"],
-      "default": {"python": "public", "typescript": "public"},
+      "members": [
+        "assert_safe"
+      ],
+      "default": {
+        "python": "public",
+        "typescript": "public"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -31,8 +43,13 @@
       "python": "CLOCKS",
       "typescript": "Clocks",
       "contract": "Clock",
-      "members": ["now"],
-      "default": {"python": "system", "typescript": "system"},
+      "members": [
+        "now"
+      ],
+      "default": {
+        "python": "system",
+        "typescript": "system"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -42,8 +59,13 @@
       "python": "RANDOM_SOURCES",
       "typescript": "RandomSources",
       "contract": "RandomSource",
-      "members": ["bytes"],
-      "default": {"python": "system", "typescript": "system"},
+      "members": [
+        "bytes"
+      ],
+      "default": {
+        "python": "system",
+        "typescript": "system"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -53,10 +75,13 @@
       "python": "SIGNERS",
       "typescript": "Signers",
       "contract": "Signer",
-      "members": ["sign"],
+      "members": [
+        "sign"
+      ],
       "default": null,
       "resolution": "single",
-      "tenant": null
+      "tenant": null,
+      "note": "A key from the agent's jwks_uri. sign(claims, purpose): client_assertion signs a JWT (typ JWT), delegation a pap-delegation+jwt (§4.1, §5.2), ES256 or PS384. A signer that signs blindly signs both (§10.7)."
     },
     {
       "id": "pap.tokenStore",
@@ -64,7 +89,11 @@
       "python": "TOKEN_STORES",
       "typescript": "TokenStores",
       "contract": "TokenStore",
-      "members": ["put", "get", "delete"],
+      "members": [
+        "put",
+        "get",
+        "delete"
+      ],
       "default": null,
       "resolution": "single",
       "tenant": null
@@ -75,7 +104,9 @@
       "python": "PAIRWISE_USER_ID_STORES",
       "typescript": "PairwiseUserIdStores",
       "contract": "PairwiseUserIdStore",
-      "members": ["get_or_create"],
+      "members": [
+        "get_or_create"
+      ],
       "default": null,
       "resolution": "single",
       "tenant": "tenant_id"
@@ -86,7 +117,10 @@
       "python": "AUTHORIZATION_STATE_STORES",
       "typescript": "AuthorizationStateStores",
       "contract": "AuthorizationStateStore",
-      "members": ["put", "take"],
+      "members": [
+        "put",
+        "take"
+      ],
       "default": null,
       "resolution": "single",
       "tenant": null
@@ -97,8 +131,15 @@
       "python": "CACHES",
       "typescript": "Caches",
       "contract": "ProtocolCache",
-      "members": ["put", "get", "delete"],
-      "default": {"python": "memory", "typescript": "memory"},
+      "members": [
+        "put",
+        "get",
+        "delete"
+      ],
+      "default": {
+        "python": "memory",
+        "typescript": "memory"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -108,7 +149,9 @@
       "python": "BROWSER_HANDOFFS",
       "typescript": "BrowserHandoffs",
       "contract": "BrowserHandoff",
-      "members": ["open"],
+      "members": [
+        "open"
+      ],
       "default": null,
       "resolution": "single",
       "tenant": null
@@ -119,32 +162,42 @@
       "python": "BROWSER_JOINS",
       "typescript": "BrowserJoins",
       "contract": "BrowserJoin",
-      "members": ["load_join_form", "submit_join_form"],
+      "members": [
+        "load_join_form",
+        "submit_join_form"
+      ],
       "default": null,
       "resolution": "single",
       "tenant": null,
-      "note": "The personal agent's own browser (§5): load_join_form opens the browser-session endpoint and returns the one-time code from that page only; submit_join_form submits the proof from the same browser, whose SameSite=Strict cookie ties the code to it."
+      "note": "The personal agent's own browser (§6): load_join_form opens the browser-session endpoint and returns the one-time code from that page only; once the agent has authorized the code at {endpoint}/authorize, submit_join_form submits the form from the same browser, whose SameSite=Strict cookie ties the code to it. No proof: the access token never passes through the browser."
     },
     {
-      "id": "pap.dpopProofProvider",
+      "id": "pap.sessionSigner",
       "role": "personal-agent",
-      "python": "DPOP_PROOF_PROVIDERS",
-      "typescript": "DpopProofProviders",
-      "contract": "DpopProofProvider",
-      "members": ["new_session_key", "create", "discard_session_key"],
+      "python": "SESSION_SIGNERS",
+      "typescript": "SessionSigners",
+      "contract": "SessionSigner",
+      "members": [
+        "sign"
+      ],
       "default": null,
       "resolution": "single",
-      "tenant": "DpopProofRequest.tenant_id",
-      "note": "A Session Key per Session (§4.3): new_session_key makes one and returns its RFC 7638 thumbprint, which names the Session; create signs with the key a DpopProofRequest's session_key names; discard_session_key forgets one whose Session ended, never to be used again (§4.2)."
+      "tenant": "SessionJwtRequest.tenant_id",
+      "note": "Signs the Session JWT of one request (§5.2) from a SessionJwtRequest: method, url, tenant_id, issuer, client_id, sid, sub, agent_id, access_token. DelegatedSessionSigner keeps one delegated P-256 key per (tenant_id, issuer, sub) in a DelegatedKeyCustody, never shared across User IDs, its delegation signed by the pap.signer key with purpose delegation, rotated before exp."
     },
     {
-      "id": "pap.accountTokenLock",
+      "id": "pap.refreshTokenLock",
       "role": "personal-agent",
-      "python": "ACCOUNT_TOKEN_LOCKS",
-      "typescript": "AccountTokenLocks",
-      "contract": "AccountTokenLock",
-      "members": ["hold"],
-      "default": {"python": "in-process", "typescript": "in-process"},
+      "python": "REFRESH_TOKEN_LOCKS",
+      "typescript": "RefreshTokenLocks",
+      "contract": "RefreshTokenLock",
+      "members": [
+        "hold"
+      ],
+      "default": {
+        "python": "in-process",
+        "typescript": "in-process"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -154,7 +207,9 @@
       "python": "PROTECTED_INPUTS",
       "typescript": "ProtectedInputs",
       "contract": "ProtectedInput",
-      "members": ["collect"],
+      "members": [
+        "collect"
+      ],
       "default": null,
       "resolution": "single",
       "tenant": null
@@ -165,8 +220,13 @@
       "python": "RETRY_POLICIES",
       "typescript": "RetryPolicies",
       "contract": "RetryPolicy",
-      "members": ["delay"],
-      "default": {"python": "default", "typescript": "default"},
+      "members": [
+        "delay"
+      ],
+      "default": {
+        "python": "default",
+        "typescript": "default"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -176,8 +236,14 @@
       "python": "RATE_LIMIT_BUDGETS",
       "typescript": "RateLimitBudgets",
       "contract": "RateLimitBudget",
-      "members": ["acquire", "defer"],
-      "default": {"python": "in-process", "typescript": "in-process"},
+      "members": [
+        "acquire",
+        "defer"
+      ],
+      "default": {
+        "python": "in-process",
+        "typescript": "in-process"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -187,7 +253,11 @@
       "python": "STANDING_PERMISSION_STORES",
       "typescript": "StandingPermissionStores",
       "contract": "StandingPermissionStore",
-      "members": ["reserve", "commit", "release"],
+      "members": [
+        "reserve",
+        "commit",
+        "release"
+      ],
       "default": null,
       "resolution": "single",
       "tenant": null
@@ -198,7 +268,9 @@
       "python": "TELEMETRY_SINKS",
       "typescript": "TelemetrySinks",
       "contract": "TelemetrySink",
-      "members": ["record"],
+      "members": [
+        "record"
+      ],
       "default": null,
       "resolution": "optional",
       "tenant": null,
@@ -210,7 +282,9 @@
       "python": "APPROVAL_SURFACES",
       "typescript": null,
       "contract": "ApprovalSurface",
-      "members": ["approve"],
+      "members": [
+        "approve"
+      ],
       "default": null,
       "resolution": "optional",
       "tenant": null,
@@ -222,10 +296,21 @@
       "python": "COMPANY_STORES",
       "typescript": "CompanyStores",
       "contract": "CompanyStore",
-      "members": ["get", "put", "create", "replace", "take", "delete"],
-      "default": {"python": "memory", "typescript": "memory"},
+      "members": [
+        "get",
+        "put",
+        "create",
+        "replace",
+        "take",
+        "delete"
+      ],
+      "default": {
+        "python": "memory",
+        "typescript": "memory"
+      },
       "resolution": "single",
-      "tenant": null
+      "tenant": null,
+      "note": "JSON records by kind and key. Sessions are keyed by client_id and sid (§5.3), remembered after they end; access and refresh tokens by digest."
     },
     {
       "id": "pap.company.accounts",
@@ -233,7 +318,10 @@
       "python": "COMPANY_ACCOUNTS",
       "typescript": "CompanyAccounts",
       "contract": "AccountDirectory",
-      "members": ["authenticate", "check_code"],
+      "members": [
+        "authenticate",
+        "check_code"
+      ],
       "default": null,
       "resolution": "single",
       "tenant": null
@@ -244,7 +332,9 @@
       "python": "COMPANY_AGENTS",
       "typescript": "CompanyAgents",
       "contract": "CompanyAgent",
-      "members": ["respond"],
+      "members": [
+        "respond"
+      ],
       "default": null,
       "resolution": "single",
       "tenant": null
@@ -255,7 +345,10 @@
       "python": "OPERATION_EXECUTORS",
       "typescript": "OperationExecutors",
       "contract": "OperationExecutor",
-      "members": ["action", "perform"],
+      "members": [
+        "action",
+        "perform"
+      ],
       "default": null,
       "resolution": "by-action",
       "tenant": null
@@ -266,8 +359,13 @@
       "python": "CLIENT_POLICIES",
       "typescript": "ClientPolicies",
       "contract": "ClientPolicy",
-      "members": ["allows"],
-      "default": {"python": "allow", "typescript": "allow"},
+      "members": [
+        "allows"
+      ],
+      "default": {
+        "python": "allow",
+        "typescript": "allow"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -277,8 +375,13 @@
       "python": "CLIENT_RESOLVERS",
       "typescript": "ClientResolvers",
       "contract": "ClientResolver",
-      "members": ["resolve"],
-      "default": {"python": "https", "typescript": "https"},
+      "members": [
+        "resolve"
+      ],
+      "default": {
+        "python": "https",
+        "typescript": "https"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -288,8 +391,13 @@
       "python": "REPLAY_CACHES",
       "typescript": "ReplayCaches",
       "contract": "ReplayCache",
-      "members": ["mark_once"],
-      "default": {"python": "store", "typescript": "store"},
+      "members": [
+        "mark_once"
+      ],
+      "default": {
+        "python": "store",
+        "typescript": "store"
+      },
       "resolution": "single",
       "tenant": null
     },
@@ -299,7 +407,11 @@
       "python": "COMPANY_APIS",
       "typescript": "CompanyApis",
       "contract": "CompanyApi",
-      "members": ["description", "openapi", "handle"],
+      "members": [
+        "description",
+        "openapi",
+        "handle"
+      ],
       "default": null,
       "resolution": "optional",
       "tenant": null
@@ -310,7 +422,11 @@
       "python": "COMPANY_MCP",
       "typescript": "CompanyMcps",
       "contract": "CompanyMcp",
-      "members": ["description", "tools", "call"],
+      "members": [
+        "description",
+        "tools",
+        "call"
+      ],
       "default": null,
       "resolution": "optional",
       "tenant": null
@@ -321,7 +437,9 @@
       "python": "COMPANY_RATE_LIMITS",
       "typescript": "CompanyRateLimits",
       "contract": "RateLimit",
-      "members": ["admit"],
+      "members": [
+        "admit"
+      ],
       "default": null,
       "resolution": "optional",
       "tenant": null

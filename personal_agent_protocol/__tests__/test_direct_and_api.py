@@ -12,7 +12,7 @@ from personal_agent_protocol import AuthorizationError, DirectSignInClient
 from personal_agent_protocol.apis import ApiClient, ApiError, openapi_url
 from personal_agent_protocol.demo.kit import ScriptedBrowser, personal_agent_reactor
 from personal_agent_protocol.operations import OperationsClient, approve
-from personal_agent_protocol.transport import DpopHttpClient
+from personal_agent_protocol.transport import SessionHttpClient
 
 from .test_company_end_to_end import TENANT, World
 
@@ -25,7 +25,7 @@ def direct_world() -> tuple[World, ScriptedBrowser]:
     world.reactor = personal_agent_reactor(
         world.host, network=world.network, http_client=world.http
     )
-    world.transport = DpopHttpClient(reactor=world.reactor, http_client=world.http)
+    world.transport = SessionHttpClient(reactor=world.reactor, http_client=world.http)
     return world, browser
 
 
@@ -40,7 +40,6 @@ async def begin(world: World, browser: ScriptedBrowser, session, scopes=("orders
         redirect_uri=f"https://{world.atlas.domain}/oauth/callback",
         scopes=scopes,
         tenant_id=TENANT,
-        session_key=session.session_key,
     )
     return client
 
@@ -56,7 +55,7 @@ async def test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchang
 
     # Signed out: the API says which scope signing in would give.
     with pytest.raises(ApiError) as raised:
-        await api.call("GET", orders, token=session, **world.who)
+        await api.call("GET", orders, session=session)
     assert (raised.value.code, raised.value.details) == (
         "insufficient_scope",
         {"scope": "orders:read"},
@@ -68,17 +67,17 @@ async def test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchang
     assert "Atlas" in page and "atlas.example" in page and "See your orders" in page
     callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
     result = await client.complete(callback)
-    assert result.token.signed_in and result.token.session_key == session.session_key
+    assert result.token.scopes == ("orders:read", "orders:write")
     signed_in = result.token
 
-    read = await api.call("GET", orders, token=signed_in, **world.who)
+    read = await api.call("GET", orders, session=session, token=signed_in)
     assert read.body == {
         "orders": [{"order_id": "ord_7Hk2", "item": "Ridge Jacket, size M", "status": "delivered"}]
     }
 
     # A consequential call answers 202 with an operation: proposed, not performed.
     proposed = await api.call(
-        "POST", f"{orders}/ord_7Hk2/exchanges", token=signed_in, body={}, **world.who
+        "POST", f"{orders}/ord_7Hk2/exchanges", session=session, token=signed_in, body={}
     )
     assert proposed.status == 202 and proposed.operation is not None
     assert world.plugin.executor.performed == []
@@ -86,8 +85,8 @@ async def test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchang
         world.shop.config.operations_endpoint,
         proposed.operation,
         approval=approve(proposed.operation),
+        session=session,
         token=signed_in,
-        **world.who,
     )
     assert done.operation.state == "succeeded"  # type: ignore[union-attr]
     assert world.plugin.executor.performed == [proposed.operation.operation_id]
@@ -107,9 +106,9 @@ async def test_partial_consent_and_a_write_that_was_not_granted() -> None:
         await ApiClient(transport=world.transport).call(
             "POST",
             "https://manzanita.example/api/orders/ord_7Hk2/exchanges",
+            session=session,
             token=result.token,
             body={},
-            **world.who,
         )
     assert raised.value.code == "insufficient_scope"
 
@@ -134,7 +133,6 @@ async def test_the_consent_page_is_never_framed_and_bad_redirects_are_not_follow
     good = (
         f"?response_type=code&client_id={world.atlas.client_id}&scope=orders:read"
         "&state=s1&code_challenge=c&code_challenge_method=S256"
-        f"&dpop_jkt={'K' * 43}"
         f"&redirect_uri=https://{world.atlas.domain}/oauth/callback"
     )
     page = await world.http.get(base + good)

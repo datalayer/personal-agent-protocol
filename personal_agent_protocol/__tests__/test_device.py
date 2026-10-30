@@ -14,12 +14,10 @@ from reactor import PluginManifest  # type: ignore[import-untyped]
 from personal_agent_protocol import (
     AUTHORIZATION_STATE_STORES,
     CLOCKS,
-    DPOP_PROOF_PROVIDERS,
     SIGNERS,
     TOKEN_STORES,
     AuthorizationError,
     DeviceSignInClient,
-    DpopProofRequest,
 )
 from personal_agent_protocol.models import Organization
 from personal_agent_protocol.reactor import build_pap_reactor
@@ -68,21 +66,11 @@ class Signer:
         return SecretStr("signed-client-assertion")
 
 
-class Dpop:
-    def __init__(self) -> None:
-        self.requests: list[DpopProofRequest] = []
-
-    async def create(self, request: DpopProofRequest) -> SecretStr:
-        self.requests.append(request)
-        return SecretStr("proof")
-
-
 class DevicePlugin:
     def __init__(self) -> None:
         self.clock = MutableClock()
         self.state = MemoryState()
         self.tokens = MemoryTokens()
-        self.dpop = Dpop()
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
@@ -90,7 +78,6 @@ class DevicePlugin:
         contribute(AUTHORIZATION_STATE_STORES, self.state, contribution_id="memory")
         contribute(TOKEN_STORES, self.tokens, contribution_id="memory")
         contribute(SIGNERS, Signer(), contribution_id="signer")
-        contribute(DPOP_PROOF_PROVIDERS, self.dpop, contribution_id="dpop")
 
 
 def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
@@ -103,8 +90,10 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
             calls += 1
             form = dict(parse_qsl(request.content.decode()))
             forms.append(form)
+            # OAuth endpoints get no Session header and no proof (§5.2).
+            assert "poppy-session" not in request.headers and "dpop" not in request.headers
+            assert form["client_assertion"] == "signed-client-assertion"
             if calls == 1:
-                assert "DPoP" not in request.headers
                 return httpx.Response(
                     200,
                     json={
@@ -116,7 +105,6 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
                         "interval": 5,
                     },
                 )
-            assert request.headers["DPoP"] == "proof"
             if calls == 2:
                 return httpx.Response(400, json={"error": "authorization_pending"})
             if calls == 3:
@@ -124,13 +112,11 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "access_token": "signed-in-session-token",
-                    "token_type": "DPoP",
+                    "access_token": "signed-in-access-token",
+                    "token_type": "Bearer",
                     "expires_in": 300,
                     "scope": "orders:read",
-                    "session_key": "ses_existing",
-                    "signed_in": True,
-                    "refresh_token": "private-account-token",
+                    "refresh_token": "private-refresh-token",
                 },
             )
 
@@ -146,7 +132,6 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
                 client_id="https://agent.example/agent.json",
                 scopes=("orders:read", "orders:write"),
                 tenant_id="application-one",
-                session_key="K" * 43,
                 organization=Organization(name="Company", domain="company.example"),
                 protected_resources=("https://company.example",),
             )
@@ -170,13 +155,15 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
         assert complete.status == "complete"
         assert complete.granted_scopes == ("orders:read",)
         assert complete.missing_scopes == ("orders:write",)
-        assert complete.token is not None and complete.token.refresh_token is None
-        assert complete.account_token_reference is not None
-        stored = plugin.tokens.values[complete.account_token_reference]
-        assert stored.get_secret_value() == "private-account-token"
+        assert complete.token is not None
+        assert complete.token.access_token.get_secret_value() == "signed-in-access-token"
+        assert complete.refresh_token_reference is not None
+        assert "private-refresh-token" not in complete.model_dump_json()
+        stored = plugin.tokens.values[complete.refresh_token_reference]
+        assert stored.get_secret_value() == "private-refresh-token"
         assert forms[0]["scope"] == "orders:read orders:write"
         assert all(form.get("device_code") == "private-device-code" for form in forms[1:])
-        assert len(plugin.dpop.requests) == 3
+        assert len(forms) == 4
 
     asyncio.run(scenario())
 
@@ -214,7 +201,6 @@ def test_device_sign_in_denial_is_terminal() -> None:
                 client_id="https://agent.example/agent.json",
                 scopes=("orders:read",),
                 tenant_id="application-one",
-                session_key="K" * 43,
                 organization=Organization(name="Company", domain="company.example"),
                 protected_resources=("https://company.example",),
             )
@@ -272,7 +258,6 @@ def test_a_device_link_is_shown_only_on_the_issuer_or_its_domains(link: str, all
                 client_id="https://agent.example/agent.json",
                 scopes=("orders:read",),
                 tenant_id="application-one",
-                session_key="K" * 43,
                 organization=Organization(name="Company", domain="company.example"),
                 protected_resources=("https://company.example",),
             )
@@ -287,55 +272,6 @@ def test_a_device_link_is_shown_only_on_the_issuer_or_its_domains(link: str, all
                     await begin
                 assert refused.value.code == "unsafe_verification_uri"
                 assert plugin.state.values == {}  # nothing kept for a link never shown
-            reactor.stop()
-
-    asyncio.run(scenario())
-
-
-def test_the_device_poll_retries_once_with_the_token_endpoints_nonce() -> None:
-    async def scenario() -> None:
-        calls = 0
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                return httpx.Response(
-                    200,
-                    json={
-                        "device_code": "private-device-code",
-                        "user_code": "WDJB-MJHT",
-                        "verification_uri": "https://company.example/device",
-                        "expires_in": 600,
-                        "interval": 5,
-                    },
-                )
-            if calls == 2:
-                return httpx.Response(
-                    400, json={"error": "use_dpop_nonce"}, headers={"DPoP-Nonce": "n-1"}
-                )
-            return httpx.Response(400, json={"error": "authorization_pending"})
-
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-            reactor, _ = build_pap_reactor(http_client=http)
-            plugin = DevicePlugin()
-            reactor.register_plugin(PluginManifest(name="pap-test-device", version="1"), plugin)
-            client = DeviceSignInClient(reactor=reactor, http_client=http)
-            started = await client.begin(
-                device_authorization_endpoint="https://auth.example.com/oauth/device",
-                token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
-                issuer="https://auth.example.com",
-                client_id="https://agent.example/agent.json",
-                scopes=("orders:read",),
-                tenant_id="application-one",
-                session_key="K" * 43,
-                organization=Organization(name="Company", domain="company.example"),
-                protected_resources=("https://company.example",),
-            )
-            plugin.clock.advance(5)
-            polled = await client.poll(started.reference)
-            assert polled.status == "pending"
-            assert [request.nonce for request in plugin.dpop.requests] == [None, "n-1"]
             reactor.stop()
 
     asyncio.run(scenario())

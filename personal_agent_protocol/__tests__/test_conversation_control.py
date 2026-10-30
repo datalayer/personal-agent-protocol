@@ -14,39 +14,39 @@ from pydantic import SecretStr
 from reactor import PluginManifest
 
 from personal_agent_protocol import (
-    DPOP_PROOF_PROVIDERS,
+    SESSION_SIGNERS,
+    AccessToken,
     Author,
     ConversationClient,
     ConversationError,
-    DpopHttpClient,
-    DpopProofRequest,
     Message,
-    SessionToken,
+    PapSession,
+    SessionHttpClient,
+    SessionJwtRequest,
     build_pap_reactor,
 )
 from personal_agent_protocol.conversations import StreamReconnected, TextDelta
 
 ENDPOINT = "https://api.example/conversations"
-WHO = {"tenant_id": "tenant", "issuer": "https://auth.example"}
 
 
-class Proofs:
-    async def create(self, request: DpopProofRequest) -> SecretStr:
-        return SecretStr("proof")
+class Jwts:
+    async def sign(self, request: SessionJwtRequest) -> SecretStr:
+        return SecretStr("session-jwt")
 
 
 class Plugin:
     def provide_contributions(self, contributions: object) -> None:
-        contributions.contribute(DPOP_PROOF_PROVIDERS, Proofs(), contribution_id="proofs")  # type: ignore[attr-defined]
+        contributions.contribute(SESSION_SIGNERS, Jwts(), contribution_id="jwts")  # type: ignore[attr-defined]
 
 
-def token(signed_in: bool = False) -> SessionToken:
-    return SessionToken(
-        access_token=SecretStr("session-secret"),
-        token_type="DPoP",  # noqa: S106 - OAuth token type
-        expires_in=300,
-        session_key="K" * 43,
-        signed_in=signed_in,
+def session() -> PapSession:
+    return PapSession(
+        sid="s" * 22,
+        sub="usr_ada",
+        issuer="https://auth.example",
+        client_id="https://agent.example/agent.json",
+        tenant_id="tenant",
     )
 
 
@@ -54,7 +54,7 @@ def client_for(handler) -> tuple[ConversationClient, httpx.AsyncClient]:  # type
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     reactor, _ = build_pap_reactor(http_client=http)
     reactor.register_plugin(PluginManifest(name="control-test", version="1"), Plugin())
-    return ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http)), http
+    return ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http)), http
 
 
 def event(event_id: str, **fields: object) -> dict[str, object]:
@@ -99,7 +99,7 @@ async def test_stream_yields_events_and_deltas_and_stops_at_closed() -> None:
 
     client, http = client_for(company)
     async with http:
-        items = [item async for item in client.stream(ENDPOINT, "cnv_1", token=token(), **WHO)]
+        items = [item async for item in client.stream(ENDPOINT, "cnv_1", session=session())]
     assert isinstance(items[0], TextDelta) and items[0].actionable is False
     assert [getattr(item, "id", None) for item in items[1:]] == ["evt_1", "evt_2"]
 
@@ -124,7 +124,7 @@ async def test_a_closed_stream_reopens_from_last_event_id_and_drops_partial_text
 
     client, http = client_for(company)
     async with http:
-        items = [item async for item in client.stream(ENDPOINT, "cnv_1", token=token(), **WHO)]
+        items = [item async for item in client.stream(ENDPOINT, "cnv_1", session=session())]
     assert calls == [None, "evt_1"]
     reconnects = [item for item in items if isinstance(item, StreamReconnected)]
     assert reconnects == [
@@ -151,7 +151,7 @@ async def test_a_company_that_does_not_stream_says_so() -> None:
     )
     async with http:
         with pytest.raises(ConversationError) as raised:
-            [item async for item in client.stream(ENDPOINT, "cnv_1", token=token(), **WHO)]
+            [item async for item in client.stream(ENDPOINT, "cnv_1", session=session())]
     assert raised.value.code == "sse_unsupported"
 
 
@@ -163,7 +163,7 @@ async def test_a_stream_that_keeps_closing_empty_gives_up() -> None:
             [
                 item
                 async for item in client.stream(
-                    ENDPOINT, "cnv_1", token=token(), max_reconnects=2, **WHO
+                    ENDPOINT, "cnv_1", session=session(), max_reconnects=2
                 )
             ]
     assert raised.value.code == "stream_unavailable"
@@ -185,8 +185,8 @@ async def test_handoff_and_close_post_empty_objects() -> None:
 
     client, http = client_for(company)
     async with http:
-        queued = await client.handoff(ENDPOINT, "cnv_1", token=token(), **WHO)
-        closed = await client.close(ENDPOINT, "cnv_1", token=token(), **WHO)
+        queued = await client.handoff(ENDPOINT, "cnv_1", session=session())
+        closed = await client.close(ENDPOINT, "cnv_1", session=session())
     assert queued.status == "queued"
     assert closed.status == "closed" and closed.responder == "human"
     assert seen == [("/conversations/cnv_1/handoff", b"{}"), ("/conversations/cnv_1/close", b"{}")]
@@ -212,16 +212,14 @@ async def test_a_direct_conversation_names_its_parent_and_the_parent_points_to_i
             ENDPOINT,
             "cnv_1",
             Message(id="msg_d1", author=Author(type="human"), text="I'll take it from here"),
-            token=token(),
-            **WHO,
+            session=session(),
         )
         with pytest.raises(ConversationError) as raised:
             await client.send(
                 ENDPOINT,
                 "cnv_1",
                 Message(id="msg_p2", author=Author(type="agent"), text="Still there?"),
-                token=token(),
-                **WHO,
+                session=session(),
             )
     assert seen[0]["parent_conversation_id"] == "cnv_1"
     assert opened.conversation_id == "cnv_direct"
@@ -231,34 +229,36 @@ async def test_a_direct_conversation_names_its_parent_and_the_parent_points_to_i
 
 @pytest.mark.asyncio
 async def test_signing_in_mid_conversation_keeps_its_id() -> None:
-    """An `authorization` event is answered by a token change; the conversation goes on (§7.11)."""
+    """An `authorization` event is answered by signing in: the conversation goes on (§7.11)."""
 
-    tokens: list[str] = []
+    tokens: list[str | None] = []
 
     def company(request: httpx.Request) -> httpx.Response:
-        tokens.append(request.headers["authorization"])
+        tokens.append(request.headers.get("authorization"))
         return httpx.Response(
             202, json={"conversation_id": "cnv_1", "status": "working", "responder": "agent"}
         )
 
     client, http = client_for(company)
-    signed_in = token(signed_in=True).model_copy(
-        update={"access_token": SecretStr("signed-in-secret")}
+    one = session()
+    signed_in = AccessToken(
+        access_token=SecretStr("signed-in-secret"),
+        token_type="Bearer",  # noqa: S106 - OAuth token type
+        expires_in=300,
     )
     async with http:
         first = await client.send(
             ENDPOINT,
             "cnv_1",
             Message(id="msg_1", author=Author(type="agent"), text="Show my order"),
-            token=token(),
-            **WHO,
+            session=one,
         )
         second = await client.send(
             ENDPOINT,
             "cnv_1",
             Message(id="msg_2", author=Author(type="agent"), text="Signed in now"),
+            session=one,
             token=signed_in,
-            **WHO,
         )
     assert first.conversation_id == second.conversation_id == "cnv_1"
-    assert tokens == ["DPoP session-secret", "DPoP signed-in-secret"]
+    assert tokens == [None, "Bearer signed-in-secret"]

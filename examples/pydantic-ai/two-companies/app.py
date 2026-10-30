@@ -23,9 +23,9 @@ from personal_agent_protocol import (
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
     SessionClient,
+    SessionHttpClient,
     generate_message_id,
 )
 from personal_agent_protocol.demo.kit import (
@@ -47,7 +47,7 @@ agent = Agent(
     instructions=(
         "Use run_two_companies to show how Ledgerly pays Ada's invoices at Northwind "
         "Bank for her. Be clear that this is composition of two PAP relationships, not "
-        "a company-to-company protocol. Never expose tokens, codes, or proofs."
+        "a company-to-company protocol. Never expose tokens, codes, or Session JWTs."
     ),
 )
 
@@ -66,7 +66,7 @@ async def run_two_companies() -> dict[str, Any]:
     reactor = personal_agent_reactor(
         PersonalAgentHost(atlas, clock), network=network, http_client=http
     )
-    transport = DpopHttpClient(reactor=reactor, http_client=http)
+    transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
     operations = OperationsClient(transport=transport)
 
@@ -75,12 +75,10 @@ async def run_two_companies() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
     device = DeviceSignInClient(reactor=reactor, http_client=http)
@@ -91,7 +89,6 @@ async def run_two_companies() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("books:read", "payments:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -107,10 +104,16 @@ async def run_two_companies() -> dict[str, Any]:
     async def say(text: str):  # type: ignore[no-untyped-def]
         message = Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
         if not cursor:
-            page = await conversations.start(chat, message, token=token, wait=0, **who)
+            page = await conversations.start(chat, message, session=session, token=token, wait=0)
         else:
             page = await conversations.send(
-                chat, cursor["id"], message, token=token, cursor=cursor["at"], wait=0, **who
+                chat,
+                cursor["id"],
+                message,
+                session=session,
+                token=token,
+                cursor=cursor["at"],
+                wait=0,
             )
         cursor.update(id=page.conversation_id, at=page.cursor)
         return [e for e in page.events if e.type != "state"][-1].message
@@ -125,13 +128,17 @@ async def run_two_companies() -> dict[str, Any]:
     performed_before_approval = len(bank_plugin.executor.performed)
 
     # 3. Ada approves in Atlas; Ledgerly confirms that exact revision at Northwind.
-    paid = await operations.confirm(ops, relayed, approval=approve(relayed), token=token, **who)
+    paid = await operations.confirm(
+        ops, relayed, approval=approve(relayed), session=session, token=token
+    )
     first = (await bank.operation_record(bank_plugin.executor.performed[0])).operation
 
     # 4. A standing permission is itself an operation Ada approves.
     allow = "Allow Ledgerly to pay Acme invoices up to EUR 2000 without asking"
     grant = (await say(allow)).operation
-    granted = await operations.confirm(ops, grant, approval=approve(grant), token=token, **who)
+    granted = await operations.confirm(
+        ops, grant, approval=approve(grant), session=session, token=token
+    )
 
     # 5. Within the bounds: paid under the permission, Ada told what was done.
     told = await say("Pay INV-0043")
@@ -162,7 +169,7 @@ async def run_two_companies() -> dict[str, Any]:
         else None,
         "beyond_bounds_asks_ada": over.summary if over else None,
         "bank_payments_performed": len(bank_plugin.executor.performed),
-        "tokens_codes_and_proofs_withheld": True,
+        "tokens_codes_and_session_jwts_withheld": True,
     }
 
 

@@ -23,9 +23,9 @@ from personal_agent_protocol import (
     ConversationError,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
     SessionClient,
+    SessionHttpClient,
     generate_message_id,
 )
 from personal_agent_protocol.company import build_company, company_app
@@ -46,7 +46,7 @@ agent = Agent(
     instructions=(
         "Use explain_conversation_control to explain how a PAP conversation is signed "
         "in to, handed to the user directly or to a person at the company, and closed. "
-        "Never expose tokens, codes, or proofs."
+        "Never expose tokens, codes, or Session JWTs."
     ),
 )
 
@@ -78,15 +78,15 @@ async def explain_conversation_control() -> dict[str, Any]:
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
-    conversations = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
+    conversations = ConversationClient(
+        transport=SessionHttpClient(reactor=reactor, http_client=http)
+    )
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     def say(text: str, author: str = "agent") -> Message:
@@ -99,13 +99,13 @@ async def explain_conversation_control() -> dict[str, Any]:
     # 1. Signed out, the company answers with an `authorization` event instead:
     #    `insufficient_scope`, with the scope the request needs.
     page = await conversations.start(
-        endpoint, say("Where is my jacket order?"), token=session, wait=0, **who
+        endpoint, say("Where is my jacket order?"), session=session, wait=0
     )
     parent = page.conversation_id
     asked = [e for e in page.events if e.type != "state"][-1]
 
     # 2. The host signs Ada in (Device Sign-In on Manzanita's page) for that scope; the
-    #    same Session (same Session Key) and conversation continue signed in.
+    #    same Session and conversation continue signed in.
     device = DeviceSignInClient(reactor=reactor, http_client=http)
     started = await device.begin(
         device_authorization_endpoint=metadata.device_authorization_endpoint,
@@ -114,7 +114,6 @@ async def explain_conversation_control() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=tuple((asked.scope or "").split()),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -127,35 +126,43 @@ async def explain_conversation_control() -> dict[str, Any]:
         endpoint,
         parent,
         say("Where is my jacket order?"),
+        session=session,
         token=token,
         cursor=page.cursor,
         wait=0,
-        **who,
     )
     answered = [e for e in page.events if e.type != "state"][-1].message
 
     # 3. Ada wants to talk to Manzanita herself: a Direct Conversation under the parent.
     direct = await conversations.start_direct(
-        endpoint, parent, say("I'd like to ask about sizing myself", "human"), token=token, **who
+        endpoint,
+        parent,
+        say("I'd like to ask about sizing myself", "human"),
+        session=session,
+        token=token,
     )
     refusals: dict[str, object] = {}
     for action in ("send", "handoff"):
         try:
             if action == "send":
-                await conversations.send(endpoint, parent, say("Still there?"), token=token, **who)
+                await conversations.send(
+                    endpoint, parent, say("Still there?"), session=session, token=token
+                )
             else:
-                await conversations.handoff(endpoint, parent, token=token, **who)
+                await conversations.handoff(endpoint, parent, session=session, token=token)
         except ConversationError as error:
             refusals[action] = error.code
             refusals[f"{action}_names_the_open_direct_conversation"] = (error.details or {}).get(
                 "conversation_id"
             ) == direct.conversation_id
-    direct_closed = await conversations.close(endpoint, direct.conversation_id, token=token, **who)
+    direct_closed = await conversations.close(
+        endpoint, direct.conversation_id, session=session, token=token
+    )
 
     # 4. Handoff to a person at the company; their replies' author is `human`.
-    handed = await conversations.handoff(endpoint, parent, token=token, **who)
+    handed = await conversations.handoff(endpoint, parent, session=session, token=token)
     page = await conversations.send(
-        endpoint, parent, say("Thank you"), token=token, cursor=page.cursor, wait=0, **who
+        endpoint, parent, say("Thank you"), session=session, token=token, cursor=page.cursor, wait=0
     )
     after_handoff = [
         f"{event.type}:{event.status}" if event.status else event.type for event in page.events
@@ -169,15 +176,17 @@ async def explain_conversation_control() -> dict[str, Any]:
         author_name="Sam",
     )
     page = await conversations.read_events(
-        endpoint, parent, token=token, cursor=page.cursor, wait=0, **who
+        endpoint, parent, session=session, token=token, cursor=page.cursor, wait=0
     )
     replies = [event.message for event in page.events if event.message is not None]
     person = replies[-1].author.model_dump(exclude_none=True) if replies else None
 
     # 5. Closing ends the conversation; what it started is not cancelled.
-    closed = await conversations.close(endpoint, parent, token=token, **who)
+    closed = await conversations.close(endpoint, parent, session=session, token=token)
     try:
-        await conversations.send(endpoint, parent, say("One more thing"), token=token, **who)
+        await conversations.send(
+            endpoint, parent, say("One more thing"), session=session, token=token
+        )
         after_close = "accepted"
     except ConversationError as error:
         after_close = error.code

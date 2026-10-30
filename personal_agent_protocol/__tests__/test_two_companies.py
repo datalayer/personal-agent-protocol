@@ -13,9 +13,9 @@ from personal_agent_protocol import (
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
     SessionClient,
+    SessionHttpClient,
     generate_message_id,
 )
 from personal_agent_protocol.demo.kit import (
@@ -48,7 +48,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
     reactor = personal_agent_reactor(
         PersonalAgentHost(atlas, clock), network=network, http_client=http
     )
-    transport = DpopHttpClient(reactor=reactor, http_client=http)
+    transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
     operations = OperationsClient(transport=transport)
 
@@ -56,12 +56,10 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
     company = await DiscoveryClient(reactor=reactor, http_client=http).discover("ledgerly.example")
     metadata = company.oauth_metadata
     assert metadata is not None
-    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
     device = DeviceSignInClient(reactor=reactor, http_client=http)
@@ -72,14 +70,13 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         client_id=atlas.client_id,
         scopes=("books:read", "payments:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=company.document.organization,
         protected_resources=metadata.protected_resources,
     )
     await firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
     clock.advance(started.poll_interval)
     token = (await device.poll(started.reference)).token
-    assert token is not None and token.signed_in
+    assert token is not None
 
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     ops = firm.config.operations_endpoint
@@ -88,7 +85,9 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
 
     # 1. Ledgerly is not yet connected to Northwind: Ada approves it on Northwind's page.
-    page = await conversations.start(endpoint, say("Pay INV-0042"), token=token, wait=0, **who)
+    page = await conversations.start(
+        endpoint, say("Pay INV-0042"), session=session, token=token, wait=0
+    )
     connect = [e for e in page.events if e.type != "state"][-1].message.data["connect"]  # type: ignore[union-attr,index]
     assert connect["verification_uri"] == "https://northwind.example/device"
     await bank.approve_device(connect["user_code"], account_id=ACCOUNT)
@@ -99,10 +98,10 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         endpoint,
         page.conversation_id,
         say("Done. Pay INV-0042"),
+        session=session,
         token=token,
         cursor=page.cursor,
         wait=0,
-        **who,
     )
     relayed = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert relayed is not None and relayed.user_approval_required
@@ -112,7 +111,9 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
     assert bank_plugin.executor.performed == []
 
     # 3. Ada approves in Atlas; Ledgerly confirms that exact revision at Northwind.
-    paid = await operations.confirm(ops, relayed, approval=approve(relayed), token=token, **who)
+    paid = await operations.confirm(
+        ops, relayed, approval=approve(relayed), session=session, token=token
+    )
     assert paid.operation.state == "succeeded"  # type: ignore[union-attr]
     assert paid.operation.result.summary.startswith(  # type: ignore[union-attr]
         "Northwind Bank: Sent EUR 1250.00 to Acme GmbH for INV-0042"
@@ -126,13 +127,15 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         endpoint,
         page.conversation_id,
         say("Allow Ledgerly to pay Acme invoices up to EUR 2000 without asking"),
+        session=session,
         token=token,
         cursor=page.cursor,
         wait=0,
-        **who,
     )
     grant = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
-    granted = await operations.confirm(ops, grant, approval=approve(grant), token=token, **who)  # type: ignore[arg-type]
+    granted = await operations.confirm(
+        ops, grant, approval=approve(grant), session=session, token=token
+    )  # type: ignore[arg-type]
     assert granted.operation.state == "succeeded"  # type: ignore[union-attr]
 
     # 5. Within the bounds: paid under the standing permission, Ada told what was done.
@@ -140,10 +143,10 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         endpoint,
         page.conversation_id,
         say("Pay INV-0043"),
+        session=session,
         token=token,
         cursor=page.cursor,
         wait=0,
-        **who,
     )
     told = [e for e in page.events if e.type != "state"][-1].message  # type: ignore[union-attr]
     assert told.operation is None  # type: ignore[union-attr]
@@ -156,10 +159,10 @@ async def test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_
         endpoint,
         page.conversation_id,
         say("Pay INV-0044"),
+        session=session,
         token=token,
         cursor=page.cursor,
         wait=0,
-        **who,
     )
     over = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     assert over is not None and "EUR 3400.00" in over.summary

@@ -8,7 +8,7 @@ runs a journey: discovery, a signed-out Session, a question, Device Sign-In, and
 confirmed exchange. Each protocol stage is one event whose attributes come from an
 allowlist — a domain, an issuer, a status, a count — so what the tool hands the
 model is exactly what a trace or an analytics pipeline would receive, and holds no
-token, code, proof, or identifier. With `opentelemetry-api` installed, the same
+token, code, Session JWT, or identifier. With `opentelemetry-api` installed, the same
 events become spans through `OpenTelemetrySink`.
 """
 
@@ -30,10 +30,10 @@ from personal_agent_protocol import (
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
-    DpopHttpClient,
     Message,
     RecordingTelemetrySink,
     SessionClient,
+    SessionHttpClient,
     generate_message_id,
 )
 from personal_agent_protocol.demo.kit import (
@@ -84,19 +84,17 @@ async def read_pap_telemetry() -> dict[str, Any]:
         http_client=http,
         plugins=[(PluginManifest(name="atlas-telemetry", version="1"), Telemetry(sink))],
     )
-    transport = DpopHttpClient(reactor=reactor, http_client=http)
+    transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
 
     company = await DiscoveryClient(reactor=reactor, http_client=http).discover(DOMAIN)
     metadata = company.oauth_metadata
     if not (metadata is not None and metadata.device_authorization_endpoint is not None):
         raise RuntimeError("the example world is incomplete")
-    who = {"tenant_id": TENANT, "issuer": metadata.issuer}
     session = await SessionClient(reactor=reactor, http_client=http).start(
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
-        token_endpoint=metadata.token_endpoint,
         tenant_id=TENANT,
     )
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
@@ -105,7 +103,7 @@ async def read_pap_telemetry() -> dict[str, Any]:
         return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
 
     page = await conversations.start(
-        endpoint, say("Where is my jacket order?"), token=session, wait=0, **who
+        endpoint, say("Where is my jacket order?"), session=session, wait=0
     )
     device = DeviceSignInClient(reactor=reactor, http_client=http)
     started = await device.begin(
@@ -115,7 +113,6 @@ async def read_pap_telemetry() -> dict[str, Any]:
         client_id=atlas.client_id,
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
-        session_key=session.session_key,
         organization=company.document.organization,
         protected_resources=metadata.protected_resources,
     )
@@ -128,17 +125,17 @@ async def read_pap_telemetry() -> dict[str, Any]:
         endpoint,
         page.conversation_id,
         say("Exchange it for something warmer"),
+        session=session,
         token=signed_in,
         cursor=page.cursor,
         wait=0,
-        **who,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
     ops = operations_endpoint(company.document, ClientMetadata.model_validate(atlas.metadata))
     if proposal is None or ops is None:
         raise RuntimeError("the example world is incomplete")
     await OperationsClient(transport=transport).confirm(
-        ops, proposal, approval=approve(proposal), token=signed_in, **who
+        ops, proposal, approval=approve(proposal), session=session, token=signed_in
     )
 
     events = [event.as_dict() for event in sink.events]

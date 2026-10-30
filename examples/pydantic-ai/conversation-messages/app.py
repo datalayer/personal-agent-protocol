@@ -12,26 +12,26 @@ from pydantic_ai import Agent
 from reactor import PluginManifest
 
 from personal_agent_protocol import (
-    DPOP_PROOF_PROVIDERS,
+    SESSION_SIGNERS,
     Author,
     ConversationClient,
-    DpopHttpClient,
     Message,
-    SessionToken,
+    SessionClient,
+    SessionHttpClient,
     build_pap_reactor,
     generate_message_id,
 )
 
 
-class Proofs:
-    async def create(self, request: object) -> SecretStr:
-        return SecretStr("host-only-proof")
+class SessionJwts:
+    async def sign(self, request: object) -> SecretStr:
+        return SecretStr("host-only-session-jwt")
 
 
 class Plugin:
     def provide_contributions(self, contributions: object) -> None:
         contributions.contribute(  # type: ignore[attr-defined]
-            DPOP_PROOF_PROVIDERS, Proofs(), contribution_id="protected-dpop"
+            SESSION_SIGNERS, SessionJwts(), contribution_id="protected-session-signer"
         )
 
 
@@ -57,14 +57,13 @@ async def demonstrate_conversation() -> dict[str, object]:
     async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
         reactor, _ = build_pap_reactor(http_client=http)
         reactor.register_plugin(PluginManifest(name="conversation-example", version="1"), Plugin())
-        client = ConversationClient(transport=DpopHttpClient(reactor=reactor, http_client=http))
-        token = SessionToken(
-            access_token=SecretStr("host-only-token"),
-            token_type="DPoP",  # noqa: S106 - OAuth token type
-            expires_in=300,
-            # The Session Key's JWK thumbprint names the Session; it stays in the host.
-            session_key="NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
-            signed_in=False,
+        client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
+        # A Session is local: signed out, and with no request sent.
+        session = await SessionClient(reactor=reactor, http_client=http).start(
+            client_id="https://assistant.example/agent.json",
+            pairwise_user_id="usr_host_only_example",
+            issuer="https://auth.shop.example",
+            tenant_id="demo",
         )
         # The personal agent writes this message itself: its `author` is `agent`.
         first = Message(
@@ -75,9 +74,7 @@ async def demonstrate_conversation() -> dict[str, object]:
         started = await client.start(
             "https://api.shop.example/poppy/conversations",
             first,
-            token=token,
-            tenant_id="demo",
-            issuer="https://auth.shop.example",
+            session=session,
         )
         follow_up = Message(
             id=generate_message_id(reactor),
@@ -88,9 +85,7 @@ async def demonstrate_conversation() -> dict[str, object]:
             "https://api.shop.example/poppy/conversations",
             started.conversation_id,
             follow_up,
-            token=token,
-            tenant_id="demo",
-            issuer="https://auth.shop.example",
+            session=session,
         )
         reactor.stop()
     return {

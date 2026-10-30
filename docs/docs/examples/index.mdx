@@ -18,15 +18,15 @@ capability owns sensitive work, and what may safely cross into model context.
 | ------------------------------------------------------ | ------------------------------------------------------------- | -------------------------- |
 | [Company discovery](./company-discovery)               | Resolve and validate public PAP capabilities                  | A company domain           |
 | [Agent identity](./agent-identity)                     | Verify personal-agent metadata and signing policy             | An `agent.json` URL        |
-| [Session assertion](./session-assertion)               | Bind a short-lived request to a pairwise user                 | Verified metadata          |
+| [Delegation](./delegation)                             | Vouch for a delegated key, naming no User and no Company      | Verified metadata          |
 | [Direct Sign-In boundary](./direct-sign-in-boundary)   | Keep OAuth state and PKCE outside the model                   | A signed-out Session       |
-| [DPoP proof](./dpop-proof)                             | Bind one proof to one HTTP request                            | A protected key            |
-| [DPoP transport](./dpop-transport)                     | Retry and redirect without replaying proofs or leaking tokens | A Session Token reference  |
+| [Session JWT](./session-jwt)                           | Bind one Session JWT to one HTTP request                      | A protected key            |
+| [Session transport](./session-transport)               | Restart and redirect without leaking tokens or Session JWTs   | A Session and access token |
 | [Conversation messages](./conversation-messages)       | Create and retry idempotent messages safely                   | A conversation endpoint    |
 | [Conversation events](./conversation-events)           | Long poll, drain, recover, and de-duplicate ordered events    | A conversation and cursor  |
-| [Session lifecycle](./session-lifecycle)               | Start, retry, and renew a signed-out Session                  | An authorization server    |
-| [Direct Sign-In lifecycle](./direct-sign-in-lifecycle) | Upgrade the same Session after user consent                   | A browser callback         |
-| [Browser Session](./browser-session)                   | Join the agent's browser to the same Session                  | A join code and DPoP proof |
+| [Session lifecycle](./session-lifecycle)               | Start a signed-out Session, and restart it when refused       | A company issuer           |
+| [Direct Sign-In lifecycle](./direct-sign-in-lifecycle) | Sign in after user consent, keep the tokens in the host       | A browser callback         |
+| [Browser Session](./browser-session)                   | Join the agent's browser to the same Session                  | A join code and a Session  |
 | [Account Tokens](./account-tokens) | Refresh, rotate, narrow, expire, and revoke without exposing the token | A signed-in Session |
 | [Mediated Sign-In](./mediated-sign-in) | Relay protected input to one endpoint, then a one-time code | Declared mediated fields |
 | [Conversation streaming](./conversation-streaming) | Stream over SSE, reconnect from `Last-Event-ID`, never act on deltas | An open conversation |
@@ -90,23 +90,20 @@ company domain. Its result contains only:
 - extension names.
 
 Raw response bodies, authorization URLs, callback parameters, assertions,
-DPoP proofs, Session Tokens, and Account Tokens never enter model context.
+Session JWTs, access tokens, and refresh tokens never enter model context.
 
 ### What the Loop applications show
 
-- **`dpop-proof`** creates and verifies a real ES256 proof in host code and
-  demonstrates one-use replay rejection. Its Reactor gallery view creates fresh
-  device-side proofs with non-exportable Web Crypto keys but keeps only boolean
-  policy evidence in React state. Server-side signature and replay verification
-  stays behind PAP's `./server` entry and is never bundled into the browser view.
+- **`session-jwt`** signs and verifies a real ES256 Session JWT in host code and
+  demonstrates one-use replay rejection, keeping only boolean policy evidence.
 - **`session-lifecycle`** drives the real `SessionClient` against a
-  deterministic local company. Nonce retry creates fresh assertions and proofs,
-  and renewal proves the existing Session's own key, the Session Key. Only status, scopes, and
-  boolean evidence reach the agent or React state.
+  deterministic local company. Each request gets a fresh Session JWT, and
+  `invalid_session` starts a new Session once. Only status and boolean evidence reach
+  the agent or React state.
 - **`direct-sign-in-lifecycle`** drives the real `DirectSignInClient` through
   both sides of the browser pause: atomic state consumption, exact callback
-  validation, a proof-bound nonce retry, partial consent, and continuation of
-  the original Session. Browser and credential material stays with Reactor
+  validation, partial consent, and token custody. Browser and credential material
+  stays with Reactor
   contributions and the host transport.
 - **PAP Guided Journey**, a separate gallery example, advances the user,
   company, and wire views together across discovery, a signed-out conversation,

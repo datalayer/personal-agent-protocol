@@ -133,7 +133,7 @@ for (const entry of points) {
 test("the tenant-scoped points are the inventory's", () => {
   assert.deepEqual(
     inventory.points.filter((entry) => entry.tenant !== null).map((entry) => entry.id).sort(),
-    ["pap.dpopProofProvider", "pap.pairwiseUserIdStore"],
+    ["pap.pairwiseUserIdStore", "pap.sessionSigner"],
   );
 });
 
@@ -161,42 +161,37 @@ test("pairwise IDs are resolved per tenant and never cross", async () => {
   assert.notEqual(one, two);
 });
 
-test("each DPoP proof is asked for the request's own tenant", async () => {
+test("each Session JWT is asked for the request's own tenant", async () => {
   const asked = [];
-  const proofs = {
-    async create(request) {
-      asked.push([request.tenantId, request.sessionKey]);
-      return new portable.SecretValue(`proof-for-${request.tenantId}`);
+  const signer = {
+    async sign(request) {
+      asked.push([request.tenantId, request.sid]);
+      return new portable.SecretValue(`jwt-for-${request.tenantId}`);
     },
   };
   const seen = [];
   const fetch = async (_url, init) => {
-    seen.push(new Headers(init.headers).get("dpop"));
+    seen.push(new Headers(init.headers).get("poppy-session"));
     return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
   };
   const reactor = portable.buildPapReactor({}, [
-    contributor("proofs", portable.DpopProofProviders, proofs, 10),
+    contributor("session-signer", portable.SessionSigners, signer, 10),
   ]);
-  const client = new portable.DpopFetchClient({ reactor, fetch });
-  const token = (sessionKey) => ({
-    accessToken: new portable.SecretValue("sat"),
-    tokenType: "DPoP",
-    expiresIn: 60,
-    scopes: [],
-    sessionKey,
-    signedIn: false,
-  });
-  const one = "1".repeat(43);
-  const two = "2".repeat(43);
-  for (const [tenantId, sessionKey] of [["tenant-one", one], ["tenant-two", two]]) {
-    await client.request("GET", "https://shop.example/api/orders", {
-      token: token(sessionKey),
-      tenantId,
+  const client = new portable.SessionFetchClient({ reactor, fetch });
+  const one = "1".repeat(22);
+  const two = "2".repeat(22);
+  for (const [tenantId, sid] of [["tenant-one", one], ["tenant-two", two]]) {
+    const session = new portable.PapSession({
+      sid,
+      sub: "usr_ada",
       issuer: "https://shop.example",
+      clientId: "https://agent.example/agent.json",
+      tenantId,
     });
+    await client.request("GET", "https://shop.example/api/orders", { session });
   }
   reactor.stop();
-  // Each proof names its tenant, and its Session by the token's key (§4.3).
+  // Each JWT names its tenant, and its Session by its `sid` (§5.2).
   assert.deepEqual(asked, [["tenant-one", one], ["tenant-two", two]]);
-  assert.deepEqual(seen, ["proof-for-tenant-one", "proof-for-tenant-two"]);
+  assert.deepEqual(seen, ["jwt-for-tenant-one", "jwt-for-tenant-two"]);
 });

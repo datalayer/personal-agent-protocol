@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DirectSignInClient, SessionClient, discoverCompany } from "../../lib/index.js";
+import { DirectSignInClient, SessionClient, discoverCompany, sessionHeaders } from "../../lib/index.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
 import { CONSENT_COOKIE } from "../../lib/server.js";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -17,6 +17,7 @@ import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./suppor
 const TENANT = "atlas-demo";
 const PAIRWISE = "usr_ada_at_manzanita_000000";
 const AUTHORIZE = "https://manzanita.example/oauth/authorize";
+const ORDERS = "https://manzanita.example/api/orders";
 const HIDDEN = /<input type="hidden" name="([^"]+)" value="([^"]*)">/g;
 
 /** Atlas's website, whose key set a spec rotates; it counts JWKS fetches. */
@@ -49,57 +50,73 @@ async function world(maxAge) {
   const host = await agentHost({ identity: atlas, fetch, clock });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  /** A Session started by an agent signing with `identity`'s key (on `agent`, else its own host). */
-  const start = async (identity, agent) => {
-    agent ??= await agentHost({ identity, fetch, clock });
-    return new SessionClient({ reactor: agent.reactor, fetch }).start({
+  /**
+   * One signed-out request in a new Session, whose delegation `identity`'s key signed.
+   *
+   * Each call is a new host, so a new delegated key and delegation: a delegation is verified
+   * against the agent's keys when it is first seen (§5.2).
+   */
+  const accepted = async (identity) => {
+    const agent = await agentHost({ identity, fetch, clock });
+    const session = await new SessionClient({ reactor: agent.reactor, fetch }).start({
       clientId: identity.clientId,
       pairwiseUserId: PAIRWISE,
       issuer: metadata.issuer,
-      tokenEndpoint: metadata.token_endpoint,
       tenantId: TENANT,
     });
+    const answer = await fetch(ORDERS, { method: "GET", headers: await sessionHeaders(agent.reactor, "GET", ORDERS, { session }) });
+    if (answer.status === 400) {
+      assert.equal((await answer.json()).error, "invalid_session");
+      return false;
+    }
+    // Signed out: the Session is good, and the account needs a sign-in (§7).
+    assert.equal(answer.status, 401);
+    return true;
   };
   const rotated = (kid) => agentIdentity({ domain: "atlas.example", name: "Atlas", kid });
-  return { clock, fetch, atlas, site, shop, host, metadata, start, rotated };
+  return { clock, fetch, atlas, site, shop, host, metadata, accepted, rotated };
 }
 
 test("overlapping JWKS: either key verifies during the overlap, the retired one after it is refused", async () => {
   const w = await world(600);
-  await w.start(w.atlas); // signed with key-1: the company caches [key-1]
+  assert.ok(await w.accepted(w.atlas)); // the company caches [key-1]
   assert.equal(w.site.jwksFetches, 1);
   const newer = await w.rotated("key-2");
 
+  // The overlap: both keys are published; the agent signs delegations with the new one.
   w.site.keys = [...w.atlas.jwks.keys, ...newer.jwks.keys];
-  assert.equal((await w.start(newer)).signedIn, false);
+  assert.ok(await w.accepted(newer));
   assert.equal(w.site.jwksFetches, 2); // the unknown kid fetched the set again, at once
-  assert.equal((await w.start(w.atlas)).signedIn, false);
-  assert.equal((await w.start(newer)).signedIn, false);
+  // Delegations signed with the old key still verify during the overlap, from the cache.
+  assert.ok(await w.accepted(w.atlas));
+  assert.ok(await w.accepted(newer));
   assert.equal(w.site.jwksFetches, 2);
 
   // Retired: still verified until the cached set expires (its max-age), refused after.
   w.site.keys = [...newer.jwks.keys];
   w.clock.advance(599);
-  assert.equal((await w.start(w.atlas)).signedIn, false);
+  assert.ok(await w.accepted(w.atlas));
   w.clock.advance(2);
-  await assert.rejects(w.start(w.atlas), (error) => error.code === "invalid_client");
-  assert.equal((await w.start(newer)).signedIn, false);
+  assert.equal(await w.accepted(w.atlas), false);
+  assert.ok(await w.accepted(newer));
 });
 
 test("unknown kids fetch the set again at most once a minute", async () => {
   const w = await world(3600);
-  await w.start(w.atlas);
+  assert.ok(await w.accepted(w.atlas));
   assert.equal(w.site.jwksFetches, 1);
+  // Delegations naming keys that were never published: refused, one fetch for all of them.
   for (let index = 0; index < 20; index += 1) {
-    await assert.rejects(w.start(await w.rotated(`forged-${index}`)), (error) => error.code === "invalid_client");
+    assert.equal(await w.accepted(await w.rotated(`forged-${index}`)), false);
   }
   assert.equal(w.site.jwksFetches, 2);
+  // A real rotation inside that minute waits for the next refetch: then it verifies.
   const newer = await w.rotated("key-2");
   w.site.keys = [...w.atlas.jwks.keys, ...newer.jwks.keys];
-  await assert.rejects(w.start(newer));
+  assert.equal(await w.accepted(newer), false);
   assert.equal(w.site.jwksFetches, 2);
   w.clock.advance(61);
-  assert.equal((await w.start(newer)).signedIn, false);
+  assert.ok(await w.accepted(newer));
   assert.equal(w.site.jwksFetches, 3);
 });
 
@@ -123,8 +140,6 @@ async function open(shop, url, cookie) {
 
 test("the consent form is bound to the browser that was shown it", async () => {
   const w = await world(600);
-  // On the host that signs in: the Session Key is that host's (§4.3).
-  const session = await w.start(w.atlas, w.host);
   const client = new DirectSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
   await client.begin({
     authorizationEndpoint: w.metadata.authorization_endpoint,
@@ -134,7 +149,6 @@ test("the consent form is bound to the browser that was shown it", async () => {
     redirectUri: "https://atlas.example/oauth/callback",
     scopes: ["orders:read"],
     tenantId: TENANT,
-    sessionKey: session.sessionKey,
   });
   const url = w.host.browser.urls.at(-1);
   const ours = await open(w.shop, url);
@@ -148,6 +162,7 @@ test("the consent form is bound to the browser that was shown it", async () => {
     for (const attribute of ["Path=/", "Secure", "HttpOnly", "SameSite=Strict"]) assert.ok(shown.setCookie.includes(attribute));
   }
   assert.deepEqual(Object.keys(ours.form).sort(), ["csrf", "request_id"]);
+  assert.notEqual(ours.form.request_id, theirs.form.request_id);
   assert.ok(ours.answer.body.includes(`action="${AUTHORIZE}"`));
   assert.notEqual(ours.cookie, theirs.cookie);
 
@@ -173,7 +188,7 @@ test("the consent form is bound to the browser that was shown it", async () => {
   const decision = await w.shop.consentDecision(post(allow, { cookie: ours.cookie }));
   assert.deepEqual(decision, { requestId: ours.form.request_id, allow: true });
   const callbackUrl = await w.shop.approveAuthorization(decision.requestId, { accountId: "acct_ada" });
-  assert.equal((await client.complete({ callbackUrl })).token.signedIn, true);
+  assert.deepEqual((await client.complete({ callbackUrl })).token.scopes, ["orders:read"]);
   await assert.rejects(w.shop.consentDecision(post(allow, { cookie: ours.cookie })));
   // A browser that already has the cookie keeps it.
   const again = await open(w.shop, url, ours.cookie);

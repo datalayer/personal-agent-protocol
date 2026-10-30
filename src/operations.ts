@@ -130,6 +130,8 @@ const TOKEN = /[A-Za-z*][A-Za-z0-9!#$%&'*+.^_`|~:/-]*/y;
 const NUMBER = /-?\d{1,15}(\.\d{1,3})?/y;
 const BYTES = /:[A-Za-z0-9+/=]*:/y;
 const DISPLAY = /%"[^"]*"/y;
+/** Any bare item but a String: a Token `a` or an Integer `1` is never the String "a" or "1". */
+const NOT_A_STRING = Symbol("not a String");
 
 /** A strict parser of an RFC 9651 Dictionary, keeping the Strings a caller reads. */
 class Dictionary {
@@ -204,7 +206,7 @@ class Dictionary {
     }
   }
 
-  #bareItem(): unknown {
+  #bareItem(): string | typeof NOT_A_STRING {
     const first = this.#peek();
     if (first === '"') return this.#string();
     if (first === "?") {
@@ -212,16 +214,19 @@ class Dictionary {
       const value = this.#peek();
       if (value !== "0" && value !== "1") throw new DictionaryError();
       this.#at += 1;
-      return value === "1";
-    }
-    if (first === ":") return this.#match(BYTES);
-    if (first === "@") {
+    } else if (first === ":") {
+      this.#match(BYTES);
+    } else if (first === "@") {
       this.#at += 1;
-      return this.#match(NUMBER);
+      this.#match(NUMBER);
+    } else if (first === "%") {
+      this.#match(DISPLAY);
+    } else if (first === "-" || /^[0-9]$/.test(first)) {
+      this.#match(NUMBER);
+    } else {
+      this.#match(TOKEN);
     }
-    if (first === "%") return this.#match(DISPLAY);
-    if (first === "-" || /^[0-9]$/.test(first)) return this.#match(NUMBER);
-    return this.#match(TOKEN);
+    return NOT_A_STRING;
   }
 
   #string(): string {

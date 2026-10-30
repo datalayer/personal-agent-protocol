@@ -12,7 +12,6 @@ import {
   Clocks,
   AuthorizationError,
   DeviceSignInClient,
-  DpopProofProviders,
   SecretValue,
   Signers,
   TokenStores,
@@ -22,7 +21,6 @@ import {
 
 function devicePlugin() {
   const state = new Map();
-  const proofs = [];
   const tokens = new Map();
   let now = new Date("2026-10-10T00:00:00Z");
   const plugin = {
@@ -64,18 +62,13 @@ function devicePlugin() {
       },
       {
         point: Signers,
-        value: { async sign() { return new SecretValue("client-assertion"); } },
-        options: { id: "signer" },
-      },
-      {
-        point: DpopProofProviders,
         value: {
-          async create(request) {
-            proofs.push(request);
-            return new SecretValue("proof");
+          async sign(_claims, { purpose }) {
+            assert.equal(purpose, "client_assertion");
+            return new SecretValue("client-assertion");
           },
         },
-        options: { id: "dpop" },
+        options: { id: "signer" },
       },
     ],
   };
@@ -83,7 +76,6 @@ function devicePlugin() {
     plugin,
     tokens,
     state,
-    proofs,
     advance(seconds) {
       now = new Date(now.getTime() + seconds * 1000);
     },
@@ -97,20 +89,23 @@ const options = {
   clientId: "https://agent.example/agent.json",
   scopes: ["orders:read", "orders:write"],
   tenantId: "application-one",
-  sessionKey: "K".repeat(43),
   organization: { name: "Company", domain: "company.example" },
   protectedResources: ["https://company.example"],
 };
 
-test("Device Sign-In paces polling and stores the Account Token", async () => {
+test("Device Sign-In paces polling and keeps the refresh token behind a reference", async () => {
   const extension = devicePlugin();
   const forms = [];
   let calls = 0;
   const fetch = async (_input, init) => {
     calls += 1;
-    forms.push(new URLSearchParams(init.body));
+    const form = new URLSearchParams(init.body);
+    forms.push(form);
+    // OAuth endpoints get no Session header and no proof (§5.2).
+    const headers = Object.keys(init.headers).map((name) => name.toLowerCase());
+    assert.ok(!headers.includes("poppy-session") && !headers.includes("dpop"));
+    assert.equal(form.get("client_assertion"), "client-assertion");
     if (calls === 1) {
-      assert.equal(init.headers.DPoP, undefined);
       return Response.json({
         device_code: "private-device-code",
         user_code: "WDJB-MJHT",
@@ -120,17 +115,16 @@ test("Device Sign-In paces polling and stores the Account Token", async () => {
         interval: 5,
       });
     }
-    assert.equal(init.headers.DPoP, "proof");
     if (calls === 2) {
       return Response.json({ error: "authorization_pending" }, { status: 400 });
     }
     if (calls === 3) return Response.json({ error: "slow_down" }, { status: 400 });
     return Response.json({
-      access_token: "signed-in-session-token",
-      token_type: "DPoP",
+      access_token: "signed-in-access-token",
+      token_type: "Bearer",
       expires_in: 300,
       scope: "orders:read",
-      refresh_token: "private-account-token",
+      refresh_token: "private-refresh-token",
     });
   };
   const reactor = buildPapReactor({ fetch }, [extension.plugin]);
@@ -139,12 +133,14 @@ test("Device Sign-In paces polling and stores the Account Token", async () => {
   assert.equal(started.userCode, "WDJB-MJHT");
   assert.deepEqual([started.organizationName, started.organizationDomain], ["Company", "company.example"]);
   assert.ok(!JSON.stringify(started).includes("private-device-code"));
+  assert.equal(calls, 1);
 
   const early = await client.poll(started.reference);
   assert.equal(early.status, "pending");
   assert.equal(calls, 1);
   extension.advance(5);
-  await client.poll(started.reference);
+  const pending = await client.poll(started.reference);
+  assert.equal(pending.retryAt.toISOString(), "2026-10-10T00:00:10.000Z");
   extension.advance(5);
   const slowed = await client.poll(started.reference);
   assert.equal(slowed.retryAt.toISOString(), "2026-10-10T00:00:20.000Z");
@@ -155,12 +151,41 @@ test("Device Sign-In paces polling and stores the Account Token", async () => {
   assert.equal(complete.status, "complete");
   assert.deepEqual(complete.grantedScopes, ["orders:read"]);
   assert.deepEqual(complete.missingScopes, ["orders:write"]);
-  assert.equal(complete.token.sessionKey, "K".repeat(43));
-  // Every poll's proof is signed with the Session's key: the company binds the code to it.
-  assert.deepEqual([...new Set(extension.proofs.map((proof) => proof.sessionKey))], ["K".repeat(43)]);
-  assert.equal(complete.token.accountToken, undefined);
-  assert.equal(extension.tokens.get(complete.accountTokenReference).reveal(), "private-account-token");
-  assert.equal(forms[1].get("device_code"), "private-device-code");
+  assert.equal(complete.token.accessToken.reveal(), "signed-in-access-token");
+  assert.ok(!JSON.stringify(complete).includes("private-refresh-token"));
+  assert.equal(extension.tokens.get(complete.refreshTokenReference).reveal(), "private-refresh-token");
+  assert.equal(forms[0].get("scope"), "orders:read orders:write");
+  assert.equal(forms.length, 4);
+  assert.ok(forms.slice(1).every((form) => form.get("device_code") === "private-device-code"));
+});
+
+test("a denied Device Sign-In is terminal", async () => {
+  const extension = devicePlugin();
+  const fetch = async (input) =>
+    String(input).endsWith("/device")
+      ? Response.json({
+          device_code: "private-device-code",
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://company.example/device",
+          expires_in: 60,
+          interval: 1,
+        })
+      : Response.json({ error: "access_denied", error_description: "private detail" }, { status: 400 });
+  const reactor = buildPapReactor({ fetch }, [extension.plugin]);
+  const client = new DeviceSignInClient({ reactor, fetch });
+  const started = await client.begin(options);
+  extension.advance(1);
+  await assert.rejects(client.poll(started.reference), (error) => {
+    assert.ok(error instanceof AuthorizationError);
+    assert.equal(error.code, "access_denied");
+    assert.ok(!String(error).includes("private detail"));
+    return true;
+  });
+  await assert.rejects(
+    client.poll(started.reference),
+    (error) => error instanceof AuthorizationError && error.code === "invalid_or_expired_device_session",
+  );
+  reactor.stop();
 });
 
 const LINKS = [
@@ -200,32 +225,6 @@ for (const [link, allowed] of LINKS) {
     reactor.stop();
   });
 }
-
-test("the device poll retries once with the token endpoint's nonce", async () => {
-  const extension = devicePlugin();
-  let calls = 0;
-  const fetch = async () => {
-    calls += 1;
-    if (calls === 1) {
-      return Response.json({
-        device_code: "private-device-code",
-        user_code: "WDJB-MJHT",
-        verification_uri: "https://company.example/device",
-        expires_in: 600,
-        interval: 5,
-      });
-    }
-    if (calls === 2) return Response.json({ error: "use_dpop_nonce" }, { status: 400, headers: { "DPoP-Nonce": "n-1" } });
-    return Response.json({ error: "authorization_pending" }, { status: 400 });
-  };
-  const reactor = buildPapReactor({ fetch }, [extension.plugin]);
-  const client = new DeviceSignInClient({ reactor, fetch });
-  const started = await client.begin(options);
-  extension.advance(5);
-  assert.equal((await client.poll(started.reference)).status, "pending");
-  assert.deepEqual(extension.proofs.map((request) => request.nonce), [undefined, "n-1"]);
-  reactor.stop();
-});
 
 test("a device authorization answering with a redirect gets nothing", async () => {
   const extension = devicePlugin();

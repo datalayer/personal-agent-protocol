@@ -2540,7 +2540,7 @@ guide:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - security.client-assertion-ps384-header-on-ec-key
-  reason: RSA key size is not checked.
+  reason: Companies accept ES256 and PS384 alone, not RS256; RSA key size is checked for blind keys only.
 - id: GUIDE-jwt-02
   source: guide
   section: Signing and verifying JWTs

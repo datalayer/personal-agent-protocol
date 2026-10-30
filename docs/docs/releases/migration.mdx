@@ -15,16 +15,19 @@ has the full list.
 0.28.0 implements [PAP draft 0.3](https://personalagentprotocol.org/docs/0.3/spec)
 as upstream rewrote it at commit `3e9bada` (revision 2026-10-28). The draft keeps
 the number 0.3, but a 0.27 personal agent and a 0.28 company cannot work together:
-upgrade both. The SDKs spell these the same way, Python in `snake_case` and
-TypeScript in `camelCase`.
+upgrade both. Python spells the names below in `snake_case`, TypeScript in
+`camelCase`; the table after this one lists the TypeScript names that differ by
+more than that.
 
 | Change | What to do |
 | --- | --- |
 | Sessions are local: a random `sid`, no network call | `SessionClient.start(...)` returns a `PapSession`; `renew`, `session_key`, `SessionToken` and the JWT bearer grant are gone |
 | Every company request carries `Poppy-Session` | Contribute `pap.sessionSigner` in place of `pap.dpopProofProvider`, or use the default with a `DelegatedKeyCustody` in place of `SessionKeyCustody` |
 | Delegations come from the signer | `pap.signer` receives `purpose="delegation"`; its key signs client assertions and delegations only |
-| Blind signing is available | A blind signer signs both client assertions and delegations; see the cryptography guide for what it gives up |
-| Access and refresh tokens under OAuth's names | Read `TokenResponse`; `refresh_token_expires_in` is gone; account clients take an access token, not a Session Token |
+| Blind signing is available | `BlindJoseSigner` signs both client assertions and delegations; see [what it gives up](/guides/cryptography/#blind-signing-and-what-it-gives-up) |
+| Access and refresh tokens under OAuth's names | Read `TokenResponse`; `AccountTokenClient` is `RefreshTokenClient`; `refresh_token_expires_in` is gone; account clients take an access token, not a Session Token |
+| `account_mismatch` is gone | Handle `invalid_session` for an access token of another account in a Session (a company MAY refuse it); start a new Session for a second account |
+| DPoP is the company's choice | The SDKs send no proofs and refuse a `DPoP` token response with `unsupported_token_type`; a company's `dpop_signing_alg_values_supported` is its own to list, and ignored ([DPoP](/guides/cryptography/#dpop)) |
 | MCP tokens | `token_for_mcp` requests by `resource`; Token Exchange is gone |
 | The issuer comes from the domain | A company serves `/.well-known/oauth-protected-resource` with `resource` = `https://{domain}` |
 | `invalid_session` is back, `invalid_grant` no longer ends a Session | Handle `invalid_session` by starting one new Session, then stop |
@@ -33,6 +36,18 @@ TypeScript in `camelCase`.
 | Mediated Sign-In is an extension grant | Publish `extensions["mediated-sign-in"]`, list the grant type; `auth.mediated` is refused |
 | Operations version 2 | `OperationsClient.ask_user` and `send` replace `confirm` and `cancel`; `operations_negotiated` replaces `operations_endpoint`; `cancel_open_operations` is `settle_open_operations`; standing permissions and `PapOutcome` are gone; `pap operations confirm` and `cancel` are `pap operations send` |
 | Feedback | `FeedbackReport` has no `kind` |
+
+| What a company's API sees | `ApiCall.carries_approval` says the request came with an approval; `ApiError.body` keeps an `action_failed` body, so a host needs no subclass for the company's words |
+
+In TypeScript, these differ by more than the case of their letters:
+
+| 0.27 | 0.28 |
+| --- | --- |
+| `DpopFetchClient` | `SessionFetchClient` |
+| `AccountTokenClient` | `RefreshTokenClient` |
+| `JoseDpopProofProvider`, `DpopProofProviders` | `DelegatedSessionSigner`, `SessionSigners` |
+| `InMemorySessionKeys`, `SessionKeyCustody` | `InMemoryDelegatedKeys`, `DelegatedKeyCustody` |
+| `offersTokenExchange` | removed |
 
 A custom company store keys Sessions by `client_id` and `sid`, and sees join
 codes authorized for a Session rather than proven with its key.

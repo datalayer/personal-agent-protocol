@@ -34,7 +34,11 @@ shape of 0.3 that 0.27.0 implements: see the
 - **Plain OAuth tokens:** refresh and access tokens under OAuth's names. The
   reference companies issue Bearer tokens. `dpop_jkt`, Poppy's own DPoP rules,
   `refresh_token_expires_in` and `account_mismatch` are gone. The SDKs do not
-  send DPoP proofs yet, and refuse a `DPoP` token response.
+  send DPoP proofs yet, though the draft says an agent SHOULD: they refuse a
+  `DPoP` token response with `unsupported_token_type`, so they can't sign in at a
+  company that requires DPoP. A company's `dpop_signing_alg_values_supported` is
+  its own to list, with any algorithms: both SDKs read it and act on nothing in
+  it.
 - **MCP:** a token is requested with `resource` set to the server's `url`. Token
   Exchange is gone.
 - **Sign-out, challenges, rate limits:** sign-out revokes every refresh token
@@ -55,6 +59,12 @@ shape of 0.3 that 0.27.0 implements: see the
   `user_approval_required`, `terms_changed` or `operation_not_found`. The agent
   asks the User about every operation. `PapOutcome` is withdrawn and `PapConfirm`
   is at version 2.
+- **Operations, for hosts:** `ApiError.body` (`body` in TypeScript) keeps a 422
+  `action_failed` body, so a host needs no subclass for the company's words;
+  `ApiCall.carries_approval` (`carriesApproval`) says the request came with an
+  approval, so a company can tell a retry from a first ask. A company says
+  `Retry-After: 5` while it performs, in both SDKs. A 429 is reported in telemetry
+  as `rate_limited`, not `refused`.
 - **Schemas:** feedback has no `kind`; an alternative's `instructions` has no
   length cap; an unknown conversation `status` reads as `working` and an unknown
   `responder` as `human`. Upstream's JSON Schemas are vendored and the fixtures

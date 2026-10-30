@@ -213,7 +213,6 @@ async def test_an_mcp_token_is_refused_everywhere_but_its_mcp_server() -> None:
         ("GET", "https://manzanita.example/api/orders"),
         ("POST", "https://manzanita.example/poppy/conversations"),
         ("GET", "https://manzanita.example/poppy/operations/op_any"),
-        ("POST", "https://manzanita.example/poppy/sign-in"),
         ("POST", "https://manzanita.example/poppy/feedback"),
     ]
     for method, url in endpoints:

@@ -355,7 +355,7 @@ def test_exit_codes_for_setup_input_refusals_and_usage(tmp_path: Path) -> None:
     pap("auth", "direct", session, *SCOPES, "--no-input", code=4)
     wrong = f"{ADA['email']}\nnot the password\n"
     assert (
-        "sign_in_failed"
+        "invalid_grant"
         in pap("auth", "mediated", session, *SCOPES, "--stdin", input=wrong, code=1).output
     )
     pap("api", "openapi", session, "GET", "/api/nothing-here", code=1)

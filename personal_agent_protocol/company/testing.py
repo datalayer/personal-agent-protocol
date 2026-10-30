@@ -156,7 +156,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
         ),
         CODE: IssuedCode("c", "https://atlas.example/cb", "chal", ("a",), "acct_1", ("a",), later),
         MEDIATED: PendingMediated(
-            "ses_1", "acct_1", ("a",), "ref", later, ("k1", "k2"), 2, "failed"
+            "c", "acct_1", ("a",), "ref", later, "a•••@example.com", ("k1", "k2"), 2, "failed"
         ),
         CONVERSATION: StoredConversation(
             conversation_id="cnv_1",

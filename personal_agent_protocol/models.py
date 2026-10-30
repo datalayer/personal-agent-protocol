@@ -120,28 +120,44 @@ class Organization(ProtocolModel):
     _normalize_domain = field_validator("domain")(_domain)
 
 
-class ScopeOption(ProtocolModel):
-    scopes: list[str] = Field(default_factory=list)
-
-
 class MediatedField(ProtocolModel):
     name: str = Field(min_length=1)
     label: str = Field(min_length=1)
     secret: bool
 
 
-class MediatedSignIn(ScopeOption):
-    """Mediated Sign-In, transitional (§4.7): the only sign-in type with its own scopes."""
+#: What a Mediated Sign-In field can't be called: the grant's own parameters and OAuth's
+#: (Mediated Sign-In 2).
+MEDIATED_RESERVED_FIELDS = frozenset(
+    {
+        "grant_type",
+        "scope",
+        "resource",
+        "client_id",
+        "client_secret",
+        "client_assertion",
+        "client_assertion_type",
+        "sign_in_id",
+        "one_time_code",
+    }
+)
 
-    endpoint: str
+
+class MediatedSignIn(ProtocolModel):
+    """`extensions["mediated-sign-in"]`, version 1: the credentials to collect, its scopes."""
+
+    version: Literal["1"]
     fields: list[MediatedField] = Field(min_length=1)
+    scopes: list[str] = Field(min_length=1)
 
     _scopes = field_validator("scopes")(lambda value: [_scope(item) for item in value])
 
-    @field_validator("endpoint")
+    @field_validator("fields")
     @classmethod
-    def validate_endpoint(cls, value: str) -> str:
-        return _https_url(value, "mediated sign-in endpoint")
+    def validate_fields(cls, value: list[MediatedField]) -> list[MediatedField]:
+        if any(field.name in MEDIATED_RESERVED_FIELDS for field in value):
+            raise ValueError("a Mediated Sign-In field can't use a reserved parameter name")
+        return value
 
 
 class ScopeHint(ProtocolModel):
@@ -162,16 +178,16 @@ class ScopeHint(ProtocolModel):
 
 
 class AuthCapabilities(ProtocolModel):
-    """`auth` (§3.1): optional; the issuer it names, Mediated Sign-In, the Company's scopes.
+    """`auth` (§3.1): optional; the issuer it names, the Company's scopes.
 
     `issuer` is needed only when the domain's protected resource metadata lists more
     than one authorization server, and then names one of them; with one, it may be
     left out, and if present names that one (§3.1, §3.2). Direct and Device Sign-In are
     not here: the issuer's `grant_types_supported` says whether the Company offers them.
+    Mediated Sign-In is an extension (`extensions["mediated-sign-in"]`).
     """
 
     issuer: str | None = None
-    mediated: MediatedSignIn | None = None
     scopes: dict[str, str] = Field(default_factory=dict)
     scope_hints: dict[str, ScopeHint] = Field(default_factory=dict)
 

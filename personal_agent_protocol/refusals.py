@@ -20,6 +20,8 @@ from .errors import PersonalAgentProtocolError, TransportError
 #: The statuses of an HTTP redirect.
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
+_CODE_REQUIRED = ("sign_in_id", "sent_to", "expires_in")
+
 _CHALLENGE_PARAMETER = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"')
 
 
@@ -37,7 +39,7 @@ def challenge_parameters(header: str) -> dict[str, str]:
 
 
 def refusal_details(response: httpx.Response, payload: object) -> dict[str, object]:
-    """What a refusal says besides its code: `extension`, `scope`, `retry_after`.
+    """What a refusal says besides its code: `extension`, `scope`, `retry_after`...
 
     `extension_required` names its extension in the JSON body at the token
     endpoint and the endpoints the protocol or an extension defines, and in
@@ -61,6 +63,9 @@ def refusal_details(response: httpx.Response, payload: object) -> dict[str, obje
     retry_after = response.headers.get("retry-after")
     if response.status_code == 429 and retry_after:
         details["retry_after"] = retry_after
+    if body.get("error") == "code_required":
+        # What continues a Mediated Sign-In (Mediated Sign-In 4).
+        details.update({name: body[name] for name in _CODE_REQUIRED if name in body})
     return details
 
 
@@ -97,9 +102,9 @@ def refuse_redirect(
 ) -> None:
     """Outside discovery a redirect never carries the protocol's secrets (§3).
 
-    A token, revocation, device authorization or Mediated Sign-In endpoint, an
-    API, or a conversation, feedback or extension endpoint answering with a
-    redirect is refused: nothing is sent to the new URL.
+    A token, revocation or device authorization endpoint, an API, or a conversation,
+    feedback or extension endpoint answering with a redirect is refused: nothing is sent
+    to the new URL.
     """
 
     if response.status_code in REDIRECT_STATUSES:

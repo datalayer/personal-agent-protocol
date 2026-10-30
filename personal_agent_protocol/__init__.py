@@ -79,8 +79,12 @@ from .errors import (
 from .feedback import FeedbackClient, FeedbackError, FeedbackReport, feedback_endpoint
 from .identity import AgentIdentityClient
 from .mediated import (
+    MEDIATED_EXTENSION,
+    MEDIATED_GRANT,
+    MEDIATED_VERSION,
     MediatedSignInClient,
     MediatedSignInResult,
+    mediated_sign_in,
 )
 from .models import (
     AUTHORIZATION_CODE_GRANT,
@@ -99,6 +103,7 @@ from .models import (
     FeedbackDescriptor,
     JsonWebKey,
     JsonWebKeySet,
+    MediatedSignIn,
     Message,
     OAuthServerMetadata,
     Operation,
@@ -215,6 +220,9 @@ __all__ = [
     "DISCOVERY_TRANSPORTS",
     "FINAL_STATES",
     "JWT_CLIENT_ASSERTION",
+    "MEDIATED_EXTENSION",
+    "MEDIATED_GRANT",
+    "MEDIATED_VERSION",
     "OPERATIONS_EXTENSION",
     "OPERATIONS_VERSION",
     "PAIRWISE_USER_ID_STORES",
@@ -297,6 +305,7 @@ __all__ = [
     "JoseSigner",
     "JsonWebKey",
     "JsonWebKeySet",
+    "MediatedSignIn",
     "MediatedSignInClient",
     "MediatedSignInResult",
     "Message",
@@ -370,6 +379,7 @@ __all__ = [
     "generate_pairwise_user_id",
     "is_loopback_redirect",
     "jwk_thumbprint",
+    "mediated_sign_in",
     "new_idempotency_key",
     "new_session_id",
     "openapi_url",

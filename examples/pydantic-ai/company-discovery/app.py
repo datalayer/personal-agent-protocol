@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic_ai import Agent
 
-from personal_agent_protocol import DiscoveryClient
+from personal_agent_protocol import DiscoveryClient, mediated_sign_in
 
 agent = Agent(
     instructions=(
@@ -31,12 +31,12 @@ async def discover_pap_company(domain: str) -> dict[str, Any]:
     document = company.document
     metadata = company.oauth_metadata
     # Direct and Device Sign-In are offered by the OAuth server's metadata (its grant
-    # types and endpoints); Mediated Sign-In by `auth.mediated` in poppy.json.
+    # types and endpoints); Mediated Sign-In by its extension in poppy.json and its grant type.
     sign_in = []
     if metadata is not None:
         sign_in += ["direct"] if metadata.offers_direct else []
         sign_in += ["device"] if metadata.offers_device else []
-    if document.auth is not None and document.auth.mediated is not None:
+    if mediated_sign_in(company) is not None:
         sign_in.append("mediated")
     interfaces = []
     if document.agent is not None:

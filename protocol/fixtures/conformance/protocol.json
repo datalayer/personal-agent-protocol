@@ -279,6 +279,39 @@
       }
     },
     {
+      "id": "protocol.extension-recognized-from-the-request",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.3-02"
+      ],
+      "check": "extension_negotiation",
+      "description": "An extension the Company recognizes from the request needs no client metadata entry.",
+      "input": {
+        "company": {
+          "mediated-sign-in": {
+            "version": "1",
+            "fields": [
+              {
+                "name": "email",
+                "label": "Email",
+                "secret": false
+              }
+            ],
+            "scopes": [
+              "orders:read"
+            ]
+          }
+        },
+        "agent": {}
+      },
+      "expect": {
+        "negotiated": {
+          "mediated-sign-in": "1"
+        }
+      }
+    },
+    {
       "id": "protocol.third-party-extension-name",
       "kind": "positive",
       "role": "personal-agent",

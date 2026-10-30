@@ -84,10 +84,13 @@ class Authenticated:
 
 @dataclass(frozen=True)
 class SignInContext:
-    """Who a Mediated Sign-In attempt comes from: the agent and its Session."""
+    """Who a Mediated Sign-In attempt comes from: the agent, by its `client_id`."""
 
     client_id: str
-    session_key: str
+
+
+class SignInRefused(Exception):  # noqa: N818 - an outcome, raised by an account directory
+    """The Company refuses this sign-in, whatever the credentials: `access_denied`."""
 
 
 @runtime_checkable
@@ -95,10 +98,10 @@ class AccountDirectory(Protocol):
     """The company's own accounts: credentials and second factors.
 
     The service limits Mediated Sign-In attempts itself (by account
-    identifier, by agent and user, by Session, and wrong codes by account),
-    but a directory MUST also throttle its own checks: it is the one place
-    that sees every path to an account, and `context` says which agent and
-    Session each attempt comes from (§4.7, a company MUST rate-limit).
+    identifier, by `client_id`, and wrong codes by account), but a directory
+    MUST also throttle its own checks: it is the one place that sees every
+    path to an account, and `context` says which agent each attempt comes
+    from. `authenticate` raises `SignInRefused` to refuse a sign-in outright.
     """
 
     async def authenticate(
@@ -418,6 +421,7 @@ __all__ = [
     "ReplayCache",
     "Reply",
     "SignInContext",
+    "SignInRefused",
     "StoreReplayCache",
     "StoredConversation",
     "StoredEvent",

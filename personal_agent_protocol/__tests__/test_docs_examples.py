@@ -442,9 +442,8 @@ async def _mediated_sign_in(docs: Docs) -> tuple[dict[str, Any], Check]:
         "MediatedSignInClient": MediatedSignInClient,
         "reactor": docs.reactor,
         "http": docs.http,
-        "document": company.document,
-        "issuer": company.oauth_metadata.issuer,
-        "signed_out_session": await docs.signed_out("shop.example"),
+        "company": company,
+        "client_id": (await docs.signed_out("shop.example")).client_id,
     }, check
 
 

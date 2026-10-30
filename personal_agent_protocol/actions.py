@@ -42,6 +42,7 @@ from .conversations import ConversationClient, StreamReconnected, TextDelta
 from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError
 from .identity import AgentIdentityClient
+from .mediated import mediated_sign_in
 from .models import ConversationEvent, DiscoveredCompany, Operation
 from .operations import OperationsClient, operations_endpoint
 from .reactor import APPROVAL_SURFACES, ApprovalRequest, ApprovalSurface, optional_contribution
@@ -86,13 +87,13 @@ async def discover_company(
         "organization": document.organization.name,
         "protocol_version": document.protocol_version,
         "issuer": metadata.issuer if metadata else None,
-        # Direct and Device from the issuer's grants, Mediated from poppy.json (§4.4).
+        # Direct, Device and Mediated from the issuer's grants, the last with its extension.
         "sign_in": [
             name
             for name, offered in (
                 ("direct", metadata is not None and metadata.offers_direct),
                 ("device", metadata is not None and metadata.offers_device),
-                ("mediated", document.auth is not None and document.auth.mediated is not None),
+                ("mediated", mediated_sign_in(company) is not None),
             )
             if offered
         ],

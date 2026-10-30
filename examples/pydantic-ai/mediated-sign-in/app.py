@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic_ai import Agent
 
-from personal_agent_protocol import AuthorizationError, DiscoveryClient, SessionClient
+from personal_agent_protocol import AuthorizationError, DiscoveryClient
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
@@ -22,10 +22,12 @@ from personal_agent_protocol.demo.kit import (
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
-from personal_agent_protocol.mediated import MediatedSignInClient
-
-TENANT = "atlas-example"
-PAIRWISE = "usr_ada_at_manzanita_000000"
+from personal_agent_protocol.mediated import (
+    MEDIATED_EXTENSION,
+    MediatedSignInClient,
+    mediated_sign_in,
+)
+from personal_agent_protocol.models import ExtensionDescriptor
 
 agent = Agent(
     instructions=(
@@ -38,7 +40,7 @@ agent = Agent(
 
 @agent.tool_plain
 async def explain_mediated_sign_in() -> dict[str, Any]:
-    """Sign a Session in through Manzanita's mediated endpoint; return safe evidence."""
+    """Sign in with the Mediated Sign-In grant at Manzanita's token endpoint: safe evidence."""
 
     clock = MutableClock()
     network = InProcessNetwork()
@@ -53,71 +55,56 @@ async def explain_mediated_sign_in() -> dict[str, Any]:
     reactor = personal_agent_reactor(host, network=network, http_client=http)
 
     company = await DiscoveryClient(reactor=reactor, http_client=http).discover("manzanita.example")
-    auth = company.document.auth
-    if not (auth is not None and auth.mediated is not None and company.oauth_metadata):
+    offered = mediated_sign_in(company)
+    if offered is None or company.oauth_metadata is None:
         raise RuntimeError("the example world is incomplete")
-    sessions = SessionClient(reactor=reactor, http_client=http)
-
-    async def signed_out_session():  # type: ignore[no-untyped-def]
-        return await sessions.start(
-            client_id=atlas.client_id,
-            pairwise_user_id=PAIRWISE,
-            issuer=auth.issuer,
-            tenant_id=TENANT,
-        )
-
-    session = await signed_out_session()
     mediated = MediatedSignInClient(reactor=reactor, http_client=http)
 
-    # An endpoint off the company's domain is refused before the user is asked anything.
-    off_domain = auth.mediated.model_copy(
-        update={"endpoint": "https://collector.attacker.example/sign-in"}
+    # A field named like a parameter of the grant is refused before the user is asked anything.
+    hostile = company.document.model_copy(
+        update={
+            "extensions": {
+                MEDIATED_EXTENSION: ExtensionDescriptor.model_validate(
+                    {
+                        "version": "1",
+                        "fields": [{"name": "client_id", "label": "Client", "secret": False}],
+                        "scopes": ["orders:read"],
+                    }
+                )
+            }
+        }
     )
     try:
         await mediated.sign_in(
-            mediated=off_domain,
-            organization=company.document.organization,
-            issuer=auth.issuer,
+            company=company.model_copy(update={"document": hostile}),
+            client_id=atlas.client_id,
             scopes=("orders:read",),
-            session=session,
         )
-        off_domain_refused = "not refused"
+        reserved_field_refused = "not refused"
     except AuthorizationError as error:
-        off_domain_refused = error.code
+        reserved_field_refused = error.code
     asked_before_refusal = len(typed.asked)
 
-    # The declared fields, collected by the host, sent once to the mediated endpoint.
+    # The declared fields, collected by the host, sent once to the issuer's token endpoint.
     started = await mediated.sign_in(
-        mediated=auth.mediated,
-        organization=company.document.organization,
-        issuer=auth.issuer,
-        scopes=("orders:read", "orders:write"),
-        session=session,
+        company=company, client_id=atlas.client_id, scopes=("orders:read", "orders:write")
     )
     if not (started.reference is not None):
         raise RuntimeError("the example world is incomplete")
 
-    # Only the Session that started the sign-in may finish it.
-    stranger = await signed_out_session()
-    try:
-        await mediated.submit_code(started.reference, session=stranger)
-        other_session = "accepted"
-    except AuthorizationError as error:
-        other_session = error.code
-
-    wrong = await mediated.submit_code(started.reference, session=session)
-    done = await mediated.submit_code(started.reference, session=session)
+    wrong = await mediated.submit_code(started.reference)
+    done = await mediated.submit_code(started.reference)
     await http.aclose()
 
     return {
-        "off_domain_endpoint": off_domain_refused,
-        "user_asked_before_off_domain_refusal": asked_before_refusal,
+        "token_endpoint": company.oauth_metadata.token_endpoint,
+        "reserved_field": reserved_field_refused,
+        "user_asked_before_refusal": asked_before_refusal,
         "fields_asked_for": [field.label for field in typed.asked[0].fields],
         "secret_fields": [field.name for field in typed.asked[0].fields if field.secret],
         "asked_on_behalf_of": typed.asked[0].company_domain,
         "first_answer": started.status,
         "code_sent_to": started.sent_to,
-        "other_session_finishing": other_session,
         "wrong_code": wrong.status,
         "same_reference_after_wrong_code": wrong.reference == started.reference,
         "final_status": done.status,

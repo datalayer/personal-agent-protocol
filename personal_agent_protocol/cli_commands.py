@@ -80,7 +80,7 @@ from .device import DeviceSignInClient
 from .errors import PersonalAgentProtocolError
 from .identity import AgentIdentityClient
 from .mcp import McpClient, fetch_mcp_server_metadata, mcp_api
-from .mediated import MediatedSignInClient
+from .mediated import MediatedSignInClient, mediated_sign_in
 from .models import Author, DiscoveredCompany, Message, Operation
 from .operations import UserApproval, approve
 from .pairwise import resolve_pairwise_user_id
@@ -273,14 +273,14 @@ def _scopes(scope: list[str] | None, company: DiscoveredCompany, kind: str) -> t
     """The scopes the user named, each one the company offers this sign-in type (§4.4).
 
     Direct and Device Sign-In can grant any scope in `scopes_supported`; Mediated only
-    those in `auth.mediated.scopes`. None is chosen for the user: a request asks only
+    those in the extension's `scopes`. None is chosen for the user: a request asks only
     for what the task needs (RFC 9700 §2.3).
     """
 
     metadata = company.oauth_metadata
-    auth = company.document.auth
     if kind == "mediated":
-        offered = tuple(auth.mediated.scopes) if auth and auth.mediated else ()
+        mediated = mediated_sign_in(company)
+        offered = tuple(mediated.scopes) if mediated else ()
     else:
         offered = tuple(metadata.scopes_supported or ()) if metadata else ()
     if not scope:
@@ -590,7 +590,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         stdin: bool = STDIN,
         input_fd: int | None = INPUT_FD,
     ) -> None:
-        """Mediated Sign-In: the user's credentials go only to the company's endpoint.
+        """Mediated Sign-In: the user's credentials go only to the issuer's token endpoint.
 
         The company's fields (and a one-time code, if it sends one) are asked
         for at a hidden prompt, or read one per line from stdin or a descriptor.
@@ -599,23 +599,19 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session)
             company = await company_of(runtime, record.domain)
-            auth_document = company.document.auth
-            if auth_document is None or auth_document.mediated is None:
+            if mediated_sign_in(company) is None:
                 raise NotConfiguredError("no_mediated", "The company offers no Mediated Sign-In")
             client = MediatedSignInClient(reactor=runtime.reactor, http_client=runtime.http)
-            live = runtime.session_of(record)
             result = await client.sign_in(
-                mediated=auth_document.mediated,
-                organization=company.document.organization,
-                issuer=record.issuer,
+                company=company,
+                client_id=record.client_id,
                 scopes=_scopes(scope, company, "mediated"),
-                session=live,
             )
             while result.status == "code_required" and result.reference is not None:
-                result = await client.submit_code(result.reference, session=live)
+                result = await client.submit_code(result.reference)
             if result.status != "complete" or result.token is None:
                 raise PersonalAgentProtocolError(
-                    f"sign_in_{result.status}", "Mediated Sign-In did not complete"
+                    "sign_in_incomplete", "Mediated Sign-In did not complete"
                 )
             await _keep(
                 runtime, record, result.token, refresh_reference=result.refresh_token_reference

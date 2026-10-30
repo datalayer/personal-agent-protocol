@@ -58,8 +58,9 @@ bearer and `refresh_token` grants. Which sign-in modes the company offers
 comes from that metadata too: Direct Sign-In when it has an
 `authorization_endpoint` and the authorization code grant, Device Sign-In when
 it has a `device_authorization_endpoint` and the device code grant, Token
-Exchange when it lists that grant. `auth.mediated` in `poppy.json` offers
-Mediated Sign-In.
+Exchange when it lists that grant. The `mediated-sign-in` extension in
+`poppy.json`, with its grant type in `grant_types_supported`, offers Mediated
+Sign-In.
 
 Scopes are the company's own: name them for what they allow (`orders:read`,
 `payments:write`), describe each in `auth.scopes` (or in an OpenAPI

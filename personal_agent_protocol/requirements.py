@@ -4,7 +4,7 @@
 
 """The normative requirement ledger (`protocol/requirements.yaml`) and shared fixtures.
 
-Every MUST, MUST NOT, SHOULD, and SHOULD NOT of draft 0.2 and Operations v1
+Every MUST, MUST NOT, SHOULD, and SHOULD NOT of draft 0.3 and its extensions
 has one entry: its section, level, role, exact text, where it is implemented
 (`module:symbol`), and the test that shows it (`file::name`), or an `open`
 status with the reason. Recommendations from the upstream guides are kept
@@ -26,7 +26,7 @@ from typing import Any, Literal
 import yaml  # type: ignore[import-untyped]
 
 Level = Literal["MUST", "MUST NOT", "SHOULD", "SHOULD NOT"]
-Source = Literal["spec", "operations", "guide"]
+Source = Literal["spec", "operations", "mediated", "guide"]
 Status = Literal["implemented", "partial", "open", "not-applicable"]
 
 LEVELS: tuple[Level, ...] = ("MUST", "MUST NOT", "SHOULD", "SHOULD NOT")

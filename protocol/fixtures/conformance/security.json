@@ -894,8 +894,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "GUIDE-secrets-01",
-        "PAP-4.7-03"
+        "GUIDE-secrets-01"
       ],
       "description": "A refused request's body never echoes the token, assertion, or credential it carried."
     }

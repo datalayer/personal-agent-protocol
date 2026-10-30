@@ -4,12 +4,35 @@ title: Mediated Sign-In
 
 # Mediated Sign-In
 
-Mediated Sign-In (PAP draft 0.3 §4.7) is for companies that can't offer
-Direct or Device Sign-In yet. The company declares the fields it needs in
-`auth.mediated.fields` and an `endpoint`; the personal agent relays what the
-user types. It is not an OAuth flow, and the one sign-in mode where a password
-passes through the agent's host, so prefer Direct Sign-In, then Device Sign-In,
-when the company offers them.
+Mediated Sign-In is an extension of draft 0.3, version 1, for companies that
+can't offer Direct or Device Sign-In yet. The company lists it in `extensions`
+in its `poppy.json`, with the `fields` it needs and the `scopes` it can grant,
+and lists the grant type
+`https://personalagentprotocol.org/grant/mediated-sign-in` in its issuer's
+`grant_types_supported`. The personal agent sends what the user types to the
+issuer's token endpoint: it is an OAuth extension grant (RFC 6749 §4.5), and
+the one sign-in where a password passes through the agent's host, so prefer
+Direct Sign-In, then Device Sign-In, when the company offers them.
+
+```json
+{
+  "extensions": {
+    "mediated-sign-in": {
+      "version": "1",
+      "fields": [
+        { "name": "email", "label": "Email", "secret": false },
+        { "name": "password", "label": "Password", "secret": true }
+      ],
+      "scopes": ["orders:read"]
+    }
+  }
+}
+```
+
+The personal agent doesn't list the extension in its client metadata: the
+company recognizes it from the grant type, and can't answer it with
+`extension_required`. `mediated_sign_in(company)` reads what a discovered
+company offers, or `None`.
 
 :::note Mediated Sign-In is transitional
 
@@ -46,45 +69,51 @@ The answers must be exactly the declared fields, none empty, as `SecretStr`.
 
 ```python
 client = MediatedSignInClient(reactor=reactor, http_client=http)
-result = await client.sign_in(
-    mediated=document.auth.mediated,
-    organization=document.organization,
-    issuer=document.auth.issuer,
-    scopes=("orders:read",),
-    session=signed_out_session,  # the Session that sends the request
-)
+result = await client.sign_in(company=company, client_id=client_id, scopes=("orders:read",))
 if result.status == "code_required":
-    result = await client.submit_code(result.reference, session=signed_out_session)
+    result = await client.submit_code(result.reference)
 ```
 
 ```typescript
 const client = new MediatedSignInClient({ reactor, fetch });
-let result = await client.signIn({ mediated, organization, issuer, scopes, token, tenantId });
+let result = await client.signIn({ company, clientId, scopes });
 if (result.status === 'code_required') {
-  result = await client.submitCode(result.reference!, { token, tenantId, issuer });
+  result = await client.submitCode(result.reference!);
 }
 ```
 
 ## What the client enforces
 
-- **One endpoint, on the company's domain.** An endpoint whose host is not the
-  company's domain or a subdomain is `unsafe_mediated_endpoint`, raised before
-  the user is asked anything. Redirects are refused, never followed, so a
-  credential cannot be carried to another URL.
-- **Sent once, then dropped.** The values are serialized into one request body
-  and cleared; no result, error, or log carries them.
-- **A code continues alone.** `code_required` stores an opaque reference in
-  the `pap.authorizationStateStore`. The continuation sends only the code, to
-  `{endpoint}/{sign_in_id}`, and only from the Session that started it, proved
-  with the same Session Key (`session_mismatch` otherwise, with the pending
-  state kept).
-- **Statuses, not errors.** `failed` and `expired` are results; a refused
-  request (for example `rate_limited`) is an error with `retry_after` when the
-  company sent one.
-- **Same Session, no escalation.** A completed sign-in must be a DPoP token for
-  the initiating Session (the same Session Key), with no scope that was not
-  requested.
-  The Account Token goes to the token store; only its reference is returned.
+- **One endpoint.** The values go to the `token_endpoint` of the company's
+  issuer, with this grant and a client assertion, and nowhere else. Redirects
+  are refused, never followed, so a credential cannot be carried to another URL.
+- **Field names checked.** A field named like a parameter of the grant, such as
+  `client_id`, `scope`, `resource` or `sign_in_id`, is
+  `invalid_mediated_extension`, raised before the user is asked anything.
+- **Sent once, then dropped.** The values are put into one token request and
+  cleared; no result, error, or log carries them.
+- **A code continues alone.** `code_required` (HTTP 400, with `sign_in_id`,
+  `sent_to` and `expires_in`) stores an opaque reference in the
+  `pap.authorizationStateStore`. The continuation sends the same grant with
+  `sign_in_id` and `one_time_code`, and neither the credentials nor `scope`: the
+  sign-in keeps the scopes of the first request, and only the `client_id` that
+  started it can finish it. A wrong code returns `code_required` again until the
+  company's limit.
+- **OAuth errors.** `invalid_grant` (a wrong password, too many wrong codes, an
+  unknown `sign_in_id`), `expired_token`, `access_denied` and `invalid_scope` are
+  raised as `AuthorizationError`. A rate limit is HTTP 429 with `Retry-After`:
+  `rate_limited`, with `retry_after`, keeps a pending code.
+- **No escalation.** A completed sign-in is the same token response as Direct
+  and Device Sign-In, with no scope that was not requested. The refresh token
+  goes to the token store; only its reference is returned.
+
+## For a company
+
+`CompanyConfig(mediated_fields=(...), mediated_scopes=(...))` publishes the
+extension and lists the grant. A reserved field name is refused when the
+configuration is built, attempts are limited by account and by `client_id`, an
+unknown account and a wrong password both answer `invalid_grant`, and an
+`AccountDirectory` raises `SignInRefused` to answer `access_denied`.
 
 ## Security boundary
 
@@ -93,4 +122,4 @@ code was sent. It must never ask for a password or code in chat. If a user
 pastes one into the conversation anyway, the host should not forward it.
 
 See the runnable [Mediated Sign-In example](/examples/mediated-sign-in/) and
-the upstream [Mediated Sign-In specification](https://personalagentprotocol.org/docs/0.3/spec#mediated-sign-in).
+the upstream [Mediated Sign-In extension](https://personalagentprotocol.org/docs/0.3/extensions/mediated-sign-in).

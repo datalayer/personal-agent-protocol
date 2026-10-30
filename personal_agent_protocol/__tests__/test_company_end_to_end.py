@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 
+import httpx
 import pytest
 
 from personal_agent_protocol import (
@@ -33,10 +34,11 @@ from personal_agent_protocol.demo.kit import (
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
-from personal_agent_protocol.mediated import MediatedSignInClient
+from personal_agent_protocol.mediated import MEDIATED_GRANT, MediatedSignInClient
 from personal_agent_protocol.models import Author, ClientMetadata
 from personal_agent_protocol.operations import OperationsClient, approve, operations_endpoint
 
+SHOP = "https://manzanita.example"
 TENANT = "atlas-demo"
 PAIRWISE = "usr_ada_at_manzanita_000000"
 
@@ -62,6 +64,18 @@ class World:
         #: The Session `test_company_refusals.signed_in` signed in, and its refresh token.
         self.session: PapSession | None = None
         self.refresh_reference: str | None = None
+
+    async def mediated_grant(self, **fields: str) -> httpx.Response:
+        """The Mediated Sign-In grant, as a personal agent sends it, with `fields` as given."""
+
+        form = {
+            "grant_type": MEDIATED_GRANT,
+            **fields,
+            **await SessionClient(
+                reactor=self.reactor, http_client=self.http
+            ).client_authentication(client_id=self.atlas.client_id, issuer=SHOP),
+        }
+        return await self.http.post(f"{SHOP}/oauth/token", data=form)
 
     async def signed_out_session(self):  # type: ignore[no-untyped-def]
         company = await DiscoveryClient(reactor=self.reactor, http_client=self.http).discover(
@@ -187,19 +201,14 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
 async def test_mediated_sign_in_with_a_one_time_code() -> None:
     world = World(dict(ADA), {"code": "000000"}, {"code": ADA_CODE})
     session = await world.signed_out_session()
-    auth = world.company.document.auth
     mediated = MediatedSignInClient(reactor=world.reactor, http_client=world.http)
     started = await mediated.sign_in(
-        mediated=auth.mediated,  # type: ignore[union-attr,arg-type]
-        organization=world.company.document.organization,
-        issuer=session.issuer,
-        scopes=("orders:read",),
-        session=session,
+        company=world.company, client_id=session.client_id, scopes=("orders:read",)
     )
     assert started.status == "code_required" and started.sent_to == "a•••@example.com"
-    wrong = await mediated.submit_code(started.reference, session=session)  # type: ignore[arg-type]
+    wrong = await mediated.submit_code(started.reference)  # type: ignore[arg-type]
     assert wrong.status == "code_required"
-    done = await mediated.submit_code(started.reference, session=session)  # type: ignore[arg-type]
+    done = await mediated.submit_code(started.reference)  # type: ignore[arg-type]
     assert done.status == "complete" and done.granted_scopes == ("orders:read",)
     assert [request.purpose for request in world.host.protected_input.asked] == [
         "credentials",

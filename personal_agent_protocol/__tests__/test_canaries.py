@@ -145,7 +145,6 @@ class Harvest:
             self.secret(f"cookie {name}", value)
         body = request.content
         kind = request.headers.get("content-type", "")
-        path = request.url.path
         if kind.startswith("application/x-www-form-urlencoded"):
             form = dict(parse_qsl(body.decode()))
             self.secret("client assertion", form.get("client_assertion"))
@@ -154,10 +153,8 @@ class Harvest:
             self.secret("device code", form.get("device_code"))
             self.secret("refresh token", form.get("refresh_token"))
             self.secret("revoked token", form.get("token"))
-        elif kind.startswith("application/json") and path.startswith("/poppy/sign-in"):
-            sent = json.loads(body or b"{}")
-            self.secret("mediated password", sent.get("credentials", {}).get("password"))
-            self.secret("one-time code", sent.get("code"))
+            self.secret("mediated password", form.get("password"))
+            self.secret("one-time code", form.get("one_time_code"))
 
     def response(self, request: httpx.Request, response: httpx.Response) -> None:
         for name, value in _cookies(response.headers.get("set-cookie", "")):

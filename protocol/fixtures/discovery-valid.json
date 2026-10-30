@@ -6,24 +6,6 @@
   },
   "auth": {
     "issuer": "https://auth.example.com",
-    "mediated": {
-      "endpoint": "https://auth.example.com/poppy/sign-in",
-      "fields": [
-        {
-          "name": "email",
-          "label": "Email",
-          "secret": false
-        },
-        {
-          "name": "password",
-          "label": "Password",
-          "secret": true
-        }
-      ],
-      "scopes": [
-        "orders:read"
-      ]
-    },
     "scopes": {
       "orders:read": "See your orders, returns, and bookings",
       "orders:write": "Exchange or return items, and change bookings",
@@ -77,6 +59,24 @@
     "operations": {
       "version": "1",
       "endpoint": "https://api.example.com/poppy/operations"
+    },
+    "mediated-sign-in": {
+      "version": "1",
+      "fields": [
+        {
+          "name": "email",
+          "label": "Email",
+          "secret": false
+        },
+        {
+          "name": "password",
+          "label": "Password",
+          "secret": true
+        }
+      ],
+      "scopes": [
+        "orders:read"
+      ]
     }
   }
 }

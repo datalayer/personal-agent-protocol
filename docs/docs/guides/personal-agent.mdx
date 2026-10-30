@@ -75,7 +75,7 @@ A request that needs more than the token holds gets `insufficient_scope`, with
 the `scope` it needs, on an API, in a conversation's `authorization` event,
 and on Operations. Answer it with an Account Token that covers the scopes, or
 by signing the same Session in. The OAuth metadata says which modes the
-company offers (`offers_direct`, `offers_device`; `auth.mediated` for
+company offers (`offers_direct`, `offers_device`; `mediated_sign_in(company)` for
 Mediated Sign-In): prefer Direct Sign-In, then Device Sign-In, and use
 Mediated Sign-In, which is transitional, only when neither covers the task.
 

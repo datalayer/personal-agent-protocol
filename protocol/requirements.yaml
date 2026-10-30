@@ -1,7 +1,8 @@
-# Personal Agent Protocol draft 0.3 and Operations v1: the normative requirement ledger.
+# Personal Agent Protocol draft 0.3, Operations and Mediated Sign-In: the normative requirement ledger.
 #
 # requirements: every MUST, MUST NOT, SHOULD, and SHOULD NOT of the specification
-# (source: spec, the default) and the Operations extension (source: operations),
+# (source: spec, the default), the Operations extension (source: operations) and the
+# Mediated Sign-In extension (source: mediated),
 # one atomic statement per entry, with the upstream text that states it.
 # guide: recommendations from the upstream Guides (source: guide), kept apart.
 #
@@ -20,6 +21,7 @@ sources:
   spec: https://personalagentprotocol.org/docs/0.3/spec
   operations: https://personalagentprotocol.org/docs/0.3/extensions/operations
   guide: https://personalagentprotocol.org/docs/0.3/guides
+  mediated: https://personalagentprotocol.org/docs/0.3/extensions/mediated-sign-in
 requirements:
 - id: PAP-3-01
   section: '3'
@@ -350,8 +352,8 @@ requirements:
   status: not-applicable
   implementation:
   - personal_agent_protocol.company.service:CompanyService.oauth_metadata
-  reason: Withdrawn upstream (3e9bada) with Poppy's DPoP rules; the reference company issues Bearer
-    access tokens and lists no dpop_signing_alg_values_supported.
+  reason: Withdrawn upstream (3e9bada) with Poppy's DPoP rules; the reference company issues Bearer access
+    tokens and lists no dpop_signing_alg_values_supported.
 - id: PAP-3.2-11
   section: '3.2'
   level: MUST
@@ -1171,7 +1173,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService.approve_device
   - personal_agent_protocol.company.service:CompanyService.approve_authorization
   - personal_agent_protocol.company.service:CompanyService._refresh_grant
-  - personal_agent_protocol.company.service:CompanyService._mediated
+  - personal_agent_protocol.company.service:CompanyService._mediated_grant
   tests:
   - personal_agent_protocol/__tests__/test_direct_and_api.py::test_partial_consent_and_a_write_that_was_not_granted
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
@@ -1213,20 +1215,6 @@ requirements:
   status: open
   reason: No helper maps a task's scopes to a held Account Token; the host decides.
   implementation: []
-- id: PAP-4.4-20
-  section: '4.4'
-  level: SHOULD
-  role: personal-agent
-  text: A Personal Agent SHOULD use Direct or Device Sign-In rather than Mediated Sign-In when the Company
-    offers it and the scopes it can grant cover the task.
-  status: open
-  reason: The SDK says what the company offers; choosing the sign-in type is the host's (README, host-decided
-    helpers).
-  implementation:
-  - personal_agent_protocol.models:OAuthServerMetadata.offers_direct
-  - personal_agent_protocol.models:OAuthServerMetadata.offers_device
-  tests:
-  - personal_agent_protocol/__tests__/test_draft_03.py::test_the_issuer_lists_the_grants_and_scopes_it_offers
 - id: PAP-4.4-21
   section: '4.4'
   level: SHOULD
@@ -1374,141 +1362,6 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService.approve_device
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_a_device_code_works_only_for_the_agent_it_was_issued_to
-- id: PAP-4.7-01
-  section: '4.7'
-  level: MUST
-  role: personal-agent
-  text: 'secret marks a value the Personal Agent MUST protect: never shown back to the User, written to
-    logs, or sent anywhere else.'
-  status: implemented
-  implementation:
-  - personal_agent_protocol.mediated:MediatedSignInClient
-  - personal_agent_protocol.reactor:PROTECTED_INPUTS
-  tests:
-  - personal_agent_protocol/__tests__/test_mediated.py::test_the_declared_fields_go_to_the_endpoint_and_the_session_is_signed_in
-  - personal_agent_protocol/__tests__/test_mediated.py::test_a_one_time_code_continues_without_the_credentials
-- id: PAP-4.7-02
-  section: '4.7'
-  level: MUST
-  role: company
-  text: A Company that offers Mediated Sign-In MUST rate-limit attempts, MUST NOT return credentials in
-    any response, and SHOULD require a one-time code when a sign-in looks unusual.
-  status: partial
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService._mediated_code
-  tests:
-  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_mediated_sign_in_with_a_one_time_code
-  reason: Wrong one-time codes are capped (max_code_attempts); credential attempts are not yet rate-limited
-    by account, client_id, or user.
-- id: PAP-4.7-03
-  section: '4.7'
-  level: MUST NOT
-  role: company
-  text: A Company that offers Mediated Sign-In MUST rate-limit attempts, MUST NOT return credentials in
-    any response, and SHOULD require a one-time code when a sign-in looks unusual.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService._mediated
-  tests:
-  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_mediated_sign_in_with_a_one_time_code
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - security.refusals-disclose-no-credential
-- id: PAP-4.7-04
-  section: '4.7'
-  level: SHOULD
-  role: company
-  text: A Company that offers Mediated Sign-In MUST rate-limit attempts, MUST NOT return credentials in
-    any response, and SHOULD require a one-time code when a sign-in looks unusual.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.points:AccountDirectory.authenticate
-  - personal_agent_protocol.company.service:CompanyService._mediated
-  tests:
-  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_mediated_sign_in_with_a_one_time_code
-- id: PAP-4.7-05
-  section: '4.7'
-  level: MUST NOT
-  role: personal-agent
-  text: Personal Agents MUST NOT send credentials to any endpoint other than the Company's auth.mediated.endpoint.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.mediated:MediatedSignInClient._endpoint_on_company_domain
-  - personal_agent_protocol.mediated:MediatedSignInClient._post
-  tests:
-  - personal_agent_protocol/__tests__/test_mediated.py::test_a_redirect_never_carries_the_credentials_elsewhere
-  - personal_agent_protocol/__tests__/test_mediated.py::test_an_endpoint_off_the_company_domain_is_refused_before_asking
-- id: PAP-4.7-06
-  section: '4.7'
-  level: MUST
-  role: personal-agent
-  text: A Personal Agent MUST choose which stored credentials to send by the Company's auth.issuer, never
-    by the field labels or the endpoint.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.reactor:ProtectedInputRequest
-  - personal_agent_protocol.mediated:MediatedSignInClient.sign_in
-  tests:
-  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_in_a_session_another_account_used_signs_in
-- id: PAP-4.7-07
-  section: '4.7'
-  level: MUST
-  role: personal-agent
-  text: and MUST show the Company's organization.name and domain whenever it asks the User for credentials
-    or a code.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.reactor:ProtectedInputRequest
-  - personal_agent_protocol.ui:PapSignIn
-  tests:
-  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_in_a_session_another_account_used_signs_in
-  - personal_agent_protocol/__tests__/test_ui.py::test_direct_and_mediated_answers
-  - personal_agent_protocol/__tests__/test_ui.py::test_a_device_or_mediated_sign_in_names_its_company
-- id: PAP-4.7-08
-  section: '4.7'
-  level: MUST
-  role: personal-agent
-  text: After a sign-in ends, as complete, failed, or expired, the Personal Agent MUST either discard
-    the credentials or keep them only in a credential store the User chose, such as a password manager.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.mediated:MediatedSignInClient.sign_in
-  - personal_agent_protocol.mediated:MediatedSignInClient._collect
-  tests:
-  - personal_agent_protocol/__tests__/test_mediated.py::test_the_declared_fields_go_to_the_endpoint_and_the_session_is_signed_in
-  - personal_agent_protocol/__tests__/test_canaries.py::test_no_credential_reaches_logs_errors_urls_or_model_text
-- id: PAP-4.7-09
-  section: '4.7'
-  level: MUST NOT
-  role: personal-agent
-  text: It MUST NOT keep them anywhere else, including model context and logs.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.mediated:MediatedSignInClient
-  tests:
-  - personal_agent_protocol/__tests__/test_canaries.py::test_no_credential_reaches_logs_errors_urls_or_model_text
-- id: PAP-4.7-10
-  section: '4.7'
-  level: SHOULD NOT
-  role: personal-agent
-  text: After the User or the Company revokes the Personal Agent's access (4.9), the Personal Agent SHOULD
-    NOT sign in again with stored credentials unless the User asks it to.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.mediated:MediatedSignInClient
-  tests:
-  - personal_agent_protocol/__tests__/test_mediated.py::test_the_declared_fields_go_to_the_endpoint_and_the_session_is_signed_in
-- id: PAP-4.7-20
-  section: '4.7'
-  level: SHOULD
-  role: company
-  text: A Company SHOULD offer Mediated Sign-In only until it can add Direct or Device Sign-In, and SHOULD
-    stop offering it once those cover the scopes it grants.
-  status: not-applicable
-  reason: The reference company offers it to demonstrate the transitional flow; a deployment sets mediated_fields
-    only while it must.
-  implementation:
-  - personal_agent_protocol.company.service:CompanyConfig
 - id: PAP-4.8-01
   section: '4.8'
   level: MUST
@@ -1562,7 +1415,7 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._refresh_grant
   - personal_agent_protocol.company.service:CompanyService._sign_in
-  - personal_agent_protocol.company.service:CompanyService._mediated
+  - personal_agent_protocol.company.service:CompanyService._mediated_grant
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   - personal_agent_protocol/__tests__/test_company_rules.py::test_a_signed_out_session_can_use_another_accounts_token
@@ -2415,6 +2268,153 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_canaries.py::test_no_credential_reaches_logs_errors_urls_or_model_text
   - personal_agent_protocol/__tests__/test_canaries.py::test_the_examples_tools_tell_a_model_no_credential
+- id: MED-1-01
+  source: mediated
+  section: '1'
+  level: SHOULD
+  role: company
+  text: A Company SHOULD offer Mediated Sign-In only until it can add Direct or Device Sign-In, and SHOULD
+    stop offering it once those cover the scopes it grants.
+  status: not-applicable
+  reason: A Company's own decision; the reference company offers it to show the extension.
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests: []
+- id: MED-2-01
+  source: mediated
+  section: '2'
+  level: MUST NOT
+  role: company
+  text: name is the parameter the Personal Agent sends. It MUST NOT be grant_type, scope, resource, a
+    client authentication parameter such as client_id or client_assertion, or a parameter this extension
+    defines, such as sign_in_id.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.models:MediatedSignIn.validate_fields
+  tests:
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_company_cannot_publish_a_reserved_mediated_field
+  - personal_agent_protocol/__tests__/test_mediated.py::test_a_forbidden_field_name_is_refused
+- id: MED-2-02
+  source: mediated
+  section: '2'
+  level: MUST
+  role: personal-agent
+  text: 'secret marks a value the Personal Agent MUST protect: never shown back to the User, written to
+    logs, or sent anywhere else.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.mediated:MediatedSignInClient
+  - personal_agent_protocol.reactor:PROTECTED_INPUTS
+  tests:
+  - personal_agent_protocol/__tests__/test_mediated.py::test_the_declared_fields_go_to_the_token_endpoint_as_the_grant
+  - personal_agent_protocol/__tests__/test_mediated.py::test_a_one_time_code_continues_without_the_credentials_or_scope
+- id: MED-2-03
+  source: mediated
+  section: '2'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT grant scopes beyond those requested and listed here.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._mediated_grant
+  tests:
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_the_company_grants_only_the_extensions_scopes
+  - personal_agent_protocol/__tests__/test_security_review.py::test_finding_8_mediated_sign_in_refuses_unknown_or_missing_scopes
+- id: MED-6-01
+  source: mediated
+  section: '6'
+  level: MUST NOT
+  role: personal-agent
+  text: Personal Agents MUST NOT send credentials anywhere other than the token_endpoint of the Company's
+    issuer, with this grant.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.mediated:MediatedSignInClient.sign_in
+  - personal_agent_protocol.sessions:SessionClient.token_request
+  tests:
+  - personal_agent_protocol/__tests__/test_mediated.py::test_a_redirect_never_carries_the_credentials_elsewhere
+  - personal_agent_protocol/__tests__/test_security_review.py::test_finding_7_the_mediated_client_sends_credentials_once_and_follows_no_redirect
+- id: MED-6-02
+  source: mediated
+  section: '6'
+  level: MUST
+  role: personal-agent
+  text: A Personal Agent MUST choose which stored credentials to send by the Company's issuer, never by
+    the field labels or the endpoint,
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:ProtectedInputRequest
+  - personal_agent_protocol.mediated:MediatedSignInClient.sign_in
+  tests:
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_in_a_session_another_account_used_signs_in
+  - personal_agent_protocol/__tests__/test_mediated.py::test_the_declared_fields_go_to_the_token_endpoint_as_the_grant
+- id: MED-6-03
+  source: mediated
+  section: '6'
+  level: MUST
+  role: personal-agent
+  text: and MUST show the Company's organization.name and domain whenever it asks the User for credentials
+    or a code.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:ProtectedInputRequest
+  - personal_agent_protocol.ui:PapSignIn
+  tests:
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_mediated_sign_in_in_a_session_another_account_used_signs_in
+  - personal_agent_protocol/__tests__/test_mediated.py::test_a_one_time_code_continues_without_the_credentials_or_scope
+  - personal_agent_protocol/__tests__/test_ui.py::test_direct_and_mediated_answers
+- id: MED-6-04
+  source: mediated
+  section: '6'
+  level: MUST
+  role: personal-agent
+  text: After a sign-in ends, with tokens or an error other than code_required, the Personal Agent MUST
+    either discard the credentials or keep them only in a credential store the User chose, such as a password
+    manager.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.mediated:MediatedSignInClient.sign_in
+  - personal_agent_protocol.mediated:MediatedSignInClient._collect
+  tests:
+  - personal_agent_protocol/__tests__/test_mediated.py::test_the_declared_fields_go_to_the_token_endpoint_as_the_grant
+  - personal_agent_protocol/__tests__/test_canaries.py::test_no_credential_reaches_logs_errors_urls_or_model_text
+- id: MED-6-05
+  source: mediated
+  section: '6'
+  level: MUST NOT
+  role: personal-agent
+  text: It MUST NOT keep them anywhere else, including model context and logs (spec 10.2).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.mediated:MediatedSignInClient
+  tests:
+  - personal_agent_protocol/__tests__/test_canaries.py::test_no_credential_reaches_logs_errors_urls_or_model_text
+- id: MED-6-06
+  source: mediated
+  section: '6'
+  level: SHOULD NOT
+  role: personal-agent
+  text: After the User or the Company revokes the Personal Agent's access (spec 5.5), the Personal Agent
+    SHOULD NOT sign in again with stored credentials unless the User asks it to.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.mediated:MediatedSignInClient
+  tests:
+  - personal_agent_protocol/__tests__/test_mediated.py::test_the_declared_fields_go_to_the_token_endpoint_as_the_grant
+- id: MED-6-07
+  source: mediated
+  section: '6'
+  level: SHOULD
+  role: personal-agent
+  text: A Personal Agent SHOULD use Direct or Device Sign-In rather than Mediated Sign-In when the Company
+    offers it and its scopes cover the task.
+  status: open
+  reason: The SDK reports what a Company offers; choosing between sign-in types is the host's.
+  implementation:
+  - personal_agent_protocol.models:OAuthServerMetadata.offers_direct
+  - personal_agent_protocol.models:OAuthServerMetadata.offers_device
+  tests: []
 - id: OPS-2-01
   source: operations
   section: '2'
@@ -2996,7 +2996,8 @@ guide:
   implementation:
   - personal_agent_protocol.transport:SessionHttpClient.request
   - personal_agent_protocol.sessions:SessionClient.token_request
-  reason: Withdrawn or reshaped upstream at 3e9bada; this entry is rewritten when the ledger is regenerated from that commit.
+  reason: Withdrawn or reshaped upstream at 3e9bada; this entry is rewritten when the ledger is regenerated
+    from that commit.
 - id: GUIDE-retry-03
   source: guide
   section: Retries
@@ -3326,11 +3327,11 @@ guide:
   section: Mediated sign-in
   level: SHOULD
   role: company
-  text: Return the same failed response for an unknown account and a wrong password, so responses don't
-    reveal whether an account exists.
+  text: Return the same invalid_grant error for an unknown account and a wrong password, so responses
+    don't reveal whether an account exists.
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._mediated
+  - personal_agent_protocol.company.service:CompanyService._mediated_grant
   tests:
   - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_mediated_sign_in_with_a_one_time_code
 - id: GUIDE-co-mediated-02
@@ -3342,9 +3343,37 @@ guide:
     sign-in after the user disconnected it.
   status: open
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._mediated
+  - personal_agent_protocol.company.service:CompanyService._mediated_grant
   reason: Whether a code is required is the account directory's answer (Authenticated.code_reference);
     the company does not yet ask for one because of a disconnect.
+  tests: []
+- id: GUIDE-co-mediated-03
+  source: guide
+  section: Mediated sign-in
+  level: SHOULD
+  role: company
+  text: Rate-limit attempts by account, by client_id, and by network address, and cap wrong one-time codes.
+  status: partial
+  reason: By account and client_id; the neutral CompanyRequest carries no network address, which a Company
+    limits at its edge.
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._attempt_keys
+  - personal_agent_protocol.company.service:CompanyService._attempt_failed
+  tests:
+  - personal_agent_protocol/__tests__/test_security_review.py::test_finding_2_wrong_passwords_lock_the_account_out_with_backoff
+  - personal_agent_protocol/__tests__/test_security_review.py::test_finding_2_wrong_codes_count_per_account_across_sign_ins
+- id: GUIDE-co-mediated-04
+  source: guide
+  section: Mediated sign-in
+  level: SHOULD
+  role: company
+  text: Never store raw credentials or codes, including in logs, traces, and idempotency records.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._mediated_grant
+  tests:
+  - personal_agent_protocol/__tests__/test_company_end_to_end.py::test_mediated_sign_in_with_a_one_time_code
+  - personal_agent_protocol/__tests__/test_canaries.py::test_no_credential_reaches_logs_errors_urls_or_model_text
 - id: GUIDE-co-dpop-01
   source: guide
   section: DPoP proofs

@@ -28,7 +28,7 @@ from personal_agent_protocol import (
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.company import CLIENT_POLICIES, CompanyConfig
 from personal_agent_protocol.company.asgi import company_app
-from personal_agent_protocol.company.service import WEB_COOKIE, _composite
+from personal_agent_protocol.company.service import WEB_COOKIE
 from personal_agent_protocol.crypto import (
     SESSION_JWT_ALGORITHM,
     SESSION_JWT_TYPE,
@@ -43,7 +43,6 @@ from personal_agent_protocol.transport import SESSION_HEADER, session_headers
 from .test_company_end_to_end import TENANT, World
 from .test_company_refusals import signed_in
 
-MEDIATED = "https://manzanita.example/poppy/sign-in"
 MCP = "https://manzanita.example/mcp"
 
 
@@ -63,9 +62,7 @@ def _spy_token_responses(world: World) -> list[httpx.Response]:
 
     async def spy(request: httpx.Request) -> httpx.Response:
         response = await original(request)
-        if request.url.path in {"/oauth/token", "/poppy/sign-in"} or request.url.path.startswith(
-            "/poppy/sign-in/"
-        ):
+        if request.url.path == "/oauth/token":
             await response.aread()
             captured.append(response)
         return response
@@ -189,13 +186,11 @@ async def test_finding_1_mediated_sign_in_after_an_mcp_token_issues_the_default_
     for_mcp = await _for_mcp(world)
     session = world.session
     assert session is not None
-    started = await _post_json(
-        world, session, MEDIATED, {"credentials": dict(ADA), "scope": "orders:read"}
-    )
+    started = await world.mediated_grant(**ADA, scope="orders:read")
     sign_in_id = started.json()["sign_in_id"]
-    done = await _post_json(world, session, f"{MEDIATED}/{sign_in_id}", {"code": ADA_CODE})
+    done = await world.mediated_grant(sign_in_id=sign_in_id, one_time_code=ADA_CODE)
     body = done.json()
-    assert body["status"] == "complete" and body["token_type"] == "Bearer"
+    assert done.status_code == 200 and body["token_type"] == "Bearer"
     await _assert_the_default_token(world, session, SecretStr(body["access_token"]), for_mcp)
 
 
@@ -303,17 +298,14 @@ async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("scope", "expected"),
-    [("orders:read bogus:scope", 400), (None, 400), ("", 400), ("admin:all", 400), (7, 400)],
+    [("orders:read bogus:scope", 400), (None, 400), ("", 400), ("admin:all", 400), ("7", 400)],
 )
 async def test_finding_8_mediated_sign_in_refuses_unknown_or_missing_scopes(
-    scope: object, expected: int
+    scope: str | None, expected: int
 ) -> None:
     world = World()
-    session = await world.signed_out_session()
-    body: dict[str, object] = {"credentials": dict(ADA)}
-    if scope is not None:
-        body["scope"] = scope
-    response = await _post_json(world, session, MEDIATED, body)
+    await world.signed_out_session()
+    response = await world.mediated_grant(**ADA, **({} if scope is None else {"scope": scope}))
     assert response.status_code == expected
     assert response.json() == {"error": "invalid_scope"}
 
@@ -521,7 +513,7 @@ def _ignore_retry_after(world: World) -> None:
 async def test_finding_2_wrong_passwords_lock_the_account_out_with_backoff() -> None:
     world = World()
     _ignore_retry_after(world)
-    session = await world.signed_out_session()
+    await world.signed_out_session()
     directory = world.plugin.accounts  # type: ignore[attr-defined]
     seen: list[object] = []
     authenticate = directory.authenticate
@@ -532,32 +524,22 @@ async def test_finding_2_wrong_passwords_lock_the_account_out_with_backoff() -> 
 
     directory.authenticate = spy
     wrong = {"email": ADA["email"], "password": "wrong"}
-    answers = [
-        await _post_json(world, session, MEDIATED, {"credentials": wrong, "scope": "orders:read"})
-        for _ in range(8)
-    ]
-    assert [a.status_code for a in answers] == [200] * 5 + [429] * 3
-    assert {a.json().get("status") for a in answers[:5]} == {"failed"}
+    answers = [await world.mediated_grant(**wrong, scope="orders:read") for _ in range(8)]
+    assert [a.status_code for a in answers] == [400] * 5 + [429] * 3
+    assert {a.json().get("error") for a in answers[:5]} == {"invalid_grant"}
     assert not answers[5].content
     assert int(answers[5].headers["retry-after"]) == 15 * 60
     # Locked out: the directory is not asked, even with the right password.
     assert len(seen) == 5
-    right = await _post_json(
-        world, session, MEDIATED, {"credentials": dict(ADA), "scope": "orders:read"}
-    )
+    right = await world.mediated_grant(**ADA, scope="orders:read")
     assert right.status_code == 429 and len(seen) == 5
-    # The directory hears which agent and Session each attempt came from.
+    # The directory hears which agent each attempt came from.
     assert seen[0].client_id == world.atlas.client_id  # type: ignore[attr-defined]
-    assert seen[0].session_key == _composite(session.client_id, session.sid)  # type: ignore[attr-defined]
     # Once the lockout ends, the next failure locks the account out twice as long.
     world.clock.advance(15 * 60)
-    again = await _post_json(
-        world, session, MEDIATED, {"credentials": wrong, "scope": "orders:read"}
-    )
-    assert again.status_code == 200
-    doubled = await _post_json(
-        world, session, MEDIATED, {"credentials": wrong, "scope": "orders:read"}
-    )
+    again = await world.mediated_grant(**wrong, scope="orders:read")
+    assert again.status_code == 400
+    doubled = await world.mediated_grant(**wrong, scope="orders:read")
     assert doubled.status_code == 429 and int(doubled.headers["retry-after"]) == 30 * 60
 
 
@@ -565,35 +547,28 @@ async def test_finding_2_wrong_passwords_lock_the_account_out_with_backoff() -> 
 async def test_finding_2_wrong_codes_count_per_account_across_sign_ins() -> None:
     world = World()
     _ignore_retry_after(world)
-    session = await world.signed_out_session()
+    await world.signed_out_session()
     last = None
     for _ in range(5):
-        started = await _post_json(
-            world,
-            session,
-            MEDIATED,
-            {"credentials": dict(ADA), "scope": "orders:read orders:write"},
-        )
+        started = await world.mediated_grant(**ADA, scope="orders:read orders:write")
         if started.status_code == 429:
             last = started
             break
         sign_in_id = started.json()["sign_in_id"]
         for attempt in range(3):
-            answer = await _post_json(
-                world, session, f"{MEDIATED}/{sign_in_id}", {"code": f"00000{attempt}"}
+            answer = await world.mediated_grant(
+                sign_in_id=sign_in_id, one_time_code=f"00000{attempt}"
             )
-            if answer.json().get("status") == "failed":
+            if answer.json().get("error") == "invalid_grant":
                 break
     assert last is not None and last.status_code == 429 and not last.content
     # A right code after the account's code budget is spent does not sign in either.
     world.clock.advance(15 * 60)
-    started = await _post_json(
-        world, session, MEDIATED, {"credentials": dict(ADA), "scope": "orders:read"}
+    started = await world.mediated_grant(**ADA, scope="orders:read")
+    done = await world.mediated_grant(
+        sign_in_id=started.json()["sign_in_id"], one_time_code=ADA_CODE
     )
-    done = await _post_json(
-        world, session, f"{MEDIATED}/{started.json()['sign_in_id']}", {"code": ADA_CODE}
-    )
-    assert done.json()["status"] == "complete"
+    assert done.status_code == 200 and done.json()["access_token"]
 
 
 @pytest.mark.asyncio
@@ -772,7 +747,9 @@ async def test_finding_15_a_resource_response_is_read_only_up_to_its_limit() -> 
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         max_response_bytes=100 * 1024,
     )
-    response = await transport.request("GET", MEDIATED, session=session)
+    response = await transport.request(
+        "GET", "https://manzanita.example/api/orders", session=session
+    )
     assert len(response.content) == 100 * 1024 + 1
     assert endless.sent <= 3
 
@@ -797,12 +774,12 @@ async def test_finding_7_a_body_is_never_sent_to_a_redirect(status: int) -> None
     with pytest.raises(TransportError) as refused:
         await transport.request(
             "POST",
-            MEDIATED,
+            "https://manzanita.example/api/orders",
             session=session,
-            content=b'{"credentials":{"password":"x"}}',
+            content=b'{"note":"x"}',
         )
     assert refused.value.code == "redirect_refused"
-    assert [path for _, path, _ in seen] == ["/poppy/sign-in"]
+    assert [path for _, path, _ in seen] == ["/api/orders"]
 
 
 @pytest.mark.asyncio
@@ -813,7 +790,7 @@ async def test_finding_7_the_mediated_client_sends_credentials_once_and_follows_
     from personal_agent_protocol.mediated import MediatedSignInClient
 
     world = World(dict(ADA))
-    session = await world.signed_out_session()
+    await world.signed_out_session()
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -823,16 +800,11 @@ async def test_finding_7_the_mediated_client_sends_credentials_once_and_follows_
     client = MediatedSignInClient(
         reactor=world.reactor, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
     )
-    auth = world.company.document.auth
     with pytest.raises(AuthorizationError):
         await client.sign_in(
-            mediated=auth.mediated,  # type: ignore[union-attr,arg-type]
-            organization=world.company.document.organization,
-            issuer=auth.issuer,  # type: ignore[union-attr]
-            scopes=("orders:read",),
-            session=session,
+            company=world.company, client_id=world.atlas.client_id, scopes=("orders:read",)
         )
-    assert seen == ["/poppy/sign-in"]
+    assert seen == ["/oauth/token"]
 
 
 def test_finding_16_concurrent_writers_lose_no_secret(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -1167,19 +1139,6 @@ async def test_o4_a_token_in_the_query_is_refused_even_beside_a_valid_header() -
         )
         assert answer.status_code == 400
         assert answer.json()["error"] == "invalid_request"
-
-
-def test_o5_mediated_credentials_may_go_to_the_issuer_host() -> None:
-    from personal_agent_protocol.errors import AuthorizationError
-    from personal_agent_protocol.mediated import MediatedSignInClient
-
-    check = MediatedSignInClient._endpoint_on_company_domain
-    issuer = "https://auth.shop-login.example"
-    assert check("https://auth.shop-login.example/poppy/sign-in", "shop.example", issuer)
-    assert check("https://api.shop.example/poppy/sign-in", "shop.example", issuer)
-    for endpoint in ("https://evil.example/sign-in", "http://shop.example/sign-in"):
-        with pytest.raises(AuthorizationError):
-            check(endpoint, "shop.example", issuer)
 
 
 @pytest.mark.asyncio

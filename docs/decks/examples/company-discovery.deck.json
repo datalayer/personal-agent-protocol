@@ -56,7 +56,7 @@
       "title": "What the model sees",
       "left": { "heading": "Visible", "type": "bullets", "items": ["A verified capability summary", "Organization, sign-in methods, scopes and interfaces"] },
       "right": { "heading": "Never", "type": "bullets", "items": ["Raw response bodies", "Any credential: none were sent"] },
-      "notes": "The tool result is an inventory of what the company supports, not the raw documents it served: Direct and Device Sign-In as the OAuth metadata offers them, Mediated from auth.mediated, the company's own scopes in its own words, and whether it offers Token Exchange for MCP servers without DPoP. And since discovery sends no credential, there is none to leak."
+      "notes": "The tool result is an inventory of what the company supports, not the raw documents it served: Direct and Device Sign-In as the OAuth metadata offers them, Mediated from its extension and grant type, the company's own scopes in its own words, and whether it offers Token Exchange for MCP servers without DPoP. And since discovery sends no credential, there is none to leak."
     },
     {
       "type": "closing",

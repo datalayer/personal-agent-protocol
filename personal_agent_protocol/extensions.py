@@ -10,7 +10,10 @@
   an invalid name is ignored like any extension the agent does not support.
 - `negotiate_extensions` keeps only what both sides list with the same major
   version: everything else is ignored, so either side works with the other
-  under the specification alone.
+  under the specification alone. An extension the company recognizes from the
+  request itself, such as one with its own grant type, needs no entry on the
+  agent's side (`RECOGNIZED_FROM_THE_REQUEST`), and is never refused with
+  `extension_required`.
 - `extension_required` reads the `403` a company returns when a request needs
   an extension the personal agent does not list.
 """
@@ -25,7 +28,10 @@ from .models import ExtensionDescriptor
 from .refusals import challenge_parameters
 
 #: Extensions this SDK implements, by name and major version.
-SUPPORTED_EXTENSIONS: Mapping[str, str] = {"operations": "1"}
+SUPPORTED_EXTENSIONS: Mapping[str, str] = {"operations": "1", "mediated-sign-in": "1"}
+
+#: Extensions a company recognizes from the request: the agent doesn't list them (§3.3).
+RECOGNIZED_FROM_THE_REQUEST: frozenset[str] = frozenset({"mediated-sign-in"})
 
 _PLAIN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
@@ -63,8 +69,12 @@ def negotiate_extensions(
     for name, descriptor in company.items():
         if extension_name_kind(name) == "invalid":
             continue
+        if supported.get(name) != descriptor.version:
+            continue
         mine = agent.get(name)
-        if mine is None or supported.get(name) != descriptor.version:
+        if mine is None:
+            if name in RECOGNIZED_FROM_THE_REQUEST:
+                negotiated[name] = descriptor.version
             continue
         if mine.version == descriptor.version:
             negotiated[name] = descriptor.version
@@ -89,4 +99,7 @@ def extension_required(
     if values.get("error") != "extension_required":
         return None
     name = values.get("extension")
-    return name if isinstance(name, str) and extension_name_kind(name) != "invalid" else None
+    if not isinstance(name, str) or name in RECOGNIZED_FROM_THE_REQUEST:
+        # A company can't refuse a request that uses the extension itself (§3.3).
+        return None
+    return name if extension_name_kind(name) != "invalid" else None

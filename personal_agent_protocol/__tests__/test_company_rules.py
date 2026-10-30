@@ -24,19 +24,32 @@ from personal_agent_protocol import (
     AuthorizationError,
     ConversationError,
     DeviceSignInClient,
+    DiscoveryClient,
     Message,
+    SessionClient,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.apis import ApiClient, ApiError
-from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE
-from personal_agent_protocol.mediated import MediatedSignInClient
+from personal_agent_protocol.company import SignInRefused
+from personal_agent_protocol.demo.kit import (
+    AgentIdentity,
+    PersonalAgentHost,
+    ScriptedInput,
+    personal_agent_reactor,
+)
+from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
+from personal_agent_protocol.demo.manzanita import CONFIG as MANZANITA
+from personal_agent_protocol.mediated import (
+    MEDIATED_GRANT,
+    MediatedSignInClient,
+    mediated_sign_in,
+)
 from personal_agent_protocol.models import Author, ConversationEventPage
 from personal_agent_protocol.operations import OperationError, OperationsClient
 from personal_agent_protocol.sessions import PapSession
 
 from .test_company_end_to_end import TENANT, World
 
-MEDIATED = "https://manzanita.example/poppy/sign-in"
 ORDERS = "https://manzanita.example/api/orders"
 EXCHANGE = "https://manzanita.example/api/orders/ord_7Hk2/exchanges"
 
@@ -148,18 +161,12 @@ async def test_mediated_sign_in_in_a_session_another_account_used_signs_in() -> 
     await RefreshTokenClient(reactor=world.reactor, http_client=world.http).revoke(
         reference, context=context(world)
     )
-    auth = world.company.document.auth
-    assert auth is not None and auth.mediated is not None
     mediated = MediatedSignInClient(reactor=world.reactor, http_client=world.http)
     started = await mediated.sign_in(
-        mediated=auth.mediated,
-        organization=world.company.document.organization,
-        issuer=auth.issuer,
-        scopes=("orders:read",),
-        session=session,
+        company=world.company, client_id=session.client_id, scopes=("orders:read",)
     )
     assert started.status == "code_required" and started.reference is not None
-    done = await mediated.submit_code(started.reference, session=session)
+    done = await mediated.submit_code(started.reference)
     assert done.status == "complete" and done.token is not None
     # The host asked for the credentials naming the company and its issuer (Mediated Sign-In).
     asked = world.host.protected_input.asked[0]
@@ -239,47 +246,148 @@ async def test_after_sign_out_what_used_the_account_stays_and_asks_for_sign_in()
     assert hidden.value.code == "operation_not_found"
 
 
-# Mediated Sign-In's statuses and errors ------------------------------------------------------
+# Mediated Sign-In's errors --------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_a_failed_or_expired_mediated_sign_in_stays_so_and_unknown_is_not_found() -> None:
+async def test_a_failed_or_expired_mediated_sign_in_stays_so_and_unknown_is_invalid_grant() -> None:
     world = World()
-    session = await world.signed_out_session()
-    started = await post_json(
-        world, session, MEDIATED, {"credentials": dict(ADA), "scope": "orders:read"}
-    )
-    assert started.status_code == 200 and started.json()["status"] == "code_required"
+    await world.signed_out_session()
+    started = await world.mediated_grant(**ADA, scope="orders:read")
+    assert started.status_code == 400 and started.json()["error"] == "code_required"
+    assert started.json()["sent_to"] == "a•••@example.com"
+    assert started.json()["expires_in"] == 300
     sign_in_id = started.json()["sign_in_id"]
-    statuses = []
+    errors = []
     for _ in range(4):
-        answer = await post_json(world, session, f"{MEDIATED}/{sign_in_id}", {"code": "000000"})
-        assert answer.status_code == 200  # every status comes with HTTP 200
-        statuses.append(answer.json()["status"])
-    assert statuses == ["code_required", "code_required", "failed", "failed"]
-    # Even the right code: once failed, the same status again.
-    right = await post_json(world, session, f"{MEDIATED}/{sign_in_id}", {"code": ADA_CODE})
-    assert (right.status_code, right.json()) == (200, {"status": "failed"})
+        answer = await world.mediated_grant(sign_in_id=sign_in_id, one_time_code="000000")
+        assert answer.status_code == 400
+        errors.append(answer.json()["error"])
+    assert errors == ["code_required", "code_required", "invalid_grant", "invalid_grant"]
+    # Even the right code: once failed, the same error again.
+    right = await world.mediated_grant(sign_in_id=sign_in_id, one_time_code=ADA_CODE)
+    assert (right.status_code, right.json()) == (400, {"error": "invalid_grant"})
 
-    later = await world.signed_out_session()
-    started = await post_json(
-        world, later, MEDIATED, {"credentials": dict(ADA), "scope": "orders:read"}
-    )
+    started = await world.mediated_grant(**ADA, scope="orders:read")
     expiring = started.json()["sign_in_id"]
     world.clock.advance(6 * 60)
-    another = await world.signed_out_session()
     for _ in range(2):
-        answer = await post_json(world, later, f"{MEDIATED}/{expiring}", {"code": ADA_CODE})
-        assert (answer.status_code, answer.json()) == (200, {"status": "expired"})
+        answer = await world.mediated_grant(sign_in_id=expiring, one_time_code=ADA_CODE)
+        assert (answer.status_code, answer.json()) == (400, {"error": "expired_token"})
 
-    # Unknown, or another Session's: the same 404 sign_in_not_found.
-    for sender, target in ((another, expiring), (later, "si_unknown")):
-        missing = await post_json(world, sender, f"{MEDIATED}/{target}", {"code": ADA_CODE})
-        assert (missing.status_code, missing.json()) == (404, {"error": "sign_in_not_found"})
-    unknown_scope = await post_json(
-        world, another, MEDIATED, {"credentials": dict(ADA), "scope": "orders:everything"}
-    )
+    missing = await world.mediated_grant(sign_in_id="sgn_unknown", one_time_code=ADA_CODE)
+    assert (missing.status_code, missing.json()) == (400, {"error": "invalid_grant"})
+    unknown_scope = await world.mediated_grant(**ADA, scope="orders:everything")
     assert (unknown_scope.status_code, unknown_scope.json()) == (400, {"error": "invalid_scope"})
+
+
+@pytest.mark.asyncio
+async def test_only_the_client_that_started_a_mediated_sign_in_can_finish_it() -> None:
+    world = World()
+    await world.signed_out_session()
+    started = (await world.mediated_grant(**ADA, scope="orders:read")).json()
+    other = AgentIdentity(domain="other.example", name="Other")
+    world.network.add(other.domain, other.website())
+    sessions = SessionClient(
+        reactor=personal_agent_reactor(
+            PersonalAgentHost(other, world.clock), network=world.network, http_client=world.http
+        ),
+        http_client=world.http,
+    )
+    answer = await world.http.post(
+        "https://manzanita.example/oauth/token",
+        data={
+            "grant_type": MEDIATED_GRANT,
+            "sign_in_id": started["sign_in_id"],
+            "one_time_code": ADA_CODE,
+            **await sessions.client_authentication(
+                client_id=other.client_id, issuer="https://manzanita.example"
+            ),
+        },
+    )
+    assert (answer.status_code, answer.json()) == (400, {"error": "invalid_grant"})
+    finished = await world.mediated_grant(sign_in_id=started["sign_in_id"], one_time_code=ADA_CODE)
+    assert finished.status_code == 200 and finished.json()["refresh_token"]
+
+
+@pytest.mark.asyncio
+async def test_a_mediated_continuation_takes_no_credentials_or_scope() -> None:
+    world = World()
+    await world.signed_out_session()
+    started = (await world.mediated_grant(**ADA, scope="orders:read")).json()
+    for extra in ({"scope": "orders:write"}, {"password": ADA["password"]}):
+        answer = await world.mediated_grant(
+            sign_in_id=started["sign_in_id"], one_time_code=ADA_CODE, **extra
+        )
+        assert (answer.status_code, answer.json()) == (400, {"error": "invalid_request"})
+    no_code = await world.mediated_grant(sign_in_id=started["sign_in_id"])
+    assert (no_code.status_code, no_code.json()) == (400, {"error": "invalid_request"})
+    # A missing field of the first request is the same.
+    missing = await world.mediated_grant(email=ADA["email"], scope="orders:read")
+    assert (missing.status_code, missing.json()) == (400, {"error": "invalid_request"})
+
+
+@pytest.mark.asyncio
+async def test_the_company_grants_only_the_extensions_scopes() -> None:
+    config = dataclasses.replace(MANZANITA, mediated_scopes=("orders:read",))
+    world = World()
+    world.shop, world.plugin = manzanita(world.network, world.clock, config=config)
+    company = await DiscoveryClient(reactor=world.reactor, http_client=world.http).discover(
+        "manzanita.example"
+    )
+    assert mediated_sign_in(company).scopes == ["orders:read"]  # type: ignore[union-attr]
+    refused = await world.mediated_grant(**ADA, scope="orders:read orders:write")
+    assert (refused.status_code, refused.json()) == (400, {"error": "invalid_scope"})
+
+
+@pytest.mark.asyncio
+async def test_a_company_can_refuse_a_mediated_sign_in_with_access_denied() -> None:
+    world = World()
+    await world.signed_out_session()
+
+    async def refuse(credentials: object, context: object) -> None:
+        raise SignInRefused
+
+    world.plugin.accounts.authenticate = refuse  # type: ignore[method-assign,assignment]
+    answer = await world.mediated_grant(**ADA, scope="orders:read")
+    assert (answer.status_code, answer.json()) == (400, {"error": "access_denied"})
+
+
+@pytest.mark.asyncio
+async def test_an_extension_used_by_the_request_needs_no_client_metadata_entry() -> None:
+    """Plain lists no extension: the grant type says it uses Mediated Sign-In (§3.3)."""
+
+    world = World()
+    plain = AgentIdentity(domain="plain.example", name="Plain", extensions=())
+    world.network.add(plain.domain, plain.website())
+    assert plain.metadata["extensions"] == {}
+    reactor = personal_agent_reactor(
+        PersonalAgentHost(
+            plain, world.clock, protected_input=ScriptedInput(dict(ADA), {"code": ADA_CODE})
+        ),
+        network=world.network,
+        http_client=world.http,
+    )
+    company = await DiscoveryClient(reactor=reactor, http_client=world.http).discover(
+        "manzanita.example"
+    )
+    client = MediatedSignInClient(reactor=reactor, http_client=world.http)
+    started = await client.sign_in(
+        company=company, client_id=plain.client_id, scopes=("orders:read",)
+    )
+    assert started.status == "code_required"
+    done = await client.submit_code(started.reference)  # type: ignore[arg-type]
+    assert done.status == "complete"
+    # The company lists the grant and the extension, and no such refusal exists for it.
+    assert MEDIATED_GRANT in company.oauth_metadata.grant_types_supported  # type: ignore[union-attr]
+    assert "mediated-sign-in" in company.document.extensions
+
+
+def test_a_company_cannot_publish_a_reserved_mediated_field() -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        dataclasses.replace(MANZANITA, mediated_fields=(("client_id", "Client", False),))
+    with pytest.raises(ValueError, match="mediated_scopes"):
+        dataclasses.replace(MANZANITA, mediated_scopes=("nothing:here",))
 
 
 # Conversation requests (§8.2 to §8.13) -----------------------------------------------------

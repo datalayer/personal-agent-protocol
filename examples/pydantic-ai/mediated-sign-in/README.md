@@ -1,7 +1,7 @@
 # Mediated Sign-In
 
 This example signs Ada in to Manzanita Outfitters through the company's
-mediated endpoint with the real Python SDK `MediatedSignInClient`. Her email,
+token endpoint, as the Mediated Sign-In extension grant, with the real Python SDK `MediatedSignInClient`. Her email,
 password, and one-time code are collected by the host's trusted input surface
 (the Reactor `pap.protectedInput` contribution, scripted here), never by the
 model. It also shows an off-domain endpoint refused before anything is asked,

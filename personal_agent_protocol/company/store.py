@@ -579,25 +579,28 @@ class IssuedCode:
 
 @dataclass(frozen=True)
 class PendingMediated:
-    session_key: str
+    #: Only the `client_id` that started a sign-in can finish it (Mediated Sign-In 4).
+    client_id: str
     account_id: str
     scopes: tuple[str, ...]
     code_reference: str
     expires_at: datetime
+    sent_to: str = ""
     #: The `SIGN_IN_ATTEMPTS` keys the credentials counted against, cleared on success.
     attempt_keys: tuple[str, ...] = ()
     attempts: int = 0
     #: `code_required` while a code is awaited; once `failed` or `expired` it stays so,
-    #: and a code sent to it gets the same status again (§4.7).
+    #: and a code sent to it gets the same error again.
     status: Literal["code_required", "failed", "expired"] = "code_required"
 
     def to_json(self) -> JsonObject:
         return {
-            "session_key": self.session_key,
+            "client_id": self.client_id,
             "account_id": self.account_id,
             "scopes": list(self.scopes),
             "code_reference": self.code_reference,
             "expires_at": _time(self.expires_at),
+            "sent_to": self.sent_to,
             "attempt_keys": list(self.attempt_keys),
             "attempts": self.attempts,
             "status": self.status,
@@ -606,11 +609,12 @@ class PendingMediated:
     @classmethod
     def from_json(cls, value: JsonObject) -> PendingMediated:
         return cls(
-            session_key=value["session_key"],
+            client_id=value["client_id"],
             account_id=value["account_id"],
             scopes=tuple(value["scopes"]),
             code_reference=value["code_reference"],
             expires_at=_parse(value["expires_at"]),
+            sent_to=value["sent_to"],
             attempt_keys=tuple(value["attempt_keys"]),
             attempts=value["attempts"],
             status=value["status"],

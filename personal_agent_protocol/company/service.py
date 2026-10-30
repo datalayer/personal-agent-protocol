@@ -24,8 +24,9 @@ What it implements of draft 0.3 (upstream 3e9bada) and Operations v1:
   Sign-In with `authorization_pending` and `slow_down`, refresh with rotation,
   narrower scopes and `resource` (RFC 8707: `invalid_target` for one it doesn't
   serve), and revocation (RFC 7009) whose sign-in ends whole.
-- Mediated Sign-In with a one-time code, attempt limits, and uniform failures;
-  credentials are checked by the account directory and dropped.
+- The Mediated Sign-In extension v1, an extension grant at the token endpoint, with a
+  one-time code, attempt limits, and uniform failures; credentials are checked by the
+  account directory and dropped.
 - Conversations (§8): idempotent messages, ordered cursor events, waited
   replies, SSE, handoff, Direct Conversations, `authorization` events, and
   closing; a conversation that is not yours is `conversation_not_found`.
@@ -67,7 +68,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from http.cookies import CookieError, SimpleCookie
-from typing import Any, Literal, Protocol, TypeVar, cast
+from typing import Any, Literal, NoReturn, Protocol, TypeVar, cast
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import jwt
@@ -82,9 +83,11 @@ from ..errors import (
     SessionError,
 )
 from ..json import loads_strict
+from ..mediated import MEDIATED_EXTENSION, MEDIATED_GRANT, MEDIATED_VERSION
 from ..models import (
     AUTHORIZATION_CODE_GRANT,
     DEVICE_CODE_GRANT,
+    MEDIATED_RESERVED_FIELDS,
     REFRESH_TOKEN_GRANT,
     Author,
     ClientMetadata,
@@ -135,6 +138,7 @@ from .points import (
     ReplayCache,
     Reply,
     SignInContext,
+    SignInRefused,
     Turn,
 )
 from .store import (
@@ -192,6 +196,12 @@ from .verify import (
 _PAGE = 50
 #: How often a compare-and-set is retried against concurrent writers before giving up.
 _CAS_ATTEMPTS = 32
+#: The key prefix of a `client_id`'s Mediated Sign-In attempts: it has its own limit.
+_CLIENT_ATTEMPTS = "client:"
+#: How long a Mediated Sign-In's one-time code can be sent.
+_MEDIATED_CODE_LIFETIME = timedelta(minutes=5)
+#: The error a Mediated Sign-In that ended answers with, for good.
+_MEDIATED_ENDED = {"failed": "invalid_grant", "expired": "expired_token"}
 #: How long an expired device or Mediated sign-in is kept, to answer that it expired.
 _KEPT_EXPIRED = timedelta(minutes=10)
 #: How long the first request with an `Idempotency-Key` holds it: a repeat in that time
@@ -293,7 +303,10 @@ class CompanyConfig:
     domain: str
     scopes: tuple[str, ...]
     write_scopes: tuple[str, ...] = ()
+    #: Mediated Sign-In's `fields`: `(name, label, secret)`. None, it isn't offered.
     mediated_fields: tuple[tuple[str, str, bool], ...] = ()
+    #: The scopes Mediated Sign-In can grant, its `scopes`: none named, all of `scopes`.
+    mediated_scopes: tuple[str, ...] = ()
     device: bool = True
     direct: bool = True
     operations: bool = True
@@ -308,8 +321,10 @@ class CompanyConfig:
     device_interval: int = 5
     max_code_attempts: int = 3
     #: Failed Mediated Sign-In attempts (credentials or codes) a key may make before it
-    #: is locked out: an account identifier, an agent's user, a Session, an account's codes.
+    #: is locked out: an account identifier, an account's codes.
     max_sign_in_failures: int = 5
+    #: The same for all of a `client_id`'s attempts, which many users' sign-ins share.
+    max_client_sign_in_failures: int = 100
     #: How long the first lockout lasts; each failure past the limit doubles it (at most a
     #: day), and the count is forgotten once a key has failed nothing for this long.
     sign_in_lockout: timedelta = timedelta(minutes=15)
@@ -378,8 +393,17 @@ class CompanyConfig:
         for name, (changes, _personal) in self.scope_hints.items():
             if name not in self.scopes or changes not in ("none", "reversible", "irreversible"):
                 raise ValueError("scope_hints name a scope and its changes")
-        if self.max_sign_in_failures < 1 or self.sign_in_lockout <= timedelta(0):
+        if (
+            self.max_sign_in_failures < 1
+            or self.max_client_sign_in_failures < 1
+            or self.sign_in_lockout <= timedelta(0)
+        ):
             raise ValueError("sign-in attempts need a positive limit and lockout")
+        if any(name in MEDIATED_RESERVED_FIELDS for name, _, _ in self.mediated_fields):
+            # A field would overwrite the grant's own parameters (Mediated Sign-In 2).
+            raise ValueError("a Mediated Sign-In field can't use a reserved parameter name")
+        if any(scope not in self.scopes for scope in self.mediated_scopes):
+            raise ValueError("mediated_scopes must be among scopes")
         if self.operations and not self.write_scopes:
             # Confirming an operation needs a write scope: without one, any signed-in
             # Session, whatever it was granted, could confirm (Operations §3.3).
@@ -418,8 +442,9 @@ class CompanyConfig:
         return f"{self.base}/oauth/revoke"
 
     @property
-    def mediated_endpoint(self) -> str:
-        return f"{self.base}/poppy/sign-in"
+    def mediated_grant_scopes(self) -> tuple[str, ...]:
+        """The extension's `scopes`: what Mediated Sign-In can grant."""
+        return self.mediated_scopes or self.scopes
 
     @property
     def conversations_endpoint(self) -> str:
@@ -662,7 +687,6 @@ _NAMED_ROUTES = frozenset(
         "oauth_device",
         "oauth_revoke",
         "poppy_browser_session",
-        "poppy_sign_in",
         "poppy_conversations",
         "poppy_operations",
         "poppy_feedback",
@@ -902,10 +926,6 @@ class CompanyService:
                 return await self._device(request)
             if method == "POST" and path == "/oauth/revoke":
                 return await self._revoke(request)
-            if method == "POST" and path == "/poppy/sign-in" and self.config.mediated_fields:
-                return await self._mediated(request)
-            if method == "POST" and path.startswith("/poppy/sign-in/"):
-                return await self._mediated_code(request, path.rsplit("/", 1)[1])
             if path == "/poppy/conversations" and method == "POST":
                 return await self._start_conversation(request)
             if path.startswith("/poppy/conversations/"):
@@ -932,7 +952,9 @@ class CompanyService:
 
     # Discovery ---------------------------------------------------------------------
 
-    def discovery_document(self, domain: str | None = None) -> dict[str, Any]:
+    def discovery_document(  # noqa: C901 - one branch per member
+        self, domain: str | None = None
+    ) -> dict[str, Any]:
         """The discovery document published at `domain`: the company's own, or one of its
         aliases, which it names as the organization's domain; its endpoints stay on `base`.
 
@@ -942,15 +964,6 @@ class CompanyService:
         organization = config.organization_domain(domain)
         # Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
         auth: dict[str, Any] = {"issuer": config.base}
-        if config.mediated_fields:
-            auth["mediated"] = {
-                "endpoint": config.mediated_endpoint,
-                "fields": [
-                    {"name": name, "label": label, "secret": secret}
-                    for name, label, secret in config.mediated_fields
-                ],
-                "scopes": list(config.scopes),
-            }
         auth["scopes"] = {scope: config.scope_descriptions[scope] for scope in config.scopes}
         if config.scope_hints:
             auth["scope_hints"] = {
@@ -980,13 +993,23 @@ class CompanyService:
             document["feedback"] = {"endpoint": config.feedback_endpoint}
         if config.excluded_tasks:
             document["excluded_tasks"] = {"url": config.excluded_tasks_url}
+        extensions: dict[str, Any] = {}
         if config.operations:
-            document["extensions"] = {
-                "operations": {
-                    "version": OPERATIONS_VERSION,
-                    "endpoint": config.operations_endpoint,
-                }
+            extensions["operations"] = {
+                "version": OPERATIONS_VERSION,
+                "endpoint": config.operations_endpoint,
             }
+        if config.mediated_fields:
+            extensions[MEDIATED_EXTENSION] = {
+                "version": MEDIATED_VERSION,
+                "fields": [
+                    {"name": name, "label": label, "secret": secret}
+                    for name, label, secret in config.mediated_fields
+                ],
+                "scopes": list(config.mediated_grant_scopes),
+            }
+        if extensions:
+            document["extensions"] = extensions
         return document
 
     def domain_resource_metadata(self, domain: str | None = None) -> dict[str, Any]:
@@ -1042,6 +1065,8 @@ class CompanyService:
         if config.device:
             grants.append(DEVICE_CODE_GRANT)
             metadata["device_authorization_endpoint"] = config.device_endpoint
+        if config.mediated_fields:
+            grants.append(MEDIATED_GRANT)
         return metadata
 
     # OAuth -------------------------------------------------------------------------
@@ -1125,6 +1150,10 @@ class CompanyService:
             return await self._code_grant(form, client_id)
         if grant == DEVICE_CODE_GRANT and self.config.device:
             return await self._device_grant(form, client_id)
+        if grant == MEDIATED_GRANT and self.config.mediated_fields:
+            # The request itself uses the extension: no client metadata entry is asked
+            # for, and `extension_required` can't refuse it (§3.3).
+            return await self._mediated_grant(form, client_id)
         raise _RefusedError(400, "unsupported_grant_type")
 
     def _resource(self, form: Mapping[str, str]) -> str | None:
@@ -2066,19 +2095,14 @@ class CompanyService:
 
     # Mediated Sign-In attempt limits (§4.7: a company MUST rate-limit attempts) ---------
 
-    def _attempt_keys(
-        self, session: CallerSession, credentials: Mapping[str, object]
-    ) -> tuple[str, ...]:
-        """What a credential attempt counts against: the account, the agent's user, the Session.
+    def _attempt_keys(self, client_id: str, credentials: Mapping[str, object]) -> tuple[str, ...]:
+        """What a credential attempt counts against: the account, and the `client_id`.
 
         The account is named by the declared fields that are not secret (an
         email, a username), normalized; its password is never part of a key.
         """
 
-        keys = [
-            _composite("user", session.client_id, session.pairwise_user_id),
-            _composite("session", session.session_key),
-        ]
+        keys = [f"{_CLIENT_ATTEMPTS}{_composite(client_id)}"]
         named = [
             str(credentials.get(name, "")).strip().casefold()
             for name, _, secret in self.config.mediated_fields
@@ -2117,8 +2141,13 @@ class CompanyService:
                 )
                 failures = before.failures + 1
                 locked_until = before.locked_until
-                if failures >= config.max_sign_in_failures:
-                    over = min(failures - config.max_sign_in_failures, 7)
+                limit = (
+                    config.max_client_sign_in_failures
+                    if key.startswith(_CLIENT_ATTEMPTS)
+                    else config.max_sign_in_failures
+                )
+                if failures >= limit:
+                    over = min(failures - limit, 7)
                     locked_until = now + min(config.sign_in_lockout * 2**over, timedelta(days=1))
                 after = SignInAttempts(failures=failures, locked_until=locked_until)
                 # Forgotten once the key has failed nothing for a lockout's length.
@@ -2148,92 +2177,106 @@ class CompanyService:
             429, None, {"Retry-After": str(retry_after), "Cache-Control": "no-store"}
         )
 
-    async def _mediated(self, request: CompanyRequest) -> CompanyResponse:
-        _, session = await self._caller(request)
-        body = loads_strict(request.body) if request.body else {}
-        credentials = body.get("credentials") if isinstance(body, dict) else None
-        if not isinstance(credentials, dict):
-            raise _RefusedError(400, "invalid_request")
-        scope = body.get("scope")
-        granted = tuple(s for s in scope.split(" ") if s) if isinstance(scope, str) else ()
-        if not granted or any(s not in self.config.scopes for s in granted):
-            # Missing, unknown, or unavailable scopes are refused, never narrowed (§4.4).
+    async def _mediated_grant(self, form: Mapping[str, str], client_id: str) -> CompanyResponse:
+        """The grant's first request: credentials and `scope` (Mediated Sign-In 3)."""
+
+        if "sign_in_id" in form or "one_time_code" in form:
+            return await self._mediated_code(form, client_id)
+        config = self.config
+        granted = tuple(s for s in form.get("scope", "").split(" ") if s)
+        if not granted or any(s not in config.mediated_grant_scopes for s in granted):
+            # Missing, unknown, or unavailable scopes are refused, never narrowed.
             raise _RefusedError(400, "invalid_scope")
-        keys = self._attempt_keys(session, credentials)
+        credentials = {name: form.get(name) for name, _, _ in config.mediated_fields}
+        if any(value is None for value in credentials.values()):
+            raise _RefusedError(400, "invalid_request")
+        keys = self._attempt_keys(client_id, credentials)
         locked = await self._locked_for(keys)
         if locked is not None:
-            # Locked out: the credentials are not even checked (§4.2, `rate_limited`).
+            # Locked out: the credentials are not even checked.
             credentials.clear()
-            return self._rate_limited(locked)
+            raise _RateLimitedError(locked)
         accounts = cast(
             AccountDirectory, first_contribution(self.reactor, COMPANY_ACCOUNTS, "accounts")
         )
         secrets = {name: SecretStr(str(value)) for name, value in credentials.items()}
         credentials.clear()
-        authenticated = await accounts.authenticate(
-            secrets, SignInContext(client_id=session.client_id, session_key=session.session_key)
-        )
-        secrets.clear()
+        try:
+            authenticated = await accounts.authenticate(secrets, SignInContext(client_id=client_id))
+        except SignInRefused as refused:
+            raise _RefusedError(400, "access_denied") from refused
+        finally:
+            secrets.clear()
         if authenticated is None:
             await self._attempt_failed(keys)
-            return CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+            # The same answer for an unknown account and a wrong password.
+            raise _RefusedError(400, "invalid_grant")
         code_key = self._code_key(authenticated.account_id)
         if authenticated.code_reference is None:
             await self._attempts_cleared(keys)
-            return await self._signed_in_body(session, authenticated.account_id, granted)
+            return await self._sign_in(
+                client_id, authenticated.account_id, granted, requested=granted
+            )
         locked = await self._locked_for((code_key,))
         if locked is not None:
             # Too many wrong codes for this account: no new code until the lockout ends.
-            return self._rate_limited(locked)
-        sign_in_id = self._id("si")
-        expires_at = self._now() + timedelta(minutes=5)
-        await self.store.put(
-            MEDIATED,
-            sign_in_id,
-            PendingMediated(
-                session_key=session.session_key,
-                account_id=authenticated.account_id,
-                scopes=granted,
-                code_reference=authenticated.code_reference,
-                expires_at=expires_at,
-                attempt_keys=keys,
-            ).to_json(),
-            expires_at=expires_at + _KEPT_EXPIRED,
+            raise _RateLimitedError(locked)
+        sign_in_id = self._id("sgn")
+        expires_at = self._now() + _MEDIATED_CODE_LIFETIME
+        pending = PendingMediated(
+            client_id=client_id,
+            account_id=authenticated.account_id,
+            scopes=granted,
+            code_reference=authenticated.code_reference,
+            sent_to=authenticated.sent_to or "your device",
+            expires_at=expires_at,
+            attempt_keys=keys,
         )
-        return CompanyResponse(
-            200,
-            {
-                "status": "code_required",
-                "sign_in_id": sign_in_id,
-                "code": {"sent_to": authenticated.sent_to or "your device"},
-                "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
-            },
-            {"Cache-Control": "no-store"},
+        await self.store.put(
+            MEDIATED, sign_in_id, pending.to_json(), expires_at=expires_at + _KEPT_EXPIRED
+        )
+        return self._code_required(sign_in_id, pending)
+
+    def _code_required(self, sign_in_id: str, pending: PendingMediated) -> CompanyResponse:
+        """A code is on its way: send it with `sign_in_id` (Mediated Sign-In 4)."""
+
+        left = math.ceil((pending.expires_at - self._now()).total_seconds())
+        return _json_error(
+            400,
+            "code_required",
+            sign_in_id=sign_in_id,
+            sent_to=pending.sent_to,
+            expires_in=max(1, left),
         )
 
-    async def _mediated_code(self, request: CompanyRequest, sign_in_id: str) -> CompanyResponse:
-        _, session = await self._caller(request)
+    async def _mediated_code(self, form: Mapping[str, str], client_id: str) -> CompanyResponse:
+        """The grant's continuation: `sign_in_id` and the code, nothing else (Mediated 4)."""
+
+        sign_in_id, code = form.get("sign_in_id"), form.get("one_time_code")
+        if (
+            sign_in_id is None
+            or code is None
+            or "scope" in form
+            or any(name in form for name, _, _ in self.config.mediated_fields)
+        ):
+            raise _RefusedError(400, "invalid_request")
         pending = await self._read(MEDIATED, sign_in_id, PendingMediated.from_json)
-        if pending is None or pending.session_key != session.session_key:
-            # Unknown, or another Session's: the same error for both (§4.7).
-            raise _RefusedError(404, "sign_in_not_found")
+        if pending is None or pending.client_id != client_id:
+            # Unknown, or another client's: the same error for both.
+            raise _RefusedError(400, "invalid_grant")
         if pending.status != "code_required":
-            # Once failed or expired, it stays so: the same status again, HTTP 200 (§4.7).
-            return CompanyResponse(200, {"status": pending.status}, {"Cache-Control": "no-store"})
+            # Once failed or expired, it stays so: the same error again.
+            raise _RefusedError(400, _MEDIATED_ENDED[pending.status])
         if self._now() >= pending.expires_at:
-            return await self._mediated_ended(sign_in_id, "expired")
+            await self._mediated_ended(sign_in_id, "expired")
         code_key = self._code_key(pending.account_id)
         if await self._locked_for((code_key,)) is not None:
             # The account's code budget is spent, whichever sign-in spent it.
-            return await self._mediated_ended(sign_in_id, "failed")
-        body = loads_strict(request.body) if request.body else {}
-        code = body.get("code") if isinstance(body, dict) else None
+            await self._mediated_ended(sign_in_id, "failed")
         accounts = cast(
             AccountDirectory, first_contribution(self.reactor, COMPANY_ACCOUNTS, "accounts")
         )
-        if not isinstance(code, str) or not await accounts.check_code(
-            pending.code_reference, SecretStr(code)
-        ):
+        if not await accounts.check_code(pending.code_reference, SecretStr(code)):
             # Every wrong code counts, however many replicas check them at once: against
             # this sign-in, and against the account across every sign-in started for it.
             await self._attempt_failed((code_key,))
@@ -2248,44 +2291,29 @@ class CompanyService:
                 or counted[1].attempts >= self.config.max_code_attempts
                 or await self._locked_for((code_key,)) is not None
             ):
-                return await self._mediated_ended(sign_in_id, "failed")
-            return CompanyResponse(
-                200,
-                {
-                    "status": "code_required",
-                    "sign_in_id": sign_in_id,
-                    "code": {},
-                    "expires_at": pending.expires_at.isoformat().replace("+00:00", "Z"),
-                },
-                {"Cache-Control": "no-store"},
-            )
+                await self._mediated_ended(sign_in_id, "failed")
+            return self._code_required(sign_in_id, pending)
         # One use: of two right codes sent at once, only the one that takes it signs in.
         taken = await self.store.take(MEDIATED, sign_in_id)
         completed = None if taken is None else PendingMediated.from_json(taken)
         if completed is None or completed.status != "code_required":
-            return CompanyResponse(200, {"status": "failed"}, {"Cache-Control": "no-store"})
+            raise _RefusedError(400, "invalid_grant")
         await self._attempts_cleared((*completed.attempt_keys, code_key))
-        return await self._signed_in_body(session, completed.account_id, completed.scopes)
+        return await self._sign_in(
+            client_id, completed.account_id, completed.scopes, requested=completed.scopes
+        )
 
     async def _mediated_ended(
         self, sign_in_id: str, status: Literal["failed", "expired"]
-    ) -> CompanyResponse:
-        """The sign-in ends as `status`, kept so a later code gets the same answer (§4.7)."""
+    ) -> NoReturn:
+        """The sign-in ends as `status`, kept so a later code gets the same error."""
 
         def end(current: PendingMediated) -> PendingMediated:
             return current if current.status != "code_required" else replace(current, status=status)
 
         changed = await self._change(MEDIATED, sign_in_id, PendingMediated.from_json, end)
         ended = status if changed is None else changed[1].status
-        return CompanyResponse(200, {"status": ended}, {"Cache-Control": "no-store"})
-
-    async def _signed_in_body(
-        self, session: CallerSession, account_id: str, scopes: tuple[str, ...]
-    ) -> CompanyResponse:
-        # Every requested scope is granted here, so `scope` is left out, as at the token
-        # endpoint (§4.4, §4.7).
-        response = await self._sign_in(session.client_id, account_id, scopes, requested=scopes)
-        return replace(response, body={"status": "complete", **cast(dict, response.body)})
+        raise _RefusedError(400, _MEDIATED_ENDED[ended])
 
     # Conversations -------------------------------------------------------------------
 

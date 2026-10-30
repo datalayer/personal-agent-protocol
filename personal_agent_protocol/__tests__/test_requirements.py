@@ -52,7 +52,7 @@ def test_the_ledger_is_well_formed() -> None:
             assert item.tests, f"{item.id} is implemented but names no test"
         else:
             assert item.reason, f"{item.id} is {item.status} without a reason"
-    assert {item.source for item in LEDGER.requirements} == {"spec", "operations"}
+    assert {item.source for item in LEDGER.requirements} == {"spec", "operations", "mediated"}
     assert {item.source for item in LEDGER.guide} == {"guide"}
 
 

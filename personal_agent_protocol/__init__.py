@@ -83,7 +83,6 @@ from .mediated import (
 )
 from .models import (
     AUTHORIZATION_CODE_GRANT,
-    RESERVED_SCOPE_PREFIX,
     SUPPORTED_PROTOCOL_VERSIONS,
     TOKEN_EXCHANGE_GRANT,
     Alternative,
@@ -227,7 +226,6 @@ __all__ = [
     "RANDOM_SOURCES",
     "RATE_LIMIT_BUDGETS",
     "REFRESH_TOKEN_GRANT",
-    "RESERVED_SCOPE_PREFIX",
     "RETRY_POLICIES",
     "SIGNERS",
     "STANDING_PERMISSION_STORES",

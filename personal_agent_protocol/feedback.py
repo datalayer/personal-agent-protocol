@@ -22,15 +22,13 @@ if endpoint is not None:
 The report describes the task, never the user: no names, contact details,
 order or account numbers (SHOULD NOT), and never a secret (MUST NOT). The
 Session already tells the company which personal agent and which user sent
-it. `kind` is `missing`, the only value this version defines; personal
-agents MUST NOT send others. Errors are reported, never retried here: send
-one report per task, not one per attempt.
+it. Errors are reported, never retried here: send one report per task, not
+one per attempt.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Literal
 
 import httpx
 from pydantic import ConfigDict, Field
@@ -55,12 +53,11 @@ class FeedbackError(PersonalAgentProtocolError):
 class FeedbackReport(ProtocolModel):
     """One report of a task the company offers no way to do through the protocol (§8).
 
-    Exactly these three fields: nothing about the user, no identifiers, no secret.
+    Exactly these two fields: nothing about the user, no identifiers, no secret.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    kind: Literal["missing"] = "missing"
     task: str = Field(min_length=1, max_length=FEEDBACK_TASK_MAX_LENGTH)
     description: str = Field(min_length=1, max_length=FEEDBACK_DESCRIPTION_MAX_LENGTH)
 

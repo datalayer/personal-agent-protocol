@@ -1,0 +1,7 @@
+{
+  "instructions": "Gift cards are applied at checkout on the website: open the cart, choose Pay, and enter the card's number under Gift card. A gift card covers any part of an order, and the rest is paid as usual; the balance left on the card stays on it for a later order, and the receipt shows what was taken from each.",
+  "references": [
+    {"type": "web", "url": "https://example.com/checkout"},
+    {"type": "openapi", "url": "https://api.example.com/openapi.json", "operation_id": "applyGiftCard"}
+  ]
+}

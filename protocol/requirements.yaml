@@ -347,16 +347,11 @@ requirements:
   role: company
   text: A Company MAY list the algorithms it accepts in dpop_signing_alg_values_supported, as RFC 9449
     §5.1 defines, and the list MUST then include ES256.
-  status: implemented
+  status: not-applicable
   implementation:
   - personal_agent_protocol.company.service:CompanyService.oauth_metadata
-  - personal_agent_protocol.company.service:DPOP_ALGORITHMS
-  - personal_agent_protocol.models:OAuthServerMetadata.validate_dpop_algorithms
-  tests:
-  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
-  - personal_agent_protocol/__tests__/test_discovery.py::test_discovers_and_authenticates_company
-  conformance:
-  - protocol.dpop-algorithms-include-es256
+  reason: Withdrawn upstream (3e9bada) with Poppy's DPoP rules; the reference company issues Bearer
+    access tokens and lists no dpop_signing_alg_values_supported.
 - id: PAP-3.2-11
   section: '3.2'
   level: MUST
@@ -2233,7 +2228,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyConfig
   tests:
   - personal_agent_protocol/__tests__/test_feedback.py::test_a_signed_out_and_a_signed_in_session_report_with_no_scope
-  - personal_agent_protocol/__tests__/test_feedback.py::test_the_company_accepts_an_unknown_kind_and_refuses_a_malformed_report
+  - personal_agent_protocol/__tests__/test_feedback.py::test_the_company_ignores_unknown_members_and_refuses_a_malformed_report
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
@@ -2249,7 +2244,7 @@ requirements:
   implementation:
   - personal_agent_protocol.feedback:FeedbackReport
   tests:
-  - personal_agent_protocol/__tests__/test_feedback.py::test_a_report_is_missing_kind_task_and_description_only
+  - personal_agent_protocol/__tests__/test_feedback.py::test_a_report_is_task_and_description_only
 - id: PAP-8-03
   section: '8'
   level: SHOULD NOT
@@ -2260,7 +2255,7 @@ requirements:
   implementation:
   - personal_agent_protocol.feedback:FeedbackReport
   tests:
-  - personal_agent_protocol/__tests__/test_feedback.py::test_a_report_is_missing_kind_task_and_description_only
+  - personal_agent_protocol/__tests__/test_feedback.py::test_a_report_is_task_and_description_only
   reason: A report carries only kind, task, and description, never the Session's user or account; what
     the host writes in task and description is its own.
 - id: PAP-8-04
@@ -2273,7 +2268,7 @@ requirements:
   - personal_agent_protocol.feedback:FeedbackReport
   - personal_agent_protocol.feedback:FeedbackClient.report
   tests:
-  - personal_agent_protocol/__tests__/test_feedback.py::test_a_report_is_missing_kind_task_and_description_only
+  - personal_agent_protocol/__tests__/test_feedback.py::test_a_report_is_task_and_description_only
   reason: The client sends exactly the three fields of the report, and the token and proof only in headers;
     it cannot tell a secret a host wrote into the text.
 - id: PAP-8-05
@@ -2296,7 +2291,7 @@ requirements:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._feedback
   tests:
-  - personal_agent_protocol/__tests__/test_feedback.py::test_the_company_accepts_an_unknown_kind_and_refuses_a_malformed_report
+  - personal_agent_protocol/__tests__/test_feedback.py::test_the_company_ignores_unknown_members_and_refuses_a_malformed_report
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - protocol.feedback-report

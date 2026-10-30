@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -49,7 +49,7 @@ from reactor.ui import (  # type: ignore[import-untyped]
     display_type,
 )
 
-from .models import _domain
+from .models import _domain, known_responder, known_status
 
 #: The display type of a sign-in waiting for the person.
 PAP_SIGN_IN_TYPE = "application/vnd.datalayer.pap.sign-in+json"
@@ -451,6 +451,18 @@ class PapReplies(Display):
     status: PapConversationStatus | None = None
     responder: Literal["agent", "human"] | None = None
 
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status(cls, value: object) -> object:
+        # A status this version doesn't define reads as `working` (§8.7).
+        return known_status(value)
+
+    @field_validator("responder", mode="before")
+    @classmethod
+    def _responder(cls, value: object) -> object:
+        # A responder this version doesn't define reads as `human` (§8.7).
+        return known_responder(value)
+
     @field_validator("company")
     @classmethod
     def _company(cls, value: str) -> str:
@@ -488,8 +500,8 @@ class PapReplies(Display):
                 PapReply(author=message.author.type, name=message.author.name, text=message.text)
                 for message in written
             ],
-            status=status,
-            responder=responder,
+            status=cast(Any, status),
+            responder=cast(Any, responder),
         )
 
     def text(self) -> str:

@@ -365,8 +365,6 @@ class CompanyConfig:
                 raise ValueError("device_page must be on the company's domain or a subdomain")
         if any(scope not in self.scopes for scope in self.write_scopes):
             raise ValueError("write_scopes must be among scopes")
-        if any(scope.startswith("poppy:") for scope in self.scopes):
-            raise ValueError("scope names starting with poppy: are reserved (§4.4)")
         if set(self.scope_descriptions) != set(self.scopes) or not all(
             self.scope_descriptions.values()
         ):
@@ -831,9 +829,13 @@ class CompanyService:
                 # An alias publishes the company's discovery document, and nothing else (§3).
                 if method == "GET" and path == "/.well-known/poppy.json":
                     return CompanyResponse(200, self.discovery_document(host))
+                if method == "GET" and path == "/.well-known/oauth-protected-resource":
+                    return CompanyResponse(200, self.domain_resource_metadata(host))
                 return _json_error(404, "not_found")
             if method == "GET" and path == "/.well-known/poppy.json":
                 return CompanyResponse(200, self.discovery_document())
+            if method == "GET" and path == "/.well-known/oauth-protected-resource":
+                return CompanyResponse(200, self.domain_resource_metadata())
             if method == "GET" and path == "/.well-known/oauth-authorization-server":
                 return CompanyResponse(200, self.oauth_metadata())
             if path == "/.well-known/oauth-protected-resource/mcp" and self._mcp() is not None:
@@ -949,6 +951,21 @@ class CompanyService:
                 }
             }
         return document
+
+    def domain_resource_metadata(self, domain: str | None = None) -> dict[str, Any]:
+        """RFC 9728 metadata of `https://{domain}`, naming the issuer (§3.2).
+
+        Published by the company's own domain and each alias: `resource` is exactly
+        `https://{domain}` and its one authorization server is the company's issuer.
+        """
+
+        organization = self.config.organization_domain(domain)
+        return {
+            "resource": f"https://{organization}",
+            "authorization_servers": [self.config.base],
+            "scopes_supported": list(self.config.scopes),
+            "bearer_methods_supported": ["header"],
+        }
 
     def protected_resource_metadata(self) -> dict[str, Any]:
         """RFC 9728 metadata for the MCP server: its issuer is the company's (§6)."""
@@ -2890,18 +2907,16 @@ class CompanyService:
     async def _feedback(self, request: CompanyRequest) -> CompanyResponse:
         """Accept a report with a Session Token, signed in or out, no scope needed.
 
-        Any `kind` is accepted, so later versions can add kinds; `task` (at
-        most 200 characters) and `description` (at most 2,000) are required.
-        The text is kept as data for the operator, never acted on.
+        `task` (at most 200 characters) and `description` (at most 2,000) are
+        required; other members are ignored. The text is kept as data for the
+        operator, never acted on.
         """
 
         _, session = await self._caller(request)
         body = _json_object(request.body)
-        kind, task, description = body.get("kind"), body.get("task"), body.get("description")
+        task, description = body.get("task"), body.get("description")
         if (
-            not isinstance(kind, str)
-            or not kind
-            or not isinstance(task, str)
+            not isinstance(task, str)
             or not 0 < len(task) <= 200
             or not isinstance(description, str)
             or not 0 < len(description) <= 2000
@@ -2909,7 +2924,6 @@ class CompanyService:
             raise _RefusedError(400, "invalid_request")
         report = StoredFeedback(
             report_id=self._id("fb"),
-            kind=kind,
             task=task,
             description=description,
             client_id=session.client_id,

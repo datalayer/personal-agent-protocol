@@ -187,7 +187,10 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             company = await client.discover(given["domain"])
         finally:
             await http.aclose()
-        if "issuer" in expect:
+        if "issuer" in expect and expect["issuer"] is None:
+            # No issuer: a website to browse only (§3.2).
+            assert company.oauth_metadata is None and company.resource_metadata is None
+        elif "issuer" in expect:
             assert company.oauth_metadata is not None
             assert company.oauth_metadata.issuer == expect["issuer"]
         if "organization_domain" in expect:

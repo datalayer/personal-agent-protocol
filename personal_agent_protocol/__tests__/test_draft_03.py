@@ -202,9 +202,11 @@ def test_the_issuer_lists_the_grants_and_scopes_it_offers() -> None:
         "revocation_endpoint": "https://auth.example.com/oauth/revoke",
         "protected_resources": ["https://example.com"],
     }
-    with pytest.raises(ValidationError, match="JWT bearer"):
-        # grant_types_supported is required, with the JWT bearer and refresh grants (§3.2).
-        OAuthServerMetadata.model_validate({**base, "grant_types_supported": ["refresh_token"]})
+    with pytest.raises(ValidationError, match="refresh_token"):
+        # grant_types_supported is required, with the refresh grant (§3.2).
+        OAuthServerMetadata.model_validate(
+            {**base, "grant_types_supported": ["authorization_code"]}
+        )
     with pytest.raises(ValidationError, match="authorization_endpoint"):
         OAuthServerMetadata.model_validate(
             {**base, "grant_types_supported": [JWT_BEARER, "refresh_token", "authorization_code"]}
@@ -231,8 +233,9 @@ def test_scopes_are_the_companys_described_and_never_poppy() -> None:
         "auth": {"issuer": "https://auth.example.com", "scopes": {"poppy:read": "Read"}},
         "web": {},
     }
-    with pytest.raises(ValidationError, match="reserved"):
-        DiscoveryDocument.model_validate(document)
+    # `poppy:` is no longer reserved (3e9bada): a Company's scope like any other.
+    accepted = DiscoveryDocument.model_validate(document)
+    assert accepted.auth is not None and accepted.auth.scopes == {"poppy:read": "Read"}
     with pytest.raises(ValidationError, match="description"):
         DiscoveryDocument.model_validate(
             {**document, "auth": {"issuer": "https://auth.example.com", "scopes": {"a": ""}}}

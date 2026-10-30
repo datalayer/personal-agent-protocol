@@ -5,7 +5,6 @@
   "authorization_endpoint": "https://auth.example.com/oauth/authorize",
   "device_authorization_endpoint": "https://auth.example.com/oauth/device",
   "grant_types_supported": [
-    "urn:ietf:params:oauth:grant-type:jwt-bearer",
     "refresh_token",
     "authorization_code",
     "urn:ietf:params:oauth:grant-type:device_code"
@@ -14,10 +13,6 @@
     "orders:read",
     "orders:write",
     "addresses"
-  ],
-  "dpop_signing_alg_values_supported": [
-    "ES256",
-    "RS256"
   ],
   "protected_resources": [
     "https://example.com",

@@ -177,7 +177,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
         REPLAY: ReplayMark(),
         SIGN_IN_ATTEMPTS: SignInAttempts(3, later),
         FEEDBACK: StoredFeedback(
-            "fb_1", "missing", "Pay with a gift card", "No gift card field.", "c", "u", now
+            "fb_1", "Pay with a gift card", "No gift card field.", "c", "u", now
         ),
         DPOP_NONCE: IssuedNonce(),
         IDEMPOTENCY: IdempotencyRecord("digest", 202, {"operation": {"operation_id": "op_1"}}),

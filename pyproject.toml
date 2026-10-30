@@ -41,6 +41,8 @@ test = [
   "pytest-asyncio>=0.21",
   "pytest-cov>=4.1",
   "uvicorn>=0.30",
+  # The shared fixtures checked against upstream's JSON Schemas (protocol/schemas).
+  "jsonschema>=4.18",
   # The displays' tests (the `ui` extra).
   "datalayer_reactor>=1.1.0,<2",
   # The OpenTelemetry adapter's tests and the trace canaries (the `telemetry` extra).

@@ -125,14 +125,17 @@ async def test_metadata_connects_to_the_approved_address() -> None:
                     await send({"type": "lifespan.startup.complete"})
             await send({"type": "lifespan.shutdown.complete"})
             return
+        # A website only: no protected resource metadata, so no issuer (§3.2).
+        found = scope["path"] == "/.well-known/poppy.json"
         await send(
             {
                 "type": "http.response.start",
-                "status": 200,
+                "status": 200 if found else 404,
                 "headers": [(b"content-type", b"application/json")],
             }
         )
-        await send({"type": "http.response.body", "body": json.dumps(document).encode()})
+        body = document if found else {"error": "not_found"}
+        await send({"type": "http.response.body", "body": json.dumps(body).encode()})
 
     resolutions: list[str] = []
 
@@ -169,7 +172,9 @@ async def test_metadata_connects_to_the_approved_address() -> None:
             listener.close()
 
     assert company.document.organization.domain == "pinned.example"
-    assert resolutions == ["pinned.example"]
+    assert company.oauth_metadata is None
+    assert resolutions == ["pinned.example", "pinned.example"]
+    # One connection to the approved address, kept for both fetches.
     assert dial.dialed == ["127.0.0.1"]
 
 

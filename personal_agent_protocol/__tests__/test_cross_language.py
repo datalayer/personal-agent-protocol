@@ -124,6 +124,7 @@ def _print(title: str, report: ConformanceReport) -> None:
         print(f"  {result.outcome:7} {result.id} {result.message or ''}")  # noqa: T201
 
 
+@pytest.mark.xfail(reason="TypeScript port pending", strict=True)
 @pytest.mark.asyncio
 async def test_python_runner_against_the_typescript_company(tmp_path: Path) -> None:
     from reactor import PluginManifest  # noqa: F401 - the runner's host needs Reactor

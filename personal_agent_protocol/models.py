@@ -32,8 +32,6 @@ DPOP_REQUIRED_ALGORITHM = "ES256"
 _EXTENSION_VERSION = re.compile(r"^(0|[1-9][0-9]*)$")
 #: OAuth scope syntax (RFC 6749 §3.3): one scope token.
 _SCOPE = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]+$")
-#: Scope names starting with this are reserved for the protocol, which defines none (§4.4).
-RESERVED_SCOPE_PREFIX = "poppy:"
 #: The grants a Company's token endpoint MUST accept (§3.2): starting and renewing Sessions,
 #: and Account Tokens.
 JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
@@ -170,31 +168,30 @@ class ScopeHint(ProtocolModel):
 
 
 class AuthCapabilities(ProtocolModel):
-    """`auth` (§3.1): the issuer, Mediated Sign-In, and the Company's scopes.
+    """`auth` (§3.1): optional; the issuer it names, Mediated Sign-In, the Company's scopes.
 
-    Direct and Device Sign-In are not here: the issuer's `grant_types_supported` says
-    whether the Company offers them (§3.2, §4.4).
+    `issuer` is needed only when the domain's protected resource metadata lists more
+    than one authorization server, and then names one of them; with one, it may be
+    left out, and if present names that one (§3.1, §3.2). Direct and Device Sign-In are
+    not here: the issuer's `grant_types_supported` says whether the Company offers them.
     """
 
-    issuer: str
+    issuer: str | None = None
     mediated: MediatedSignIn | None = None
     scopes: dict[str, str] = Field(default_factory=dict)
     scope_hints: dict[str, ScopeHint] = Field(default_factory=dict)
 
     @field_validator("issuer")
     @classmethod
-    def validate_issuer(cls, value: str) -> str:
+    def validate_issuer(cls, value: str | None) -> str | None:
         # Kept exactly as written: the issuer is compared character for character (§3.2).
-        return _https_url(value, "auth issuer")
+        return None if value is None else _https_url(value, "auth issuer")
 
     @field_validator("scopes")
     @classmethod
     def validate_scopes(cls, value: dict[str, str]) -> dict[str, str]:
         for name, description in value.items():
             _scope(name)
-            if name.startswith(RESERVED_SCOPE_PREFIX):
-                # The protocol defines no scope; `poppy:` names are its own (§4.4).
-                raise ValueError("scope names starting with poppy: are reserved")
             if not description:
                 raise ValueError("each scope needs a description")
         return value
@@ -210,12 +207,11 @@ class AuthCapabilities(ProtocolModel):
 class AgentProtocol(ProtocolModel):
     type: str = Field(min_length=1)
     endpoint: str
-    resource: str | None = None
 
-    @field_validator("endpoint", "resource")
+    @field_validator("endpoint")
     @classmethod
-    def validate_urls(cls, value: str | None, info: Any) -> str | None:
-        return _https_url(value, info.field_name) if value is not None else None
+    def validate_endpoint(cls, value: str) -> str:
+        return _https_url(value, "endpoint")
 
 
 class AgentDescriptor(ProtocolModel):
@@ -226,12 +222,11 @@ class ApiDescriptor(ProtocolModel):
     type: str = Field(min_length=1)
     url: str
     description: str = Field(min_length=1)
-    resource: str | None = None
 
-    @field_validator("url", "resource")
+    @field_validator("url")
     @classmethod
-    def validate_urls(cls, value: str | None, info: Any) -> str | None:
-        return _https_url(value, info.field_name) if value is not None else None
+    def validate_url(cls, value: str) -> str:
+        return _https_url(value, "API url")
 
 
 class WebDescriptor(ProtocolModel):
@@ -301,12 +296,23 @@ class DiscoveryDocument(ProtocolModel):
     def validate_interfaces(self) -> DiscoveryDocument:
         if self.agent is None and not self.apis and self.web is None:
             raise ValueError("one of agent, apis, or web is required")
-        needs_auth = self.agent is not None or bool(self.apis)
-        needs_auth = needs_auth or self.feedback is not None
-        needs_auth = needs_auth or bool(self.web and self.web.browser_session_endpoint)
-        if needs_auth and self.auth is None:
-            raise ValueError("auth is required for sessions, APIs, conversations, or feedback")
         return self
+
+    @property
+    def needs_issuer(self) -> bool:
+        """Whether the Company must have an OAuth issuer (§3.2).
+
+        One that lists `agent`, `apis`, `feedback`, `web.browser_session_endpoint`,
+        or an extension: without an issuer it can only be browsed as a website.
+        """
+
+        return (
+            self.agent is not None
+            or bool(self.apis)
+            or self.feedback is not None
+            or bool(self.web and self.web.browser_session_endpoint)
+            or bool(self.extensions)
+        )
 
 
 class OAuthServerMetadata(ProtocolModel):
@@ -328,9 +334,8 @@ class OAuthServerMetadata(ProtocolModel):
     @field_validator("grant_types_supported")
     @classmethod
     def validate_grants(cls, value: list[str]) -> list[str]:
-        missing = {JWT_BEARER_GRANT, REFRESH_TOKEN_GRANT} - set(value)
-        if missing:
-            raise ValueError("grant_types_supported must include the JWT bearer and refresh grants")
+        if REFRESH_TOKEN_GRANT not in value:
+            raise ValueError("grant_types_supported must include refresh_token")
         return value
 
     @field_validator("scopes_supported")
@@ -410,13 +415,50 @@ class OAuthServerMetadata(ProtocolModel):
         return _https_url(value, info.field_name).rstrip("/") if value is not None else None
 
 
+class ProtectedResourceMetadata(ProtocolModel):
+    """RFC 9728 protected resource metadata, with the fields this protocol uses (§3.2, §4.5).
+
+    The Company's domain publishes it with `resource` exactly `https://{domain}` and
+    its issuer in `authorization_servers`; a service that accepts only tokens issued
+    for it publishes it with its own `resource`, as MCP servers do (§4.5, §7).
+    """
+
+    resource: str
+    authorization_servers: list[str] = Field(min_length=1)
+    scopes_supported: list[str] = Field(default_factory=list)
+    bearer_methods_supported: list[str] = Field(default_factory=list)
+
+    @field_validator("resource")
+    @classmethod
+    def validate_resource(cls, value: str) -> str:
+        # Compared exactly as written: never normalized (§3.2, §4.5).
+        return _https_url(value, "resource")
+
+    @field_validator("authorization_servers")
+    @classmethod
+    def validate_servers(cls, value: list[str]) -> list[str]:
+        return [_https_url(item, "authorization server") for item in value]
+
+
+def protected_resource_metadata_url(url: str) -> str:
+    """Where a resource's RFC 9728 metadata is (§3.1 of RFC 9728): the well-known path first.
+
+    `https://example.com` has it at `https://example.com/.well-known/oauth-protected-resource`;
+    `https://example.com/mcp` at `https://example.com/.well-known/oauth-protected-resource/mcp`.
+    """
+
+    parsed = urlsplit(url)
+    path = parsed.path.rstrip("/")
+    return f"https://{parsed.netloc}/.well-known/oauth-protected-resource{path}"
+
+
 class ClientMetadata(ProtocolModel):
     client_id: str
     client_name: str = Field(min_length=1)
     logo_uri: str | None = None
     jwks_uri: str
     redirect_uris: list[str] = Field(default_factory=list)
-    token_endpoint_auth_method: Literal["private_key_jwt"] = "private_key_jwt"
+    token_endpoint_auth_method: Literal["private_key_jwt"] = "private_key_jwt"  # noqa: S105
     extensions: dict[str, ExtensionDescriptor] = Field(default_factory=dict)
 
     @field_validator("client_id", "logo_uri", "jwks_uri")
@@ -633,6 +675,23 @@ class Message(ProtocolModel):
         return self
 
 
+#: The conversation statuses and responders this version defines (§8.7).
+CONVERSATION_STATUSES = ("working", "idle", "queued", "closed")
+RESPONDERS = ("agent", "human")
+
+
+def known_status(value: object) -> object:
+    """A `status` this SDK doesn't recognize reads as `working` (§8.7)."""
+
+    return value if not isinstance(value, str) or value in CONVERSATION_STATUSES else "working"
+
+
+def known_responder(value: object) -> object:
+    """A `responder` this SDK doesn't recognize reads as `human` (§8.7)."""
+
+    return value if not isinstance(value, str) or value in RESPONDERS else "human"
+
+
 #: Event types draft 0.3 defines (§7.5); a personal agent skips any other type.
 KNOWN_EVENT_TYPES = frozenset(
     {"message", "state", "authorization", "user_requested", "direct_opened", "direct_closed"}
@@ -659,6 +718,13 @@ class ConversationEvent(ProtocolModel):
         if value is not None and not _IDENTIFIER.fullmatch(value):
             raise ValueError("conversation event IDs must use the URL-safe base64 alphabet")
         return value
+
+    _status = field_validator("status", mode="before")(
+        classmethod(lambda cls, value: known_status(value))
+    )
+    _responder = field_validator("responder", mode="before")(
+        classmethod(lambda cls, value: known_responder(value))
+    )
 
     @property
     def known(self) -> bool:
@@ -700,6 +766,13 @@ class ConversationEventPage(ProtocolModel):
     status: Literal["working", "idle", "queued", "closed"]
     responder: Literal["agent", "human"]
 
+    _status = field_validator("status", mode="before")(
+        classmethod(lambda cls, value: known_status(value))
+    )
+    _responder = field_validator("responder", mode="before")(
+        classmethod(lambda cls, value: known_responder(value))
+    )
+
     @field_validator("conversation_id", "cursor")
     @classmethod
     def validate_ids(cls, value: str) -> str:
@@ -736,7 +809,7 @@ class Alternative(ProtocolModel):
     instructions the agent has to follow.
     """
 
-    instructions: str | None = Field(default=None, min_length=1, max_length=2000)
+    instructions: str | None = Field(default=None, min_length=1)
     references: list[AlternativeReference] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -776,6 +849,25 @@ class ExcludedTasks(ProtocolModel):
 
 
 class DiscoveredCompany(ProtocolModel):
+    """A verified `poppy.json`, its domain's protected resource metadata, and its issuer's.
+
+    `resource_metadata` and `oauth_metadata` are `None` only for a Company that has
+    no issuer, which can only be browsed as a website (§3.2).
+    """
+
     discovery_url: str
     document: DiscoveryDocument
     oauth_metadata: OAuthServerMetadata | None = None
+    resource_metadata: ProtectedResourceMetadata | None = None
+
+    @property
+    def issuer(self) -> str | None:
+        """The Company's OAuth issuer, as found from its domain (§3.2)."""
+
+        return None if self.oauth_metadata is None else self.oauth_metadata.issuer
+
+    @property
+    def resource(self) -> str:
+        """`https://{organization.domain}`: the resource the default access token is for."""
+
+        return f"https://{self.document.organization.domain}"

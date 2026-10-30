@@ -33,22 +33,123 @@ def fixture(name: str) -> dict[str, object]:
     return json.loads((FIXTURES / name).read_text())
 
 
-@pytest.mark.asyncio
-async def test_discovers_and_authenticates_company() -> None:
+RESOURCE_METADATA = "/.well-known/oauth-protected-resource"
+
+
+def company_site(
+    *, resource_metadata: dict[str, object] | None = None, document: dict[str, object] | None = None
+) -> httpx.MockTransport:
+    """example.com's poppy.json and protected resource metadata, auth.example.com's metadata."""
+
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "example.com" and request.url.path == RESOURCE_METADATA:
+            return httpx.Response(
+                200, json=resource_metadata or fixture("protected-resource-metadata-valid.json")
+            )
         if request.url.host == "example.com":
-            return httpx.Response(200, json=fixture("discovery-valid.json"))
+            return httpx.Response(200, json=document or fixture("discovery-valid.json"))
         if request.url.host == "auth.example.com":
             return httpx.Response(200, json=fixture("oauth-metadata-valid.json"))
         return httpx.Response(404)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_discovers_and_authenticates_company() -> None:
+    async with httpx.AsyncClient(transport=company_site()) as http:
         client = DiscoveryClient(http_client=http, address_resolver=public_resolver)
         company = await client.discover("example.com")
 
     assert company.document.organization.name == "Example Company"
     assert company.oauth_metadata is not None
     assert company.oauth_metadata.token_endpoint == ("https://auth.example.com/oauth/token")
+    # The issuer is the one the domain's protected resource metadata names (§3.2).
+    assert company.issuer == "https://auth.example.com"
+    assert company.resource_metadata is not None
+    assert company.resource_metadata.resource == company.resource == "https://example.com"
+
+
+@pytest.mark.asyncio
+async def test_the_issuer_comes_from_the_domains_protected_resource_metadata() -> None:
+    """One authorization server is the issuer: poppy.json may leave `auth` out (§3.1, §3.2)."""
+
+    document = fixture("discovery-valid.json")
+    document.pop("auth")
+    async with httpx.AsyncClient(transport=company_site(document=document)) as http:
+        client = DiscoveryClient(http_client=http, address_resolver=public_resolver)
+        company = await client.discover("example.com")
+    assert company.document.auth is None
+    assert company.issuer == "https://auth.example.com"
+
+
+@pytest.mark.asyncio
+async def test_refuses_protected_resource_metadata_for_another_resource() -> None:
+    """`resource` is exactly `https://{organization.domain}` (§3.2)."""
+
+    for other in ("https://example.com/", "https://www.example.com", "https://example.com/api"):
+        transport = company_site(
+            resource_metadata={
+                "resource": other,
+                "authorization_servers": ["https://auth.example.com"],
+            }
+        )
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = DiscoveryClient(http_client=http, address_resolver=public_resolver)
+            with pytest.raises(DiscoveryError, match="resource_mismatch"):
+                await client.discover("example.com")
+
+
+@pytest.mark.asyncio
+async def test_several_authorization_servers_need_auth_issuer_among_them() -> None:
+    """Several authorization servers: `auth.issuer` names the one to use, from the list (§3.1)."""
+
+    several = {
+        "resource": "https://example.com",
+        "authorization_servers": ["https://staff.example.com", "https://auth.example.com"],
+    }
+    without = fixture("discovery-valid.json")
+    without.pop("auth")
+    async with httpx.AsyncClient(
+        transport=company_site(resource_metadata=several, document=without)
+    ) as http:
+        client = DiscoveryClient(http_client=http, address_resolver=public_resolver)
+        with pytest.raises(DiscoveryError, match="issuer_not_named"):
+            await client.discover("example.com")
+    async with httpx.AsyncClient(transport=company_site(resource_metadata=several)) as http:
+        client = DiscoveryClient(http_client=http, address_resolver=public_resolver)
+        assert (await client.discover("example.com")).issuer == "https://auth.example.com"
+    unlisted = fixture("discovery-valid.json")
+    unlisted["auth"]["issuer"] = "https://login.example.com"  # type: ignore[index]
+    async with httpx.AsyncClient(
+        transport=company_site(resource_metadata=several, document=unlisted)
+    ) as http:
+        client = DiscoveryClient(http_client=http, address_resolver=public_resolver)
+        with pytest.raises(DiscoveryError, match="issuer_mismatch"):
+            await client.discover("example.com")
+
+
+@pytest.mark.asyncio
+async def test_one_authorization_server_and_another_auth_issuer_is_refused() -> None:
+    document = fixture("discovery-valid.json")
+    document["auth"]["issuer"] = "https://login.example.com"  # type: ignore[index]
+    async with httpx.AsyncClient(transport=company_site(document=document)) as http:
+        client = DiscoveryClient(http_client=http, address_resolver=public_resolver)
+        with pytest.raises(DiscoveryError, match="issuer_mismatch"):
+            await client.discover("example.com")
+
+
+@pytest.mark.asyncio
+async def test_a_company_that_needs_an_issuer_and_publishes_none_is_refused() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/poppy.json":
+            return httpx.Response(200, json=fixture("discovery-valid.json"))
+        return httpx.Response(404, json={"error": "not_found"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DiscoveryClient(http_client=http, address_resolver=public_resolver)
+        with pytest.raises(DiscoveryError, match="issuer_not_found"):
+            await client.discover("example.com")
 
 
 @pytest.mark.asyncio
@@ -57,6 +158,8 @@ async def test_rejects_issuer_that_does_not_authorize_domain() -> None:
     metadata["protected_resources"] = ["https://attacker.example"]
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == RESOURCE_METADATA:
+            return httpx.Response(200, json=fixture("protected-resource-metadata-valid.json"))
         body = fixture("discovery-valid.json") if request.url.host == "example.com" else metadata
         return httpx.Response(200, json=body)
 
@@ -92,7 +195,9 @@ async def test_discovers_through_reactor_contributions() -> None:
         async def get(self, url: str, *, fetch: MetadataFetch) -> DiscoveryResponse:
             self.fetches.append(fetch)
             name = (
-                "discovery-valid.json"
+                "protected-resource-metadata-valid.json"
+                if url.endswith(RESOURCE_METADATA)
+                else "discovery-valid.json"
                 if url.startswith("https://example.com/")
                 else "oauth-metadata-valid.json"
             )
@@ -119,6 +224,7 @@ async def test_discovers_through_reactor_contributions() -> None:
     assert company.oauth_metadata.issuer == "https://auth.example.com"
     # Each fetch carries the policy's approval and the client's bounds to the transport.
     assert [fetch.approved.host for fetch in transport.fetches] == [
+        "example.com",
         "example.com",
         "auth.example.com",
     ]
@@ -152,6 +258,8 @@ async def test_metadata_fetches_carry_no_cookie_or_credential() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.headers)
+        if request.url.path == RESOURCE_METADATA:
+            return httpx.Response(200, json=fixture("protected-resource-metadata-valid.json"))
         if request.url.host == "example.com":
             return httpx.Response(200, json=fixture("discovery-valid.json"))
         return httpx.Response(200, json=fixture("oauth-metadata-valid.json"))
@@ -165,7 +273,7 @@ async def test_metadata_fetches_carry_no_cookie_or_credential() -> None:
             "example.com"
         )
 
-    assert len(seen) == 2
+    assert len(seen) == 3
     for headers in seen:
         assert "cookie" not in headers
         assert "authorization" not in headers
@@ -213,6 +321,15 @@ async def test_an_alias_publishes_the_companys_discovery_and_its_issuer_lists_it
         service.discovery_document("shop.example")["auth"] == service.discovery_document()["auth"]
     )
     async with network.client() as http:
+        # The alias's own protected resource metadata names the company's issuer (§3.2).
+        alias_resource = (
+            await http.get("https://shop.example/.well-known/oauth-protected-resource")
+        ).json()
+        assert alias_resource == {
+            **alias_resource,
+            "resource": "https://shop.example",
+            "authorization_servers": [f"https://{config.domain}"],
+        }
         assert (
             await http.get("https://shop.example/.well-known/oauth-authorization-server")
         ).status_code == 404

@@ -32,21 +32,31 @@ def test_discovery_fixture_round_trips_and_preserves_extensions() -> None:
     }
 
 
-def test_discovery_requires_auth_for_an_api() -> None:
-    with pytest.raises(ValidationError, match="auth is required"):
-        DiscoveryDocument.model_validate(
-            {
-                "protocol_version": "0.3",
-                "organization": {"name": "Example", "domain": "example.com"},
-                "apis": [
-                    {
-                        "type": "openapi",
-                        "url": "https://api.example.com/openapi.json",
-                        "description": "Example",
-                    }
-                ],
-            }
-        )
+def test_discovery_needs_an_issuer_for_an_api_not_auth() -> None:
+    """`auth` is optional (3e9bada): the issuer comes from the domain (§3.2)."""
+
+    document = DiscoveryDocument.model_validate(
+        {
+            "protocol_version": "0.3",
+            "organization": {"name": "Example", "domain": "example.com"},
+            "apis": [
+                {
+                    "type": "openapi",
+                    "url": "https://api.example.com/openapi.json",
+                    "description": "Example",
+                }
+            ],
+        }
+    )
+    assert document.auth is None and document.needs_issuer
+    website = DiscoveryDocument.model_validate(
+        {
+            "protocol_version": "0.3",
+            "organization": {"name": "Example", "domain": "example.com"},
+            "web": {},
+        }
+    )
+    assert not website.needs_issuer
 
 
 def test_strict_json_rejects_duplicate_members() -> None:

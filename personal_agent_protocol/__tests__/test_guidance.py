@@ -126,7 +126,9 @@ async def test_discovery_and_oauth_metadata_are_cached_until_they_expire() -> No
     def handler(request: httpx.Request) -> httpx.Response:
         fetched.append(request.url.host)
         name = (
-            "discovery-valid.json"
+            "protected-resource-metadata-valid.json"
+            if request.url.path == "/.well-known/oauth-protected-resource"
+            else "discovery-valid.json"
             if request.url.host == "example.com"
             else "oauth-metadata-valid.json"
         )
@@ -141,13 +143,13 @@ async def test_discovery_and_oauth_metadata_are_cached_until_they_expire() -> No
         client = DiscoveryClient(reactor=reactor_with(http, Host(clock)))
         await client.discover("example.com")
         await client.discover("example.com")
-        assert fetched == ["example.com", "auth.example.com"]
+        assert fetched == ["example.com", "example.com", "auth.example.com"]
         clock.advance(61)  # the OAuth metadata's 30 s became a minute; it is now stale
         await client.discover("example.com")
-        assert fetched == ["example.com", "auth.example.com", "auth.example.com"]
+        assert fetched == ["example.com", "example.com", "auth.example.com", "auth.example.com"]
         clock.advance(300)
         await client.discover("example.com")
-    assert fetched[-2:] == ["example.com", "auth.example.com"]
+    assert fetched[-3:] == ["example.com", "example.com", "auth.example.com"]
 
 
 @pytest.mark.asyncio

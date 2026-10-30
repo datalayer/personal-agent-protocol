@@ -32,3 +32,12 @@ fetch. Draft 0.1 stays readable, frozen, at
 https://personalagentprotocol.org/docs/0.1/spec; draft 0.2 is frozen at
 https://personalagentprotocol.org/docs/0.2/spec. This repository implements
 0.3 only and uses no earlier document.
+
+## Vendored JSON Schemas
+
+`protocol/schemas/` holds JSON Schemas copied unchanged from the upstream
+company kit (`kit/company/schemas/`) at commit 3e9bada, under the upstream
+repository's license (Apache License 2.0). The tests check the shared
+fixtures and the reference company's documents against them
+(`personal_agent_protocol/__tests__/test_schemas.py`). They are replaced
+whole when a later upstream commit is adopted, never edited here.

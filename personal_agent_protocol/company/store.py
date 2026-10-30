@@ -836,12 +836,10 @@ class SignInAttempts:
 class StoredFeedback:
     """A feedback report as the company received it (§8): data, never instructions.
 
-    `kind` is whatever the personal agent sent (an unknown kind is accepted);
     `client_id` and `pairwise_user_id` are the Session's, which sent it.
     """
 
     report_id: str
-    kind: str
     task: str
     description: str
     client_id: str
@@ -851,7 +849,6 @@ class StoredFeedback:
     def to_json(self) -> JsonObject:
         return {
             "report_id": self.report_id,
-            "kind": self.kind,
             "task": self.task,
             "description": self.description,
             "client_id": self.client_id,
@@ -863,7 +860,6 @@ class StoredFeedback:
     def from_json(cls, value: JsonObject) -> StoredFeedback:
         return cls(
             report_id=value["report_id"],
-            kind=value["kind"],
             task=value["task"],
             description=value["description"],
             client_id=value["client_id"],

@@ -21,6 +21,8 @@ from .models import (
     DiscoveryDocument,
     ExcludedTasks,
     OAuthServerMetadata,
+    ProtectedResourceMetadata,
+    protected_resource_metadata_url,
 )
 from .reactor import (
     DISCOVERY_TRANSPORTS,
@@ -127,9 +129,11 @@ class DiscoveryClient:
                 "Discovery organization domain is not the host that served the document",
             )
 
+        resource_metadata = await self._domain_resource_metadata(document)
         metadata: OAuthServerMetadata | None = None
-        if document.auth:
-            metadata_data, _ = await self._get_json(_metadata_url(document.auth.issuer))
+        if resource_metadata is not None:
+            issuer = self._issuer(document, resource_metadata)
+            metadata_data, _ = await self._get_json(_metadata_url(issuer))
             try:
                 metadata = OAuthServerMetadata.model_validate(metadata_data)
             except ValidationError as exc:
@@ -137,9 +141,9 @@ class DiscoveryClient:
                     "invalid_oauth_metadata", "OAuth server metadata failed validation"
                 ) from exc
             # Character for character: no case folding, no trailing-slash trimming (§3.2).
-            if metadata.issuer != document.auth.issuer:
+            if metadata.issuer != issuer:
                 raise DiscoveryError(
-                    "issuer_mismatch", "OAuth metadata issuer does not match auth.issuer"
+                    "issuer_mismatch", "OAuth metadata issuer is not the issuer found"
                 )
             # `https://{domain}` exactly, the host ignoring case (§3.2, RFC 9728 §3.3).
             if not metadata.lists_resource(document.organization.domain):
@@ -152,7 +156,70 @@ class DiscoveryClient:
             discovery_url=str(final_url),
             document=document,
             oauth_metadata=metadata,
+            resource_metadata=resource_metadata,
         )
+
+    async def _domain_resource_metadata(
+        self, document: DiscoveryDocument
+    ) -> ProtectedResourceMetadata | None:
+        """The domain's protected resource metadata, which names its issuer (§3.2).
+
+        Its `resource` is exactly `https://{organization.domain}`. A domain without
+        it has no issuer: refused when the document lists anything that needs one,
+        else a website to browse only.
+        """
+
+        resource = f"https://{document.organization.domain}"
+        try:
+            data, _ = await self._get_json(protected_resource_metadata_url(resource))
+        except DiscoveryError as exc:
+            if exc.code == "http_error" and exc.status_code == 404:
+                if document.needs_issuer:
+                    raise DiscoveryError(
+                        "issuer_not_found",
+                        "The domain publishes no protected resource metadata naming its issuer",
+                    ) from exc
+                return None
+            raise
+        try:
+            metadata = ProtectedResourceMetadata.model_validate(data)
+        except ValidationError as exc:
+            raise ProtocolValidationError(
+                "invalid_resource_metadata", "Protected resource metadata failed validation"
+            ) from exc
+        if metadata.resource != resource:
+            raise DiscoveryError(
+                "resource_mismatch",
+                "The domain's protected resource metadata names another resource",
+            )
+        return metadata
+
+    @staticmethod
+    def _issuer(document: DiscoveryDocument, metadata: ProtectedResourceMetadata) -> str:
+        """The issuer the domain names (§3.1, §3.2).
+
+        One authorization server is the issuer, and `auth.issuer`, if present, names
+        it; with several, `auth.issuer` is required and must be one of them.
+        """
+
+        servers = metadata.authorization_servers
+        named = document.auth.issuer if document.auth is not None else None
+        if len(servers) == 1:
+            if named is not None and named != servers[0]:
+                raise DiscoveryError(
+                    "issuer_mismatch", "auth.issuer is not the domain's authorization server"
+                )
+            return servers[0]
+        if named is None:
+            raise DiscoveryError(
+                "issuer_not_named",
+                "The domain lists several authorization servers and auth.issuer names none",
+            )
+        if named not in servers:
+            raise DiscoveryError(
+                "issuer_mismatch", "auth.issuer is not one of the domain's authorization servers"
+            )
+        return named
 
     async def excluded_tasks(self, company: DiscoveredCompany) -> ExcludedTasks | None:
         """The tasks the company chose not to offer through the protocol (§8.1).

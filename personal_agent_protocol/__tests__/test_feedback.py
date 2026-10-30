@@ -35,15 +35,14 @@ GIFT_CARD = FeedbackReport(
 )
 
 
-def test_a_report_is_missing_kind_task_and_description_only() -> None:
+def test_a_report_is_task_and_description_only() -> None:
     assert GIFT_CARD.model_dump() == {
-        "kind": "missing",
         "task": "Pay with a gift card",
         "description": GIFT_CARD.description,
     }
-    # Personal agents MUST NOT send other kinds; nothing else rides along (§8).
+    # No `kind` (3e9bada), and nothing else rides along (§9.3).
     with pytest.raises(ValidationError):
-        FeedbackReport(kind="error", task="x", description="y")  # type: ignore[arg-type]
+        FeedbackReport(kind="missing", task="x", description="y")  # type: ignore[call-arg]
     with pytest.raises(ValidationError):
         FeedbackReport(task="x", description="y", user="Ada")  # type: ignore[call-arg]
     with pytest.raises(ValidationError):
@@ -74,17 +73,14 @@ async def test_a_signed_out_and_a_signed_in_session_report_with_no_scope() -> No
         **world.who,
     )
     reports = await world.shop.feedback_reports()
-    assert [(report.kind, report.task) for report in reports] == [
-        ("missing", "Pay with a gift card"),
-        ("missing", "Return a jacket"),
-    ]
+    assert [report.task for report in reports] == ["Pay with a gift card", "Return a jacket"]
     # The Session says which personal agent and which user sent it; the report doesn't.
     assert {report.client_id for report in reports} == {world.atlas.client_id}
     assert {report.pairwise_user_id for report in reports} == {PAIRWISE}
 
 
 @pytest.mark.asyncio
-async def test_the_company_accepts_an_unknown_kind_and_refuses_a_malformed_report() -> None:
+async def test_the_company_ignores_unknown_members_and_refuses_a_malformed_report() -> None:
     world = World()
     session = await world.signed_out_session()
 
@@ -98,15 +94,15 @@ async def test_the_company_accepts_an_unknown_kind_and_refuses_a_malformed_repor
             **world.who,
         )
 
-    # A kind it doesn't recognize is accepted, so later versions can add kinds (§8).
+    # A member it doesn't recognize, such as the withdrawn `kind`, is ignored (§9.3).
     accepted = await post({"kind": "slow", "task": "Track a parcel", "description": "Took ages."})
     assert accepted.status_code == 202 and accepted.content == b""
-    assert (await world.shop.feedback_reports())[0].kind == "slow"
+    assert (await world.shop.feedback_reports())[0].task == "Track a parcel"
     for body in (
-        {"kind": "missing", "task": "x" * 201, "description": "too long a task"},
-        {"kind": "missing", "task": "x", "description": "y" * 2001},
-        {"kind": "missing", "task": "x"},
-        {"task": "x", "description": "y"},
+        {"task": "x" * 201, "description": "too long a task"},
+        {"task": "x", "description": "y" * 2001},
+        {"task": "x"},
+        {"description": "y"},
         ["not", "an", "object"],
     ):
         refused = await post(body)

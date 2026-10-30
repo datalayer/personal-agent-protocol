@@ -508,8 +508,16 @@
                 "https://example.co.uk"
               ],
               "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "refresh_token"
+              ]
+            }
+          },
+          "https://example.co.uk/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.co.uk",
+              "authorization_servers": [
+                "https://auth.example.com"
               ]
             }
           }
@@ -554,8 +562,16 @@
                 "https://example.com"
               ],
               "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "refresh_token"
+              ]
+            }
+          },
+          "https://example.fr/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.fr",
+              "authorization_servers": [
+                "https://auth.example.com"
               ]
             }
           }
@@ -600,8 +616,16 @@
                 "https://example.fr/"
               ],
               "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "refresh_token"
+              ]
+            }
+          },
+          "https://example.fr/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.fr",
+              "authorization_servers": [
+                "https://auth.example.com"
               ]
             }
           }
@@ -647,8 +671,16 @@
                 "https://example.fr/poppy"
               ],
               "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "refresh_token"
+              ]
+            }
+          },
+          "https://example.fr/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.fr",
+              "authorization_servers": [
+                "https://auth.example.com"
               ]
             }
           }
@@ -694,8 +726,16 @@
                 "https://EXAMPLE.fr"
               ],
               "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "refresh_token"
+              ]
+            }
+          },
+          "https://example.fr/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.fr",
+              "authorization_servers": [
+                "https://auth.example.com"
               ]
             }
           }
@@ -741,7 +781,298 @@
                 "https://example.com"
               ],
               "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "refresh_token"
+              ]
+            }
+          },
+          "https://example.com/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.com",
+              "authorization_servers": [
+                "https://auth.example.com"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "issuer_mismatch"
+      }
+    },
+    {
+      "id": "protocol.issuer-from-protected-resource-metadata",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-03"
+      ],
+      "check": "discovery",
+      "description": "The issuer is found from the domain's protected resource metadata (§3.2): poppy.json needs no auth.issuer when it lists one authorization server.",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {},
+              "agent": {
+                "protocols": [
+                  {
+                    "type": "poppy",
+                    "endpoint": "https://api.example.com/poppy/conversations"
+                  }
+                ]
+              }
+            }
+          },
+          "https://example.com/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.com",
+              "authorization_servers": [
+                "https://auth.example.com"
+              ]
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
+                "refresh_token"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "issuer": "https://auth.example.com"
+      }
+    },
+    {
+      "id": "protocol.resource-metadata-names-another-resource",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-03"
+      ],
+      "check": "discovery",
+      "description": "The domain's protected resource metadata has resource exactly https://{organization.domain} (§3.2); a trailing slash is another resource.",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "auth": {
+                "issuer": "https://auth.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://example.com/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.com/",
+              "authorization_servers": [
+                "https://auth.example.com"
+              ]
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
+                "refresh_token"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "resource_mismatch"
+      }
+    },
+    {
+      "id": "protocol.several-authorization-servers-need-auth-issuer",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-03"
+      ],
+      "check": "discovery",
+      "description": "With several authorization servers in the domain's protected resource metadata, auth.issuer is required (§3.1, §3.2).",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {},
+              "feedback": {
+                "endpoint": "https://api.example.com/poppy/feedback"
+              }
+            }
+          },
+          "https://example.com/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.com",
+              "authorization_servers": [
+                "https://staff.example.com",
+                "https://auth.example.com"
+              ]
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
+                "refresh_token"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "issuer_not_named"
+      }
+    },
+    {
+      "id": "protocol.several-authorization-servers-auth-issuer-listed",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-03"
+      ],
+      "check": "discovery",
+      "description": "With several authorization servers, auth.issuer names the one Personal Agents use (§3.1, §3.2).",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "auth": {
+                "issuer": "https://auth.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://example.com/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.com",
+              "authorization_servers": [
+                "https://staff.example.com",
+                "https://auth.example.com"
+              ]
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/oauth/token",
+              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
+                "refresh_token"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "issuer": "https://auth.example.com"
+      }
+    },
+    {
+      "id": "protocol.several-authorization-servers-auth-issuer-unlisted",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-03"
+      ],
+      "check": "discovery",
+      "description": "auth.issuer MUST be one of the domain's authorization servers (§3.1).",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "auth": {
+                "issuer": "https://login.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://example.com/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.com",
+              "authorization_servers": [
+                "https://staff.example.com",
+                "https://auth.example.com"
+              ]
+            }
+          },
+          "https://login.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://login.example.com",
+              "token_endpoint": "https://login.example.com/oauth/token",
+              "revocation_endpoint": "https://login.example.com/oauth/revoke",
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
                 "refresh_token"
               ]
             }
@@ -750,6 +1081,90 @@
       },
       "expect": {
         "error": "issuer_mismatch"
+      }
+    },
+    {
+      "id": "protocol.one-authorization-server-auth-issuer-other",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-03"
+      ],
+      "check": "discovery",
+      "description": "With one authorization server, auth.issuer, if present, MUST name it (§3.1).",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "auth": {
+                "issuer": "https://login.example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://example.com/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.com",
+              "authorization_servers": [
+                "https://auth.example.com"
+              ]
+            }
+          },
+          "https://login.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://login.example.com",
+              "token_endpoint": "https://login.example.com/oauth/token",
+              "revocation_endpoint": "https://login.example.com/oauth/revoke",
+              "protected_resources": [
+                "https://example.com"
+              ],
+              "grant_types_supported": [
+                "refresh_token"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "issuer_mismatch"
+      }
+    },
+    {
+      "id": "protocol.website-without-issuer",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-03"
+      ],
+      "check": "discovery",
+      "description": "A Company with no issuer can only be browsed as a website (§3.2): its domain publishes no protected resource metadata, and poppy.json lists only web.",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {}
+            }
+          }
+        }
+      },
+      "expect": {
+        "issuer": null
       }
     },
     {
@@ -788,8 +1203,16 @@
                 "https://example.com"
               ],
               "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "refresh_token"
+              ]
+            }
+          },
+          "https://example.com/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.com",
+              "authorization_servers": [
+                "https://auth.example.com"
               ]
             }
           }
@@ -836,8 +1259,16 @@
                 "https://Shop-A.example"
               ],
               "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "refresh_token"
+              ]
+            }
+          },
+          "https://shop-a.example/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://shop-a.example",
+              "authorization_servers": [
+                "https://auth.provider.example/shop-a"
               ]
             }
           }
@@ -845,56 +1276,6 @@
       },
       "expect": {
         "issuer": "https://auth.provider.example/shop-a"
-      }
-    },
-    {
-      "id": "protocol.dpop-algorithms-include-es256",
-      "kind": "negative",
-      "role": "personal-agent",
-      "requirements": [
-        "PAP-3.2-10"
-      ],
-      "check": "discovery",
-      "description": "A company that lists dpop_signing_alg_values_supported includes ES256 (§3.2); metadata without it is refused.",
-      "input": {
-        "domain": "example.com",
-        "responses": {
-          "https://example.com/.well-known/poppy.json": {
-            "status": 200,
-            "json": {
-              "protocol_version": "0.3",
-              "organization": {
-                "name": "Example",
-                "domain": "example.com"
-              },
-              "auth": {
-                "issuer": "https://auth.example.com"
-              },
-              "web": {}
-            }
-          },
-          "https://auth.example.com/.well-known/oauth-authorization-server": {
-            "status": 200,
-            "json": {
-              "issuer": "https://auth.example.com",
-              "token_endpoint": "https://auth.example.com/oauth/token",
-              "revocation_endpoint": "https://auth.example.com/oauth/revoke",
-              "dpop_signing_alg_values_supported": [
-                "RS256"
-              ],
-              "protected_resources": [
-                "https://example.com"
-              ],
-              "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                "refresh_token"
-              ]
-            }
-          }
-        }
-      },
-      "expect": {
-        "error": "invalid_oauth_metadata"
       }
     },
     {
@@ -1115,21 +1496,29 @@
       "requirements": [
         "PAP-8-01"
       ],
-      "check": "discovery_document",
-      "description": "auth is required when feedback is present (§3.1).",
+      "check": "discovery",
+      "description": "A company that lists feedback needs an issuer (§3.2): a domain without protected resource metadata naming one is refused.",
       "input": {
-        "protocol_version": "0.3",
-        "organization": {
-          "name": "Example",
-          "domain": "example.com"
-        },
-        "feedback": {
-          "endpoint": "https://api.example.com/poppy/feedback"
-        },
-        "web": {}
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "feedback": {
+                "endpoint": "https://api.example.com/poppy/feedback"
+              },
+              "web": {}
+            }
+          }
+        }
       },
       "expect": {
-        "valid": false
+        "error": "issuer_not_found"
       }
     },
     {

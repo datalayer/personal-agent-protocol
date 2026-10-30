@@ -444,8 +444,6 @@ def test_only_the_companys_own_words_are_replies() -> None:
         {"replies": [{"author": "model", "text": "Hello"}]},
         {"replies": [{"author": {"type": "agent"}, "text": " "}]},
         {"replies": [{"author": {"type": "agent"}, "text": "Hello", "token": "secret"}]},
-        {"status": "waiting"},
-        {"responder": "company"},
         {"token": "secret"},
     ],
 )
@@ -454,6 +452,22 @@ def test_replies_are_refused_when_they_say_less_or_other(overrides: dict[str, An
     fields.update(overrides)
     with pytest.raises(ValidationError):
         PapReplies.model_validate(fields)
+
+
+def test_an_unknown_status_reads_as_working_and_an_unknown_responder_as_human() -> None:
+    """Later versions may add values (§8.7): read as the most careful known one."""
+
+    fields = _replies().model_dump()
+    shown = PapReplies.model_validate({**fields, "status": "paused", "responder": "robot"})
+    assert (shown.status, shown.responder) == ("working", "human")
+    built = PapReplies.of(
+        "manzanita.example",
+        "conv_4Kp9",
+        [_message("msg_1", "agent", "Hello", role="company")],
+        status="paused",
+        responder="robot",
+    )
+    assert built is not None and (built.status, built.responder) == ("working", "human")
 
 
 async def test_the_core_plugin_declares_the_replies_type() -> None:

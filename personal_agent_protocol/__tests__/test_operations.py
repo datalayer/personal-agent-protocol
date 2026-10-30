@@ -44,7 +44,7 @@ from personal_agent_protocol.company import (
 from personal_agent_protocol.company.points import COMPANY_MCP, OPERATION_EXECUTORS
 from personal_agent_protocol.demo.kit import ScriptedApprovals
 from personal_agent_protocol.mcp import McpClient
-from personal_agent_protocol.models import Author
+from personal_agent_protocol.models import Author, ProtectedResourceMetadata
 from personal_agent_protocol.reactor import RATE_LIMIT_BUDGETS, first_contribution
 
 from .test_company_end_to_end import World
@@ -888,7 +888,7 @@ async def _mcp(world: World, session: Any) -> McpClient:
     result = await RefreshTokenClient(reactor=world.reactor, http_client=world.http).token_for_mcp(
         world.refresh_reference,  # type: ignore[arg-type]
         context=world.account_context(),
-        url="https://manzanita.example/mcp",
+        server=ProtectedResourceMetadata(resource="https://manzanita.example/mcp"),
     )
     return McpClient(
         http_client=world.http,

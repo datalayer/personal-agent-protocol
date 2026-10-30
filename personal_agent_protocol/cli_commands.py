@@ -347,10 +347,10 @@ async def _mcp_client(runtime: CliRuntime, record: SessionRecord) -> tuple[McpCl
         raise NotConfiguredError("no_mcp", "The company lists no MCP server")
     token: AccessToken | None = None
     if record.refresh_reference is not None:
-        await fetch_mcp_server_metadata(runtime.http, server.url, issuer=record.issuer)
+        metadata = await fetch_mcp_server_metadata(runtime.http, server.url, issuer=record.issuer)
         result = await RefreshTokenClient(
             reactor=runtime.reactor, http_client=runtime.http
-        ).token_for_mcp(record.refresh_reference, context=account_context(record), url=server.url)
+        ).token_for_mcp(record.refresh_reference, context=account_context(record), server=metadata)
         token = result.token
     client = McpClient(
         http_client=runtime.http,

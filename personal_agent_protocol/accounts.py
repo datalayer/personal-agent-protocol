@@ -31,7 +31,7 @@ a log, or a URL.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
 
 import httpx
@@ -40,7 +40,7 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 from .auth import _https_url, _scopes
 from .errors import AuthorizationError, PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
-from .models import DiscoveredCompany, ProtocolModel
+from .models import DiscoveredCompany, ProtectedResourceMetadata, ProtocolModel
 from .reactor import (
     REFRESH_TOKEN_LOCKS,
     TOKEN_STORES,
@@ -207,12 +207,22 @@ class RefreshTokenClient:
         reference: str,
         *,
         context: RefreshTokenContext,
-        url: str,
+        server: ProtectedResourceMetadata,
         scopes: tuple[str, ...] | None = None,
     ) -> RefreshResult:
-        """An access token for one MCP server: `resource` is its `url` from poppy.json (§7)."""
+        """An access token for one MCP server: `resource` is its `url` from poppy.json (§7).
 
-        return await self.refresh(reference, context=context, scopes=scopes, resource=url)
+        `server` is its protected resource metadata, as `fetch_mcp_server_metadata` returns
+        it. MCP's baseline is Bearer: a proof goes only when `server` lists ES256, whatever
+        the issuer lists, so a server that doesn't gets a Bearer token.
+        """
+
+        return await self.refresh(
+            reference,
+            context=replace(context, dpop_signing_algs=server.dpop_signing_alg_values_supported),
+            scopes=scopes,
+            resource=server.resource,
+        )
 
     @traced(
         "pap.sign_in.refresh_token.revoke",
@@ -341,7 +351,9 @@ class ServiceTokens:
     reads the service's protected resource metadata: a `resource` other than
     `https://{organization.domain}` gets a token requested for it, used only there;
     otherwise the default token serves. After a service answers `invalid_token`
-    with `resource_metadata`, `token_for(url, fresh=True)` reads it again.
+    with `resource_metadata`, `token_for(url, fresh=True)` reads it again. A token for
+    an MCP server the Company lists proves as that server's metadata says (§7);
+    every other as the issuer's does (§4.5).
     """
 
     refresh: RefreshTokenClient
@@ -360,20 +372,29 @@ class ServiceTokens:
     async def token_for(self, service_url: str, *, fresh: bool = False) -> AccessToken | None:
         """The access token to call `service_url` with, or `None` once signed out."""
 
-        resource = await self.resource_for(service_url, fresh=fresh)
+        metadata = await self.discovery.service_metadata(self.company, service_url, fresh=fresh)
+        resource = None if metadata is None else metadata.resource
         if fresh:
             self._tokens.pop(resource, None)
         known = self._tokens.get(resource)
         if known is not None:
             return known
-        result = await self.refresh.refresh(
-            self.reference, context=self.context, scopes=self.scopes, resource=resource
-        )
+        if metadata is not None and self._is_mcp(metadata.resource):
+            result = await self.refresh.token_for_mcp(
+                self.reference, context=self.context, server=metadata, scopes=self.scopes
+            )
+        else:
+            result = await self.refresh.refresh(
+                self.reference, context=self.context, scopes=self.scopes, resource=resource
+            )
         if result.status != "signed_in" or result.token is None:
             self._tokens.clear()
             return None
         self._tokens[resource] = result.token
         return result.token
+
+    def _is_mcp(self, resource: str) -> bool:
+        return any(api.type == "mcp" and api.url == resource for api in self.company.document.apis)
 
     def forget(self) -> None:
         """Drop every access token held: signed out, or a new sign-in replaces them."""

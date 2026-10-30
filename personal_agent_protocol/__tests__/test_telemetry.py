@@ -36,6 +36,7 @@ from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenCon
 from personal_agent_protocol.company import COMPANY_RATE_LIMITS
 from personal_agent_protocol.conversations import ConversationError
 from personal_agent_protocol.demo.kit import AgentIdentity
+from personal_agent_protocol.models import ProtectedResourceMetadata
 from personal_agent_protocol.reactor import PapCorePlugin
 from personal_agent_protocol.telemetry import safe_attributes
 
@@ -188,7 +189,7 @@ async def test_a_company_reports_what_it_did_and_refused(
             client_id=world.atlas.client_id,
             tenant_id=TENANT,
         ),
-        url=mcp,
+        server=ProtectedResourceMetadata(resource=mcp),
     )
     assert for_mcp.status == "signed_in"
     await world.transport.request(

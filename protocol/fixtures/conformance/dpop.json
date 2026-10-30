@@ -130,6 +130,72 @@
       }
     },
     {
+      "id": "dpop.mcp-proof-from-the-servers-metadata",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "GUIDE-mcp-01"
+      ],
+      "description": "A token for an MCP server carries a proof only when that server's protected resource metadata lists ES256: the issuer's list doesn't decide it, and the same refresh for any other token follows the issuer's.",
+      "check": "dpop_mcp_token",
+      "input": [
+        {
+          "issuer": [
+            "ES256"
+          ],
+          "server": [
+            "ES256"
+          ],
+          "token_type": "DPoP"
+        },
+        {
+          "issuer": [
+            "ES256"
+          ],
+          "server": null,
+          "token_type": "Bearer"
+        },
+        {
+          "issuer": [
+            "ES256"
+          ],
+          "server": [
+            "RS256"
+          ],
+          "token_type": "Bearer"
+        },
+        {
+          "issuer": null,
+          "server": [
+            "ES256"
+          ],
+          "token_type": "DPoP"
+        },
+        {
+          "issuer": null,
+          "server": null,
+          "token_type": "Bearer"
+        }
+      ],
+      "expect": [
+        {
+          "proof": true
+        },
+        {
+          "proof": false
+        },
+        {
+          "proof": false
+        },
+        {
+          "proof": true
+        },
+        {
+          "proof": false
+        }
+      ]
+    },
+    {
       "id": "dpop.metadata-lists-es256",
       "kind": "positive",
       "role": "company",
@@ -412,6 +478,50 @@
       ],
       "description": "An MCP server's challenge to a bound token with no proof is DPoP invalid_dpop_proof with resource_metadata.",
       "world": "dpop-binding"
+    },
+    {
+      "id": "dpop.mcp-metadata-lists-es256",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "GUIDE-mcp-01"
+      ],
+      "world": "dpop-binding",
+      "description": "With binding on, the MCP server's own protected resource metadata lists dpop_signing_alg_values_supported: [\"ES256\"]."
+    },
+    {
+      "id": "dpop.mcp-challenges-bearer-then-dpop",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "GUIDE-co-session-06",
+        "GUIDE-mcp-01"
+      ],
+      "world": "dpop-binding",
+      "description": "An MCP server challenges with each scheme it accepts: Bearer, its baseline, then DPoP, each with resource_metadata."
+    },
+    {
+      "id": "dpop.mcp-bearer-without-a-proof",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "GUIDE-mcp-01"
+      ],
+      "world": "dpop-binding",
+      "description": "An issuer that requires a proof still gives a Bearer token, without one, for an MCP resource, and for nothing else: ordinary MCP clients stay supported.",
+      "expect": {
+        "default": "invalid_dpop_proof"
+      }
+    },
+    {
+      "id": "dpop.mcp-server-decides-the-proof",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "GUIDE-mcp-01"
+      ],
+      "world": "dpop-binding",
+      "description": "At an issuer that lists DPoP, a server whose metadata doesn't gets a Bearer token and no proof, and accepts it."
     }
   ]
 }

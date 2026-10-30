@@ -453,6 +453,8 @@ class ProtectedResourceMetadata(ProtocolModel):
     authorization_servers: list[str] = Field(default_factory=list)
     scopes_supported: list[str] = Field(default_factory=list)
     bearer_methods_supported: list[str] = Field(default_factory=list)
+    #: At an MCP server it, not the issuer's list, says whether a token proves (§7).
+    dpop_signing_alg_values_supported: list[str] | None = None
 
     @field_validator("resource")
     @classmethod

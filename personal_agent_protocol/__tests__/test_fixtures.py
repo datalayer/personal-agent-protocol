@@ -30,12 +30,14 @@ from personal_agent_protocol import (
     SessionClient,
     SessionHttpClient,
 )
+from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.apis import ApiClient, conversation_endpoint, known_apis
 from personal_agent_protocol.conformance import load_fixture_cases
 from personal_agent_protocol.crypto import DelegatedSessionSigner, InMemoryDelegatedKeys
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
+    MemoryVault,
     MutableClock,
     PersonalAgentHost,
     personal_agent_reactor,
@@ -59,6 +61,7 @@ from personal_agent_protocol.models import (
     ExtensionDescriptor,
     Message,
     Operation,
+    ProtectedResourceMetadata,
 )
 from personal_agent_protocol.reactor import PublicUrlSafetyPolicy, SessionJwtRequest
 
@@ -304,6 +307,8 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         assert len(delegations) == expect["delegations"]
     elif case.check == "dpop_token_request":
         await _dpop_token_requests(case)
+    elif case.check == "dpop_mcp_token":
+        await _dpop_mcp_tokens(case)
     elif case.check == "dpop_proof_shape":
         await _dpop_proof_shape(case)
     else:  # pragma: no cover - a fixture with a check this test does not know
@@ -343,6 +348,40 @@ async def _dpop_token_requests(case: Any) -> None:
             assert refused.value.code == expect["error"]
         else:
             await request
+        assert ("dpop" in sent[0].headers) is expect["proof"]
+
+
+async def _dpop_mcp_tokens(case: Any) -> None:
+    """Which list decides a proof: the MCP server's for its token, the issuer's otherwise (§7)."""
+
+    for given, expect in zip(case.input, case.expect, strict=True):
+        sent: list[httpx.Request] = []
+        answer = {
+            "access_token": "t",
+            "token_type": given["token_type"],
+            "expires_in": 60,
+            "scope": "orders:read",
+        }
+        http = httpx.AsyncClient(transport=httpx.MockTransport(_recording(sent, answer)))
+        identity = AgentIdentity(domain="atlas.example", name="Atlas")
+        vault = MemoryVault()
+        await vault.put("refresh", SecretStr("rt"))
+        host = PersonalAgentHost(identity, MutableClock(), vault=vault)
+        reactor = personal_agent_reactor(host, network=InProcessNetwork(), http_client=http)
+        context = RefreshTokenContext(
+            token_endpoint="https://shop.example/oauth/token",  # noqa: S106 - a URL
+            issuer="https://shop.example",
+            client_id=identity.client_id,
+            tenant_id="t",
+            dpop_signing_algs=given["issuer"],
+        )
+        server = ProtectedResourceMetadata(
+            resource="https://shop.example/mcp",
+            dpop_signing_alg_values_supported=given["server"],
+        )
+        await RefreshTokenClient(reactor=reactor, http_client=http).token_for_mcp(
+            "refresh", context=context, server=server
+        )
         assert ("dpop" in sent[0].headers) is expect["proof"]
 
 

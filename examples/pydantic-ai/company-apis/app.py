@@ -146,7 +146,7 @@ async def _journey() -> dict[str, Any]:
             tenant_id=TENANT,
             revocation_endpoint=metadata.revocation_endpoint,
         ),
-        url=served.resource,
+        server=served,
     )
     if refreshed.token is None:
         raise RuntimeError("the example world is incomplete")

@@ -36,6 +36,7 @@ from personal_agent_protocol.crypto import (
     session_jwt_claims,
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE
+from personal_agent_protocol.models import ProtectedResourceMetadata
 from personal_agent_protocol.reactor import SESSION_SIGNERS, SessionJwtRequest, first_contribution
 from personal_agent_protocol.sessions import AccessToken
 from personal_agent_protocol.transport import SESSION_HEADER, session_headers
@@ -134,7 +135,7 @@ async def _for_mcp(world: World) -> AccessToken:
             client_id=world.atlas.client_id,
             tenant_id=TENANT,
         ),
-        url=MCP,
+        server=ProtectedResourceMetadata(resource=MCP),
     )
     assert result.token is not None and result.token.resource == MCP
     return result.token

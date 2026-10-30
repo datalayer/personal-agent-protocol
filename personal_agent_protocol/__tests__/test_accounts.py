@@ -18,6 +18,7 @@ from personal_agent_protocol.accounts import (
     RefreshTokenContext,
     stale_resource_metadata,
 )
+from personal_agent_protocol.models import ProtectedResourceMetadata
 from personal_agent_protocol.reactor import build_pap_reactor
 
 CONTEXT = RefreshTokenContext(
@@ -183,7 +184,8 @@ def test_a_token_for_an_mcp_server_names_it_as_the_resource() -> None:
 
     mcp = "https://mcp.shop.example/mcp"
     client, _ = arrange(company)
-    result = asyncio.run(client.token_for_mcp("refresh_ref", context=CONTEXT, url=mcp))
+    server = ProtectedResourceMetadata(resource=mcp)
+    result = asyncio.run(client.token_for_mcp("refresh_ref", context=CONTEXT, server=server))
     assert result.status == "signed_in"
     assert result.token is not None and result.token.resource == mcp
     # An OAuth refresh with `resource` (RFC 8707, §4.5): no Token Exchange.

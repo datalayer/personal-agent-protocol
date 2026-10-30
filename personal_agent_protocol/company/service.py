@@ -457,6 +457,12 @@ class CompanyConfig:
         return f"https://{self.domain}"
 
     @property
+    def mcp_token_schemes(self) -> tuple[str, ...]:
+        """The MCP server's schemes: Bearer, its baseline, and DPoP with binding on (§7)."""
+
+        return ("Bearer",) if self.dpop_binding == "off" else ("Bearer", "DPoP")
+
+    @property
     def identifier(self) -> str:
         """The company's identifier (§3.2): its issuer, else its lowercase HTTPS domain."""
 
@@ -1135,12 +1141,15 @@ class CompanyService:
         it (§4.5).
         """
 
-        return {
+        metadata: dict[str, Any] = {
             "resource": self.config.mcp_url,
             "authorization_servers": [self.config.base],
             "scopes_supported": list(self.config.scopes),
             "bearer_methods_supported": ["header"],
         }
+        if self.config.dpop_binding != "off":
+            metadata["dpop_signing_alg_values_supported"] = [DPOP_ALGORITHM]
+        return metadata
 
     def oauth_metadata(self) -> dict[str, Any]:
         config = self.config
@@ -1250,7 +1259,7 @@ class CompanyService:
         grant = form.get("grant_type")
         client_id = await self._client(form)
         # Before any grant is used: a proof refused spends no code.
-        jkt = await self._token_binding(request)
+        jkt = await self._token_binding(request, self._resource(form))
         if grant == REFRESH_TOKEN_GRANT:
             return await self._refresh_grant(form, client_id, jkt)
         if grant == AUTHORIZATION_CODE_GRANT and self.config.direct:
@@ -1263,14 +1272,19 @@ class CompanyService:
             return await self._mediated_grant(form, client_id, jkt)
         raise _RefusedError(400, "unsupported_grant_type")
 
-    async def _token_binding(self, request: CompanyRequest) -> str | None:
-        """The thumbprint the tokens of this request are bound to, or `None` for Bearer."""
+    async def _token_binding(self, request: CompanyRequest, resource: str | None) -> str | None:
+        """The thumbprint the tokens of this request are bound to, or `None` for Bearer.
+
+        `required` asks a proof of every token but one requested for the MCP server, whose
+        baseline is Bearer, so ordinary MCP clients stay supported (§7): such a token works
+        at that server alone.
+        """
 
         if self.config.dpop_binding == "off":
             return None
         if request.headers.get("dpop"):
             return await self._dpop_proof(request, status=400)
-        if self.config.dpop_binding == "required":
+        if self.config.dpop_binding == "required" and resource is None:
             raise _RefusedError(400, "invalid_dpop_proof")
         return None
 
@@ -1548,7 +1562,12 @@ class CompanyService:
             raise _RefusedError(400, "invalid_grant")
         await self.store.delete(USER_CODE, approved.user_code)
         return await self._sign_in(
-            client_id, approved.account_id, approved.granted, requested=approved.scopes, jkt=jkt
+            client_id,
+            approved.account_id,
+            approved.granted,
+            requested=approved.scopes,
+            jkt=jkt,
+            resource=self._resource(form),
         )
 
     async def _forget_device(self, key: str, pending: PendingDevice) -> None:
@@ -1648,12 +1667,14 @@ class CompanyService:
         *,
         requested: tuple[str, ...],
         jkt: str | None,
+        resource: str | None,
     ) -> CompanyResponse:
         """A sign-in: a new refresh token, and an access token (§4.7).
 
         `scopes` are the ones the user approved of those `requested`; the response
         leaves `scope` out when they are the same (RFC 6749 §5.1). Plain OAuth: no
-        Session is named or signed in here (§5.4).
+        Session is named or signed in here (§5.4). `resource` is the service the access
+        token is for, as at a refresh: an MCP client signing in asks for its server.
         """
 
         if not scopes:
@@ -1687,7 +1708,7 @@ class CompanyService:
             account_id=account_id,
             scopes=scopes,
             family=family,
-            resource=None,
+            resource=resource,
             refresh_token=refresh_token,
             requested=requested,
             jkt=jkt,
@@ -1989,7 +2010,12 @@ class CompanyService:
         if not hmac.compare_digest(challenge.decode(), issued.code_challenge):
             raise _RefusedError(400, "invalid_grant")
         return await self._sign_in(
-            client_id, issued.account_id, issued.scopes, requested=issued.requested, jkt=jkt
+            client_id,
+            issued.account_id,
+            issued.scopes,
+            requested=issued.requested,
+            jkt=jkt,
+            resource=self._resource(form),
         )
 
     def _redirect_url(self, redirect_uri: str, **values: str) -> str:
@@ -2450,7 +2476,12 @@ class CompanyService:
         if authenticated.code_reference is None:
             await self._attempts_cleared(keys)
             return await self._sign_in(
-                client_id, authenticated.account_id, granted, requested=granted, jkt=jkt
+                client_id,
+                authenticated.account_id,
+                granted,
+                requested=granted,
+                jkt=jkt,
+                resource=self._resource(form),
             )
         locked = await self._locked_for((code_key,))
         if locked is not None:
@@ -2537,7 +2568,12 @@ class CompanyService:
             raise _RefusedError(400, "invalid_grant")
         await self._attempts_cleared((*completed.attempt_keys, code_key))
         return await self._sign_in(
-            client_id, completed.account_id, completed.scopes, requested=completed.scopes, jkt=jkt
+            client_id,
+            completed.account_id,
+            completed.scopes,
+            requested=completed.scopes,
+            jkt=jkt,
+            resource=self._resource(form),
         )
 
     async def _mediated_ended(
@@ -3492,7 +3528,7 @@ class CompanyService:
             status,
             body,
             {
-                "WWW-Authenticate": _challenges(self.config.token_schemes, error, extra),
+                "WWW-Authenticate": _challenges(self.config.mcp_token_schemes, error, extra),
                 "Cache-Control": "no-store",
                 **(headers or {}),
             },

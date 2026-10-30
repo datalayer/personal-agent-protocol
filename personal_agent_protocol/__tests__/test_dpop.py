@@ -32,6 +32,7 @@ from personal_agent_protocol import (
     SIGNERS,
     AccessToken,
     AuthorizationError,
+    DiscoveryClient,
     DpopProofRequest,
     InMemoryDpopKeys,
     JoseDpopProver,
@@ -45,10 +46,11 @@ from personal_agent_protocol import (
     TransportError,
     build_pap_reactor,
 )
+from personal_agent_protocol.accounts import ServiceTokens
 from personal_agent_protocol.cli_host import FileDpopKeys, FileKeyStore
 from personal_agent_protocol.company import CompanyConfig, MemoryReplayCache
 from personal_agent_protocol.company.verify import verify_dpop_proof
-from personal_agent_protocol.conformance import ConformanceContext, SignedIn
+from personal_agent_protocol.conformance import ConformanceContext, SignedIn, _signed_in_user
 from personal_agent_protocol.crypto import jwk_thumbprint, new_dpop_key, token_hash
 from personal_agent_protocol.demo.conformance import MANZANITA_SCENARIO, ManzanitaConformance
 from personal_agent_protocol.demo.kit import ScriptedInput
@@ -584,6 +586,48 @@ async def test_required_challenges_dpop_alone_signed_out_too(
 
 
 @pytest.mark.asyncio
+async def test_a_sign_in_for_the_mcp_server_needs_no_proof_and_works_only_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ordinary MCP client asks for its server at the token endpoint: Bearer, for it alone."""
+
+    world = _binding(monkeypatch, dpop_binding="required")
+    ctx = world.context()
+    metadata = await ctx.metadata()
+    url = world.service.config.mcp_url
+    started = await ctx.agent.device.begin(
+        device_authorization_endpoint=str(metadata.device_authorization_endpoint),
+        token_endpoint=metadata.token_endpoint,
+        issuer=metadata.issuer,
+        client_id=ctx.agent.identity.client_id,
+        scopes=("orders:read",),
+        tenant_id=ctx.tenant_id,
+        organization=(await ctx.company()).document.organization,
+        protected_resources=metadata.protected_resources,
+    )
+    await ctx.driver.approve_device(started.user_code, account=ctx.driver.accounts[0])
+    await ctx.driver.wait(started.poll_interval)
+    pending = await ctx.agent.vault.take(started.reference)
+    grant = {
+        "grant_type": DEVICE_CODE_GRANT,
+        "device_code": pending.device_code.get_secret_value(),
+        "resource": url,
+    }
+    answer = await ctx.token_request({**grant, **await ctx.client_form()})
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["token_type"] == "Bearer"
+    session = await ctx.session(ctx.new_user())
+    token = AccessToken(
+        access_token=answer.json()["access_token"],
+        scope="orders:read",
+        resource=url,
+    )
+    api = ctx.url(MANZANITA_SCENARIO.read_path)
+    elsewhere = await ctx.send("GET", api, headers=await ctx.auth(session, "GET", api, token))
+    assert elsewhere.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_a_refused_proof_spends_no_device_code(monkeypatch: pytest.MonkeyPatch) -> None:
     world = _binding(monkeypatch, dpop_binding="required")
     ctx = world.context()
@@ -701,3 +745,30 @@ async def test_a_private_key_or_another_curve_in_a_proof_is_refused() -> None:
                 window=timedelta(seconds=60),
             )
         assert refused.value.code == "invalid_dpop_proof"
+
+
+@pytest.mark.asyncio
+async def test_service_tokens_prove_at_an_mcp_server_as_its_metadata_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`token_for` reads the server's list for its token, the issuer's for the default (§7)."""
+
+    world = _binding(monkeypatch, dpop_binding="optional")
+    ctx = world.context()
+    _user, signed = await _signed_in_user(ctx)
+    url = world.service.config.mcp_url
+    tokens = ServiceTokens(
+        refresh=ctx.agent.accounts,
+        discovery=DiscoveryClient(reactor=ctx.agent.reactor),
+        company=await ctx.company(),
+        reference=signed.reference,
+        context=await ctx.account_context(signed.session.sub),
+    )
+    token = await tokens.token_for(url)
+    assert token is not None and token.token_type == "DPoP" and token.resource == url
+
+    plain = world.service.protected_resource_metadata()
+    plain.pop("dpop_signing_alg_values_supported")
+    monkeypatch.setattr(world.service, "protected_resource_metadata", lambda: plain)
+    answered = await tokens.token_for(url, fresh=True)
+    assert answered is not None and answered.token_type == "Bearer"

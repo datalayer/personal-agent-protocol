@@ -258,6 +258,14 @@ class DiscoveryClient:
         with the domain's own, the default token works there.
         """
 
+        metadata = await self.service_metadata(company, url, fresh=fresh)
+        return None if metadata is None else metadata.resource
+
+    async def service_metadata(
+        self, company: DiscoveredCompany, url: str, *, fresh: bool = False
+    ) -> ProtectedResourceMetadata | None:
+        """The metadata of a service that accepts only tokens issued for it, or `None` (§4.5)."""
+
         metadata = await self.resource_metadata(url, fresh=fresh)
         if metadata is None or metadata.resource == company.resource:
             return None
@@ -266,7 +274,7 @@ class DiscoveryClient:
                 "invalid_resource_metadata",
                 "The service's protected resource metadata names another authorization server",
             )
-        return metadata.resource
+        return metadata
 
     async def excluded_tasks(self, company: DiscoveredCompany) -> ExcludedTasks | None:
         """The tasks the company chose not to offer through the protocol (§8.1).

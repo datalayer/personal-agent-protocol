@@ -26,7 +26,7 @@ from personal_agent_protocol.mcp import (
     fetch_mcp_server_metadata,
     mcp_api,
 )
-from personal_agent_protocol.models import Approval
+from personal_agent_protocol.models import Approval, ProtectedResourceMetadata
 from personal_agent_protocol.sessions import AccessToken
 from personal_agent_protocol.transport import (
     SessionHttpClient,
@@ -73,7 +73,7 @@ async def mcp_token(world: World, reference: str, url: str = MCP) -> AccessToken
     """A token for the MCP server: a refresh with `resource`, its `url` (§4.5, §7)."""
 
     result = await RefreshTokenClient(reactor=world.reactor, http_client=world.http).token_for_mcp(
-        reference, context=context(world), url=url
+        reference, context=context(world), server=ProtectedResourceMetadata(resource=url)
     )
     assert result.status == "signed_in" and result.token is not None
     return result.token
@@ -274,12 +274,18 @@ async def test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url() ->
     accounts = RefreshTokenClient(reactor=world.reactor, http_client=world.http)
     with pytest.raises(PersonalAgentProtocolError) as plain:
         await accounts.token_for_mcp(
-            reference, context=context(world), url="http://manzanita.example/mcp"
+            reference,
+            context=context(world),
+            server=ProtectedResourceMetadata.model_construct(
+                resource="http://manzanita.example/mcp"
+            ),
         )
     assert plain.value.code == "invalid_url"
     with pytest.raises(PersonalAgentProtocolError) as elsewhere:
         await accounts.token_for_mcp(
-            reference, context=context(world), url="https://elsewhere.example/mcp"
+            reference,
+            context=context(world),
+            server=ProtectedResourceMetadata(resource="https://elsewhere.example/mcp"),
         )
     assert elsewhere.value.code == "invalid_target"
     token = await mcp_token(world, reference)

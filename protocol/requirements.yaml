@@ -3724,3 +3724,28 @@ guide:
   - dpop.browser-join
   - dpop.mcp-token-bound
   - dpop.mcp-challenge-keeps-resource-metadata
+  - dpop.mcp-challenges-bearer-then-dpop
+- id: GUIDE-mcp-01
+  source: guide
+  section: MCP and UCP interoperability
+  level: SHOULD
+  role: both
+  text: 'Use Bearer tokens for ordinary MCP authorization. Use DPoP only with a server that advertises it
+    and a client that supports it (section 7): the issuer that requires a proof still lets ordinary MCP clients
+    get a Bearer token for an MCP resource.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.accounts:RefreshTokenClient.token_for_mcp
+  - personal_agent_protocol.accounts:ServiceTokens.token_for
+  - personal_agent_protocol.company.service:CompanyService.protected_resource_metadata
+  - personal_agent_protocol.company.service:CompanyService._token_binding
+  - personal_agent_protocol.company.service:CompanyConfig.mcp_token_schemes
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_binding_with_dpop_over_tls
+  conformance:
+  - dpop.mcp-proof-from-the-servers-metadata
+  - dpop.mcp-metadata-lists-es256
+  - dpop.mcp-challenges-bearer-then-dpop
+  - dpop.mcp-bearer-without-a-proof
+  - dpop.mcp-server-decides-the-proof

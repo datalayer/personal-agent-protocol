@@ -2274,8 +2274,9 @@ async def _signed_in_mcp(ctx: ConformanceContext) -> tuple[str, SignedIn, Access
 
     url = await _mcp_url(ctx)
     user, signed = await _signed_in_user(ctx)
+    server = await fetch_mcp_server_metadata(ctx.http, url, issuer=(await ctx.metadata()).issuer)
     result = await ctx.agent.accounts.token_for_mcp(
-        signed.reference, context=await ctx.account_context(user), url=url
+        signed.reference, context=await ctx.account_context(user), server=server
     )
     check(result.status == "signed_in" and result.token is not None, "a token for the server")
     return user, signed, cast(AccessToken, result.token), url
@@ -2966,6 +2967,87 @@ async def _dpop_mcp_challenge(ctx: ConformanceContext, _: FixtureCase) -> None:
         "resource_metadata" in answer.headers.get("www-authenticate", ""),
         "the challenge keeps resource_metadata (§7)",
     )
+
+
+@case("dpop.mcp-metadata-lists-es256")
+async def _dpop_mcp_metadata(ctx: ConformanceContext, _: FixtureCase) -> None:
+    url = await _mcp_url(ctx)
+    served = await fetch_mcp_server_metadata(ctx.http, url, issuer=(await ctx.metadata()).issuer)
+    check(
+        served.dpop_signing_alg_values_supported == [DPOP_ALGORITHM],
+        "the MCP server's own metadata lists ES256",
+    )
+
+
+@case("dpop.mcp-challenges-bearer-then-dpop")
+async def _dpop_mcp_schemes(ctx: ConformanceContext, _: FixtureCase) -> None:
+    url = await _mcp_url(ctx)
+    answer = await ctx.send(
+        "POST",
+        url,
+        headers={"Content-Type": "application/json"},
+        content=b'{"jsonrpc":"2.0","id":1,"method":"ping"}',
+    )
+    check(answer.status_code == 401, f"a challenge, got {answer.status_code}")
+    challenges = answer.headers.get("www-authenticate", "")
+    check(
+        re.findall(r"(?:^|,\s*)(Bearer|DPoP)\b", challenges) == ["Bearer", "DPoP"],
+        f"Bearer, then DPoP: {challenges}",
+    )
+    check(challenges.count("resource_metadata=") == 2, "each keeps resource_metadata")
+
+
+@case("dpop.mcp-bearer-without-a-proof")
+async def _dpop_mcp_bearer(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    """An ordinary MCP client: Bearer for the server, at an issuer that requires a proof."""
+
+    url = await _mcp_url(ctx)
+    _user, signed = await _signed_in_user(ctx)
+    refresh_token = (await ctx.refresh_token(signed.reference)).get_secret_value()
+    form = {"grant_type": "refresh_token", "refresh_token": refresh_token}
+    default = await ctx.token_request({**form, **await ctx.client_form()})
+    expect_refusal(default, 400, fixture.expect["default"], "no proof for the default token")
+    answer = await ctx.token_request({**form, "resource": url, **await ctx.client_form()})
+    check(answer.status_code == 200, f"no proof for the MCP server: got {answer.status_code}")
+    issued = answer.json()
+    check(issued["token_type"].lower() == "bearer", "a Bearer token")
+    token = AccessToken(
+        access_token=issued["access_token"],
+        token_type="Bearer",  # noqa: S106 - an OAuth token type
+        scope=issued.get("scope", ""),
+        resource=url,
+    )
+    listed = await (await _mcp_client(ctx, signed.session, token, url)).call_tool(
+        _tool(ctx.scenario.mcp_read_tool)
+    )
+    check(not listed.is_error, "the MCP server accepts it")
+    elsewhere = await ctx.send(
+        "GET",
+        ctx.url(ctx.scenario.read_path),
+        headers=await ctx.auth(signed.session, "GET", ctx.url(ctx.scenario.read_path), token),
+    )
+    check(elsewhere.status_code == 401, "and it works nowhere else")
+
+
+@case("dpop.mcp-server-decides-the-proof")
+async def _dpop_mcp_decides(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """The issuer lists ES256; a server that doesn't gets Bearer, with no proof (§7)."""
+
+    url = await _mcp_url(ctx)
+    metadata = await ctx.metadata()
+    check(metadata.dpop_signing_alg_values_supported, "the issuer lists DPoP")
+    _user, signed = await _signed_in_user(ctx)
+    served = await fetch_mcp_server_metadata(ctx.http, url, issuer=metadata.issuer)
+    plain = served.model_copy(update={"dpop_signing_alg_values_supported": None})
+    result = await ctx.agent.accounts.token_for_mcp(
+        signed.reference, context=await ctx.account_context(signed.session.sub), server=plain
+    )
+    token = cast(AccessToken, result.token)
+    check(token.token_type == "Bearer", "a server without the field gets Bearer")  # noqa: S105
+    listed = await (await _mcp_client(ctx, signed.session, token, url)).call_tool(
+        _tool(ctx.scenario.mcp_read_tool)
+    )
+    check(not listed.is_error, "and takes it")
 
 
 # A Company with no issuer (§3.2) ------------------------------------------------------

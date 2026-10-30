@@ -78,6 +78,7 @@ from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
 from .models import Approval, Author, ConversationEvent, DiscoveredCompany, Message, Operation
 from .operations import (
     APPROVAL_HEADER,
+    OPERATIONS_VERSION,
     OperationsClient,
     approval_header,
     operations_negotiated,
@@ -2685,7 +2686,7 @@ class ConformanceReport:
             "schema_version": SCHEMA_VERSION,
             "protocol": "personal-agent-protocol",
             "profile": self.profile,
-            "extensions": {"operations": "1"},
+            "extensions": {"operations": OPERATIONS_VERSION},
             "role": "personal-agent",
             "target": self.target,
             "agent": self.agent,

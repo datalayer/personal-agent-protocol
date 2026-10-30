@@ -285,6 +285,12 @@ export interface CompanyConfigOptions {
   readonly dpopBinding?: DpopBinding;
   /** Proofs must carry a nonce the company gave (RFC 9449 §8, §9). */
   readonly dpopNonces?: boolean;
+  /**
+   * Whether the company has an OAuth issuer (§3.2, default true). Without one it runs no OAuth
+   * server: its protected resource metadata and OAuth endpoints are 404, it publishes no `auth`,
+   * `identifier` is its HTTPS domain, and every Session stays signed out.
+   */
+  readonly oauth?: boolean;
   /** How long a given nonce is accepted, in seconds (default five minutes). */
   readonly dpopNonceLifetimeSeconds?: number;
   /** The acceptance window of a proof's `iat`, in seconds (default a minute). */
@@ -340,6 +346,7 @@ export class CompanyConfig {
   readonly idempotencyLifetimeSeconds: number;
   readonly dpopBinding: DpopBinding;
   readonly dpopNonces: boolean;
+  readonly oauth: boolean;
   readonly dpopNonceLifetimeSeconds: number;
   readonly dpopProofWindowSeconds: number;
 
@@ -377,6 +384,7 @@ export class CompanyConfig {
     this.idempotencyLifetimeSeconds = options.idempotencyLifetimeSeconds ?? 24 * 60 * 60;
     this.dpopBinding = options.dpopBinding ?? "off";
     this.dpopNonces = options.dpopNonces ?? false;
+    this.oauth = options.oauth ?? true;
     this.dpopNonceLifetimeSeconds = options.dpopNonceLifetimeSeconds ?? 5 * 60;
     this.dpopProofWindowSeconds = options.dpopProofWindowSeconds ?? 60;
     for (const [name, lifetime] of Object.entries({
@@ -389,6 +397,13 @@ export class CompanyConfig {
       dpopProofWindowSeconds: this.dpopProofWindowSeconds,
     })) {
       if (!(lifetime > 0)) throw new RangeError(`${name} must be positive`);
+    }
+    if (
+      !this.oauth &&
+      (this.mediatedFields.length > 0 || this.operations || this.aliases.length > 0 || this.dpopBinding !== "off")
+    ) {
+      // Each needs an issuer: sign-in, an approving account, the domains it joins (§3.2).
+      throw new RangeError("a company with no issuer has no mediatedFields, operations, aliases or DPoP");
     }
     if (!["off", "optional", "required"].includes(this.dpopBinding)) {
       throw new RangeError("dpopBinding is off, optional or required");
@@ -457,10 +472,18 @@ export class CompanyConfig {
   get base(): string {
     return `https://${this.domain}`;
   }
+  /** The company's identifier (§3.2): its issuer, else its lowercase HTTPS domain. */
+  get identifier(): string {
+    return this.oauth ? this.base : `https://${this.domain.toLowerCase()}`;
+  }
   /** The `Authorization` schemes a resource accepts, each challenged (§7). */
   get tokenSchemes(): readonly string[] {
     if (this.dpopBinding === "off") return ["Bearer"];
     return this.dpopBinding === "optional" ? ["Bearer", "DPoP"] : ["DPoP"];
+  }
+  /** The MCP server's schemes: Bearer, its baseline, and DPoP with binding on (§7). */
+  get mcpTokenSchemes(): readonly string[] {
+    return this.dpopBinding === "off" ? ["Bearer"] : ["Bearer", "DPoP"];
   }
   get tokenEndpoint(): string {
     return `${this.base}/oauth/token`;
@@ -646,6 +669,8 @@ class WatchedReplayCache implements ReplayCache {
 }
 
 /** A proof's refusals: challenged as `DPoP`, the one scheme that has proofs (RFC 9449 §7.1). */
+/** What a company with no issuer doesn't serve (§3.2). */
+const OAUTH_PATHS = ["/oauth/", "/.well-known/oauth-"];
 const PROOF_REFUSALS = new Set(["invalid_dpop_proof", "use_dpop_nonce"]);
 const CHALLENGED = new Set(["invalid_token", "insufficient_scope", SIGNED_OUT, ...PROOF_REFUSALS]);
 
@@ -965,7 +990,7 @@ export class CompanyService {
     // Outside a request (the host signing an account out, say): no route, no agent.
     const exchange = exchanges.getStore();
     emit(sink, name, outcome, exchange === undefined ? 0 : performance.now() - exchange.started, {
-      "pap.company.issuer": this.config.base,
+      "pap.company.issuer": this.config.identifier,
       "pap.company.domain": this.config.domain,
       "pap.company.route": exchange?.route,
       "pap.client.id": exchange?.clientId,
@@ -1063,6 +1088,10 @@ export class CompanyService {
     }
     try {
       const host = (request.headers.host ?? "").split(":", 1)[0]?.toLowerCase() ?? "";
+      if (!this.config.oauth && OAUTH_PATHS.some((prefix) => path.startsWith(prefix))) {
+        // No issuer: a 404 is how an agent learns it (§3.2).
+        return jsonError(404, "not_found");
+      }
       if (this.config.aliases.includes(host)) {
         // An alias publishes the company's discovery document, and nothing else (§3).
         if (method === "GET" && path === "/.well-known/poppy.json") {
@@ -1155,23 +1184,25 @@ export class CompanyService {
     if (domain !== undefined && domain !== config.domain && !config.aliases.includes(domain)) {
       throw new RangeError(`${domain} is not one of this company's domains`);
     }
-    // Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
-    const auth: Record<string, unknown> = { issuer: config.base };
-    auth.scopes = Object.fromEntries(config.scopes.map((scope) => [scope, config.scopeDescriptions[scope]]));
-    if (Object.keys(config.scopeHints).length) {
-      auth.scope_hints = Object.fromEntries(
-        Object.entries(config.scopeHints).map(([scope, [changes, personal]]) => [
-          scope,
-          { changes, personal_data: personal },
-        ]),
-      );
-    }
     const document: Record<string, unknown> = {
       protocol_version: PROTOCOL_PROFILE,
       organization: { name: config.name, domain: domain ?? config.domain },
-      auth,
       agent: { protocols: [{ type: "poppy", endpoint: config.conversationsEndpoint }] },
     };
+    if (config.oauth) {
+      // Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
+      const auth: Record<string, unknown> = { issuer: config.base };
+      auth.scopes = Object.fromEntries(config.scopes.map((scope) => [scope, config.scopeDescriptions[scope]]));
+      if (Object.keys(config.scopeHints).length) {
+        auth.scope_hints = Object.fromEntries(
+          Object.entries(config.scopeHints).map(([scope, [changes, personal]]) => [
+            scope,
+            { changes, personal_data: personal },
+          ]),
+        );
+      }
+      document.auth = auth;
+    }
     const apis: Record<string, string>[] = [];
     const api = this.#api();
     if (api !== undefined) {
@@ -1209,6 +1240,7 @@ export class CompanyService {
       authorization_servers: [this.config.base],
       scopes_supported: [...this.config.scopes],
       bearer_methods_supported: ["header"],
+      ...(this.config.dpopBinding === "off" ? {} : { dpop_signing_alg_values_supported: [DPOP_ALGORITHM] }),
     };
   }
 
@@ -1336,7 +1368,7 @@ export class CompanyService {
     const grant = form.grant_type;
     const clientId = await this.#client(form);
     // Before any grant is used: a proof refused spends no code.
-    const jkt = await this.#tokenBinding(request);
+    const jkt = await this.#tokenBinding(request, this.#resource(form));
     if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, jkt);
     if (grant === AUTHORIZATION_CODE_GRANT && this.config.direct) return this.#codeGrant(form, clientId, jkt);
     if (grant === DEVICE_CODE_GRANT && this.config.device) return this.#deviceGrant(form, clientId, jkt);
@@ -1348,11 +1380,19 @@ export class CompanyService {
     throw new Refused(400, "unsupported_grant_type");
   }
 
-  /** The thumbprint the tokens of this request are bound to, or `undefined` for Bearer. */
-  async #tokenBinding(request: CompanyRequest): Promise<string | undefined> {
+  /**
+   * The thumbprint the tokens of this request are bound to, or `undefined` for Bearer.
+   *
+   * `required` asks a proof of every token but one requested for the MCP server, whose baseline
+   * is Bearer, so ordinary MCP clients stay supported (§7): such a token works at that server
+   * alone.
+   */
+  async #tokenBinding(request: CompanyRequest, resource: string | undefined): Promise<string | undefined> {
     if (this.config.dpopBinding === "off") return undefined;
     if (request.headers.dpop) return this.#dpopProof(request, { status: 400 });
-    if (this.config.dpopBinding === "required") throw new Refused(400, "invalid_dpop_proof");
+    if (this.config.dpopBinding === "required" && resource === undefined) {
+      throw new Refused(400, "invalid_dpop_proof");
+    }
     return undefined;
   }
 
@@ -1649,7 +1689,7 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     await this.store.delete(RecordKinds.userCode, approved.userCode);
-    return this.#signIn(clientId, approved.accountId, approved.granted, approved.scopes, jkt);
+    return this.#signIn(clientId, approved.accountId, approved.granted, approved.scopes, jkt, this.#resource(form));
   }
 
   async #forgetDevice(key: string, pending: PendingDevice): Promise<void> {
@@ -1751,6 +1791,7 @@ export class CompanyService {
     scopes: readonly string[],
     requested: readonly string[],
     jkt: string | undefined,
+    resource: string | undefined,
   ): Promise<CompanyResponse> {
     if (!scopes.length) {
       // A sign-in grants at least one scope: approving none is a decline (§4.7).
@@ -1778,7 +1819,16 @@ export class CompanyService {
     };
     await this.store.put(RecordKinds.accountFamily, family, json(signIn), expiry(expiresAt));
     await this.#rememberFamily(clientId, accountId, family);
-    return this.#issue({ clientId, accountId, scopes, family, refreshToken, requested, jkt });
+    return this.#issue({
+      clientId,
+      accountId,
+      scopes,
+      family,
+      ...(resource === undefined ? {} : { resource }),
+      refreshToken,
+      requested,
+      jkt,
+    });
   }
 
   async #rememberFamily(clientId: string, accountId: string, family: string): Promise<void> {
@@ -2079,7 +2129,7 @@ export class CompanyService {
       .update(form.code_verifier ?? "")
       .digest("base64url");
     if (!sameText(verifier, issued.codeChallenge)) throw new Refused(400, "invalid_grant");
-    return this.#signIn(clientId, issued.accountId, issued.scopes, issued.requested, jkt);
+    return this.#signIn(clientId, issued.accountId, issued.scopes, issued.requested, jkt, this.#resource(form));
   }
 
   #redirectUrl(redirectUri: string, values: Readonly<Record<string, string>>): string {
@@ -2250,13 +2300,14 @@ export class CompanyService {
     scope?: string,
     headers: Readonly<Record<string, string>> = {},
   ): CompanyResponse {
-    const extra: Record<string, unknown> = { resource_metadata: this.config.mcpResourceMetadata };
+    const extra: Record<string, unknown> = {};
+    if (this.config.oauth) extra.resource_metadata = this.config.mcpResourceMetadata;
     if (scope !== undefined) extra.scope = scope;
     return {
       status,
       ...(error ? { body: scope === undefined ? { error } : { error, scope } } : {}),
       headers: {
-        "WWW-Authenticate": challenges(this.config.tokenSchemes, error, extra),
+        "WWW-Authenticate": challenges(this.config.mcpTokenSchemes, error, extra),
         ...NO_STORE,
         ...headers,
       },
@@ -2273,7 +2324,7 @@ export class CompanyService {
     // An invented token is `invalid_token`, and a request with neither token nor Session
     // header gets the challenge: where a client finds how to sign in (§7). Only a token this
     // company issued, without the header, is `invalid_session` (§5.3).
-    if (!request.headers[SESSION_HEADER]) {
+    if (this.config.oauth && !request.headers[SESSION_HEADER]) {
       const presented = (request.headers.authorization ?? "").split(" ")[1];
       if (!presented) return this.#mcpRefusal(401, SIGNED_OUT);
       if ((await this.#accessToken(presented)) === undefined) return this.#mcpRefusal(401, "invalid_token");
@@ -2451,7 +2502,7 @@ export class CompanyService {
       return resolved;
     };
     const verified = await verifySessionJwt(header, {
-      issuer: this.config.base,
+      issuer: this.config.identifier,
       method: request.method,
       url: request.url,
       resolve,
@@ -2690,7 +2741,7 @@ export class CompanyService {
     const { accountId, codeReference, sentTo } = authenticated;
     if (codeReference === undefined) {
       await this.#attemptsCleared(keys);
-      return this.#signIn(clientId, accountId, granted, granted, jkt);
+      return this.#signIn(clientId, accountId, granted, granted, jkt, this.#resource(form));
     }
     const codeLocked = await this.#lockedFor([this.#codeKey(accountId)]);
     // Too many wrong codes for this account: no new code until the lockout ends.
@@ -2785,7 +2836,7 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     await this.#attemptsCleared([...completed.attemptKeys, codeKey]);
-    return this.#signIn(clientId, completed.accountId, completed.scopes, completed.scopes, jkt);
+    return this.#signIn(clientId, completed.accountId, completed.scopes, completed.scopes, jkt, this.#resource(form));
   }
 
   /** The sign-in ends as `status`, kept so a later code gets the same error. */

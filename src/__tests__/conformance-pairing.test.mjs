@@ -123,12 +123,28 @@ test("the DPoP cases: TypeScript agent ↔ TypeScript company over TLS, in the w
   assert.deepEqual(new Set(report.cases.map((item) => item.kind)), new Set(["positive", "negative", "recovery"]));
 });
 
+test("the no-issuer cases: TypeScript agent ↔ TypeScript company over TLS, with no OAuth server", async () => {
+  const world = "no-issuer";
+  const cases = companyCases(world);
+  assert.ok(cases.length >= 11);
+  const report = await runPairing({ config: worldConfig(world), cases });
+  const reports = process.env.PAP_CONFORMANCE_REPORTS;
+  if (reports) {
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, `typescript-agent-typescript-company.${world}.json`), `${JSON.stringify(report, null, 2)}\n`);
+  }
+  const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
+  assert.deepEqual(failed, {});
+  assert.deepEqual(report.summary, { passed: cases.length, failed: 0, skipped: 0 });
+  assert.deepEqual(new Set(report.cases.map((item) => item.kind)), new Set(["positive", "negative"]));
+});
+
 test("every case belongs to one world", () => {
-  const fixtures = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop"].flatMap((suite) =>
+  const fixtures = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop", "no-issuer"].flatMap((suite) =>
     JSON.parse(readFileSync(new URL(`../../protocol/fixtures/conformance/${suite}.json`, import.meta.url), "utf8"))
       .cases.filter((item) => item.check === undefined),
   );
-  const selected = [...companyCases(), ...companyCases("dpop-binding")].map((item) => item.id);
+  const selected = [...companyCases(), ...companyCases("dpop-binding"), ...companyCases("no-issuer")].map((item) => item.id);
   assert.deepEqual(selected.sort(), fixtures.map((item) => item.id).sort());
 });
 

@@ -280,7 +280,9 @@ For MCP the personal agent gets a token for the MCP server's `url` from
 discovery alone (§4.5). `fetchMcpServerMetadata` reads the server's protected
 resource metadata, and `RefreshTokenClient.tokenForMcp` asks for a token with
 `resource` set to its `url`, as a refresh (the refresh token rotates as on any
-other). `ServiceTokens` does the same for any service: one access token per
+other). MCP's baseline is Bearer: a proof goes only when that metadata lists
+`dpop_signing_alg_values_supported` with ES256, whatever the issuer lists.
+`ServiceTokens` does the same for any service: one access token per
 `resource` a service asks for. `McpSessionAuth.fetch` sends that token, with
 the Session header, only to that exact URL (scheme, host, port and path), and
 refuses every other request before it is made (`token_not_for_this_url`).
@@ -295,7 +297,7 @@ const mcpUrl = mcpApi(company.document)!.url;
 const served = await fetchMcpServerMetadata(mcpUrl, { issuer });
 const refreshed = await new RefreshTokenClient({ reactor }).tokenForMcp(refreshTokenReference, {
   context: { tokenEndpoint, issuer, clientId, tenantId },
-  url: served.resource,
+  server: served,
 });
 const mcp = new McpClient({ url: mcpUrl, session, token: refreshed.token, reactor });
 const tools = await mcp.listTools();

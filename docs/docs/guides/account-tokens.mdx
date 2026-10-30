@@ -80,7 +80,9 @@ returns that was not requested is `scope_escalation`. Asking for more than the
 token holds draws the company's `invalid_scope`, reported as
 `re_consent_required`: the user decides on wider access by signing in again,
 and the SDK does not retry. `token_for_mcp` (`tokenForMcp`) is a refresh with
-`resource` set to an MCP server's `url`.
+`resource` set to an MCP server's `url`, taking the server's protected resource
+metadata: its `dpop_signing_alg_values_supported`, never the issuer's, says
+whether a DPoP proof goes.
 
 ## Expiry and revocation
 

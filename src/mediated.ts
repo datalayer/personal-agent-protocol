@@ -8,7 +8,9 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { AuthorizationError, ProtocolValidationError } from "./errors.js";
 import {
+  MEDIATED_EXTENSION,
   parseMediatedSignIn,
+  requireOauth,
   type DiscoveredCompany,
   type MediatedSignIn,
 } from "./models.js";
@@ -54,7 +56,7 @@ import { byIssuer, signInResult, traced } from "./telemetry.js";
  * Direct or Device Sign-In when the company offers them.
  */
 
-export const MEDIATED_EXTENSION = "mediated-sign-in";
+export { MEDIATED_EXTENSION };
 export const MEDIATED_VERSION = "1";
 export const MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in";
 
@@ -180,7 +182,7 @@ export class MediatedSignInClient {
    */
   async #signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
     const mediated = this.#offered(options.company);
-    const metadata = options.company.oauthMetadata as NonNullable<DiscoveredCompany["oauthMetadata"]>;
+    const metadata = requireOauth(options.company);
     const organization = options.company.document.organization;
     const requested = [...new Set(options.scopes)];
     if (requested.length === 0) {

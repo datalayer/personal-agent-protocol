@@ -135,7 +135,9 @@ test("one authorization server and another auth.issuer is refused", async () => 
 });
 
 test("a company that needs an issuer and publishes none is refused", async () => {
+  // `auth.issuer` says it has one: a 404 can't make it a Company without (§3.2).
   const discovery = await fixture("discovery-valid.json");
+  assert.ok(discovery.auth.issuer);
   const fetch = async (input) =>
     new URL(input).pathname === "/.well-known/poppy.json"
       ? jsonResponse(discovery)
@@ -244,7 +246,7 @@ test("metadata stays cached until a service says it is stale, then is read fresh
 });
 
 test("malformed service metadata is refused", async () => {
-  const { company, reactor } = await services({ current: { resource: SERVICE } });
+  const { company, reactor } = await services({ current: { resource: 42 } });
   await assert.rejects(
     serviceResource(company, SERVICE, { reactor }),
     (error) => error instanceof ProtocolValidationError && error.code === "invalid_resource_metadata",

@@ -33,6 +33,7 @@ import {
   firstContribution,
   sessionHeaders,
   sessionJwtClaims,
+  parseProtectedResourceMetadata,
 } from "../../lib/index.js";
 import {
   ClientPolicies,
@@ -125,7 +126,7 @@ async function deviceSignIn(w) {
 /** Sign in, and take a token for the MCP server: a refresh with its `url` (§4.5, §7). */
 async function forMcp(w) {
   const done = await deviceSignIn(w);
-  const result = await w.accounts.tokenForMcp(done.refreshTokenReference, { context: w.context, url: MCP });
+  const result = await w.accounts.tokenForMcp(done.refreshTokenReference, { context: w.context, server: parseProtectedResourceMetadata({ resource: MCP }) });
   assert.equal(result.token.resource, MCP);
   return result.token;
 }

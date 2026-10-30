@@ -36,6 +36,7 @@ import {
   mcpApi,
   sessionHeaders,
   tokenHash,
+  parseProtectedResourceMetadata,
 } from "../../lib/index.js";
 import { CompanyAccounts, CompanyApis, CompanyMcps, CompanyRateLimits, StaleConversationError } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
@@ -571,7 +572,7 @@ test("a call says whether it carries an approval", async () => {
     return answerTool(name, args, call);
   };
   const url = mcpApi(w.company.document).url;
-  const mcpToken = await w.tokens.tokenForMcp(result.refreshTokenReference, { context: w.context, url });
+  const mcpToken = await w.tokens.tokenForMcp(result.refreshTokenReference, { context: w.context, server: parseProtectedResourceMetadata({ resource: url }) });
   const client = new McpClient({ url, session, reactor: w.host.reactor, fetch: w.fetch, token: mcpToken.token });
   const asked = await client.callTool("exchange_jacket", { order_id: "ord_other" });
   await client.callTool("exchange_jacket", { order_id: "ord_other" }, { approval: approvalOf(asked.operation) });
@@ -687,7 +688,7 @@ test("an operation at MCP: an error result with the operation, _meta approves, a
   const session = await w.start();
   const { result } = await directSignIn(w);
   const url = mcpApi(w.company.document).url;
-  const mcpToken = await w.tokens.tokenForMcp(result.refreshTokenReference, { context: w.context, url });
+  const mcpToken = await w.tokens.tokenForMcp(result.refreshTokenReference, { context: w.context, server: parseProtectedResourceMetadata({ resource: url }) });
   assert.equal(mcpToken.status, "signed_in");
   assert.equal(mcpToken.token.resource, url);
   const client = new McpClient({ url, session, reactor: w.host.reactor, fetch: w.fetch, token: mcpToken.token });

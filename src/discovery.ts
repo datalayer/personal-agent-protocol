@@ -243,8 +243,16 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
     );
   }
   const resourceMetadata = await domainResourceMetadata(document, read);
-  if (resourceMetadata === undefined) {
-    return { discoveryUrl: discovery.finalUrl.toString(), document };
+  if (resourceMetadata === undefined || resourceMetadata.authorization_servers.length === 0) {
+    // The only way to no issuer: 404, or metadata that lists none (§3.2).
+    if (needsIssuer(document)) {
+      throw new DiscoveryError("issuer_not_found", "The company offers sign-in and its domain names no issuer");
+    }
+    return {
+      discoveryUrl: discovery.finalUrl.toString(),
+      document,
+      ...(resourceMetadata === undefined ? {} : { resourceMetadata }),
+    };
   }
 
   const issuer = issuerNamed(document, resourceMetadata);
@@ -281,9 +289,8 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
 /**
  * The domain's protected resource metadata, which names its issuer (§3.2).
  *
- * Its `resource` is exactly `https://{organization.domain}`. A domain without it has no
- * issuer: refused when the document lists anything that needs one, else a website to
- * browse only.
+ * Its `resource` is exactly `https://{organization.domain}`. `undefined` for a 404, which says
+ * the Company has no issuer; any other failure is thrown, and never read so.
  */
 async function domainResourceMetadata(
   document: DiscoveryDocument,
@@ -295,13 +302,6 @@ async function domainResourceMetadata(
     fetched = await readJson(new URL(protectedResourceMetadataUrl(resource)), read);
   } catch (cause) {
     if (cause instanceof DiscoveryError && cause.code === "http_error" && cause.statusCode === 404) {
-      if (needsIssuer(document)) {
-        throw new DiscoveryError(
-          "issuer_not_found",
-          "The domain publishes no protected resource metadata naming its issuer",
-          { cause },
-        );
-      }
       return undefined;
     }
     throw cause;
@@ -395,6 +395,15 @@ export async function serviceResource(
   url: string,
   options: DiscoveryOptions & { readonly fresh?: boolean } = {},
 ): Promise<string | undefined> {
+  return (await serviceMetadata(company, url, options))?.resource;
+}
+
+/** The metadata of a service that accepts only tokens issued for it, or `undefined` (§4.5). */
+export async function serviceMetadata(
+  company: DiscoveredCompany,
+  url: string,
+  options: DiscoveryOptions & { readonly fresh?: boolean } = {},
+): Promise<ProtectedResourceMetadata | undefined> {
   const metadata = await resourceMetadata(url, options);
   if (metadata === undefined || metadata.resource === companyResource(company)) return undefined;
   const issuer = companyIssuer(company);
@@ -404,7 +413,7 @@ export async function serviceResource(
       "The service's protected resource metadata names another authorization server",
     );
   }
-  return metadata.resource;
+  return metadata;
 }
 
 /**

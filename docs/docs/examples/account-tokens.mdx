@@ -73,7 +73,9 @@ Sign-out is `sign_out(references)`: it revokes every refresh token held for the
 account, and the account is signed out once none is valid.
 
 A token for one service, such as an MCP server, comes from a refresh with
-`resource` set to the server's URL: `token_for_mcp(reference, context=..., url=...)`.
+`resource` set to the server's URL: `token_for_mcp(reference, context=..., server=...)`,
+with `server` the metadata `fetch_mcp_server_metadata` returns. MCP's baseline is
+Bearer: a proof goes only when that metadata lists ES256, whatever the issuer lists.
 
 The model sees statuses (`signed_in`, `re_consent_required`, `signed_out`),
 whether a rotation happened, and scope names. The refresh token, access tokens,

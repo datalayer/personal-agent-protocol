@@ -59,6 +59,7 @@ import {
   approvalHeader,
   buildPapReactor,
   challengeParameters,
+  companyIdentifier,
   conversationEndpoint,
   delegationClaims,
   discoverCompany,
@@ -74,6 +75,8 @@ import {
   openapiUrl,
   operationsNegotiated,
   parseClientMetadata,
+  accessTokenFromResponse,
+  requireOauth,
   serviceResource,
   sessionHeaders,
   sessionJwtClaims,
@@ -82,7 +85,7 @@ import {
 import { JoseSigner } from "../../../lib/server.js";
 import { ControlledBrowser } from "./controlled-browser.mjs";
 
-const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop"];
+const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop", "no-issuer"];
 const CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const DAY_SECONDS = 24 * 60 * 60;
 
@@ -353,11 +356,10 @@ export class Context {
   }
 
   async session(user, agent = this.agent) {
-    const metadata = await this.metadata();
     return agent.sessions.start({
       clientId: agent.identity.clientId,
       pairwiseUserId: user,
-      issuer: metadata.issuer,
+      issuer: companyIdentifier(await this.company()),
       tenantId: this.tenantId,
     });
   }
@@ -1627,7 +1629,8 @@ const mcpClient = (ctx, session, token, url) =>
 async function signedInMcp(ctx) {
   const url = await mcpUrl(ctx);
   const [user, signed] = await signedInUser(ctx);
-  const result = await ctx.agent.accounts.tokenForMcp(signed.reference, { context: await ctx.accountContext(user), url });
+  const server = await fetchMcpServerMetadata(url, { issuer: (await ctx.metadata()).issuer, fetch: ctx.fetch });
+  const result = await ctx.agent.accounts.tokenForMcp(signed.reference, { context: await ctx.accountContext(user), server });
   check(result.status === "signed_in" && result.token !== undefined, "a token for the server");
   return { user, signed, token: result.token, url };
 }
@@ -2131,6 +2134,189 @@ caseFor("dpop.mcp-challenge-keeps-resource-metadata")(async (ctx) => {
   const answer = await ctx.send("POST", url, { headers, body: '{"jsonrpc":"2.0","id":1,"method":"ping"}' });
   await proofRefused(answer, "an MCP token with no proof");
   check((answer.headers.get("www-authenticate") ?? "").includes("resource_metadata"), "the challenge keeps resource_metadata (§7)");
+});
+
+caseFor("dpop.mcp-metadata-lists-es256")(async (ctx) => {
+  const url = await mcpUrl(ctx);
+  const served = await fetchMcpServerMetadata(url, { issuer: (await ctx.metadata()).issuer, fetch: ctx.fetch });
+  const listed = served.dpop_signing_alg_values_supported ?? [];
+  check(listed.length === 1 && listed[0] === DPOP_ALGORITHM, "the MCP server's own metadata lists ES256");
+});
+
+caseFor("dpop.mcp-challenges-bearer-then-dpop")(async (ctx) => {
+  const url = await mcpUrl(ctx);
+  const answer = await ctx.send("POST", url, {
+    headers: { "Content-Type": "application/json" },
+    body: '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+  });
+  check(answer.status === 401, `a challenge, got ${answer.status}`);
+  const challenges = answer.headers.get("www-authenticate") ?? "";
+  const schemes = [...challenges.matchAll(/(?:^|,\s*)(Bearer|DPoP)\b/g)].map((match) => match[1]);
+  check(schemes.join() === "Bearer,DPoP", `Bearer, then DPoP: ${challenges}`);
+  check(challenges.split("resource_metadata=").length === 3, "each keeps resource_metadata");
+});
+
+caseFor("dpop.mcp-bearer-without-a-proof")(async (ctx, fixture) => {
+  // An ordinary MCP client: Bearer for the server, at an issuer that requires a proof.
+  const url = await mcpUrl(ctx);
+  const [, signed] = await signedInUser(ctx);
+  const refreshToken = ctx.refreshToken(signed.reference).reveal();
+  const form = { grant_type: "refresh_token", refresh_token: refreshToken };
+  const fallback = await ctx.tokenRequest({ ...form, ...(await ctx.clientForm()) });
+  await expectRefusal(fallback, 400, fixture.expect.default, "no proof for the default token");
+  const answer = await ctx.tokenRequest({ ...form, resource: url, ...(await ctx.clientForm()) });
+  check(answer.status === 200, `no proof for the MCP server: got ${answer.status}`);
+  const issued = await answer.json();
+  check(issued.token_type.toLowerCase() === "bearer", "a Bearer token");
+  const token = accessTokenFromResponse(
+    { accessToken: new SecretValue(issued.access_token), tokenType: "Bearer", ...(issued.scope ? { scope: issued.scope } : {}) },
+    { resource: url, requestedScopes: ctx.scenario.scopes },
+  );
+  const listed = await mcpClient(ctx, signed.session, token, url).callTool(tool(ctx.scenario.mcp_read_tool));
+  check(!listed.isError, "the MCP server accepts it");
+  const api = ctx.url(ctx.scenario.read_path);
+  const elsewhere = await ctx.send("GET", api, { headers: await ctx.auth(signed.session, "GET", api, token) });
+  check(elsewhere.status === 401, "and it works nowhere else");
+});
+
+caseFor("dpop.mcp-server-decides-the-proof")(async (ctx) => {
+  // The issuer lists ES256; a server that doesn't gets Bearer, with no proof (§7).
+  const url = await mcpUrl(ctx);
+  const metadata = await ctx.metadata();
+  check(metadata.dpop_signing_alg_values_supported?.length, "the issuer lists DPoP");
+  const [, signed] = await signedInUser(ctx);
+  const served = await fetchMcpServerMetadata(url, { issuer: metadata.issuer, fetch: ctx.fetch });
+  const { dpop_signing_alg_values_supported: _listed, ...plain } = served;
+  const result = await ctx.agent.accounts.tokenForMcp(signed.reference, {
+    context: await ctx.accountContext(signed.session.sub),
+    server: plain,
+  });
+  check(result.token.tokenType === "Bearer", "a server without the field gets Bearer");
+  const listed = await mcpClient(ctx, signed.session, result.token, url).callTool(tool(ctx.scenario.mcp_read_tool));
+  check(!listed.isError, "and takes it");
+});
+
+// A Company with no issuer (§3.2) ------------------------------------------------------
+
+function noIssuerCompany(company) {
+  check(company.oauthMetadata === undefined, "no OAuth metadata");
+  check(companyIdentifier(company) === `https://${company.document.organization.domain}`, "its identifier is its HTTPS domain");
+}
+
+const jsonAnswer = (status, body) => () =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+/** The company's own network, but for one URL: an error is never no issuer (§3.2). */
+const oneAnswer = (ctx, url, answer) => (input, init) =>
+  String(input) === url ? Promise.resolve(answer()) : ctx.fetch(input, init);
+
+/** Discovery of the company with its domain's protected resource metadata as `answer`. */
+function discoverWith(ctx, answer, options = {}) {
+  const fetch = oneAnswer(ctx, `${ctx.baseUrl}/.well-known/oauth-protected-resource`, answer);
+  return discoverCompany(ctx.domain, { fetch, ...options });
+}
+
+async function discoveryStops(ctx, fixture, answer, options) {
+  const error = await refused(discoverWith(ctx, answer, options), fixture.id);
+  check(error.code === fixture.expect.error, `stopped by ${error.code}`);
+}
+
+caseFor("no-issuer.discovery")(async (ctx) => {
+  const company = await ctx.company();
+  noIssuerCompany(company);
+  check(company.resourceMetadata === undefined, "the domain's metadata is a 404");
+});
+
+caseFor("no-issuer.metadata-without-servers")(async (ctx) => {
+  for (const extra of [{}, { authorization_servers: [] }]) {
+    noIssuerCompany(await discoverWith(ctx, jsonAnswer(200, { resource: ctx.baseUrl, ...extra })));
+  }
+});
+
+caseFor("no-issuer.no-oauth-server")(async (ctx) => {
+  const company = await ctx.company();
+  check(company.document.auth === undefined, "poppy.json has no auth");
+  for (const [method, path] of [
+    ["GET", "/.well-known/oauth-authorization-server"],
+    ["POST", "/oauth/token"],
+    ["POST", "/oauth/device"],
+    ["POST", "/oauth/revoke"],
+    ["GET", "/oauth/authorize"],
+  ]) {
+    const answer = await ctx.send(method, `${ctx.baseUrl}${path}`);
+    check(answer.status === 404, `${method} ${path}: got ${answer.status}`);
+  }
+});
+
+caseFor("no-issuer.session-audience")(async (ctx, fixture) => {
+  const session = await ctx.session(ctx.newUser());
+  check(session.issuer === ctx.baseUrl, "the Session names the identifier");
+  const url = await ctx.conversationsEndpoint();
+  const body = JSON.stringify({ message: message(ctx.scenario.greeting) });
+  const headers = { "Content-Type": "application/json" };
+  const accepted = await ctx.send("POST", url, { headers: { ...(await ctx.auth(session, "POST", url)), ...headers }, body });
+  check(accepted.ok, `aud is the identifier: got ${accepted.status}`);
+  const forged = await ctx.forgedSessionJwt(session, "POST", url, { mutation: fixture.mutation });
+  const answer = await ctx.send("POST", url, { headers: { "Poppy-Session": forged, ...headers }, body });
+  await expectRefusal(answer, fixture.expect.status, fixture.expect.error, fixture.id);
+});
+
+caseFor("no-issuer.signed-out-interfaces")(async (ctx) => {
+  const session = await ctx.session(ctx.newUser());
+  const endpoint = await ctx.conversationsEndpoint();
+  const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { session });
+  check(receipt.conversation_id, "a conversation starts signed out");
+  const feedback = feedbackEndpoint((await ctx.company()).document);
+  if (feedback === undefined) throw new SkipCase("the company lists no feedback endpoint");
+  await new FeedbackClient({ transport: ctx.agent.transport }).report(
+    feedback,
+    { task: "no issuer", description: "A report from a signed-out Session." },
+    { session },
+  );
+  check((await join(ctx, { session }, ctx.url("/"))).length > 0, "a browser joins signed out");
+});
+
+caseFor("no-issuer.sign-in-refused-locally")(async (ctx, fixture) => {
+  const company = await ctx.company();
+  let error;
+  try {
+    requireOauth(company);
+  } catch (caught) {
+    error = caught;
+  }
+  check(error?.code === fixture.expect.error, `refused by ${error?.code}`);
+});
+
+caseFor("no-issuer.no-fallback-server-error")((ctx, fixture) =>
+  discoveryStops(ctx, fixture, jsonAnswer(500, { error: "server_error" })),
+);
+
+caseFor("no-issuer.no-fallback-timeout")((ctx, fixture) =>
+  discoveryStops(ctx, fixture, () => new Promise(() => {}), { timeoutMs: 1000 }),
+);
+
+caseFor("no-issuer.no-fallback-invalid-metadata")((ctx, fixture) =>
+  discoveryStops(ctx, fixture, jsonAnswer(200, { authorization_servers: [] })),
+);
+
+caseFor("no-issuer.no-fallback-unverified-issuer")((ctx, fixture) =>
+  // The company has no issuer: the one named here publishes no metadata.
+  discoveryStops(ctx, fixture, jsonAnswer(200, { resource: ctx.baseUrl, authorization_servers: [ctx.baseUrl] })),
+);
+
+caseFor("no-issuer.sign-in-offered-without-issuer")(async (ctx, fixture) => {
+  const company = await ctx.company();
+  const endpoint = await ctx.conversationsEndpoint();
+  for (const offers of [
+    { auth: { issuer: ctx.baseUrl } },
+    { agent: { protocols: [{ type: "poppy", endpoint, access: "signed_in" }] } },
+    { extensions: { "mediated-sign-in": { version: "1" } } },
+  ]) {
+    const answer = jsonAnswer(200, { ...company.document, ...offers });
+    const fetch = oneAnswer(ctx, `${ctx.baseUrl}/.well-known/poppy.json`, answer);
+    const error = await refused(discoverCompany(ctx.domain, { fetch }), fixture.id);
+    check(error.code === fixture.expect.error, `stopped by ${error.code}`);
+  }
 });
 
 /** Run each case; a failure never stops the others. The report is the runner's schema 1. */

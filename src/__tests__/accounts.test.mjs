@@ -17,6 +17,7 @@ import {
   TokenStores,
   buildPapReactor,
   staleResourceMetadata,
+  parseProtectedResourceMetadata,
 } from "../../lib/index.js";
 
 const context = {
@@ -170,7 +171,7 @@ test("a token for an MCP server names it as the resource", async () => {
     return json(200, signedIn());
   });
   const mcp = "https://mcp.shop.example/mcp";
-  const result = await client.tokenForMcp("refresh_ref", { context, url: mcp });
+  const result = await client.tokenForMcp("refresh_ref", { context, server: parseProtectedResourceMetadata({ resource: mcp }) });
   assert.equal(result.status, "signed_in");
   assert.equal(result.token.resource, mcp);
   // An OAuth refresh with `resource` (RFC 8707, §4.5): no Token Exchange.
@@ -252,7 +253,10 @@ test("no error carries the refresh token", async () => {
 
 const COMPANY = {
   discoveryUrl: "https://shop.example/.well-known/poppy.json",
-  document: { organization: { name: "Shop", domain: "shop.example" } },
+  document: {
+    organization: { name: "Shop", domain: "shop.example" },
+    apis: [{ type: "mcp", url: "https://mcp.shop.example/mcp", description: "The shop's tools" }],
+  },
   resourceMetadata: { resource: "https://shop.example", authorization_servers: [context.issuer] },
   oauthMetadata: { issuer: context.issuer },
 };

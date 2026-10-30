@@ -26,6 +26,7 @@ import {
   PapSession,
   ProofError,
   SecretValue,
+  ServiceTokens,
   SessionClient,
   SessionError,
   SessionFetchClient,
@@ -468,6 +469,60 @@ test("required challenges DPoP alone, signed out too", async () => {
   const refused = await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) });
   assert.equal(refused.status, 401);
   assert.ok(refused.headers.get("www-authenticate").startsWith("DPoP scope="));
+});
+
+test("a sign-in for the MCP server needs no proof and works only there", async () => {
+  // An ordinary MCP client asks for its server at the token endpoint: Bearer, for it alone.
+  const { ctx, service } = await binding({ dpopBinding: "required" });
+  const metadata = await ctx.metadata();
+  const { device } = ctx.agent;
+  const started = await device.begin({
+    deviceAuthorizationEndpoint: metadata.device_authorization_endpoint,
+    tokenEndpoint: metadata.token_endpoint,
+    issuer: metadata.issuer,
+    clientId: ctx.agent.identity.clientId,
+    scopes: ["orders:read"],
+    tenantId: ctx.tenantId,
+    organization: (await ctx.company()).document.organization,
+    protectedResources: metadata.protected_resources,
+  });
+  await ctx.driver.approveDevice(started.userCode, { account: ctx.driver.accounts[0] });
+  await ctx.driver.wait(started.pollInterval);
+  const pending = ctx.agent.state.get(started.reference);
+  const url = service.config.mcpUrl;
+  const answer = await ctx.tokenRequest({
+    grant_type: DEVICE_CODE_GRANT,
+    device_code: pending.deviceCode.reveal(),
+    resource: url,
+    ...(await ctx.clientForm()),
+  });
+  const issued = await answer.json();
+  assert.deepEqual([answer.status, issued.token_type], [200, "Bearer"]);
+  const session = await ctx.session(ctx.newUser());
+  const token = { accessToken: new SecretValue(issued.access_token), tokenType: "Bearer", scopes: ["orders:read"], resource: url };
+  const api = ctx.url(scenario.read_path);
+  const elsewhere = await ctx.send("GET", api, { headers: await ctx.auth(session, "GET", api, token) });
+  assert.equal(elsewhere.status, 401);
+});
+
+test("ServiceTokens prove at an MCP server as its metadata says", async () => {
+  // `tokenFor` reads the server's list for its token, the issuer's for the default (§7).
+  const { ctx, service } = await binding({ dpopBinding: "optional" });
+  const signed = await signedIn(ctx);
+  const url = service.config.mcpUrl;
+  const tokens = new ServiceTokens({
+    refresh: ctx.agent.accounts,
+    company: await ctx.company(),
+    reference: signed.reference,
+    context: await ctx.accountContext(signed.session.sub),
+    discovery: { reactor: ctx.agent.reactor },
+  });
+  const token = await tokens.tokenFor(url);
+  assert.deepEqual([token.tokenType, token.resource], ["DPoP", url]);
+  const listed = service.protectedResourceMetadata();
+  delete listed.dpop_signing_alg_values_supported;
+  service.protectedResourceMetadata = () => listed;
+  assert.equal((await tokens.tokenFor(url, { fresh: true })).tokenType, "Bearer");
 });
 
 test("a refused proof spends no device code", async () => {

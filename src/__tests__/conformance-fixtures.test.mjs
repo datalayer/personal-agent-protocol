@@ -19,13 +19,16 @@ import {
   InMemoryDelegatedKeys,
   InMemoryDpopKeys,
   JoseDpopProver,
+  RefreshTokenClient,
   SecretValue,
   SessionClient,
   SessionError,
   SessionFetchClient,
   SessionSigners,
   Signers,
+  TokenStores,
   buildPapReactor,
+  companyIdentifier,
   conversationEndpoint,
   discoverCompany,
   extensionNameKind,
@@ -37,11 +40,12 @@ import {
   parseJsonStrict,
   parseMessage,
   parseOperation,
+  parseProtectedResourceMetadata,
 } from "../../lib/index.js";
 import { NodeUrlSafetyPolicy } from "../../lib/server.js";
 import { agentIdentity } from "./support/world.mjs";
 
-const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop"];
+const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop", "no-issuer"];
 const KNOWN_EVENT_TYPES = new Set(["message", "state", "authorization", "user_requested", "direct_opened", "direct_closed"]);
 
 const LOCAL = SUITES.flatMap((suite) =>
@@ -149,6 +153,7 @@ const CHECKS = {
     }
     const company = await discoverCompany(given.domain, options);
     if ("issuer" in expect) assert.equal(company.oauthMetadata?.issuer ?? null, expect.issuer);
+    if ("identifier" in expect) assert.equal(companyIdentifier(company), expect.identifier);
     if ("organization_domain" in expect) assert.equal(company.document.organization.domain, expect.organization_domain);
     if ("discovery_url" in expect) assert.equal(company.discoveryUrl, expect.discovery_url);
   },
@@ -264,6 +269,52 @@ const CHECKS = {
       if ("error" in wanted) await assert.rejects(request, rejectsWith(wanted.error));
       else await request;
       assert.equal(sent[0].has("dpop"), wanted.proof);
+      reactor.stop();
+    }
+  },
+
+  /** Which list decides a proof: the MCP server's for its token, the issuer's otherwise (§7). */
+  async dpop_mcp_token(given, expect) {
+    const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
+    for (const [index, { issuer, server, token_type: tokenType }] of given.entries()) {
+      const sent = [];
+      const answer = { access_token: "t", token_type: tokenType, expires_in: 60, scope: "orders:read" };
+      const fetch = async (_url, init) => {
+        sent.push(new Headers(init.headers));
+        return new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } });
+      };
+      const vault = new Map([["refresh", new SecretValue("rt")]]);
+      const reactor = buildPapReactor({ fetch }, [
+        {
+          name: "@tests/dpop-mcp",
+          contributes: [
+            { point: Signers, value: identity.signer, options: { id: "signer" } },
+            {
+              point: TokenStores,
+              value: {
+                get: async (reference) => vault.get(reference),
+                put: async (reference, value) => void vault.set(reference, value),
+                delete: async (reference) => void vault.delete(reference),
+              },
+              options: { id: "tokens" },
+            },
+          ],
+        },
+      ]);
+      await new RefreshTokenClient({ reactor, fetch }).tokenForMcp("refresh", {
+        context: {
+          tokenEndpoint: "https://shop.example/oauth/token",
+          issuer: "https://shop.example",
+          clientId: identity.clientId,
+          tenantId: "t",
+          dpopSigningAlgs: issuer ?? undefined,
+        },
+        server: parseProtectedResourceMetadata({
+          resource: "https://shop.example/mcp",
+          dpop_signing_alg_values_supported: server,
+        }),
+      });
+      assert.equal(sent[0].has("dpop"), expect[index].proof);
       reactor.stop();
     }
   },

@@ -32,9 +32,9 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { AuthorizationError, ProtocolValidationError, type PersonalAgentProtocolError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
-import { serviceResource, type DiscoveryOptions } from "./discovery.js";
+import { serviceMetadata, serviceResource, type DiscoveryOptions } from "./discovery.js";
 import { readLimitedText } from "./limits.js";
-import type { DiscoveredCompany } from "./models.js";
+import type { DiscoveredCompany, ProtectedResourceMetadata } from "./models.js";
 import { RefreshTokenLocks, TokenStores, firstContribution, type TokenStore } from "./reactor.js";
 import { refusalCode, refusalDetails, refuseRedirect, refusedWithoutBody } from "./refusals.js";
 import {
@@ -230,13 +230,23 @@ export class RefreshTokenClient {
     });
   }
 
-  /** An access token for one MCP server: `resource` is its `url` from poppy.json (§7). */
+  /**
+   * An access token for one MCP server: `resource` is its `url` from poppy.json (§7).
+   *
+   * `server` is its protected resource metadata, as `fetchMcpServerMetadata` returns it. MCP's
+   * baseline is Bearer: a proof goes only when `server` lists ES256, whatever the issuer lists,
+   * so a server that doesn't gets a Bearer token.
+   */
   tokenForMcp(
     reference: string,
-    options: Omit<RefreshOptions, "resource"> & { readonly url: string },
+    options: Omit<RefreshOptions, "resource"> & { readonly server: ProtectedResourceMetadata },
   ): Promise<RefreshResult> {
-    const { url, ...rest } = options;
-    return this.refresh(reference, { ...rest, resource: url });
+    const { server, context, ...rest } = options;
+    return this.refresh(reference, {
+      ...rest,
+      context: { ...context, dpopSigningAlgs: server.dpop_signing_alg_values_supported },
+      resource: server.resource,
+    });
   }
 
   revoke(
@@ -385,7 +395,8 @@ export interface ServiceTokensOptions {
  * resource metadata: a `resource` other than `https://{organization.domain}` gets a token
  * requested for it, used only there; otherwise the default token serves. After a service
  * answers `invalid_token` with `resource_metadata`, `tokenFor(url, { fresh: true })` reads it
- * again.
+ * again. A token for an MCP server the Company lists proves as that server's metadata says (§7);
+ * every other as the issuer's does (§4.5).
  */
 export class ServiceTokens {
   readonly #options: ServiceTokensOptions;
@@ -408,22 +419,27 @@ export class ServiceTokens {
     serviceUrl: string,
     options: { readonly fresh?: boolean } = {},
   ): Promise<AccessToken | undefined> {
-    const resource = await this.resourceFor(serviceUrl, options);
+    const { refresh, reference, context, scopes, company } = this.#options;
+    const metadata = await serviceMetadata(company, serviceUrl, { ...this.#options.discovery, ...options });
+    const resource = metadata?.resource;
     if (options.fresh === true) this.#tokens.delete(resource);
     const known = this.#tokens.get(resource);
     if (known !== undefined) return known;
-    const { refresh, reference, context, scopes } = this.#options;
-    const result = await refresh.refresh(reference, {
-      context,
-      ...(scopes === undefined ? {} : { scopes }),
-      resource,
-    });
+    const narrowed = scopes === undefined ? {} : { scopes };
+    const result =
+      metadata !== undefined && this.#isMcp(metadata.resource)
+        ? await refresh.tokenForMcp(reference, { context, server: metadata, ...narrowed })
+        : await refresh.refresh(reference, { context, ...narrowed, resource });
     if (result.status !== "signed_in" || result.token === undefined) {
       this.#tokens.clear();
       return undefined;
     }
     this.#tokens.set(resource, result.token);
     return result.token;
+  }
+
+  #isMcp(resource: string): boolean {
+    return this.#options.company.document.apis.some((api) => api.type === "mcp" && api.url === resource);
   }
 
   /** Drop every access token held: signed out, or a new sign-in replaces them. */

@@ -29,6 +29,7 @@ import {
   operationFrom,
   parseTokenResponse,
   sessionHeaders,
+  parseProtectedResourceMetadata,
 } from "../../lib/index.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
 import { ControlledBrowser } from "./support/controlled-browser.mjs";
@@ -92,7 +93,7 @@ async function signedIn(w) {
 
 /** A token for the MCP server: a refresh with `resource`, its `url` (§4.5, §7). */
 async function mcpToken(w, reference, url = MCP) {
-  const result = await w.accounts.tokenForMcp(reference, { context: w.context, url });
+  const result = await w.accounts.tokenForMcp(reference, { context: w.context, server: parseProtectedResourceMetadata({ resource: url }) });
   assert.equal(result.status, "signed_in");
   return result.token;
 }
@@ -272,9 +273,9 @@ test("a token for the MCP server comes from a refresh with its url", async () =>
   assert.equal((await refusal(mcp.callTool("exchange_jacket"))).code, "insufficient_scope");
 
   const { reference } = await signedIn(w);
-  const plain = await refusal(w.accounts.tokenForMcp(reference, { context: w.context, url: "http://manzanita.example/mcp" }));
+  const plain = await refusal(w.accounts.tokenForMcp(reference, { context: w.context, server: { resource: "http://manzanita.example/mcp" } }));
   assert.equal(plain.code, "invalid_url");
-  const elsewhere = await refusal(w.accounts.tokenForMcp(reference, { context: w.context, url: "https://elsewhere.example/mcp" }));
+  const elsewhere = await refusal(w.accounts.tokenForMcp(reference, { context: w.context, server: parseProtectedResourceMetadata({ resource: "https://elsewhere.example/mcp" }) }));
   assert.equal(elsewhere.code, "invalid_target");
   const token = await mcpToken(w, reference);
   assert.equal(token.resource, MCP);

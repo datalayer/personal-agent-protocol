@@ -4,7 +4,7 @@
  * BSD 3-Clause License
  */
 
-import { ProtocolValidationError } from "./errors.js";
+import { AuthorizationError, ProtocolValidationError } from "./errors.js";
 
 export type UnknownFields = Readonly<Record<string, unknown>>;
 
@@ -20,6 +20,8 @@ export const REFRESH_TOKEN_GRANT = "refresh_token";
 /** The grants that say the Company offers Direct and Device Sign-In (§3.2, §4.4). */
 export const AUTHORIZATION_CODE_GRANT = "authorization_code";
 export const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+/** The sign-in extension, listed in `extensions` (Mediated Sign-In 2). */
+export const MEDIATED_EXTENSION = "mediated-sign-in";
 /** `changes` values a scope hint may give (§4.4); any other is read as `irreversible`. */
 export const SCOPE_CHANGES = ["none", "reversible", "irreversible"] as const;
 export type ScopeChanges = (typeof SCOPE_CHANGES)[number];
@@ -136,9 +138,22 @@ export interface AuthCapabilities extends UnknownFields {
   readonly scope_hints: Readonly<Record<string, ScopeHint>>;
 }
 
+/** A conversation protocol the Company Agent speaks (§3.1, §8); read `access` with `accountAccess`. */
 export interface AgentProtocol extends UnknownFields {
   readonly type: string;
   readonly endpoint: string;
+  readonly access?: string;
+}
+
+/**
+ * Whether a `poppy` entry needs account access before useful work can begin (§3.2).
+ *
+ * `signed_in` lets the agent arrange sign-in before its first request; a value this SDK doesn't
+ * know is an absent hint. A hint only: it grants nothing, and challenges and authorization
+ * events still decide.
+ */
+export function accountAccess(protocol: AgentProtocol): "session" | "signed_in" {
+  return protocol.type === "poppy" && protocol.access === "signed_in" ? "signed_in" : "session";
 }
 
 export interface AgentDescriptor extends UnknownFields {
@@ -344,8 +359,8 @@ export interface ConversationEventPage extends UnknownFields {
 /**
  * A verified `poppy.json`, its domain's protected resource metadata, and its issuer's.
  *
- * `resourceMetadata` and `oauthMetadata` are absent only for a Company that has no
- * issuer, which can only be browsed as a website (§3.2).
+ * A Company with no issuer has no `oauthMetadata`, and `resourceMetadata` only when the domain
+ * publishes it with no authorization server; it offers no sign-in (§3.2).
  */
 export interface DiscoveredCompany {
   readonly discoveryUrl: string;
@@ -365,18 +380,35 @@ export function companyResource(company: DiscoveredCompany): string {
 }
 
 /**
- * Whether the Company must have an OAuth issuer (§3.2).
+ * Who the Company is (§3.2): its issuer, else `https://{organization.domain}`.
  *
- * One that lists `agent`, `apis`, `feedback`, `web.browser_session_endpoint`, or an
- * extension: without an issuer it can only be browsed as a website.
+ * Session JWTs name it in `aud`, and User IDs and Agent IDs are scoped by it. Discovery reaches
+ * the domain only when it established that there is no issuer: never after an error, a timeout,
+ * or an issuer that failed to verify.
+ */
+export function companyIdentifier(company: DiscoveredCompany): string {
+  return companyIssuer(company) ?? companyResource(company);
+}
+
+/** The issuer's metadata, or `AuthorizationError` (`no_issuer`), before any sign-in. */
+export function requireOauth(company: DiscoveredCompany): OAuthServerMetadata {
+  if (company.oauthMetadata === undefined) {
+    throw new AuthorizationError("no_issuer", "A Company with no issuer offers no sign-in");
+  }
+  return company.oauthMetadata;
+}
+
+/**
+ * Whether the Company offers sign-in, which needs an OAuth issuer (§3.2).
+ *
+ * `auth.issuer`, an `access: signed_in` conversation entry, or Mediated Sign-In. Anything else
+ * works signed out: APIs, conversations, feedback and browser join.
  */
 export function needsIssuer(document: DiscoveryDocument): boolean {
   return (
-    document.agent !== undefined ||
-    document.apis.length > 0 ||
-    document.feedback !== undefined ||
-    document.web?.browser_session_endpoint !== undefined ||
-    Object.keys(document.extensions).length > 0
+    document.auth?.issuer !== undefined ||
+    (document.agent?.protocols.some((protocol) => accountAccess(protocol) === "signed_in") ?? false) ||
+    MEDIATED_EXTENSION in document.extensions
   );
 }
 
@@ -618,6 +650,9 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     const agentSource = record(source.agent, "agent");
     const protocols = array(agentSource.protocols, "agent.protocols").map((item, index) => {
       const protocol = record(item, `agent.protocols[${index}]`);
+      if (protocol.access !== undefined && typeof protocol.access !== "string") {
+        throw new ProtocolValidationError("invalid_type", `agent.protocols[${index}].access must be a string`);
+      }
       return {
         ...protocol,
         type: string(protocol.type, `agent.protocols[${index}].type`),
@@ -696,27 +731,26 @@ export function dpopAlgorithms(value: unknown, label: string): readonly string[]
  * RFC 9728 protected resource metadata, with the fields this protocol uses (§3.2, §4.5).
  *
  * The Company's domain publishes it with `resource` exactly `https://{domain}` and its
- * issuer in `authorization_servers`; a service that accepts only tokens issued for it
+ * issuer, if any, in `authorization_servers`; a service that accepts only tokens issued for it
  * publishes it with its own `resource`, as MCP servers do (§4.5, §7).
  */
 export interface ProtectedResourceMetadata extends UnknownFields {
   readonly resource: string;
+  /** Empty at the domain of a Company with no issuer (§3.2). */
   readonly authorization_servers: readonly string[];
   readonly scopes_supported: readonly string[];
   readonly bearer_methods_supported: readonly string[];
+  /** At an MCP server it, not the issuer's list, says whether a token proves (§7). */
+  readonly dpop_signing_alg_values_supported?: readonly string[];
 }
 
 export function parseProtectedResourceMetadata(value: unknown): ProtectedResourceMetadata {
   const source = record(value, "protected resource metadata");
-  const servers = array(source.authorization_servers, "authorization_servers").map((item) =>
-    httpsUrl(item, "authorization server"),
-  );
-  if (servers.length === 0) {
-    throw new ProtocolValidationError(
-      "invalid_resource_metadata",
-      "authorization_servers must not be empty",
-    );
-  }
+  const servers = array(
+    source.authorization_servers === undefined ? [] : source.authorization_servers,
+    "authorization_servers",
+  ).map((item) => httpsUrl(item, "authorization server"));
+  const algorithms = dpopAlgorithms(source.dpop_signing_alg_values_supported, "dpop_signing_alg_values_supported");
   return {
     ...source,
     // Compared exactly as written: never normalized (§3.2, §4.5).
@@ -729,6 +763,7 @@ export function parseProtectedResourceMetadata(value: unknown): ProtectedResourc
       source.bearer_methods_supported ?? [],
       "bearer_methods_supported",
     ).map((item) => string(item, "bearer_methods_supported entry")),
+    ...(algorithms === undefined ? {} : { dpop_signing_alg_values_supported: algorithms }),
   } as ProtectedResourceMetadata;
 }
 

@@ -65,6 +65,10 @@ shape of 0.3 that 0.27.0 implements: see the
   approval, so a company can tell a retry from a first ask. A company says
   `Retry-After: 5` while it performs, in both SDKs. A 429 is reported in telemetry
   as `rate_limited`, not `refused`.
+- **Decks:** the entry `@datalayer/personal-agent-protocol/decks` ships the four
+  cases as decks: `PAP_DECKS`, `PAP_DECK_IDS` and `papDeck(id)`, each with its
+  `yaml` and the same deck parsed as `spec`. It brings in `yaml` and nothing of
+  the SDK, and the docs site shows them under Cases.
 - **Schemas:** feedback has no `kind`; an alternative's `instructions` has no
   length cap; an unknown conversation `status` reads as `working` and an unknown
   `responder` as `human`. Upstream's JSON Schemas are vendored and the fixtures

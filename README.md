@@ -270,6 +270,11 @@ person-to-company journey rendered with the runtime's real message UI. The
 gallery's local company simulators are deterministic and clearly identified;
 the PAP clients, transports, validation, and parsed exchanges are real.
 
+The entry `@datalayer/personal-agent-protocol/decks` ships the four
+[cases](https://personal-agent-protocol.datalayer.tech/examples/cases/) as decks:
+`PAP_DECKS`, `PAP_DECK_IDS` and `papDeck(id)`, each with its `yaml` and the same
+deck parsed as `spec`. It brings in `yaml` and nothing of the SDK.
+
 Each implemented feature should have all three learning layers:
 
 1. a focused SDK example in this repository;

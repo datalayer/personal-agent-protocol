@@ -18,6 +18,7 @@ import {
   parseJsonWebKeySet,
   parseMessage,
   parseOAuthServerMetadata,
+  parseProtectedResourceMetadata,
   parseOperation,
   parseTokenResponse,
   sessionTokenFromResponse,
@@ -31,15 +32,17 @@ test("discovery fixture round-trips and preserves extensions", () => {
   const document = parseDiscoveryDocument(fixture("discovery-valid.json"));
   assert.equal(document.protocol_version, "0.3");
   assert.equal(document.apis[1].type, "mcp");
-  assert.equal(document.extensions.operations.endpoint, "https://api.example.com/poppy/operations");
+  assert.equal(document.extensions.operations.version, "2");
 });
 
-test("discovery requires auth for an API", () => {
-  assert.throws(() => parseDiscoveryDocument({
+test("auth is optional: the issuer comes from the domain's protected resource metadata", () => {
+  const document = parseDiscoveryDocument({
     protocol_version: "0.3",
     organization: { name: "Example", domain: "example.com" },
     apis: [{ type: "openapi", url: "https://api.example.com/openapi.json", description: "Example" }],
-  }));
+  });
+  assert.equal(document.auth, undefined);
+  assert.equal(parseProtectedResourceMetadata(fixture("protected-resource-metadata-valid.json")).authorization_servers[0], "https://auth.example.com");
 });
 
 test("strict JSON rejects duplicate members", () => {

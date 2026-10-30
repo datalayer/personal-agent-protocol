@@ -88,11 +88,16 @@ test("cache lifetime follows Cache-Control within a minute and a day", () => {
 test("discovery and OAuth metadata are cached until they expire", async () => {
   const discovery = await fixture("discovery-valid.json");
   const oauth = await fixture("oauth-metadata-valid.json");
+  const resource = await fixture("protected-resource-metadata-valid.json");
   const fetched = [];
   const fetch = async (input) => {
-    const host = new URL(input).hostname;
-    fetched.push(host);
-    return host === "example.com"
+    const url = new URL(input);
+    if (url.pathname === "/.well-known/oauth-protected-resource") {
+      fetched.push("resource");
+      return json(resource, { "cache-control": "max-age=300" });
+    }
+    fetched.push(url.hostname);
+    return url.hostname === "example.com"
       ? json(discovery, { "cache-control": "max-age=300" })
       : json(oauth, { "cache-control": "max-age=30" });
   };
@@ -100,13 +105,13 @@ test("discovery and OAuth metadata are cached until they expire", async () => {
   const reactor = buildPapReactor({ fetch }, [host(clock).plugin]);
   await discoverCompany("example.com", { reactor });
   await discoverCompany("example.com", { reactor });
-  assert.deepEqual(fetched, ["example.com", "auth.example.com"]);
+  assert.deepEqual(fetched, ["example.com", "resource", "auth.example.com"]);
   clock.advance(61);
   await discoverCompany("example.com", { reactor });
-  assert.deepEqual(fetched, ["example.com", "auth.example.com", "auth.example.com"]);
+  assert.deepEqual(fetched, ["example.com", "resource", "auth.example.com", "auth.example.com"]);
   clock.advance(300);
   await discoverCompany("example.com", { reactor });
-  assert.deepEqual(fetched.slice(-2), ["example.com", "auth.example.com"]);
+  assert.deepEqual(fetched.slice(-3), ["example.com", "resource", "auth.example.com"]);
   reactor.stop();
 });
 

@@ -72,7 +72,13 @@ export {
   type DeviceSignInPoll,
   type DeviceSignInStart,
 } from "./device.js";
-export { discoverCompany, excludedTasks, type DiscoveryOptions } from "./discovery.js";
+export {
+  discoverCompany,
+  excludedTasks,
+  resourceMetadata,
+  serviceResource,
+  type DiscoveryOptions,
+} from "./discovery.js";
 export {
   FEEDBACK_DESCRIPTION_MAX_LENGTH,
   FEEDBACK_TASK_MAX_LENGTH,
@@ -227,13 +233,18 @@ export {
   AUTHORIZATION_CODE_GRANT,
   DPOP_REQUIRED_ALGORITHM,
   JWT_BEARER_GRANT,
-  RESERVED_SCOPE_PREFIX,
   SCOPE_CHANGES,
   SUPPORTED_PROTOCOL_VERSIONS,
   TOKEN_EXCHANGE_GRANT,
   effectiveChanges,
   isLoopbackRedirect,
+  companyIssuer,
+  companyResource,
+  knownResponder,
+  knownStatus,
   listsResource,
+  needsIssuer,
+  parseProtectedResourceMetadata,
   offersDevice,
   offersDirect,
   offersTokenExchange,
@@ -276,6 +287,7 @@ export {
   type JsonWebKeySet,
   type Message,
   type OAuthServerMetadata,
+  type ProtectedResourceMetadata,
   type Operation,
   type OperationConfirmation,
   type OperationResult,

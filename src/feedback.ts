@@ -18,7 +18,7 @@
  * if (endpoint !== undefined) {
  *   await new FeedbackClient({ transport }).report(
  *     endpoint,
- *     { kind: "missing", task: "Pay with a gift card", description: "..." },
+ *     { task: "Pay with a gift card", description: "..." },
  *     { token, ...who },
  *   );
  * }
@@ -26,9 +26,8 @@
  *
  * The report describes the task, never the user: no names, contact details, order or
  * account numbers (SHOULD NOT), and never a secret (MUST NOT). The Session already
- * tells the company which personal agent and which user sent it. `kind` is `missing`,
- * the only value this version defines; personal agents MUST NOT send others. Errors are
- * reported, never retried here: send one report per task, not one per attempt.
+ * tells the company which personal agent and which user sent it. Errors are reported,
+ * never retried here: send one report per task, not one per attempt.
  */
 import { PersonalAgentProtocolError, ProtocolValidationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
@@ -58,29 +57,22 @@ export class FeedbackError extends PersonalAgentProtocolError {
 /**
  * One report of a task the company offers no way to do through the protocol (§8).
  *
- * Exactly these three fields: nothing about the user, no identifiers, no secret.
+ * Exactly these two fields: nothing about the user, no identifiers, no secret.
  */
 export interface FeedbackReport {
-  readonly kind: "missing";
   readonly task: string;
   readonly description: string;
 }
 
-const REPORT_FIELDS = new Set(["kind", "task", "description"]);
+const REPORT_FIELDS = new Set(["task", "description"]);
 
-/** A report to send, checked: `kind` `missing` (the default), `task` 1..200, `description` 1..2000. */
+/** A report to send, checked: `task` 1..200, `description` 1..2000. */
 export function parseFeedbackReport(value: {
-  readonly kind?: string;
   readonly task: string;
   readonly description: string;
 }): FeedbackReport {
   if (typeof value !== "object" || value === null || Object.keys(value).some((key) => !REPORT_FIELDS.has(key))) {
-    throw new ProtocolValidationError("invalid_feedback", "a feedback report has kind, task and description only");
-  }
-  const kind = value.kind ?? "missing";
-  if (kind !== "missing") {
-    // The only kind this version defines; personal agents send no other (§8).
-    throw new ProtocolValidationError("invalid_feedback", "a feedback report's kind is missing");
+    throw new ProtocolValidationError("invalid_feedback", "a feedback report has task and description only");
   }
   const { task, description } = value;
   if (typeof task !== "string" || task.length < 1 || task.length > FEEDBACK_TASK_MAX_LENGTH) {
@@ -93,7 +85,7 @@ export function parseFeedbackReport(value: {
   ) {
     throw new ProtocolValidationError("invalid_feedback", "description is 1 to 2000 characters");
   }
-  return { kind, task, description };
+  return { task, description };
 }
 
 /** The company's feedback endpoint, when it asks for feedback. */
@@ -138,7 +130,7 @@ export class FeedbackClient {
    */
   async report(
     endpoint: string,
-    report: { readonly kind?: string; readonly task: string; readonly description: string },
+    report: { readonly task: string; readonly description: string },
     options: FeedbackReportOptions,
   ): Promise<Alternative | undefined> {
     const checked = parseFeedbackReport(report);

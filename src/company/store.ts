@@ -409,12 +409,10 @@ export interface IdempotencyRecord {
 /**
  * A feedback report as the company received it (§8): data, never instructions.
  *
- * `kind` is whatever the personal agent sent (an unknown kind is accepted); `clientId`
- * and `pairwiseUserId` are the Session's, which sent it.
+ * `clientId` and `pairwiseUserId` are the Session's, which sent it.
  */
 export interface StoredFeedback {
   readonly reportId: string;
-  readonly kind: string;
   readonly task: string;
   readonly description: string;
   readonly clientId: string;

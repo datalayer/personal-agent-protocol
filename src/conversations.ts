@@ -14,6 +14,8 @@ import {
   parseMessage,
   type ConversationEvent,
   type ConversationEventPage,
+  knownResponder,
+  knownStatus,
   type ConversationResponder,
   type ConversationStatus,
   type Message,
@@ -667,17 +669,7 @@ function parseConversationResponse(value: unknown): ConversationResponse {
     );
   }
   assertIdentifier(source.conversation_id, "conversation ID");
-  if (
-    !(["working", "idle", "queued", "closed"] as unknown[]).includes(
-      source.status,
-    )
-  ) {
-    throw new ConversationError(
-      "invalid_response",
-      "conversation response was malformed",
-    );
-  }
-  if (!(["agent", "human"] as unknown[]).includes(source.responder)) {
+  if (typeof source.status !== "string" || typeof source.responder !== "string") {
     throw new ConversationError(
       "invalid_response",
       "conversation response was malformed",
@@ -685,8 +677,8 @@ function parseConversationResponse(value: unknown): ConversationResponse {
   }
   return {
     conversation_id: source.conversation_id,
-    status: source.status as ConversationStatus,
-    responder: source.responder as ConversationResponder,
+    status: knownStatus(source.status),
+    responder: knownResponder(source.responder),
   };
 }
 

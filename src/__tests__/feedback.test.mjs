@@ -74,11 +74,11 @@ async function signedIn(w) {
   return (await device.poll(started.reference)).token;
 }
 
-test("a report is missing, task and description only", () => {
-  assert.deepEqual(parseFeedbackReport(GIFT_CARD), { kind: "missing", ...GIFT_CARD });
-  // Personal agents MUST NOT send other kinds; nothing else rides along (§8).
+test("a report is task and description only", () => {
+  assert.deepEqual(parseFeedbackReport(GIFT_CARD), GIFT_CARD);
+  // Nothing else rides along (§9.3).
   for (const report of [
-    { kind: "error", task: "x", description: "y" },
+    { kind: "missing", task: "x", description: "y" },
     { task: "x", description: "y", user: "Ada" },
     { task: "x".repeat(FEEDBACK_TASK_MAX_LENGTH + 1), description: "y" },
     { task: "x", description: "y".repeat(FEEDBACK_DESCRIPTION_MAX_LENGTH + 1) },
@@ -89,12 +89,13 @@ test("a report is missing, task and description only", () => {
   assert.equal(parseFeedbackReport({ task: "x".repeat(200), description: "y".repeat(2000) }).task, "x".repeat(200));
 });
 
-test("feedback is listed with an HTTPS endpoint, and needs auth", () => {
+test("feedback is listed with an HTTPS endpoint", () => {
   const base = { protocol_version: "0.3", organization: { name: "Example", domain: "example.com" }, web: {} };
   const listed = parseDiscoveryDocument({ ...base, auth: { issuer: "https://example.com" }, feedback: { endpoint: "https://example.com/poppy/feedback" } });
   assert.equal(feedbackEndpoint(listed), "https://example.com/poppy/feedback");
   assert.equal(feedbackEndpoint(parseDiscoveryDocument(base)), undefined);
-  assert.throws(() => parseDiscoveryDocument({ ...base, feedback: { endpoint: "https://example.com/poppy/feedback" } }), /auth is required/);
+  // `auth` is optional: the issuer comes from the domain's protected resource metadata (§3.1).
+  assert.equal(feedbackEndpoint(parseDiscoveryDocument({ ...base, feedback: { endpoint: "https://example.com/poppy/feedback" } })), "https://example.com/poppy/feedback");
   assert.throws(() =>
     parseDiscoveryDocument({ ...base, auth: { issuer: "https://example.com" }, feedback: { endpoint: "http://example.com/poppy/feedback" } }),
   );
@@ -116,30 +117,26 @@ test("a signed-out and a signed-in Session report, with no scope", async () => {
     undefined,
   );
   const reports = await w.shop.feedbackReports();
-  assert.deepEqual(reports.map((report) => [report.kind, report.task]), [
-    ["missing", "Pay with a gift card"],
-    ["missing", "Return a jacket"],
-  ]);
+  assert.deepEqual(reports.map((report) => report.task), ["Pay with a gift card", "Return a jacket"]);
   // The Session says which personal agent and which user sent it; the report doesn't.
   assert.deepEqual([...new Set(reports.map((report) => report.clientId))], [w.identity.clientId]);
   assert.deepEqual([...new Set(reports.map((report) => report.pairwiseUserId))], [PAIRWISE]);
 });
 
-test("the company accepts an unknown kind and refuses a malformed report", async () => {
+test("the company ignores other members and refuses a malformed report", async () => {
   const w = await world();
   const session = await w.start();
   const post = (body) =>
     w.transport.request("POST", FEEDBACK, { token: session, ...w.who, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  // A kind it doesn't recognize is accepted, so later versions can add kinds (§8).
+  // Other members are ignored, so later versions can add some (§9.3).
   const accepted = await post({ kind: "slow", task: "Track a parcel", description: "Took ages." });
   assert.equal(accepted.status, 202);
   assert.equal(await accepted.text(), "");
-  assert.equal((await w.shop.feedbackReports())[0].kind, "slow");
+  assert.equal((await w.shop.feedbackReports())[0].kind, undefined);
   for (const body of [
-    { kind: "missing", task: "x".repeat(201), description: "too long a task" },
-    { kind: "missing", task: "x", description: "y".repeat(2001) },
+    { task: "x".repeat(201), description: "too long a task" },
+    { task: "x", description: "y".repeat(2001) },
     { kind: "missing", task: "x" },
-    { task: "x", description: "y" },
     ["not", "an", "object"],
   ]) {
     const refused = await post(body);

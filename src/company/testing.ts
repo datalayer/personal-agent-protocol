@@ -211,7 +211,6 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
     [RecordKinds.signInAttempts]: { failures: 3, lockedUntil: later } satisfies SignInAttempts,
     [RecordKinds.feedback]: {
       reportId: "fb_1",
-      kind: "missing",
       task: "Pay with a gift card",
       description: "No gift card field.",
       clientId: "c",

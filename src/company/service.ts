@@ -350,9 +350,6 @@ export class CompanyConfig {
     if (this.writeScopes.some((scope) => !this.scopes.includes(scope))) {
       throw new RangeError("writeScopes must be among scopes");
     }
-    if (this.scopes.some((scope) => scope.startsWith("poppy:"))) {
-      throw new RangeError("scope names starting with poppy: are reserved (§4.4)");
-    }
     const described = Object.keys(this.scopeDescriptions);
     if (
       described.length !== new Set(this.scopes).size ||
@@ -940,10 +937,16 @@ export class CompanyService {
         if (method === "GET" && path === "/.well-known/poppy.json") {
           return { status: 200, body: this.discoveryDocument(host), headers: {} };
         }
+        if (method === "GET" && path === "/.well-known/oauth-protected-resource") {
+          return { status: 200, body: this.domainResourceMetadata(host), headers: {} };
+        }
         return jsonError(404, "not_found");
       }
       if (method === "GET" && path === "/.well-known/poppy.json") {
         return { status: 200, body: this.discoveryDocument(), headers: {} };
+      }
+      if (method === "GET" && path === "/.well-known/oauth-protected-resource") {
+        return { status: 200, body: this.domainResourceMetadata(), headers: {} };
       }
       if (method === "GET" && path === "/.well-known/oauth-authorization-server") {
         return { status: 200, body: this.oauthMetadata(), headers: {} };
@@ -1084,6 +1087,25 @@ export class CompanyService {
       metadata.dpop_signing_alg_values_supported = [...DPOP_ALGORITHMS];
     }
     return metadata;
+  }
+
+  /**
+   * RFC 9728 metadata of `https://{domain}`, naming the issuer (§3.2).
+   *
+   * Published by the company's own domain and each alias: `resource` is exactly
+   * `https://{domain}` and its one authorization server is the company's issuer.
+   */
+  domainResourceMetadata(domain?: string): Record<string, unknown> {
+    const config = this.config;
+    if (domain !== undefined && domain !== config.domain && !config.aliases.includes(domain)) {
+      throw new RangeError(`${domain} is not one of this company's domains`);
+    }
+    return {
+      resource: `https://${domain ?? config.domain}`,
+      authorization_servers: [config.base],
+      scopes_supported: [...config.scopes],
+      bearer_methods_supported: ["header"],
+    };
   }
 
   oauthMetadata(): Record<string, unknown> {
@@ -3290,17 +3312,14 @@ export class CompanyService {
   /**
    * Accept a report with a Session Token, signed in or out, no scope needed.
    *
-   * Any `kind` is accepted, so later versions can add kinds; `task` (at most 200
-   * characters) and `description` (at most 2,000) are required. The text is kept as data
-   * for the operator, never acted on.
+   * `task` (at most 200 characters) and `description` (at most 2,000) are required; other
+   * members are ignored. The text is kept as data for the operator, never acted on.
    */
   async #feedback(request: CompanyRequest): Promise<CompanyResponse> {
     const [, session] = await this.#caller(request);
     const body = jsonObject(request.body);
-    const { kind, task, description } = body;
+    const { task, description } = body;
     if (
-      typeof kind !== "string" ||
-      !kind ||
       typeof task !== "string" ||
       !(task.length > 0 && task.length <= 200) ||
       typeof description !== "string" ||
@@ -3310,7 +3329,6 @@ export class CompanyService {
     }
     const report: StoredFeedback = {
       reportId: this.#id("fb"),
-      kind,
       task,
       description,
       clientId: session.clientId,

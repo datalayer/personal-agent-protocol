@@ -139,7 +139,7 @@ const CHECKS = {
       return;
     }
     const company = await discoverCompany(given.domain, options);
-    if ("issuer" in expect) assert.equal(company.oauthMetadata.issuer, expect.issuer);
+    if ("issuer" in expect) assert.equal(company.oauthMetadata?.issuer ?? null, expect.issuer);
     if ("organization_domain" in expect) assert.equal(company.document.organization.domain, expect.organization_domain);
     if ("discovery_url" in expect) assert.equal(company.discoveryUrl, expect.discovery_url);
   },

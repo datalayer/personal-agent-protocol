@@ -27,6 +27,17 @@ import {
   sessionTokenFromResponse,
 } from "../../lib/index.js";
 
+/** The company's documents by path: its poppy.json, its domain's resource metadata, its issuer's. */
+const PRM = {
+  resource: "https://example.com",
+  authorization_servers: ["https://auth.example.com"],
+};
+const documentAt = (input, discovery, metadata) => {
+  const url = new URL(input);
+  if (url.pathname === "/.well-known/oauth-protected-resource") return PRM;
+  return url.hostname === "example.com" ? discovery : metadata;
+};
+
 const fixture = async (name) =>
   JSON.parse(
     await readFile(new URL(`../../protocol/fixtures/${name}`, import.meta.url), "utf8"),
@@ -36,11 +47,10 @@ test("parses the shared discovery fixture and preserves extension fields", async
   const document = parseDiscoveryDocument(await fixture("discovery-valid.json"));
   assert.equal(document.protocol_version, "0.3");
   assert.equal(document.apis[1].type, "mcp");
-  assert.equal(document.auth.mediated.fields[1].secret, true);
-  assert.equal(document.auth.scopes.addresses, "See and change your saved shipping addresses");
+    assert.equal(document.auth.scopes.addresses, "See and change your saved shipping addresses");
   assert.deepEqual(document.auth.scope_hints["orders:write"], { changes: "irreversible", personal_data: true });
   assert.equal(document.excluded_tasks.url, "https://example.com/poppy/excluded-tasks.json");
-  assert.equal(document.extensions.operations.endpoint, "https://api.example.com/poppy/operations");
+  assert.equal(document.extensions.operations.version, "2");
 });
 
 test("discovers and authenticates a company", async () => {
@@ -48,7 +58,7 @@ test("discovers and authenticates a company", async () => {
   const metadata = await fixture("oauth-metadata-valid.json");
   const fetch = async (input) => {
     const url = new URL(input);
-    const body = url.hostname === "example.com" ? discovery : metadata;
+    const body = documentAt(url, discovery, metadata);
     return new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -67,7 +77,7 @@ test("passes AbortSignal to discovery requests", async () => {
   const receivedSignals = [];
   const fetch = async (input, init) => {
     receivedSignals.push(init.signal);
-    const body = new URL(input).hostname === "example.com" ? discovery : metadata;
+    const body = documentAt(input, discovery, metadata);
     return new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -78,7 +88,7 @@ test("passes AbortSignal to discovery requests", async () => {
 
   // Each request is given a signal of its own that follows the caller's
   // (combined with the SDK's deadline), not the caller's object itself.
-  assert.equal(receivedSignals.length, 2);
+  assert.equal(receivedSignals.length, 3);
   for (const signal of receivedSignals) {
     assert.ok(signal instanceof AbortSignal);
     assert.equal(signal.aborted, false);
@@ -103,7 +113,7 @@ test("rejects an OAuth issuer that does not authorize the company domain", async
     protected_resources: ["https://attacker.example"],
   };
   const fetch = async (input) => {
-    const body = new URL(input).hostname === "example.com" ? discovery : metadata;
+    const body = documentAt(input, discovery, metadata);
     return new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -126,7 +136,7 @@ test("discovers through Reactor contributions", async () => {
         point: DiscoveryTransports,
         value: {
           fetch: async (input) => {
-            const body = input.hostname === "example.com" ? discovery : metadata;
+            const body = documentAt(input, discovery, metadata);
             return new Response(JSON.stringify(body), {
               status: 200,
               headers: { "content-type": "application/json" },

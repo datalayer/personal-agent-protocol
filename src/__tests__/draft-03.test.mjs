@@ -212,8 +212,8 @@ test("the issuer lists the grants and scopes it offers", () => {
     revocation_endpoint: "https://auth.example.com/oauth/revoke",
     protected_resources: ["https://example.com"],
   };
-  // grant_types_supported is required, with the JWT bearer and refresh grants (§3.2).
-  assert.throws(() => parseOAuthServerMetadata({ ...base, grant_types_supported: ["refresh_token"] }), /JWT bearer/);
+  // grant_types_supported is required, with the refresh grant (§3.2).
+  assert.throws(() => parseOAuthServerMetadata({ ...base, grant_types_supported: [JWT_BEARER] }), /refresh_token/);
   assert.throws(() => parseOAuthServerMetadata(base), /grant_types_supported/);
   assert.throws(
     () => parseOAuthServerMetadata({ ...base, grant_types_supported: [JWT_BEARER, "refresh_token", "authorization_code"] }),
@@ -231,14 +231,14 @@ test("the issuer lists the grants and scopes it offers", () => {
   assert.equal(listsResource(slashed, "example.com"), false);
 });
 
-test("scopes are the company's, described, and never poppy:", () => {
+test("scopes are the company's and described; poppy: is no longer reserved", () => {
   const document = {
     protocol_version: "0.3",
     organization: { name: "Example", domain: "example.com" },
     auth: { issuer: "https://auth.example.com", scopes: { "poppy:read": "Read" } },
     web: {},
   };
-  assert.throws(() => parseDiscoveryDocument(document), /reserved/);
+  assert.equal(parseDiscoveryDocument(document).auth.scopes["poppy:read"], "Read");
   assert.throws(() => parseDiscoveryDocument({ ...document, auth: { issuer: "https://auth.example.com", scopes: { a: "" } } }));
 });
 

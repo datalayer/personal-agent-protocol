@@ -10,12 +10,19 @@ import { readBoundedBody, withinDeadline, type CacheBounds } from "./limits.js";
 import { parseJsonStrict } from "./json.js";
 import {
   SUPPORTED_PROTOCOL_VERSIONS,
+  companyIssuer,
+  companyResource,
   listsResource,
+  needsIssuer,
   parseDiscoveryDocument,
   parseExcludedTasks,
   parseOAuthServerMetadata,
+  parseProtectedResourceMetadata,
+  protectedResourceMetadataUrl,
   type DiscoveredCompany,
+  type DiscoveryDocument,
   type ExcludedTasks,
+  type ProtectedResourceMetadata,
 } from "./models.js";
 import {
   DiscoveryTransports,
@@ -235,15 +242,26 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
       "Discovery organization domain is not the host that served the document",
     );
   }
-  if (!document.auth) {
+  const resourceMetadata = await domainResourceMetadata(document, read);
+  if (resourceMetadata === undefined) {
     return { discoveryUrl: discovery.finalUrl.toString(), document };
   }
 
-  const metadataResponse = await readJson(metadataUrl(document.auth.issuer), read);
-  const oauthMetadata = parseOAuthServerMetadata(metadataResponse.value);
+  const issuer = issuerNamed(document, resourceMetadata);
+  const metadataResponse = await readJson(metadataUrl(issuer), read);
+  let oauthMetadata;
+  try {
+    oauthMetadata = parseOAuthServerMetadata(metadataResponse.value);
+  } catch (cause) {
+    throw new ProtocolValidationError(
+      "invalid_oauth_metadata",
+      "OAuth server metadata failed validation",
+      { cause },
+    );
+  }
   // Character for character: no case folding, no trailing-slash trimming (§3.2).
-  if (oauthMetadata.issuer !== document.auth.issuer) {
-    throw new DiscoveryError("issuer_mismatch", "OAuth metadata issuer does not match auth.issuer");
+  if (oauthMetadata.issuer !== issuer) {
+    throw new DiscoveryError("issuer_mismatch", "OAuth metadata issuer is not the issuer found");
   }
   // `https://{domain}` exactly, the host ignoring case (§3.2, RFC 9728 §3.3).
   if (!listsResource(oauthMetadata, document.organization.domain)) {
@@ -255,8 +273,138 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
   return {
     discoveryUrl: discovery.finalUrl.toString(),
     document,
+    resourceMetadata,
     oauthMetadata,
   };
+}
+
+/**
+ * The domain's protected resource metadata, which names its issuer (§3.2).
+ *
+ * Its `resource` is exactly `https://{organization.domain}`. A domain without it has no
+ * issuer: refused when the document lists anything that needs one, else a website to
+ * browse only.
+ */
+async function domainResourceMetadata(
+  document: DiscoveryDocument,
+  read: ReadOptions,
+): Promise<ProtectedResourceMetadata | undefined> {
+  const resource = `https://${document.organization.domain}`;
+  let fetched: Fetched;
+  try {
+    fetched = await readJson(new URL(protectedResourceMetadataUrl(resource)), read);
+  } catch (cause) {
+    if (cause instanceof DiscoveryError && cause.code === "http_error" && cause.statusCode === 404) {
+      if (needsIssuer(document)) {
+        throw new DiscoveryError(
+          "issuer_not_found",
+          "The domain publishes no protected resource metadata naming its issuer",
+          { cause },
+        );
+      }
+      return undefined;
+    }
+    throw cause;
+  }
+  const metadata = parseResourceMetadata(fetched.value);
+  if (metadata.resource !== resource) {
+    throw new DiscoveryError(
+      "resource_mismatch",
+      "The domain's protected resource metadata names another resource",
+    );
+  }
+  return metadata;
+}
+
+function parseResourceMetadata(value: unknown): ProtectedResourceMetadata {
+  try {
+    return parseProtectedResourceMetadata(value);
+  } catch (cause) {
+    throw new ProtocolValidationError(
+      "invalid_resource_metadata",
+      "Protected resource metadata failed validation",
+      { cause },
+    );
+  }
+}
+
+/**
+ * The issuer the domain names (§3.1, §3.2).
+ *
+ * One authorization server is the issuer, and `auth.issuer`, if present, names it; with
+ * several, `auth.issuer` is required and must be one of them.
+ */
+function issuerNamed(document: DiscoveryDocument, metadata: ProtectedResourceMetadata): string {
+  const servers = metadata.authorization_servers;
+  const named = document.auth?.issuer;
+  if (servers.length === 1) {
+    const only = servers[0] as string;
+    if (named !== undefined && named !== only) {
+      throw new DiscoveryError("issuer_mismatch", "auth.issuer is not the domain's authorization server");
+    }
+    return only;
+  }
+  if (named === undefined) {
+    throw new DiscoveryError(
+      "issuer_not_named",
+      "The domain lists several authorization servers and auth.issuer names none",
+    );
+  }
+  if (!servers.includes(named)) {
+    throw new DiscoveryError(
+      "issuer_mismatch",
+      "auth.issuer is not one of the domain's authorization servers",
+    );
+  }
+  return named;
+}
+
+/**
+ * The protected resource metadata of the service at `url` (RFC 9728 §3.1), if any.
+ *
+ * `undefined` when the service publishes none (404). Cached as its headers allow; `fresh`
+ * reads it again, after a service said the agent's view is stale (§4.5).
+ */
+export async function resourceMetadata(
+  url: string,
+  options: DiscoveryOptions & { readonly fresh?: boolean } = {},
+): Promise<ProtectedResourceMetadata | undefined> {
+  const { read } = readOptions(options);
+  const metadataAddress = protectedResourceMetadataUrl(url);
+  if (options.fresh === true) await read.cache.delete(`pap.metadata:${metadataAddress}`);
+  try {
+    return parseResourceMetadata((await readJson(new URL(metadataAddress), read)).value);
+  } catch (cause) {
+    if (cause instanceof DiscoveryError && cause.code === "http_error" && cause.statusCode === 404) {
+      return undefined;
+    }
+    throw cause;
+  }
+}
+
+/**
+ * The `resource` to request a token for before calling `url`, or `undefined` (§4.5).
+ *
+ * A service whose protected resource metadata names a `resource` other than
+ * `https://{organization.domain}` accepts only tokens issued for it, and its
+ * `authorization_servers` include the Company's issuer. Without metadata, or with the
+ * domain's own, the default token works there.
+ */
+export async function serviceResource(
+  company: DiscoveredCompany,
+  url: string,
+  options: DiscoveryOptions & { readonly fresh?: boolean } = {},
+): Promise<string | undefined> {
+  const metadata = await resourceMetadata(url, options);
+  if (metadata === undefined || metadata.resource === companyResource(company)) return undefined;
+  const issuer = companyIssuer(company);
+  if (issuer === undefined || !metadata.authorization_servers.includes(issuer)) {
+    throw new DiscoveryError(
+      "invalid_resource_metadata",
+      "The service's protected resource metadata names another authorization server",
+    );
+  }
+  return metadata.resource;
 }
 
 /**

@@ -450,6 +450,8 @@ def test_requirements_and_conformance_commands(tmp_path: Path) -> None:
     assert "<testsuite" in junit.output and 'name="pap.operations"' in junit.output
     text = pap("conformance", "run", "--demo", "--case", "lifecycle.rotated-token")
     assert "passed   lifecycle.rotated-token" in text.output
+    bound = pap("conformance", "run", "--demo", "--world", "dpop-binding")
+    assert "passed   dpop.token-bound-and-used" in bound.output
     pap("conformance", "run", code=3)  # a real company needs its own driver and scenario
 
 

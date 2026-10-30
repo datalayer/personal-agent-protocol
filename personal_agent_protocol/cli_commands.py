@@ -1183,6 +1183,9 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         case_id: list[str] | None = CASE,
         requirement: list[str] | None = REQUIREMENT,
         suite: list[str] | None = SUITE,
+        world: str | None = typer.Option(
+            None, "--world", help="With --demo: a world of the fixtures, such as dpop-binding."
+        ),
         output_format: str = typer.Option("text", "--format", help="text, json, or junit."),
         output: Path | None = OUTPUT,
     ) -> None:
@@ -1205,16 +1208,16 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         async def main() -> Any:
             from .demo.conformance import ManzanitaConformance
 
-            world = ManzanitaConformance()
+            demo_world = ManzanitaConformance(world)
             cases = select_cases(
-                ids=case_id or (), requirements=requirement or (), suites=suite or ()
+                ids=case_id or (), requirements=requirement or (), suites=suite or (), world=world
             )
             if tls:
                 from .demo.sockets import served_over_tls
 
-                async with served_over_tls(world.network):
-                    return await run_conformance(world.context(), cases=cases)
-            return await run_conformance(world.context(), cases=cases)
+                async with served_over_tls(demo_world.network):
+                    return await run_conformance(demo_world.context(), cases=cases)
+            return await run_conformance(demo_world.context(), cases=cases)
 
         report = asyncio.run(main())
         _write_report(report, output_format, output)

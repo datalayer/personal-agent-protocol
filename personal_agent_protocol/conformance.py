@@ -3079,7 +3079,7 @@ async def _discover_with(
 ) -> DiscoveredCompany:
     """Discovery of the company with its domain's protected resource metadata as `answer`."""
 
-    inner = cast(httpx.AsyncBaseTransport, ctx.http._transport)
+    inner = ctx.http._transport
     url = f"{ctx.base_url}/.well-known/oauth-protected-resource"
     async with httpx.AsyncClient(transport=_OneAnswer(inner, url, answer)) as http:
         client = DiscoveryClient(
@@ -3112,9 +3112,11 @@ async def _no_issuer_discovery(ctx: ConformanceContext, _: FixtureCase) -> None:
 
 @case("no-issuer.metadata-without-servers")
 async def _no_issuer_metadata(ctx: ConformanceContext, _: FixtureCase) -> None:
-    for extra in ({}, {"authorization_servers": []}):
-        answer = _json_answer(200, {"resource": ctx.base_url, **extra})
-        _no_issuer_company(await _discover_with(ctx, answer))
+    for metadata in (
+        {"resource": ctx.base_url},
+        {"resource": ctx.base_url, "authorization_servers": []},
+    ):
+        _no_issuer_company(await _discover_with(ctx, _json_answer(200, metadata)))
 
 
 @case("no-issuer.no-oauth-server")
@@ -3210,7 +3212,7 @@ async def _sign_in_without_issuer(ctx: ConformanceContext, fixture: FixtureCase)
     served = (await ctx.company()).document.model_dump(mode="json", exclude_none=True)
     endpoint = await ctx.conversations_endpoint()
     agent = {"protocols": [{"type": "poppy", "endpoint": endpoint, "access": "signed_in"}]}
-    inner = cast(httpx.AsyncBaseTransport, ctx.http._transport)
+    inner = ctx.http._transport
     for offers in (
         {"auth": {"issuer": ctx.base_url}},
         {"agent": agent},

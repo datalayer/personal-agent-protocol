@@ -104,7 +104,7 @@ async function docsWorld() {
     const company = companies[new URL(url.reveal()).hostname];
     scope.incomingCallbackUrl = await company.approveAuthorization(host.browser.requestId, { accountId: "acct_ada" });
   };
-  const transport = new portable.DpopFetchClient({ reactor, fetch });
+  const transport = new portable.SessionFetchClient({ reactor, fetch });
   const discovered = (domain) => portable.discoverCompany(domain, { reactor });
   async function who(domain) {
     const issuer = (await discovered(domain)).oauthMetadata.issuer;
@@ -116,19 +116,17 @@ async function docsWorld() {
     return { tenantId: TENANT, pairwiseUserId, issuer };
   }
   async function signedOut(domain) {
-    const metadata = (await discovered(domain)).oauthMetadata;
-    const { pairwiseUserId } = await who(domain);
+    const { issuer, pairwiseUserId } = await who(domain);
     return new portable.SessionClient({ reactor, fetch }).start({
       clientId: identity.clientId,
       pairwiseUserId,
-      issuer: metadata.issuer,
-      tokenEndpoint: metadata.token_endpoint,
+      issuer,
       tenantId: TENANT,
     });
   }
   async function signedIn(domain, scopes) {
-    const metadata = (await discovered(domain)).oauthMetadata;
-    const { pairwiseUserId } = await who(domain);
+    const company = await discovered(domain);
+    const metadata = company.oauthMetadata;
     const session = await signedOut(domain);
     const device = new portable.DeviceSignInClient({ reactor, fetch });
     const started = await device.begin({
@@ -138,17 +136,22 @@ async function docsWorld() {
       clientId: identity.clientId,
       scopes,
       tenantId: TENANT,
-      sessionKey: session.sessionKey,
-      organization: { name: "Manzanita", domain: new URL(metadata.protected_resources[0]).hostname },
+      organization: company.document.organization,
       protectedResources: metadata.protected_resources,
     });
     await companies[domain].approveDevice(started.userCode, { accountId: "acct_ada" });
     clock.advance(started.pollInterval);
     const done = await device.poll(started.reference);
     assert.equal(done.status, "complete");
-    return { token: done.token, reference: done.accountTokenReference };
+    return { session, token: done.token, reference: done.refreshTokenReference };
   }
-  return { clock, fetch, identity, companies, host, reactor, scope, transport, discovered, who, signedOut, signedIn };
+  /** A signed-in Session and an operation its company returned (an exchange). */
+  async function proposed(domain) {
+    const { session, token } = await signedIn(domain, ["orders:read", "orders:write"]);
+    const answer = await new portable.ApiClient({ transport }).call("POST", `https://${domain}/api/orders/ord_7Hk2/exchanges`, { session, token, body: {} });
+    return { session, token, operation: answer.operation };
+  }
+  return { clock, fetch, identity, companies, host, reactor, scope, transport, discovered, who, signedOut, signedIn, proposed };
 }
 
 const CASES = {};
@@ -199,19 +202,15 @@ example("docs/docs/sdk/typescript.mdx#2", async (w) => [
   },
 ]);
 
-example("docs/docs/sdk/typescript.mdx#3", async (w) => {
-  const response = new Response(JSON.stringify({
-    access_token: "sat_docs",
-    token_type: "DPoP",
-    expires_in: 3600,
-  }));
-  const sessionKey = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
-  return [{ reactor: w.reactor, response, sessionKey }, async (values, out) => {
-    assert.equal(values.claims.iss, "https://agent.example/agent.json");
-    assert.equal(values.token.signedIn, false);
-    assert.ok(out.some((line) => line.includes(sessionKey)));
-  }];
-});
+example("docs/docs/sdk/typescript.mdx#3", async (w) => [
+  { reactor: w.reactor },
+  async (values, out) => {
+    assert.equal(values.session.clientId, "https://agent.example/agent.json");
+    assert.ok(values.session.sub.startsWith("usr_"));
+    assert.equal(values.session.handle, `ses_${values.session.sid}`);
+    assert.deepEqual(out, [`${values.session.sid} ${values.session.handle}`]);
+  },
+]);
 
 example("docs/docs/guides/operational-limits.mdx#0", async (w) => [
   { reactor: w.reactor },
@@ -221,34 +220,25 @@ example("docs/docs/guides/operational-limits.mdx#0", async (w) => [
 // Sessions and sign-in ----------------------------------------------------------------------
 
 example("docs/docs/guides/sessions.mdx#0", async (w) => [
-  { reactor: w.reactor, abortController: new AbortController() },
+  { reactor: w.reactor },
   async (values) => {
-    assert.equal(values.token.signedIn, false);
-    assert.equal(values.renewed.sessionKey, values.token.sessionKey);
+    assert.equal(values.session.handle, `ses_${values.session.sid}`);
+    assert.equal(values.session.issuer, "https://auth.company.example");
   },
 ]);
 
-example("docs/docs/guides/direct-sign-in.mdx#0", async (w) => {
-  const { pairwiseUserId } = await w.who("auth.example.com");
-  return [
-    {
-      reactor: w.reactor,
-      fetch: w.fetch,
-      pairwiseUserId,
-      signedOutSession: await w.signedOut("auth.example.com"),
-      request: { signal: new AbortController().signal },
-    },
-    async (values) => {
-      assert.deepEqual(values.result.grantedScopes, ["orders:read"]);
-      assert.ok(values.accountReference.startsWith("account_"));
-    },
-  ];
-});
+example("docs/docs/guides/direct-sign-in.mdx#0", async (w) => [
+  { reactor: w.reactor, fetch: w.fetch, request: { signal: new AbortController().signal } },
+  async (values, out) => {
+    assert.deepEqual(values.result.grantedScopes, ["orders:read"]);
+    assert.ok(values.refreshReference.startsWith("refresh_"));
+    assert.ok(out[0].endsWith(' ["orders:read"] []'));
+  },
+]);
 
 example("docs/docs/guides/device-sign-in.mdx#0", async (w) => {
   const company = await w.discovered("shop.example");
   const metadata = company.oauthMetadata;
-  const { pairwiseUserId } = await w.who("shop.example");
   const shown = [];
   return [
     {
@@ -257,8 +247,6 @@ example("docs/docs/guides/device-sign-in.mdx#0", async (w) => {
       fetch: w.fetch,
       company,
       metadata,
-      pairwiseUserId,
-      signedOutSession: await w.signedOut("shop.example"),
       renderHumanHandoff: (...values) => shown.push(values),
       abortSignal: new AbortController().signal,
     },
@@ -272,46 +260,46 @@ example("docs/docs/guides/device-sign-in.mdx#0", async (w) => {
 
 example("docs/docs/guides/mediated-sign-in.mdx#0", async (w) => {
   const company = await w.discovered("shop.example");
-  const who = await w.who("shop.example");
   return [
     {
       MediatedSignInClient: portable.MediatedSignInClient,
       reactor: w.reactor,
       fetch: w.fetch,
-      mediated: company.document.auth.mediated,
-      organization: company.document.organization,
+      company,
+      clientId: w.identity.clientId,
       scopes: ["orders:read"],
-      token: await w.signedOut("shop.example"),
-      ...who,
     },
     async (values) => {
       assert.equal(values.result.status, "complete");
-      assert.equal(values.result.token.signedIn, true);
+      assert.deepEqual(values.result.token.scopes, ["orders:read"]);
     },
   ];
 });
 
 example("docs/docs/guides/account-tokens.mdx#0", async (w) => {
   const metadata = (await w.discovered("shop.example")).oauthMetadata;
-  const who = await w.who("shop.example");
-  const { token, reference } = await w.signedIn("shop.example", ["orders:read"]);
+  const { issuer, tenantId } = await w.who("shop.example");
+  const { reference } = await w.signedIn("shop.example", ["orders:read"]);
+  const asked = [];
   return [
     {
-      AccountTokenClient: portable.AccountTokenClient,
+      RefreshTokenClient: portable.RefreshTokenClient,
       reactor: w.reactor,
       fetch: w.fetch,
-      accountTokenReference: reference,
+      refreshTokenReference: reference,
       tokenEndpoint: metadata.token_endpoint,
       revocationEndpoint: metadata.revocation_endpoint,
-      issuer: who.issuer,
+      issuer,
       clientId: w.identity.clientId,
-      tenantId: who.tenantId,
-      pairwiseUserId: who.pairwiseUserId,
-      session: token,
+      tenantId,
+      token: undefined,
+      askTheUserToSignInAgain: () => asked.push("again"),
+      continueSignedOut: () => asked.push("signed out"),
     },
     async (values) => {
       assert.equal(values.result.status, "signed_in");
       assert.deepEqual(values.result.token.scopes, ["orders:read"]);
+      assert.deepEqual(asked, []);
     },
   ];
 });
@@ -320,21 +308,19 @@ example("docs/docs/guides/account-tokens.mdx#0", async (w) => {
 
 example("docs/docs/guides/conversations.mdx#0", async (w) => {
   const company = await w.discovered("shop.example");
-  const who = await w.who("shop.example");
-  const token = await w.signedOut("shop.example");
+  const session = await w.signedOut("shop.example");
   const endpoint = company.document.agent.protocols[0].endpoint;
   const conversations = new portable.ConversationClient({ reactor: w.reactor, transport: w.transport });
   const message = { id: conversations.generateMessageId(), author: { type: "human" }, text: "Hello" };
-  const page = await conversations.start(endpoint, message, { token, wait: 0, ...who });
-  await conversations.close(endpoint, page.conversation_id, { token, ...who });
+  const page = await conversations.start(endpoint, message, { session, wait: 0 });
+  await conversations.close(endpoint, page.conversation_id, { session });
   const handled = [];
   return [
     {
       conversations,
       endpoint,
       conversationId: page.conversation_id,
-      token,
-      ...who,
+      session,
       ui: { showTyping() {}, dropPartial() {} },
       handleEvent: (event) => handled.push(event),
     },
@@ -343,27 +329,21 @@ example("docs/docs/guides/conversations.mdx#0", async (w) => {
 });
 
 example("docs/docs/guides/operations.mdx#0", async (w) => {
-  const who = await w.who("shop.example");
-  const { token } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
-  const proposed = await w.transport.request("POST", "https://shop.example/api/orders/ord_7Hk2/exchanges", {
-    ...who,
-    token,
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  const operation = portable.parseOperation((await proposed.json()).operation);
+  const proposed = await w.proposed("shop.example");
   return [
     {
-      approve: portable.approve,
-      operations: new portable.OperationsClient({ reactor: w.reactor, transport: w.transport }),
-      endpoint: "https://shop.example/poppy/operations",
-      operation,
-      token,
-      ...who,
+      ...proposed,
+      api: new portable.ApiClient({ transport: w.transport }),
+      url: "https://shop.example/api/orders/ord_7Hk2/exchanges",
+      body: {},
+      organization: (await w.discovered("shop.example")).document.organization,
+      tenantId: TENANT,
+      operations: new portable.OperationsClient({ reactor: w.reactor }),
     },
     async (values) => {
-      assert.equal(values.outcome.status, "confirmed");
-      assert.equal(values.outcome.operation.state, "succeeded");
+      assert.equal(values.sent.status, "answered");
+      assert.ok(values.sent.answer.body.summary.startsWith("Exchanged"));
+      assert.equal(w.host.approvals.asked[0].summary, proposed.operation.summary);
     },
   ];
 });
@@ -381,16 +361,15 @@ example("docs/docs/guides/operations.mdx#1", async () => {
 // OpenAPI, MCP and the website ----------------------------------------------------------
 
 example("docs/docs/sdk/typescript.mdx#5", async (w) => {
-  const who = await w.who("shop.example");
-  const { token } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
+  const { session, token } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
   return [
-    { reactor: w.reactor, session: token, ...who },
+    { reactor: w.reactor, session, token },
     async (values, out) => {
       assert.equal(values.orders.status, 200);
       assert.equal(values.orders.body.orders[0].order_id, "ord_7Hk2");
-      assert.equal(values.proposed.status, 202);
-      assert.equal(values.proposed.operation.state, "proposed");
-      assert.ok(out[0].startsWith("202 "));
+      assert.equal(values.proposed.status, 403);
+      assert.ok(values.proposed.operation.operation_id);
+      assert.ok(out[0].startsWith("403 "));
     },
   ];
 });
@@ -398,52 +377,45 @@ example("docs/docs/sdk/typescript.mdx#5", async (w) => {
 example("docs/docs/sdk/typescript.mdx#6", async (w) => {
   const company = await w.discovered("shop.example");
   const metadata = company.oauthMetadata;
-  const who = await w.who("shop.example");
-  const { token, reference } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
+  const { issuer, tenantId } = await w.who("shop.example");
+  const { session, reference } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
   return [
     {
       reactor: w.reactor,
       company,
-      accountTokenReference: reference,
+      session,
+      refreshTokenReference: reference,
       tokenEndpoint: metadata.token_endpoint,
       clientId: w.identity.clientId,
-      session: token,
-      ...who,
+      issuer,
+      tenantId,
     },
     async (values) => {
       assert.equal(values.mcpUrl, "https://shop.example/mcp");
-      assert.equal(values.served.supportsDpop, true);
-      assert.equal(values.token.signedIn, true);
-      assert.equal(values.token.tokenType, "DPoP");
+      assert.equal(values.refreshed.token.resource, values.mcpUrl);
+      assert.equal(values.refreshed.token.tokenType, "Bearer");
       assert.deepEqual(values.tools.map((tool) => tool.name), ["list_orders", "exchange_jacket"]);
-      assert.equal(values.result.operation.state, "proposed");
+      assert.ok(values.result.operation.operation_id);
     },
   ];
 });
 
 example("docs/docs/examples/browser-session.mdx#0", async (w) => {
   const company = await w.discovered("shop.example");
-  const who = await w.who("shop.example");
-  const { token } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
-  const proposed = await w.transport.request("POST", "https://shop.example/api/orders/ord_7Hk2/exchanges", {
-    ...who,
-    token,
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  const operation = portable.parseOperation((await proposed.json()).operation);
+  const { session, token } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
   const browser = new ControlledBrowser(w.fetch);
   await w.reactor.install({
     name: "docs-controlled-browser",
     contributes: [{ point: portable.BrowserJoins, value: browser, options: { id: "controlled-browser" } }],
   });
   return [
-    { reactor: w.reactor, company, operation, session: token, browser, tenantId: who.tenantId, issuer: who.issuer },
-    async (values, out) => {
-      assert.equal(values.page, operation.url);
-      assert.deepEqual(out, [operation.url]);
-      assert.equal(browser.page.status, 200);
-      assert.ok(browser.page.text.includes('data-state="proposed"'));
+    { reactor: w.reactor, company, session, token, browser },
+    async () => {
+      // The browser holds the Session's cookie, and the company knows it for that Session.
+      const cookie = browser.cookies.get("shop.example").get("__Host-poppy_session");
+      const joined = await w.companies["shop.example"].webSession(cookie);
+      assert.equal(joined.sid, session.sid);
+      assert.equal(joined.accountId, "acct_ada");
     },
   ];
 });
@@ -498,7 +470,7 @@ example("docs/docs/guides/telemetry.mdx#0", async () => {
 
 example("docs/docs/guides/extensions.mdx#0", async () => [
   {},
-  async (values) => assert.deepEqual(values.negotiated, { operations: "1" }),
+  async (values) => assert.deepEqual(values.negotiated, { operations: "2" }),
 ]);
 
 // The runner -------------------------------------------------------------------------------

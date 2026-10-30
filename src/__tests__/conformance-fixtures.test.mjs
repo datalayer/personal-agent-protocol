@@ -10,6 +10,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { decodeJwt, decodeProtectedHeader } from "jose";
+
 import {
   ApiClient,
   ConversationClient,
@@ -207,6 +209,29 @@ const CHECKS = {
       await assert.rejects(conversations.readEvents("https://shop.example/poppy/conversations", "cnv_rate_limited", { session }), refused);
       reactor.stop();
     }
+  },
+
+  async delegated_key_per_user_id(given, expect) {
+    const identity = await agentIdentity({ domain: "agent.example", name: "Agent" });
+    const signer = new DelegatedSessionSigner({ custody: new InMemoryDelegatedKeys(), signer: identity.signer });
+    const keys = new Set();
+    const delegations = new Set();
+    for (const { sub, issuer } of given.requests) {
+      const compact = await signer.sign({
+        method: "GET",
+        url: `${issuer}/api/orders`,
+        tenantId: "t",
+        issuer,
+        clientId: identity.clientId,
+        sid: "c2lkX2Zvcl90aGVfZml4dHVyZQ",
+        sub,
+      });
+      const header = decodeProtectedHeader(compact.reveal());
+      keys.add(header.kid);
+      delegations.add(decodeJwt(header.pap_dlg).jti);
+    }
+    assert.equal(keys.size, expect.keys);
+    assert.equal(delegations.size, expect.delegations);
   },
 };
 

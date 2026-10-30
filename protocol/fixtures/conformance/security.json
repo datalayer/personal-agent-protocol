@@ -1,7 +1,7 @@
 {
   "suite": "security",
   "profile": "0.3",
-  "description": "Duplicate JSON members, SSRF, redirects, oversized metadata, JOSE algorithm confusion, audiences, clock skew, replay, and DPoP mismatches.",
+  "description": "Duplicate JSON members, SSRF, redirects, oversized metadata, JOSE algorithm confusion, audiences, clock skew, replay, delegations, and Session JWT mismatches.",
   "cases": [
     {
       "id": "security.duplicate-json-members",
@@ -441,8 +441,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "GUIDE-jwt-04",
-        "PAP-4.8-02"
+        "PAP-4.1-05"
       ],
       "target": "client_assertion",
       "mutation": {
@@ -490,8 +489,8 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-02",
-        "GUIDE-jwt-02"
+        "PAP-5.2-03",
+        "PAP-5.3-04"
       ],
       "description": "A Session JWT with alg none is refused: alg MUST be ES256 (§5.2).",
       "target": "session_jwt",
@@ -508,7 +507,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-02"
+        "PAP-5.3-04"
       ],
       "description": "A Session JWT whose signature doesn't verify with its delegated key (§5.2).",
       "target": "session_jwt",
@@ -525,7 +524,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-02"
+        "PAP-5.2-02"
       ],
       "description": "typ MUST be poppy-session+jwt, so a client assertion can't pass for one (§5.2).",
       "target": "session_jwt",
@@ -542,7 +541,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-03"
+        "PAP-5.3-04"
       ],
       "description": "kid is the delegated key's thumbprint (§5.2).",
       "target": "session_jwt",
@@ -559,7 +558,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-03"
+        "PAP-5.2-14"
       ],
       "description": "A Session JWT signed directly with a key from jwks_uri, without a delegation, is refused (§5.2).",
       "target": "session_jwt",
@@ -576,7 +575,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-03"
+        "PAP-5.2-14"
       ],
       "description": "A delegation past its exp (§5.2).",
       "target": "session_jwt",
@@ -594,7 +593,8 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-03"
+        "PAP-5.2-11",
+        "PAP-5.2-14"
       ],
       "description": "A delegation's exp is at most 24 hours after its iat (§5.2).",
       "target": "session_jwt",
@@ -611,7 +611,8 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-03"
+        "PAP-5.2-09",
+        "PAP-5.2-14"
       ],
       "description": "A delegation's typ is pap-delegation+jwt (§5.2).",
       "target": "session_jwt",
@@ -628,7 +629,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-03"
+        "PAP-5.2-14"
       ],
       "description": "A delegation not signed by the key its kid names in jwks_uri (§5.2).",
       "target": "session_jwt",
@@ -641,12 +642,41 @@
       }
     },
     {
+      "id": "security.delegated-key-shared-across-user-ids",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-5.2-16"
+      ],
+      "description": "A delegated key, and its delegation, signs for one User ID only: two User IDs at one Company, and one User's IDs at two Companies, never share a thumbprint or a delegation jti (§5.2).",
+      "check": "delegated_key_per_user_id",
+      "input": {
+        "requests": [
+          {
+            "sub": "usr_ada_at_a",
+            "issuer": "https://a.example"
+          },
+          {
+            "sub": "usr_ben_at_a",
+            "issuer": "https://a.example"
+          },
+          {
+            "sub": "usr_ada_at_b",
+            "issuer": "https://b.example"
+          }
+        ]
+      },
+      "expect": {
+        "keys": 3,
+        "delegations": 3
+      }
+    },
+    {
       "id": "security.session-jwt-other-audience",
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "GUIDE-jwt-04",
-        "PAP-4.3-04"
+        "PAP-5.3-05"
       ],
       "description": "aud is the Company's issuer (§5.3, §10.4).",
       "target": "session_jwt",
@@ -663,7 +693,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-04"
+        "PAP-5.3-05"
       ],
       "description": "aud is the issuer, compared character for character, never an endpoint (§5.3, §10.4).",
       "target": "session_jwt",
@@ -680,7 +710,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-04"
+        "PAP-5.3-06"
       ],
       "description": "htm is the request's method (§5.3).",
       "target": "session_jwt",
@@ -697,7 +727,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-04"
+        "PAP-5.3-06"
       ],
       "description": "htu is the request's URL (§5.3).",
       "target": "session_jwt",
@@ -714,7 +744,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-05"
+        "PAP-5.3-07"
       ],
       "description": "iat is within the acceptance window (§5.3).",
       "target": "session_jwt",
@@ -731,7 +761,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-05"
+        "PAP-5.3-07"
       ],
       "description": "iat is within the acceptance window (§5.3).",
       "target": "session_jwt",
@@ -748,7 +778,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-07"
+        "PAP-5.3-08"
       ],
       "description": "ath is the hash of the access token (§5.3).",
       "target": "session_jwt",
@@ -765,7 +795,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-07"
+        "PAP-5.3-08"
       ],
       "description": "A request with an access token carries ath (§5.2).",
       "target": "session_jwt",
@@ -782,7 +812,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-07"
+        "PAP-5.3-01"
       ],
       "description": "Without an access token, ath MUST be absent (§5.3).",
       "target": "session_jwt",
@@ -800,8 +830,8 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-01",
-        "PAP-4.3-11"
+        "PAP-5.2-01",
+        "PAP-5.3-09"
       ],
       "description": "A request without the Session header is refused, and a company's own access token without it too (§5.3).",
       "expect": {
@@ -814,7 +844,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-06"
+        "GUIDE-co-session-05"
       ],
       "description": "A Company MAY reject a reused jti (§5.3); the reference company does.",
       "expect": {
@@ -827,7 +857,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-19"
+        "PAP-5.3-03"
       ],
       "description": "Exactly one Poppy-Session header, one JWT (§5.2).",
       "expect": {
@@ -840,7 +870,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-03"
+        "PAP-5.3-02"
       ],
       "description": "A known sid keeps its sub (§5.3).",
       "expect": {
@@ -853,7 +883,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-03"
+        "PAP-5.3-08"
       ],
       "description": "The access token was issued to the same client_id as iss (§5.3).",
       "expect": {
@@ -866,8 +896,8 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-17",
-        "PAP-4.3-16"
+        "PAP-5.6-04",
+        "PAP-5.6-03"
       ],
       "description": "A Session Token in the query string, with no Authorization header, is not accepted."
     },
@@ -876,7 +906,7 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-4.3-12"
+        "PAP-5.6-01"
       ],
       "description": "A request carrying only Authorization and DPoP, no cookie, is served."
     },

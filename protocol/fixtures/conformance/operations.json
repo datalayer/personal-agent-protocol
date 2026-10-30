@@ -142,18 +142,14 @@
       "id": "operations.cross-channel-identity",
       "kind": "positive",
       "role": "company",
-      "requirements": [
-        "GUIDE-ops-co-02"
-      ],
+      "requirements": [],
       "description": "The same action through the API and then a conversation is the same operation ID."
     },
     {
       "id": "operations.cross-channel-mcp",
       "kind": "positive",
       "role": "company",
-      "requirements": [
-        "GUIDE-ops-co-02"
-      ],
+      "requirements": [],
       "description": "The same action through an MCP tool, in structuredContent.operation of an error result, is the same operation as through the API."
     },
     {

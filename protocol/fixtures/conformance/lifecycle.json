@@ -8,9 +8,7 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-4.2-03",
-        "PAP-4.2-04",
-        "PAP-4.2-05"
+        "GUIDE-co-lifetimes-01"
       ],
       "description": "A Session starts signed out: a DPoP token with expires_in > 0 (hours, not days), no scope, no Session named: its key names it."
     },
@@ -18,9 +16,7 @@
       "id": "lifecycle.signed-out-challenge",
       "kind": "positive",
       "role": "company",
-      "requirements": [
-        "PAP-4.3-15"
-      ],
+      "requirements": [],
       "description": "An account request with no access token gets a 401 challenge with scope and no error code, read as insufficient_scope (§7)."
     },
     {
@@ -28,7 +24,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-6-04"
+        "PAP-7-02"
       ],
       "description": "A resource the company doesn't serve is invalid_target (RFC 8707, §4.5)."
     },
@@ -37,7 +33,7 @@
       "kind": "recovery",
       "role": "both",
       "requirements": [
-        "PAP-6-04"
+        "PAP-7-02"
       ],
       "description": "A service refusing a token not issued for it answers invalid_token with resource_metadata, and the agent reads it again (§4.5)."
     },
@@ -46,7 +42,7 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-4.2-01"
+        "PAP-5.1-01"
       ],
       "description": "The same user runs two Sessions at once; each has its own Session Key and both are served."
     },
@@ -55,8 +51,8 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-4.4-02",
-        "PAP-4.4-03"
+        "PAP-4.7-04",
+        "PAP-4.7-05"
       ],
       "description": "A sign-in grants no more than the scopes requested and allowed for its type; partial consent shows in scope."
     },
@@ -65,7 +61,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.4-03"
+        "PAP-4.7-05"
       ],
       "description": "A sign-in asking for a scope the company does not offer is invalid_scope."
     },
@@ -73,9 +69,7 @@
       "id": "lifecycle.refresh-token-serves-any-session",
       "kind": "positive",
       "role": "company",
-      "requirements": [
-        "PAP-4.8-01"
-      ],
+      "requirements": [],
       "description": "The Account Token signs a fresh signed-out Session in at the token endpoint."
     },
     {
@@ -83,7 +77,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.8-05"
+        "PAP-4.4-01"
       ],
       "description": "After a refresh rotates the Account Token, the old one is invalid_grant; the new one works."
     },
@@ -91,9 +85,7 @@
       "id": "lifecycle.narrower-scopes",
       "kind": "positive",
       "role": "company",
-      "requirements": [
-        "PAP-4.8-01"
-      ],
+      "requirements": [],
       "description": "A refresh asking for fewer scopes gets a token with only those."
     },
     {
@@ -101,7 +93,7 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.4-02"
+        "PAP-4.7-04"
       ],
       "description": "A refresh asking for a scope the Account Token does not hold is invalid_scope."
     },
@@ -109,18 +101,14 @@
       "id": "lifecycle.refresh-token-from-another-client",
       "kind": "negative",
       "role": "company",
-      "requirements": [
-        "PAP-4.8-02"
-      ],
+      "requirements": [],
       "description": "Another client_id presenting the Account Token gets invalid_grant."
     },
     {
       "id": "lifecycle.refresh-token-at-api",
       "kind": "negative",
       "role": "company",
-      "requirements": [
-        "PAP-4.8-01"
-      ],
+      "requirements": [],
       "description": "An Account Token presented at an API as an access token is refused (invalid_token)."
     },
     {
@@ -128,7 +116,7 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-4.9-01"
+        "GUIDE-co-lifetimes-02"
       ],
       "description": "After revocation, the Session Token issued before it is handled as signed out on the next request (insufficient_scope)."
     },
@@ -137,7 +125,7 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-4.9-01"
+        "GUIDE-co-lifetimes-02"
       ],
       "description": "After revocation, renewal returns a signed-out token for the same Session, and the revoked token is invalid_grant."
     },
@@ -146,8 +134,8 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-4.9-01",
-        "PAP-4.8-05"
+        "GUIDE-co-lifetimes-02",
+        "PAP-4.4-01"
       ],
       "description": "Revoking the current, rotated Account Token signs out every Session signed in from the same sign-in, including tokens issued before the rotation; renewing with the assertion is signed out."
     },
@@ -165,7 +153,7 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-4.3-18"
+        "PAP-5.6-05"
       ],
       "description": "A 429 carries Retry-After, and the SDK reports it without retrying early.",
       "check": "rate_limited",
@@ -188,9 +176,9 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-6-06",
-        "PAP-6-03",
-        "PAP-4.3-26"
+        "PAP-7-06",
+        "PAP-7-02",
+        "PAP-7-04"
       ],
       "description": "The MCP server's protected resource metadata names it as the resource and the company's issuer among its authorization servers; a server that supports DPoP lists ES256. An unauthenticated call is 401 with one challenge per scheme it accepts, each pointing there."
     },
@@ -199,9 +187,8 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-4.3-09",
-        "PAP-4.3-24",
-        "PAP-6-04",
+        "PAP-7-03",
+        "PAP-7-02",
         "GUIDE-pa-tokens-01"
       ],
       "description": "A Session's token request with resource set to the MCP url returns a token for the same Session, DPoP for a server that supports DPoP and Bearer otherwise; the MCP server accepts it and enforces its scopes."
@@ -211,9 +198,8 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-4.3-10",
-        "PAP-4.3-11",
-        "PAP-6-05"
+        "PAP-7-05",
+        "PAP-5.3-09"
       ],
       "description": "The MCP server's token is refused at every API, conversation, and operations endpoint; the MCP server refuses the Session's own DPoP token; no token is issued without a proof for another resource."
     },
@@ -222,8 +208,8 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-4.9-01",
-        "PAP-6-04"
+        "GUIDE-co-lifetimes-02",
+        "PAP-7-02"
       ],
       "description": "After revocation the MCP server handles the Session's token for it as signed out (insufficient_scope)."
     },
@@ -232,14 +218,14 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-5-01",
-        "PAP-5-03",
-        "PAP-5-12",
-        "PAP-5-10",
-        "PAP-5-11",
-        "PAP-5-02",
-        "PAP-5-04",
-        "PAP-5-05"
+        "PAP-6-01",
+        "PAP-6-03",
+        "GUIDE-co-browser-01",
+        "PAP-6-11",
+        "PAP-6-12",
+        "GUIDE-co-browser-02",
+        "PAP-6-05",
+        "PAP-6-06"
       ],
       "description": "The agent's own browser posts a browser assertion and gets a Secure, HttpOnly, SameSite=Lax cookie with no lifetime of its own; the website follows the Session's sign-out on the next request."
     },
@@ -248,12 +234,12 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-5-05",
-        "PAP-5-06",
-        "PAP-5-07",
-        "PAP-5-08",
-        "PAP-5-09",
-        "PAP-5-03"
+        "PAP-6-06",
+        "PAP-6-07",
+        "PAP-6-08",
+        "PAP-6-09",
+        "PAP-6-10",
+        "PAP-6-03"
       ],
       "description": "A join code submitted from another browser, a code used twice, a proof over another code, or a key that names no Session sets no Session cookie (HTTP 400), the two attacks of §9.6 among them."
     }

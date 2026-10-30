@@ -5,7 +5,7 @@
 """Generate the protocol coverage reference from the requirement ledger.
 
 `protocol/requirements.yaml` has one entry per normative statement of PAP draft 0.3
-and Operations v1, and the Guides' recommendations apart. This script writes one
+and Operations v2, and the Guides' recommendations apart. This script writes one
 page per area under `docs/docs/protocol/coverage/` — every entry with its upstream
 section, normative level, SDK symbols, test IDs and status — and the summary table
 between the markers of `docs/docs/protocol/coverage.mdx`.
@@ -71,51 +71,51 @@ AREAS = (
     Area(
         "identity-sessions",
         "Identity and Sessions",
-        "Personal-agent and user identity, Sessions, and proof of possession (§4.1 to §4.3).",
+        "Personal-agent identity, User IDs, the Session header and delegated keys (§4.1, §5).",
         SPEC,
-        _spec("4.1", "4.2", "4.3"),
+        _spec("4.1", "5"),
     ),
     Area(
         "sign-in",
-        "Sign-in and Account Tokens",
-        "Sign-in modes, consent, Account Tokens, and sign-out (§4.4 to §4.9).",
+        "Sign-in and OAuth tokens",
+        "Direct and Device Sign-In, refresh and access tokens, and scopes (§4.2 to §4.8).",
         SPEC,
-        _spec("4.4", "4.5", "4.6", "4.7", "4.8", "4.9"),
+        _spec("4.2", "4.3", "4.4", "4.5", "4.6", "4.7", "4.8"),
     ),
     Area(
         "browser",
         "Browser",
-        "Joining a Session in the personal agent's own browser (§5).",
-        SPEC,
-        _spec("5"),
-    ),
-    Area(
-        "apis",
-        "APIs",
-        "OpenAPI with DPoP and MCP with a resource-bound Bearer (§6).",
+        "Joining a Session in the personal agent's own browser (§6).",
         SPEC,
         _spec("6"),
     ),
     Area(
-        "conversations",
-        "Conversations",
-        "Messages, events, streaming, handoff, Direct Conversations, and closing (§7).",
+        "apis",
+        "APIs",
+        "OpenAPI and MCP, with the Session header and access tokens (§7).",
         SPEC,
         _spec("7"),
     ),
     Area(
-        "feedback",
-        "Feedback",
-        "Reports of a task the protocol can't do at a company (§8).",
+        "conversations",
+        "Conversations",
+        "Messages, events, streaming, handoff, Direct Conversations, and closing (§8).",
         SPEC,
         _spec("8"),
     ),
     Area(
-        "security-considerations",
-        "Security considerations",
-        "Content from companies, secrets and the model, and assertions (§9).",
+        "feedback",
+        "Task coverage",
+        "Excluded tasks, alternatives, and reports of a task the protocol can't do (§9).",
         SPEC,
         _spec("9"),
+    ),
+    Area(
+        "security-considerations",
+        "Security considerations",
+        "Content from companies, secrets and the model, and delegated keys (§10).",
+        SPEC,
+        _spec("10"),
     ),
     Area(
         "operations",

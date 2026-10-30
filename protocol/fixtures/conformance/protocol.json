@@ -155,7 +155,7 @@
       "kind": "positive",
       "role": "personal-agent",
       "requirements": [
-        "PAP-6-02",
+        "PAP-7-01",
         "PAP-3.3-04"
       ],
       "check": "discovery_document",
@@ -394,7 +394,7 @@
       "kind": "positive",
       "role": "personal-agent",
       "requirements": [
-        "PAP-7.5-01",
+        "PAP-8.5-01",
         "PAP-3.3-04"
       ],
       "check": "conversation_page",
@@ -465,8 +465,8 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-7.4-03",
-        "PAP-7.4-01"
+        "PAP-8.4-02",
+        "PAP-8.4-01"
       ],
       "check": "message_context",
       "input": {
@@ -835,7 +835,7 @@
       "kind": "positive",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3.2-03"
+        "PAP-3.2-24"
       ],
       "check": "discovery",
       "description": "The issuer is found from the domain's protected resource metadata (§3.2): poppy.json needs no auth.issuer when it lists one authorization server.",
@@ -895,7 +895,7 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3.2-03"
+        "PAP-3.2-24"
       ],
       "check": "discovery",
       "description": "The domain's protected resource metadata has resource exactly https://{organization.domain} (§3.2); a trailing slash is another resource.",
@@ -950,7 +950,8 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3.2-03"
+        "PAP-3.2-24",
+        "PAP-3.1-03"
       ],
       "check": "discovery",
       "description": "With several authorization servers in the domain's protected resource metadata, auth.issuer is required (§3.1, §3.2).",
@@ -1006,7 +1007,7 @@
       "kind": "positive",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3.2-03"
+        "PAP-3.1-03"
       ],
       "check": "discovery",
       "description": "With several authorization servers, auth.issuer names the one Personal Agents use (§3.1, §3.2).",
@@ -1062,7 +1063,7 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3.2-03"
+        "PAP-3.1-03"
       ],
       "check": "discovery",
       "description": "auth.issuer MUST be one of the domain's authorization servers (§3.1).",
@@ -1118,7 +1119,7 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3.2-03"
+        "PAP-3.1-04"
       ],
       "check": "discovery",
       "description": "With one authorization server, auth.issuer, if present, MUST name it (§3.1).",
@@ -1173,7 +1174,7 @@
       "kind": "positive",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3.2-03"
+        "PAP-3.2-23"
       ],
       "check": "discovery",
       "description": "A Company with no issuer can only be browsed as a website (§3.2): its domain publishes no protected resource metadata, and poppy.json lists only web.",
@@ -1524,7 +1525,7 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-8-01"
+        "PAP-9.3-01"
       ],
       "check": "discovery",
       "description": "A company that lists feedback needs an issuer (§3.2): a domain without protected resource metadata naming one is refused.",
@@ -1584,7 +1585,7 @@
       "kind": "positive",
       "role": "personal-agent",
       "requirements": [
-        "PAP-8-01"
+        "PAP-9.3-01"
       ],
       "check": "discovery_document",
       "description": "A company that wants feedback lists feedback.endpoint (§8).",
@@ -1612,9 +1613,8 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-8-01",
-        "PAP-8-06",
-        "PAP-8.3-01"
+        "PAP-9.3-01",
+        "PAP-9.3-06"
       ],
       "description": "A feedback report with a Session Token and no scope is accepted with 202, a kind the company doesn't recognize too; a task over 200 characters is invalid_request; without a token it is 401."
     }

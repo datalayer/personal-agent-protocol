@@ -365,7 +365,7 @@ class PapReplies(Display):
     (``author``, with the writer's ``name`` when the company gives one,
     version 3), whoever answers the conversation now (``responder``) and
     wherever it stands (``status``: ``working``, ``idle``, ``queued`` while a
-    person is found, ``closed``); the page tells them apart, as PAP-7.8-01
+    person is found, ``closed``); the page tells them apart, as PAP-8.8-01
     asks of the personal agent's own words. Each reply is the company's text,
     verbatim; a message carrying only data is the model's to read, not the
     page's to draw. It names the conversation (``conversation``, version 2):

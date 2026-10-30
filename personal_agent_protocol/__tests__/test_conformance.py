@@ -52,7 +52,7 @@ async def test_python_agent_python_company_over_tls() -> None:
 async def test_reports_as_json_and_junit_and_a_failure_does_not_stop_the_suite() -> None:
     world = ManzanitaConformance()
     selected = select_cases(
-        suites=["lifecycle"], requirements=["GUIDE-co-account-01", "PAP-4.9-01"]
+        suites=["lifecycle"], requirements=["GUIDE-co-account-01", "GUIDE-co-lifetimes-02"]
     )
     assert {case.id for case in selected} == {
         "lifecycle.disconnect-from-account-settings",
@@ -84,7 +84,7 @@ async def test_reports_as_json_and_junit_and_a_failure_does_not_stop_the_suite()
     names = [case.get("name") for case in junit.iter("testcase")]
     assert "lifecycle.disconnect-from-account-settings" in names
     requirements = [p.get("value") for p in junit.iter("property")]
-    assert "PAP-4.9-01" in requirements
+    assert "GUIDE-co-lifetimes-02" in requirements
 
 
 @pytest.mark.asyncio

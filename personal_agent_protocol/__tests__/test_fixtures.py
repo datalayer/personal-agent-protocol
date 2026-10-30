@@ -18,11 +18,13 @@ from typing import Any
 
 import httpcore
 import httpx
+import jwt
 import pytest
 
 from personal_agent_protocol import DiscoveryClient, SessionClient, SessionHttpClient
 from personal_agent_protocol.apis import ApiClient, conversation_endpoint, known_apis
 from personal_agent_protocol.conformance import load_fixture_cases
+from personal_agent_protocol.crypto import DelegatedSessionSigner, InMemoryDelegatedKeys
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
@@ -50,7 +52,7 @@ from personal_agent_protocol.models import (
     Message,
     Operation,
 )
-from personal_agent_protocol.reactor import PublicUrlSafetyPolicy
+from personal_agent_protocol.reactor import PublicUrlSafetyPolicy, SessionJwtRequest
 
 LOCAL = [case for case in load_fixture_cases() if case.check is not None]
 
@@ -268,6 +270,27 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         await http.aclose()
         assert refused.value.code == expect["error"]
         assert refused.value.details == {"retry_after": expect["retry_after"]}
+    elif case.check == "delegated_key_per_user_id":
+        identity = AgentIdentity(domain="agent.example", name="Agent")
+        signer = DelegatedSessionSigner(InMemoryDelegatedKeys(), signer=identity.signer())
+        keys, delegations = set(), set()
+        for item in given["requests"]:
+            request = SessionJwtRequest(
+                method="GET",
+                url=f"{item['issuer']}/api/orders",
+                tenant_id="t",
+                issuer=item["issuer"],
+                client_id=identity.client_id,
+                sid="c2lkX2Zvcl90aGVfZml4dHVyZQ",
+                sub=item["sub"],
+            )
+            header = jwt.get_unverified_header((await signer.sign(request)).get_secret_value())
+            keys.add(header["kid"])
+            delegations.add(
+                jwt.decode(header["pap_dlg"], options={"verify_signature": False})["jti"]
+            )
+        assert len(keys) == expect["keys"]
+        assert len(delegations) == expect["delegations"]
     else:  # pragma: no cover - a fixture with a check this test does not know
         raise AssertionError(f"unknown fixture check {case.check!r}")
 

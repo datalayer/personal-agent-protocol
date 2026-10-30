@@ -4,9 +4,9 @@ title: Protocol coverage
 
 # Protocol coverage
 
-The SDKs target **Personal Agent Protocol draft 0.3, as of October 26, 2026**
-(upstream commit `a95b757`, reviewed October 27, 2026) and the Operations
-extension version 1. The
+The SDKs target **Personal Agent Protocol draft 0.3, as of October 28, 2026**
+(upstream commit `3e9bada`, reviewed October 30, 2026) and the Operations
+extension version 2. The
 upstream draft remains authoritative. This page records, requirement by
 requirement, what the implementation and the conformance suite cover.
 
@@ -22,7 +22,7 @@ and version 0.1, which SDK 0.24 and earlier implement, at
 [/docs/0.1/spec](https://personalagentprotocol.org/docs/0.1/spec). What changed
 between them is in the upstream
 [changelog](https://personalagentprotocol.org/docs/changelog) and, for the
-SDKs, in [Migration](/releases/migration/#026--027).
+SDKs, in [Migration](/releases/migration/#027--028).
 
 - [Overview and principles](https://personalagentprotocol.org/docs/introduction)
 - [Draft specification](https://personalagentprotocol.org/docs/0.3/spec)
@@ -37,8 +37,8 @@ The repository records the reviewed upstream revision in
 
 The shared fixture corpus covers discovery (including the served host after
 redirects, `major.minor` versions and issuers with a path), OAuth and MCP
-protected resource metadata, client metadata, session-token responses,
-conversation event pages, feedback reports, and Operations objects. Both SDKs preserve unknown compatible fields and event types while
+protected resource metadata, client metadata, Session JWTs, delegations, token
+responses, conversation event pages, feedback reports, and Operations objects. Both SDKs preserve unknown compatible fields and event types while
 validating the required shape of known types.
 
 ## Coverage by area
@@ -52,17 +52,17 @@ and SHOULDs.
 
 | Area | Entries | Implemented | Partial | Open | Not applicable |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| [Discovery](/protocol/coverage/discovery/) | 32 | 28 | 2 | 0 | 2 |
-| [Identity and Sessions](/protocol/coverage/identity-sessions/) | 52 | 48 | 2 | 0 | 2 |
-| [Sign-in and Account Tokens](/protocol/coverage/sign-in/) | 27 | 20 | 3 | 2 | 2 |
+| [Discovery](/protocol/coverage/discovery/) | 30 | 28 | 1 | 0 | 1 |
+| [Identity and Sessions](/protocol/coverage/identity-sessions/) | 48 | 44 | 2 | 0 | 2 |
+| [Sign-in and OAuth tokens](/protocol/coverage/sign-in/) | 15 | 11 | 2 | 2 | 0 |
 | [Browser](/protocol/coverage/browser/) | 13 | 12 | 0 | 1 | 0 |
 | [APIs](/protocol/coverage/apis/) | 6 | 6 | 0 | 0 | 0 |
-| [Conversations](/protocol/coverage/conversations/) | 18 | 16 | 0 | 0 | 2 |
-| [Feedback](/protocol/coverage/feedback/) | 15 | 10 | 5 | 0 | 0 |
-| [Security considerations](/protocol/coverage/security-considerations/) | 6 | 3 | 1 | 0 | 2 |
+| [Conversations](/protocol/coverage/conversations/) | 12 | 12 | 0 | 0 | 0 |
+| [Task coverage](/protocol/coverage/feedback/) | 12 | 7 | 5 | 0 | 0 |
+| [Security considerations](/protocol/coverage/security-considerations/) | 9 | 4 | 2 | 0 | 3 |
 | [Operations](/protocol/coverage/operations/) | 21 | 20 | 1 | 0 | 0 |
 | [Mediated Sign-In](/protocol/coverage/mediated-sign-in/) | 11 | 9 | 0 | 1 | 1 |
-| [Operational guidance](/protocol/coverage/operational-guidance/) | 67 | 50 | 7 | 5 | 5 |
+| [Operational guidance](/protocol/coverage/operational-guidance/) | 79 | 59 | 8 | 6 | 6 |
 
 {/* coverage:end */}
 

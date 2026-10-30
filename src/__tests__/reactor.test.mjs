@@ -12,9 +12,9 @@ import {
   BrowserHandoffs,
   Caches,
   Clocks,
-  DpopProofProviders,
   PairwiseUserIdStores,
   RandomSources,
+  SessionSigners,
   Signers,
   TokenStores,
   resolvePairwiseUserId,
@@ -28,7 +28,7 @@ const securityPoints = [
   TokenStores,
   PairwiseUserIdStores,
   BrowserHandoffs,
-  DpopProofProviders,
+  SessionSigners,
 ];
 
 const plugin = (name, point, value, id = name) => ({
@@ -45,7 +45,7 @@ test("exports aligned infrastructure point IDs and secure defaults", () => {
   assert.equal(PairwiseUserIdStores.id, "pap.pairwiseUserIdStore");
   assert.equal(Caches.id, "pap.cache");
   assert.equal(BrowserHandoffs.id, "pap.browserHandoff");
-  assert.equal(DpopProofProviders.id, "pap.dpopProofProvider");
+  assert.equal(SessionSigners.id, "pap.sessionSigner");
 
   const reactor = buildPapReactor();
   const clock = firstContribution(reactor, Clocks, "clock");

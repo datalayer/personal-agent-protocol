@@ -8,8 +8,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import * as portable from "../../lib/index.js";
 import { DiscoveryError } from "../../lib/index.js";
-import { NodeUrlSafetyPolicy, isGlobalAddress } from "../../lib/server.js";
+import { JoseSigner, NodeUrlSafetyPolicy, isGlobalAddress } from "../../lib/server.js";
 
 test("classifies public and non-public IP address ranges", () => {
   assert.equal(isGlobalAddress("93.184.216.34"), true);
@@ -75,7 +76,16 @@ test("keeps server security APIs out of the portable entry bundle", async () => 
   const bundle = await readFile(new URL("../../lib/index.js", import.meta.url), "utf8");
   assert.equal(bundle.includes("node:dns"), false);
   assert.equal(bundle.includes("NodeUrlSafetyPolicy"), false);
-  assert.equal(bundle.includes("JoseSigner"), false);
-  assert.equal(bundle.includes("verifyDpopProof"), false);
-  assert.equal(bundle.includes("verifyBrowserAssertion"), false);
+  // A key from `jwks_uri` stays on the server; `BlindJoseSigner`, which holds none, is portable.
+  assert.equal(/\bJoseSigner\b/u.test(bundle), false);
+  assert.equal(bundle.includes("verifySessionJwt"), false);
+  assert.equal(bundle.includes("verifyDelegation"), false);
+  assert.equal(bundle.includes("CompanyService"), false);
+});
+
+test("the server entry signs with a key, the portable one does not", () => {
+  assert.equal(typeof JoseSigner, "function");
+  assert.equal("JoseSigner" in portable, false);
+  assert.equal(typeof portable.BlindJoseSigner, "function");
+  assert.equal(typeof portable.DelegatedSessionSigner, "function");
 });

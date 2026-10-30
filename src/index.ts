@@ -50,7 +50,6 @@ export {
   DelegatedSessionSigner,
   InMemoryDelegatedKeys,
   JOSE_ALGORITHMS,
-  JoseSigner,
   SESSION_JWT_ALGORITHM,
   SESSION_JWT_TYPE,
   delegationClaims,
@@ -64,7 +63,6 @@ export {
   type DelegatedKeyWho,
   type DelegatedSessionSignerOptions,
   type JoseAlgorithm,
-  type JoseSignerOptions,
 } from "./crypto.js";
 export {
   BlindJoseSigner,

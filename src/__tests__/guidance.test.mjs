@@ -14,18 +14,24 @@ import {
   AgentIdentityClient,
   Clocks,
   DEFAULT_CACHE_BOUNDS,
-  DpopFetchClient,
-  DpopProofProviders,
+  Caches,
+  MetadataCache,
+  PapSession,
   RateLimitBudgets,
   RetryPolicies,
   RetryPolicy,
   SecretValue,
+  SessionFetchClient,
+  SessionSigners,
   SharedRateLimitBudget,
   TransportError,
+  accessTokenFromResponse,
   buildPapReactor,
   cacheLifetime,
   discoverCompany,
+  firstContribution,
   parseRetryAfter,
+  parseTokenResponse,
 } from "../../lib/index.js";
 import { IdentityClientResolver } from "../../lib/server.js";
 
@@ -45,22 +51,22 @@ function mutableClock(start = NOW) {
 }
 
 function host(clock, extra = []) {
-  const proofs = [];
+  const jwts = [];
   return {
-    proofs,
+    jwts,
     plugin: {
       name: "@tests/guidance",
       contributes: [
         { point: Clocks, value: clock, options: { id: "clock", order: 10 } },
         {
-          point: DpopProofProviders,
+          point: SessionSigners,
           value: {
-            async create(request) {
-              proofs.push(request);
-              return new SecretValue(`proof-${proofs.length}`);
+            async sign(request) {
+              jwts.push(request);
+              return new SecretValue(`jwt-${jwts.length}`);
             },
           },
-          options: { id: "proofs" },
+          options: { id: "jwts" },
         },
         ...extra.map(([point, value]) => ({ point, value, options: { id: "test", order: 10 } })),
       ],
@@ -83,6 +89,13 @@ test("cache lifetime follows Cache-Control within a minute and a day", () => {
   for (const [header, seconds] of cases) {
     assert.equal(cacheLifetime(header, DEFAULT_CACHE_BOUNDS), seconds, String(header));
   }
+});
+
+test("cache bounds are checked", () => {
+  const reactor = buildPapReactor();
+  assert.throws(() => new MetadataCache(reactor, { minSeconds: 120, maxSeconds: 60, defaultSeconds: 60 }), RangeError);
+  assert.throws(() => new MetadataCache(reactor, { ...DEFAULT_CACHE_BOUNDS, defaultSeconds: 10 }), RangeError);
+  reactor.stop();
 });
 
 test("discovery and OAuth metadata are cached until they expire", async () => {
@@ -193,17 +206,19 @@ function fakeTime() {
   return time;
 }
 
-const session = {
-  accessToken: new SecretValue("session-secret"),
-  tokenType: "DPoP",
-  expiresIn: 300,
-  scopes: ["orders:read"],
-  sessionKey: "K".repeat(43),
-  signedIn: true,
-};
-const who = { token: session, tenantId: "t", pairwiseUserId: "usr_example", issuer: "https://shop.example" };
+const session = new PapSession({
+  sid: "S".repeat(22),
+  sub: "usr_example",
+  issuer: "https://shop.example",
+  clientId: clientId,
+  tenantId: "t",
+});
+const token = accessTokenFromResponse(
+  parseTokenResponse({ access_token: "access-secret", token_type: "Bearer", expires_in: 300, scope: "orders:read" }),
+);
+const who = { session, token };
 
-test("safe requests retry after Retry-After with fresh proofs", async () => {
+test("safe requests retry after Retry-After with fresh Session JWTs", async () => {
   const answers = [
     new Response(null, { status: 503, headers: { "retry-after": "2" } }),
     new Response(null, { status: 429, headers: { "retry-after": "1" } }),
@@ -211,7 +226,7 @@ test("safe requests retry after Retry-After with fresh proofs", async () => {
   ];
   const seen = [];
   const fetch = async (_input, init) => {
-    seen.push(init.headers.DPoP);
+    seen.push(init.headers["Poppy-Session"]);
     return answers.shift();
   };
   const time = fakeTime();
@@ -221,13 +236,13 @@ test("safe requests retry after Retry-After with fresh proofs", async () => {
     [RetryPolicies, new RetryPolicy({ baseDelay: 0.5, maxAttempts: 3 })],
   ]);
   const reactor = buildPapReactor({ fetch }, [agent.plugin]);
-  const response = await new DpopFetchClient({ reactor, fetch }).request(
+  const response = await new SessionFetchClient({ reactor, fetch }).request(
     "GET",
     "https://shop.example/api/orders",
     who,
   );
   assert.equal(response.status, 200);
-  assert.deepEqual(seen, ["proof-1", "proof-2", "proof-3"]);
+  assert.deepEqual(seen, ["jwt-1", "jwt-2", "jwt-3"]);
   assert.equal(time.slept.length, 2);
   assert.ok(time.slept[0] >= 2 && time.slept[0] <= 2.5);
   assert.ok(time.slept[1] >= 1 && time.slept[1] <= 1.5);
@@ -244,7 +259,7 @@ test("writes and long pauses go back to the caller, and pauses are shared", asyn
   const time = fakeTime();
   const budget = new SharedRateLimitBudget({ sleep: time.sleep, monotonic: time.monotonic, maxWait: 10 });
   const reactor = buildPapReactor({ fetch }, [host(mutableClock(), [[RateLimitBudgets, budget]]).plugin]);
-  const client = new DpopFetchClient({ reactor, fetch });
+  const client = new SessionFetchClient({ reactor, fetch });
   const refused = await client.request("POST", "https://shop.example/api/orders", { ...who, body: "{}" });
   assert.equal(refused.status, 429);
   assert.equal(calls, 1);
@@ -279,4 +294,12 @@ test("the shared budget paces tasks and refuses long waits", async () => {
       error.code === "rate_limited" &&
       error.details.retry_after === "60",
   );
+});
+
+test("the core contributes cache, retry and budget defaults", () => {
+  const reactor = buildPapReactor();
+  assert.ok(firstContribution(reactor, Caches, "cache"));
+  assert.ok(firstContribution(reactor, RetryPolicies, "retry policy") instanceof RetryPolicy);
+  assert.ok(firstContribution(reactor, RateLimitBudgets, "budget") instanceof SharedRateLimitBudget);
+  reactor.stop();
 });

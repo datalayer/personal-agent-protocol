@@ -30,7 +30,7 @@ import {
   mediatedSignIn,
   parseConversationEventPage,
 } from "../../lib/index.js";
-import { CompanyConfig, JOIN_COOKIE, SignInRefused, WEB_COOKIE } from "../../lib/server.js";
+import { CompanyApis, CompanyConfig, JOIN_COOKIE, OperationExecutors, SignInRefused, WEB_COOKIE } from "../../lib/server.js";
 import { ADA, ADA_CODE, CONFIG_OPTIONS, manzanita } from "../../lib/demo/manzanita.js";
 import { ControlledBrowser } from "./support/controlled-browser.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -42,13 +42,13 @@ const ORDERS = `${SHOP}/api/orders`;
 const EXCHANGE = `${ORDERS}/ord_7Hk2/exchanges`;
 const JOIN = `${SHOP}/poppy/browser-session`;
 
-async function world({ answers = [], extensions, config, controlled = false } = {}) {
+async function world({ answers = [], extensions, config, plugins, controlled = false } = {}) {
   const clock = new MutableClock();
   const sites = {};
   const fetch = inProcessFetch(sites);
   const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas", ...(extensions ? { extensions } : {}) });
   sites["atlas.example"] = identity.documents;
-  const { service: shop, plugin } = manzanita({ fetch, clock, ...(config ? { config } : {}) });
+  const { service: shop, plugin } = manzanita({ fetch, clock, ...(config ? { config } : {}), ...(plugins ? { plugins } : {}) });
   sites["manzanita.example"] = shop;
   const controlledBrowser = controlled ? new ControlledBrowser(fetch) : undefined;
   const host = await agentHost({ identity, fetch, clock, answers, ...(controlledBrowser ? { controlledBrowser } : {}) });
@@ -196,6 +196,48 @@ test("after sign-out what used the account stays and asks for sign-in", async ()
   const done = await w.api.call("POST", EXCHANGE, { session, token: back, body: {}, approval });
   assert.equal(done.status, 200);
   assert.deepEqual(w.plugin.executor.performed, [operation.operation_id]);
+});
+
+test("an operation returned signed out is approved only in that Session, and signing in changes nothing", async () => {
+  const performed = [];
+  const notes = {
+    description: "Notes",
+    openapi: () => ({}),
+    handle: async () => ({ operation: { action: "orders.note", summary: "Add a note." } }),
+  };
+  const executor = {
+    action: "orders.note",
+    perform: async (operation, accountId) => {
+      assert.equal(accountId, undefined);
+      performed.push(operation.operation_id);
+      return { summary: "Noted." };
+    },
+  };
+  const w = await world({
+    plugins: [{
+      name: "notes",
+      version: "1",
+      contributes: [
+        { point: CompanyApis, value: notes, options: { id: "notes", order: -1 } },
+        { point: OperationExecutors, value: executor, options: { id: "note" } },
+      ],
+    }],
+  });
+  const session = await w.start();
+  const other = await w.start();
+  const url = `${SHOP}/api/notes`;
+  const answered = await w.api.call("POST", url, { session, body: {} });
+  assert.equal(answered.status, 403);
+  const { operation } = answered;
+  const approval = { operation_id: operation.operation_id, revision: operation.revision };
+  // Another Session of the same agent and user: as if it had no approval.
+  const elsewhere = await w.api.call("POST", url, { session: other, body: {}, approval });
+  assert.notEqual(elsewhere.operation.operation_id, operation.operation_id);
+  assert.deepEqual(performed, []);
+  const [token] = await deviceSignIn(w, "acct_ada");
+  const done = await w.api.call("POST", url, { session, token, body: {}, approval });
+  assert.equal(done.status, 200);
+  assert.deepEqual(performed, [operation.operation_id]);
 });
 
 // Mediated Sign-In's errors --------------------------------------------------------------------

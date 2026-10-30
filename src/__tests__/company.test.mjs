@@ -679,6 +679,12 @@ test("an operation at MCP: an error result with the operation, _meta approves, a
   assert.deepEqual([elsewhere.code, elsewhere.statusCode], ["invalid_token", 401]);
   assert.equal(elsewhere.details.resource_metadata, "https://manzanita.example/.well-known/oauth-protected-resource");
 
+  // Signed out, a call with an approval gets the challenge for the account.
+  const outsider = new McpClient({ url, session: await w.start(), reactor: w.host.reactor, fetch: w.fetch });
+  const challenged = await outsider.callTool("exchange_jacket", {}, { approval: approvalOf(asked.operation) }).catch((error) => error);
+  assert.deepEqual([challenged.code, challenged.statusCode], ["insufficient_scope", 401]);
+  assert.deepEqual(w.plugin.executor.performed, [asked.operation.operation_id]);
+
   // Signed out, a tool of the account is the challenge with `scope`, no error code.
   const out = await new McpClient({ url, session, reactor: w.host.reactor, fetch: w.fetch }).auth.fetch(url, {
     method: "POST",

@@ -3263,14 +3263,13 @@ export class CompanyService {
     approval: Approval | undefined,
     target: StoredOperation | undefined,
   ): Promise<Decision> {
-    const sameAction = target !== undefined && target.key === asked.key;
-    if (target !== undefined && approval !== undefined && sameAction) {
+    if (target !== undefined && approval !== undefined) {
       const revision = target.revisions.find((item) => item.revision === approval.revision);
       if (this.#approves(target, revision, asked)) {
         return this.#perform(target, revision as OperationRevision);
       }
     }
-    let current = sameAction ? target : undefined;
+    let current = target?.key === asked.key ? target : undefined;
     if (current === undefined || current.status !== "open") {
       current = await this.#openOperation(asked.key);
     }

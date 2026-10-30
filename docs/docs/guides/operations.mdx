@@ -54,7 +54,7 @@ sent = await operations.send(
 
 ```typescript
 const approval = await operations.askUser(operation, { organization, tenantId });
-const sent = await operations.send((approval) => api.call("POST", url, { body, token, approval }), approval);
+const sent = await operations.send((approval) => api.call("POST", url, { session, token, body, approval }), approval);
 ```
 
 - `ask_user` goes through the host's own approval surface

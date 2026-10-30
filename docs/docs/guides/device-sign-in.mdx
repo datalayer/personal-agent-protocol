@@ -88,7 +88,6 @@ const started = await client.begin({
   clientId: 'https://agent.example/agent.json',
   scopes: ['orders:read', 'orders:return'],
   tenantId: 'application-42',
-  sessionKey: signedOutSession.sessionKey,
   organization: company.document.organization,
   protectedResources: metadata.protected_resources,
 });

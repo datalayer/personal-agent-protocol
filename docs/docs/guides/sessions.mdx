@@ -105,24 +105,16 @@ const pairwiseUserId = await resolvePairwiseUserId(reactor, {
 });
 
 const sessions = new SessionClient({ reactor });
-const token = await sessions.start({
+const session = await sessions.start({
   clientId: 'https://agent.example/agent.json',
   pairwiseUserId,
   issuer: 'https://auth.company.example',
-  tokenEndpoint: 'https://auth.company.example/oauth/token',
   tenantId: 'application-42',
-  signal: abortController.signal,
-});
-
-const renewed = await sessions.renew({
-  clientId: 'https://agent.example/agent.json',
-  pairwiseUserId,
-  issuer: 'https://auth.company.example',
-  tokenEndpoint: 'https://auth.company.example/oauth/token',
-  tenantId: 'application-42',
-  sessionKey: token.sessionKey, // the same Session Key: the same Session
 });
 ```
+
+`start` sends no request here either: a `PapSession` is local, and each request
+carries a Session JWT from `pap.sessionSigner` (`SessionSigners` in TypeScript).
 
 ## Enforced request boundary
 

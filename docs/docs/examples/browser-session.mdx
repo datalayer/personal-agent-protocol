@@ -63,21 +63,23 @@ code as a secret and `submit_join_form(proof)` posts it from the same browser.
 The client refuses a code shorter than 128 bits (`invalid_join_code`) and
 returns only the endpoint and when the browser joined.
 
-In TypeScript, the agent joins its browser, then opens an operation's page in
-it after `operationPage` has checked the page is on the company's domain:
+In TypeScript, the agent joins its browser to the Session, signed in with the
+account's access token or signed out, then browses the company's website in it.
+`BrowserSessionClient` takes the transport that sends the Session header, and
+the `pap.browserJoin` contribution (`loadJoinForm(endpoint)`,
+`submitJoinForm()`) gives it the code from the agent's own browser and submits
+the form, the code alone:
 
 ```typescript
-import { BrowserSessionClient, operationPage } from "@datalayer/personal-agent-protocol";
+import { BrowserSessionClient, SessionFetchClient } from "@datalayer/personal-agent-protocol";
 
-const page = operationPage(operation, company.document.organization.domain);
-await new BrowserSessionClient({ reactor }).join({
+const transport = new SessionFetchClient({ reactor });
+await new BrowserSessionClient({ reactor, transport }).join({
   browserSessionEndpoint: company.document.web!.browser_session_endpoint!,
-  tenantId,
-  issuer,
-  sessionKey: session.sessionKey,
+  session,
+  token,
 });
-await browser.get(page);
-console.log(page);
+await browser.get(`https://${company.document.organization.domain}/`);
 ```
 
 ## Company responsibilities

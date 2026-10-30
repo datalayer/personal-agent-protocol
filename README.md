@@ -187,7 +187,7 @@ Python additionally provides a SQLite pairwise-identity reference provider.
 The portable TypeScript entry rejects obvious local and private literal
 addresses. Its explicit server entry adds `NodeUrlSafetyPolicy` and
 `createResolvingFetch` (A/AAAA resolution, every address global, the vetted one
-dialled), `JoseSigner`, and DPoP verification:
+dialled), `JoseSigner`, and the checks a company makes of a Session header:
 
 ```typescript
 import {

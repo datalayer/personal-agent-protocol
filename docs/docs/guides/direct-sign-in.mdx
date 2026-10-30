@@ -90,8 +90,6 @@ const started = await signIn.begin({
   redirectUri: 'https://agent.example/oauth/callback',
   scopes: ['orders:read'],
   tenantId: 'application-42',
-  // The Session to sign in: its Session Key goes in the URL as `dpop_jkt`.
-  sessionKey: signedOutSession.sessionKey,
 });
 
 // Later, at the registered callback route. Never put this URL in UI/model state.
@@ -100,19 +98,18 @@ const result = await signIn.complete({
   signal: request.signal,
 });
 console.log(started.expiresAt, result.grantedScopes, result.missingScopes);
-// The Account Token is already in `pap.tokenStore`; only its reference is here.
-const accountReference = result.accountTokenReference;
+// The refresh token is already in `pap.tokenStore`; only its reference is here.
+const refreshReference = result.refreshTokenReference;
 ```
 
-The TypeScript flow has the same one-use, redirect, issuer, nonce, Session, and
-scope guarantees as Python and propagates an optional `AbortSignal` to both
-exchange attempts. Use it in a trusted backend or desktop host whose Reactor
+The TypeScript flow has the same one-use, redirect, issuer, and scope guarantees
+as Python and propagates an optional `AbortSignal` to the exchange. Use it in a trusted backend or desktop host whose Reactor
 contributions keep assertion signing and authorization state out of browser
 code. A web Preview should request the flow through that host and receive only
 safe status.
 
-The request URL, state, verifier, authorization code, client assertion, DPoP
-proof, Session Token, and Account Token are redacted by default. Reveal them
+The request URL, state, verifier, authorization code, client assertion, access
+token, and refresh token are redacted by default. Reveal them
 only at the browser handoff or final HTTPS serialization boundary. They must
 not enter model context, logs, analytics, A2UI state, or callback error text.
 

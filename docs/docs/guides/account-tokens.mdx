@@ -34,12 +34,18 @@ else:  # "signed_out"
 ```
 
 ```typescript
-const accounts = new AccountTokenClient({ reactor, fetch });
-const result = await accounts.refresh(accountTokenReference, {
-  context: { tokenEndpoint, revocationEndpoint, issuer, clientId, tenantId, pairwiseUserId },
-  sessionKey: session.sessionKey,
+const accounts = new RefreshTokenClient({ reactor, fetch });
+const result = await accounts.refresh(refreshTokenReference, {
+  context: { tokenEndpoint, revocationEndpoint, issuer, clientId, tenantId },
   scopes: ['orders:read'],
 });
+if (result.status === 'signed_in') {
+  token = result.token; // a new access token; the refresh token stays in the store
+} else if (result.status === 're_consent_required') {
+  askTheUserToSignInAgain();
+} else { // 'signed_out'
+  continueSignedOut();
+}
 ```
 
 A refresh is a `refresh_token` grant with a fresh client assertion. It names no

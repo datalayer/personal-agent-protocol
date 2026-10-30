@@ -24,7 +24,7 @@ async for item in conversations.stream(endpoint, conversation_id, session=sessio
 ```
 
 ```typescript
-for await (const item of conversations.stream(endpoint, conversationId, { token, tenantId, issuer })) {
+for await (const item of conversations.stream(endpoint, conversationId, { session })) {
   if ('kind' in item && item.kind === 'text-delta') ui.showTyping(item.message_id, item.text);
   else if ('kind' in item && item.kind === 'reconnected') ui.dropPartial(item.discardedMessageIds);
   else handleEvent(item);

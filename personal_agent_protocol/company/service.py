@@ -2961,14 +2961,13 @@ class CompanyService:
     ) -> _Decision:
         """Checks 1 and 2 passed for `target`, if any: check 3, then perform or ask."""
 
-        same_action = target is not None and target.key == asked.key
-        if target is not None and approval is not None and same_action:
+        if target is not None and approval is not None:
             revision = next(
                 (item for item in target.revisions if item.revision == approval.revision), None
             )
             if self._approves(target, revision, asked):
                 return await self._perform(target, cast(OperationRevision, revision))
-        current = target if same_action else None
+        current = target if target is not None and target.key == asked.key else None
         if current is None or current.status != "open":
             current = await self._open_operation(asked.key)
         named = None if approval is None else approval.revision

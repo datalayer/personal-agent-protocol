@@ -768,10 +768,23 @@ async def test_an_operation_returned_signed_out_is_approved_only_in_that_session
         assert elsewhere.operation is not None
         assert elsewhere.operation.operation_id != operation.operation_id
         assert performed == []
-        done = await api.call("POST", url, session=session, body={}, approval=_approval(operation))
+        # Signing in changes nothing: it can still be approved in that Session (Operations 3).
+        token = await signed_in_to(world, session)
+        done = await api.call(
+            "POST", url, session=session, token=token, body={}, approval=_approval(operation)
+        )
         assert done.status == 200 and performed == [operation.operation_id]
     finally:
         world.shop._api = api_of  # type: ignore[attr-defined,method-assign]
+
+
+async def signed_in_to(world: World, session: Any) -> Any:
+    """An access token, for a Session that started signed out (no Session is named, §5.4)."""
+
+    kept = world.session
+    token = await signed_in(world)
+    world.session = kept or session
+    return token
 
 
 class _Contribute:
@@ -873,6 +886,25 @@ async def test_the_mcp_approval_is_read_from_meta_ignoring_unknown_members() -> 
     )
     assert raw.get("isError") is not True
     assert world.plugin.executor.performed == [asked.operation.operation_id]
+
+
+@pytest.mark.asyncio
+async def test_a_signed_out_call_with_an_approval_gets_the_mcp_challenge() -> None:
+    from personal_agent_protocol.mcp import McpError
+
+    world, session, _, _ = await _world()
+    asked = await (await _mcp(world, session)).call_tool("exchange_jacket")
+    assert asked.operation is not None
+    signed_out = McpClient(
+        http_client=world.http,
+        url="https://manzanita.example/mcp",
+        session=await world.signed_out_session(),
+        reactor=world.reactor,
+    )
+    with pytest.raises(McpError) as raised:
+        await signed_out.call_tool("exchange_jacket", approval=_approval(asked.operation))
+    assert (raised.value.code, raised.value.status_code) == ("insufficient_scope", 401)
+    assert world.plugin.executor.performed == []
 
 
 @pytest.mark.asyncio

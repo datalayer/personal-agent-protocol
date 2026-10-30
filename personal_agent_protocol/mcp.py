@@ -45,8 +45,8 @@ from .models import (
 )
 from .operations import APPROVAL_META_KEY, operation_from
 from .reactor import SystemClock, parse_retry_after, send_bounded
-from .refusals import challenge_parameters, refuse_redirect
-from .sessions import AccessToken, PapSession
+from .refusals import challenge_parameters, dpop_nonce_asked, refuse_redirect
+from .sessions import DPOP_NONCE_HEADER, AccessToken, PapSession
 from .transport import invalid_session, session_headers
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -123,10 +123,12 @@ def _target(url: str | httpx.URL) -> tuple[str, str, int, str]:
 
 
 class McpSessionAuth(httpx.Auth):
-    """The Session header, and signed in a Bearer token, to one MCP server's URL only (§7).
+    """The Session header, and signed in a token, to one MCP server's URL only (§7).
 
     The token was issued for that server's `url` and works nowhere else; the
-    Session JWT is signed for each request by the host's `pap.sessionSigner`.
+    Session JWT is signed for each request by the host's `pap.sessionSigner`, and with
+    a `DPoP` token a proof by `pap.dpopProver`. A `use_dpop_nonce` challenge is
+    retried once, and the server's latest nonce kept for its later requests (§4.5).
     """
 
     requires_response_body = False
@@ -149,6 +151,7 @@ class McpSessionAuth(httpx.Auth):
         self.session = session
         self.token = token
         self.reactor = reactor
+        self.dpop_nonce: str | None = None
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
         raise TransportError("sync_unsupported", "Session JWTs are signed asynchronously")
@@ -163,11 +166,27 @@ class McpSessionAuth(httpx.Auth):
                 "token_not_for_this_url",
                 "A token for an MCP server is sent only to that server",
             )
-        headers = await session_headers(
-            self.reactor, request.method, str(request.url), session=self.session, token=self.token
+        request.headers.update(await self._signed(request))
+        response = yield request
+        bound = self.token is not None and self.token.token_type == "DPoP"  # noqa: S105
+        if not bound:
+            return
+        asked = dpop_nonce_asked(response)
+        self.dpop_nonce = response.headers.get(DPOP_NONCE_HEADER, self.dpop_nonce)
+        if asked is not None:
+            request.headers.update(await self._signed(request))
+            response = yield request
+            self.dpop_nonce = response.headers.get(DPOP_NONCE_HEADER, self.dpop_nonce)
+
+    async def _signed(self, request: httpx.Request) -> dict[str, str]:
+        return await session_headers(
+            self.reactor,
+            request.method,
+            str(request.url),
+            session=self.session,
+            token=self.token,
+            dpop_nonce=self.dpop_nonce,
         )
-        request.headers.update(headers)
-        yield request
 
 
 class McpToolResult(ProtocolModel):
@@ -372,7 +391,7 @@ def _rate_limited(response: httpx.Response) -> McpError:
 
 
 def _refusal(response: httpx.Response) -> McpError:
-    """A token refusal, from the `Bearer` challenge (§7) or the body.
+    """A token refusal, from the `WWW-Authenticate` challenge (§7) or the body.
 
     A challenge with no error code (signed out) is `insufficient_scope` (§7); its
     `resource_metadata` is kept, so a stale view of the server is read again.

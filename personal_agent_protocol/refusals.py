@@ -91,6 +91,17 @@ def refusal_code(response: httpx.Response, payload: object, default: str) -> str
     return default
 
 
+def dpop_nonce_asked(response: httpx.Response) -> str | None:
+    """The nonce a resource's `use_dpop_nonce` challenge gives, to retry with (RFC 9449 §9)."""
+
+    if response.status_code != 401:
+        return None
+    challenge = challenge_parameters(response.headers.get("www-authenticate", ""))
+    return (
+        response.headers.get("dpop-nonce") if challenge.get("error") == "use_dpop_nonce" else None
+    )
+
+
 def refused_without_body(response: httpx.Response) -> bool:
     """A refusal with nothing to parse, such as a 429 (§5.6) or a challenge alone (§7)."""
 
@@ -118,6 +129,7 @@ def refuse_redirect(
 __all__ = [
     "REDIRECT_STATUSES",
     "challenge_parameters",
+    "dpop_nonce_asked",
     "refusal_code",
     "refusal_details",
     "refuse_redirect",

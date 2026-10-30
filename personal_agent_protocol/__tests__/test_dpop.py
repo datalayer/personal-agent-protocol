@@ -24,18 +24,25 @@ from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untype
 from personal_agent_protocol import (
     CLOCKS,
     DPOP_PROVERS,
+    SESSION_SIGNERS,
     SIGNERS,
+    AccessToken,
     DpopProofRequest,
     InMemoryDpopKeys,
     JoseDpopProver,
+    PapSession,
     SessionClient,
     SessionError,
+    SessionHttpClient,
+    SessionJwtRequest,
     TokenResponse,
+    TransportError,
     build_pap_reactor,
 )
 from personal_agent_protocol.cli_host import FileDpopKeys, FileKeyStore
-from personal_agent_protocol.crypto import jwk_thumbprint
+from personal_agent_protocol.crypto import jwk_thumbprint, token_hash
 from personal_agent_protocol.errors import ProofError
+from personal_agent_protocol.mcp import McpSessionAuth
 from personal_agent_protocol.reactor import first_contribution
 
 ISSUER = "https://shop.example"
@@ -281,3 +288,202 @@ async def test_use_dpop_nonce_with_no_proof_sent_is_not_retried() -> None:
     with pytest.raises(SessionError) as refused:
         await _token_request(answers, None)
     assert refused.value.code == "use_dpop_nonce" and len(sent) == 1
+
+
+# Resources --------------------------------------------------------------------------
+
+ORDERS = "https://shop.example/api/orders"
+BOUND = AccessToken(access_token=SecretStr("bound-token"), token_type="DPoP", scope="orders:read")  # noqa: S106
+PLAIN = AccessToken(access_token=SecretStr("plain-token"), scope="orders:read")
+
+
+def _session() -> PapSession:
+    return PapSession(
+        sid="S" * 22,
+        sub="usr_pairwise",
+        issuer=ISSUER,
+        client_id="https://agent.example/agent.json",
+        tenant_id="tenant",
+    )
+
+
+class _Jwts:
+    def __init__(self) -> None:
+        self.requests: list[SessionJwtRequest] = []
+
+    async def sign(self, request: SessionJwtRequest) -> SecretStr:
+        self.requests.append(request)
+        return SecretStr(f"jwt-{len(self.requests)}")
+
+
+class _ResourceHost:
+    def __init__(self, jwts: _Jwts) -> None:
+        self.jwts = jwts
+
+    def provide_contributions(self, contributions: object) -> None:
+        contributions.contribute(  # type: ignore[attr-defined]
+            SESSION_SIGNERS, self.jwts, contribution_id="session-signer"
+        )
+
+
+def _world(
+    answers: Callable[[httpx.Request], httpx.Response],
+) -> tuple[SessionHttpClient, list[httpx.Request], _Jwts, httpx.AsyncClient, PluginPlatform]:
+    sent: list[httpx.Request] = []
+    jwts = _Jwts()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return answers(request)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    platform, _ = build_pap_reactor(
+        http_client=http,
+        plugins=[(PluginManifest(name="host", version="1"), _ResourceHost(jwts))],
+    )
+    return SessionHttpClient(reactor=platform, http_client=http), sent, jwts, http, platform
+
+
+def _challenge_nonce(request: httpx.Request) -> httpx.Response:
+    if _read(SecretStr(request.headers["dpop"]))[1].get("nonce") == "n-1":
+        return httpx.Response(200, json={}, headers={"DPoP-Nonce": "n-2"})
+    return httpx.Response(
+        401,
+        json={"error": "use_dpop_nonce"},
+        headers={"WWW-Authenticate": 'DPoP error="use_dpop_nonce"', "DPoP-Nonce": "n-1"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dpop_token_goes_with_a_proof_and_the_session_header() -> None:
+    client, sent, jwts, http, platform = _world(lambda _: httpx.Response(200, json={}))
+    await client.request("GET", f"{ORDERS}?page=2", session=_session(), token=BOUND)
+    platform.stop()
+    await http.aclose()
+    request = sent[0]
+    assert request.headers["authorization"] == "DPoP bound-token"
+    assert request.headers["poppy-session"] == "jwt-1"
+    _, claims = _read(SecretStr(request.headers["dpop"]))
+    assert claims["htu"] == ORDERS and claims["htm"] == "GET"
+    assert claims["ath"] == token_hash(BOUND.access_token)
+    assert jwts.requests[0].access_token == BOUND.access_token
+
+
+@pytest.mark.asyncio
+async def test_a_bearer_token_and_a_signed_out_request_carry_no_proof() -> None:
+    client, sent, _, http, platform = _world(lambda _: httpx.Response(200, json={}))
+    await client.request("GET", ORDERS, session=_session(), token=PLAIN)
+    await client.request("GET", ORDERS, session=_session())
+    platform.stop()
+    await http.aclose()
+    assert sent[0].headers["authorization"] == "Bearer plain-token"
+    assert all("dpop" not in request.headers for request in sent)
+
+
+@pytest.mark.asyncio
+async def test_a_resource_nonce_is_retried_once_and_the_latest_kept_for_the_origin() -> None:
+    client, sent, jwts, http, platform = _world(_challenge_nonce)
+    answered = await client.request("GET", ORDERS, session=_session(), token=BOUND)
+    assert answered.status_code == 200 and len(sent) == 2
+    first, second = (_read(SecretStr(item.headers["dpop"]))[1] for item in sent)
+    assert first["jti"] != second["jti"] and "nonce" not in first and second["nonce"] == "n-1"
+    # A fresh Session JWT too.
+    assert [item.headers["poppy-session"] for item in sent] == ["jwt-1", "jwt-2"]
+    assert len(jwts.requests) == 2
+    # The latest nonce, from the success, goes with the next request to the origin.
+    assert client.dpop_nonces == {"https://shop.example:443": "n-2"}
+    client.dpop_nonces["https://shop.example:443"] = "n-1"
+    await client.request("GET", f"{ORDERS}/1", session=_session(), token=BOUND)
+    assert len(sent) == 3
+    assert _read(SecretStr(sent[2].headers["dpop"]))[1]["nonce"] == "n-1"
+    platform.stop()
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_second_nonce_challenge_is_returned_to_the_caller() -> None:
+    def always(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"error": "use_dpop_nonce"},
+            headers={"WWW-Authenticate": 'DPoP error="use_dpop_nonce"', "DPoP-Nonce": "n-3"},
+        )
+
+    client, sent, _, http, platform = _world(always)
+    answered = await client.request("GET", ORDERS, session=_session(), token=BOUND)
+    platform.stop()
+    await http.aclose()
+    assert answered.status_code == 401 and len(sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_bearer_token_ignores_a_nonce_challenge() -> None:
+    client, sent, _, http, platform = _world(_challenge_nonce_for_bearer)
+    answered = await client.request("GET", ORDERS, session=_session(), token=PLAIN)
+    platform.stop()
+    await http.aclose()
+    assert answered.status_code == 401 and len(sent) == 1 and client.dpop_nonces == {}
+
+
+def _challenge_nonce_for_bearer(_: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        401,
+        headers={"WWW-Authenticate": 'DPoP error="use_dpop_nonce"', "DPoP-Nonce": "n-1"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stream_retries_a_nonce_with_a_fresh_proof() -> None:
+    client, sent, _, http, platform = _world(_challenge_nonce)
+    async with client.stream("GET", ORDERS, session=_session(), token=BOUND) as response:
+        assert response.status_code == 200
+    platform.stop()
+    await http.aclose()
+    assert len(sent) == 2
+    assert sent[0].headers["dpop"] != sent[1].headers["dpop"]
+    assert client.dpop_nonces == {"https://shop.example:443": "n-2"}
+
+
+@pytest.mark.asyncio
+async def test_a_restarted_session_sends_a_fresh_proof_and_a_redirect_is_refused() -> None:
+    answers = iter(
+        [
+            httpx.Response(400, json={"error": "invalid_session"}),
+            httpx.Response(302, headers={"Location": "https://elsewhere.example/"}),
+        ]
+    )
+    client, sent, _, http, platform = _world(lambda _: next(answers))
+    with pytest.raises(TransportError) as refused:
+        await client.request("GET", ORDERS, session=_session(), token=BOUND)
+    platform.stop()
+    await http.aclose()
+    assert refused.value.code == "redirect_refused" and len(sent) == 2
+    assert sent[0].headers["dpop"] != sent[1].headers["dpop"]
+
+
+@pytest.mark.asyncio
+async def test_the_dpop_header_stays_the_hosts() -> None:
+    client, sent, _, http, platform = _world(lambda _: httpx.Response(200, json={}))
+    with pytest.raises(TransportError) as refused:
+        await client.request(
+            "GET", ORDERS, session=_session(), token=BOUND, headers={"DPoP": "forged"}
+        )
+    platform.stop()
+    await http.aclose()
+    assert refused.value.code == "protected_header" and sent == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_sends_a_proof_and_retries_a_nonce_once() -> None:
+    url = "https://shop.example/mcp"
+    token = BOUND.model_copy(update={"resource": url})
+    client, sent, _, http, platform = _world(_challenge_nonce)
+    auth = McpSessionAuth(url, session=_session(), token=token, reactor=platform)
+    await http.send(http.build_request("POST", url, content=b"{}"), auth=auth)
+    assert len(sent) == 2
+    assert sent[1].headers["authorization"] == "DPoP bound-token"
+    assert _read(SecretStr(sent[1].headers["dpop"]))[1]["nonce"] == "n-1"
+    assert auth.dpop_nonce == "n-2"
+    platform.stop()
+    await http.aclose()
+    assert client.dpop_nonces == {}

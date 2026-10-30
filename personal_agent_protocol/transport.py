@@ -4,10 +4,12 @@
 """The Session header on every request to a Company's APIs and endpoints (§5.2, §5.6).
 
 Each request carries a fresh Session JWT (`Poppy-Session`) from the host's
-`pap.sessionSigner`, and, signed in, the account's access token in
-`Authorization: Bearer`. An `invalid_session` answer starts a new Session once,
-and the request is sent again in it; a second one is returned to the caller,
-who stops (§5.5, §7).
+`pap.sessionSigner`, and, signed in, the account's access token in `Authorization`,
+with the scheme its `token_type` names. A `DPoP` token goes with a fresh proof from
+`pap.dpopProver` on every request and retry, and a `use_dpop_nonce` challenge is
+retried once; the latest nonce is kept per origin for later requests (§4.5). An
+`invalid_session` answer starts a new Session once, and the request is sent again in
+it; a second one is returned to the caller, who stops (§5.5, §7).
 """
 
 from __future__ import annotations
@@ -26,11 +28,14 @@ from .errors import TransportError
 from .json import loads_strict
 from .reactor import (
     CLOCKS,
+    DPOP_PROVERS,
     RANDOM_SOURCES,
     RATE_LIMIT_BUDGETS,
     RETRY_POLICIES,
     SESSION_SIGNERS,
     Clock,
+    DpopProofRequest,
+    DpopProver,
     RandomSource,
     RateLimitBudget,
     RetryPolicy,
@@ -42,8 +47,8 @@ from .reactor import (
     parse_retry_after,
     send_bounded,
 )
-from .refusals import refuse_redirect
-from .sessions import AccessToken, PapSession
+from .refusals import dpop_nonce_asked, refuse_redirect
+from .sessions import DPOP_HEADER, DPOP_NONCE_HEADER, AccessToken, PapSession
 
 #: The header that carries the Session JWT (§5.2).
 SESSION_HEADER = "Poppy-Session"
@@ -93,8 +98,14 @@ async def session_headers(
     *,
     session: PapSession,
     token: AccessToken | None,
+    dpop_nonce: str | None = None,
 ) -> dict[str, str]:
-    """`Poppy-Session` for this request, and with an access token, `Authorization` (§5.2)."""
+    """The headers of one request: every credential, fresh (§4.5, §5.2).
+
+    `Poppy-Session` always; with an access token, `Authorization`; with a `DPoP` token,
+    a `DPoP` proof too, whose `ath` covers the same token as the Session JWT's.
+    `dpop_nonce` is the server's latest for this origin.
+    """
 
     signer = cast(SessionSigner, first_contribution(reactor, SESSION_SIGNERS, "session signer"))
     jwt = await signer.sign(
@@ -111,8 +122,22 @@ async def session_headers(
         )
     )
     headers = {SESSION_HEADER: jwt.get_secret_value()}
-    if token is not None:
-        headers["Authorization"] = f"Bearer {token.access_token.get_secret_value()}"
+    if token is None:
+        return headers
+    headers["Authorization"] = f"{token.token_type} {token.access_token.get_secret_value()}"
+    if token.token_type == "DPoP":  # noqa: S105 - an OAuth token type
+        prover = cast(DpopProver, first_contribution(reactor, DPOP_PROVERS, "DPoP prover"))
+        proof = await prover.prove(
+            DpopProofRequest(
+                method=method.upper(),
+                url=url,
+                tenant_id=session.tenant_id,
+                issuer=session.issuer,
+                access_token=token.access_token,
+                nonce=dpop_nonce,
+            )
+        )
+        headers[DPOP_HEADER] = proof.get_secret_value()
     return headers
 
 
@@ -132,6 +157,8 @@ class SessionHttpClient:
         self.http = http_client
         #: No more than this (and one byte) of a response is read; the client checks the rest.
         self.max_response_bytes = max_response_bytes
+        #: The latest `DPoP-Nonce` each origin gave a request with a `DPoP` token (§4.5).
+        self.dpop_nonces: dict[str, str] = {}
 
     async def request(
         self,
@@ -152,7 +179,8 @@ class SessionHttpClient:
         `pap.retryPolicy` — never sooner than `Retry-After`, with exponential
         backoff and jitter otherwise. A write, or a pause longer than the policy
         allows, returns the refusal to the caller. `invalid_session` starts a new
-        Session once (`session.restart()`) and sends the request again in it.
+        Session once (`session.restart()`) and sends the request again in it, and a
+        `use_dpop_nonce` challenge sends it again once with the nonce.
         """
 
         policy = optional_contribution(self.reactor, RETRY_POLICIES, "retry policy")
@@ -160,7 +188,7 @@ class SessionHttpClient:
         retry = policy if isinstance(policy, RetryPolicy) else RetryPolicy(max_attempts=1)
         key = budget_key(url)
         attempts = 0
-        restarted = False
+        restarted = nonce_retried = False
         while True:
             if isinstance(budget, RateLimitBudget):
                 await budget.acquire(key)
@@ -172,6 +200,9 @@ class SessionHttpClient:
                 # The Session failed a check or has ended: a new one, once (§5.5, §7).
                 restarted = True
                 session.restart(self._random_bytes)
+                continue
+            if not nonce_retried and self._asks_a_nonce(response, token):
+                nonce_retried = True
                 continue
             if response.status_code not in _LATER:
                 return response
@@ -203,11 +234,26 @@ class SessionHttpClient:
             return 0.5
         return int.from_bytes(source.bytes(4), "big") / 2**32
 
+    def _dpop_nonce(self, url: str, token: AccessToken | None) -> str | None:
+        return None if token is None else self.dpop_nonces.get(budget_key(url))
+
+    def _keep_dpop_nonce(
+        self, url: str, token: AccessToken | None, response: httpx.Response
+    ) -> None:
+        given = response.headers.get(DPOP_NONCE_HEADER)
+        if given and token is not None and token.token_type == "DPoP":  # noqa: S105
+            self.dpop_nonces[budget_key(url)] = given
+
+    @staticmethod
+    def _asks_a_nonce(response: httpx.Response, token: AccessToken | None) -> bool:
+        bound = token is not None and token.token_type == "DPoP"  # noqa: S105
+        return bound and dpop_nonce_asked(response) is not None
+
     def _headers(self, supplied: Mapping[str, str] | None) -> dict[str, str]:
         values = dict(supplied or {})
         if any(name.lower() in _HOST_OWNED for name in values):
             raise TransportError(
-                "protected_header", "Authorization and Poppy-Session headers are host-owned"
+                "protected_header", "Authorization, DPoP and Poppy-Session headers are host-owned"
             )
         return values
 
@@ -225,7 +271,14 @@ class SessionHttpClient:
 
         target = _https_url(url)
         supplied = self._headers(headers)
-        signed = await session_headers(self.reactor, method, target, session=session, token=token)
+        signed = await session_headers(
+            self.reactor,
+            method,
+            target,
+            session=session,
+            token=token,
+            dpop_nonce=self._dpop_nonce(target, token),
+        )
         try:
             response = await send_bounded(
                 self.http,
@@ -238,6 +291,7 @@ class SessionHttpClient:
             raise TransportError("request_failed", "PAP resource request failed") from exc
         # A redirect would carry the token and a Session JWT to another URL: refused (§3).
         refuse_redirect(response)
+        self._keep_dpop_nonce(target, token, response)
         return response
 
     @asynccontextmanager
@@ -252,14 +306,21 @@ class SessionHttpClient:
     ) -> AsyncIterator[httpx.Response]:
         """Open a streamed response (SSE) in `session`; no redirect followed.
 
-        `invalid_session` starts a new Session once, as `request` does.
+        `invalid_session` starts a new Session once, and `use_dpop_nonce` sends it again
+        once, as `request` does.
         """
 
         target = _https_url(url)
         supplied = self._headers(headers)
-        for attempt in range(2):
+        restarted = nonce_retried = False
+        while True:
             signed = await session_headers(
-                self.reactor, method, target, session=session, token=token
+                self.reactor,
+                method,
+                target,
+                session=session,
+                token=token,
+                dpop_nonce=self._dpop_nonce(target, token),
             )
             request = self.http.build_request(
                 method.upper(), target, headers={**supplied, **signed}
@@ -269,11 +330,16 @@ class SessionHttpClient:
             except httpx.HTTPError as exc:
                 raise TransportError("request_failed", "PAP stream request failed") from exc
             try:
-                if response.status_code == 400 and attempt == 0:
+                if response.status_code == 400 and not restarted:
                     await response.aread()
                     if invalid_session(response):
+                        restarted = True
                         session.restart(self._random_bytes)
                         continue
+                self._keep_dpop_nonce(target, token, response)
+                if not nonce_retried and self._asks_a_nonce(response, token):
+                    nonce_retried = True
+                    continue
                 refuse_redirect(response)
                 yield response
                 return

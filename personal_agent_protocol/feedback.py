@@ -7,7 +7,8 @@
 A company that wants to know lists `feedback.endpoint` in its poppy.json.
 When a user's task can't be done — not with the Company Agent, not with its
 APIs, not on its website in a browser session — the personal agent MAY send
-one `FeedbackReport` for that task with the Session's token and a DPoP proof:
+one `FeedbackReport` for that task, with the Session header and, signed in, the access
+token:
 
 ```python
 endpoint = feedback_endpoint(company.document)
@@ -69,7 +70,7 @@ def feedback_endpoint(document: DiscoveryDocument) -> str | None:
 
 
 class FeedbackClient:
-    """Send feedback reports with a Session Token, signed in or out, and a DPoP proof."""
+    """Send feedback reports in a Session, signed in or out."""
 
     def __init__(
         self, *, transport: SessionHttpClient, max_response_bytes: int = 16 * 1024

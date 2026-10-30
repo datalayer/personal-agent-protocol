@@ -7,40 +7,37 @@
 // What draft 0.3 adds, both sides, over HTTP in one process: the port of
 // personal_agent_protocol/__tests__/test_draft_03.py.
 //
-// Session Keys (§4.2, §4.3), codes bound to them (§4.5, §4.6), scopes and their hints
-// (§3.1, §4.4), excluded tasks and alternatives (§8), and the sign-in rules that changed.
+// Sessions kept by `sid` (§5.2, §5.3, §5.5), sign-in as plain OAuth (§4.2, §4.3), scopes and
+// their hints (§3.1, §4.7), excluded tasks and alternatives (§9.1, §9.2).
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
   DeviceSignInClient,
-  DirectSignInClient,
-  DpopProofProviders,
+  PapSession,
   SessionClient,
-  SessionError,
-  Signers,
   buildClientAssertionClaims,
   discoverCompany,
   effectiveChanges,
   excludedTasks,
-  firstContribution,
   listsResource,
   offersDevice,
   offersDirect,
-  offersTokenExchange,
   parseAlternative,
   parseDiscoveryDocument,
   parseOAuthServerMetadata,
+  sessionHeaders,
   usableReferences,
 } from "../../lib/index.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
+import { RecordKinds } from "../../lib/server.js";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
 const TENANT = "atlas-demo";
 const PAIRWISE = "usr_ada_at_manzanita_000000";
 const ISSUER = "https://manzanita.example";
 const TOKEN = "https://manzanita.example/oauth/token";
-const JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+const FEEDBACK = "https://manzanita.example/poppy/feedback";
 
 async function world() {
   const clock = new MutableClock();
@@ -53,8 +50,44 @@ async function world() {
   const host = await agentHost({ identity, fetch, clock });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
-  const who = { clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: ISSUER, tokenEndpoint: TOKEN, tenantId: TENANT };
-  return { clock, fetch, identity, shop, host, company, metadata: company.oauthMetadata, sessions, who };
+  const who = { clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: ISSUER, tenantId: TENANT };
+  return { clock, fetch, identity, shop, host, sites, company, metadata: company.oauthMetadata, sessions, who };
+}
+
+/** One request straight to the company, so `invalid_session` starts no new Session. */
+async function report(w, session) {
+  const signed = await sessionHeaders(w.host.reactor, "POST", FEEDBACK, { session });
+  return w.fetch(FEEDBACK, {
+    method: "POST",
+    headers: { ...signed, "Content-Type": "application/json" },
+    body: JSON.stringify({ task: "Track a parcel", description: "No tracking anywhere." }),
+  });
+}
+
+async function refusedWith(response, status, body) {
+  assert.deepEqual([response.status, await response.json()], [status, body]);
+}
+
+function deviceBegin(w, device, scopes) {
+  return device.begin({
+    deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
+    tokenEndpoint: w.metadata.token_endpoint,
+    issuer: w.metadata.issuer,
+    clientId: w.identity.clientId,
+    scopes,
+    tenantId: TENANT,
+    organization: w.company.document.organization,
+    protectedResources: w.metadata.protected_resources,
+  });
+}
+
+/** Ada signs in with Device Sign-In: the token the polling agent gets. */
+async function signedIn(w, scopes = ["orders:read", "orders:write"]) {
+  const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const started = await deviceBegin(w, device, scopes);
+  await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
+  w.clock.advance(started.pollInterval);
+  return device.poll(started.reference);
 }
 
 async function refusal(promise) {
@@ -66,87 +99,115 @@ async function refusal(promise) {
   assert.fail("expected a refusal");
 }
 
-// Session Keys -----------------------------------------------------------------------------
+// Sessions -----------------------------------------------------------------------------------
 
-test("a new key starts a Session and the same key renews it", async () => {
+test("a new sid starts a Session and the same sid continues it", async () => {
   const w = await world();
   const first = await w.sessions.start(w.who);
   const second = await w.sessions.start(w.who);
-  // Each Session has its own key, which names it (§4.3).
-  assert.notEqual(first.sessionKey, second.sessionKey);
-  const renewed = await w.sessions.renew({ ...w.who, sessionKey: first.sessionKey });
-  assert.equal(renewed.sessionKey, first.sessionKey);
-  assert.equal(renewed.signedIn, false);
+  // A Session is local: each has its own `sid`, and the company has heard of neither (§5.2).
+  assert.notEqual(first.sid, second.sid);
+  assert.deepEqual(w.shop.store.keys(RecordKinds.session), []);
+  assert.equal((await report(w, first)).status, 202);
+  assert.equal((await report(w, first)).status, 202);
+  assert.equal(w.shop.store.keys(RecordKinds.session).length, 1);
+  assert.equal((await report(w, second)).status, 202);
+  assert.equal(w.shop.store.keys(RecordKinds.session).length, 2);
+  // One delegated key per User ID signs them all: a key doesn't name a Session (§5.2).
+  assert.equal(w.host.delegatedKeys.size, 1);
 });
 
-test("an ended Session's key is refused, not a new Session", async () => {
-  // A Company remembers the keys of Sessions it ended (§4.2, SHOULD).
+test("an ended Session's sid is refused, not a new Session", async () => {
+  // A Company remembers the `sid`s of Sessions it ended, and may forget them (§5.5).
   const w = await world();
   const session = await w.sessions.start(w.who);
-  // Long past the end of anything that could renew it.
-  const config = w.shop.config;
-  w.clock.advance(config.sessionLifetimeSeconds + config.accountTokenLifetimeSeconds + 24 * 3600);
-  const ended = await refusal(w.sessions.renew({ ...w.who, sessionKey: session.sessionKey }));
-  assert.ok(ended instanceof SessionError);
-  assert.equal(ended.code, "invalid_grant");
-  // The agent never uses that key again: it is gone from its custody (§4.2).
-  assert.equal(await w.host.sessionKeys.get({ tenantId: TENANT, issuer: ISSUER, thumbprint: session.sessionKey }), undefined);
+  assert.equal((await report(w, session)).status, 202);
+  assert.equal(await w.shop.endSession(session.clientId, session.sid), true);
+  assert.equal(await w.shop.endSession(session.clientId, session.sid), false);
+  await refusedWith(await report(w, session), 400, { error: "invalid_session" });
+
+  // A Session past the lifetime the company gives it has ended the same way.
+  const lapsing = await w.sessions.start(w.who);
+  assert.equal((await report(w, lapsing)).status, 202);
+  const { config } = w.shop;
+  w.clock.advance(config.sessionLifetimeSeconds);
+  await refusedWith(await report(w, lapsing), 400, { error: "invalid_session" });
+
+  // Once forgotten, the same `sid` starts a new Session (§5.5: a Company can forget).
+  w.clock.advance(config.endedSessionMemorySeconds + 1);
+  assert.equal((await report(w, lapsing)).status, 202);
 });
+
+/** The same `sid` with something changed: what the SDK would never send. */
+const changed = (session, change) =>
+  new PapSession({
+    sid: session.sid,
+    sub: session.sub,
+    issuer: session.issuer,
+    clientId: session.clientId,
+    tenantId: session.tenantId,
+    ...change,
+  });
 
 test("a Session keeps the Agent ID it started with", async () => {
   const w = await world();
   for (const other of ["agt_shopping", undefined]) {
     const session = await w.sessions.start({ ...w.who, agentId: "agt_travel" });
-    await w.sessions.renew({ ...w.who, sessionKey: session.sessionKey, agentId: "agt_travel" });
-    const changed = await refusal(
-      w.sessions.renew({ ...w.who, sessionKey: session.sessionKey, ...(other === undefined ? {} : { agentId: other }) }),
-    );
-    assert.equal(changed.code, "invalid_grant");
+    assert.equal((await report(w, session)).status, 202);
+    await refusedWith(await report(w, changed(session, other === undefined ? {} : { agentId: other })), 400, { error: "invalid_session" });
   }
 });
 
-test("a device code is bound to the key of its first poll", async () => {
+test("a Session keeps the User ID it started with", async () => {
   const w = await world();
   const session = await w.sessions.start(w.who);
-  const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
-  const started = await device.begin({
-    deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
-    tokenEndpoint: w.metadata.token_endpoint,
-    issuer: w.metadata.issuer,
-    clientId: w.identity.clientId,
-    scopes: ["orders:read"],
-    tenantId: TENANT,
-    sessionKey: session.sessionKey,
-    organization: w.company.document.organization,
-    protectedResources: w.metadata.protected_resources,
+  assert.equal((await report(w, session)).status, 202);
+  await refusedWith(await report(w, changed(session, { sub: "usr_somebody_else_000000" })), 400, { error: "invalid_session" });
+});
+
+test("an access token without the Session header is invalid_session", async () => {
+  // A copied access token is useless without the agent's key (§5.3).
+  const w = await world();
+  const { token } = await signedIn(w);
+  const bare = await w.fetch(FEEDBACK, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token.accessToken.reveal()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ task: "x", description: "y" }),
   });
+  await refusedWith(bare, 400, { error: "invalid_session" });
+});
+
+// Sign-in ------------------------------------------------------------------------------------
+
+test("a device code works only for the agent it was issued to", async () => {
+  const w = await world();
+  const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const started = await deviceBegin(w, device, ["orders:read"]);
   w.clock.advance(started.pollInterval);
   assert.equal((await device.poll(started.reference)).status, "pending");
-  // Opening the link approves nothing by itself (§4.6): still pending.
+  // Opening the link approves nothing by itself (§4.3): still pending.
   const page = await w.fetch(started.verificationUriComplete ?? started.verificationUri, { method: "GET" });
   assert.ok([200, 404].includes(page.status));
   w.clock.advance(started.pollInterval);
   assert.equal((await device.poll(started.reference)).status, "pending");
 
-  // A poll with another key: refused, the code being bound to the first poll's.
-  const other = await w.sessions.start(w.who);
+  // A poll from another agent, with its own good assertion: refused.
+  const other = await agentIdentity({ domain: "other.example", name: "Other" });
+  w.sites[other.domain] = other.documents;
   // The device code is host state, never the model's: read it where the host keeps it.
   const code = [...w.host.state.values()].find((value) => value?.deviceCode !== undefined).deviceCode.reveal();
-  const provider = firstContribution(w.host.reactor, DpopProofProviders, "DPoP");
-  const proof = await provider.create({ method: "POST", url: TOKEN, tenantId: TENANT, issuer: ISSUER, sessionKey: other.sessionKey });
-  const signer = firstContribution(w.host.reactor, Signers, "signer");
-  const assertion = await signer.sign(
-    { ...buildClientAssertionClaims({ clientId: w.identity.clientId, issuer: ISSUER, now: w.clock.now() }) },
+  const assertion = await other.signer.sign(
+    { ...buildClientAssertionClaims({ clientId: other.clientId, issuer: ISSUER, now: w.clock.now() }) },
     { purpose: "client_assertion" },
   );
   w.clock.advance(started.pollInterval);
   const stolen = await w.fetch(TOKEN, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", DPoP: proof.reveal() },
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       device_code: code,
-      client_id: w.identity.clientId,
+      client_id: other.clientId,
       client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
       client_assertion: assertion.reveal(),
     }).toString(),
@@ -155,52 +216,16 @@ test("a device code is bound to the key of its first poll", async () => {
   assert.equal((await stolen.json()).error, "invalid_grant");
 });
 
-test("an authorization code needs dpop_jkt and the key it names", async () => {
+test("an authorization request needs PKCE", async () => {
   const w = await world();
-  const session = await w.sessions.start(w.who);
   const base =
     "https://manzanita.example/oauth/authorize?response_type=code" +
     `&client_id=${w.identity.clientId}&scope=orders:read&state=s1` +
-    "&code_challenge=c&code_challenge_method=S256" +
     "&redirect_uri=https://atlas.example/oauth/callback";
-  // Without the Session Key's thumbprint the request is refused back to the agent (§4.5).
+  // Without an S256 code challenge the request is refused back to the agent (§4.2).
   const refused = await w.fetch(base, { method: "GET" });
   assert.ok([302, 303].includes(refused.status));
   assert.equal(new URL(refused.headers.get("location")).searchParams.get("error"), "invalid_request");
-
-  // With it, the code is redeemed only with a proof from that key: another Session's
-  // proof is refused, and the code is gone (§4.5, RFC 9449 §10).
-  const client = new DirectSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
-  await client.begin({
-    authorizationEndpoint: w.metadata.authorization_endpoint,
-    tokenEndpoint: w.metadata.token_endpoint,
-    issuer: w.metadata.issuer,
-    clientId: w.identity.clientId,
-    redirectUri: "https://atlas.example/oauth/callback",
-    scopes: ["orders:read"],
-    tenantId: TENANT,
-    sessionKey: session.sessionKey,
-  });
-  assert.equal(new URL(w.host.browser.urls.at(-1)).searchParams.get("dpop_jkt"), session.sessionKey);
-  const callbackUrl = await w.shop.approveAuthorization(w.host.browser.requestId, { accountId: "acct_ada" });
-  const other = await w.sessions.start(w.who);
-  const another = new DirectSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
-  await another.begin({
-    authorizationEndpoint: w.metadata.authorization_endpoint,
-    tokenEndpoint: w.metadata.token_endpoint,
-    issuer: w.metadata.issuer,
-    clientId: w.identity.clientId,
-    redirectUri: "https://atlas.example/oauth/callback",
-    scopes: ["orders:read"],
-    tenantId: TENANT,
-    sessionKey: other.sessionKey,
-  });
-  // The first request's code, presented with the second Session's state and key.
-  const otherState = new URL(w.host.browser.urls.at(-1)).searchParams.get("state");
-  const swapped = new URL(callbackUrl);
-  swapped.searchParams.set("state", otherState);
-  const wrongKey = await refusal(another.complete({ callbackUrl: swapped.toString() }));
-  assert.equal(wrongKey.code, "invalid_grant");
 });
 
 // Discovery and scopes -----------------------------------------------------------------------
@@ -213,19 +238,19 @@ test("the issuer lists the grants and scopes it offers", () => {
     protected_resources: ["https://example.com"],
   };
   // grant_types_supported is required, with the refresh grant (§3.2).
-  assert.throws(() => parseOAuthServerMetadata({ ...base, grant_types_supported: [JWT_BEARER] }), /refresh_token/);
+  assert.throws(() => parseOAuthServerMetadata({ ...base, grant_types_supported: ["authorization_code"] }), /refresh_token/);
   assert.throws(() => parseOAuthServerMetadata(base), /grant_types_supported/);
   assert.throws(
-    () => parseOAuthServerMetadata({ ...base, grant_types_supported: [JWT_BEARER, "refresh_token", "authorization_code"] }),
+    () => parseOAuthServerMetadata({ ...base, grant_types_supported: ["refresh_token", "authorization_code"] }),
     /authorization_endpoint/,
   );
-  const plain = parseOAuthServerMetadata({ ...base, grant_types_supported: [JWT_BEARER, "refresh_token"] });
-  // No sign-in grant: signed-out Sessions only (§4.4).
-  assert.deepEqual([offersDirect(plain), offersDevice(plain), offersTokenExchange(plain)], [false, false, false]);
+  const plain = parseOAuthServerMetadata({ ...base, grant_types_supported: ["refresh_token"] });
+  // No sign-in grant: signed-out Sessions only (§5.4).
+  assert.deepEqual([offersDirect(plain), offersDevice(plain)], [false, false]);
   assert.ok(listsResource(plain, "EXAMPLE.com"));
   const slashed = parseOAuthServerMetadata({
     ...base,
-    grant_types_supported: [JWT_BEARER, "refresh_token"],
+    grant_types_supported: ["refresh_token"],
     protected_resources: ["https://example.com/"],
   });
   assert.equal(listsResource(slashed, "example.com"), false);
@@ -243,7 +268,7 @@ test("scopes are the company's and described; poppy: is no longer reserved", () 
 });
 
 test("an unknown changes hint is read as irreversible", () => {
-  // Later versions may add values: until then, the most careful reading (§4.4).
+  // Later versions may add values: until then, the most careful reading (§4.7).
   assert.equal(effectiveChanges({ changes: "permanent", personal_data: false }), "irreversible");
   assert.equal(effectiveChanges({ changes: "none", personal_data: true }), "none");
   const document = (hint) => ({
@@ -274,7 +299,7 @@ test("the excluded tasks are read and their alternatives filtered", async () => 
       { type: "web", url: "https://manzanita.example/help" },
     ],
   });
-  // Only the company's own listed APIs, and only types the agent knows (§8.2).
+  // Only the company's own listed APIs, and only types the agent knows (§9.2).
   assert.deepEqual(
     usableReferences(alternative, w.company.document).map((reference) => [reference.type, reference.url]),
     [
@@ -288,8 +313,6 @@ test("the excluded tasks are read and their alternatives filtered", async () => 
 
 test("a signed-in token response leaves out scope only when exact", async () => {
   const w = await world();
-  const session = await w.sessions.start(w.who);
-  const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
   const answers = [];
   const handle = w.shop.handle.bind(w.shop);
   w.shop.handle = async (request) => {
@@ -297,27 +320,16 @@ test("a signed-in token response leaves out scope only when exact", async () => 
     if (new URL(request.url).pathname === "/oauth/token") answers.push(answer.body);
     return answer;
   };
-  const started = await device.begin({
-    deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
-    tokenEndpoint: w.metadata.token_endpoint,
-    issuer: w.metadata.issuer,
-    clientId: w.identity.clientId,
-    scopes: ["orders:read", "orders:write"],
-    tenantId: TENANT,
-    sessionKey: session.sessionKey,
-    organization: w.company.document.organization,
-    protectedResources: w.metadata.protected_resources,
-  });
-  await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
-  w.clock.advance(started.pollInterval);
-  const done = await device.poll(started.reference);
+  const done = await signedIn(w);
   // Ada approved both scopes asked for: the response left `scope` out, and the SDK read it
-  // as exactly those (§4.4, RFC 6749 §5.1).
+  // as exactly those (§4.7, RFC 6749 §5.1).
   assert.equal("scope" in answers.at(-1), false);
-  assert.equal(done.token.signedIn, true);
   assert.deepEqual(new Set(done.token.scopes), new Set(["orders:read", "orders:write"]));
-  // The Account Token's lifetime is sent, so expired tells from revoked (guides).
-  assert.equal(done.token.accountTokenExpiresIn, 90 * 24 * 3600);
+  assert.equal(done.token.tokenType, "Bearer");
+  assert.equal(done.token.expiresIn, 3600);
+  // The refresh token stays behind its reference, in the host's store.
+  assert.ok(done.refreshTokenReference);
+  assert.ok(w.host.tokens.has(done.refreshTokenReference));
 });
 
 test("a discovery document off the well-known path is refused", async () => {

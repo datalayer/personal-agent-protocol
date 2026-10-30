@@ -60,7 +60,7 @@ SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{22,256}$")
 def _algorithm(value: str) -> JoseAlgorithm:
     if value not in JOSE_ALGORITHMS:
         raise ValueError("PAP JOSE algorithms are ES256 and PS384")
-    return value  # type: ignore[return-value]
+    return cast(JoseAlgorithm, value)
 
 
 def _base64url(data: bytes) -> str:

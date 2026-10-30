@@ -38,7 +38,7 @@ pap = "personal_agent_protocol.cli_plugin:plugin"
 [project.optional-dependencies]
 test = [
   "pytest>=7.0",
-  "pytest-asyncio>=0.21",
+  "pytest-asyncio>=0.24",
   "pytest-cov>=4.1",
   "uvicorn>=0.30",
   # The shared fixtures checked against upstream's JSON Schemas (protocol/schemas).
@@ -80,6 +80,7 @@ packages = ["personal_agent_protocol"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = ["error"]
 markers = [
   "load: bounded load tests, sized by PAP_LOAD_SIZE (64 by default; the load CI job runs 512)",

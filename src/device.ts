@@ -170,6 +170,7 @@ interface PendingDeviceSignIn {
   readonly expiresAt: Date;
   readonly nextPollAt: Date;
   readonly interval: number;
+  readonly dpopSigningAlgs: readonly string[] | undefined;
 }
 
 function isPending(value: unknown): value is PendingDeviceSignIn {
@@ -227,6 +228,11 @@ export interface DeviceSignInBeginOptions {
    * resources', or a subdomain of either (§4.6).
    */
   readonly protectedResources: readonly string[];
+  /**
+   * The issuer's `dpop_signing_alg_values_supported`: each poll sends a DPoP proof when it
+   * includes ES256 (§4.5).
+   */
+  readonly dpopSigningAlgs?: readonly string[] | undefined;
   readonly signal?: AbortSignal;
 }
 
@@ -316,6 +322,7 @@ export class DeviceSignInClient {
       expiresAt,
       nextPollAt: new Date(now.getTime() + authorization.interval * 1000),
       interval: authorization.interval,
+      dpopSigningAlgs: options.dpopSigningAlgs,
     };
     const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
     await store.put(reference, pending, { expiresAt });
@@ -370,6 +377,8 @@ export class DeviceSignInClient {
         tokenEndpoint: pending.tokenEndpoint,
         form: () => ({ grant_type: DEVICE_CODE_GRANT, device_code: pending.deviceCode.reveal() }),
         error: AuthorizationError,
+        tenantId: pending.tenantId,
+        dpopSigningAlgs: pending.dpopSigningAlgs,
         ...(signal === undefined ? {} : { signal }),
       });
     } catch (cause) {

@@ -78,6 +78,8 @@ const refresh = (client) =>
     tokenEndpoint: TOKEN_ENDPOINT,
     form: () => ({ grant_type: REFRESH_TOKEN_GRANT, refresh_token: "refresh-secret" }),
     error: SessionError,
+    tenantId: "tenant-one",
+    dpopSigningAlgs: undefined,
   });
 
 function setup(fetch) {
@@ -146,14 +148,20 @@ test("an access token remembers the service it was issued for", () => {
   assert.equal(accessTokenFromResponse(response, { resource: mcp }).resource, mcp);
 });
 
-for (const tokenType of ["DPoP", "dpop", "mac"]) {
-  test(`a token response is Bearer, never ${tokenType}`, () => {
-    assert.throws(
-      () => parseTokenResponse({ access_token: "t", token_type: tokenType }),
-      (error) => error instanceof ProtocolValidationError,
-    );
+for (const [given, read] of [["Bearer", "Bearer"], ["bearer", "Bearer"], ["DPoP", "DPoP"], ["dpop", "DPoP"]]) {
+  test(`a token response of type ${given} reads as ${read}, ignoring case`, () => {
+    const response = parseTokenResponse({ access_token: "t", token_type: given });
+    assert.equal(response.tokenType, read);
+    assert.equal(accessTokenFromResponse(response, { requestedScopes: ["orders:read"] }).tokenType, read);
   });
 }
+
+test("any other token type is refused", () => {
+  assert.throws(
+    () => parseTokenResponse({ access_token: "t", token_type: "mac" }),
+    (error) => error instanceof ProtocolValidationError,
+  );
+});
 
 test("a Session starts with no request and a new random sid", async () => {
   const sent = [];
@@ -229,7 +237,7 @@ test("the token endpoint gets a client assertion and no Session", async () => {
   }
 });
 
-test("a DPoP token type is refused at the token endpoint", async () => {
+test("a DPoP answer with no proof sent is refused", async () => {
   const answer = { access_token: "key-bound-secret", token_type: "DPoP", expires_in: 60 };
   const { reactor, client } = setup(async () => json(answer));
   await assert.rejects(refresh(client), (error) => {

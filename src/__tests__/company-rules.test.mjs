@@ -148,7 +148,7 @@ test("Mediated Sign-In in a Session another account used signs in", async () => 
   const [, reference] = await deviceSignIn(w, "acct_bob");
   await w.tokens.revoke(reference, { context: w.context });
   const mediated = new MediatedSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
-  const started = await mediated.signIn({ company: w.company, clientId: w.identity.clientId, scopes: ["orders:read"] });
+  const started = await mediated.signIn({ company: w.company, clientId: w.identity.clientId, scopes: ["orders:read"], tenantId: "t" });
   assert.equal(started.status, "code_required");
   const done = await mediated.submitCode(started.reference);
   assert.equal(done.status, "complete");
@@ -370,7 +370,7 @@ test("an extension used by the request needs no client metadata entry", async ()
   const host = await agentHost({ identity: plain, fetch: w.fetch, clock: w.clock, answers: [{ ...ADA }, { code: ADA_CODE }] });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const client = new MediatedSignInClient({ reactor: host.reactor, fetch: w.fetch });
-  const started = await client.signIn({ company, clientId: plain.clientId, scopes: ["orders:read"] });
+  const started = await client.signIn({ company, clientId: plain.clientId, scopes: ["orders:read"], tenantId: "t" });
   assert.equal(started.status, "code_required");
   const done = await client.submitCode(started.reference);
   assert.equal(done.status, "complete");

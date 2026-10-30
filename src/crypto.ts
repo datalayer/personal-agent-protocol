@@ -14,6 +14,10 @@
  *   User ID (tenant, issuer, `sub`), vouched for by a delegation the `pap.signer` key signs,
  *   and a fresh Session JWT for each request. Keys live in a `DelegatedKeyCustody`;
  *   `InMemoryDelegatedKeys` is for one process.
+ * - `JoseDpopProver` is the `pap.dpopProver` default: one P-256 key per Company for a tenant,
+ *   never a delegated key and never one from `jwks_uri` (§4.5, §5.2), and a fresh RFC 9449
+ *   proof for each request. Keys live in a `DpopKeyCustody`; `InMemoryDpopKeys` is for one
+ *   process.
  */
 
 import {
@@ -30,6 +34,8 @@ import { ProofError } from "./errors.js";
 import {
   Signers,
   firstContribution,
+  type DpopProofRequest,
+  type DpopProver,
   type SessionJwtRequest,
   type SessionSigner,
   type Signer,
@@ -48,6 +54,9 @@ export const SESSION_JWT_ALGORITHM = "ES256";
 export const DELEGATION_TYPE = "pap-delegation+jwt";
 /** A delegation expires at most this long after it is issued (§5.2). */
 export const DELEGATION_MAX_LIFETIME_SECONDS = 24 * 60 * 60;
+/** A DPoP proof's `typ` and `alg` (§4.5, RFC 9449 §4.2). */
+export const DPOP_PROOF_TYPE = "dpop+jwt";
+export const DPOP_ALGORITHM = "ES256";
 /** The `typ` each `pap.signer` purpose signs with. */
 export const SIGNER_TYPES: Readonly<Record<string, string>> = {
   client_assertion: "JWT",
@@ -90,10 +99,10 @@ export function normalizedHtu(value: string): string {
   try {
     url = new URL(value);
   } catch (cause) {
-    throw new ProofError("invalid_htu", "A Session JWT's target must be an HTTPS URL", { cause });
+    throw new ProofError("invalid_htu", "A signed request's target must be an HTTPS URL", { cause });
   }
   if (url.protocol !== "https:" || url.username || url.password) {
-    throw new ProofError("invalid_htu", "A Session JWT's target must be an HTTPS URL");
+    throw new ProofError("invalid_htu", "A signed request's target must be an HTTPS URL");
   }
   url.search = "";
   url.hash = "";
@@ -403,6 +412,132 @@ export class DelegatedSessionSigner implements SessionSigner {
       issuedAt: new Date((claims.iat as number) * 1000),
       expiresAt: new Date((claims.exp as number) * 1000),
     };
+  }
+}
+
+/** One DPoP key: `thumbprint` is what the Company binds a token to (RFC 9449 §6). */
+export interface DpopKey {
+  readonly privateKey: KeyInput;
+  readonly publicJwk: JWK;
+  readonly thumbprint: string;
+}
+
+export interface DpopKeyWho {
+  readonly tenantId: string;
+  readonly issuer: string;
+}
+
+/** A new P-256 key, used for nothing but DPoP proofs (§5.2). */
+export async function newDpopKey(): Promise<DpopKey> {
+  const { privateKey, publicKey } = await generateKeyPair(DPOP_ALGORITHM, { extractable: true });
+  const exported = await exportJWK(publicKey);
+  const publicJwk: JWK = {
+    kty: exported.kty as string,
+    crv: exported.crv as string,
+    x: exported.x as string,
+    y: exported.y as string,
+  };
+  return { privateKey, publicJwk, thumbprint: await jwkThumbprint(publicJwk) };
+}
+
+/**
+ * Where DPoP keys live: one per Company for a tenant, made on first use.
+ *
+ * `keyFor` returns the key of `(tenantId, issuer)`, and makes it if there is none, at once:
+ * two callers never get two keys. `forget` loses it: refresh tokens aren't bound, so the next
+ * refresh gets a token for a new key (RFC 9449 §5). A host keeps them on the User's device or
+ * in its KMS; `InMemoryDpopKeys` is for one process.
+ */
+export interface DpopKeyCustody {
+  keyFor(who: DpopKeyWho): Promise<DpopKey>;
+  forget(who: DpopKeyWho): Promise<void>;
+}
+
+/** DPoP keys in this process's memory, one per Company for a tenant. */
+export class InMemoryDpopKeys implements DpopKeyCustody {
+  readonly #keys = new Map<string, Promise<DpopKey>>();
+
+  static #name(who: DpopKeyWho): string {
+    return JSON.stringify([who.tenantId, who.issuer]);
+  }
+
+  keyFor(who: DpopKeyWho): Promise<DpopKey> {
+    const name = InMemoryDpopKeys.#name(who);
+    const known = this.#keys.get(name);
+    if (known !== undefined) return known;
+    const made = newDpopKey();
+    // Held before it is ready: a second caller waits for this key, and makes none.
+    this.#keys.set(name, made);
+    made.catch(() => {
+      if (this.#keys.get(name) === made) this.#keys.delete(name);
+    });
+    return made;
+  }
+
+  async forget(who: DpopKeyWho): Promise<void> {
+    this.#keys.delete(InMemoryDpopKeys.#name(who));
+  }
+
+  get size(): number {
+    return this.#keys.size;
+  }
+}
+
+/**
+ * A DPoP proof's claims for one request (RFC 9449 §4.2).
+ *
+ * `jti`, `htm`, `htu` (no query or fragment) and `iat`; `ath` with an access token, `nonce`
+ * when the server gave one.
+ */
+export async function dpopProofClaims(
+  request: DpopProofRequest,
+  options: {
+    readonly issuedAt: Date;
+    readonly randomBytes?: (length: number) => Uint8Array;
+  },
+): Promise<Record<string, unknown>> {
+  const entropy = (options.randomBytes ?? systemRandomBytes)(16);
+  if (entropy.byteLength < 16) {
+    throw new ProofError("weak_randomness", "A DPoP proof's jti needs 128 random bits");
+  }
+  return {
+    jti: base64Url(entropy),
+    htm: request.method.toUpperCase(),
+    htu: normalizedHtu(request.url),
+    iat: Math.floor(options.issuedAt.getTime() / 1000),
+    ...(request.accessToken === undefined ? {} : { ath: await tokenHash(request.accessToken) }),
+    ...(request.nonce === undefined ? {} : { nonce: request.nonce }),
+  };
+}
+
+export interface JoseDpopProverOptions {
+  readonly now?: () => Date;
+  readonly randomBytes?: (length: number) => Uint8Array;
+}
+
+/** `pap.dpopProver`: a fresh proof for each request, by the Company's DPoP key (§4.5). */
+export class JoseDpopProver implements DpopProver {
+  readonly keys: DpopKeyCustody;
+  readonly #now: () => Date;
+  readonly #randomBytes: (length: number) => Uint8Array;
+
+  constructor(keys: DpopKeyCustody, options: JoseDpopProverOptions = {}) {
+    this.keys = keys;
+    this.#now = options.now ?? (() => new Date());
+    this.#randomBytes = options.randomBytes ?? systemRandomBytes;
+  }
+
+  async prove(request: DpopProofRequest): Promise<SecretValue> {
+    const claims = await dpopProofClaims(request, { issuedAt: this.#now(), randomBytes: this.#randomBytes });
+    const key = await this.keys.keyFor({ tenantId: request.tenantId, issuer: request.issuer });
+    try {
+      const proof = await new SignJWT(claims as JWTPayload)
+        .setProtectedHeader({ alg: DPOP_ALGORITHM, typ: DPOP_PROOF_TYPE, jwk: key.publicJwk })
+        .sign(key.privateKey);
+      return new SecretValue(proof);
+    } catch (cause) {
+      throw new ProofError("signing_failed", "Could not sign the DPoP proof", { cause });
+    }
   }
 }
 

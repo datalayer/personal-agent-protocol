@@ -113,6 +113,8 @@ export interface MediatedSignInOptions {
   readonly company: DiscoveredCompany;
   readonly clientId: string;
   readonly scopes: readonly string[];
+  /** Whose DPoP key proves, when the issuer lists ES256 (§4.5). */
+  readonly tenantId: string;
   readonly signal?: AbortSignal;
 }
 
@@ -130,6 +132,8 @@ interface PendingCode {
   readonly scopes: readonly string[];
   readonly companyName: string;
   readonly companyDomain: string;
+  readonly tenantId: string;
+  readonly dpopSigningAlgs: readonly string[] | undefined;
   readonly signInId: string;
   readonly sentTo?: string;
   readonly expiresAt: Date;
@@ -169,7 +173,11 @@ export class MediatedSignInClient {
     );
   }
 
-  /** Collect the declared fields from the user and send them with the grant. */
+  /**
+   * Collect the declared fields from the user and send them with the grant.
+   *
+   * A DPoP proof goes with the grant when the issuer's metadata lists ES256 (§4.5).
+   */
   async #signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
     const mediated = this.#offered(options.company);
     const metadata = options.company.oauthMetadata as NonNullable<DiscoveredCompany["oauthMetadata"]>;
@@ -206,6 +214,8 @@ export class MediatedSignInClient {
       scopes: requested,
       companyName: organization.name,
       companyDomain: organization.domain,
+      tenantId: options.tenantId,
+      dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
       signInId: "",
       expiresAt: new Date(8.64e15),
     };
@@ -286,6 +296,8 @@ export class MediatedSignInClient {
         tokenEndpoint: pending.tokenEndpoint,
         form: () => form,
         error: AuthorizationError,
+        tenantId: pending.tenantId,
+        dpopSigningAlgs: pending.dpopSigningAlgs,
         ...(signal === undefined ? {} : { signal }),
       });
     } catch (error) {

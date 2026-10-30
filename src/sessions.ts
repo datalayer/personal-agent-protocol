@@ -10,18 +10,19 @@
  * A Session is local: `SessionClient.start` chooses its `sid` at random and asks the company
  * nothing (§5.2). Every request then carries a Session JWT the `pap.sessionSigner` signs for
  * it (`SessionFetchClient`). Account access is plain OAuth: sign-in and refresh return an
- * access token and a refresh token (§4.4, §4.5, §4.7); the token endpoint gets a client
- * assertion and nothing else.
+ * access token and a refresh token (§4.4, §4.5, §4.7). The token endpoint gets a client
+ * assertion, and a DPoP proof when the issuer's metadata lists ES256 (§4.5).
  */
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { SESSION_ID } from "./crypto.js";
+import { DPOP_ALGORITHM, SESSION_ID } from "./crypto.js";
 import { PersonalAgentProtocolError, ProtocolValidationError, SessionError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { readLimitedText } from "./limits.js";
 import {
   Clocks,
+  DpopProvers,
   PairwiseUserIdStores,
   RandomSources,
   Signers,
@@ -34,6 +35,10 @@ import { SecretValue } from "./secret.js";
 import { byIssuer, sessionResult, traced } from "./telemetry.js";
 
 export const JWT_CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+/** The header that carries a DPoP proof (RFC 9449 §4.1). */
+export const DPOP_HEADER = "DPoP";
+/** The header a server gives a DPoP nonce in (RFC 9449 §8). */
+export const DPOP_NONCE_HEADER = "DPoP-Nonce";
 /** A client assertion's `exp` is at most this long after its `iat` (§4.1). */
 export const ASSERTION_MAX_LIFETIME_SECONDS = 300;
 
@@ -269,12 +274,11 @@ export class PapSession {
 /**
  * A token endpoint's answer, as on the wire (§4.7): plain OAuth.
  *
- * `token_type` is compared ignoring case (RFC 6749 §5.1). This SDK does not send DPoP proofs
- * yet (§4.5: a SHOULD), so a `DPoP` token is refused.
+ * `token_type` is compared ignoring case (RFC 6749 §5.1): `Bearer` or `DPoP`.
  */
 export interface TokenResponse {
   readonly accessToken: SecretValue;
-  readonly tokenType: "Bearer";
+  readonly tokenType: "Bearer" | "DPoP";
   readonly expiresIn?: number;
   readonly scope?: string;
   readonly refreshToken?: SecretValue;
@@ -286,11 +290,13 @@ export interface TokenResponse {
  * `resource` is the service it was issued for, or absent for the default token that works at
  * all of the Company's services but one that asks for its own. `scopes` is what was granted:
  * a response that leaves `scope` out granted exactly the scopes requested (RFC 6749 §5.1).
- * Never the refresh token: that one stays in `pap.tokenStore`.
+ * Never the refresh token: that one stays in `pap.tokenStore`. `tokenType` says how it is
+ * sent: `DPoP`, bound to the Company's DPoP key, with a proof on every request (§4.5). Refresh
+ * tokens aren't bound, so a lost key means refreshing, not signing in again (RFC 9449 §5).
  */
 export interface AccessToken {
   readonly accessToken: SecretValue;
-  readonly tokenType: "Bearer";
+  readonly tokenType: "Bearer" | "DPoP";
   readonly expiresIn?: number;
   readonly scopes: readonly string[];
   readonly resource?: string;
@@ -314,14 +320,8 @@ function nonEmptyString(value: unknown, label: string): string {
 export function parseTokenResponse(value: unknown): TokenResponse {
   const source = object(value, "token response");
   const tokenType = nonEmptyString(source.token_type, "token_type").toLowerCase();
-  if (tokenType === "dpop") {
-    throw new ProtocolValidationError(
-      "unsupported_token_type",
-      "DPoP-bound access tokens are not supported by this SDK yet",
-    );
-  }
-  if (tokenType !== "bearer") {
-    throw new ProtocolValidationError("invalid_token_type", "an access token is Bearer");
+  if (tokenType !== "bearer" && tokenType !== "dpop") {
+    throw new ProtocolValidationError("invalid_token_type", "an access token is Bearer or DPoP");
   }
   const expiresIn = source.expires_in;
   if (
@@ -338,7 +338,7 @@ export function parseTokenResponse(value: unknown): TokenResponse {
   const refresh = source.refresh_token;
   return {
     accessToken: new SecretValue(nonEmptyString(source.access_token, "access_token")),
-    tokenType: "Bearer",
+    tokenType: tokenType === "dpop" ? "DPoP" : "Bearer",
     ...(expiresIn === undefined || expiresIn === null ? {} : { expiresIn: expiresIn as number }),
     ...(typeof scope === "string" ? { scope } : {}),
     ...(refresh === undefined || refresh === null
@@ -363,7 +363,7 @@ export function accessTokenFromResponse(
   }
   return {
     accessToken: response.accessToken,
-    tokenType: "Bearer",
+    tokenType: response.tokenType,
     ...(response.expiresIn === undefined ? {} : { expiresIn: response.expiresIn }),
     scopes: scope.split(" ").filter(Boolean),
     ...(options.resource === undefined ? {} : { resource: options.resource }),
@@ -450,6 +450,10 @@ export interface TokenRequestOptions {
   /** The grant's own fields. */
   readonly form: () => Record<string, string> | Promise<Record<string, string>>;
   readonly error: TokenErrorClass;
+  /** Whose key proves, when a proof goes. */
+  readonly tenantId: string;
+  /** The issuer's `dpop_signing_alg_values_supported`, or `undefined` when it lists none. */
+  readonly dpopSigningAlgs: readonly string[] | undefined;
   readonly signal?: AbortSignal;
 }
 
@@ -505,12 +509,77 @@ export class SessionClient {
    * POST one grant to the token endpoint with a fresh client assertion (§4.1, §4.4).
    *
    * `form` gives the grant's own fields. No Session header goes to an OAuth endpoint (§5.2).
-   * Throws `error` with the company's OAuth error code.
+   * `dpopSigningAlgs` is the issuer's `dpop_signing_alg_values_supported`: when it includes
+   * ES256 a DPoP proof goes with the request, so the Company can bind the tokens (§4.5), and a
+   * `use_dpop_nonce` refusal is retried once, with a fresh proof and client assertion. Throws
+   * `error` with the company's OAuth error code.
    */
   async tokenRequest(options: TokenRequestOptions): Promise<TokenResponse> {
     const Failure = options.error;
     const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint");
+    if (!options.tenantId || options.tenantId.length > 256) {
+      throw new RangeError("tenantId must contain between 1 and 256 characters");
+    }
     const fields = await options.form();
+    const proves = options.dpopSigningAlgs?.includes(DPOP_ALGORITHM) === true;
+    let nonce: string | undefined;
+    while (true) {
+      const proof = proves ? await this.#proof(tokenEndpoint, options, nonce) : undefined;
+      const { response, payload } = await this.#postGrant(fields, tokenEndpoint, proof, options);
+      const given = response.headers.get(DPOP_NONCE_HEADER);
+      if (
+        proves &&
+        nonce === undefined &&
+        given !== null &&
+        response.status === 400 &&
+        (payload as { error?: unknown } | null | undefined)?.error === "use_dpop_nonce"
+      ) {
+        nonce = given;
+        continue;
+      }
+      if (response.ok) {
+        let token: TokenResponse;
+        try {
+          token = parseTokenResponse(payload);
+        } catch (cause) {
+          throw new Failure("invalid_token_response", "Token response is malformed", {
+            statusCode: response.status,
+            cause,
+          });
+        }
+        if (token.tokenType === "DPoP" && !proves) {
+          throw new Failure("unsupported_token_type", "The company bound the token to a key no proof showed", {
+            statusCode: response.status,
+          });
+        }
+        return token;
+      }
+      const details = refusalDetails(response, payload);
+      throw new Failure(refusalCode(response, payload, "http_error"), "Company refused the token request", {
+        statusCode: response.status,
+        ...(Object.keys(details).length > 0 ? { details } : {}),
+      });
+    }
+  }
+
+  #proof(tokenEndpoint: string, options: TokenRequestOptions, nonce: string | undefined): Promise<SecretValue> {
+    return firstContribution(this.#reactor, DpopProvers, "DPoP prover").prove({
+      method: "POST",
+      url: tokenEndpoint,
+      tenantId: options.tenantId,
+      issuer: options.issuer,
+      ...(nonce === undefined ? {} : { nonce }),
+    });
+  }
+
+  /** One POST of a grant, with a fresh client assertion: its response and JSON body. */
+  async #postGrant(
+    fields: Record<string, string>,
+    tokenEndpoint: string,
+    proof: SecretValue | undefined,
+    options: TokenRequestOptions,
+  ): Promise<{ readonly response: Response; readonly payload: unknown }> {
+    const Failure = options.error;
     const body = new URLSearchParams({
       ...fields,
       ...(await this.clientAuthentication({ clientId: options.clientId, issuer: options.issuer })),
@@ -519,7 +588,7 @@ export class SessionClient {
     try {
       response = await this.#fetch(tokenEndpoint, {
         method: "POST",
-        headers: { Accept: "application/json" },
+        headers: { Accept: "application/json", ...(proof === undefined ? {} : { [DPOP_HEADER]: proof.reveal() }) },
         body,
         credentials: "omit",
         redirect: "manual",
@@ -536,26 +605,10 @@ export class SessionClient {
       });
     }
     // A 429 has `Retry-After` and no body (§5.6).
-    const payload = refusedWithoutBody(response, text) ? undefined : this.#decode(response, text, Failure);
-    if (response.ok) {
-      try {
-        return parseTokenResponse(payload);
-      } catch (cause) {
-        const dpop = cause instanceof ProtocolValidationError && cause.code === "unsupported_token_type";
-        throw new Failure(
-          dpop ? "unsupported_token_type" : "invalid_token_response",
-          dpop
-            ? "The company issued a DPoP-bound token, which this SDK doesn't support yet"
-            : "Token response is malformed",
-          { statusCode: response.status, cause },
-        );
-      }
-    }
-    const details = refusalDetails(response, payload);
-    throw new Failure(refusalCode(response, payload, "http_error"), "Company refused the token request", {
-      statusCode: response.status,
-      ...(Object.keys(details).length > 0 ? { details } : {}),
-    });
+    return {
+      response,
+      payload: refusedWithoutBody(response, text) ? undefined : this.#decode(response, text, Failure),
+    };
   }
 
   /** `client_id` and a fresh client assertion, as form fields (§4.1). */

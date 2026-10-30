@@ -297,7 +297,7 @@ test("orchestrates one-use Direct Sign-In with partial scopes", async () => {
   assert.deepEqual(signals, [controller.signal]);
 });
 
-test("a DPoP token type at the end of Direct Sign-In is refused", async () => {
+test("a DPoP answer at the end of Direct Sign-In, no proof sent, is refused", async () => {
   const orchestration = orchestrationPlugin();
   const fetch = async () =>
     new Response(JSON.stringify({ access_token: "t", token_type: "DPoP", scope: "orders:read", refresh_token: "r" }), {

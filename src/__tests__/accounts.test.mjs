@@ -155,7 +155,7 @@ test("a scope the company was not asked for is refused", async () => {
   );
 });
 
-test("a DPoP answer to a refresh is refused", async () => {
+test("a DPoP answer to a refresh with no proof is refused", async () => {
   const { client } = arrange(() => json(200, signedIn({ token_type: "DPoP" })));
   await assert.rejects(
     client.refresh("refresh_ref", { context }),

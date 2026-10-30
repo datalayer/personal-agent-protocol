@@ -78,7 +78,7 @@ if result.status == "code_required":
 
 ```typescript
 const client = new MediatedSignInClient({ reactor, fetch });
-let result = await client.signIn({ company, clientId, scopes });
+let result = await client.signIn({ company, clientId, scopes, tenantId: 'tenant-one' });
 if (result.status === 'code_required') {
   result = await client.submitCode(result.reference!);
 }

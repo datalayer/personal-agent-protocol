@@ -208,6 +208,7 @@ interface PendingDirectSignIn {
   readonly tokenEndpoint: string;
   readonly tenantId: string;
   readonly expiresAt: Date;
+  readonly dpopSigningAlgs: readonly string[] | undefined;
 }
 
 export interface DirectSignInStart {
@@ -223,6 +224,11 @@ export interface DirectSignInBeginOptions extends DirectSignInOptions {
   readonly tokenEndpoint: string;
   readonly tenantId: string;
   readonly lifetimeSeconds?: number;
+  /**
+   * The issuer's `dpop_signing_alg_values_supported`: the code exchange sends a DPoP proof
+   * when it includes ES256 (§4.5).
+   */
+  readonly dpopSigningAlgs?: readonly string[] | undefined;
 }
 
 export interface DirectSignInCompleteOptions {
@@ -344,6 +350,7 @@ export class DirectSignInClient {
       tokenEndpoint,
       tenantId: options.tenantId,
       expiresAt,
+      dpopSigningAlgs: options.dpopSigningAlgs,
     };
     await store.put(reference, pending, { expiresAt });
     try {
@@ -405,6 +412,8 @@ export class DirectSignInClient {
       tokenEndpoint: pending.tokenEndpoint,
       form: () => form,
       error: AuthorizationError,
+      tenantId: pending.tenantId,
+      dpopSigningAlgs: pending.dpopSigningAlgs,
       ...(signal === undefined ? {} : { signal }),
     });
     return finishSignIn(this.#reactor, response, request.scopes, { error: AuthorizationError });

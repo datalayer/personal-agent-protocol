@@ -618,6 +618,8 @@ test("finding 15: a token response is read only up to its limit", async () => {
       tokenEndpoint: w.metadata.token_endpoint,
       form: () => ({ grant_type: "refresh_token", refresh_token: "x" }),
       error: SessionError,
+      tenantId: "t",
+      dpopSigningAlgs: undefined,
     }),
     (error) => error.code === "response_too_large",
   );
@@ -666,7 +668,7 @@ test("finding 7: the mediated client sends credentials once, to the token endpoi
       return new Response(null, { status: 307, headers: { location: "/collect-credentials" } });
     },
   });
-  await assert.rejects(client.signIn({ company: w.company, clientId: w.identity.clientId, scopes: ["orders:read"] }), (error) => error.code === "redirect_refused");
+  await assert.rejects(client.signIn({ company: w.company, clientId: w.identity.clientId, scopes: ["orders:read"], tenantId: "t" }), (error) => error.code === "redirect_refused");
   assert.deepEqual(seen, [TOKEN]);
 });
 

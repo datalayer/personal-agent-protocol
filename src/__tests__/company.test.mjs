@@ -380,7 +380,7 @@ test("polling too fast is slow_down, and the interval grows", async () => {
 test("Mediated Sign-In with a one-time code; a wrong code asks again", async () => {
   const w = await world({ answers: [{ ...ADA }, { code: "000000" }, { code: ADA_CODE }] });
   const mediated = new MediatedSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
-  const started = await mediated.signIn({ company: w.company, clientId: w.identity.clientId, scopes: ["orders:read"] });
+  const started = await mediated.signIn({ company: w.company, clientId: w.identity.clientId, scopes: ["orders:read"], tenantId: "t" });
   assert.equal(started.status, "code_required");
   assert.equal(started.sentTo, "a•••@example.com");
   const wrong = await mediated.submitCode(started.reference);
@@ -396,7 +396,7 @@ test("wrong credentials fail uniformly", async () => {
   const mediated = new MediatedSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await assert.rejects(
-      mediated.signIn({ company: w.company, clientId: w.identity.clientId, scopes: ["orders:read"] }),
+      mediated.signIn({ company: w.company, clientId: w.identity.clientId, scopes: ["orders:read"], tenantId: "t" }),
       (error) => error instanceof AuthorizationError && error.code === "invalid_grant",
     );
   }

@@ -17,6 +17,8 @@ import {
   ConversationClient,
   DelegatedSessionSigner,
   InMemoryDelegatedKeys,
+  InMemoryDpopKeys,
+  JoseDpopProver,
   SecretValue,
   SessionClient,
   SessionError,
@@ -39,7 +41,7 @@ import {
 import { NodeUrlSafetyPolicy } from "../../lib/server.js";
 import { agentIdentity } from "./support/world.mjs";
 
-const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations"];
+const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop"];
 const KNOWN_EVENT_TYPES = new Set(["message", "state", "authorization", "user_requested", "direct_opened", "direct_closed"]);
 
 const LOCAL = SUITES.flatMap((suite) =>
@@ -193,6 +195,8 @@ const CHECKS = {
           tokenEndpoint: "https://shop.example/oauth/token",
           form: () => ({ grant_type: "refresh_token", refresh_token: "rt_rate_limited" }),
           error: SessionError,
+          tenantId: "t",
+          dpopSigningAlgs: undefined,
         }),
         refused,
       );
@@ -232,6 +236,55 @@ const CHECKS = {
     }
     assert.equal(keys.size, expect.keys);
     assert.equal(delegations.size, expect.delegations);
+  },
+
+  /** Whether a token request proves, and what becomes of its answer (§4.5). */
+  async dpop_token_request(given, expect) {
+    const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
+    for (const [index, { algs, token_type: tokenType }] of given.entries()) {
+      const wanted = expect[index];
+      const sent = [];
+      const answer = { access_token: "t", token_type: tokenType, expires_in: 60 };
+      const fetch = async (_url, init) => {
+        sent.push(new Headers(init.headers));
+        return new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } });
+      };
+      const reactor = buildPapReactor({ fetch }, [
+        { name: "@tests/dpop", contributes: [{ point: Signers, value: identity.signer, options: { id: "signer" } }] },
+      ]);
+      const request = new SessionClient({ reactor, fetch }).tokenRequest({
+        clientId: identity.clientId,
+        issuer: "https://shop.example",
+        tokenEndpoint: "https://shop.example/oauth/token",
+        form: () => ({ grant_type: "refresh_token", refresh_token: "rt" }),
+        error: SessionError,
+        tenantId: "t",
+        dpopSigningAlgs: algs ?? undefined,
+      });
+      if ("error" in wanted) await assert.rejects(request, rejectsWith(wanted.error));
+      else await request;
+      assert.equal(sent[0].has("dpop"), wanted.proof);
+      reactor.stop();
+    }
+  },
+
+  /** A proof's header and claims (RFC 9449 §4.2). */
+  async dpop_proof_shape(given, expect) {
+    const proof = await new JoseDpopProver(new InMemoryDpopKeys()).prove({
+      method: given.method,
+      url: given.url,
+      tenantId: "t",
+      issuer: "https://shop.example",
+      accessToken: new SecretValue(given.access_token),
+      nonce: given.nonce,
+    });
+    const header = decodeProtectedHeader(proof.reveal());
+    assert.equal(header.typ, "dpop+jwt");
+    assert.equal(header.alg, "ES256");
+    assert.deepEqual(Object.keys(header.jwk).sort(), ["crv", "kty", "x", "y"]);
+    const claims = decodeJwt(proof.reveal());
+    for (const [name, value] of Object.entries(expect)) assert.equal(claims[name], value);
+    assert.ok(claims.jti.length >= 22);
   },
 };
 

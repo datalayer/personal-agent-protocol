@@ -238,7 +238,7 @@ async function mediatedSignIn(fetch, clock, sites, harvest) {
   await host.reactor.install(harvest.telemetryPlugin("mediated-telemetry"));
   const company = await pap.discoverCompany("manzanita.example", { reactor: host.reactor });
   const mediated = new pap.MediatedSignInClient({ reactor: host.reactor, fetch });
-  const started = await mediated.signIn({ company, clientId: identity.clientId, scopes: ["orders:read"] });
+  const started = await mediated.signIn({ company, clientId: identity.clientId, scopes: ["orders:read"], tenantId: "t" });
   assert.equal(started.status, "code_required");
   assert.equal((await mediated.submitCode(started.reference)).status, "code_required");
   assert.equal((await mediated.submitCode(started.reference)).status, "complete");

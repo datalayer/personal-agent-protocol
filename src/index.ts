@@ -47,13 +47,19 @@ export {
   ContributedSigner,
   DELEGATION_MAX_LIFETIME_SECONDS,
   DELEGATION_TYPE,
+  DPOP_ALGORITHM,
+  DPOP_PROOF_TYPE,
   DelegatedSessionSigner,
   InMemoryDelegatedKeys,
+  InMemoryDpopKeys,
   JOSE_ALGORITHMS,
+  JoseDpopProver,
   SESSION_JWT_ALGORITHM,
   SESSION_JWT_TYPE,
   delegationClaims,
+  dpopProofClaims,
   jwkThumbprint,
+  newDpopKey,
   normalizedHtu,
   publicJwk,
   sessionJwtClaims,
@@ -62,7 +68,11 @@ export {
   type DelegatedKeyCustody,
   type DelegatedKeyWho,
   type DelegatedSessionSignerOptions,
+  type DpopKey,
+  type DpopKeyCustody,
+  type DpopKeyWho,
   type JoseAlgorithm,
+  type JoseDpopProverOptions,
 } from "./crypto.js";
 export {
   BlindJoseSigner,
@@ -112,7 +122,13 @@ export {
   type FeedbackReport,
   type FeedbackReportOptions,
 } from "./feedback.js";
-export { REDIRECT_STATUSES, challengeParameters, refusalDetails, refuseRedirect } from "./refusals.js";
+export {
+  REDIRECT_STATUSES,
+  challengeParameters,
+  dpopNonceAsked,
+  refusalDetails,
+  refuseRedirect,
+} from "./refusals.js";
 export {
   AgentIdentityClient,
   type AgentIdentityClientOptions,
@@ -127,6 +143,7 @@ export {
   Caches,
   Clocks,
   ApprovalSurfaces,
+  DpopProvers,
   SessionSigners,
   RefreshTokenLocks,
   DiscoveryTransports,
@@ -155,6 +172,8 @@ export {
   type AuthorizationStateStore,
   type Clock,
   type DiscoveryTransport,
+  type DpopProofRequest,
+  type DpopProver,
   type SessionJwtRequest,
   type SessionSigner,
   type PairwiseUserIdStore,
@@ -181,6 +200,8 @@ export {
 } from "./telemetry.js";
 export {
   ASSERTION_MAX_LIFETIME_SECONDS,
+  DPOP_HEADER,
+  DPOP_NONCE_HEADER,
   JWT_CLIENT_ASSERTION,
   PapSession,
   SessionClient,

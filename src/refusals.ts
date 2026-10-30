@@ -85,6 +85,14 @@ export function refusalCode(response: Response, payload: unknown, fallback: stri
   return fallback;
 }
 
+/** The nonce a resource's `use_dpop_nonce` challenge gives, to retry with (RFC 9449 §9). */
+export function dpopNonceAsked(response: Response): string | undefined {
+  if (response.status !== 401) return undefined;
+  const challenge = challengeParameters(response.headers.get("www-authenticate"));
+  if (challenge.error !== "use_dpop_nonce") return undefined;
+  return response.headers.get("dpop-nonce") ?? undefined;
+}
+
 /** A refusal with nothing to parse, such as a 429 (§5.6) or a challenge alone (§7). */
 export function refusedWithoutBody(response: Response, text: string): boolean {
   return !response.ok && !text;

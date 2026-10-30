@@ -189,18 +189,18 @@
       "id": "pap.dpopProver",
       "role": "personal-agent",
       "python": "DPOP_PROVERS",
-      "typescript": null,
+      "typescript": "DpopProvers",
       "contract": "DpopProver",
       "members": [
         "prove"
       ],
       "default": {
         "python": "in-memory",
-        "typescript": null
+        "typescript": "in-memory"
       },
       "resolution": "single",
       "tenant": "DpopProofRequest.tenant_id",
-      "note": "Signs the DPoP proof of one request (§4.5, RFC 9449 §4.2) from a DpopProofRequest: method, url, tenant_id, issuer, access_token, nonce. JoseDpopProver keeps one P-256 key per (tenant_id, issuer) in a DpopKeyCustody, InMemoryDpopKeys by default: never a delegated key and never a key from jwks_uri (§5.2). A host that keeps tokens past one process contributes a durable custody, as the CLI's FileDpopKeys does. Python only until the TypeScript SDK proves too."
+      "note": "Signs the DPoP proof of one request (§4.5, RFC 9449 §4.2) from a DpopProofRequest: method, url, tenant_id, issuer, access_token, nonce. JoseDpopProver keeps one P-256 key per (tenant_id, issuer) in a DpopKeyCustody, InMemoryDpopKeys by default: never a delegated key and never a key from jwks_uri (§5.2). A host that keeps tokens past one process contributes a durable custody, as the CLI's FileDpopKeys does."
     },
     {
       "id": "pap.refreshTokenLock",

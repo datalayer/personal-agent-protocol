@@ -62,13 +62,19 @@ function httpsUrl(value: string, label: string): string {
   return value;
 }
 
-/** Where a refresh token is used, and for whom (all non-secret). */
+/**
+ * Where a refresh token is used, and for whom (all non-secret).
+ *
+ * `dpopSigningAlgs` is the issuer's `dpop_signing_alg_values_supported`: a refresh sends a DPoP
+ * proof when it includes ES256 (§4.5).
+ */
 export interface RefreshTokenContext {
   readonly tokenEndpoint: string;
   readonly issuer: string;
   readonly clientId: string;
   readonly tenantId: string;
   readonly revocationEndpoint?: string;
+  readonly dpopSigningAlgs?: readonly string[] | undefined;
 }
 
 export interface RefreshOptions {
@@ -182,6 +188,8 @@ export class RefreshTokenClient {
           tokenEndpoint,
           form: () => form,
           error: AuthorizationError,
+          tenantId: context.tenantId,
+          dpopSigningAlgs: context.dpopSigningAlgs,
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         });
       } catch (error) {

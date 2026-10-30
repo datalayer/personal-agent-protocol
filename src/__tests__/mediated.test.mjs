@@ -132,7 +132,7 @@ const codeRequired = (extra = {}) =>
     ...extra,
   });
 const signIn = (client, offered = company()) =>
-  client.signIn({ company: offered, clientId: CLIENT_ID, scopes: ["orders:read", "orders:return"] });
+  client.signIn({ company: offered, clientId: CLIENT_ID, scopes: ["orders:read", "orders:return"], tenantId: "tenant-one" });
 
 test("the declared fields go to the token endpoint as the grant", async () => {
   const { client, asked, seen, tokens } = arrange(() => json(200, complete()), CREDENTIALS);
@@ -315,7 +315,7 @@ test("a rate-limited code keeps the sign-in", async () => {
   assert.equal(state.values.has(started.reference), true);
 });
 
-test("a DPoP answer to a Mediated Sign-In is refused", async () => {
+test("a DPoP answer to a Mediated Sign-In with no proof is refused", async () => {
   const { client } = arrange(() => json(200, complete({ token_type: "DPoP" })), CREDENTIALS);
   await assert.rejects(signIn(client), (error) => error.code === "unsupported_token_type");
 });

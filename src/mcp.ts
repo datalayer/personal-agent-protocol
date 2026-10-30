@@ -36,8 +36,8 @@ import {
   type ProtectedResourceMetadata,
 } from "./models.js";
 import { APPROVAL_META_KEY, operationFrom } from "./operations.js";
-import { challengeParameters, refuseRedirect } from "./refusals.js";
-import type { AccessToken, PapSession } from "./sessions.js";
+import { challengeParameters, dpopNonceAsked, refuseRedirect } from "./refusals.js";
+import { DPOP_NONCE_HEADER, type AccessToken, type PapSession } from "./sessions.js";
 import { parseRetryAfter, readLimited, readLimitedText } from "./limits.js";
 import { invalidSession, sessionHeaders } from "./transport.js";
 
@@ -131,15 +131,19 @@ function requestUrl(input: string | URL | Request): string {
 }
 
 /**
- * The Session header, and signed in a Bearer token, to one MCP server's URL only (§7).
+ * The Session header, and signed in a token, to one MCP server's URL only (§7).
  *
  * The token was issued for that server's `url` and works nowhere else; the Session JWT is
- * signed for each request by the host's `pap.sessionSigner`. Any other URL (another path,
+ * signed for each request by the host's `pap.sessionSigner`, and with a `DPoP` token a proof by
+ * `pap.dpopProver`. A `use_dpop_nonce` challenge is retried once, and the server's latest
+ * nonce kept for its later requests (§4.5). Any other URL (another path,
  * host, port or scheme) is refused before a request is made, and redirects are never followed.
  */
 export class McpSessionAuth {
   readonly url: string;
   readonly session: PapSession;
+  /** The latest `DPoP-Nonce` the server gave a request with a `DPoP` token (§4.5). */
+  dpopNonce: string | undefined;
   readonly #token: AccessToken | undefined;
   readonly #reactor: ReactorPlatformView;
   readonly #fetch: typeof globalThis.fetch;
@@ -183,15 +187,30 @@ export class McpSessionAuth {
       );
     }
     const method = (init.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-    const signed = await sessionHeaders(this.#reactor, method, url, {
-      session: this.session,
-      token: this.#token,
-    });
-    const headers = new Headers(input instanceof Request ? input.headers : undefined);
-    for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
-    for (const [name, value] of Object.entries(signed)) headers.set(name, value);
-    return this.#fetch(url, { ...init, method, headers, credentials: "omit", redirect: "manual" });
+    const send = async (): Promise<Response> => {
+      const signed = await sessionHeaders(this.#reactor, method, url, {
+        session: this.session,
+        token: this.#token,
+        dpopNonce: this.dpopNonce,
+      });
+      const headers = new Headers(input instanceof Request ? input.headers : undefined);
+      for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
+      for (const [name, value] of Object.entries(signed)) headers.set(name, value);
+      return this.#fetch(url, { ...init, method, headers, credentials: "omit", redirect: "manual" });
+    };
+    const response = await send();
+    if (this.#token?.tokenType !== "DPoP") return response;
+    this.#keepNonce(response);
+    if (dpopNonceAsked(response) === undefined) return response;
+    await response.body?.cancel().catch(() => undefined);
+    const retried = await send();
+    this.#keepNonce(retried);
+    return retried;
   };
+
+  #keepNonce(response: Response): void {
+    this.dpopNonce = response.headers.get(DPOP_NONCE_HEADER) ?? this.dpopNonce;
+  }
 }
 
 /** A tool's answer; `operation` is set when it needs the user's approval (Operations 4). */
@@ -431,7 +450,7 @@ function rateLimited(response: Response): McpError {
 }
 
 /**
- * A token refusal, from the `Bearer` challenge (§7) or the body.
+ * A token refusal, from the `WWW-Authenticate` challenge (§7) or the body.
  *
  * A challenge with no error code (signed out) is `insufficient_scope` (§7); its
  * `resource_metadata` is kept, so a stale view of the server is read again.

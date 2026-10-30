@@ -16,6 +16,9 @@ import {
 } from "@datalayer/reactor";
 
 import { isGlobalAddress, literalAddress } from "./addresses.js";
+// A cycle with crypto.ts, whose signers read this module's contracts: neither module uses the
+// other while it loads.
+import { InMemoryDpopKeys, JoseDpopProver } from "./crypto.js";
 import { DiscoveryError } from "./errors.js";
 import {
   InMemoryProtocolCache,
@@ -116,6 +119,32 @@ export interface SessionJwtRequest {
  */
 export interface SessionSigner {
   sign(request: SessionJwtRequest): Promise<SecretValue>;
+}
+
+/**
+ * What one DPoP proof is signed for (§4.5, RFC 9449 §4.2).
+ *
+ * `method` and `url` are the request's (`htm`, `htu`). `tenantId` and `issuer` say whose key
+ * signs: one key per Company, for a tenant. `accessToken`, when the request carries one, is
+ * hashed into `ath`, and `nonce` is the latest the server gave.
+ */
+export interface DpopProofRequest {
+  readonly method: string;
+  readonly url: string;
+  readonly tenantId: string;
+  readonly issuer: string;
+  readonly accessToken?: SecretValue;
+  readonly nonce?: string;
+}
+
+/**
+ * Sign the DPoP proof of one request (§4.5).
+ *
+ * Never with a delegated key or a key from `jwks_uri`: a proof and a Session JWT are separate
+ * signatures, by separate keys (§5.2).
+ */
+export interface DpopProver {
+  prove(request: DpopProofRequest): Promise<SecretValue>;
 }
 
 /** Serialize every use of one refresh token: rotation invalidates the one replaced (§4.4). */
@@ -230,6 +259,8 @@ export const BrowserHandoffs = defineContributionPoint<BrowserHandoff>(
 );
 export const BrowserJoins = defineContributionPoint<BrowserJoin>("pap.browserJoin");
 export const SessionSigners = defineContributionPoint<SessionSigner>("pap.sessionSigner");
+/** `DpopProver`: the DPoP proof of a request, when the Company lists ES256 or bound a token. */
+export const DpopProvers = defineContributionPoint<DpopProver>("pap.dpopProver");
 export const RefreshTokenLocks = defineContributionPoint<RefreshTokenLock>(
   "pap.refreshTokenLock",
 );
@@ -307,6 +338,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       BrowserHandoffs,
       BrowserJoins,
       SessionSigners,
+      DpopProvers,
       RefreshTokenLocks,
       ProtectedInputs,
       RetryPolicies,
@@ -343,6 +375,17 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
         order: 100,
       }),
     ],
+    register({ contribute, reactor }) {
+      // Whichever clock and random source the host contributes, read when a proof is signed.
+      contribute(
+        DpopProvers,
+        new JoseDpopProver(new InMemoryDpopKeys(), {
+          now: () => firstContribution(reactor, Clocks, "clock").now(),
+          randomBytes: (length) => firstContribution(reactor, RandomSources, "random source").bytes(length),
+        }),
+        { id: "in-memory", order: 100 },
+      );
+    },
   });
 }
 

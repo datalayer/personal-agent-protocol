@@ -8,9 +8,12 @@
  * The Session header on every request to a Company's APIs and endpoints (§5.2, §5.6).
  *
  * Each request carries a fresh Session JWT (`Poppy-Session`) from the host's
- * `pap.sessionSigner`, and, signed in, the account's access token in `Authorization: Bearer`.
- * An `invalid_session` answer starts a new Session once, and the request is sent again in it;
- * a second one is returned to the caller, who stops (§5.5, §7).
+ * `pap.sessionSigner`, and, signed in, the account's access token in `Authorization`, with the
+ * scheme its `tokenType` names. A `DPoP` token goes with a fresh proof from `pap.dpopProver` on
+ * every request and retry, and a `use_dpop_nonce` challenge is retried once; the latest nonce
+ * is kept per origin for later requests (§4.5). An `invalid_session` answer starts a new
+ * Session once, and the request is sent again in it; a second one is returned to the caller,
+ * who stops (§5.5, §7).
  */
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
@@ -20,6 +23,7 @@ import { parseJsonStrict } from "./json.js";
 import { budgetKey, parseRetryAfter, RetryPolicy } from "./limits.js";
 import {
   Clocks,
+  DpopProvers,
   RandomSources,
   RateLimitBudgets,
   RetryPolicies,
@@ -27,8 +31,8 @@ import {
   firstContribution,
   optionalContribution,
 } from "./reactor.js";
-import { refuseRedirect } from "./refusals.js";
-import type { AccessToken, PapSession } from "./sessions.js";
+import { dpopNonceAsked, refuseRedirect } from "./refusals.js";
+import { DPOP_HEADER, DPOP_NONCE_HEADER, type AccessToken, type PapSession } from "./sessions.js";
 
 /** The header that carries the Session JWT (§5.2). */
 export const SESSION_HEADER = "Poppy-Session";
@@ -69,14 +73,24 @@ export async function invalidSession(response: Response): Promise<boolean> {
   }
 }
 
-/** `Poppy-Session` for this request, and with an access token, `Authorization` (§5.2). */
+/**
+ * The headers of one request: every credential, fresh (§4.5, §5.2).
+ *
+ * `Poppy-Session` always; with an access token, `Authorization`; with a `DPoP` token, a `DPoP`
+ * proof too, whose `ath` covers the same token as the Session JWT's. `dpopNonce` is the
+ * server's latest for this origin.
+ */
 export async function sessionHeaders(
   reactor: ReactorPlatformView,
   method: string,
   url: string,
-  options: { readonly session: PapSession; readonly token?: AccessToken | undefined },
+  options: {
+    readonly session: PapSession;
+    readonly token?: AccessToken | undefined;
+    readonly dpopNonce?: string | undefined;
+  },
 ): Promise<Record<string, string>> {
-  const { session, token } = options;
+  const { session, token, dpopNonce } = options;
   const signer = firstContribution(reactor, SessionSigners, "session signer");
   const jwt = await signer.sign({
     method: method.toUpperCase(),
@@ -89,10 +103,21 @@ export async function sessionHeaders(
     ...(session.agentId === undefined ? {} : { agentId: session.agentId }),
     ...(token === undefined ? {} : { accessToken: token.accessToken }),
   });
-  return {
-    [SESSION_HEADER]: jwt.reveal(),
-    ...(token === undefined ? {} : { Authorization: `Bearer ${token.accessToken.reveal()}` }),
-  };
+  const headers: Record<string, string> = { [SESSION_HEADER]: jwt.reveal() };
+  if (token === undefined) return headers;
+  headers.Authorization = `${token.tokenType} ${token.accessToken.reveal()}`;
+  if (token.tokenType === "DPoP") {
+    const proof = await firstContribution(reactor, DpopProvers, "DPoP prover").prove({
+      method: method.toUpperCase(),
+      url,
+      tenantId: session.tenantId,
+      issuer: session.issuer,
+      accessToken: token.accessToken,
+      ...(dpopNonce === undefined ? {} : { nonce: dpopNonce }),
+    });
+    headers[DPOP_HEADER] = proof.reveal();
+  }
+  return headers;
 }
 
 export interface SessionFetchClientOptions {
@@ -112,6 +137,8 @@ export interface SessionFetchRequestOptions {
 
 /** Send requests with the Session header; a redirect is refused, never followed (§3). */
 export class SessionFetchClient {
+  /** The latest `DPoP-Nonce` each origin gave a request with a `DPoP` token (§4.5). */
+  readonly dpopNonces = new Map<string, string>();
   readonly #reactor: ReactorPlatformView;
   readonly #fetch: typeof globalThis.fetch;
 
@@ -135,7 +162,8 @@ export class SessionFetchClient {
    * then retried by `pap.retryPolicy` — never sooner than `Retry-After`, with exponential
    * backoff and jitter otherwise. A write, or a pause longer than the policy allows, returns
    * the refusal to the caller. `invalid_session` starts a new Session once
-   * (`session.restart()`) and sends the request again in it.
+   * (`session.restart()`) and sends the request again in it, and a `use_dpop_nonce` challenge
+   * sends it again once with the nonce.
    */
   async request(
     method: string,
@@ -149,6 +177,7 @@ export class SessionFetchClient {
     const key = budgetKey(httpsUrl(url));
     let attempts = 0;
     let restarted = false;
+    let nonceRetried = false;
     while (true) {
       await budget?.acquire(key);
       const response = await this.#requestOnce(method, url, options);
@@ -158,6 +187,11 @@ export class SessionFetchClient {
         restarted = true;
         await response.body?.cancel().catch(() => undefined);
         options.session.restart((length) => this.#randomBytes(length));
+        continue;
+      }
+      if (!nonceRetried && options.token?.tokenType === "DPoP" && dpopNonceAsked(response) !== undefined) {
+        nonceRetried = true;
+        await response.body?.cancel().catch(() => undefined);
         continue;
       }
       if (!later.has(response.status)) return response;
@@ -200,11 +234,13 @@ export class SessionFetchClient {
     if (Object.keys(supplied).some((name) => hostOwned.has(name.toLowerCase()))) {
       throw new TransportError(
         "protected_header",
-        "Authorization and Poppy-Session headers are host-owned",
+        "Authorization, DPoP and Poppy-Session headers are host-owned",
       );
     }
     const target = httpsUrl(url);
-    const signed = await sessionHeaders(this.#reactor, method, target.toString(), options);
+    const origin = budgetKey(target);
+    const dpopNonce = options.token === undefined ? undefined : this.dpopNonces.get(origin);
+    const signed = await sessionHeaders(this.#reactor, method, target.toString(), { ...options, dpopNonce });
     let response: Response;
     try {
       response = await this.#fetch(target, {
@@ -220,6 +256,8 @@ export class SessionFetchClient {
     }
     // A redirect would carry the token and a Session JWT to another URL: refused (§3).
     await refuseRedirect(response);
+    const given = response.headers.get(DPOP_NONCE_HEADER);
+    if (given && options.token?.tokenType === "DPoP") this.dpopNonces.set(origin, given);
     return response;
   }
 }

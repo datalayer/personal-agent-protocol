@@ -10,6 +10,33 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.27 → 0.28
+
+0.28.0 implements [PAP draft 0.3](https://personalagentprotocol.org/docs/0.3/spec)
+as upstream rewrote it at commit `3e9bada` (revision 2026-10-28). The draft keeps
+the number 0.3, but a 0.27 personal agent and a 0.28 company cannot work together:
+upgrade both. The SDKs spell these the same way, Python in `snake_case` and
+TypeScript in `camelCase`.
+
+| Change | What to do |
+| --- | --- |
+| Sessions are local: a random `sid`, no network call | `SessionClient.start(...)` returns a `PapSession`; `renew`, `session_key`, `SessionToken` and the JWT bearer grant are gone |
+| Every company request carries `Poppy-Session` | Contribute `pap.sessionSigner` in place of `pap.dpopProofProvider`, or use the default with a `DelegatedKeyCustody` in place of `SessionKeyCustody` |
+| Delegations come from the signer | `pap.signer` receives `purpose="delegation"`; its key signs client assertions and delegations only |
+| Blind signing is available | A blind signer signs both client assertions and delegations; see the cryptography guide for what it gives up |
+| Access and refresh tokens under OAuth's names | Read `TokenResponse`; `refresh_token_expires_in` is gone; account clients take an access token, not a Session Token |
+| MCP tokens | `token_for_mcp` requests by `resource`; Token Exchange is gone |
+| The issuer comes from the domain | A company serves `/.well-known/oauth-protected-resource` with `resource` = `https://{domain}` |
+| `invalid_session` is back, `invalid_grant` no longer ends a Session | Handle `invalid_session` by starting one new Session, then stop |
+| Rate limits have no body | Read `Retry-After` on the 429; custom `pap.company.rateLimit` contributions return no `rate_limited` body |
+| Browser join | `BrowserJoin.submit_join_form()` takes no proof; companies serve `{browser_session_endpoint}/authorize` |
+| Mediated Sign-In is an extension grant | Publish `extensions["mediated-sign-in"]`, list the grant type; `auth.mediated` is refused |
+| Operations version 2 | `OperationsClient.ask_user` and `send` replace `confirm` and `cancel`; `operations_negotiated` replaces `operations_endpoint`; `cancel_open_operations` is `settle_open_operations`; standing permissions and `PapOutcome` are gone; `pap operations confirm` and `cancel` are `pap operations send` |
+| Feedback | `FeedbackReport` has no `kind` |
+
+A custom company store keys Sessions by `client_id` and `sid`, and sees join
+codes authorized for a Session rather than proven with its key.
+
 ## 0.26 → 0.27
 
 0.27.0 implements [PAP draft 0.3](https://personalagentprotocol.org/docs/0.3/spec)

@@ -6,6 +6,60 @@
 
 # Changelog
 
+## 0.28.0 (unreleased)
+
+PAP draft 0.3 as rewritten upstream at `3e9bada` (revision 2026-10-28), in both
+SDKs and both reference companies, with no compatibility with the `a95b757`
+shape of 0.3 that 0.27.0 implements: see the
+[0.27 → 0.28 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#027--028).
+
+- **Discovery:** the issuer comes from the domain's protected resource metadata
+  (RFC 9728); `auth` and `auth.issuer` are optional, the latter needed only when
+  several authorization servers are listed. `resource` leaves `agent.protocols`
+  and `apis`; a service's own metadata says when it needs its own token, and
+  `invalid_target` and `invalid_token` with `resource_metadata` say so at the
+  company. Unknown API types are skipped; `poppy:` scopes are no longer reserved.
+- **Sessions:** a `Poppy-Session` JWT signed per request, naming the Session by a
+  random `sid` the agent chooses. The JWT bearer grant, Session assertions,
+  renewal, `session_id` and Session Keys are gone. A failed check is
+  `invalid_session` (400); the agent starts a new Session once, then stops. A
+  company refuses its own access token without the header.
+- **Delegated keys:** Session JWTs are signed with short-lived keys vouched for
+  by a `pap-delegation+jwt` of at most 24 hours in `pap_dlg`, one key per User
+  ID, naming no User or Company (`pap.sessionSigner` replaces
+  `pap.dpopProofProvider`).
+- **Blind signing:** companies accept `ES256` and `PS384` for client assertions
+  and delegations; a signer can sign both blindly (RFC 9474
+  RSABSSA-SHA384-PSS-Deterministic), with each `jti` drawn on the device.
+- **Plain OAuth tokens:** refresh and access tokens under OAuth's names. The
+  reference companies issue Bearer tokens. `dpop_jkt`, Poppy's own DPoP rules,
+  `refresh_token_expires_in` and `account_mismatch` are gone. The SDKs do not
+  send DPoP proofs yet, and refuse a `DPoP` token response.
+- **MCP:** a token is requested with `resource` set to the server's `url`. Token
+  Exchange is gone.
+- **Sign-out, challenges, rate limits:** sign-out revokes every refresh token
+  held for the account; a signed-out account request gets a 401 challenge with
+  `scope` and no error code; rate limits are 429 with `Retry-After` and no
+  `rate_limited` body.
+- **Browser join:** the agent authorizes the form's one-time code at
+  `{browser_session_endpoint}/authorize`; the browser submits only the code.
+- **Mediated Sign-In** is the `mediated-sign-in` extension, version 1: an OAuth
+  extension grant at the token endpoint, with `code_required`. `auth.mediated`
+  and its endpoint are gone. An extension recognized from the request needs no
+  client-metadata entry.
+- **Operations version 2:** a 403 `approval_required` (or MCP `structuredContent`,
+  or a message's `operation`) and a retry carrying the approval in
+  `Poppy-Approval`, `_meta` or a message's `approval`; at most once, 503 with
+  `Retry-After` while performing. No endpoints, `state`, `confirmation`,
+  `result`, `approved_by`, cancel, standing permissions,
+  `user_approval_required`, `terms_changed` or `operation_not_found`. The agent
+  asks the User about every operation. `PapOutcome` is withdrawn and `PapConfirm`
+  is at version 2.
+- **Schemas:** feedback has no `kind`; an alternative's `instructions` has no
+  length cap; an unknown conversation `status` reads as `working` and an unknown
+  `responder` as `human`. Upstream's JSON Schemas are vendored and the fixtures
+  checked against them.
+
 ## 0.27.0 (unreleased)
 
 PAP draft 0.3, as of upstream `a95b757` (reviewed 27 October 2026), in both SDKs

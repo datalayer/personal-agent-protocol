@@ -279,7 +279,7 @@ function isPendingDirectSignIn(value: unknown): value is PendingDirectSignIn {
   );
 }
 
-/** Orchestrate one-use browser authorization and proof-bound code exchange. */
+/** Orchestrate one-use browser authorization and the code exchange. */
 export class DirectSignInClient {
   readonly #reactor: ReactorPlatformView;
   readonly #sessions: SessionClient;

@@ -288,7 +288,6 @@ export class DeviceSignInClient {
         client_assertion_type: JWT_CLIENT_ASSERTION,
         client_assertion: clientAssertion.reveal(),
       }),
-      undefined,
       options.signal,
     );
     // A 429 has `Retry-After` and no body (§5.6).
@@ -413,17 +412,12 @@ export class DeviceSignInClient {
     if (!options.tenantId || options.tenantId.length > 256) throw new RangeError("Invalid tenantId");
   }
 
-  async #request(url: string, body: URLSearchParams, dpop?: string, signal?: AbortSignal): Promise<Response> {
-    const response = await this.#send(url, body, dpop, signal);
-    await refuseRedirect(response, AuthorizationError);
-    return response;
-  }
-
-  async #send(url: string, body: URLSearchParams, dpop?: string, signal?: AbortSignal): Promise<Response> {
+  async #request(url: string, body: URLSearchParams, signal?: AbortSignal): Promise<Response> {
+    let response: Response;
     try {
-      return await this.#fetch(url, {
+      response = await this.#fetch(url, {
         method: "POST",
-        headers: { Accept: "application/json", ...(dpop === undefined ? {} : { DPoP: dpop }) },
+        headers: { Accept: "application/json" },
         body,
         credentials: "omit",
         redirect: "manual",
@@ -432,6 +426,8 @@ export class DeviceSignInClient {
     } catch (cause) {
       throw new AuthorizationError("request_failed", "Device Sign-In request failed", { cause });
     }
+    await refuseRedirect(response, AuthorizationError);
+    return response;
   }
 
   async #decode(response: Response, label: string): Promise<unknown> {

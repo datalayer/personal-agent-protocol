@@ -13,18 +13,13 @@ export type UnknownFields = Readonly<Record<string, unknown>>;
  * version can break the one before, so only its own `major.minor`.
  */
 export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set(["0.3"]);
-/** The DPoP algorithm every company accepts (§3.2): a list a company publishes includes it. */
-export const DPOP_REQUIRED_ALGORITHM = "ES256";
 /** OAuth scope syntax (RFC 6749 §3.3): one scope token. */
 const SCOPE = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
-/** The grants a Company's token endpoint MUST accept (§3.2): Sessions and Account Tokens. */
-export const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+/** The grant a Company's token endpoint MUST accept (§3.2). */
 export const REFRESH_TOKEN_GRANT = "refresh_token";
 /** The grants that say the Company offers Direct and Device Sign-In (§3.2, §4.4). */
 export const AUTHORIZATION_CODE_GRANT = "authorization_code";
 export const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-/** The grant for a Bearer token at an MCP server that doesn't support DPoP (§4.3). */
-export const TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange";
 /** `changes` values a scope hint may give (§4.4); any other is read as `irreversible`. */
 export const SCOPE_CHANGES = ["none", "reversible", "irreversible"] as const;
 export type ScopeChanges = (typeof SCOPE_CHANGES)[number];
@@ -212,11 +207,6 @@ export function offersDirect(metadata: OAuthServerMetadata): boolean {
 /** Whether the Company offers Device Sign-In (§3.2, §4.4). */
 export function offersDevice(metadata: OAuthServerMetadata): boolean {
   return metadata.grant_types_supported.includes(DEVICE_CODE_GRANT);
-}
-
-/** Whether Bearer tokens for MCP servers without DPoP can be had (§4.3). */
-export function offersTokenExchange(metadata: OAuthServerMetadata): boolean {
-  return metadata.grant_types_supported.includes(TOKEN_EXCHANGE_GRANT);
 }
 
 /**
@@ -696,14 +686,10 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
   } as DiscoveryDocument;
 }
 
-/** A `dpop_signing_alg_values_supported` list: when listed, it includes ES256 (§3.2, §4.3). */
+/** A `dpop_signing_alg_values_supported` list: whichever a Company lists (§4.5). */
 export function dpopAlgorithms(value: unknown, label: string): readonly string[] | undefined {
   if (value === undefined || value === null) return undefined;
-  const algorithms = array(value, label).map((item) => string(item, `${label} entry`));
-  if (!algorithms.includes(DPOP_REQUIRED_ALGORITHM)) {
-    throw new ProtocolValidationError("invalid_oauth_metadata", `${label} must include ES256`);
-  }
-  return algorithms;
+  return array(value, label).map((item) => string(item, `${label} entry`));
 }
 
 /**

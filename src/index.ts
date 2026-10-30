@@ -249,11 +249,8 @@ export {
 } from "./mcp.js";
 export {
   AUTHORIZATION_CODE_GRANT,
-  DPOP_REQUIRED_ALGORITHM,
-  JWT_BEARER_GRANT,
   SCOPE_CHANGES,
   SUPPORTED_PROTOCOL_VERSIONS,
-  TOKEN_EXCHANGE_GRANT,
   effectiveChanges,
   isLoopbackRedirect,
   companyIssuer,
@@ -265,7 +262,6 @@ export {
   parseProtectedResourceMetadata,
   offersDevice,
   offersDirect,
-  offersTokenExchange,
   parseAlternative,
   parseAlternativeReference,
   parseAuthor,

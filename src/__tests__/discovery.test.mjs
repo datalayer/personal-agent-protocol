@@ -308,6 +308,15 @@ test("rejects an OAuth issuer that does not authorize the company domain", async
   );
 });
 
+test("a company lists whichever DPoP algorithms it accepts", async () => {
+  // DPoP is the Company's choice (§4.5): nothing here says which, and a list isn't refused.
+  const discovery = await fixture("discovery-valid.json");
+  const metadata = { ...(await fixture("oauth-metadata-valid.json")), dpop_signing_alg_values_supported: ["PS256"] };
+  const fetch = async (input) => jsonResponse(documentAt(input, discovery, metadata));
+  const company = await discoverCompany("example.com", { fetch });
+  assert.deepEqual(company.oauthMetadata.dpop_signing_alg_values_supported, ["PS256"]);
+});
+
 test("discovers through Reactor contributions", async () => {
   const discovery = await fixture("discovery-valid.json");
   const metadata = await fixture("oauth-metadata-valid.json");

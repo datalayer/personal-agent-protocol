@@ -19,9 +19,9 @@
  *
  * A company built on the SDK's company service reports through the same point (stage
  * `company`): an agent's identity verified for the first time or with new metadata, a
- * Session started or renewed, a Session moved to another interface (a Bearer token for the
- * MCP server, a browser joining it), and each request it refused, with the protocol's
- * code, the route, the status, and whether a proof or assertion was a replay. The device
+ * Session started, a Session moved to another interface (a token for the MCP server, a
+ * browser joining it), and each request it refused, with the protocol's code, the route,
+ * the status, and whether a Session JWT or client assertion was a replay. The device
  * flow's `authorization_pending` and `slow_down` are progress, not refusals.
  *
  * `openTelemetrySink(tracer)` makes each event a span of any OpenTelemetry API tracer

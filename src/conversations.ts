@@ -132,7 +132,7 @@ export function generateMessageId(reactor: ReactorPlatformView): string {
   return `msg_${base64Url(bytes)}`;
 }
 
-/** Start and continue PAP conversations through a proof-bound transport. */
+/** Start and continue PAP conversations, each request with the Session header. */
 export class ConversationClient {
   readonly #reactor: ReactorPlatformView;
   readonly #transport: SessionFetchClient;

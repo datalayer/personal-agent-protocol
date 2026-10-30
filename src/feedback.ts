@@ -11,7 +11,7 @@
  * A company that wants to know lists `feedback.endpoint` in its poppy.json. When a
  * user's task can't be done — not with the Company Agent, not with its APIs, not on its
  * website in a browser session — the personal agent MAY send one `FeedbackReport` for
- * that task with the Session's token and a DPoP proof:
+ * that task with the Session header and, signed in, the access token:
  *
  * ```ts
  * const endpoint = feedbackEndpoint(company.document);

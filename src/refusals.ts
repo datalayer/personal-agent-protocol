@@ -15,6 +15,8 @@ import { PersonalAgentProtocolError, TransportError } from "./errors.js";
 /** The statuses of an HTTP redirect. */
 export const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 
+const CODE_REQUIRED = ["sign_in_id", "sent_to", "expires_in"];
+
 const CHALLENGE_PARAMETER = /([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"/g;
 
 /**
@@ -37,7 +39,7 @@ export function challengeParameters(header: string | null | undefined): Record<s
  * `extension_required` names its extension in the JSON body at the token endpoint and
  * the endpoints the protocol or an extension defines, and in the `WWW-Authenticate`
  * challenge at APIs (§3.3); either shape is read. `retry_after` is kept as sent on a
- * 429 (§4.3), never acted on here.
+ * 429 or 503 (§5.6), never acted on here.
  */
 export function refusalDetails(response: Response, payload: unknown): Record<string, unknown> {
   const challenge = challengeParameters(response.headers.get("www-authenticate"));
@@ -50,9 +52,42 @@ export function refusalDetails(response: Response, payload: unknown): Record<str
   if (typeof extension === "string" && extension) details.extension = extension;
   const scope = "scope" in body ? body.scope : challenge.scope;
   if (typeof scope === "string" && scope) details.scope = scope;
+  // A token not issued for this service: its metadata, to read again (§4.5).
+  if (challenge.resource_metadata) details.resource_metadata = challenge.resource_metadata;
   const retryAfter = response.headers.get("retry-after");
-  if (response.status === 429 && retryAfter) details.retry_after = retryAfter;
+  if ((response.status === 429 || response.status === 503) && retryAfter) {
+    details.retry_after = retryAfter;
+  }
+  if (body.error === "code_required") {
+    // What continues a Mediated Sign-In (Mediated Sign-In 4).
+    for (const name of CODE_REQUIRED) if (name in body) details[name] = body[name];
+  }
   return details;
+}
+
+/**
+ * The error a refusal names: in its JSON body, else its `WWW-Authenticate` challenge.
+ *
+ * A 401 challenge with no error code and a `scope` is a signed-out request for something that
+ * needs the account: read as `insufficient_scope` (§7). A 429 has no body: `rate_limited`
+ * (§5.6).
+ */
+export function refusalCode(response: Response, payload: unknown, fallback: string): string {
+  const body =
+    typeof payload === "object" && payload !== null && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {};
+  if (typeof body.error === "string") return body.error;
+  const challenge = challengeParameters(response.headers.get("www-authenticate"));
+  if (challenge.error !== undefined) return challenge.error;
+  if (response.status === 401 && challenge.scope) return "insufficient_scope";
+  if (response.status === 429) return "rate_limited";
+  return fallback;
+}
+
+/** A refusal with nothing to parse, such as a 429 (§5.6) or a challenge alone (§7). */
+export function refusedWithoutBody(response: Response, text: string): boolean {
+  return !response.ok && !text;
 }
 
 type ErrorClass = new (

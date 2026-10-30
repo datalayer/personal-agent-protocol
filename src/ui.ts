@@ -8,21 +8,21 @@
  * PAP's displays for Reactor's ui channel (`@datalayer/reactor/ui`), as a
  * page receives them: the TypeScript side of `personal_agent_protocol.ui`.
  *
- * A display is declared once, in Python (`PapConfirm`, `PapOutcome`: pydantic
+ * A display is declared once, in Python (`PapConfirm`, `PapReplies`: pydantic
  * models with `@display_type`); this module types its wire form and checks it
  * with a guard, against the same committed examples the Python tests write
- * (`protocol/fixtures/pap-confirm-display.json`, `pap-outcome-display.json`). It needs no runtime from
+ * (`protocol/fixtures/pap-confirm-display.json`). It needs no runtime from
  * Reactor: the guard takes any display-shaped value, so Reactor's `Display`
  * narrows to a `PapConfirmDisplay`.
  */
 
-/** The display type of an operation waiting for the person to confirm it. */
+/** The display type of an operation waiting for the person's approval. */
 export const PAP_CONFIRM_TYPE = "application/vnd.datalayer.pap.confirm+json";
 
 /** The version of `PAP_CONFIRM_TYPE` this module reads. */
-export const PAP_CONFIRM_VERSION = 1;
+export const PAP_CONFIRM_VERSION = 2;
 
-/** What confirming an operation does, as an application's Rules class it. */
+/** What approving an operation does, as an application's Rules class it. */
 export type PapActionClass = "read" | "write" | "send" | "buy" | "delete" | "publish";
 
 /** Every `PapActionClass`, in the Rules' order. */
@@ -36,35 +36,36 @@ export const PAP_ACTION_CLASSES: readonly PapActionClass[] = [
 ];
 
 /**
- * The Session an operation is confirmed in: a one-way reference (12 hex
- * digits of the SHA-256 of its ID — never the ID, never the Session Token)
+ * The Session an operation is approved in: a one-way reference (12 hex
+ * digits of the SHA-256 of its ID — never the ID, never an access token)
  * and whether the person is signed in there. The page sees the reference; a
  * model is told only `signed_in`.
  */
 export type PapSessionShown = { ref: string; signed_in: boolean };
 
 /** The revision a revised operation replaced, and its terms. */
-export type PapTermsWas = { revision: number; terms: Record<string, unknown> };
+export type PapTermsWas = { revision: string; terms: Record<string, unknown> };
 
-/** An operation to confirm, as a display's `data` (`PapConfirm`'s fields). */
+/** An operation to approve, as a display's `data` (`PapConfirm`'s fields). */
 export type PapConfirmData = {
-  /** The company, as the person knows it (its domain or its name). */
+  /** The Company's name (`organization.name`), or its domain. */
   company: string;
-  /** The company's own words, shown verbatim, never rephrased. */
+  /** The company's own words, shown verbatim as text, never rephrased. */
   summary: string;
   terms: Record<string, unknown>;
-  /** The operation's reference at the company; with `revision`, what is confirmed. */
+  /** The operation's ID at the company; with `revision`, what is approved. */
   operation_ref: string;
-  revision: number;
-  /** What confirming it does, as an application's Rules class it; null when not said. */
+  /** Opaque (Operations 3). */
+  revision: string;
+  /** The last time an approval of this revision is accepted (ISO 8601). */
+  expires_at: string;
+  /** Where the terms disagree with the summary or with what was asked for. */
+  differences: string[];
+  /** What approving it does, as an application's Rules class it; null when not said. */
   does: PapActionClass | null;
   session: PapSessionShown | null;
-  /** Until when the company holds these terms (ISO 8601). */
-  expires_at: string | null;
-  /** The revision it replaced, when the company changed its terms. */
+  /** The revision it replaced, when the terms changed. */
   was: PapTermsWas | null;
-  /** Only the person's own decision confirms it: no approval given in advance covers it. */
-  only_the_person: boolean;
 };
 
 /** A display of an operation to confirm, as the page receives it. */
@@ -86,11 +87,11 @@ const DATA_KEYS = [
   "terms",
   "operation_ref",
   "revision",
+  "expires_at",
+  "differences",
   "does",
   "session",
-  "expires_at",
   "was",
-  "only_the_person",
 ] as const;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -101,8 +102,8 @@ const hasExactly = (value: Record<string, unknown>, keys: readonly string[]): bo
   return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 };
 
-const isRevision = (value: unknown): value is number =>
-  typeof value === "number" && Number.isInteger(value) && value >= 1;
+const isRevision = (value: unknown): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(value);
 
 const isFilled = (value: unknown): value is string => typeof value === "string" && value.trim() !== "";
 
@@ -118,29 +119,27 @@ export function isPapSessionShown(value: unknown): value is PapSessionShown {
 }
 
 /**
- * Whether a value is an operation to confirm's `data`, as `PapConfirm` sends
+ * Whether a value is an operation to approve's `data`, as `PapConfirm` sends
  * it: every field, of its type, and no other (a member nobody declared is
  * refused, as the Python model refuses it).
  */
 export function isPapConfirmData(value: unknown): value is PapConfirmData {
   if (!isObject(value) || !hasExactly(value, DATA_KEYS)) return false;
-  const { company, summary, terms, operation_ref, revision, does, session, expires_at, was, only_the_person } =
-    value;
+  const { company, summary, terms, operation_ref, revision, expires_at, differences, does, session, was } = value;
   if (!isFilled(company) || !isFilled(summary) || !isFilled(operation_ref)) return false;
   if (!isObject(terms) || !isRevision(revision)) return false;
+  if (typeof expires_at !== "string" || Number.isNaN(Date.parse(expires_at))) return false;
+  if (!Array.isArray(differences) || differences.some((item) => typeof item !== "string")) return false;
   if (does !== null && !PAP_ACTION_CLASSES.includes(does as PapActionClass)) return false;
   if (session !== null && !isPapSessionShown(session)) return false;
-  if (expires_at !== null && (typeof expires_at !== "string" || Number.isNaN(Date.parse(expires_at)))) {
-    return false;
-  }
   if (was !== null) {
     if (!isObject(was) || !hasExactly(was, ["revision", "terms"])) return false;
-    if (!isRevision(was.revision) || was.revision >= revision || !isObject(was.terms)) return false;
+    if (!isRevision(was.revision) || was.revision === revision || !isObject(was.terms)) return false;
   }
-  return typeof only_the_person === "boolean";
+  return true;
 }
 
-/** Whether a display is an operation to confirm, of the version this SDK reads. */
+/** Whether a display is an operation to approve, of the version this SDK reads. */
 export function isPapConfirm<D extends DisplayLike>(display: D): display is D & PapConfirmDisplay {
   return (
     display.type === PAP_CONFIRM_TYPE &&
@@ -151,114 +150,39 @@ export function isPapConfirm<D extends DisplayLike>(display: D): display is D & 
   );
 }
 
-/** What an operation to confirm reads as without a renderer: `PapConfirm.text()`, word for word. */
-export function papConfirmText(data: PapConfirmData): string {
-  const said = `${data.company} asks you to confirm: ${data.summary} (version ${data.revision})`;
-  return data.was ? `${said} Changed since version ${data.was.revision}.` : said;
-}
-
-/** An operation to confirm as its display, `text` included; throws when `data` is not one. */
-export function papConfirmDisplay(id: string, data: PapConfirmData): PapConfirmDisplay {
-  if (!id || !isPapConfirmData(data)) {
-    throw new TypeError("Not an operation to confirm: PapConfirm's fields, each of its type, and no other");
-  }
-  return { type: PAP_CONFIRM_TYPE, version: PAP_CONFIRM_VERSION, id, text: papConfirmText(data), data, actions: [] };
-}
-
-/** The display type of what a confirmed operation came to. */
-export const PAP_OUTCOME_TYPE = "application/vnd.datalayer.pap.outcome+json";
-
-/** The version of `PAP_OUTCOME_TYPE` this module reads. */
-export const PAP_OUTCOME_VERSION = 1;
-
-/** What a confirmed operation came to: every operation state but `proposed`. */
-export type PapOutcomeState = "in_progress" | "succeeded" | "failed" | "cancelled" | "expired";
-
-/** Every `PapOutcomeState`. */
-export const PAP_OUTCOME_STATES: readonly PapOutcomeState[] = [
-  "in_progress",
-  "succeeded",
-  "failed",
-  "cancelled",
-  "expired",
-];
-
-/** What a confirmed operation came to, as a display's `data` (`PapOutcome`'s fields). */
-export type PapOutcomeData = {
-  /** The company, as the person knows it (its domain or its name). */
-  company: string;
-  /** What was confirmed, in the company's words. */
-  summary: string;
-  operation_ref: string;
-  revision: number;
-  state: PapOutcomeState;
-  /**
-   * The company's final `result.summary`, verbatim — a failed operation's
-   * partial effects included; null while in progress, never null once final.
-   */
-  result: string | null;
-  /** Who confirmed it: the person, or a standing permission they gave; null when read back. */
-  approved_by: "user" | "standing_permission" | null;
-};
-
-/** A display of what a confirmed operation came to, as the page receives it. */
-export type PapOutcomeDisplay = {
-  type: typeof PAP_OUTCOME_TYPE;
-  version: typeof PAP_OUTCOME_VERSION;
-  id: string;
-  text: string;
-  data: PapOutcomeData;
-  actions?: unknown[];
-};
-
-const OUTCOME_KEYS = ["company", "summary", "operation_ref", "revision", "state", "result", "approved_by"] as const;
-
-const OUTCOME_LEADS: Record<PapOutcomeState, string> = {
-  succeeded: "Done at",
-  failed: "Failed at",
-  in_progress: "Still in progress at",
-  cancelled: "Cancelled at",
-  expired: "Expired at",
-};
+/** What makes a link, an image or HTML of a summary, in CommonMark and its autolinks. */
+const ACTIVE = /[\\[\]<>@]|:\/\/|www\./g;
 
 /**
- * Whether a value is an outcome's `data`, as `PapOutcome` sends it: every
- * field, of its type, and no other; a result once final and none before.
+ * A summary whose links, images and HTML show as text, wherever it is rendered.
+ *
+ * A summary can't send the User elsewhere or load content while they decide (Operations 3):
+ * their markup is escaped, in the Markdown a chat renders. Emphasis, paragraphs and lists stay.
+ * Text a host shows as text needs none of this: it shows the summary as it is.
  */
-export function isPapOutcomeData(value: unknown): value is PapOutcomeData {
-  if (!isObject(value) || !hasExactly(value, OUTCOME_KEYS)) return false;
-  const { company, summary, operation_ref, revision, state, result, approved_by } = value;
-  if (!isFilled(company) || !isFilled(summary) || !isFilled(operation_ref) || !isRevision(revision)) return false;
-  if (!PAP_OUTCOME_STATES.includes(state as PapOutcomeState)) return false;
-  if (state === "in_progress" ? result !== null : !isFilled(result)) return false;
-  return approved_by === null || approved_by === "user" || approved_by === "standing_permission";
+export function inertSummary(summary: string): string {
+  return summary.replace(ACTIVE, (active) => {
+    if (active === "://") return "\\://";
+    if (active === "www.") return "www\\.";
+    return `\\${active}`;
+  });
 }
 
-/** Whether a display is what a confirmed operation came to, of the version this SDK reads. */
-export function isPapOutcome<D extends DisplayLike>(display: D): display is D & PapOutcomeDisplay {
-  return (
-    display.type === PAP_OUTCOME_TYPE &&
-    display.version === PAP_OUTCOME_VERSION &&
-    typeof display.id === "string" &&
-    typeof display.text === "string" &&
-    isPapOutcomeData(display.data)
-  );
+/** What an operation to approve reads as without a renderer: `PapConfirm.text()`, word for word. */
+export function papConfirmText(data: PapConfirmData): string {
+  const expires = new Date(data.expires_at).toISOString().replace(/\.\d{3}Z$/, "+00:00");
+  let said = `${data.company} asks you to approve: ${inertSummary(data.summary)} (revision ${data.revision}, until ${expires})`;
+  if (data.was) said += " The terms changed since you saw them.";
+  for (const difference of data.differences) said += ` Check: ${difference}`;
+  return said;
 }
 
-/** What an outcome reads as without a renderer: `PapOutcome.text()`, word for word. */
-export function papOutcomeText(data: PapOutcomeData): string {
-  const lead = `${OUTCOME_LEADS[data.state]} ${data.company}`;
-  return data.result === null
-    ? `${lead}: ${data.summary} (version ${data.revision}) The outcome is not known yet.`
-    : `${lead}: ${data.result} (version ${data.revision})`;
-}
-
-/** An outcome as its display, `text` included; throws when `data` is not one. */
-export function papOutcomeDisplay(id: string, data: PapOutcomeData): PapOutcomeDisplay {
-  if (!id || !isPapOutcomeData(data)) {
-    throw new TypeError("Not an operation's outcome: PapOutcome's fields, each of its type, and no other");
+/** An operation to approve as its display, `text` included; throws when `data` is not one. */
+export function papConfirmDisplay(id: string, data: PapConfirmData): PapConfirmDisplay {
+  if (!id || !isPapConfirmData(data)) {
+    throw new TypeError("Not an operation to approve: PapConfirm's fields, each of its type, and no other");
   }
-  return { type: PAP_OUTCOME_TYPE, version: PAP_OUTCOME_VERSION, id, text: papOutcomeText(data), data, actions: [] };
+  return { type: PAP_CONFIRM_TYPE, version: PAP_CONFIRM_VERSION, id, text: papConfirmText(data), data, actions: [] };
 }
 
 /** The display type of what a company answered in a conversation. */

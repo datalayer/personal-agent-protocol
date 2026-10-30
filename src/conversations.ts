@@ -21,11 +21,11 @@ import {
   type Message,
 } from "./models.js";
 import { RandomSources, firstContribution } from "./reactor.js";
-import type { SessionToken } from "./sessions.js";
+import type { AccessToken, PapSession } from "./sessions.js";
 import { byEndpoint, conversationResult, traced } from "./telemetry.js";
-import { DpopFetchClient } from "./transport.js";
+import { SessionFetchClient } from "./transport.js";
 import { readLimited } from "./limits.js";
-import { challengeParameters, refusalDetails } from "./refusals.js";
+import { refusalCode, refusalDetails } from "./refusals.js";
 
 const identifier = /^[A-Za-z0-9_-]{1,256}$/;
 
@@ -65,9 +65,9 @@ export interface ConversationStreamOptions extends ConversationRequestOptions {
 }
 
 export interface ConversationRequestOptions {
-  readonly token: SessionToken;
-  readonly tenantId: string;
-  readonly issuer: string;
+  readonly session: PapSession;
+  /** Signed in with it, signed out without. */
+  readonly token?: AccessToken | undefined;
   readonly cursor?: string;
   readonly wait?: number;
   readonly signal?: AbortSignal;
@@ -86,7 +86,7 @@ export interface ConversationEventOptions extends ConversationRequestOptions {
 
 export interface ConversationClientOptions {
   readonly reactor: ReactorPlatformView;
-  readonly transport: DpopFetchClient;
+  readonly transport: SessionFetchClient;
   readonly maxResponseBytes?: number;
 }
 
@@ -135,7 +135,7 @@ export function generateMessageId(reactor: ReactorPlatformView): string {
 /** Start and continue PAP conversations through a proof-bound transport. */
 export class ConversationClient {
   readonly #reactor: ReactorPlatformView;
-  readonly #transport: DpopFetchClient;
+  readonly #transport: SessionFetchClient;
   readonly #maxResponseBytes: number;
 
   constructor(options: ConversationClientOptions) {
@@ -237,9 +237,8 @@ export class ConversationClient {
       options.wait,
     );
     const response = await this.#transport.request("GET", target, {
+      session: options.session,
       token: options.token,
-      tenantId: options.tenantId,
-      issuer: options.issuer,
       headers: { Accept: "application/json" },
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
@@ -420,9 +419,8 @@ export class ConversationClient {
       let progressed = false;
       const partial: string[] = [];
       const response = await this.#transport.request("GET", url, {
+        session: options.session,
         token: options.token,
-        tenantId: options.tenantId,
-        issuer: options.issuer,
         headers: {
           Accept: "text/event-stream",
           ...(lastEventId === undefined ? {} : { "Last-Event-ID": lastEventId }),
@@ -493,9 +491,8 @@ export class ConversationClient {
       "POST",
       `${endpoint.replace(/\/$/, "")}/${conversationId}/${action}`,
       {
+        session: options.session,
         token: options.token,
-        tenantId: options.tenantId,
-        issuer: options.issuer,
         headers: { "Content-Type": "application/json" },
         body: "{}",
         ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -546,9 +543,8 @@ export class ConversationClient {
       target.searchParams.set("wait", String(options.wait));
     }
     const response = await this.#transport.request("POST", target.toString(), {
+      session: options.session,
       token: options.token,
-      tenantId: options.tenantId,
-      issuer: options.issuer,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -618,16 +614,8 @@ export class ConversationClient {
       payload = undefined;
     }
     if (response.status !== expectedStatus) {
-      let error =
-        typeof payload === "object" &&
-        payload !== null &&
-        !Array.isArray(payload)
-          ? (payload as Record<string, unknown>).error
-          : undefined;
-      if (typeof error !== "string") {
-        // A token error may come only in WWW-Authenticate (§6).
-        error = challengeParameters(response.headers.get("www-authenticate")).error;
-      }
+      // In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
+      const error = refusalCode(response, payload, "conversation_request_failed");
       const openId =
         error === "direct_conversation_open" &&
         typeof (payload as Record<string, unknown>).conversation_id === "string" &&
@@ -641,7 +629,7 @@ export class ConversationClient {
         ...(openId === undefined ? {} : { conversation_id: openId }),
       };
       throw new ConversationError(
-        typeof error === "string" ? error : "conversation_request_failed",
+        error,
         "conversation request was rejected",
         {
           statusCode: response.status,

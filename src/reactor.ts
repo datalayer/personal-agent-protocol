@@ -23,7 +23,6 @@ import {
   SharedRateLimitBudget,
   type RateLimitBudget,
 } from "./limits.js";
-import type { StandingPermissionStore } from "./operations.js";
 import type { SecretValue } from "./secret.js";
 import type { TelemetryEvent } from "./telemetry.js";
 
@@ -81,53 +80,46 @@ export interface BrowserHandoff {
 }
 
 /**
- * The personal agent's own browser, joining a Session through the company's form (§5).
+ * The personal agent's own browser, joining a Session through the company's form (§6).
  *
- * `loadJoinForm` opens the endpoint with a GET, as a top-level navigation, and returns
- * the form's one-time `code`, read from that page only; `submitJoinForm` puts the proof
- * in the form's `proof` field and submits it from the same browser, whose cookie ties the
- * code to it.
+ * `loadJoinForm` opens the endpoint with a GET, as a top-level navigation, and returns the
+ * form's one-time `code`, read from that page only; once the agent has authorized the code,
+ * `submitJoinForm` submits the form, the code alone, from the same browser, whose cookie
+ * ties the code to it.
  */
 export interface BrowserJoin {
   loadJoinForm(endpoint: URL): Promise<SecretValue>;
-  submitJoinForm(proof: SecretValue): Promise<void>;
+  submitJoinForm(): Promise<void>;
 }
 
 /**
- * Inputs for one fresh proof-of-possession JWT.
+ * Inputs for one request's Session JWT (§5.2).
  *
- * `sessionKey` is the Session Key's JWK thumbprint (RFC 7638), which names the Session
- * at the company (§4.3): the provider signs with that key, and no other.
+ * `sid` names the Session, `sub` the User ID and `issuer` the Company; `accessToken`, when
+ * the request carries one, is hashed into `ath`.
  */
-export interface DpopProofRequest {
+export interface SessionJwtRequest {
   readonly method: string;
   readonly url: string;
   readonly tenantId: string;
   readonly issuer: string;
-  readonly sessionKey: string;
+  readonly clientId: string;
+  readonly sid: string;
+  readonly sub: string;
+  readonly agentId?: string;
   readonly accessToken?: SecretValue;
-  readonly nonce?: string;
 }
 
 /**
- * Create fresh DPoP proofs with Session Keys whose private halves it keeps (§4.3).
- *
- * Each Session has its own key: `newSessionKey` makes one and returns its JWK
- * thumbprint, which names the Session; `create` signs with the key a thumbprint names;
- * `discardSessionKey` forgets one whose Session has ended, never to be used again (§4.2).
+ * Sign the Session JWT of one request with a delegated key whose private half it keeps
+ * (§5.2). `DelegatedSessionSigner` is the default: one delegated key per User ID.
  */
-export interface DpopProofProvider {
-  newSessionKey(options: { readonly tenantId: string; readonly issuer: string }): Promise<string>;
-  create(request: DpopProofRequest): Promise<SecretValue>;
-  discardSessionKey(options: {
-    readonly tenantId: string;
-    readonly issuer: string;
-    readonly sessionKey: string;
-  }): Promise<void>;
+export interface SessionSigner {
+  sign(request: SessionJwtRequest): Promise<SecretValue>;
 }
 
-/** Serialize every use of one Account Token: rotation invalidates the one replaced (PAP §4.8). */
-export interface AccountTokenLock {
+/** Serialize every use of one refresh token: rotation invalidates the one replaced (§4.4). */
+export interface RefreshTokenLock {
   hold<T>(reference: string, work: () => Promise<T>): Promise<T>;
 }
 
@@ -144,9 +136,8 @@ export interface ProtectedInputRequest {
   readonly companyName: string;
   readonly companyDomain: string;
   /**
-   * The company's `auth.issuer`: a credential store the user chose picks stored
-   * credentials by it, never by the field labels or the endpoint, which the company
-   * writes and can name anything (§4.7).
+   * The company's issuer: a credential store the user chose picks stored credentials by
+   * it, never by the field labels, which the company writes and can name anything.
    */
   readonly issuer: string;
   readonly fields: readonly ProtectedInputField[];
@@ -159,6 +150,40 @@ export interface ProtectedInput {
 }
 
 /**
+ * What a user is asked to approve: nothing has been done yet.
+ *
+ * An operation (Operations 5): `summary` is the company's own, shown as it is and as text, its
+ * links, images and HTML not rendered (`inertSummary`, wherever Markdown is); `companyName` and
+ * `companyDomain` say who asks, and are shown with it; `terms` and `expiresAt` are the
+ * revision's; `differences` what the terms check found, to point out; `changed` what a new
+ * revision changed.
+ */
+export interface ApprovalRequest {
+  readonly actionId: string;
+  readonly actionName: string;
+  readonly summary: string;
+  readonly arguments: Readonly<Record<string, string>>;
+  readonly tenantId: string;
+  readonly companyName?: string;
+  readonly companyDomain?: string;
+  readonly terms?: Readonly<Record<string, unknown>>;
+  readonly expiresAt?: Date;
+  readonly differences: readonly string[];
+  readonly changed: readonly string[];
+}
+
+/**
+ * The host's own approval surface: the user, not a model, answers.
+ *
+ * Only `true` approves. The surface asks the user every time: it never answers from an earlier
+ * decision, and never because of text from a company. Without a contribution, no operation is
+ * approved.
+ */
+export interface ApprovalSurface {
+  approve(request: ApprovalRequest): Promise<boolean>;
+}
+
+/**
  * Receive each finished protocol stage (`TelemetryEvent` of telemetry.ts), redacted already.
  * No contribution, no telemetry.
  */
@@ -166,8 +191,8 @@ export interface TelemetrySink {
   record(event: TelemetryEvent): void;
 }
 
-/** One in-process lock per reference: the default Account Token lock. */
-export class InProcessAccountTokenLock implements AccountTokenLock {
+/** One in-process lock per reference: the default refresh token lock. */
+export class InProcessRefreshTokenLock implements RefreshTokenLock {
   readonly #tails = new Map<string, Promise<unknown>>();
 
   async hold<T>(reference: string, work: () => Promise<T>): Promise<T> {
@@ -204,11 +229,9 @@ export const BrowserHandoffs = defineContributionPoint<BrowserHandoff>(
   "pap.browserHandoff",
 );
 export const BrowserJoins = defineContributionPoint<BrowserJoin>("pap.browserJoin");
-export const DpopProofProviders = defineContributionPoint<DpopProofProvider>(
-  "pap.dpopProofProvider",
-);
-export const AccountTokenLocks = defineContributionPoint<AccountTokenLock>(
-  "pap.accountTokenLock",
+export const SessionSigners = defineContributionPoint<SessionSigner>("pap.sessionSigner");
+export const RefreshTokenLocks = defineContributionPoint<RefreshTokenLock>(
+  "pap.refreshTokenLock",
 );
 export const ProtectedInputs = defineContributionPoint<ProtectedInput>(
   "pap.protectedInput",
@@ -218,10 +241,8 @@ export const RetryPolicies = defineContributionPoint<RetryPolicy>("pap.retryPoli
 export const RateLimitBudgets = defineContributionPoint<RateLimitBudget>(
   "pap.rateLimitBudget",
 );
-/** `StandingPermissionStore` (operations.ts): the user's standing permissions (Operations). */
-export const StandingPermissionStores = defineContributionPoint<StandingPermissionStore>(
-  "pap.standingPermissionStore",
-);
+/** `ApprovalSurface`: the host's own surface, where the user answers (Operations 5). */
+export const ApprovalSurfaces = defineContributionPoint<ApprovalSurface>("pap.approvalSurface");
 /** `TelemetrySink`: where traces and analytics events go; none, and nothing is emitted. */
 export const TelemetrySinks = defineContributionPoint<TelemetrySink>("pap.telemetry");
 
@@ -285,12 +306,12 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       Caches,
       BrowserHandoffs,
       BrowserJoins,
-      DpopProofProviders,
-      AccountTokenLocks,
+      SessionSigners,
+      RefreshTokenLocks,
       ProtectedInputs,
       RetryPolicies,
       RateLimitBudgets,
-      StandingPermissionStores,
+      ApprovalSurfaces,
       TelemetrySinks,
     ],
     contributes: [
@@ -311,7 +332,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       ),
       contribution(Clocks, systemClock, { id: "system", order: 100 }),
       contribution(RandomSources, systemRandom, { id: "system", order: 100 }),
-      contribution(AccountTokenLocks, new InProcessAccountTokenLock(), {
+      contribution(RefreshTokenLocks, new InProcessRefreshTokenLock(), {
         id: "in-process",
         order: 100,
       }),

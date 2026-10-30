@@ -109,7 +109,7 @@ export class BrowserSessionError extends PersonalAgentProtocolError {
   constructor(
     code: string,
     message: string,
-    options: { cause?: unknown } = {},
+    options: { statusCode?: number; cause?: unknown } = {},
   ) {
     super(code, message, options);
     this.name = "BrowserSessionError";

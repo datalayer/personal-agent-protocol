@@ -6,25 +6,23 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { AuthorizationError, ProtocolValidationError } from "./errors.js";
+import { AuthorizationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import {
   AuthorizationStateStores,
   Clocks,
   RandomSources,
   Signers,
-  TokenStores,
   firstContribution,
 } from "./reactor.js";
 import { SecretValue } from "./secret.js";
-import { refusalDetails, refuseRedirect } from "./refusals.js";
+import { refusalCode, refusalDetails, refuseRedirect, refusedWithoutBody } from "./refusals.js";
 import {
   JWT_CLIENT_ASSERTION,
-  SESSION_KEY,
   SessionClient,
   buildClientAssertionClaims,
-  sessionTokenFromResponse,
-  type SessionToken,
+  finishSignIn,
+  type AccessToken,
   type TokenResponse,
 } from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
@@ -168,7 +166,6 @@ interface PendingDeviceSignIn {
   readonly issuer: string;
   readonly clientId: string;
   readonly tenantId: string;
-  readonly sessionKey: string;
   readonly scopes: readonly string[];
   readonly expiresAt: Date;
   readonly nextPollAt: Date;
@@ -209,8 +206,8 @@ export interface DeviceSignInStart {
 export interface DeviceSignInPoll {
   readonly status: "pending" | "complete";
   readonly retryAt?: Date;
-  readonly token?: SessionToken;
-  readonly accountTokenReference?: string;
+  readonly token?: AccessToken;
+  readonly refreshTokenReference?: string;
   readonly grantedScopes: readonly string[];
   readonly missingScopes: readonly string[];
 }
@@ -222,11 +219,6 @@ export interface DeviceSignInBeginOptions {
   readonly clientId: string;
   readonly scopes: readonly string[];
   readonly tenantId: string;
-  /**
-   * The Session to sign in: the polls carry its proofs, and the company binds the device
-   * code to the key of the first (§4.6).
-   */
-  readonly sessionKey: string;
   /** The company's, from its poppy.json: named with the link and the code (§4.6). */
   readonly organization: { readonly name: string; readonly domain: string };
   /**
@@ -244,7 +236,7 @@ export interface DeviceSignInClientOptions {
   readonly maxResponseBytes?: number;
 }
 
-/** PAP Device Sign-In with private device codes and Reactor-backed Account Tokens. */
+/** PAP Device Sign-In with private device codes and Reactor-backed refresh tokens. */
 export class DeviceSignInClient {
   readonly #reactor: ReactorPlatformView;
   readonly #fetch: typeof globalThis.fetch;
@@ -299,6 +291,7 @@ export class DeviceSignInClient {
       undefined,
       options.signal,
     );
+    // A 429 has `Retry-After` and no body (§5.6).
     const payload = await this.#decode(response, "Device authorization");
     if (!response.ok) throw this.#remoteError(response, payload, "Company refused Device Sign-In");
     const authorization = parseDeviceAuthorization(payload);
@@ -320,7 +313,6 @@ export class DeviceSignInClient {
       issuer,
       clientId,
       tenantId: options.tenantId,
-      sessionKey: options.sessionKey,
       scopes: requestedScopes,
       expiresAt,
       nextPollAt: new Date(now.getTime() + authorization.interval * 1000),
@@ -377,8 +369,6 @@ export class DeviceSignInClient {
         clientId: pending.clientId,
         issuer: pending.issuer,
         tokenEndpoint: pending.tokenEndpoint,
-        tenantId: pending.tenantId,
-        sessionKey: pending.sessionKey,
         form: () => ({ grant_type: DEVICE_CODE_GRANT, device_code: pending.deviceCode.reveal() }),
         error: AuthorizationError,
         ...(signal === undefined ? {} : { signal }),
@@ -404,41 +394,11 @@ export class DeviceSignInClient {
   }
 
   async #complete(response: TokenResponse, pending: PendingDeviceSignIn): Promise<DeviceSignInPoll> {
-    if (response.tokenType !== "DPoP") {
-      throw new AuthorizationError(
-        "invalid_token_response",
-        "Device Sign-In must return a DPoP Session Token",
-      );
+    if (response.refreshToken === undefined) {
+      throw new AuthorizationError("missing_refresh_token", "Device Sign-In did not return a refresh token");
     }
-    let token: SessionToken;
-    try {
-      token = sessionTokenFromResponse(response, {
-        sessionKey: pending.sessionKey,
-        signedIn: true,
-        requestedScopes: pending.scopes,
-      });
-    } catch (cause) {
-      if (!(cause instanceof ProtocolValidationError)) throw cause;
-      throw new AuthorizationError("invalid_token_response", cause.message, { cause });
-    }
-    if (token.scopes.some((scope) => !pending.scopes.includes(scope))) {
-      throw new AuthorizationError("scope_escalation", "Company returned a scope that was not requested");
-    }
-    if (!token.accountToken) {
-      throw new AuthorizationError("missing_account_token", "Device Sign-In did not return an Account Token");
-    }
-    const random = firstContribution(this.#reactor, RandomSources, "random source");
-    const accountTokenReference = opaqueId("account", random.bytes(16));
-    const tokens = firstContribution(this.#reactor, TokenStores, "token store");
-    await tokens.put(accountTokenReference, token.accountToken);
-    const { accountToken: _accountToken, ...publicToken } = token;
-    return {
-      status: "complete",
-      token: publicToken,
-      accountTokenReference,
-      grantedScopes: publicToken.scopes,
-      missingScopes: pending.scopes.filter((scope) => !publicToken.scopes.includes(scope)),
-    };
+    const result = await finishSignIn(this.#reactor, response, pending.scopes, { error: AuthorizationError });
+    return { status: "complete", ...result };
   }
 
   /** A client assertion: `aud` is the issuer, whichever endpoint it goes to (§4.1). */
@@ -451,9 +411,6 @@ export class DeviceSignInClient {
 
   #validateContext(options: DeviceSignInBeginOptions): void {
     if (!options.tenantId || options.tenantId.length > 256) throw new RangeError("Invalid tenantId");
-    if (!SESSION_KEY.test(options.sessionKey)) {
-      throw new AuthorizationError("invalid_context", "sessionKey must be a JWK SHA-256 thumbprint");
-    }
   }
 
   async #request(url: string, body: URLSearchParams, dpop?: string, signal?: AbortSignal): Promise<Response> {
@@ -478,12 +435,13 @@ export class DeviceSignInClient {
   }
 
   async #decode(response: Response, label: string): Promise<unknown> {
+    const body = await readLimitedText(response, this.#maxResponseBytes);
+    if (refusedWithoutBody(response, body)) return undefined;
     if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") {
       throw new AuthorizationError("invalid_content_type", `${label} endpoint must return JSON`, {
         statusCode: response.status,
       });
     }
-    const body = await readLimitedText(response, this.#maxResponseBytes);
     if (new TextEncoder().encode(body).byteLength > this.#maxResponseBytes) {
       throw new AuthorizationError("response_too_large", `${label} response exceeds size limit`, {
         statusCode: response.status,
@@ -500,10 +458,8 @@ export class DeviceSignInClient {
   }
 
   #remoteError(response: Response, payload: unknown, message: string): AuthorizationError {
-    const source = typeof payload === "object" && payload !== null ? payload : {};
-    const remote = "error" in source ? (source as { error?: unknown }).error : undefined;
     const details = refusalDetails(response, payload);
-    return new AuthorizationError(typeof remote === "string" ? remote : "http_error", message, {
+    return new AuthorizationError(refusalCode(response, payload, "http_error"), message, {
       statusCode: response.status,
       ...(Object.keys(details).length > 0 ? { details } : {}),
     });

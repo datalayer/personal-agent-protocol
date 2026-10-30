@@ -6,69 +6,113 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { AuthorizationError, ProtocolValidationError, TransportError } from "./errors.js";
-import { parseJsonStrict } from "./json.js";
+import { AuthorizationError, ProtocolValidationError } from "./errors.js";
+import {
+  parseMediatedSignIn,
+  type DiscoveredCompany,
+  type MediatedSignIn,
+} from "./models.js";
 import {
   AuthorizationStateStores,
+  Clocks,
   ProtectedInputs,
   RandomSources,
-  TokenStores,
   firstContribution,
   type ProtectedInputRequest,
 } from "./reactor.js";
 import type { SecretValue } from "./secret.js";
-import { parseTokenResponse, sessionTokenFromResponse, type SessionToken } from "./sessions.js";
+import {
+  SessionClient,
+  finishSignIn,
+  opaqueId,
+  type AccessToken,
+  type TokenResponse,
+} from "./sessions.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
-import { DpopFetchClient } from "./transport.js";
-import { readLimitedText } from "./limits.js";
-import { refusalDetails } from "./refusals.js";
 
 /**
- * PAP Mediated Sign-In: the user's credentials, relayed to one endpoint (§4.7).
+ * The Mediated Sign-In extension v1: the user's credentials, as an OAuth extension grant.
  *
- * Fields come from the Reactor `pap.protectedInput` contribution (the host's
- * own trusted surface), go only to `auth.mediated.endpoint` on the company's
- * domain with no redirect followed, are sent once, and are dropped as soon as
- * the request is made. A `code_required` answer continues with the one-time
- * code alone, from the Session that started it.
+ * A company that can't offer Direct or Device Sign-In yet lists
+ * `extensions["mediated-sign-in"]` in its `poppy.json` and the grant type in its issuer's
+ * `grant_types_supported`. It is the one sign-in where a password passes through the agent's
+ * host, so this client narrows what the host can do with it:
+ *
+ * - The values are collected through the Reactor `pap.protectedInput` contribution, the host's
+ *   own trusted surface, never from a model or a tool argument, and must be exactly the
+ *   declared fields.
+ * - They are sent to the `token_endpoint` of the company's issuer, with this grant, and
+ *   nowhere else: no redirect is followed.
+ * - They are sent once. A `code_required` answer continues with `sign_in_id` and the one-time
+ *   code alone: no credentials, no scope.
+ * - They are dropped as soon as the request is sent; no result, error, or log carries them,
+ *   and the refresh token is kept behind an opaque reference.
+ *
+ * Errors are OAuth errors from the token endpoint, raised as `AuthorizationError`:
+ * `invalid_grant`, `expired_token`, `access_denied`, `invalid_scope`, and a rate limit
+ * (`rate_limited`, HTTP 429 with `Retry-After`). Mediated Sign-In is transitional: prefer
+ * Direct or Device Sign-In when the company offers them.
  */
 
-export interface MediatedField {
-  readonly name: string;
-  readonly label: string;
-  readonly secret: boolean;
+export const MEDIATED_EXTENSION = "mediated-sign-in";
+export const MEDIATED_VERSION = "1";
+export const MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in";
+
+const SIGN_IN_ID = /^[A-Za-z0-9_-]{1,256}$/;
+
+/** The extension's entry at this version, when the issuer lists the grant too. */
+function declared(company: DiscoveredCompany): unknown {
+  const descriptor = company.document.extensions[MEDIATED_EXTENSION];
+  const metadata = company.oauthMetadata;
+  if (
+    descriptor === undefined ||
+    descriptor.version !== MEDIATED_VERSION ||
+    metadata === undefined ||
+    !metadata.grant_types_supported.includes(MEDIATED_GRANT)
+  ) {
+    return undefined;
+  }
+  return descriptor;
 }
 
-export interface MediatedSignInDescriptor {
-  readonly endpoint: string;
-  readonly fields: readonly MediatedField[];
+/**
+ * What the company's Mediated Sign-In asks for, or `undefined` when it offers none.
+ *
+ * An entry whose fields can't be used, such as one named `client_id`, is an extension this SDK
+ * can't use either.
+ */
+export function mediatedSignIn(company: DiscoveredCompany): MediatedSignIn | undefined {
+  const entry = declared(company);
+  if (entry === undefined) return undefined;
+  try {
+    return parseMediatedSignIn(entry);
+  } catch (error) {
+    if (error instanceof ProtocolValidationError) return undefined;
+    throw error;
+  }
 }
 
+/**
+ * Where a Mediated Sign-In stands, without any credential.
+ *
+ * `code_required` carries an opaque `reference` to continue with, where the company sent the
+ * code (`sentTo`, as the company wrote it), and when it ends.
+ */
 export interface MediatedSignInResult {
-  readonly status: "complete" | "code_required" | "failed" | "expired";
+  readonly status: "complete" | "code_required";
   readonly reference?: string;
   readonly sentTo?: string;
   readonly expiresAt?: Date;
-  readonly token?: SessionToken;
-  readonly accountTokenReference?: string;
+  readonly token?: AccessToken;
+  readonly refreshTokenReference?: string;
   readonly grantedScopes: readonly string[];
   readonly missingScopes: readonly string[];
 }
 
 export interface MediatedSignInOptions {
-  readonly mediated: MediatedSignInDescriptor;
-  readonly organization: { readonly name: string; readonly domain: string };
-  readonly issuer: string;
+  readonly company: DiscoveredCompany;
+  readonly clientId: string;
   readonly scopes: readonly string[];
-  readonly token: SessionToken;
-  readonly tenantId: string;
-  readonly signal?: AbortSignal;
-}
-
-export interface MediatedCodeOptions {
-  readonly token: SessionToken;
-  readonly tenantId: string;
-  readonly issuer: string;
   readonly signal?: AbortSignal;
 }
 
@@ -80,24 +124,18 @@ export interface MediatedSignInClientOptions {
 
 interface PendingCode {
   readonly kind: "pap.mediated-sign-in.v1";
-  readonly endpoint: string;
-  readonly signInId: string;
-  readonly sessionKey: string;
+  readonly tokenEndpoint: string;
+  readonly issuer: string;
+  readonly clientId: string;
   readonly scopes: readonly string[];
   readonly companyName: string;
   readonly companyDomain: string;
+  readonly signInId: string;
   readonly sentTo?: string;
   readonly expiresAt: Date;
 }
 
-const identifier = /^[A-Za-z0-9_-]{1,256}$/;
 const noResult = { grantedScopes: [], missingScopes: [] } as const;
-
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
 
 function isPending(value: unknown): value is PendingCode {
   return (
@@ -107,99 +145,90 @@ function isPending(value: unknown): value is PendingCode {
   );
 }
 
-/** Relay a user's credentials to the company's mediated endpoint, once. */
+/** Sign in with the user's credentials at the issuer's token endpoint, once. */
 export class MediatedSignInClient {
   readonly #reactor: ReactorPlatformView;
-  readonly #transport: DpopFetchClient;
-  readonly #maxResponseBytes: number;
+  readonly #sessions: SessionClient;
 
   constructor(options: MediatedSignInClientOptions) {
-    const limit = options.maxResponseBytes ?? 100 * 1024;
-    if (!Number.isInteger(limit) || limit <= 0) throw new RangeError("maxResponseBytes must be positive");
     this.#reactor = options.reactor;
-    // Credentials go to one URL: a redirect is refused, never followed (§3).
-    this.#transport = new DpopFetchClient({
+    this.#sessions = new SessionClient({
       reactor: options.reactor,
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(options.maxResponseBytes === undefined ? {} : { maxResponseBytes: options.maxResponseBytes }),
     });
-    this.#maxResponseBytes = limit;
   }
 
   signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
     return traced(
       this.#reactor,
       "pap.sign_in.mediated.sign_in",
-      byIssuer(options.issuer, "mediated"),
+      byIssuer(options.company.oauthMetadata?.issuer, "mediated"),
       () => this.#signIn(options),
       signInResult,
     );
   }
 
+  /** Collect the declared fields from the user and send them with the grant. */
   async #signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
-    const endpoint = endpointOnCompanyDomain(
-      options.mediated.endpoint,
-      options.organization.domain,
-      options.issuer,
-    );
+    const mediated = this.#offered(options.company);
+    const metadata = options.company.oauthMetadata as NonNullable<DiscoveredCompany["oauthMetadata"]>;
+    const organization = options.company.document.organization;
     const requested = [...new Set(options.scopes)];
+    if (requested.length === 0) {
+      throw new AuthorizationError("invalid_scope", "At least one valid OAuth scope is required");
+    }
     const credentials = await this.#collect(
       {
         purpose: "credentials",
-        companyName: options.organization.name,
-        companyDomain: options.organization.domain,
-        issuer: options.issuer,
-        fields: options.mediated.fields.map(({ name, label, secret }) => ({ name, label, secret })),
+        companyName: organization.name,
+        companyDomain: organization.domain,
+        issuer: metadata.issuer,
+        fields: mediated.fields.map(({ name, label, secret }) => ({ name, label, secret })),
       },
-      new Set(options.mediated.fields.map((field) => field.name)),
+      new Set(mediated.fields.map((field) => field.name)),
     );
-    let body: string;
+    let form: Record<string, string>;
     try {
-      body = JSON.stringify({
+      form = {
+        grant_type: MEDIATED_GRANT,
         scope: requested.join(" "),
-        credentials: Object.fromEntries(
-          Object.entries(credentials).map(([name, value]) => [name, value.reveal()]),
-        ),
-      });
+        ...Object.fromEntries(Object.entries(credentials).map(([name, value]) => [name, value.reveal()])),
+      };
     } finally {
       for (const name of Object.keys(credentials)) delete credentials[name];
     }
-    const response = await this.#post(endpoint, body, options);
-    return this.#result(response, {
+    const pending: PendingCode = {
       kind: "pap.mediated-sign-in.v1",
-      endpoint,
-      signInId: "",
-      sessionKey: options.token.sessionKey,
+      tokenEndpoint: metadata.token_endpoint,
+      issuer: metadata.issuer,
+      clientId: options.clientId,
       scopes: requested,
-      companyName: options.organization.name,
-      companyDomain: options.organization.domain,
+      companyName: organization.name,
+      companyDomain: organization.domain,
+      signInId: "",
       expiresAt: new Date(8.64e15),
-    });
+    };
+    return this.#grant(form, pending, undefined, options.signal);
   }
 
-  submitCode(reference: string, options: MediatedCodeOptions): Promise<MediatedSignInResult> {
+  /** Continue a `code_required` sign-in with the code the user received. */
+  submitCode(reference: string, options: { readonly signal?: AbortSignal } = {}): Promise<MediatedSignInResult> {
     return traced(
       this.#reactor,
       "pap.sign_in.mediated.submit_code",
-      byIssuer(options.issuer, "mediated"),
-      () => this.#submitCode(reference, options),
+      { "pap.sign_in.method": "mediated" },
+      () => this.#submitCode(reference, options.signal),
       signInResult,
     );
   }
 
-  async #submitCode(reference: string, options: MediatedCodeOptions): Promise<MediatedSignInResult> {
-    const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
-    const pending = await store.take(reference);
+  async #submitCode(reference: string, signal: AbortSignal | undefined): Promise<MediatedSignInResult> {
+    const pending = await this.#state().take(reference);
     if (!isPending(pending)) {
       throw new AuthorizationError(
         "invalid_or_expired_sign_in",
         "Mediated Sign-In is unknown, expired, or already complete",
-      );
-    }
-    if (options.token.sessionKey !== pending.sessionKey) {
-      await store.put(reference, pending, { expiresAt: pending.expiresAt });
-      throw new AuthorizationError(
-        "session_mismatch",
-        "Only the Session that started this sign-in can finish it",
       );
     }
     const code = await this.#collect(
@@ -207,68 +236,105 @@ export class MediatedSignInClient {
         purpose: "one_time_code",
         companyName: pending.companyName,
         companyDomain: pending.companyDomain,
-        issuer: options.issuer,
+        issuer: pending.issuer,
         fields: [{ name: "code", label: "Code", secret: true }],
         ...(pending.sentTo === undefined ? {} : { sentTo: pending.sentTo }),
       },
       new Set(["code"]),
     );
-    let body: string;
+    let form: Record<string, string>;
     try {
-      body = JSON.stringify({ code: (code.code as SecretValue).reveal() });
+      form = {
+        grant_type: MEDIATED_GRANT,
+        sign_in_id: pending.signInId,
+        one_time_code: (code.code as SecretValue).reveal(),
+      };
     } finally {
       delete code.code;
     }
-    const response = await this.#post(`${pending.endpoint.replace(/\/$/, "")}/${pending.signInId}`, body, options);
-    return this.#result(response, pending, reference);
+    return this.#grant(form, pending, reference, signal);
   }
 
-  async #result(response: Response, pending: PendingCode, reference?: string): Promise<MediatedSignInResult> {
-    const payload = await this.#decode(response);
-    if (!response.ok) {
-      // Request problems are JSON errors (§4.7): `invalid_scope`, `account_mismatch`,
-      // `sign_in_not_found`, and `rate_limited` with its `Retry-After`.
-      const details = refusalDetails(response, payload);
-      throw new AuthorizationError(remoteCode(payload) ?? "http_error", "Company refused the Mediated Sign-In", {
-        statusCode: response.status,
-        ...(Object.keys(details).length > 0 ? { details } : {}),
-      });
+  #offered(company: DiscoveredCompany): MediatedSignIn {
+    const entry = declared(company);
+    if (entry === undefined) {
+      throw new AuthorizationError("no_mediated", "The company offers no Mediated Sign-In");
     }
-    const source = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
-    const status = source.status;
-    if (status === "failed" || status === "expired") return { status, ...noResult };
-    if (status === "code_required") return this.#codeRequired(source, pending, reference);
-    if (status === "complete") return this.#complete(source, pending, response.status);
-    throw new AuthorizationError("invalid_mediated_response", "Mediated Sign-In response has no known status", {
-      statusCode: response.status,
-    });
+    try {
+      return parseMediatedSignIn(entry);
+    } catch (cause) {
+      // A field named like `client_id` would overwrite the grant's own parameters.
+      throw new AuthorizationError(
+        "invalid_mediated_extension",
+        "The company's Mediated Sign-In can't be used",
+        { cause },
+      );
+    }
+  }
+
+  async #grant(
+    form: Record<string, string>,
+    pending: PendingCode,
+    reference: string | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<MediatedSignInResult> {
+    let response: TokenResponse;
+    try {
+      response = await this.#sessions.tokenRequest({
+        clientId: pending.clientId,
+        issuer: pending.issuer,
+        tokenEndpoint: pending.tokenEndpoint,
+        form: () => form,
+        error: AuthorizationError,
+        ...(signal === undefined ? {} : { signal }),
+      });
+    } catch (error) {
+      if (error instanceof AuthorizationError) {
+        if (error.code === "code_required") return await this.#codeRequired(error, pending, reference);
+        if (reference !== undefined && error.code === "rate_limited") {
+          await this.#state().put(reference, pending, { expiresAt: pending.expiresAt });
+        }
+      }
+      throw error;
+    } finally {
+      for (const name of Object.keys(form)) delete form[name];
+    }
+    return this.#complete(response, pending);
   }
 
   async #codeRequired(
-    source: Record<string, unknown>,
+    refusal: AuthorizationError,
     pending: PendingCode,
-    reference?: string,
+    reference: string | undefined,
   ): Promise<MediatedSignInResult> {
-    const signInId = source.sign_in_id;
-    const expiresAt = typeof source.expires_at === "string" ? new Date(source.expires_at) : undefined;
-    if (typeof signInId !== "string" || !identifier.test(signInId) || !expiresAt || Number.isNaN(+expiresAt)) {
-      throw new AuthorizationError("invalid_mediated_response", "Mediated Sign-In code challenge is malformed");
+    const details = refusal.details ?? {};
+    const { sign_in_id: signInId, sent_to: sentTo, expires_in: expiresIn } = details;
+    const statusCode = refusal.statusCode;
+    const context = statusCode === undefined ? {} : { statusCode };
+    if (
+      typeof signInId !== "string" ||
+      !SIGN_IN_ID.test(signInId) ||
+      (sentTo !== undefined && sentTo !== null && typeof sentTo !== "string") ||
+      !Number.isInteger(expiresIn) ||
+      (expiresIn as number) <= 0
+    ) {
+      throw new AuthorizationError("invalid_mediated_response", "Mediated Sign-In code challenge is malformed", context);
     }
     if (pending.signInId && signInId !== pending.signInId) {
-      throw new AuthorizationError("invalid_mediated_response", "Mediated Sign-In changed its sign-in ID");
+      throw new AuthorizationError("invalid_mediated_response", "Mediated Sign-In changed its sign-in ID", context);
     }
-    const code = typeof source.code === "object" && source.code !== null ? (source.code as Record<string, unknown>) : {};
-    const sentTo = typeof code.sent_to === "string" ? code.sent_to : undefined;
+    const clock = firstContribution(this.#reactor, Clocks, "clock");
+    const expiresAt = new Date(clock.now().getTime() + (expiresIn as number) * 1000);
+    const { sentTo: _sentBefore, ...earlier } = pending;
     const continued: PendingCode = {
-      ...pending,
+      ...earlier,
       signInId,
       expiresAt,
-      ...(sentTo === undefined ? {} : { sentTo }),
+      ...(typeof sentTo === "string" ? { sentTo } : {}),
     };
     const random = firstContribution(this.#reactor, RandomSources, "random source");
-    const ref = reference ?? `mediated_${base64Url(random.bytes(16))}`;
-    const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
-    await store.put(ref, continued, { expiresAt });
+    const ref = reference ?? opaqueId("mediated", (length) => random.bytes(length));
+    await this.#state().put(ref, continued, { expiresAt });
     return {
       status: "code_required",
       reference: ref,
@@ -278,46 +344,13 @@ export class MediatedSignInClient {
     };
   }
 
-  async #complete(source: Record<string, unknown>, pending: PendingCode, status: number): Promise<MediatedSignInResult> {
-    const { status: _status, ...fields } = source;
-    let token: SessionToken;
-    try {
-      const response = parseTokenResponse(fields);
-      if (response.tokenType !== "DPoP") {
-        throw new ProtocolValidationError(
-          "invalid_token_response",
-          "Mediated Sign-In must return a DPoP Session Token",
-        );
-      }
-      // `scope` as at the token endpoint: left out only when exactly as requested (§4.7).
-      token = sessionTokenFromResponse(response, {
-        sessionKey: pending.sessionKey,
-        signedIn: true,
-        requestedScopes: pending.scopes,
-      });
-    } catch (cause) {
-      throw new AuthorizationError("invalid_token_response", "Mediated Sign-In token response is malformed", {
-        statusCode: status,
-        cause,
-      });
+  async #complete(response: TokenResponse, pending: PendingCode): Promise<MediatedSignInResult> {
+    if (response.refreshToken === undefined) {
+      throw new AuthorizationError("missing_refresh_token", "Mediated Sign-In did not return a refresh token");
     }
-    if (token.scopes.some((scope) => !pending.scopes.includes(scope))) {
-      throw new AuthorizationError("scope_escalation", "Company returned an unrequested scope", { statusCode: status });
-    }
-    let accountTokenReference: string | undefined;
-    if (token.accountToken !== undefined) {
-      const random = firstContribution(this.#reactor, RandomSources, "random source");
-      accountTokenReference = `account_${base64Url(random.bytes(16))}`;
-      await firstContribution(this.#reactor, TokenStores, "token store").put(accountTokenReference, token.accountToken);
-    }
-    const { accountToken: _account, ...publicToken } = token;
-    return {
-      status: "complete",
-      token: publicToken,
-      ...(accountTokenReference === undefined ? {} : { accountTokenReference }),
-      grantedScopes: publicToken.scopes,
-      missingScopes: pending.scopes.filter((scope) => !publicToken.scopes.includes(scope)),
-    };
+    // `scope` as at the token endpoint: left out only when exactly as requested.
+    const result = await finishSignIn(this.#reactor, response, pending.scopes, { error: AuthorizationError });
+    return { status: "complete", ...result };
   }
 
   async #collect(request: ProtectedInputRequest, expected: Set<string>): Promise<Record<string, SecretValue>> {
@@ -338,80 +371,7 @@ export class MediatedSignInClient {
     return values;
   }
 
-  async #post(
-    url: string,
-    body: string,
-    options: Pick<MediatedSignInOptions, "token" | "tenantId" | "issuer" | "signal">,
-  ): Promise<Response> {
-    try {
-      return await this.#transport.request("POST", url, {
-        token: options.token,
-        tenantId: options.tenantId,
-        issuer: options.issuer,
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      });
-    } catch (cause) {
-      const code = cause instanceof TransportError ? cause.code : "request_failed";
-      throw new AuthorizationError(code, "Mediated Sign-In request failed", { cause });
-    }
+  #state() {
+    return firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
   }
-
-  async #decode(response: Response): Promise<unknown> {
-    const body = await readLimitedText(response, this.#maxResponseBytes);
-    if (new TextEncoder().encode(body).byteLength > this.#maxResponseBytes) {
-      throw new AuthorizationError("response_too_large", "Mediated Sign-In response exceeds size limit", {
-        statusCode: response.status,
-      });
-    }
-    if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") {
-      throw new AuthorizationError("invalid_content_type", "Mediated Sign-In endpoint must return JSON", {
-        statusCode: response.status,
-      });
-    }
-    try {
-      return parseJsonStrict(body);
-    } catch (cause) {
-      throw new AuthorizationError("invalid_json", "Mediated Sign-In endpoint returned invalid JSON", {
-        statusCode: response.status,
-        cause,
-      });
-    }
-  }
-}
-
-/**
- * Credentials go only to the company: an endpoint on its domain (or a subdomain), or on
- * its `auth.issuer`'s host, which its OAuth metadata ties to it (`protected_resources`).
- */
-function endpointOnCompanyDomain(endpoint: string, domain: string, issuer: string): string {
-  let url: URL;
-  try {
-    url = new URL(endpoint);
-  } catch (cause) {
-    throw new AuthorizationError("unsafe_mediated_endpoint", "Mediated endpoint is not a URL", { cause });
-  }
-  const host = url.hostname.toLowerCase();
-  const company = domain.toLowerCase();
-  let issuerHost: string | undefined;
-  try {
-    issuerHost = new URL(issuer).protocol === "https:" ? new URL(issuer).hostname.toLowerCase() : undefined;
-  } catch {
-    issuerHost = undefined;
-  }
-  const ours = host === company || host.endsWith(`.${company}`) || host === issuerHost;
-  if (url.protocol !== "https:" || !ours) {
-    throw new AuthorizationError(
-      "unsafe_mediated_endpoint",
-      "Credentials are sent only to an endpoint on the company's own domain",
-    );
-  }
-  return url.toString();
-}
-
-function remoteCode(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
-  const error = (payload as Record<string, unknown>).error;
-  return typeof error === "string" ? error : undefined;
 }

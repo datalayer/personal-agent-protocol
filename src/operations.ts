@@ -6,29 +6,68 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { PersonalAgentProtocolError, ProtocolValidationError, TransportError } from "./errors.js";
-import { parseJsonStrict } from "./json.js";
-import { parseOperation, type ClientMetadata, type DiscoveryDocument, type Operation } from "./models.js";
-import { Clocks, StandingPermissionStores, firstContribution } from "./reactor.js";
-import type { SessionToken } from "./sessions.js";
-import { byEndpoint, operationResult, traced } from "./telemetry.js";
-import type { DpopFetchClient } from "./transport.js";
-import { readLimitedText } from "./limits.js";
-import { challengeParameters, refusalDetails } from "./refusals.js";
+import { PersonalAgentProtocolError, TransportError } from "./errors.js";
+import {
+  parseApproval,
+  parseOperation,
+  type Approval,
+  type ClientMetadata,
+  type DiscoveryDocument,
+  type Operation,
+  type Organization,
+} from "./models.js";
+import {
+  ApprovalSurfaces,
+  Clocks,
+  firstContribution,
+  optionalContribution,
+  type ApprovalRequest,
+  type ApprovalSurface,
+} from "./reactor.js";
+import { operationResult, traced } from "./telemetry.js";
 
 /**
- * PAP Operations extension v1 on the personal agent's side, as in Python:
- * negotiation, exact user approval of one revision, standing permissions
- * checked term by term (Reactor `pap.standingPermissionStore`), recovery of a
- * lost confirmation by reading the same ID, and cancellation. A message never
- * confirms an operation.
+ * PAP Operations extension v2: exact approval, at most once, no endpoints of its own.
+ *
+ * A company that wants the user's approval for an action refuses the request and returns the
+ * operation: the terms, in plain language and as JSON. The personal agent gets the user's
+ * approval and makes the same request again with it, through the interface that returned the
+ * operation:
+ *
+ * - an API's `403` with `error: approval_required` and `operation`, answered by the same
+ *   request with the `Poppy-Approval` header (`ApiClient.call(..., { approval })`);
+ * - an MCP tool's error result with `structuredContent.operation`, answered by the same call
+ *   with `_meta["personalagentprotocol.org/approval"]` (`McpClient.callTool(..., { approval })`);
+ * - a company message's `operation`, answered by a message with `approval`.
+ *
+ * What this client guarantees on the personal agent's side:
+ *
+ * - **Negotiation.** Operations are used only when the company's `poppy.json` and the agent's
+ *   client metadata both list `operations` version 2.
+ * - **The user decides.** `OperationsClient.askUser` asks the host's own approval surface
+ *   (`pap.approvalSurface`) about every operation, naming the company and the revision's
+ *   summary: only the surface's `true` makes an `Approval`. Nothing here reads conversation
+ *   text as approval, approves in advance, or approves on the user's behalf; without a
+ *   surface, nothing is approved.
+ * - **Exact terms.** `termsDifferences` checks `terms` against the `summary` and against what
+ *   the agent asked for, and the surface is told any difference. An approval covers one
+ *   revision: a new one needs a new approval.
+ * - **At most once.** After a failure or a timeout, `OperationsClient.send` sends the same
+ *   approval again, waiting for `Retry-After`. A new operation in answer to such a retry
+ *   doesn't say whether the first was performed: it is `unknown`, and the host finds out
+ *   another way before asking the user again.
  */
 
 export const OPERATIONS_EXTENSION = "operations";
-export const OPERATIONS_VERSION = "1";
+export const OPERATIONS_VERSION = "2";
+/** The header that carries an approval to an API (Operations 6). */
+export const APPROVAL_HEADER = "Poppy-Approval";
+/** The `_meta` key that carries an approval to an MCP tool (Operations 6). */
+export const APPROVAL_META_KEY = "personalagentprotocol.org/approval";
+/** How many times `send` sends an approval, unless told otherwise. */
+export const SEND_ATTEMPTS = 3;
 
-const identifier = /^[A-Za-z0-9_-]{1,256}$/;
-
+/** An operation could not be approved, or its approval could not be sent. */
 export class OperationError extends PersonalAgentProtocolError {
   constructor(
     code: string,
@@ -40,24 +79,20 @@ export class OperationError extends PersonalAgentProtocolError {
   }
 }
 
-/** The company's operations endpoint when both sides list version 1. */
-export function operationsEndpoint(document: DiscoveryDocument, metadata: ClientMetadata): string | undefined {
-  const company = document.extensions[OPERATIONS_EXTENSION] as Record<string, unknown> | undefined;
-  const agent = metadata.extensions[OPERATIONS_EXTENSION];
-  if (!company || !agent || company.version !== OPERATIONS_VERSION || agent.version !== OPERATIONS_VERSION) {
-    return undefined;
-  }
-  const endpoint = company.endpoint;
-  return typeof endpoint === "string" && endpoint.startsWith("https://") ? endpoint : undefined;
+/** Whether both sides list `operations` with this version (another major doesn't count). */
+export function operationsNegotiated(document: DiscoveryDocument, metadata: ClientMetadata): boolean {
+  return (
+    document.extensions[OPERATIONS_EXTENSION]?.version === OPERATIONS_VERSION &&
+    metadata.extensions[OPERATIONS_EXTENSION]?.version === OPERATIONS_VERSION
+  );
 }
 
 /**
- * The one operation object, from whichever channel carried it (Operations §4).
+ * The one operation object, from whichever interface carried it (Operations 4).
  *
- * Accepts an API's `202` body (`{operation: …}`), an MCP tool result
- * (`{structuredContent: {operation: …}}`), a conversation message (`{operation: …}`),
- * or the operation itself. A payload that carries none, or a malformed one, is
- * `invalid_operation`.
+ * Accepts an API's `403` body (`{operation: …}`), an MCP tool result
+ * (`{structuredContent: {operation: …}}`), a conversation message (`{operation: …}`), or the
+ * operation itself. A payload that carries none, or a malformed one, is `invalid_operation`.
  */
 export function operationFrom(payload: unknown): Operation {
   let candidate: unknown = payload;
@@ -80,457 +115,418 @@ export function operationFrom(payload: unknown): Operation {
   }
 }
 
-/**
- * The operation's `url`, once checked to be the company's own HTTPS page (§4.4, §5).
- *
- * The personal agent opens it in its own browser joined to the Session
- * (`BrowserSessionClient.join({ returnTo })`), never in the user's. What is confirmed
- * there is the same operation, read back by its ID.
- */
-export function operationPage(operation: Operation, companyDomain: string): string {
-  if (!operation.url) {
-    throw new OperationError("no_operation_page", "The company gave no page for this operation");
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(operation.url);
-  } catch (cause) {
-    throw new OperationError("foreign_operation_page", "An operation's page must be on the company's own domain", { cause });
-  }
-  const host = parsed.hostname.toLowerCase();
-  const domain = companyDomain.toLowerCase().replace(/^www\./u, "");
-  if (parsed.protocol !== "https:" || !(host === domain || host.endsWith(`.${domain}`))) {
-    throw new OperationError("foreign_operation_page", "An operation's page must be on the company's own domain");
-  }
-  return operation.url;
+// The `Poppy-Approval` header: an RFC 9651 Dictionary ---------------------------------------
+
+/** The value of `Poppy-Approval`: the two members, as Strings. */
+export function approvalHeader(approval: Approval): string {
+  return `operation_id="${approval.operation_id}", revision="${approval.revision}"`;
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
+/** The value is not an RFC 9651 Dictionary: the whole field is ignored. */
+class DictionaryError extends Error {}
 
-/** A digest of exactly what a revision says: its summary and its terms. */
-export async function termsDigest(operation: Operation): Promise<string> {
-  const bytes = new TextEncoder().encode(canonical({ summary: operation.summary, terms: operation.terms ?? {} }));
-  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", bytes));
-  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
+const KEY = /[a-z*][a-z0-9_.*-]*/y;
+const TOKEN = /[A-Za-z*][A-Za-z0-9!#$%&'*+.^_`|~:/-]*/y;
+const NUMBER = /-?\d{1,15}(\.\d{1,3})?/y;
+const BYTES = /:[A-Za-z0-9+/=]*:/y;
+const DISPLAY = /%"[^"]*"/y;
 
-export interface UserApproval {
-  readonly operationId: string;
-  readonly revision: number;
-  readonly digest: string;
-}
+/** A strict parser of an RFC 9651 Dictionary, keeping the Strings a caller reads. */
+class Dictionary {
+  readonly #text: string;
+  #at = 0;
 
-/** Record the user's approval of the revision the host just showed them. */
-export async function approve(operation: Operation): Promise<UserApproval> {
-  if (operation.state !== "proposed") {
-    throw new OperationError("not_proposed", "Only a proposed operation can be approved");
-  }
-  return { operationId: operation.operation_id, revision: operation.revision, digest: await termsDigest(operation) };
-}
-
-export interface TermLimit {
-  /** Dotted path in `terms`, e.g. `price_difference.amount`. */
-  readonly path: string;
-  /** Decimal maximum (amounts are strings on the wire). */
-  readonly maximum?: string;
-  readonly allowed?: readonly string[];
-}
-
-export interface StandingPermission {
-  readonly reference: string;
-  readonly company: string;
-  readonly account: string;
-  readonly action: string;
-  readonly limits: readonly TermLimit[];
-  readonly expiresAt: Date;
-  readonly usesRemaining?: number;
-}
-
-export interface StandingPermissionRequest {
-  readonly company: string;
-  readonly account: string;
-  readonly action: string;
-  readonly operation: Operation;
-}
-
-/** Reserve, commit, and release uses of the user's standing permissions. */
-export interface StandingPermissionStore {
-  reserve(request: StandingPermissionRequest, options: { readonly now: Date }): Promise<string | undefined>;
-  commit(reservation: string): Promise<void>;
-  release(reservation: string): Promise<void>;
-}
-
-export { StandingPermissionStores } from "./reactor.js";
-
-function term(terms: Readonly<Record<string, unknown>>, path: string): unknown {
-  let value: unknown = terms;
-  for (const part of path.split(".")) {
-    if (typeof value !== "object" || value === null || !(part in value)) throw new RangeError(path);
-    value = (value as Record<string, unknown>)[part];
-  }
-  return value;
-}
-
-function decimalAtMost(value: unknown, maximum: string): boolean {
-  const pattern = /^-?\d+(\.\d+)?$/;
-  const text = String(value);
-  if (!pattern.test(text) || !pattern.test(maximum)) return false;
-  const scale = Math.max((text.split(".")[1] ?? "").length, (maximum.split(".")[1] ?? "").length);
-  const scaled = (input: string) => {
-    const [whole, fraction = ""] = input.split(".");
-    return BigInt(`${whole}${fraction.padEnd(scale, "0")}`);
-  };
-  return scaled(text) <= scaled(maximum);
-}
-
-/** Whether a standing permission covers this revision, term by term. */
-export function covers(permission: StandingPermission, request: StandingPermissionRequest, now: Date): boolean {
-  if (
-    permission.company !== request.company ||
-    permission.account !== request.account ||
-    permission.action !== request.action ||
-    now.getTime() >= permission.expiresAt.getTime() ||
-    permission.usesRemaining === 0 ||
-    request.operation.user_approval_required
-  ) {
-    return false;
-  }
-  const terms = request.operation.terms ?? {};
-  for (const limit of permission.limits) {
-    let value: unknown;
-    try {
-      value = term(terms, limit.path);
-    } catch {
-      return false;
-    }
-    if (limit.allowed !== undefined && !limit.allowed.includes(String(value))) return false;
-    if (limit.maximum !== undefined && !decimalAtMost(value, limit.maximum)) return false;
-  }
-  return true;
-}
-
-/** A single-process store of standing permissions, for examples and tests. */
-export class InMemoryStandingPermissionStore implements StandingPermissionStore {
-  readonly permissions = new Map<string, StandingPermission>();
-  readonly #reservations = new Map<string, string>();
-
-  constructor(permissions: readonly StandingPermission[] = []) {
-    for (const permission of permissions) this.permissions.set(permission.reference, permission);
+  constructor(text: string) {
+    this.#text = text.replace(/^ +| +$/g, "");
   }
 
-  async reserve(request: StandingPermissionRequest, options: { readonly now: Date }): Promise<string | undefined> {
-    for (const [reference, permission] of this.permissions) {
-      if (!covers(permission, request, options.now)) continue;
-      if (permission.usesRemaining !== undefined) {
-        this.permissions.set(reference, { ...permission, usesRemaining: permission.usesRemaining - 1 });
+  #peek(): string {
+    return this.#text[this.#at] ?? "";
+  }
+
+  #match(pattern: RegExp): string {
+    pattern.lastIndex = this.#at;
+    const found = pattern.exec(this.#text);
+    if (found === null) throw new DictionaryError();
+    this.#at = pattern.lastIndex;
+    return found[0];
+  }
+
+  #whitespace(): void {
+    while (this.#peek() === " " || this.#peek() === "\t") this.#at += 1;
+  }
+
+  members(): Map<string, unknown> {
+    const members = new Map<string, unknown>();
+    while (this.#at < this.#text.length) {
+      const key = this.#match(KEY);
+      let value: unknown = true;
+      if (this.#peek() === "=") {
+        this.#at += 1;
+        value = this.#peek() === "(" ? this.#innerList() : this.#bareItem();
       }
-      const reservation = `rsv_${this.#reservations.size + 1}_${request.operation.operation_id}`;
-      this.#reservations.set(reservation, reference);
-      return reservation;
+      this.#parameters();
+      members.set(key, value); // the last one wins, in the first one's place
+      this.#whitespace();
+      if (this.#at === this.#text.length) break;
+      if (this.#peek() !== ",") throw new DictionaryError();
+      this.#at += 1;
+      this.#whitespace();
+      if (this.#at === this.#text.length) throw new DictionaryError(); // a trailing comma
     }
+    return members;
+  }
+
+  #parameters(): void {
+    while (this.#peek() === ";") {
+      this.#at += 1;
+      while (this.#peek() === " ") this.#at += 1;
+      this.#match(KEY);
+      if (this.#peek() === "=") {
+        this.#at += 1;
+        this.#bareItem();
+      }
+    }
+  }
+
+  #innerList(): unknown[] {
+    this.#at += 1;
+    const items: unknown[] = [];
+    for (;;) {
+      while (this.#peek() === " ") this.#at += 1;
+      if (this.#peek() === ")") {
+        this.#at += 1;
+        return items;
+      }
+      items.push(this.#bareItem());
+      this.#parameters();
+      if (this.#peek() !== " " && this.#peek() !== ")") throw new DictionaryError();
+    }
+  }
+
+  #bareItem(): unknown {
+    const first = this.#peek();
+    if (first === '"') return this.#string();
+    if (first === "?") {
+      this.#at += 1;
+      const value = this.#peek();
+      if (value !== "0" && value !== "1") throw new DictionaryError();
+      this.#at += 1;
+      return value === "1";
+    }
+    if (first === ":") return this.#match(BYTES);
+    if (first === "@") {
+      this.#at += 1;
+      return this.#match(NUMBER);
+    }
+    if (first === "%") return this.#match(DISPLAY);
+    if (first === "-" || /^[0-9]$/.test(first)) return this.#match(NUMBER);
+    return this.#match(TOKEN);
+  }
+
+  #string(): string {
+    this.#at += 1;
+    let value = "";
+    while (this.#at < this.#text.length) {
+      const char = this.#text[this.#at] as string;
+      this.#at += 1;
+      if (char === "\\") {
+        const escaped = this.#peek();
+        if (escaped !== '"' && escaped !== "\\") throw new DictionaryError();
+        this.#at += 1;
+        value += escaped;
+      } else if (char === '"') {
+        return value;
+      } else if (char < " " || char > "~") {
+        throw new DictionaryError();
+      } else {
+        value += char;
+      }
+    }
+    throw new DictionaryError();
+  }
+}
+
+/**
+ * The approval a `Poppy-Approval` value states, or `undefined`.
+ *
+ * A value that isn't a Dictionary is ignored whole (RFC 9651), and so is one without both
+ * members as Strings of the IDs' characters. Members this version doesn't recognize are
+ * ignored, so later versions can add them (Operations 6).
+ */
+export function parseApprovalHeader(value: string | null | undefined): Approval | undefined {
+  if (!value) return undefined;
+  try {
+    const members = new Dictionary(value).members();
+    return parseApproval({ operation_id: members.get("operation_id"), revision: members.get("revision") });
+  } catch {
     return undefined;
   }
+}
 
-  async commit(reservation: string): Promise<void> {
-    this.#reservations.delete(reservation);
+/** The approval in an MCP tool call's `_meta`, or `undefined` (unknown members are ignored). */
+export function approvalFromMeta(meta: unknown): Approval | undefined {
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return undefined;
+  try {
+    return parseApproval((meta as Record<string, unknown>)[APPROVAL_META_KEY]);
+  } catch {
+    return undefined;
   }
+}
 
-  async release(reservation: string): Promise<void> {
-    const reference = this.#reservations.get(reservation);
-    this.#reservations.delete(reservation);
-    const permission = reference === undefined ? undefined : this.permissions.get(reference);
-    if (permission?.usesRemaining !== undefined) {
-      this.permissions.set(permission.reference, { ...permission, usesRemaining: permission.usesRemaining + 1 });
+// The terms check ---------------------------------------------------------------------------
+
+/** A value a `summary` states with decimals, such as an amount. */
+const DECIMAL = /(?<![\w.])\d[\d,]*\.\d+(?!\w)/g;
+const NUMERIC = /^\d+(\.\d+)?$/;
+
+function leaves(value: unknown, path = ""): Map<string, unknown> {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const found = new Map<string, unknown>();
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      for (const [inner, leaf] of leaves(item, path ? `${path}.${key}` : key)) found.set(inner, leaf);
+    }
+    return found;
+  }
+  return new Map([[path, value]]);
+}
+
+/**
+ * Where `terms` disagree with the `summary`, or with what the agent asked for.
+ *
+ * The company writes both, so the summary alone could describe something other than the terms
+ * (Operations 5). `asked` gives the values the agent asked for, keyed by their dotted paths in
+ * `terms`: a different or missing value is a difference. Amounts are compared with the summary
+ * both ways: every decimal in the summary is in the terms, and every number in the terms is in
+ * the summary. Identifiers aren't, since a summary is written for people. Without `terms`
+ * there is nothing to compare with.
+ */
+export function termsDifferences(
+  operation: Operation,
+  asked: Readonly<Record<string, unknown>> = {},
+): readonly string[] {
+  const found = leaves(operation.terms ?? {});
+  const differences: string[] = [];
+  for (const [path, wanted] of Object.entries(asked)) {
+    if (!found.has(path)) {
+      differences.push(`You asked for ${path} ${String(wanted)}; the terms don't say.`);
+    } else if (String(found.get(path)) !== String(wanted)) {
+      differences.push(`You asked for ${path} ${String(wanted)}; the terms say ${String(found.get(path))}.`);
     }
   }
+  if (operation.terms === undefined) return differences;
+  const stated = new Set([...operation.summary.matchAll(DECIMAL)].map(([match]) => match.replaceAll(",", "")));
+  const numbers = new Map<string, string>();
+  for (const [path, value] of found) {
+    if ((typeof value === "string" || typeof value === "number") && NUMERIC.test(String(value))) {
+      numbers.set(path, String(value));
+    }
+  }
+  const summary = operation.summary.replaceAll(",", "");
+  for (const [path, value] of numbers) {
+    if (!summary.includes(value)) differences.push(`The terms say ${path} ${value}; the summary doesn't.`);
+  }
+  const inTerms = new Set(numbers.values());
+  for (const value of [...stated].sort()) {
+    if (!inTerms.has(value)) differences.push(`The summary says ${value}; the terms don't.`);
+  }
+  return differences;
 }
 
-export interface ConfirmOutcome {
-  /**
-   * `confirmed`: accepted (final, or `in_progress` with `retryAfter`).
-   * `terms_changed`: a newer revision to show the user. `approval_required`: the
-   * company wants the user's own approval. `not_confirmed`: already cancelled or
-   * expired, returned as it is; nothing was confirmed or performed.
-   */
-  readonly status: "confirmed" | "terms_changed" | "approval_required" | "not_confirmed";
+/** What a new revision changed: `summary`, `expires_at`, and the terms' paths. */
+function changedPaths(before: Operation, after: Operation): readonly string[] {
+  const old = leaves(before.terms ?? {});
+  const now = leaves(after.terms ?? {});
+  const changed = [...new Set([...old.keys(), ...now.keys()])]
+    .filter((path) => JSON.stringify(old.get(path)) !== JSON.stringify(now.get(path)))
+    .sort();
+  return [
+    ...(before.summary === after.summary ? [] : ["summary"]),
+    ...(before.expires_at === after.expires_at ? [] : ["expires_at"]),
+    ...changed,
+  ];
+}
+
+// Asking the user, and sending the approval ---------------------------------------------------
+
+/**
+ * What came of sending an approval.
+ *
+ * `answered`: the company answered as it would without operations; `answer` is that answer,
+ * the same on every retry. `new_revision`: it returned an operation to approve, `operation`,
+ * for a first send: show what changed and ask again. `unknown`: a send failed or timed out and
+ * nothing since says whether the action was performed, with `operation` when the company
+ * answered a retry with one, or the company is still performing it: find out another way, such
+ * as from the order in the company's API, before asking the user about the same action again.
+ */
+export interface ApprovalSent<T> {
+  readonly status: "answered" | "new_revision" | "unknown";
+  readonly answer?: T;
   readonly operation?: Operation;
-  readonly changed: readonly string[];
-  readonly retryAfter?: number;
+  readonly retryAfter?: string;
 }
 
-export interface OperationRequestOptions {
-  readonly token: SessionToken;
+export interface AskUserOptions {
+  readonly organization: Pick<Organization, "name" | "domain">;
   readonly tenantId: string;
-  readonly issuer: string;
-  readonly signal?: AbortSignal;
-}
-
-export interface ConfirmOptions extends OperationRequestOptions {
-  readonly approval?: UserApproval;
-  /** `[company, account, action]` to look up a standing permission. */
-  readonly standing?: readonly [string, string, string];
+  /** Values the agent asked for, keyed by their dotted paths in `terms`. */
+  readonly asked?: Readonly<Record<string, unknown>>;
+  /** The revision this one replaces: the surface is told what changed. */
+  readonly replaces?: Operation;
+  /** Overrides the contribution, for a host whose interface is the caller's own. */
+  readonly surface?: ApprovalSurface;
 }
 
 export interface OperationsClientOptions {
   readonly reactor: ReactorPlatformView;
-  readonly transport: DpopFetchClient;
-  readonly maxResponseBytes?: number;
+  /** Waits for `Retry-After` between sends. */
+  readonly sleep?: (seconds: number) => Promise<void>;
+  /** The longest wait, in seconds, `send` will do. */
+  readonly maxWait?: number;
 }
 
-interface Held {
-  readonly store: StandingPermissionStore;
-  readonly reservation: string;
-}
+const realSleep = (seconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 
-/** Read, confirm, and cancel operations at a negotiated endpoint. */
+/** Get the user's approval of an operation, and send it at most once. */
 export class OperationsClient {
   readonly #reactor: ReactorPlatformView;
-  readonly #transport: DpopFetchClient;
-  readonly #maxResponseBytes: number;
+  readonly #sleep: (seconds: number) => Promise<void>;
+  readonly #maxWait: number;
 
   constructor(options: OperationsClientOptions) {
-    const limit = options.maxResponseBytes ?? 256 * 1024;
-    if (!Number.isInteger(limit) || limit <= 0) throw new RangeError("maxResponseBytes must be positive");
     this.#reactor = options.reactor;
-    this.#transport = options.transport;
-    this.#maxResponseBytes = limit;
+    this.#sleep = options.sleep ?? realSleep;
+    this.#maxWait = options.maxWait ?? 30;
   }
 
-  read(
-    endpoint: string,
-    operationId: string,
-    options: OperationRequestOptions,
-  ): Promise<Operation> {
+  /**
+   * Ask the user about this revision, through the host's own surface.
+   *
+   * Shows the company's name and the revision's `summary`, with any difference the terms check
+   * finds, and with what changed from `replaces`, the revision this one replaces. Only `true`
+   * from the surface approves; anything else is `not_approved`, a revision past its expiry is
+   * `revision_expired` (make the request again for new terms), and a host with no surface is
+   * `no_approval_surface`.
+   */
+  askUser(operation: Operation, options: AskUserOptions): Promise<Approval> {
     return traced(
       this.#reactor,
-      "pap.operation.read",
-      byEndpoint(endpoint),
-      () => this.#read(endpoint, operationId, options),
-      operationResult,
+      "pap.operation.ask_user",
+      {},
+      () => this.#askUser(operation, options),
+      () => ({ "pap.operation.status": "approved" }),
     );
   }
 
-  async #read(endpoint: string, operationId: string, options: OperationRequestOptions): Promise<Operation> {
-    const response = await this.#request("GET", endpoint, operationId, undefined, options);
-    const payload = await this.#payload(response);
-    if (response.status !== 200) throw operationError(response, payload);
-    return expectOperation(payload, operationId);
-  }
-
-  confirm(
-    endpoint: string,
-    operation: Operation,
-    options: ConfirmOptions,
-  ): Promise<ConfirmOutcome> {
-    return traced(
-      this.#reactor,
-      "pap.operation.confirm",
-      byEndpoint(endpoint),
-      () => this.#confirm(endpoint, operation, options),
-      operationResult,
-    );
-  }
-
-  async #confirm(endpoint: string, operation: Operation, options: ConfirmOptions): Promise<ConfirmOutcome> {
-    const { approvedBy, held } = await this.#authorize(operation, options);
-    const body = JSON.stringify({ revision: operation.revision, approved_by: approvedBy });
-    let response: Response;
-    try {
-      response = await this.#request("POST", endpoint, `${operation.operation_id}/confirm`, body, options);
-    } catch (cause) {
-      if (!(cause instanceof TransportError)) throw cause;
-      // The answer was lost: the company may have performed it. Read it back.
-      const current = await this.read(endpoint, operation.operation_id, options);
-      await settle(held, current.state !== "proposed");
-      if (current.state === "proposed") {
-        throw new OperationError("confirm_not_received", "The confirmation did not reach the company; retry it");
-      }
-      return { status: "confirmed", operation: current, changed: [] };
-    }
-    const payload = await this.#payload(response);
-    await settle(held, response.status === 200);
-    if (response.status === 200) {
-      const confirmed = expectOperation(payload, operation.operation_id);
-      if (
-        confirmed.confirmation === null &&
-        (confirmed.state === "cancelled" || confirmed.state === "expired")
-      ) {
-        // A late confirm is safe: the record comes back unchanged (Operations §5.3).
-        return { status: "not_confirmed", operation: confirmed, changed: [] };
-      }
-      if (confirmed.revision !== operation.revision || confirmed.confirmation === null) {
-        throw new OperationError("invalid_operation", "The company confirmed a revision other than the one sent");
-      }
-      const retryAfter = Number(response.headers.get("retry-after"));
-      return {
-        status: "confirmed",
-        operation: confirmed,
-        changed: [],
-        ...(Number.isInteger(retryAfter) && retryAfter > 0 ? { retryAfter } : {}),
-      };
-    }
-    const error = errorCode(payload);
-    if (error === "terms_changed") {
-      const current = expectOperation((payload as Record<string, unknown>).operation, operation.operation_id);
-      return { status: "terms_changed", operation: current, changed: changedPaths(operation, current) };
-    }
-    if (error === "user_approval_required") return { status: "approval_required", operation, changed: [] };
-    throw operationError(response, payload);
-  }
-
-  cancel(
-    endpoint: string,
-    operationId: string,
-    options: OperationRequestOptions,
-  ): Promise<Operation> {
-    return traced(
-      this.#reactor,
-      "pap.operation.cancel",
-      byEndpoint(endpoint),
-      () => this.#cancel(endpoint, operationId, options),
-      operationResult,
-    );
-  }
-
-  async #cancel(endpoint: string, operationId: string, options: OperationRequestOptions): Promise<Operation> {
-    const response = await this.#request("POST", endpoint, `${operationId}/cancel`, "{}", options);
-    const payload = await this.#payload(response);
-    if (response.status !== 200) throw operationError(response, payload);
-    return expectOperation(payload, operationId);
-  }
-
-  async #authorize(
-    operation: Operation,
-    options: ConfirmOptions,
-  ): Promise<{ approvedBy: "user" | "standing_permission"; held?: Held }> {
-    if ((options.approval === undefined) === (options.standing === undefined)) {
-      throw new OperationError(
-        "approval_required",
-        "Confirm with exactly one of a user approval or a standing permission",
-      );
-    }
-    if (operation.state !== "proposed") {
-      throw new OperationError("not_proposed", "Only a proposed operation can be confirmed");
-    }
-    if (options.approval !== undefined) {
-      const { approval } = options;
-      if (
-        approval.operationId !== operation.operation_id ||
-        approval.revision !== operation.revision ||
-        approval.digest !== (await termsDigest(operation))
-      ) {
-        throw new OperationError("approval_mismatch", "The user approved a different revision than this one");
-      }
-      return { approvedBy: "user" };
-    }
-    if (operation.user_approval_required) {
-      throw new OperationError("user_approval_required", "This revision needs the user's own approval");
-    }
-    const store = firstContribution(this.#reactor, StandingPermissionStores, "standing permission store");
+  async #askUser(operation: Operation, options: AskUserOptions): Promise<Approval> {
     const clock = firstContribution(this.#reactor, Clocks, "clock");
-    const [company, account, action] = options.standing as readonly [string, string, string];
-    const reservation = await store.reserve({ company, account, action, operation }, { now: clock.now() });
-    if (reservation === undefined) {
-      throw new OperationError("no_standing_permission", "No standing permission covers this revision: ask the user");
+    if (clock.now().getTime() > new Date(operation.expires_at).getTime()) {
+      throw new OperationError("revision_expired", "This revision has expired");
     }
-    return { approvedBy: "standing_permission", held: { store, reservation } };
-  }
-
-  async #request(
-    method: string,
-    endpoint: string,
-    path: string,
-    body: string | undefined,
-    options: OperationRequestOptions,
-  ): Promise<Response> {
-    if (!identifier.test(path.split("/", 1)[0] ?? "")) {
-      throw new ProtocolValidationError("invalid_identifier", "operation ID is invalid");
-    }
-    return this.#transport.request(method, `${endpoint.replace(/\/$/, "")}/${path}`, {
-      token: options.token,
+    const request: ApprovalRequest = {
+      actionId: "pap.operations.approve",
+      actionName: "Approve an operation",
+      summary: operation.summary,
+      arguments: { operation_id: operation.operation_id, revision: operation.revision },
       tenantId: options.tenantId,
-      issuer: options.issuer,
-      headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
-      ...(body === undefined ? {} : { body }),
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    });
+      companyName: options.organization.name,
+      companyDomain: options.organization.domain,
+      ...(operation.terms === undefined ? {} : { terms: operation.terms }),
+      expiresAt: new Date(operation.expires_at),
+      differences: termsDifferences(operation, options.asked),
+      changed: options.replaces === undefined ? [] : changedPaths(options.replaces, operation),
+    };
+    if ((await this.#approved(request, options.surface)) !== true) {
+      throw new OperationError("not_approved", "The user did not approve");
+    }
+    return { operation_id: operation.operation_id, revision: operation.revision };
   }
 
-  async #payload(response: Response): Promise<unknown> {
-    const text = await readLimitedText(response, this.#maxResponseBytes);
-    if (new TextEncoder().encode(text).byteLength > this.#maxResponseBytes) {
-      throw new OperationError("response_too_large", "operation response exceeded limit");
+  async #approved(request: ApprovalRequest, surface: ApprovalSurface | undefined): Promise<unknown> {
+    let chosen = surface;
+    if (chosen === undefined) {
+      try {
+        chosen = optionalContribution(this.#reactor, ApprovalSurfaces, "approval surface");
+      } catch (cause) {
+        throw new OperationError("approval_surface_ambiguous", "Two approval surfaces at one order", { cause });
+      }
+      if (chosen === undefined) {
+        throw new OperationError("no_approval_surface", "This host has no surface to ask the user through");
+      }
     }
-    if (!text) return {};
     try {
-      return parseJsonStrict(text);
+      return await chosen.approve(request);
     } catch (cause) {
-      throw new OperationError("invalid_json", "operation response was not JSON", { cause });
+      throw new OperationError("approval_failed", "The approval surface failed: nothing was approved", { cause });
     }
   }
-}
 
-async function settle(held: Held | undefined, spent: boolean): Promise<void> {
-  if (held === undefined) return;
-  if (spent) await held.store.commit(held.reservation);
-  else await held.store.release(held.reservation);
-}
-
-function errorCode(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
-  const error = (payload as Record<string, unknown>).error;
-  return typeof error === "string" ? error : undefined;
-}
-
-function operationError(response: Response, payload: unknown): OperationError {
-  // A token error may come only in WWW-Authenticate (§6).
-  const code = errorCode(payload) ?? challengeParameters(response.headers.get("www-authenticate")).error;
-  const details = refusalDetails(response, payload);
-  return new OperationError(code ?? "operation_request_failed", "the operation request was refused", {
-    statusCode: response.status,
-    ...(Object.keys(details).length ? { details } : {}),
-  });
-}
-
-function expectOperation(payload: unknown, operationId: string): Operation {
-  const candidate =
-    typeof payload === "object" && payload !== null && "operation" in payload
-      ? (payload as Record<string, unknown>).operation
-      : payload;
-  let operation: Operation;
-  try {
-    operation = parseOperation(candidate);
-  } catch (cause) {
-    throw new OperationError("invalid_operation", "operation was malformed", { cause });
+  /**
+   * Send one approval: the saved request, the same every time.
+   *
+   * `request(approval)` makes the request that returned the operation, with the approval:
+   * `api.call(..., { approval })`, or the tool call, or the same message with the same ID. A
+   * failure, a timeout, or a `503` sends it again with the same approval, waiting for
+   * `Retry-After`. After `attempts`, or a longer wait than `maxWait`, the outcome is `unknown`.
+   */
+  send<T>(
+    request: (approval: Approval) => Promise<T>,
+    approval: Approval,
+    options: { readonly attempts?: number } = {},
+  ): Promise<ApprovalSent<T>> {
+    return traced(
+      this.#reactor,
+      "pap.operation.send",
+      {},
+      () => this.#send(request, approval, options.attempts ?? SEND_ATTEMPTS),
+      operationResult,
+    );
   }
-  if (operation.operation_id !== operationId) {
-    throw new OperationError("invalid_operation", "the company answered for another operation");
-  }
-  return operation;
-}
 
-function flatten(value: unknown, prefix = ""): Map<string, string> {
-  const flat = new Map<string, string>();
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      for (const [path, leaf] of flatten(item, `${prefix}${key}.`)) flat.set(path, leaf);
+  async #send<T>(
+    request: (approval: Approval) => Promise<T>,
+    approval: Approval,
+    attempts: number,
+  ): Promise<ApprovalSent<T>> {
+    if (!(attempts >= 1)) throw new RangeError("attempts must be positive");
+    let uncertain = false;
+    let retryAfter: string | undefined;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        return this.#sent(await request(approval), approval, uncertain);
+      } catch (error) {
+        if (error instanceof TransportError) {
+          uncertain = true;
+          retryAfter = undefined;
+        } else if (error instanceof PersonalAgentProtocolError && error.statusCode === 503) {
+          uncertain = true;
+          const value = error.details?.retry_after;
+          retryAfter = typeof value === "string" ? value : undefined;
+        } else {
+          throw error;
+        }
+      }
+      if (attempt + 1 < attempts && !(await this.#waited(retryAfter))) break;
     }
-    return flat;
+    return { status: "unknown", ...(retryAfter === undefined ? {} : { retryAfter }) };
   }
-  flat.set(prefix.replace(/\.$/, ""), JSON.stringify(value));
-  return flat;
-}
 
-function changedPaths(before: Operation, after: Operation): readonly string[] {
-  const old = flatten(before.terms ?? {});
-  const now = flatten(after.terms ?? {});
-  const changed = [...new Set([...old.keys(), ...now.keys()])].filter((path) => old.get(path) !== now.get(path)).sort();
-  return before.summary !== after.summary ? ["summary", ...changed] : changed;
+  #sent<T>(answer: T, approval: Approval, uncertain: boolean): ApprovalSent<T> {
+    const operation = (answer as { readonly operation?: Operation } | null | undefined)?.operation;
+    if (operation === undefined) return { status: "answered", answer };
+    if (operation.revision === approval.revision) {
+      // Answering an approval with the revision it names would loop for ever.
+      throw new OperationError("invalid_operation", "The company answered an approval with the same revision");
+    }
+    return { status: uncertain ? "unknown" : "new_revision", operation };
+  }
+
+  /** Wait for `Retry-After`: `false` when it asks for longer than this client waits. */
+  async #waited(retryAfter: string | undefined): Promise<boolean> {
+    const seconds = retryAfter !== undefined && /^\d+$/.test(retryAfter) ? Number(retryAfter) : 0;
+    if (seconds > this.#maxWait) return false;
+    if (seconds > 0) await this.#sleep(seconds);
+    return true;
+  }
 }

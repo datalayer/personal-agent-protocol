@@ -330,7 +330,7 @@ export const byEndpoint = (endpoint: string) => ({ "pap.company.domain": domainO
 interface SignInLike {
   readonly status?: string;
   readonly revoked?: boolean;
-  readonly token?: { readonly signedIn?: boolean };
+  readonly token?: unknown;
   readonly grantedScopes?: readonly string[];
   readonly missingScopes?: readonly string[];
 }
@@ -342,15 +342,14 @@ export function signInResult(result: SignInLike): Record<string, unknown> {
   }
   return {
     "pap.sign_in.status": status ?? "started",
-    "pap.session.signed_in": result.token?.signedIn,
+    "pap.session.signed_in": result.token === undefined ? undefined : true,
     "pap.scopes.granted": result.grantedScopes?.length,
     "pap.scopes.missing": result.missingScopes?.length,
   };
 }
 
-export const sessionResult = (result: { readonly signedIn: boolean }) => ({
-  "pap.session.signed_in": result.signedIn,
-});
+// A new Session is signed out: it is signed in on each request with an access token.
+export const sessionResult = () => ({ "pap.session.signed_in": false });
 
 export const conversationResult = (result: {
   readonly status?: string;
@@ -360,21 +359,7 @@ export const conversationResult = (result: {
   "pap.conversation.events": result.events?.length,
 });
 
-interface OperationLike {
-  readonly state?: string;
-  readonly revision?: number;
-}
-
-export function operationResult(
-  result: OperationLike | { readonly status: string; readonly operation?: OperationLike },
-): Record<string, unknown> {
-  const outcome = !("operation_id" in result);
-  const operation = outcome
-    ? (result as { operation?: OperationLike }).operation
-    : (result as OperationLike);
-  return {
-    "pap.operation.status": outcome ? (result as { status?: string }).status : undefined,
-    "pap.operation.state": operation?.state,
-    "pap.operation.revision": operation?.revision,
-  };
-}
+/** How an approval step ended: never the operation's terms or its IDs. */
+export const operationResult = (result: { readonly status?: unknown }) => ({
+  "pap.operation.status": typeof result.status === "string" ? result.status : "approved",
+});

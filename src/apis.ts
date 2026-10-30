@@ -6,14 +6,15 @@
 
 // What a discovery document advertises, and calls to a company's OpenAPI API, as in
 // Python's personal_agent_protocol.apis: the API types this SDK speaks, the `poppy`
-// conversation endpoint, the OpenAPI description, and `ApiClient`, which calls the API
-// with the Session's DPoP token (§6, Operations §4.1). Unknown API and protocol types
-// are skipped, never an error (§3.3, §6).
+// conversation endpoint, the OpenAPI description, and `ApiClient`, which calls the API in a
+// Session (§7, Operations 4, 6). Unknown API and protocol types are skipped, never an error
+// (§3.3, §7).
 //
-// A read answers its JSON body. A consequential call answers `202` with an operation:
-// proposed, not performed, until it is confirmed at the operations endpoint
-// (`OperationsClient`). The same operation object arrives through a conversation and
-// through MCP, so one approval flow serves every channel.
+// A read answers its JSON body. An action that needs the user's approval answers
+// `403 approval_required` with an operation: refused, nothing done. The same request again
+// with the user's approval (`approval`, the `Poppy-Approval` header) performs it. The same
+// operation object arrives through a conversation or an MCP tool, so one approval flow serves
+// every interface (`OperationsClient`).
 //
 // Every write (POST, PUT, PATCH, DELETE) carries an `Idempotency-Key` (guides, *Retries*):
 // a random UUID (version 4), or the caller's own key when it retries the same request.
@@ -21,11 +22,18 @@
 // again; the company answers a repeated key with its original response.
 import { PersonalAgentProtocolError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
-import { parseOperation, type ApiDescriptor, type DiscoveryDocument, type Operation } from "./models.js";
-import type { SessionToken } from "./sessions.js";
-import type { DpopFetchClient } from "./transport.js";
+import {
+  parseOperation,
+  type ApiDescriptor,
+  type Approval,
+  type DiscoveryDocument,
+  type Operation,
+} from "./models.js";
+import { APPROVAL_HEADER, approvalHeader } from "./operations.js";
+import type { AccessToken, PapSession } from "./sessions.js";
+import type { SessionFetchClient } from "./transport.js";
 import { readLimited } from "./limits.js";
-import { challengeParameters, refusalDetails } from "./refusals.js";
+import { refusalCode, refusalDetails } from "./refusals.js";
 
 /** The API types this SDK speaks. */
 export const KNOWN_API_TYPES: ReadonlySet<string> = new Set(["openapi", "mcp"]);
@@ -80,7 +88,7 @@ export class ApiError extends PersonalAgentProtocolError {
   }
 }
 
-/** A successful API answer: the body, or the operation it proposes (`202`). */
+/** An API answer: the body, or the operation to approve (`403 approval_required`). */
 export interface ApiResponse {
   readonly status: number;
   readonly body?: unknown;
@@ -90,9 +98,9 @@ export interface ApiResponse {
 }
 
 export interface ApiCallOptions {
-  readonly token: SessionToken;
-  readonly tenantId: string;
-  readonly issuer: string;
+  readonly session: PapSession;
+  /** Signed in with it, signed out without. */
+  readonly token?: AccessToken | undefined;
   /** A JSON body, sent as `application/json`. */
   readonly body?: unknown;
   /**
@@ -100,11 +108,16 @@ export interface ApiCallOptions {
    * Absent, a write gets a new random one; a read takes none.
    */
   readonly idempotencyKey?: string;
+  /**
+   * The user's approval: the same request as the one that returned the operation. Its
+   * `Idempotency-Key` doesn't carry over (Operations 6).
+   */
+  readonly approval?: Approval;
   readonly signal?: AbortSignal;
 }
 
 export interface ApiClientOptions {
-  readonly transport: DpopFetchClient;
+  readonly transport: SessionFetchClient;
   readonly maxResponseBytes?: number;
 }
 
@@ -116,7 +129,7 @@ function member(payload: unknown, name: string): unknown {
 
 /** Read and change through a company's API, the credentials host-owned. */
 export class ApiClient {
-  readonly #transport: DpopFetchClient;
+  readonly #transport: SessionFetchClient;
   readonly #maxResponseBytes: number;
 
   constructor(options: ApiClientOptions) {
@@ -145,15 +158,15 @@ export class ApiClient {
     } else if (options.idempotencyKey !== undefined) {
       throw new RangeError("only a write (POST, PUT, PATCH, DELETE) takes an Idempotency-Key");
     }
+    if (options.approval !== undefined) headers[APPROVAL_HEADER] = approvalHeader(options.approval);
     let body: string | undefined;
     if (options.body !== undefined) {
       headers["Content-Type"] = "application/json";
       body = JSON.stringify(options.body);
     }
     const response = await this.#transport.request(method, url, {
+      session: options.session,
       token: options.token,
-      tenantId: options.tenantId,
-      issuer: options.issuer,
       headers,
       ...(body === undefined ? {} : { body }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -169,26 +182,21 @@ export class ApiClient {
   async #answer(response: Response, key: string | undefined): Promise<ApiResponse> {
     const sent = key === undefined ? {} : { idempotencyKey: key };
     const payload = await this.#payload(response);
-    if (response.status === 202) {
+    if (response.status === 403 && member(payload, "error") === "approval_required") {
       try {
-        return { status: 202, operation: parseOperation(member(payload, "operation")), ...sent };
+        return { status: 403, operation: parseOperation(member(payload, "operation")), ...sent };
       } catch (cause) {
-        throw new ApiError("invalid_operation", "202 answer carries no valid operation", {
-          statusCode: 202,
+        throw new ApiError("invalid_operation", "approval_required carries no valid operation", {
+          statusCode: 403,
           cause,
         });
       }
     }
     if (response.ok) return { status: response.status, body: payload, ...sent };
-    let error = member(payload, "error");
-    if (typeof error !== "string") {
-      // Token errors, and `extension_required` with its `extension` attribute, come in
-      // WWW-Authenticate at an API (§3.3, §6).
-      error = challengeParameters(response.headers.get("www-authenticate")).error;
-    }
     // `scope`, `extension`, and on a 429 `retry_after`: never retried here (§4.3).
     const details = refusalDetails(response, payload);
-    throw new ApiError(typeof error === "string" ? error : "api_request_failed", "the company refused the API call", {
+    // In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
+    throw new ApiError(refusalCode(response, payload, "api_request_failed"), "the company refused the API call", {
       statusCode: response.status,
       ...(Object.keys(details).length ? { details } : {}),
     });

@@ -11,12 +11,20 @@
 // names theirs under a domain they control (`example.com/gift-wrap`). An invalid name is
 // ignored like any extension the agent does not support. Negotiation keeps only what
 // both sides list at the same major version, so either side works with the other under
-// the specification alone.
+// the specification alone. An extension the company recognizes from the request itself,
+// such as one with its own grant type, needs no entry on the agent's side
+// (`RECOGNIZED_FROM_THE_REQUEST`), and is never refused with `extension_required`.
 import type { ExtensionDescriptor } from "./models.js";
 import { challengeParameters } from "./refusals.js";
 
 /** Extensions this SDK implements, by name and major version. */
-export const SUPPORTED_EXTENSIONS: Readonly<Record<string, string>> = Object.freeze({ operations: "1" });
+export const SUPPORTED_EXTENSIONS: Readonly<Record<string, string>> = Object.freeze({
+  operations: "2",
+  "mediated-sign-in": "1",
+});
+
+/** Extensions a company recognizes from the request: the agent doesn't list them (§3.3). */
+export const RECOGNIZED_FROM_THE_REQUEST: ReadonlySet<string> = new Set(["mediated-sign-in"]);
 
 const PLAIN = /^[a-z][a-z0-9_-]{0,63}$/;
 const LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
@@ -43,8 +51,12 @@ export function negotiateExtensions(
   const negotiated: Record<string, string> = {};
   for (const [name, descriptor] of Object.entries(company)) {
     if (extensionNameKind(name) === "invalid") continue;
+    if (!Object.hasOwn(supported, name) || supported[name] !== descriptor.version) continue;
     const mine = Object.hasOwn(agent, name) ? agent[name] : undefined;
-    if (mine === undefined || !Object.hasOwn(supported, name) || supported[name] !== descriptor.version) continue;
+    if (mine === undefined) {
+      if (RECOGNIZED_FROM_THE_REQUEST.has(name)) negotiated[name] = descriptor.version;
+      continue;
+    }
     if (mine.version === descriptor.version) negotiated[name] = descriptor.version;
   }
   return negotiated;
@@ -63,5 +75,7 @@ export function extensionRequired(status: number, payload: unknown, wwwAuthentic
   if (values.error !== "extension_required" && wwwAuthenticate) values = challengeParameters(wwwAuthenticate);
   if (values.error !== "extension_required") return undefined;
   const name = values.extension;
-  return typeof name === "string" && extensionNameKind(name) !== "invalid" ? name : undefined;
+  // A company can't refuse a request that uses the extension itself (§3.3).
+  if (typeof name !== "string" || RECOGNIZED_FROM_THE_REQUEST.has(name)) return undefined;
+  return extensionNameKind(name) !== "invalid" ? name : undefined;
 }

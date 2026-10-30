@@ -6,23 +6,15 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { AuthorizationError, ProtocolValidationError } from "./errors.js";
+import { AuthorizationError } from "./errors.js";
 import { isLoopbackRedirect } from "./models.js";
 import { SecretValue } from "./secret.js";
-import {
-  SESSION_KEY,
-  SessionClient,
-  sessionTokenFromResponse,
-  type RandomBytes,
-  type SessionToken,
-  type TokenResponse,
-} from "./sessions.js";
+import { SessionClient, finishSignIn, type RandomBytes, type SignInResult } from "./sessions.js";
 import {
   AuthorizationStateStores,
   BrowserHandoffs,
   Clocks,
   RandomSources,
-  TokenStores,
   firstContribution,
 } from "./reactor.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
@@ -97,11 +89,6 @@ export interface DirectSignInOptions {
   readonly clientId: string;
   readonly redirectUri: string;
   readonly scopes: readonly string[];
-  /**
-   * The Session Key's thumbprint, sent as `dpop_jkt`: the company binds the code to it, so
-   * the code signs in that Session and no other key can redeem it (§4.5, RFC 9449 §10).
-   */
-  readonly sessionKey: string;
   readonly randomBytes?: RandomBytes;
 }
 
@@ -113,7 +100,6 @@ export interface DirectSignInRequest {
   readonly scopes: readonly string[];
   readonly state: SecretValue;
   readonly codeVerifier: SecretValue;
-  readonly sessionKey: string;
 }
 
 export async function buildDirectSignInRequest(
@@ -133,9 +119,6 @@ export async function buildDirectSignInRequest(
   const scopes = validScopes(options.scopes);
   const clientId = httpsUrl(options.clientId, "clientId").toString();
   const redirectUri = redirectUrl(options.redirectUri, "redirectUri").toString();
-  if (!SESSION_KEY.test(options.sessionKey)) {
-    throw new AuthorizationError("invalid_session_key", "sessionKey must be a JWK SHA-256 thumbprint");
-  }
   // Kept exactly as written: the callback's `iss` is compared character for character (§3.2).
   httpsUrl(options.issuer, "issuer");
   const issuer = options.issuer;
@@ -146,7 +129,6 @@ export async function buildDirectSignInRequest(
   endpoint.searchParams.set("state", state);
   endpoint.searchParams.set("code_challenge", challenge);
   endpoint.searchParams.set("code_challenge_method", "S256");
-  endpoint.searchParams.set("dpop_jkt", options.sessionKey);
   endpoint.hash = "";
   return {
     authorizationUrl: new SecretValue(endpoint.toString()),
@@ -156,7 +138,6 @@ export async function buildDirectSignInRequest(
     scopes,
     state: new SecretValue(state),
     codeVerifier: new SecretValue(verifier),
-    sessionKey: options.sessionKey,
   };
 }
 
@@ -234,20 +215,10 @@ export interface DirectSignInStart {
   readonly requestedScopes: readonly string[];
 }
 
-/**
- * The signed-in Session, its scopes, and a reference to its stored Account Token.
- *
- * The Account Token never stays in `token`: it is moved into `pap.tokenStore`
- * behind `accountTokenReference` (§4.8).
- */
-export interface DirectSignInResult {
-  readonly token: SessionToken;
-  readonly grantedScopes: readonly string[];
-  readonly missingScopes: readonly string[];
-  readonly accountTokenReference?: string;
-}
+/** A completed Direct Sign-In: the access token, and the refresh token's reference. */
+export type DirectSignInResult = SignInResult;
 
-/** `sessionKey` names the Session the sign-in is for: the code is bound to it. */
+/** Plain OAuth: the sign-in names no Session, and any of the User's Sessions uses its tokens (§5.4). */
 export interface DirectSignInBeginOptions extends DirectSignInOptions {
   readonly tokenEndpoint: string;
   readonly tenantId: string;
@@ -348,12 +319,6 @@ export class DirectSignInClient {
     if (!options.tenantId || options.tenantId.length > 256) {
       throw new RangeError("tenantId must contain between 1 and 256 characters");
     }
-    if (!SESSION_KEY.test(options.sessionKey)) {
-      throw new AuthorizationError(
-        "invalid_session_key",
-        "sessionKey must be a JWK SHA-256 thumbprint",
-      );
-    }
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     const random = firstContribution(this.#reactor, RandomSources, "random source");
     const store = firstContribution(
@@ -368,7 +333,6 @@ export class DirectSignInClient {
       clientId: options.clientId,
       redirectUri: options.redirectUri,
       scopes: options.scopes,
-      sessionKey: options.sessionKey,
       randomBytes: (length) => random.bytes(length),
     });
     const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint").toString();
@@ -435,61 +399,14 @@ export class DirectSignInClient {
       redirect_uri: request.redirectUri,
       code_verifier: request.codeVerifier.reveal(),
     };
-    // The proof is signed with the key the code is bound to, the Session's (§4.5).
     const response = await this.#sessions.tokenRequest({
       clientId: request.clientId,
       issuer: request.issuer,
       tokenEndpoint: pending.tokenEndpoint,
-      tenantId: pending.tenantId,
-      sessionKey: request.sessionKey,
       form: () => form,
       error: AuthorizationError,
       ...(signal === undefined ? {} : { signal }),
     });
-    return this.#result(response, pending);
-  }
-
-  async #result(response: TokenResponse, pending: PendingDirectSignIn): Promise<DirectSignInResult> {
-    const requested = pending.request.scopes;
-    if (response.tokenType !== "DPoP") {
-      throw new AuthorizationError(
-        "invalid_token_response",
-        "Direct Sign-In must return a DPoP Session Token",
-      );
-    }
-    let token: SessionToken;
-    try {
-      token = sessionTokenFromResponse(response, {
-        sessionKey: pending.request.sessionKey,
-        signedIn: true,
-        requestedScopes: requested,
-      });
-    } catch (cause) {
-      if (!(cause instanceof ProtocolValidationError)) throw cause;
-      throw new AuthorizationError("invalid_token_response", cause.message, { cause });
-    }
-    if (token.scopes.some((scope) => !requested.includes(scope))) {
-      throw new AuthorizationError(
-        "scope_escalation",
-        "Company returned a scope that was not requested",
-      );
-    }
-    let accountTokenReference: string | undefined;
-    if (token.accountToken !== undefined) {
-      // The Account Token is a secret (§4.8): behind an opaque reference, never returned.
-      const random = firstContribution(this.#reactor, RandomSources, "random source");
-      accountTokenReference = `account_${base64Url(random.bytes(16))}`;
-      await firstContribution(this.#reactor, TokenStores, "token store").put(
-        accountTokenReference,
-        token.accountToken,
-      );
-    }
-    const { accountToken: _account, ...publicToken } = token;
-    return {
-      token: publicToken,
-      grantedScopes: publicToken.scopes,
-      missingScopes: requested.filter((scope) => !publicToken.scopes.includes(scope)),
-      ...(accountTokenReference === undefined ? {} : { accountTokenReference }),
-    };
+    return finishSignIn(this.#reactor, response, request.scopes, { error: AuthorizationError });
   }
 }

@@ -5,23 +5,28 @@
  */
 
 /**
- * Joining the personal agent's own browser to a PAP Session (§5, §9.6).
+ * Joining the personal agent's own browser to a PAP Session (§6, §10.6).
  *
- * The browser loads `web.browser_session_endpoint` with a GET and gets a form holding a
- * one-time `code`, tied to that browser by a `SameSite=Strict` cookie. The personal agent
- * signs a DPoP proof with the Session Key, the code as its `nonce`, and the browser
- * submits code and proof; the company answers with the Session's cookie. The code is
- * read from the agent's own browser only, by host code the model cannot read (§9.2):
- * never from a message or another page.
+ * 1. The browser loads `web.browser_session_endpoint` with a GET and gets a form holding a
+ *    one-time `code`, tied to that browser by a `SameSite=Strict` cookie.
+ * 2. The personal agent authorizes the code in a request of its own:
+ *    `POST {browser_session_endpoint}/authorize` with `{"code": ...}`, the Session header of
+ *    the Session the browser joins and, signed in, its access token. The company answers `204`.
+ * 3. The browser submits the form, the code alone; the company answers with the Session's
+ *    cookie. The access token never passes through the browser.
+ *
+ * The code is read from the agent's own browser only, by host code the model cannot read
+ * (§10.2): never from a message or another page.
  */
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
-import { BrowserSessionError } from "./errors.js";
-import { BrowserJoins, Clocks, DpopProofProviders, firstContribution } from "./reactor.js";
-import { SecretValue } from "./secret.js";
+import { BrowserSessionError, TransportError } from "./errors.js";
+import { BrowserJoins, Clocks, firstContribution } from "./reactor.js";
+import type { AccessToken, PapSession } from "./sessions.js";
+import type { SessionFetchClient } from "./transport.js";
 
-/** A join code carries at least 128 random bits (§5): 22 base64url characters or more. */
+/** A join code carries at least 128 random bits (§6): 22 base64url characters or more. */
 const MIN_CODE_LENGTH = 22;
 
 function httpsUrl(value: string, label: string): URL {
@@ -45,31 +50,36 @@ export interface BrowserSessionStart {
 
 export interface BrowserJoinOptions {
   readonly browserSessionEndpoint: string;
-  readonly tenantId: string;
-  readonly issuer: string;
-  /** The Session the browser joins, signed in or out: its Session Key's thumbprint. */
-  readonly sessionKey: string;
+  /** The Session the browser joins. */
+  readonly session: PapSession;
+  /** Signed in with it, signed out without. */
+  readonly token?: AccessToken | undefined;
 }
 
-/** Join the agent's own browser to a Session with a proof over a one-time code. */
+/** Join the agent's own browser to a Session: load, authorize, submit (§6). */
 export class BrowserSessionClient {
   readonly #reactor: ReactorPlatformView;
+  readonly #transport: SessionFetchClient;
 
-  constructor(options: { readonly reactor: ReactorPlatformView }) {
+  constructor(options: {
+    readonly reactor: ReactorPlatformView;
+    readonly transport: SessionFetchClient;
+  }) {
     this.#reactor = options.reactor;
+    this.#transport = options.transport;
   }
 
   /**
-   * Load the join form, sign its code with the Session Key, submit it (§5).
+   * Join the agent's browser to the Session, signed in with `token` or signed out (§6).
    *
-   * The proof's `htm` is POST, its `htu` the endpoint, its `nonce` the code; it has no
-   * `ath`.
+   * The code is authorized at `{endpoint}/authorize` with the Session header and the access
+   * token; a code the company refuses there is a `BrowserSessionError`, and the agent starts
+   * again at step 1.
    */
   async join(options: BrowserJoinOptions): Promise<BrowserSessionStart> {
     const endpoint = httpsUrl(options.browserSessionEndpoint, "browserSessionEndpoint");
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     const browser = firstContribution(this.#reactor, BrowserJoins, "browser join");
-    const prover = firstContribution(this.#reactor, DpopProofProviders, "DPoP proof provider");
     const code = await browser.loadJoinForm(endpoint);
     if (code.reveal().length < MIN_CODE_LENGTH) {
       throw new BrowserSessionError(
@@ -77,20 +87,31 @@ export class BrowserSessionClient {
         "The join page's code is too short to be one-time",
       );
     }
-    const proof = await prover.create({
-      method: "POST",
-      url: options.browserSessionEndpoint,
-      tenantId: options.tenantId,
-      issuer: options.issuer,
-      sessionKey: options.sessionKey,
-      nonce: code.reveal(),
-    });
-    await browser.submitJoinForm(proof);
+    let response: Response;
+    try {
+      response = await this.#transport.request(
+        "POST",
+        `${options.browserSessionEndpoint.replace(/\/+$/, "")}/authorize`,
+        {
+          session: options.session,
+          token: options.token,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: code.reveal() }),
+        },
+      );
+    } catch (cause) {
+      if (!(cause instanceof TransportError)) throw cause;
+      throw new BrowserSessionError(cause.code, "Authorizing the join code failed", { cause });
+    }
+    await response.body?.cancel().catch(() => undefined);
+    if (response.status !== 204) {
+      throw new BrowserSessionError(
+        "join_not_authorized",
+        "The company refused to authorize the join code",
+        { statusCode: response.status },
+      );
+    }
+    await browser.submitJoinForm();
     return { endpoint: options.browserSessionEndpoint, joinedAt: clock.now() };
   }
-}
-
-/** The `nonce` a join proof carries: the code itself (§5, RFC 9449 §8). */
-export function joinProofNonce(code: SecretValue | string): string {
-  return code instanceof SecretValue ? code.reveal() : code;
 }

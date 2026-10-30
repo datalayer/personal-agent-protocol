@@ -93,10 +93,27 @@ export interface MediatedField extends UnknownFields {
   readonly secret: boolean;
 }
 
-/** Mediated Sign-In, transitional (§4.7): the only sign-in type with its own scopes. */
-export interface MediatedSignIn extends ScopeOption {
-  readonly endpoint: string;
+/**
+ * Field names a Mediated Sign-In can't use: they would overwrite the grant's own parameters
+ * (Mediated Sign-In 2).
+ */
+export const MEDIATED_RESERVED_FIELDS: ReadonlySet<string> = new Set([
+  "grant_type",
+  "scope",
+  "resource",
+  "client_id",
+  "client_secret",
+  "client_assertion",
+  "client_assertion_type",
+  "sign_in_id",
+  "one_time_code",
+]);
+
+/** `extensions["mediated-sign-in"]`, version 1: the credentials to collect, its scopes. */
+export interface MediatedSignIn extends UnknownFields {
+  readonly version: "1";
   readonly fields: readonly MediatedField[];
+  readonly scopes: readonly string[];
 }
 
 /** What a scope allows, its most consequential operation (§4.4): a Company's claim. */
@@ -111,7 +128,7 @@ export function effectiveChanges(hint: ScopeHint): ScopeChanges {
 }
 
 /**
- * `auth` (§3.1): optional; the issuer it names, Mediated Sign-In, the Company's scopes.
+ * `auth` (§3.1): optional; the issuer it names, and the Company's scopes.
  *
  * `issuer` is needed only when the domain's protected resource metadata lists more than
  * one authorization server, and then names one of them; with one, it may be left out,
@@ -120,7 +137,6 @@ export function effectiveChanges(hint: ScopeHint): ScopeChanges {
  */
 export interface AuthCapabilities extends UnknownFields {
   readonly issuer?: string;
-  readonly mediated?: MediatedSignIn;
   readonly scopes: Readonly<Record<string, string>>;
   readonly scope_hints: Readonly<Record<string, ScopeHint>>;
 }
@@ -244,36 +260,24 @@ export interface JsonWebKeySet extends UnknownFields {
   readonly keys: readonly JsonWebKey[];
 }
 
-export type OperationState =
-  | "proposed"
-  | "in_progress"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "expired";
-
-export interface OperationResult extends UnknownFields {
-  readonly summary: string;
-  readonly data?: Readonly<Record<string, unknown>>;
-}
-
-export interface OperationConfirmation extends UnknownFields {
-  readonly revision: number;
-  readonly approved_by: "user" | "standing_permission";
-  readonly confirmed_at: string;
-}
-
+/**
+ * One action the Company performs once the User approves it (Operations 3).
+ *
+ * `revision` is opaque: it identifies these terms, and the Company changes it whenever the
+ * `summary`, `terms`, or `expires_at` change.
+ */
 export interface Operation extends UnknownFields {
   readonly operation_id: string;
-  readonly revision: number;
-  readonly state: OperationState;
+  readonly revision: string;
   readonly summary: string;
   readonly terms?: Readonly<Record<string, unknown>>;
-  readonly expires_at?: string;
-  readonly user_approval_required: boolean;
-  readonly url?: string;
-  readonly confirmation: OperationConfirmation | null;
-  readonly result: OperationResult | null;
+  readonly expires_at: string;
+}
+
+/** A statement that the User approved this revision of an operation (Operations 5, 6). */
+export interface Approval {
+  readonly operation_id: string;
+  readonly revision: string;
 }
 
 /**
@@ -296,7 +300,10 @@ export interface Message extends UnknownFields {
   readonly text?: string;
   readonly data?: Readonly<Record<string, unknown>>;
   readonly context?: Readonly<Record<string, unknown>>;
+  /** A Company message's operation, for the User's approval (Operations 4). */
   readonly operation?: Operation;
+  /** A Personal Agent message's approval: only this approves, never `text` (Operations 6). */
+  readonly approval?: Approval;
 }
 
 export type ConversationStatus = "working" | "idle" | "queued" | "closed";
@@ -576,33 +583,6 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
   let auth: AuthCapabilities | undefined;
   if (source.auth !== undefined) {
     const authSource = record(source.auth, "auth");
-    let mediated: MediatedSignIn | undefined;
-    if (authSource.mediated !== undefined) {
-      const mediatedSource = record(authSource.mediated, "auth.mediated");
-      const fields = array(mediatedSource.fields, "auth.mediated.fields").map(
-        (item, index) => {
-          const field = record(item, `auth.mediated.fields[${index}]`);
-          return {
-            ...field,
-            name: string(field.name, `auth.mediated.fields[${index}].name`),
-            label: string(field.label, `auth.mediated.fields[${index}].label`),
-            secret: boolean(field.secret, `auth.mediated.fields[${index}].secret`),
-          } as MediatedField;
-        },
-      );
-      if (fields.length === 0) {
-        throw new ProtocolValidationError(
-          "invalid_mediated_sign_in",
-          "auth.mediated.fields must not be empty",
-        );
-      }
-      mediated = {
-        ...mediatedSource,
-        ...scopes(mediatedSource, "auth.mediated"),
-        endpoint: httpsUrl(mediatedSource.endpoint, "auth.mediated.endpoint"),
-        fields,
-      } as MediatedSignIn;
-    }
     const scopeNames = stringMap(authSource.scopes ?? {}, "auth.scopes");
     for (const name of Object.keys(scopeNames)) {
       scopeToken(name, "auth.scopes name");
@@ -628,7 +608,6 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
       ...(authSource.issuer === undefined || authSource.issuer === null
         ? {}
         : { issuer: httpsUrl(authSource.issuer, "auth.issuer") }),
-      ...(mediated === undefined ? {} : { mediated }),
       scopes: scopeNames,
       scope_hints: scopeHints,
     } as AuthCapabilities;
@@ -947,84 +926,56 @@ export function parseJsonWebKeySet(value: unknown): JsonWebKeySet {
 }
 
 export function parseOperation(value: unknown): Operation {
-  const source = nullsAbsent(value, "operation", ["terms", "expires_at", "url"]);
-  const state = oneOf(
-    source.state,
-    ["proposed", "in_progress", "succeeded", "failed", "cancelled", "expired"] as const,
-    "operation.state",
-  );
-  const revision = integer(source.revision, "operation.revision");
-  let confirmation: OperationConfirmation | null = null;
-  if (source.confirmation !== undefined && source.confirmation !== null) {
-    const item = record(source.confirmation, "operation.confirmation");
-    confirmation = {
-      ...item,
-      revision: integer(item.revision, "operation.confirmation.revision"),
-      approved_by: oneOf(
-        item.approved_by,
-        ["user", "standing_permission"] as const,
-        "operation.confirmation.approved_by",
-      ),
-      confirmed_at: timestamp(item.confirmed_at, "operation.confirmation.confirmed_at"),
-    } as OperationConfirmation;
-  }
-  let result: OperationResult | null = null;
-  if (source.result !== undefined && source.result !== null) {
-    const item = nullsAbsent(source.result, "operation.result", ["data"]);
-    result = {
-      ...item,
-      summary: string(item.summary, "operation.result.summary"),
-      ...(item.data === undefined
-        ? {}
-        : { data: record(item.data, "operation.result.data") }),
-    } as OperationResult;
-  }
-  const expiresAt =
-    source.expires_at === undefined
-      ? undefined
-      : timestamp(source.expires_at, "operation.expires_at");
-  if (state === "proposed" && expiresAt === undefined) {
-    throw new ProtocolValidationError(
-      "invalid_operation",
-      "a proposed operation requires expires_at",
-    );
-  }
-  if (state === "proposed" && confirmation !== null) {
-    throw new ProtocolValidationError(
-      "invalid_operation",
-      "a proposed operation cannot be confirmed",
-    );
-  }
-  if (confirmation !== null && confirmation.revision !== revision) {
-    throw new ProtocolValidationError(
-      "invalid_operation",
-      "confirmation must name the current revision",
-    );
-  }
-  if (["succeeded", "failed", "cancelled", "expired"].includes(state) && result === null) {
-    throw new ProtocolValidationError(
-      "invalid_operation",
-      "a final operation requires a result",
-    );
-  }
+  const source = nullsAbsent(value, "operation", ["terms"]);
   return {
     ...source,
     operation_id: identifier(source.operation_id, "operation.operation_id"),
-    revision,
-    state,
+    revision: identifier(source.revision, "operation.revision"),
     summary: string(source.summary, "operation.summary"),
-    ...(source.terms === undefined
-      ? {}
-      : { terms: record(source.terms, "operation.terms") }),
-    ...(expiresAt === undefined ? {} : { expires_at: expiresAt }),
-    user_approval_required:
-      source.user_approval_required === undefined
-        ? false
-        : boolean(source.user_approval_required, "operation.user_approval_required"),
-    ...(source.url === undefined ? {} : { url: httpsUrl(source.url, "operation.url") }),
-    confirmation,
-    result,
+    ...(source.terms === undefined ? {} : { terms: record(source.terms, "operation.terms") }),
+    expires_at: timestamp(source.expires_at, "operation.expires_at"),
   } as Operation;
+}
+
+export function parseApproval(value: unknown): Approval {
+  const source = record(value, "approval");
+  return {
+    operation_id: identifier(source.operation_id, "approval.operation_id"),
+    revision: identifier(source.revision, "approval.revision"),
+  };
+}
+
+/** `extensions["mediated-sign-in"]`, version 1: its fields, none a reserved name, and scopes. */
+export function parseMediatedSignIn(value: unknown): MediatedSignIn {
+  const source = record(value, "mediated-sign-in");
+  if (source.version !== "1") {
+    throw new ProtocolValidationError("invalid_mediated_sign_in", "Mediated Sign-In is version 1");
+  }
+  const fields = array(source.fields, "mediated-sign-in.fields").map((item, index) => {
+    const field = record(item, `mediated-sign-in.fields[${index}]`);
+    return {
+      ...field,
+      name: string(field.name, `mediated-sign-in.fields[${index}].name`),
+      label: string(field.label, `mediated-sign-in.fields[${index}].label`),
+      secret: boolean(field.secret, `mediated-sign-in.fields[${index}].secret`),
+    } as MediatedField;
+  });
+  if (fields.length === 0) {
+    throw new ProtocolValidationError("invalid_mediated_sign_in", "fields must not be empty");
+  }
+  if (fields.some((field) => MEDIATED_RESERVED_FIELDS.has(field.name))) {
+    throw new ProtocolValidationError(
+      "invalid_mediated_sign_in",
+      "a Mediated Sign-In field can't use a reserved parameter name",
+    );
+  }
+  const scopeNames = array(source.scopes, "mediated-sign-in.scopes").map((item) =>
+    scopeToken(item, "mediated-sign-in.scopes entry"),
+  );
+  if (scopeNames.length === 0) {
+    throw new ProtocolValidationError("invalid_mediated_sign_in", "scopes must not be empty");
+  }
+  return { ...source, version: "1", fields, scopes: scopeNames } as MediatedSignIn;
 }
 
 const LOCALE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/;
@@ -1084,10 +1035,17 @@ export function parseMessage(value: unknown): Message {
   const context = messageContext(optionalRecord(source.context, "message.context"));
   const operation =
     source.operation === undefined ? undefined : parseOperation(source.operation);
-  if (text === undefined && data === undefined && context === undefined && operation === undefined) {
+  const approval = source.approval === undefined ? undefined : parseApproval(source.approval);
+  if (
+    text === undefined &&
+    data === undefined &&
+    context === undefined &&
+    operation === undefined &&
+    approval === undefined
+  ) {
     throw new ProtocolValidationError(
       "invalid_message",
-      "a message requires text, data, context, or operation",
+      "a message requires text, data, context, operation, or approval",
     );
   }
   return {

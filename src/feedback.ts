@@ -33,9 +33,9 @@ import { PersonalAgentProtocolError, ProtocolValidationError } from "./errors.js
 import { parseJsonStrict } from "./json.js";
 import { readLimited } from "./limits.js";
 import { parseAlternative, type Alternative, type DiscoveryDocument } from "./models.js";
-import { challengeParameters, refusalDetails } from "./refusals.js";
-import type { SessionToken } from "./sessions.js";
-import type { DpopFetchClient } from "./transport.js";
+import { refusalCode, refusalDetails } from "./refusals.js";
+import type { AccessToken, PapSession } from "./sessions.js";
+import type { SessionFetchClient } from "./transport.js";
 
 /** The longest `task` a report carries (§8). */
 export const FEEDBACK_TASK_MAX_LENGTH = 200;
@@ -94,20 +94,20 @@ export function feedbackEndpoint(document: DiscoveryDocument): string | undefine
 }
 
 export interface FeedbackClientOptions {
-  readonly transport: DpopFetchClient;
+  readonly transport: SessionFetchClient;
   readonly maxResponseBytes?: number;
 }
 
 export interface FeedbackReportOptions {
-  readonly token: SessionToken;
-  readonly tenantId: string;
-  readonly issuer: string;
+  readonly session: PapSession;
+  /** Signed in with it, signed out without. */
+  readonly token?: AccessToken | undefined;
   readonly signal?: AbortSignal;
 }
 
-/** Send feedback reports with a Session Token, signed in or out, and a DPoP proof. */
+/** Send feedback reports in a Session, signed in or out. */
 export class FeedbackClient {
-  readonly #transport: DpopFetchClient;
+  readonly #transport: SessionFetchClient;
   readonly #maxResponseBytes: number;
 
   constructor(options: FeedbackClientOptions) {
@@ -135,9 +135,8 @@ export class FeedbackClient {
   ): Promise<Alternative | undefined> {
     const checked = parseFeedbackReport(report);
     const response = await this.#transport.request("POST", endpoint, {
+      session: options.session,
       token: options.token,
-      tenantId: options.tenantId,
-      issuer: options.issuer,
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(checked),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -158,17 +157,10 @@ export class FeedbackClient {
         );
       }
     }
-    let code =
-      typeof payload === "object" && payload !== null && !Array.isArray(payload)
-        ? (payload as Record<string, unknown>).error
-        : undefined;
-    if (typeof code !== "string") {
-      // A token error may come only in WWW-Authenticate (§6).
-      code = challengeParameters(response.headers.get("www-authenticate")).error;
-    }
     const details = refusalDetails(response, payload);
     throw new FeedbackError(
-      typeof code === "string" ? code : "feedback_request_failed",
+      // In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
+      refusalCode(response, payload, "feedback_request_failed"),
       "the company refused the feedback report",
       { statusCode: response.status, ...(Object.keys(details).length > 0 ? { details } : {}) },
     );

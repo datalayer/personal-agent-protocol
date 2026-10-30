@@ -22,7 +22,7 @@ node --test src/__tests__/security-demonstrations.test.mjs   # after npm run bui
 | Issuer mix-up | Begins Direct Sign-In at Manzanita, then completes it with the answer claiming another issuer (`iss`, RFC 9207). | `issuer_mismatch` before any code reaches a token endpoint; the sign-in state is spent, so the genuine answer cannot be raced in afterwards; the Session stays signed out; starting again works. | `test_issuer_mix_up_is_refused` | `issuer mix-up is refused` |
 | Cross-tenant access | Presents Ada's signed-in token from another tenant of the same agent, and reads her conversation as another user. | `401`: proofs are made with each tenant's own DPoP key, which the token is not bound to; another user's Session sees `conversation_not_found`. Ada's tenant is unaffected. | `test_cross_tenant_access_is_refused` | `cross-tenant access is refused` |
 | Stale approval | Approves revision 1 of an exchange; Manzanita revises it to revision 2 (a price difference); confirms with the old approval. | `terms_changed` with the changed terms; the old approval does not fit revision 2 (`approval_mismatch`, refused locally); nothing is performed until the user approves revision 2; the stale approval presented again performs nothing. | `test_stale_approval_is_refused` | `stale approval is refused` |
-| Retries | Sends one message ID twice; loses the answer to a confirmation that Manzanita received and performed; retries the confirmation. | One conversation, one message; the lost answer is read back by the same operation ID, never assumed failed; the operation is performed once. | `test_retries_are_safe` | `retries are safe` |
+| Retries | Sends one message ID twice; loses the answer to an approval that Manzanita received and performed; retries the confirmation. | One conversation, one message; the lost answer is read back by the same operation ID, never assumed failed; the operation is performed once. | `test_retries_are_safe` | `retries are safe` |
 | Restart | Restarts Manzanita, twice, over its store (which holds the default replay cache), between a sign-in, a proposal, and its confirmation. | A DPoP proof seen before the restart is still refused after it; the Session and the proposal carry over; the operation confirmed after one restart is not performed again after the next. | `test_restart_is_safe` | `restart is safe` |
 | Rollback | Rolls Manzanita back to its previous release (no website) over the same store, after an Account Token rotation and a confirmed operation. | The rotated-away Account Token stays refused and the current one works; the earlier release does not perform the confirmed operation again; Sessions and the API continue. | `test_rollback_is_safe` | `rollback is safe` |
 | Revocation | Signs in two Sessions from one sign-in, then revokes the Account Token. | Both signed-in tokens read as signed out at once (`403`), not at expiry; the Account Token is gone locally and refused at the company; the Session continues signed out. | `test_revocation_is_safe` | `revocation is safe` |
@@ -41,8 +41,8 @@ cache is one process, as the store is. A company that contributes its own
 
 The same properties are also tested piecemeal, closer to the code: the
 conformance cases (`security.*-replay`, `lifecycle.rotated-token`,
-`lifecycle.sign-out-*`, `operations.terms-changed`,
-`operations.confirm-timeout-recovery`, `conversations.retry-replays`), the
+`lifecycle.sign-out-*`, `operations.new-revision-on-changed-terms`,
+`operations.lost-answer-same-approval`, `conversations.retry-replays`), the
 company store's restart test (`test_company_store.py`), the overlapping JWKS
 test (`test_guide_security.py`), and, for the `pap` CLI and live-session
 actions, the tenant tests (`test_cli_protocol.py`,

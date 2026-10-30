@@ -172,7 +172,7 @@ surface:
 
 | Area            | Current support                                                                                                                   |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Models          | Forward-compatible discovery, OAuth metadata, client metadata, messages, events, and Operations v1 models                         |
+| Models          | Forward-compatible discovery, OAuth metadata, client metadata, messages, events, and Operations v2 models                         |
 | Discovery       | `poppy.json`, company-domain and issuer validation, `poppy_domains`, bounded responses, and redirect controls                     |
 | Sessions        | Pairwise user IDs, PAP 4.2 assertions, signed-out start and renewal, redacted tokens, and DPoP nonce retry                        |
 | Cryptography    | ES256/RS256 JOSE, RFC 9449 DPoP creation and verification, freshness, token hash, nonce, and replay checks                        |

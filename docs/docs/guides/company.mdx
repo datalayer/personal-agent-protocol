@@ -144,7 +144,7 @@ app = company_app(service)  # any ASGI server, or httpx.ASGITransport in tests
 response, so any web framework can serve it; `company_app()` serves it over
 plain ASGI and rebuilds each request URL on the company's published origin so
 DPoP `htu` checks compare against what the personal agent signed. It
-implements, of draft 0.3 and Operations v1:
+implements, of draft 0.3 and Operations v2:
 
 - discovery (`/.well-known/poppy.json`) and OAuth metadata on one issuer,
   with `protected_resources`, `grant_types_supported`, `scopes_supported`,
@@ -192,9 +192,10 @@ implements, of draft 0.3 and Operations v1:
   `author_image` are given, and a closed
   conversation, one not handed to people, or one with a Direct Conversation
   open takes none;
-- Operations proposed by the company agent, read, confirmed at most once
-  (latest revision, approval rules, write scopes, extension negotiation),
-  revised (`revise()`), and cancelled;
+- Operations returned by an API, an MCP tool or the company agent, approved
+  through `Poppy-Approval`, `_meta` or a message's `approval`, checked in the
+  extension's order and performed at most once, a new revision answering a failed
+  check, and `revise()` for new terms;
 - with `web` (`web=True`, `web: true` in TypeScript), the website (§5). A GET
   of the browser-session endpoint answers a form with a one-time `code` (at
   least 128 random bits, at most 60 seconds) and an empty `proof` field, tied
@@ -204,9 +205,8 @@ implements, of draft 0.3 and Operations v1:
   code) signed with the Session Key; the company checks cookie and code (used
   once, whatever the result), the proof, and that its key is an active
   Session's (an unknown key is an error, never a new Session), then answers
-  `303` with its `__Host-poppy_session` cookie. Each operation's page confirms
-  or cancels the operation, the same operation at most once whichever channel
-  confirms it.
+  `303` with its `__Host-poppy_session` cookie. `web_session(cookie)` tells the
+  company's own pages which Session a browser stands for.
 
 ### Reactor points
 
@@ -217,7 +217,7 @@ plugins contribute with a lower `order` to replace a default.
 | --- | --- | --- |
 | `pap.company.store` | `CompanyStore`: versioned JSON records by kind and key (below) | `MemoryCompanyStore` (one process) |
 | `pap.company.accounts` | `AccountDirectory`: `authenticate(credentials, context)` and `check_code` for Mediated Sign-In; `context` (`SignInContext`) names the agent and Session, and the directory must throttle its own checks too; optionally `AccountSignOuts.signed_out_before(account_id)`, since when the account's earlier sign-ins are over (a password reset) | None: the company contributes it |
-| `pap.company.agent` | `CompanyAgent.respond(turn)`: replies, `authorization` requests, proposed operations | None: the company contributes it |
+| `pap.company.agent` | `CompanyAgent.respond(turn)`: replies, `authorization` requests, operations to approve | None: the company contributes it |
 | `pap.company.operationExecutor` | `OperationExecutor.perform(operation, account_id)`, one per `action`; `operation_id` is the idempotency key | None: an unperformable operation stays `in_progress` |
 | `pap.company.clientPolicy` | `ClientPolicy.allows(client_id)` | `AllowEveryAgent` |
 | `pap.company.clientResolver` | Verified client metadata and JWKS for a `client_id` | `IdentityClientResolver` over HTTPS |
@@ -267,7 +267,7 @@ of the atomic methods:
 
 A company restarted, replaced, or rolled back over the same store continues
 every flow: a pending device sign-in can be approved, a rotated-away Account
-Token stays refused, an operation proposed before is confirmed once after, and
+Token stays refused, an operation returned before is performed once after, and
 an event cursor resumes where it was.
 
 A version that no longer offers a scope — rolled back to one without it, or
@@ -278,20 +278,20 @@ Session within what is offered, and an Account Token refreshed for it is
 refresh asking only for scopes still offered succeeds with the same token.
 
 Taking a company down, its owner first settles and ends what is under way, so
-no personal agent reads an operation as in progress for ever or keeps a
-sign-in to a company that is gone: `open_work()` lists the operations still
-`proposed` or `in_progress` and the agents and accounts with a sign-in not
-ended (read with `records`); `cancel_open_operations(reason)` settles each as
-`cancelled` — a proposal with *Nothing was changed.*, one in progress saying it
-was stopped before it finished and that whatever it changed until then stands,
-each followed by the reason — and `end_sign_ins()` ends every sign-in as each
-agent's `disconnect` does. Final operations are left as they are. In
-TypeScript: `openWork`, `cancelOpenOperations`, `endSignIns`.
+no personal agent waits for an operation for ever or keeps a sign-in to a company
+that is gone: `open_work()` lists the operations that can still be approved or are
+being performed, and the agents and accounts with a sign-in not ended (read with
+`records`); `settle_open_operations(reason)` withdraws each one not yet approved,
+and settles each one being performed saying it was stopped before it finished and
+that whatever it changed until then stands, followed by the reason; and
+`end_sign_ins()` ends every sign-in as each agent's `disconnect` does. Operations
+already performed are left as they are. In TypeScript: `openWork`,
+`settleOpenOperations`, `endSignIns`.
 
 `approve_device`, `deny_device`, `approve_authorization`,
 `deny_authorization`, `authorization_request`, `revise`, `settle`,
 `forget_events`, `disconnect`, `operation_record`, `open_work`,
-`cancel_open_operations` and `end_sign_ins` read and write the store, so they
+`settle_open_operations` and `end_sign_ins` read and write the store, so they
 are coroutines (promises in TypeScript).
 
 A backend checks itself with the conformance kit, which runs the same checks
@@ -330,7 +330,7 @@ to the kit as `now`.
 
 ### Consent pages and the website
 
-Every page the company serves (the consent page, the operation page) is sent
+Every page the company serves (the consent page) is sent
 with `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors
 'none'`, and `Cache-Control: no-store`.
 
@@ -354,14 +354,7 @@ TypeScript) when:
 A hosted consent page (`consent_page`) gets no binding: it protects its own
 form, and `consent_decision` refuses every POST for its requests.
 
-The operation page (`/operations/{operation_id}`, both reference companies)
-does the same with the browser's `__Host-poppy_session` cookie: its form carries a
-token derived from that cookie and the operation, and a POST that is
-cross-site, from another origin, without the token, or with a token from
-another browser's page is
-refused with `403`. `test_guide_security.py` and `guide-security.test.mjs`
-test each case, and `test_mcp_and_web.py` and `mcp.test.mjs` the operation
-page.
+`test_guide_security.py` and `guide-security.test.mjs` test each case.
 
 ### Hosted sign-in pages
 

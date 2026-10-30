@@ -19,7 +19,7 @@ requirements:
   practical.
 - Create a fresh DPoP proof for every request and every retry.
 - Use resource-bound Bearer tokens only for MCP; require DPoP elsewhere.
-- Require exact current-revision approval before confirming an operation.
+- Require the user's approval of the exact revision before performing an operation.
 
 [Open security points](/security/review/) lists what is open now: residual
 risks, what a deployment must provide, and the draft's open questions; the
@@ -35,7 +35,7 @@ properties end to end.
 | Session request      | Verify issuer, subject, audience, time window, signature, and single-use `jti`.     |
 | Authorized request   | Verify token, DPoP proof, method, URL, nonce, replay ID, resource, and scopes.      |
 | Model/tool boundary  | Pass opaque references, never credentials or private signing material.              |
-| Consequential action | Approve and confirm the exact current operation revision.                           |
+| Consequential action | Approve the exact operation revision, through the host's own surface.                |
 
 ## Secret inventory
 

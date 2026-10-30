@@ -28,7 +28,7 @@ SDKs, in [Migration](/releases/migration/#026--027).
 - [Draft specification](https://personalagentprotocol.org/docs/0.3/spec)
 - [Implementation guides](https://personalagentprotocol.org/docs/0.3/guides)
 - [Extensions](https://personalagentprotocol.org/docs/0.3/extensions)
-- [Operations version 1](https://personalagentprotocol.org/docs/0.3/extensions/operations)
+- [Operations version 2](https://personalagentprotocol.org/docs/0.3/extensions/operations)
 - [Open topics](https://personalagentprotocol.org/docs/path-to-1#open-topics)
 
 The repository records the reviewed upstream revision in
@@ -52,16 +52,17 @@ and SHOULDs.
 
 | Area | Entries | Implemented | Partial | Open | Not applicable |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| [Discovery](/protocol/coverage/discovery/) | 32 | 29 | 2 | 0 | 1 |
+| [Discovery](/protocol/coverage/discovery/) | 32 | 28 | 2 | 0 | 2 |
 | [Identity and Sessions](/protocol/coverage/identity-sessions/) | 52 | 48 | 2 | 0 | 2 |
-| [Sign-in and Account Tokens](/protocol/coverage/sign-in/) | 39 | 29 | 4 | 3 | 3 |
+| [Sign-in and Account Tokens](/protocol/coverage/sign-in/) | 27 | 20 | 3 | 2 | 2 |
 | [Browser](/protocol/coverage/browser/) | 13 | 12 | 0 | 1 | 0 |
 | [APIs](/protocol/coverage/apis/) | 6 | 6 | 0 | 0 | 0 |
 | [Conversations](/protocol/coverage/conversations/) | 18 | 16 | 0 | 0 | 2 |
 | [Feedback](/protocol/coverage/feedback/) | 15 | 10 | 5 | 0 | 0 |
 | [Security considerations](/protocol/coverage/security-considerations/) | 6 | 3 | 1 | 0 | 2 |
-| [Operations](/protocol/coverage/operations/) | 19 | 17 | 2 | 0 | 0 |
-| [Operational guidance](/protocol/coverage/operational-guidance/) | 61 | 46 | 6 | 5 | 4 |
+| [Operations](/protocol/coverage/operations/) | 21 | 20 | 1 | 0 | 0 |
+| [Mediated Sign-In](/protocol/coverage/mediated-sign-in/) | 11 | 9 | 0 | 1 | 1 |
+| [Operational guidance](/protocol/coverage/operational-guidance/) | 67 | 50 | 7 | 5 | 5 |
 
 {/* coverage:end */}
 
@@ -82,7 +83,7 @@ and SHOULDs.
 | Conversations | Create, retry idempotently, read cursor events (`cursor`, `wait` as query parameters; `conversation_id` and `events` on every read), poll or stream (`Last-Event-ID` wins), identify speakers (`role` set by the company, `author` with its `type` and, for a company's person or persona, `id`, `name`, `image`), hand off and close idempotently, sign in, stay open after sign-out. |
 | Extensions | Negotiate named major versions while ignoring unsupported extensions and unknown fields. |
 | Excluded tasks and feedback | Read the tasks a company doesn't offer (`excluded_tasks`, each with an optional alternative); report a missing task (`kind` `missing`, `task`, `description`) with a Session Token; the company answers 202, or 200 with an alternative when the task can be done after all. |
-| Operations v1 | Propose immutable revisions, obtain exact approval, confirm at most once, track, recover, and cancel across channels; an account's operation only from a Session signed in to that account (`insufficient_scope` otherwise). |
+| Operations v2 | Refuse an action with its operation, get the user's approval of one revision, send it through the same interface, perform at most once, across interfaces. |
 
 ## Coverage expectations
 
@@ -108,7 +109,7 @@ where an operation was proposed.
 | Mediated Sign-In | Python and TypeScript | Python and TypeScript reference companies | [Mediated Sign-In](/examples/mediated-sign-in/) |
 | Account Tokens | Python and TypeScript | Python and TypeScript reference companies | [Account Tokens](/examples/account-tokens/) |
 | Conversations: messages, events, SSE, handoff, Direct, sign-in, close | Python and TypeScript | Python and TypeScript reference companies | [Streaming](/examples/conversation-streaming/), [control](/examples/conversation-control/) |
-| Operations v1 | Python and TypeScript | Python and TypeScript reference companies | [Operations](/examples/operations/) |
+| Operations v2 | Python and TypeScript | Python and TypeScript reference companies | [Operations](/examples/operations/) |
 | Web (Browser Session) | Python and TypeScript | Python and TypeScript reference companies | [Browser Session](/examples/browser-session/) |
 | OpenAPI and MCP | Python and TypeScript (`ApiClient`, `McpClient`, a resource-bound DPoP token or a Bearer token by Token Exchange) | Python and TypeScript reference companies | [TypeScript SDK](/sdk/typescript/#openapi-and-mcp) |
 | Feedback | Python and TypeScript (`FeedbackClient`) | Python and TypeScript reference companies (`POST /poppy/feedback`) | [Feedback coverage](/protocol/coverage/feedback/) |

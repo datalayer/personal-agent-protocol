@@ -120,9 +120,16 @@ AREAS = (
     Area(
         "operations",
         "Operations",
-        "The Operations extension, version 1.",
+        "The Operations extension, version 2.",
         f"{UPSTREAM}/extensions/operations",
         lambda entry: entry["source"] == "operations",
+    ),
+    Area(
+        "mediated-sign-in",
+        "Mediated Sign-In",
+        "The Mediated Sign-In extension, version 1.",
+        f"{UPSTREAM}/extensions/mediated-sign-in",
+        lambda entry: entry["source"] == "mediated",
     ),
     Area(
         "operational-guidance",
@@ -179,7 +186,7 @@ def _list(items: Iterable[str]) -> str:
 def _section(entry: dict[str, Any]) -> str:
     if entry["source"] == "guide":
         return _text(entry["section"])
-    prefix = "Ops §" if entry["source"] == "operations" else "§"
+    prefix = {"operations": "Ops §", "mediated": "Mediated §"}.get(entry["source"], "§")
     return f"{prefix}{entry['section']}"
 
 

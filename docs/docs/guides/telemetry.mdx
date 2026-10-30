@@ -34,8 +34,7 @@ is a programming error the SDK refuses:
 | `pap.scopes.granted`, `pap.scopes.missing` | counts |
 | `pap.conversation.status` | a lowercase identifier (`idle`, `closed`, …) |
 | `pap.conversation.events` | a count |
-| `pap.operation.state`, `pap.operation.status` | lowercase identifiers (`proposed`, `succeeded`, `confirmed`, `terms_changed`, …) |
-| `pap.operation.revision` | a count |
+| `pap.operation.status` | lowercase identifiers (`approved`, `answered`, `new_revision`, `unknown`) |
 | `pap.client.id` | the personal agent's `client_id`, once the company verified it: an `https` URL with a plain path |
 | `pap.interface` | `agent`, `openapi`, `mcp`, or `web` |
 | `pap.company.route` | the company route a request took (`oauth_token`, `poppy_conversations`, `mcp`, …), never its path |
@@ -65,7 +64,7 @@ as analytics JSON or as the span the OpenTelemetry adapter starts. See
 | `pap.sign_in.mediated.sign_in`, `pap.sign_in.mediated.submit_code` | sign_in |
 | `pap.sign_in.account_token.refresh`, `pap.sign_in.account_token.revoke` | sign_in |
 | `pap.conversation.start`, `.send`, `.read_events`, `.start_direct`, `.handoff`, `.close` | conversation |
-| `pap.operation.read`, `.confirm`, `.cancel` | operation |
+| `pap.operation.ask_user`, `.send` | operation |
 | `pap.company.identity.check`, `.session.start`, `.session.renew`, `.interface.switch`, `.sign_out`, `.refused` | company |
 
 ## What a company reports

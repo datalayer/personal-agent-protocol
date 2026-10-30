@@ -45,6 +45,7 @@ const sidebars = {
             "protocol/coverage/feedback",
             "protocol/coverage/security-considerations",
             "protocol/coverage/operations",
+            "protocol/coverage/mediated-sign-in",
             "protocol/coverage/operational-guidance",
           ],
         },

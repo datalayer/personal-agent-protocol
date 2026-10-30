@@ -1,6 +1,6 @@
 ---
 title: Operations
-description: Confirm exactly what the user approved, at most once, and recover a lost answer.
+description: Perform exactly what the user approved, at most once, and send a lost answer again.
 ---
 
 import Deck from '@theme/Deck';
@@ -10,71 +10,51 @@ import deck from '@site/decks/examples/operations.deck.json';
 
 <Deck spec={deck} />
 
-An operation is something a company proposes and performs only once it is
-confirmed: a payment, an exchange, a cancellation. The Operations extension
-(version 1) makes the approval exact and durable. The paired examples confirm
-Northwind Bank's proposed payments; Northwind marks payments as not requiring
-the user's own approval, so a standing permission may confirm them too.
+An operation is an action a company performs only once the user approves its exact
+terms: a payment, an exchange, a cancellation. The Operations extension (version 2)
+makes the approval exact, and the action happen at most once. The paired examples
+get Ada's approval of Northwind Bank's payments.
 
 ```mermaid
 sequenceDiagram
   autonumber
   actor Ada
   participant Atlas as Atlas host
-  participant Store as pap.standingPermissionStore
-  participant Bank as Northwind operations endpoint
-  Note over Atlas,Bank: Both poppy.json and agent.json list operations version 1
-  Bank-->>Atlas: Proposal op_1 revision 1 (EUR 1250.00 to Acme GmbH)
-  Atlas->>Store: reserve(company, account, action, terms)
-  Store-->>Atlas: Nothing covers it
-  Atlas->>Ada: Show the summary and terms
-  Ada->>Atlas: Approve revision 1 (approve: revision + digest)
-  Note over Bank: The bank revises: EUR 1262.50, a fee added
-  Atlas->>Bank: POST op_1/confirm (revision 1, approved_by user)
-  Bank-->>Atlas: 409 terms_changed + revision 2
+  participant Bank as Northwind Bank
+  Note over Atlas,Bank: Both poppy.json and agent.json list operations version 2
+  Atlas->>Bank: Pay INV-0042 (in a conversation)
+  Bank-->>Atlas: Message with an operation: EUR 1250.00 to Acme GmbH
+  Atlas->>Ada: Northwind Bank asks: the summary, as written
+  Ada->>Atlas: Approve this revision (the host's own interface)
+  Note over Bank: The bank changes the terms: EUR 1262.50, a fee added
+  Atlas->>Bank: Message with approval (operation_id, revision)
+  Bank-->>Atlas: Nothing done: a new revision of the same operation
   Atlas->>Ada: What changed: summary, amount.amount
-  Ada->>Atlas: Approve revision 2
-  Atlas->>Bank: POST op_1/confirm (revision 2)
+  Ada->>Atlas: Approve the new revision
+  Atlas->>Bank: Message with approval
   Bank--xAtlas: Performed, but the answer is lost
-  Atlas->>Bank: GET op_1 (same ID, never re-proposed)
-  Bank-->>Atlas: succeeded + result.summary
-  Bank-->>Atlas: Proposal op_2 (EUR 980.00)
-  Atlas->>Store: reserve: payee, amount ≤ 2000.00, EUR, one use
-  Store-->>Atlas: Reservation
-  Atlas->>Bank: POST op_2/confirm (approved_by standing_permission)
-  Bank-->>Atlas: succeeded
-  Atlas->>Store: commit (a refusal would release the use)
+  Atlas->>Bank: The same message again, the same approval
+  Bank-->>Atlas: The original response: Sent …
 ```
 
 The walkthrough:
 
-1. **Negotiation.** `operations_endpoint()` returns the endpoint only when the
-   company and the agent both list `operations` version 1. A company answers
-   an agent that does not with `extension_required`.
-2. **Exact approval.** `approve(operation)` records the revision and a digest
-   of its summary and terms. A confirmation for any other revision is refused
-   locally (`approval_mismatch`); a chat message never confirms anything.
-3. **Changed terms.** `terms_changed` returns the new revision and the changed
-   term paths, to show the user before asking again.
-4. **Recovery.** If a confirm's answer is lost, the SDK reads the same
-   operation back. It is never re-proposed or assumed failed; a retried
-   confirm returns the same record, and the company performs it once.
-5. **Standing permissions.** A permission names one company, account, and
-   action, with limits on term paths (a maximum or allowed values), an expiry,
-   and optional uses. The Reactor `pap.standingPermissionStore` reserves a use
-   only when every limit covers the revision; the use is committed when the
-   company confirms and released when it refuses. A revision that requires the
-   user's approval is never confirmed this way.
-6. **Cancel.** A proposal becomes `cancelled`, and the company's
-   `result.summary` says nothing was changed.
+1. **Negotiation.** `operations_negotiated()` is true only when the company and
+   the agent both list `operations` version 2. Without it, a company handles
+   approval itself or answers with `extension_required`.
+2. **The user decides.** `ask_user()` goes through the host's own approval
+   surface, naming the company and showing its summary, and every operation is
+   asked about. A chat message never approves anything.
+3. **New terms.** An approval of a revision the company can't accept performs
+   nothing, and the company returns a new revision, never the one named.
+   `ask_user(replaces=...)` shows what changed before asking again.
+4. **At most once.** `send()` keeps the same approval after a failure or a
+   timeout. The company performs the action once, and a repeat gets the original
+   response; while it is being performed, `503` and `Retry-After`.
 
-The model sees states, revisions, changed term paths, error codes, and the
-company's `result.summary` as written. Tokens and proofs stay host-only, and
-the decision to approve stays with the user in the host's own interface.
-
-TypeScript: `OperationsClient`, `operationsEndpoint()`, and `approve()`
-(asynchronous there, since the digest uses Web Crypto), with standing
-permissions contributed at `StandingPermissionStores`.
+The model sees revisions, changed term paths, error codes, and what the company
+says it came to, as written. Tokens stay host-only, and the decision to approve
+stays with the user in the host's own interface.
 
 - Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/operations).
 - Run the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/operations).

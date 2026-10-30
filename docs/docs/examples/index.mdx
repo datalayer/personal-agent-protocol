@@ -28,10 +28,10 @@ capability owns sensitive work, and what may safely cross into model context.
 | [Direct Sign-In lifecycle](./direct-sign-in-lifecycle) | Sign in after user consent, keep the tokens in the host       | A browser callback         |
 | [Browser Session](./browser-session)                   | Join the agent's browser to the same Session                  | A join code and a Session  |
 | [Account Tokens](./account-tokens) | Refresh, rotate, narrow, expire, and revoke without exposing the token | A signed-in Session |
-| [Mediated Sign-In](./mediated-sign-in) | Relay protected input to one endpoint, then a one-time code | Declared mediated fields |
+| [Mediated Sign-In](./mediated-sign-in) | Protected input to the token endpoint as an extension grant, then a one-time code | The extension's fields |
 | [Conversation streaming](./conversation-streaming) | Stream over SSE, reconnect from `Last-Event-ID`, never act on deltas | An open conversation |
 | [Conversation control](./conversation-control) | Sign in mid-conversation, go direct, hand off, and close | An `authorization` event |
-| [Operations](./operations) | Confirm the exact revision, recover lost answers, use standing permissions | A proposed operation |
+| [Operations](./operations) | Approve the exact revision, new terms, a lost answer sent again | An operation to approve |
 | [A user with a company](./user-with-a-company) | The whole journey with Manzanita, both sides from the SDK | A user's request |
 | [Two companies](./two-companies) | Ledgerly acts for Ada at Northwind, by composition | Two PAP relationships |
 

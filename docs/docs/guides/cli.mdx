@@ -28,7 +28,7 @@ The command groups are:
 | `pap auth`           | `direct`, `device`, and `mediated` sign-in, and `disconnect` (sign out, §4.4–§4.9).     |
 | `pap api`            | `openapi` calls with DPoP, and `mcp` tools with a Bearer for the MCP url only (§4.3, §6). |
 | `pap conversations`  | `start`, `send`, `events`, `follow` (SSE), `handoff`, `direct`, `close` (§7).           |
-| `pap operations`     | `show`, `approve`, `confirm`, `cancel` (Operations v1).                                 |
+| `pap operations`     | `show`, `approve`, `send` (Operations v2).                                              |
 | `pap requirements`   | `list` and `show` the normative requirement ledger.                                     |
 | `pap conformance`    | `run` the conformance suite (`--demo`, `--tls`) and `report` JSON or JUnit.             |
 | `pap commands`       | `list` and `run` the [live-session actions](#live-session-actions) by ID, as Studio and a REPL do. |
@@ -66,18 +66,22 @@ after these defaults and can replace any of them, for example with a system
 keyring. Only opaque references (`session:…`, `account:…`, `key:…`) are
 printed.
 
-## Operations: approve, then confirm
+## Operations: approve, then send
 
 ```bash
-pap operations approve "$SESSION" exc_5Rt2 --revision 1    # shows the company and summary;
-                                                       # the user types the operation ID
-pap operations confirm "$SESSION" exc_5Rt2 --revision 1
+pap operations show "$SESSION" exc_5Rt2                   # as the company returned it
+pap operations approve "$SESSION" exc_5Rt2 --revision "$REVISION"  # shows the company and summary;
+                                                                   # the user types the operation ID
+pap operations send "$SESSION" exc_5Rt2 --revision "$REVISION"
 ```
 
-Approval is taken at the CLI's own prompt for one exact operation ID and
-revision; no message, option, or piped text counts as approval. `confirm`
-sends only a revision the user approved, and stops with exit code 6 when the
-revision or terms changed.
+`pap api` and `pap conversations` keep each operation the company returns, with
+the request that returned it. Approval is taken at the host's approval surface or
+the CLI's own prompt, for one exact operation ID and revision; no message, option,
+or piped text counts as approval. `send` makes that same request again with the
+approval, and only for a revision the user approved. New terms stop it with exit
+code 6, to approve them. Exit code 5 means the outcome isn't known yet: run `send`
+again, the same approval, performed at most once.
 
 ## Exit codes
 
@@ -89,7 +93,7 @@ revision or terms changed.
 | 3    | Not configured: no signing key, no `client_id` or `domain`, or an unknown Session.       |
 | 4    | Input required, but `--no-input` was given or no terminal is attached.                   |
 | 5    | Still pending: the user has not finished signing in before `--timeout`.                  |
-| 6    | Not approved: no approval for this exact operation ID and revision, or the terms changed; or a live-session action the host's approval surface did not approve. |
+| 6    | Not approved: no approval for this exact operation ID and revision, or new terms; or a live-session action the host's approval surface did not approve. |
 | 130  | Interrupted.                                                                             |
 
 ## Conformance
@@ -145,7 +149,7 @@ secrets resolve Reactor contributions and expose only opaque references.
 pap company discover example.com
 pap company verify example.com --json
 pap extensions list example.com --json
-pap extensions check operations --version 1 example.com
+pap extensions check operations --version 2 example.com
 ```
 
 Both company commands use the SDK's safe discovery client. `verify` therefore
@@ -245,7 +249,6 @@ JSON as that command's `--json`.
 | `pap.operations.show` | `operations show` | `session operation_id` | at once |
 | `pap.requirements.list` | `requirements list` | `[role] [level] [status] [source]` | at once |
 | `pap.requirements.show` | `requirements show` | `requirement_id` | at once |
-| `pap.operations.cancel` | `operations cancel` | `session operation_id` | after the host's approval surface says yes |
 | `pap.sessions.end` | `sessions end` | `session` | after the host's approval surface says yes |
 | `pap.auth.disconnect` | `auth disconnect` | `session` | after the host's approval surface says yes |
 
@@ -267,7 +270,7 @@ Sessions, and never asks for input.
 What is not an action stays CLI-only: configuration (`pap config`), raw
 credential entry (`pap agent key import`, `pap auth direct|device|mediated`),
 starting and renewing Sessions, sending messages, calling APIs, and approving
-or confirming operations, which keep their own exact-ID-and-revision prompt.
+or sending operations, which keep their own exact-ID-and-revision prompt.
 
 ### The approval surface
 

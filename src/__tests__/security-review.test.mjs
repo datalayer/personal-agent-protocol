@@ -11,61 +11,101 @@ import { createServer } from "node:http";
 import { connect } from "node:net";
 import test from "node:test";
 
+import { SignJWT, generateKeyPair } from "jose";
+
 import {
-  AccountTokenClient,
   ConversationClient,
   DeviceSignInClient,
-  DpopProofProviders,
-  DpopFetchClient,
-  OperationsClient,
+  MEDIATED_GRANT,
+  McpClient,
+  MediatedSignInClient,
   RateLimitBudgets,
+  RefreshTokenClient,
+  SESSION_HEADER,
+  SESSION_JWT_ALGORITHM,
+  SESSION_JWT_TYPE,
+  SecretValue,
   SessionClient,
-  approve,
+  SessionError,
+  SessionFetchClient,
+  SessionSigners,
   discoverCompany,
   firstContribution,
+  sessionHeaders,
+  sessionJwtClaims,
 } from "../../lib/index.js";
 import {
   ClientPolicies,
   ClientResolvers,
   CompanyConfig,
   MemoryCompanyStore,
+  NodeUrlSafetyPolicy,
   StoreReplayCache,
   WEB_COOKIE,
   checkReplayCache,
   companyRequestListener,
+  isGlobalAddress,
 } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
 const TENANT = "atlas-demo";
 const PAIRWISE = "usr_ada_at_manzanita_000000";
-const MEDIATED = "https://manzanita.example/poppy/sign-in";
+const TOKEN = "https://manzanita.example/oauth/token";
+const MCP = "https://manzanita.example/mcp";
+const ORDERS = "https://manzanita.example/api/orders";
+const BROWSER_SESSION = "https://manzanita.example/poppy/browser-session";
+const LIST_TOOLS = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
-async function world({ plugins, config } = {}) {
+async function world({ plugins, config, durable = false } = {}) {
   const clock = new MutableClock();
+  const store = durable ? new MemoryCompanyStore({ clock }) : undefined;
   const sites = {};
   const fetch = inProcessFetch(sites);
   const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
   sites["atlas.example"] = identity.documents;
-  const { service: shop, plugin } = manzanita({ fetch, clock, ...(plugins ? { plugins } : {}), ...(config ? { config } : {}) });
+  const built = { fetch, clock, ...(plugins ? { plugins } : {}), ...(config ? { config } : {}), ...(store ? { store } : {}) };
+  const { service: shop, plugin } = manzanita(built);
   sites["manzanita.example"] = shop;
   const host = await agentHost({ identity, fetch, clock });
-  const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
+  const transport = new SessionFetchClient({ reactor: host.reactor, fetch });
   const conversations = new ConversationClient({ reactor: host.reactor, transport });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
-  const start = () =>
-    sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT });
+  const start = () => sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT });
   const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
   const endpoint = company.document.agent.protocols[0].endpoint;
-  const postJson = (token, url, body) =>
-    transport.request("POST", url, { token, ...who, headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) });
-  return { clock, fetch, identity, shop, plugin, host, transport, conversations, company, metadata, who, sessions, start, message, endpoint, postJson };
+  const postJson = (session, url, body, token) =>
+    transport.request("POST", url, { session, token, headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) });
+  const context = {
+    tokenEndpoint: metadata.token_endpoint,
+    revocationEndpoint: metadata.revocation_endpoint,
+    issuer: metadata.issuer,
+    clientId: identity.clientId,
+    tenantId: TENANT,
+  };
+  const accounts = new RefreshTokenClient({ reactor: host.reactor, fetch });
+  /** The grant sent straight to the token endpoint: this test counts the company's refusals. */
+  const mediatedGrant = async (form) =>
+    fetch(TOKEN, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: MEDIATED_GRANT,
+        ...form,
+        ...(await sessions.clientAuthentication({ clientId: identity.clientId, issuer: metadata.issuer })),
+      }).toString(),
+    });
+  /** A replica of the same deployment takes over, over the same store. */
+  const restart = () => {
+    sites["manzanita.example"] = manzanita(built).service;
+  };
+  return { clock, fetch, identity, shop, plugin, host, transport, conversations, company, metadata, sessions, start, message, endpoint, postJson, context, accounts, mediatedGrant, restart };
 }
 
-async function deviceSignIn(w, session, { bearerFirst = false } = {}) {
+/** Device Sign-In, Ada approving. */
+async function deviceSignIn(w) {
   const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
   const started = await device.begin({
     deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
@@ -74,88 +114,97 @@ async function deviceSignIn(w, session, { bearerFirst = false } = {}) {
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    sessionKey: session.sessionKey,
-    organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
+    organization: w.company.document.organization,
     protectedResources: w.metadata.protected_resources,
   });
-  if (bearerFirst) await bearer(w, session);
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
   return device.poll(started.reference);
 }
 
-/** The Session's token for the MCP server: DPoP (the default server), or Bearer (`mcpDpop: false`). */
-async function bearer(w, session) {
-  const dpop = w.shop.config.mcpDpop;
-  const resource = "https://manzanita.example/mcp";
-  const common = { clientId: w.identity.clientId, issuer: w.metadata.issuer, tokenEndpoint: w.metadata.token_endpoint, tenantId: TENANT, sessionKey: session.sessionKey };
-  // A DPoP MCP server: the Session's renewal with `resource`; one without: Token Exchange (§4.3).
-  const token = dpop
-    ? await w.sessions.renew({ ...common, pairwiseUserId: PAIRWISE, resource })
-    : await w.sessions.tokenForMcp({ ...common, subjectToken: session.accessToken, resource });
-  assert.equal(token.tokenType, dpop ? "DPoP" : "Bearer");
-  return token;
+/** Sign in, and take a token for the MCP server: a refresh with its `url` (§4.5, §7). */
+async function forMcp(w) {
+  const done = await deviceSignIn(w);
+  const result = await w.accounts.tokenForMcp(done.refreshTokenReference, { context: w.context, url: MCP });
+  assert.equal(result.token.resource, MCP);
+  return result.token;
 }
 
-async function assertSignedInDpop(w, sessionKey, accessToken) {
-  const stored = (await w.shop.store.get("session", sessionKey)).value;
-  const kinds = Object.values(stored.tokens)
-    .map((t) => `${t.tokenType ?? "DPoP"}:${t.accountId !== undefined}:${t.resource ?? "-"}`)
-    .sort();
-  // The signed-in token is the Session's own, for no resource; its token for the MCP server
-  // is kept, signed out, as are earlier tokens until they expire (§4.4).
-  assert.ok(kinds.includes("DPoP:true:-") && kinds.includes("DPoP:false:https://manzanita.example/mcp"));
-  assert.ok(kinds.every((kind) => kind.startsWith("DPoP:")));
-  const used = await w.fetch("https://manzanita.example/mcp", {
+/** A sign-in's token is the default one, for no resource; the MCP server's own is kept. */
+async function assertTheDefaultToken(w, session, token, mcpToken) {
+  assert.equal(token.resource, undefined);
+  const refused = await w.fetch(MCP, {
     method: "POST",
-    headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    headers: { ...(await sessionHeaders(w.host.reactor, "POST", MCP, { session, token })), "content-type": "application/json" },
+    body: LIST_TOOLS,
   });
-  assert.equal(used.status, 401);
+  assert.equal(refused.status, 401);
+  const kept = new McpClient({ url: MCP, session, reactor: w.host.reactor, token: mcpToken, fetch: w.fetch });
+  assert.ok((await kept.listTools()).length > 0);
 }
 
-/** Every token response the company sends, read on the way (a spy on `fetch`). */
-function spyTokens(w) {
-  const bodies = [];
-  const handle = w.shop.handle.bind(w.shop);
-  w.shop.handle = async (request) => {
-    const answer = await handle(request);
-    if (new URL(request.url).pathname === "/oauth/token") bodies.push(answer.body);
-    return answer;
+/** A Session JWT from the agent's delegated key, with some of it changed. */
+async function sessionJwt(w, session, method, url, { token, claims = {}, without = [], headers = {}, key } = {}) {
+  const signer = firstContribution(w.host.reactor, SessionSigners, "signer");
+  const request = {
+    method,
+    url,
+    tenantId: session.tenantId,
+    issuer: session.issuer,
+    clientId: session.clientId,
+    sid: session.sid,
+    sub: session.sub,
+    ...(token === undefined ? {} : { accessToken: token.accessToken }),
   };
-  return bodies;
+  const now = w.clock.now();
+  const delegated = await signer.keyFor(request, now);
+  const payload = { ...(await sessionJwtClaims(request, { issuedAt: now })), ...claims };
+  for (const name of without) delete payload[name];
+  const protectedHeader = {
+    alg: SESSION_JWT_ALGORITHM,
+    typ: SESSION_JWT_TYPE,
+    kid: delegated.thumbprint,
+    pap_dlg: delegated.delegation.reveal(),
+    ...headers,
+  };
+  for (const [name, value] of Object.entries(protectedHeader)) if (value === undefined) delete protectedHeader[name];
+  return new SignJWT(payload).setProtectedHeader(protectedHeader).sign(key ?? delegated.privateKey);
 }
 
-test("finding 1: a device sign-in after an MCP Bearer token stays DPoP", async () => {
+test("finding 1: a device sign-in after an MCP token issues the default token", async () => {
   const w = await world();
+  const mcpToken = await forMcp(w);
   const session = await w.start();
-  const bodies = spyTokens(w);
-  const done = await deviceSignIn(w, session, { bearerFirst: true });
+  const done = await deviceSignIn(w);
   assert.equal(done.status, "complete");
-  assert.equal(done.token.tokenType, "DPoP");
-  await assertSignedInDpop(w, session.sessionKey, bodies.at(-1).access_token);
+  assert.equal(done.token.tokenType, "Bearer");
+  await assertTheDefaultToken(w, session, done.token, mcpToken);
 });
 
-test("finding 1: a mediated sign-in after an MCP Bearer token stays DPoP", async () => {
+test("finding 1: a mediated sign-in after an MCP token issues the default token", async () => {
   const w = await world();
+  const mcpToken = await forMcp(w);
   const session = await w.start();
-  await bearer(w, session);
-  const started = await (await w.postJson(session, MEDIATED, { credentials: ADA, scope: "orders:read" })).json();
-  const done = await (await w.postJson(session, `${MEDIATED}/${started.sign_in_id}`, { code: ADA_CODE })).json();
-  assert.equal(done.status, "complete");
-  assert.equal(done.token_type, "DPoP");
-  await assertSignedInDpop(w, session.sessionKey, done.access_token);
+  const started = await (await w.mediatedGrant({ ...ADA, scope: "orders:read" })).json();
+  const answer = await w.mediatedGrant({ sign_in_id: started.sign_in_id, one_time_code: ADA_CODE });
+  assert.equal(answer.status, 200);
+  const body = await answer.json();
+  assert.equal(body.token_type, "Bearer");
+  await assertTheDefaultToken(w, session, { accessToken: new SecretValue(body.access_token) }, mcpToken);
 });
 
 test("finding 3: a retried start answers only who may read the conversation", async () => {
   const w = await world();
-  const signedIn = (await deviceSignIn(w, await w.start())).token;
+  const signed = await w.start();
+  const { token } = await deviceSignIn(w);
   const message = w.message("Where is my jacket order?");
-  await w.conversations.start(w.endpoint, message, { token: signedIn, wait: 0, ...w.who });
+  await w.conversations.start(w.endpoint, message, { session: signed, token, wait: 0 });
   const signedOut = await w.start();
   const retried = await w.postJson(signedOut, `${w.endpoint}?wait=0`, { message });
-  assert.equal(retried.status, 403);
-  assert.deepEqual(await retried.json(), { error: "insufficient_scope", scope: "orders:read" });
+  // Signed out: the challenge with `scope`, no error code and no body (§7).
+  assert.equal(retried.status, 401);
+  assert.equal(await retried.text(), "");
+  assert.equal(retried.headers.get("www-authenticate"), 'Bearer scope="orders:read"');
 });
 
 test("finding 5: operations without a write scope is a configuration error", () => {
@@ -173,35 +222,32 @@ test("finding 5: operations without a write scope is a configuration error", () 
 test("finding 5: an operation records and requires its scopes", async () => {
   const w = await world();
   const session = await w.start();
-  const done = await deviceSignIn(w, session);
-  const page = await w.conversations.start(w.endpoint, w.message("Exchange my jacket for a warmer one"), { token: done.token, wait: 0, ...w.who });
+  const done = await deviceSignIn(w);
+  const page = await w.conversations.start(w.endpoint, w.message("Exchange my jacket for a warmer one"), { session, token: done.token, wait: 0 });
   const proposal = page.events.find((event) => event.message?.operation).message.operation;
   assert.deepEqual([...(await w.shop.operationRecord(proposal.operation_id)).scopes], ["orders:write"]);
-  const accounts = new AccountTokenClient({ reactor: w.host.reactor, fetch: w.fetch });
-  const narrowed = await accounts.refresh(done.accountTokenReference, {
-    context: {
-      tokenEndpoint: w.metadata.token_endpoint,
-      revocationEndpoint: w.metadata.revocation_endpoint,
-      issuer: w.metadata.issuer,
-      clientId: w.identity.clientId,
-      tenantId: TENANT,
-      pairwiseUserId: PAIRWISE,
+  const narrowed = await w.accounts.refresh(done.refreshTokenReference, { context: w.context, scopes: ["orders:read"] });
+  const answer = await w.postJson(
+    session,
+    `${w.endpoint}/${page.conversation_id}/messages`,
+    {
+      message: {
+        id: w.message("x").id,
+        author: { type: "agent" },
+        approval: { operation_id: proposal.operation_id, revision: proposal.revision },
+      },
     },
-    sessionKey: session.sessionKey,
-    scopes: ["orders:read"],
-  });
-  const operations = new OperationsClient({ reactor: w.host.reactor, transport: w.transport });
-  await assert.rejects(
-    operations.confirm(w.company.document.extensions.operations.endpoint, proposal, { approval: await approve(proposal), token: narrowed.token, ...w.who }),
-    (error) => error.code === "insufficient_scope",
+    narrowed.token,
   );
+  assert.equal(answer.status, 403);
+  assert.ok(answer.headers.get("www-authenticate").includes('error="insufficient_scope"'));
+  assert.deepEqual([...w.plugin.executor.performed], []);
 });
 
-for (const scope of ["orders:read bogus:scope", undefined, "", "admin:all", 7]) {
+for (const scope of ["orders:read bogus:scope", undefined, "", "admin:all", "7"]) {
   test(`finding 8: mediated sign-in refuses the scope ${JSON.stringify(scope)}`, async () => {
     const w = await world();
-    const session = await w.start();
-    const response = await w.postJson(session, MEDIATED, { credentials: ADA, ...(scope === undefined ? {} : { scope }) });
+    const response = await w.mediatedGrant({ ...ADA, ...(scope === undefined ? {} : { scope }) });
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), { error: "invalid_scope" });
   });
@@ -235,56 +281,42 @@ async function rawRequest(w, request) {
   }
 }
 
-test("finding 10: a repeated dpop header is an invalid proof", async () => {
-  // Exactly one DPoP header, holding one JWT (§4.3, RFC 9449 §4.3).
+test("finding 10: a repeated Session header is invalid_session", async () => {
+  // Exactly one Session header, holding one JWT (§5.2, §5.3).
   const w = await world();
   const session = await w.start();
   const url = "https://manzanita.example/poppy/conversations";
-  const provider = firstContribution(w.host.reactor, DpopProofProviders, "DPoP");
-  const proof = async () =>
-    (await provider.create({ method: "POST", url, tenantId: TENANT, issuer: w.who.issuer, sessionKey: session.sessionKey, accessToken: session.accessToken })).reveal();
   const raw = await rawRequest(
     w,
     "POST /poppy/conversations HTTP/1.1\r\nHost: manzanita.example\r\n" +
-      `authorization: DPoP ${session.accessToken.reveal()}\r\n` +
-      `dpop: ${await proof()}\r\ndpop: ${await proof()}\r\n` +
+      `poppy-session: ${await sessionJwt(w, session, "POST", url)}\r\n` +
+      `poppy-session: ${await sessionJwt(w, session, "POST", url)}\r\n` +
       "Content-Length: 2\r\nConnection: close\r\n\r\n{}",
   );
-  assert.match(raw, /^HTTP\/1\.1 401 /);
-  assert.match(raw, /\{"error":"invalid_dpop_proof"\}/);
+  assert.match(raw, /^HTTP\/1\.1 400 /);
+  assert.match(raw, /\{"error":"invalid_session"\}/);
 });
 
-for (const name of ["authorization"]) {
-  test(`finding 10: a repeated ${name} header is refused by the Node adapter`, async () => {
-    const w = await world();
-    const server = createServer(companyRequestListener(w.shop));
-    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    try {
-      const raw = await new Promise((resolve, reject) => {
-        const socket = connect(server.address().port, "127.0.0.1");
-        let answer = "";
-        socket.on("data", (chunk) => (answer += chunk));
-        socket.on("end", () => resolve(answer));
-        socket.on("error", reject);
-        socket.end(
-          "POST /poppy/conversations HTTP/1.1\r\nHost: manzanita.example\r\n" +
-            `${name}: DPoP one\r\n${name}: DPoP two\r\n` +
-            "Content-Length: 2\r\nConnection: close\r\n\r\n{}",
-        );
-      });
-      assert.match(raw, /^HTTP\/1\.1 400 /);
-      assert.match(raw, /"error":"invalid_request"/);
-    } finally {
-      server.close();
-    }
-  });
+test("finding 10: a repeated authorization header is refused by the Node adapter", async () => {
+  const w = await world();
+  const raw = await rawRequest(
+    w,
+    "POST /poppy/conversations HTTP/1.1\r\nHost: manzanita.example\r\n" +
+      "authorization: Bearer one\r\nauthorization: Bearer two\r\n" +
+      "Content-Length: 2\r\nConnection: close\r\n\r\n{}",
+  );
+  assert.match(raw, /^HTTP\/1\.1 400 /);
+  assert.match(raw, /"error":"invalid_request"/);
+});
+
+function unsigned(claims) {
+  const part = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${part({ alg: "ES256", typ: "JWT" })}.${part(claims)}.${part("sig")}`;
 }
 
 test("finding 11: a blocked agent is never resolved, and its tokens stop at once", async () => {
   const blocked = new Set();
   const w = await world({
-    // An MCP server without DPoP: its tokens are Bearer ones (§4.3).
-    config: { mcpDpop: false },
     plugins: [
       {
         name: "blocklist",
@@ -293,7 +325,12 @@ test("finding 11: a blocked agent is never resolved, and its tokens stop at once
     ],
   });
   const session = await w.start();
-  const mcpToken = await bearer(w, session);
+  // A join the agent authorized before it was blocked.
+  const page = await w.fetch(BROWSER_SESSION, { method: "GET" });
+  const cookie = page.headers.getSetCookie().find((line) => line.startsWith("__Host-poppy_join=")).split(";")[0];
+  const code = /name="code" value="([^"]+)"/u.exec(await page.text())[1];
+  assert.equal((await w.postJson(session, `${BROWSER_SESSION}/authorize`, { code })).status, 204);
+
   const resolver = firstContribution(w.shop.reactor, ClientResolvers, "client");
   const resolved = [];
   const resolve = resolver.resolve.bind(resolver);
@@ -302,14 +339,13 @@ test("finding 11: a blocked agent is never resolved, and its tokens stop at once
     return resolve(...args);
   };
   blocked.add(w.identity.clientId);
+  // A refused agent gets `invalid_session`, in the new Session it starts too (§4.1, §7).
   const started = await w.postJson(session, w.endpoint, { message: w.message("hi") });
-  assert.equal(started.status, 401);
-  const mcp = await w.fetch("https://manzanita.example/mcp", {
-    method: "POST",
-    headers: { authorization: `Bearer ${mcpToken.accessToken.reveal()}`, "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-  });
-  assert.equal(mcp.status, 401);
+  assert.equal(started.status, 400);
+  assert.equal((await started.json()).error, "invalid_session");
+  const forged = await w.fetch(ORDERS, { method: "GET", headers: { [SESSION_HEADER]: unsigned({ iss: w.identity.clientId }) } });
+  assert.equal(forged.status, 400);
+  assert.equal((await forged.json()).error, "invalid_session");
   const authorize = new URL("https://manzanita.example/oauth/authorize");
   for (const [name, value] of Object.entries({
     client_id: w.identity.clientId,
@@ -320,12 +356,10 @@ test("finding 11: a blocked agent is never resolved, and its tokens stop at once
     code_challenge_method: "S256",
   })) authorize.searchParams.set(name, value);
   assert.equal((await w.fetch(authorize, { method: "GET" })).status, 400);
-  const part = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  const assertion = `${part({ alg: "ES256" })}.${part({ iss: w.identity.clientId })}.${part("sig")}`;
-  const browser = await w.fetch("https://manzanita.example/poppy/browser-session", {
+  const browser = await w.fetch(BROWSER_SESSION, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ assertion }).toString(),
+    headers: { "content-type": "application/x-www-form-urlencoded", cookie },
+    body: new URLSearchParams({ code }).toString(),
   });
   assert.equal(browser.status, 400);
   assert.deepEqual(resolved, []);
@@ -335,100 +369,73 @@ test("finding 17: the web cookie is a __Host- cookie", () => {
   assert.equal(WEB_COOKIE, "__Host-poppy_session");
 });
 
-/** A transport that asks the company even while it said to wait: these tests count refusals. */
-function eagerPost(w) {
-  const view = { getContributions: (point) => (point === RateLimitBudgets ? [] : w.host.reactor.getContributions(point)) };
-  const eager = new DpopFetchClient({ reactor: view, fetch: w.fetch });
-  return (token, url, body) =>
-    eager.request("POST", url, { token, ...w.who, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-}
-
 test("finding 2: wrong passwords lock the account out, with backoff", async () => {
   const w = await world();
-  const session = await w.start();
-  const post = eagerPost(w);
   const seen = [];
   const authenticate = w.plugin.accounts.authenticate.bind(w.plugin.accounts);
   w.plugin.accounts.authenticate = async (credentials, context) => {
     seen.push(context);
     return authenticate(credentials, context);
   };
-  const wrong = { email: ADA.email, password: "wrong" };
+  const wrong = { email: ADA.email, password: "wrong", scope: "orders:read" };
   const answers = [];
-  for (let i = 0; i < 8; i += 1) answers.push(await post(session, MEDIATED, { credentials: wrong, scope: "orders:read" }));
-  assert.deepEqual(answers.map((a) => a.status), [200, 200, 200, 200, 200, 429, 429, 429]);
-  assert.deepEqual(await answers[5].json(), { error: "rate_limited" });
+  for (let i = 0; i < 8; i += 1) answers.push(await w.mediatedGrant(wrong));
+  assert.deepEqual(answers.map((a) => a.status), [400, 400, 400, 400, 400, 429, 429, 429]);
+  for (const answer of answers.slice(0, 5)) assert.equal((await answer.json()).error, "invalid_grant");
+  assert.equal(await answers[5].text(), "");
   assert.equal(answers[5].headers.get("retry-after"), String(15 * 60));
   assert.equal(seen.length, 5);
   // Locked out: the directory is not asked, even with the right password.
-  const right = await post(session, MEDIATED, { credentials: ADA, scope: "orders:read" });
+  const right = await w.mediatedGrant({ ...ADA, scope: "orders:read" });
   assert.equal(right.status, 429);
   assert.equal(seen.length, 5);
-  assert.deepEqual(seen[0], { clientId: w.identity.clientId, sessionKey: session.sessionKey });
+  // The directory hears which agent each attempt came from.
+  assert.equal(seen[0].clientId, w.identity.clientId);
   // Once the lockout ends, the next failure locks the account out twice as long.
   w.clock.advance(15 * 60);
-  assert.equal((await post(session, MEDIATED, { credentials: wrong, scope: "orders:read" })).status, 200);
-  const doubled = await post(session, MEDIATED, { credentials: wrong, scope: "orders:read" });
+  assert.equal((await w.mediatedGrant(wrong)).status, 400);
+  const doubled = await w.mediatedGrant(wrong);
   assert.equal(doubled.status, 429);
   assert.equal(doubled.headers.get("retry-after"), String(30 * 60));
 });
 
 test("finding 2: wrong codes count per account across sign-ins", async () => {
   const w = await world();
-  const session = await w.start();
-  const post = eagerPost(w);
   let last;
   for (let round = 0; round < 5 && last === undefined; round += 1) {
-    const started = await post(session, MEDIATED, { credentials: ADA, scope: "orders:read orders:write" });
+    const started = await w.mediatedGrant({ ...ADA, scope: "orders:read orders:write" });
     if (started.status === 429) {
       last = started;
       break;
     }
     const { sign_in_id: signInId } = await started.json();
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const answer = await (await post(session, `${MEDIATED}/${signInId}`, { code: `00000${attempt}` })).json();
-      if (answer.status === "failed") break;
+      const answer = await w.mediatedGrant({ sign_in_id: signInId, one_time_code: `00000${attempt}` });
+      if ((await answer.json()).error === "invalid_grant") break;
     }
   }
   assert.ok(last !== undefined);
-  assert.deepEqual(await last.json(), { error: "rate_limited" });
+  assert.equal(last.status, 429);
+  assert.equal(await last.text(), "");
+  // Past the lockout, the right code signs in.
   w.clock.advance(15 * 60);
-  const started = await (await post(session, MEDIATED, { credentials: ADA, scope: "orders:read" })).json();
-  const done = await (await post(session, `${MEDIATED}/${started.sign_in_id}`, { code: ADA_CODE })).json();
-  assert.equal(done.status, "complete");
+  const started = await (await w.mediatedGrant({ ...ADA, scope: "orders:read" })).json();
+  const done = await w.mediatedGrant({ sign_in_id: started.sign_in_id, one_time_code: ADA_CODE });
+  assert.equal(done.status, 200);
+  assert.ok((await done.json()).access_token);
 });
 
-test("finding 4: a proof replayed at another replica over the same store is refused", async () => {
-  const clock = new MutableClock();
-  const store = new MemoryCompanyStore({ clock });
-  const sites = {};
-  const fetch = inProcessFetch(sites);
-  const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
-  sites["atlas.example"] = identity.documents;
-  sites["manzanita.example"] = manzanita({ fetch, clock, store }).service;
-  const host = await agentHost({ identity, fetch, clock });
-  const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
-  const metadata = company.oauthMetadata;
-  const session = await new SessionClient({ reactor: host.reactor, fetch }).start({
-    clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT,
-  });
-  const captured = [];
-  const spying = async (input, init = {}) => {
-    captured.push({ url: String(input), init });
-    return fetch(input, init);
-  };
-  const transport = new DpopFetchClient({ reactor: host.reactor, fetch: spying });
-  const conversations = new ConversationClient({ reactor: host.reactor, transport });
-  const who = { tenantId: TENANT, issuer: metadata.issuer };
-  const endpoint = company.document.agent.protocols[0].endpoint;
-  const page = await conversations.start(endpoint, { id: conversations.generateMessageId(), author: { type: "human" }, text: "hello" }, { token: session, wait: 0, ...who });
-  await conversations.readEvents(endpoint, page.conversation_id, { token: session, ...who });
-  const read = captured.find((request) => (request.init.method ?? "GET") === "GET");
-  // Another replica over the same store, with the default replay cache.
-  sites["manzanita.example"] = manzanita({ fetch, clock, store }).service;
-  const replayed = await fetch(read.url, read.init);
-  assert.equal(replayed.status, 401);
-  assert.equal((await replayed.json()).error, "invalid_dpop_proof");
+test("finding 4: a Session JWT replayed at another replica over the same store is refused", async () => {
+  const w = await world({ durable: true });
+  const session = await w.start();
+  const page = await w.conversations.start(w.endpoint, w.message("hello"), { session, wait: 0 });
+  const url = `${w.endpoint}/${page.conversation_id}/events`;
+  const headers = await sessionHeaders(w.host.reactor, "GET", url, { session });
+  assert.equal((await w.fetch(url, { method: "GET", headers })).status, 200);
+  w.restart(); // another replica over the same store, with the default replay cache
+  const replayed = await w.fetch(url, { method: "GET", headers });
+  assert.equal(replayed.status, 400);
+  assert.equal((await replayed.json()).error, "invalid_session");
 });
 
 test("finding 4: the memory store forgets expired records; the store replay cache conforms", async () => {
@@ -448,9 +455,34 @@ test("finding 4: the memory store forgets expired records; the store replay cach
 
 test("finding 9: the demo agent reads no order without orders:read", async () => {
   const { ManzanitaAgent } = await import("../../lib/demo/manzanita.js");
-  const turn = (scopes) => ({ conversationId: "cnv_1", text: "Where is my order?", author: "human", accountId: "acct_ada", scopes, clientId: "https://atlas.example/agent.json", isDirect: false, supportsOperations: true });
-  assert.deepEqual(await new ManzanitaAgent().respond(turn(["orders:write"])), [{ authorization: ["insufficient_scope", "orders:read"] }]);
-  assert.ok((await new ManzanitaAgent().respond(turn(["orders:read"])))[0].data);
+  const turn = (text, scopes) => ({ conversationId: "cnv_1", text, author: "human", accountId: "acct_ada", scopes, clientId: "https://atlas.example/agent.json", isDirect: false, supportsOperations: true });
+  assert.deepEqual(await new ManzanitaAgent().respond(turn("Where is my order?", ["orders:write"])), [{ authorization: ["insufficient_scope", "orders:read"] }]);
+  assert.ok((await new ManzanitaAgent().respond(turn("Where is my order?", ["orders:read"])))[0].data);
+});
+
+for (const [address, global] of [
+  ["64:ff9b::7f00:1", false],
+  ["64:ff9b::a9fe:a9fe", false],
+  ["::7f00:1", false],
+  ["::a9fe:a9fe", false],
+  ["::ffff:127.0.0.1", false],
+  ["2002:7f00:1::", false],
+  ["64:ff9b:1::808:808", false],
+  ["fd00:ec2::254", false],
+  ["100.100.100.200", false],
+  ["::", false],
+  ["64:ff9b::808:808", true],
+  ["2606:4700::1111", true],
+  ["8.8.8.8", true],
+]) {
+  test(`finding 13: ${address} is ${global ? "global" : "not global"}: an IPv4 address inside IPv6 is judged as IPv4`, () => {
+    assert.equal(isGlobalAddress(address), global);
+  });
+}
+
+test("finding 13: a host resolving to NAT64 loopback is refused", async () => {
+  const policy = new NodeUrlSafetyPolicy({ resolver: async () => ["64:ff9b::a9fe:a9fe"] });
+  await assert.rejects(policy.assertSafe(new URL("https://metadata.example/agent.json")), (error) => error.code === "unsafe_address");
 });
 
 const UNSAFE = [
@@ -580,7 +612,13 @@ test("finding 15: a token response is read only up to its limit", async () => {
   const { counter, response } = endless();
   const sessions = new SessionClient({ reactor: w.host.reactor, fetch: async () => response(), maxResponseBytes: 100 * 1024 });
   await assert.rejects(
-    sessions.start({ clientId: w.identity.clientId, pairwiseUserId: PAIRWISE, issuer: w.metadata.issuer, tokenEndpoint: w.metadata.token_endpoint, tenantId: TENANT }),
+    sessions.tokenRequest({
+      clientId: w.identity.clientId,
+      issuer: w.metadata.issuer,
+      tokenEndpoint: w.metadata.token_endpoint,
+      form: () => ({ grant_type: "refresh_token", refresh_token: "x" }),
+      error: SessionError,
+    }),
     (error) => error.code === "response_too_large",
   );
   assert.ok(counter.pulled <= 4, `pulled ${counter.pulled}`);
@@ -588,13 +626,11 @@ test("finding 15: a token response is read only up to its limit", async () => {
 });
 
 test("finding 15: an MCP response is read only up to its limit", async () => {
-  const { McpClient } = await import("../../lib/index.js");
-  // An MCP server without DPoP: its tokens are Bearer ones (§4.3).
-  const w = await world({ config: { mcpDpop: false } });
+  const w = await world();
+  const token = await forMcp(w);
   const session = await w.start();
-  const token = await bearer(w, session);
   const { counter, response } = endless();
-  const mcp = new McpClient({ url: "https://manzanita.example/mcp", token, fetch: async () => response(), maxResponseBytes: 100 * 1024 });
+  const mcp = new McpClient({ url: MCP, session, reactor: w.host.reactor, token, fetch: async () => response(), maxResponseBytes: 100 * 1024 });
   await assert.rejects(mcp.listTools(), (error) => error.code === "response_too_large");
   assert.ok(counter.pulled <= 4, `pulled ${counter.pulled}`);
 });
@@ -604,7 +640,7 @@ for (const status of [301, 302, 307, 308]) {
     const w = await world();
     const session = await w.start();
     const seen = [];
-    const transport = new DpopFetchClient({
+    const transport = new SessionFetchClient({
       reactor: w.host.reactor,
       fetch: async (input) => {
         seen.push(new URL(String(input)).pathname);
@@ -612,12 +648,27 @@ for (const status of [301, 302, 307, 308]) {
       },
     });
     await assert.rejects(
-      transport.request("POST", MEDIATED, { token: session, ...w.who, body: '{"credentials":{"password":"x"}}' }),
+      transport.request("POST", ORDERS, { session, body: '{"note":"x"}' }),
       (error) => error.code === "redirect_refused",
     );
-    assert.deepEqual(seen, ["/poppy/sign-in"]);
+    assert.deepEqual(seen, ["/api/orders"]);
   });
 }
+
+test("finding 7: the mediated client sends credentials once, to the token endpoint, and follows no redirect", async () => {
+  const w = await world();
+  w.host.input.answers.push({ ...ADA });
+  const seen = [];
+  const client = new MediatedSignInClient({
+    reactor: w.host.reactor,
+    fetch: async (input) => {
+      seen.push(String(input));
+      return new Response(null, { status: 307, headers: { location: "/collect-credentials" } });
+    },
+  });
+  await assert.rejects(client.signIn({ company: w.company, clientId: w.identity.clientId, scopes: ["orders:read"] }), (error) => error.code === "redirect_refused");
+  assert.deepEqual(seen, [TOKEN]);
+});
 
 test("finding 11 and O7: an unfetchable client_id is fetched once, and the refetch table is bounded", async () => {
   const { AgentIdentityClient } = await import("../../lib/index.js");
@@ -639,21 +690,16 @@ test("finding 11 and O7: an unfetchable client_id is fetched once, and the refet
 
 async function signedInWithProposal(w) {
   const session = await w.start();
-  const done = await deviceSignIn(w, session);
-  const page = await w.conversations.start(w.endpoint, w.message("Exchange my jacket for a warmer one"), { token: done.token, wait: 0, ...w.who });
+  const done = await deviceSignIn(w);
+  const page = await w.conversations.start(w.endpoint, w.message("Exchange my jacket for a warmer one"), { session, token: done.token, wait: 0 });
   return { token: done.token, page, proposal: page.events.find((event) => event.message?.operation).message.operation };
 }
 
-test("O1: an operation past proposed has no null expires_at", async () => {
+test("O1: an operation has no null members", async () => {
   const w = await world();
-  const { token, proposal } = await signedInWithProposal(w);
-  const ops = w.company.document.extensions.operations.endpoint;
-  const operations = new OperationsClient({ reactor: w.host.reactor, transport: w.transport });
-  await operations.confirm(ops, proposal, { approval: await approve(proposal), token, ...w.who });
-  const body = await (await w.transport.request("GET", `${ops}/${proposal.operation_id}`, { token, ...w.who })).json();
-  assert.equal(body.state, "succeeded");
-  assert.equal("expires_at" in body, false);
-  assert.deepEqual(Object.entries(body).filter(([, value]) => value === null), []);
+  const { proposal } = await signedInWithProposal(w);
+  assert.deepEqual(Object.keys(proposal).sort(), ["expires_at", "operation_id", "revision", "summary", "terms"]);
+  assert.deepEqual(Object.entries(proposal).filter(([, value]) => value === null), []);
 });
 
 async function assertion(w, audience, { lifetime = 60, jti } = {}) {
@@ -700,81 +746,98 @@ for (const [lifetime, jti, status] of [[600, undefined, 401], [301, undefined, 4
   });
 }
 
-test("O3: a token-endpoint DPoP refusal is an OAuth error", async () => {
-  // At the token endpoint, an OAuth error with HTTP 400; at APIs a 401 challenge (§4.3).
+test("O7: a Session JWT with a short jti is refused", async () => {
   const w = await world();
   const session = await w.start();
-  const response = await w.fetch("https://manzanita.example/oauth/token", {
+  const answer = await w.fetch(ORDERS, { method: "GET", headers: { [SESSION_HEADER]: await sessionJwt(w, session, "GET", ORDERS, { claims: { jti: "short" } }) } });
+  assert.equal(answer.status, 400);
+  assert.equal((await answer.json()).error, "invalid_session");
+});
+
+test("a copied access token is worth nothing without the agent's Session JWT", async () => {
+  // `ath` ties a Session JWT to its token, and the delegation ties its key to the agent's
+  // `jwks_uri` (§5.2, §5.3). Each forgery is `invalid_session`.
+  const w = await world();
+  const session = await w.start();
+  const { token } = await deviceSignIn(w);
+  const bearer = { authorization: `Bearer ${token.accessToken.reveal()}` };
+  const other = { accessToken: new SecretValue("another-access-token") };
+  const someone = (await generateKeyPair("ES256")).privateKey;
+  const now = Math.floor(w.clock.now().getTime() / 1000);
+  const forged = {
+    "no ath": await sessionJwt(w, session, "GET", ORDERS),
+    "another token's ath": await sessionJwt(w, session, "GET", ORDERS, { token: other }),
+    "another method": await sessionJwt(w, session, "POST", ORDERS, { token }),
+    "another url": await sessionJwt(w, session, "GET", `${ORDERS}/x`, { token }),
+    "another company": await sessionJwt(w, session, "GET", ORDERS, { token, claims: { aud: "https://other.example" } }),
+    "an old iat": await sessionJwt(w, session, "GET", ORDERS, { token, claims: { iat: now - 61 } }),
+    "no jti": await sessionJwt(w, session, "GET", ORDERS, { token, without: ["jti"] }),
+    "another key": await sessionJwt(w, session, "GET", ORDERS, { token, key: someone }),
+    "no delegation": await sessionJwt(w, session, "GET", ORDERS, { token, headers: { pap_dlg: undefined } }),
+    "signed by the agent's own key": await sessionJwt(w, session, "GET", ORDERS, { token, headers: { pap_dlg: undefined }, key: w.identity.privateKey }),
+  };
+  for (const [what, value] of Object.entries(forged)) {
+    const answer = await w.fetch(ORDERS, { method: "GET", headers: { ...bearer, [SESSION_HEADER]: value } });
+    assert.equal(answer.status, 400, what);
+    assert.equal((await answer.json()).error, "invalid_session", what);
+  }
+  const copied = await w.fetch(ORDERS, { method: "GET", headers: bearer });
+  assert.equal(copied.status, 400);
+  assert.equal((await copied.json()).error, "invalid_session");
+  // The genuine one, and that same one only once.
+  const headers = { ...bearer, [SESSION_HEADER]: await sessionJwt(w, session, "GET", ORDERS, { token }) };
+  assert.equal((await w.fetch(ORDERS, { method: "GET", headers })).status, 200);
+  const replayed = await w.fetch(ORDERS, { method: "GET", headers });
+  assert.equal(replayed.status, 400);
+  assert.equal((await replayed.json()).error, "invalid_session");
+});
+
+test("O3: a token-endpoint refusal is an OAuth error", async () => {
+  // At the token endpoint, an OAuth error with HTTP 400; at APIs a 401 challenge (§4.4, §7).
+  const w = await world();
+  const session = await w.start();
+  const response = await w.fetch(TOKEN, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      grant_type: "refresh_token",
       client_id: w.identity.clientId,
       client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
       client_assertion: await assertion(w, "https://manzanita.example"),
-      assertion: "x",
+      refresh_token: "x",
     }).toString(),
   });
   assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), { error: "invalid_dpop_proof" });
+  assert.deepEqual(await response.json(), { error: "invalid_grant" });
   assert.equal(response.headers.get("www-authenticate"), null);
-  const api = await w.fetch("https://manzanita.example/api/orders", {
-    method: "GET",
-    headers: { authorization: `DPoP ${session.accessToken.reveal()}` },
-  });
+  const token = { accessToken: new SecretValue("unknown") };
+  const api = await w.fetch(ORDERS, { method: "GET", headers: await sessionHeaders(w.host.reactor, "GET", ORDERS, { session, token }) });
   assert.equal(api.status, 401);
-  assert.deepEqual(await api.json(), { error: "invalid_dpop_proof" });
-  assert.equal(api.headers.get("www-authenticate"), 'DPoP error="invalid_dpop_proof"');
+  assert.equal((await api.json()).error, "invalid_token");
+  assert.ok(api.headers.get("www-authenticate").startsWith('Bearer error="invalid_token"'));
 });
 
 test("O4: a token in the query is refused even beside a valid header", async () => {
-  // An MCP server without DPoP: its tokens are Bearer ones (§4.3).
-  const w = await world({ config: { mcpDpop: false } });
-  const token = await bearer(w, await w.start());
+  const w = await world();
+  const token = await forMcp(w);
+  const session = await w.start();
   for (const query of [`access_token=${token.accessToken.reveal()}`, "access_token="]) {
-    const response = await w.fetch(`https://manzanita.example/mcp?${query}`, {
+    const url = `${MCP}?${query}`;
+    const response = await w.fetch(url, {
       method: "POST",
-      headers: { authorization: `Bearer ${token.accessToken.reveal()}`, "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      headers: { ...(await sessionHeaders(w.host.reactor, "POST", url, { session, token })), "content-type": "application/json" },
+      body: LIST_TOOLS,
     });
     assert.equal(response.status, 400);
     assert.equal((await response.json()).error, "invalid_request");
   }
 });
 
-test("O5: mediated credentials may go to the issuer's host, and nowhere else", async () => {
-  const { MediatedSignInClient } = await import("../../lib/index.js");
-  const w = await world();
-  const session = await w.start();
-  const reached = [];
-  const client = new MediatedSignInClient({
-    reactor: w.host.reactor,
-    fetch: async (input) => {
-      reached.push(new URL(String(input)).host);
-      return new Response('{"status":"failed"}', { status: 200, headers: { "content-type": "application/json" } });
-    },
-  });
-  w.host.input.answers.push({ email: "a@b.example", password: "x" });
-  // A Session at that issuer: its key is one the host made for it (§4.3).
-  const provider = firstContribution(w.host.reactor, DpopProofProviders, "DPoP");
-  const sessionKey = await provider.newSessionKey({ tenantId: TENANT, issuer: "https://auth.shop-login.example" });
-  const options = (endpoint) => ({
-    ...w.who,
-    mediated: { endpoint, fields: [{ name: "email", label: "Email", secret: false }, { name: "password", label: "Password", secret: true }] },
-    organization: { name: "Shop", domain: "shop.example" },
-    issuer: "https://auth.shop-login.example",
-    scopes: ["orders:read"],
-    token: { ...session, sessionKey },
-  });
-  assert.equal((await client.signIn(options("https://auth.shop-login.example/poppy/sign-in"))).status, "failed");
-  await assert.rejects(client.signIn(options("https://evil.example/sign-in")), (error) => error.code === "unsafe_mediated_endpoint");
-  assert.deepEqual(reached, ["auth.shop-login.example"]);
-});
-
 test("O8: a reply is framed by working and idle state events", async () => {
   const w = await world();
-  const page = await w.conversations.start(w.endpoint, w.message("Hello"), { token: await w.start(), wait: 0, ...w.who });
+  const page = await w.conversations.start(w.endpoint, w.message("Hello"), { session: await w.start(), wait: 0 });
   assert.deepEqual(page.events.map((event) => `${event.type}${event.status ? `:${event.status}` : ""}`), ["message", "state:working", "message", "state:idle"]);
+  assert.equal(page.status, "idle");
 });
 
 test("O9: the demo promises no operation to an agent without Operations", async () => {

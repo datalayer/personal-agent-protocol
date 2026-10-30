@@ -471,6 +471,25 @@ test("the company lists its browser-session endpoint", async () => {
   assert.deepEqual(w.company.document.web, { browser_session_endpoint: BROWSER_SESSION });
 });
 
+test("joining again without a token replaces the cookie and ends the sign-in", async () => {
+  // Step 3 replaces the cookie, and the new step 2 decides the sign-in (§6's table). Manzanita
+  // has no website login beyond this cookie, so nothing else is left.
+  const w = await world();
+  const { session, token } = await signedIn(w);
+  await join(w, session, token, "https://manzanita.example/");
+  const signedInCookie = w.browser.cookies.get("manzanita.example").get("__Host-poppy_session");
+  assert.equal((await w.shop.webSession(signedInCookie)).accountId, "acct_ada");
+
+  await join(w, session, undefined, "https://manzanita.example/");
+  const signedOutCookie = w.browser.cookies.get("manzanita.example").get("__Host-poppy_session");
+  assert.notEqual(signedOutCookie, signedInCookie);
+  assert.equal(await w.shop.webSession(signedInCookie), undefined);
+  const rejoined = await w.shop.webSession(signedOutCookie);
+  assert.equal(rejoined.sid, session.sid);
+  assert.equal(rejoined.accountId, undefined);
+  assert.deepEqual(rejoined.scopes, []);
+});
+
 test("a joined browser follows the Session", async () => {
   const w = await world();
   const { session, token, reference } = await signedIn(w);

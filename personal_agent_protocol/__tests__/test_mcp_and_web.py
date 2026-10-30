@@ -396,6 +396,32 @@ async def test_a_joined_browser_follows_the_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_joining_again_without_a_token_replaces_the_cookie_and_ends_the_sign_in() -> None:
+    """Step 3 replaces the cookie, and the new step 2 decides the sign-in (§6's table).
+
+    Manzanita has no website login beyond this cookie, so nothing else is left: the first
+    cookie stops working, and the browser's requests belong to the Session, signed out.
+    """
+
+    world, browser = web_world()
+    token, _ = await signed_in_with_reference(world)
+    session = world.session
+    assert session is not None
+    await join(world, browser, session, token, "https://manzanita.example/")
+    signed_in_cookie = browser.http.cookies.get("__Host-poppy_session")
+    joined = await world.shop.web_session(signed_in_cookie)
+    assert joined is not None and joined.account_id == "acct_ada"
+
+    await join(world, browser, session, None, "https://manzanita.example/")
+    signed_out_cookie = browser.http.cookies.get("__Host-poppy_session")
+    assert signed_out_cookie != signed_in_cookie
+    assert await world.shop.web_session(signed_in_cookie) is None
+    rejoined = await world.shop.web_session(signed_out_cookie)
+    assert rejoined is not None and rejoined.sid == session.sid and rejoined.account_id is None
+    assert rejoined.scopes == ()
+
+
+@pytest.mark.asyncio
 async def test_the_join_page_is_one_time_tied_to_its_browser_and_never_framed() -> None:
     """Step 1 of §6: a form with a one-time code, a `__Host-` cookie that ties the code to
     this browser, no caching, no framing, no opener."""

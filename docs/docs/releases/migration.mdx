@@ -13,9 +13,10 @@ has the full list.
 ## 0.28 → 0.29
 
 0.29.0 implements DPoP (spec 4.5, RFC 9449) in both SDKs and both reference
-companies. The draft is unchanged, and a company that lists no DPoP algorithm sees
-the same requests as from 0.28. Python spells the names below in `snake_case`,
-TypeScript in `camelCase`.
+companies, and moves the target from upstream `3e9bada` to `ec16efa` (revision
+2026-10-30), still draft 0.3, with no compatibility with the earlier text. A company
+that lists no DPoP algorithm sees the same requests as from 0.28. Python spells the
+names below in `snake_case`, TypeScript in `camelCase`.
 
 | Change | What to do |
 | --- | --- |
@@ -26,6 +27,29 @@ TypeScript in `camelCase`.
 | A `DPoP` token type is refused only when no proof went | `unsupported_token_type` no longer means every `DPoP` answer |
 | A new contribution point, `pap.dpopProver` | Nothing, for one process: the default keeps one key per company for a tenant in memory. A host whose tokens outlive a process contributes `JoseDpopProver` with a durable `DpopKeyCustody` |
 | Reference company: `dpop_binding`, off by default | `CompanyConfig.dpop_binding` (`off`, `optional`, `required`), `dpop_nonces`, `dpop_nonce_lifetime`, `dpop_proof_window`; turning it on lists ES256 and changes the `WWW-Authenticate` schemes (`token_schemes`) |
+
+The draft as of `ec16efa`:
+
+| Change | What to do |
+| --- | --- |
+| A Company may have no issuer: signed-out Sessions, its identifier `https://{organization.domain}` | Use `company.identifier` (`companyIdentifier(company)`) for `issuer` in `SessionClient.start`, for User IDs, and for Agent IDs, never `company.oauth_metadata.issuer`, which is `None` there. `PapSession.issuer`, `SessionJwtRequest.issuer` and `company_issuer` keep their names and hold the identifier |
+| `DiscoveryDocument.needs_issuer` means something else | It says the Company offers sign-in (`auth.issuer`, `access: signed_in`, Mediated Sign-In), not that it lists an interface. A document with `agent`, `apis`, `feedback` or `web.browser_session_endpoint` and a 404 at the domain's protected resource metadata is a Company with no issuer, no longer `issuer_not_found` |
+| A sign-in at a Company with no issuer | `company.require_oauth()` (`requireOauth`) returns the metadata, or raises `AuthorizationError` `no_issuer` |
+| `ProtectedResourceMetadata.authorization_servers` can be empty | Read `company.issuer`, or check before using `[0]` |
+| A token for an MCP server proves as that server's metadata says | `RefreshTokenClient.token_for_mcp(reference, context=, server=)` takes the metadata `fetch_mcp_server_metadata` returned in place of `url`, whose `resource` is the URL. The issuer's list no longer decides it; `ServiceTokens` does this for an MCP server the Company lists. `ProtectedResourceMetadata.dpop_signing_alg_values_supported` is new |
+| Reference company at MCP, with binding on | The MCP server's metadata lists ES256, its challenges name Bearer then DPoP (`mcp_token_schemes`), and `required` no longer refuses a request with no proof whose `resource` is the MCP server. Every grant now takes `resource`; a `resource` the company doesn't serve is `invalid_target` at any of them |
+| Reference company with no issuer | `CompanyConfig.oauth=False` (`oauth: false`), which refuses `mediated_fields`, `operations`, `aliases` and DPoP |
+| `scopes_supported` and `auth.scopes` are optional | `pap auth direct` and `pap auth device` no longer refuse a scope absent from `scopes_supported`; the Company decides. Mediated Sign-In still asks only for the extension's `scopes` |
+| `agent.protocols[].access` | `AgentProtocol.access`, kept as written, and `account_access` (`accountAccess`), `session` or `signed_in`, an unknown value reading as `session`. A hint only |
+| The reference company's join replaces the cookie | A join's new cookie makes the browser's old one stop working, so a join without a token ends the earlier sign-in |
+| `pap company discover --json` | `verified` is true for a Company with no issuer, and `identifier` is new. `SessionRecord.token_endpoint` and `revocation_endpoint` can be `null` |
+| `PROTOCOL_REVISION` | `2026-10-30` |
+
+Checked and unchanged: a refresh that omits `refresh_token` keeps the one held, and an
+`authorization` event with its `WWW-Authenticate` on a successful response is one need,
+the accepted message never sent again. The Operations check order is a SHOULD now, and
+PS384 a SHOULD for Companies: the reference companies keep both. Operator signatures
+(spec 5.3) are not built.
 
 A custom company store sees one new record kind, `dpop_nonce`, and a new
 `dpop_jkt` field in the Python company's access-token record. A durable store's

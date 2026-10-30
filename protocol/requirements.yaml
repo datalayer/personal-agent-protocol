@@ -15,7 +15,7 @@
 
 protocol: personal-agent-protocol
 profile: '0.3'
-upstream_revision: '2026-10-28'
+upstream_revision: '2026-10-30'
 reviewed: '2026-10-30'
 sources:
   spec: https://personalagentprotocol.org/docs/0.3/spec
@@ -299,7 +299,28 @@ requirements:
   section: '3.2'
   level: MUST
   role: company
-  text: Several domains MAY have the same issuer ... Their documents MUST have the same auth.
+  text: Several domains MAY have the same issuer ... The Company MUST select that same issuer on each domain.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_an_alias_publishes_the_companys_discovery_and_its_issuer_lists_it
+- id: PAP-3.2-31
+  section: '3.2'
+  level: MUST
+  role: company
+  text: The Company MUST give each scope the same authorization meaning across these domains.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_an_alias_publishes_the_companys_discovery_and_its_issuer_lists_it
+- id: PAP-3.2-32
+  section: '3.2'
+  level: SHOULD
+  role: company
+  text: The Company SHOULD publish the same scope descriptions and hints across these domains, but MAY expose
+    different scopes or capabilities.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService.discovery_document
@@ -346,15 +367,18 @@ requirements:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_the_issuer_lists_the_grants_and_scopes_it_offers
 - id: PAP-3.2-22
   section: '3.2'
-  level: MUST
+  level: SHOULD
   role: company
-  text: scopes_supported is required if the Company offers any type of sign-in, and it MUST then include
-    every scope a Personal Agent can request (4.7).
+  text: scopes_supported lists the scopes the issuer supports. A Company that offers sign-in SHOULD publish
+    it and include every scope a Personal Agent can request (4.7).
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService.oauth_metadata
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_scopes_are_the_companys_described_and_never_poppy
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.scopes-supported-optional
 - id: PAP-3.2-23
   section: '3.2'
   level: MUST
@@ -462,6 +486,44 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_issuerless.py::test_a_known_issuer_is_never_lost_to_an_error
   reason: null
+- id: PAP-3.2-29
+  section: '3.2'
+  level: MUST
+  role: company
+  text: A Company that lists signed_in MUST have an issuer.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveryDocument.needs_issuer
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  tests:
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_no_issuer_is_refused_for_a_company_that_offers_sign_in
+  conformance:
+  - no-issuer.sign-in-offered-without-issuer
+- id: PAP-3.2-30
+  section: '3.2'
+  level: MUST
+  role: personal-agent
+  text: 'Personal Agents MUST ignore unknown values of access and handle them as an absent hint. The hint
+    grants no permission: runtime challenges and authorization events remain authoritative.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:AgentProtocol.account_access
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.access-hint
+- id: PAP-3.2-33
+  section: '3.2'
+  level: MUST
+  role: personal-agent
+  text: Adding or changing an issuer can change that identifier. If it changes, Personal Agents MUST use
+    new User IDs, Agent IDs, and Sessions for the new identifier.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveredCompany.identifier
+  - personal_agent_protocol.pairwise:SqlitePairwiseUserIdStore
+  tests:
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_user_ids_are_scoped_by_the_identifier
 - id: PAP-3.3-01
   section: '3.3'
   level: MUST
@@ -628,7 +690,17 @@ requirements:
   section: '4.1'
   level: MUST
   role: company
-  text: Companies MUST accept client assertions signed with ES256 and with PS384.
+  text: Companies MUST accept client assertions signed with ES256.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.verify:verify_session_jwt
+  tests:
+  - personal_agent_protocol/__tests__/test_blind_signing.py::test_a_company_takes_an_agent_that_signs_everything_blindly
+- id: PAP-4.1-08
+  section: '4.1'
+  level: SHOULD
+  role: company
+  text: Companies SHOULD accept client assertions signed with PS384.
   status: implemented
   implementation:
   - personal_agent_protocol.company.verify:verify_session_jwt
@@ -717,7 +789,8 @@ requirements:
   level: MUST
   role: personal-agent
   text: A Company MAY return a new refresh token. The Personal Agent then MUST use the new one from then
-    on.
+    on. If the response omits refresh_token, the Personal Agent keeps using the one it has, as RFC 6749 §6
+    describes.
   status: implemented
   implementation:
   - personal_agent_protocol.accounts:RefreshTokenClient.refresh
@@ -725,6 +798,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_accounts.py::test_refresh_gets_an_access_token_and_rotates_the_stored_token
   - personal_agent_protocol/__tests__/test_accounts.py::test_concurrent_refreshes_rotate_one_after_the_other
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_accounts.py::test_a_refresh_that_omits_the_refresh_token_keeps_the_one_held
   conformance:
   - lifecycle.rotated-token
   - lifecycle.sign-out-revokes-every-refresh-token
@@ -752,10 +826,10 @@ requirements:
   - dpop.refresh-after-the-key-is-lost
 - id: PAP-4.7-01
   section: '4.7'
-  level: MUST
+  level: SHOULD
   role: company
-  text: 'The Company MUST describe each scope in scopes_supported, so the Personal Agent can choose the
-    ones a task needs: in the scopes of an OAuth 2.0 security scheme in an OpenAPI description it lists
+  text: 'The Company SHOULD describe each scope it offers Personal Agents, so the Personal Agent can choose
+    the ones a task needs: in the scopes of an OAuth 2.0 security scheme in an OpenAPI description it lists
     (section 7), or otherwise in auth.scopes.'
   status: implemented
   implementation:
@@ -764,6 +838,19 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_scopes_are_the_companys_described_and_never_poppy
   - personal_agent_protocol/__tests__/test_security_review.py::test_finding_5_operations_without_a_write_scope_is_a_configuration_error
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.auth-scopes-optional
+- id: PAP-4.7-08
+  section: '4.7'
+  level: SHOULD
+  role: company
+  text: The Company SHOULD list the scopes it supports in scopes_supported in its OAuth server metadata (3.2).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.oauth_metadata
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_scopes_are_the_companys_described_and_never_poppy
 - id: PAP-4.7-02
   section: '4.7'
   level: MUST
@@ -1017,7 +1104,18 @@ requirements:
   section: '5.2'
   level: MUST
   role: company
-  text: alg is ES256 or PS384. Companies MUST accept both.
+  text: alg is ES256 or PS384. Companies MUST accept delegations signed with ES256.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.verify:verify_delegation
+  tests:
+  - personal_agent_protocol/__tests__/test_blind_signing.py::test_a_company_takes_an_agent_that_signs_everything_blindly
+  - personal_agent_protocol/__tests__/test_delegated_keys.py::test_a_session_jwt_has_the_specs_header_and_claims
+- id: PAP-5.2-17
+  section: '5.2'
+  level: SHOULD
+  role: company
+  text: Companies SHOULD accept delegations signed with PS384.
   status: implemented
   implementation:
   - personal_agent_protocol.company.verify:verify_delegation
@@ -1089,8 +1187,9 @@ requirements:
   section: '5.2'
   level: MUST
   role: company
-  text: The Company MUST reject, with invalid_session, a Session JWT without a delegation, including one
-    signed directly with a key from jwks_uri, and a Session JWT whose delegation fails any of these checks.
+  text: When verifying a Session header (5.3), the Company MUST reject, with invalid_session, a Session JWT
+    without a delegation, including one signed directly with a key from jwks_uri, and a Session JWT whose
+    delegation fails any of these checks.
   status: implemented
   implementation:
   - personal_agent_protocol.company.verify:verify_session_jwt
@@ -1164,7 +1263,8 @@ requirements:
   section: '5.3'
   level: MUST
   role: company
-  text: The Company MUST complete these checks before creating a Session or handling the request.
+  text: The Company MUST complete the following checks before relying on Session claims for client or User
+    identity, ownership, continuity, or access to state, including creating or continuing a Session.
   status: implemented
   implementation:
   - personal_agent_protocol.company.verify:verify_session_jwt
@@ -1267,8 +1367,8 @@ requirements:
   section: '5.3'
   level: MUST
   role: company
-  text: The Company MUST reject a request that carries an access token it issued to a Personal Agent but
-    no Session header, at every endpoint that accepts the Session header.
+  text: The Company MUST reject a request without the Session header when handling it depends on Session
+    claims.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._caller
@@ -1281,6 +1381,61 @@ requirements:
   conformance:
   - lifecycle.mcp-token-only-at-mcp
   - security.session-header-missing
+- id: PAP-5.3-10
+  section: '5.3'
+  level: SHOULD
+  role: company
+  text: Companies SHOULD verify the Session header on every request that carries it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+- id: PAP-5.3-11
+  section: '5.3'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT use unverified Session claims to attribute a request to a Personal Agent, User,
+    or Session, or to look up their state.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+- id: PAP-5.3-12
+  section: '5.3'
+  level: SHOULD
+  role: personal-agent
+  text: A Personal Agent SHOULD also sign requests carrying the Session header with an HTTP Message Signature
+    (RFC 9421), using Web Bot Auth, so traffic-management infrastructure can authenticate the operator before
+    the request reaches the Company's application.
+  status: open
+  reason: 'Not built: it needs an operator key, its directory and a signing path of their own, separate from
+    delegated keys, and its absence does not make a Session JWT invalid. Recorded here until a host needs
+    it.'
+  implementation: []
+  tests: []
+- id: PAP-5.3-13
+  section: '5.3'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent's operator signature MUST cover poppy-session, and authorization when present,
+    so it binds to the Session JWT and access token.
+  status: open
+  reason: 'Not built: this SDK sends no operator signature yet (PAP-5.3-12).'
+  implementation: []
+  tests: []
+- id: PAP-5.3-14
+  section: '5.3'
+  level: MUST
+  role: company
+  text: Before trusting any Session claim, the Company MUST verify the Session JWT independently (5.3), whatever
+    an operator signature says.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
 - id: PAP-5.4-01
   section: '5.4'
   level: MUST NOT
@@ -1541,14 +1696,16 @@ requirements:
   section: '6'
   level: MUST
   role: company
-  text: The cookie MUST act for the account and scopes authorized in step 2, and MUST stop acting for
-    the account when the User signs out or disconnects the Personal Agent (5.5).
+  text: The cookie MUST act for the account and scopes authorized in step 2, if any, and MUST stop acting
+    for the account when the User signs out or disconnects the Personal Agent (5.5).
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService.web_session
+  - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_joined_browser_follows_the_session
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_joining_again_without_a_token_replaces_the_cookie_and_ends_the_sign_in
   conformance:
   - lifecycle.browser-joins-session
 - id: PAP-6-12
@@ -1576,6 +1733,30 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService.web_session
   reason: The reference website has one page, an operation's; its refusals say the Session ended rather
     than name a scope.
+- id: PAP-6-14
+  section: '6'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent MUST join only a browser it controls to a Session, never the User's own browser.
+  status: partial
+  reason: The contract of pap.browserJoin and the guides say so; only the host knows whose browser it contributes,
+    so the SDK can't check it.
+  implementation:
+  - personal_agent_protocol.reactor:BrowserJoin
+  - personal_agent_protocol.browser:BrowserSessionClient
+  tests:
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_joined_browser_follows_the_session
+- id: PAP-6-15
+  section: '6'
+  level: SHOULD NOT
+  role: company
+  text: In a join without an access token, the Company SHOULD NOT end or change that login, because the Personal
+    Agent's browser may have a login it can't easily recreate.
+  status: not-applicable
+  reason: 'The reference companies have no website login beyond the Session''s cookie: there is no other
+    login to keep.'
+  implementation: []
+  tests: []
 - id: PAP-7-01
   section: '7'
   level: SHOULD
@@ -1592,8 +1773,8 @@ requirements:
   section: '7'
   level: MUST
   role: company
-  text: Every listed API MUST accept the Session header (5.2) and the Company's access tokens (4.5), and
-    enforce their scopes, except that an MCP server MAY ignore the Session header.
+  text: Every listed API MUST accept the Session header (5.2) and, when the Company offers account access,
+    its access tokens (4.5), and enforce their scopes.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._api_call
@@ -1665,7 +1846,7 @@ requirements:
   section: '7'
   level: MUST
   role: company
-  text: The MCP server MUST include the Company's issuer in its authorization_servers.
+  text: An MCP server that offers account access MUST include the Company's issuer in its authorization_servers.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService.protected_resource_metadata
@@ -1844,6 +2025,17 @@ requirements:
   conformance:
   - conversations.direct-conversation
   - conversations.direct-of-direct-refused
+- id: PAP-8.11-01
+  section: '8.11'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent MUST handle the event and matching challenge as one authorization need, and MUST
+    NOT resubmit an accepted message because it received the challenge.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient
+  tests:
+  - personal_agent_protocol/__tests__/test_conversations.py::test_an_authorization_event_with_its_challenge_on_an_accepted_message_is_one_need
 - id: PAP-9.1-01
   section: '9.1'
   level: SHOULD
@@ -1917,6 +2109,17 @@ requirements:
   - protocol.feedback-endpoint-listed
   - protocol.feedback-report
   - no-issuer.signed-out-interfaces
+- id: PAP-9.3-08
+  section: '9.3'
+  level: SHOULD
+  role: company
+  text: A Company SHOULD verify the Session header on a report, signed in or signed out, and needs no scope
+    for it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._feedback
+  tests:
+  - personal_agent_protocol/__tests__/test_feedback.py::test_a_signed_out_and_a_signed_in_session_report_with_no_scope
 - id: PAP-9.3-02
   section: '9.3'
   level: SHOULD NOT
@@ -2249,6 +2452,17 @@ requirements:
   - personal_agent_protocol.models:OAuthServerMetadata.offers_direct
   - personal_agent_protocol.models:OAuthServerMetadata.offers_device
   tests: []
+- id: MED-2-04
+  source: mediated
+  section: '2'
+  level: SHOULD
+  role: company
+  text: scopes lists the scopes Mediated Sign-In can grant. The Company SHOULD also include them in scopes_supported.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_scopes_are_the_companys_described_and_never_poppy
 - id: OPS-2-01
   source: operations
   section: '2'
@@ -2449,10 +2663,10 @@ requirements:
   section: '6'
   level: MUST
   role: company
-  text: 'Before performing the action, the Company MUST check, in this order: the Session can approve
-    the operation, else it handles the request as if it had no approval; the operation hasn''t been performed
-    already; the revision is one the Company returned for this operation, it hasn''t expired, and the
-    request asks for exactly what it describes.'
+  text: 'Before performing the action, the Company MUST make these checks: the Session can approve the operation,
+    else it handles the request as if it had no approval; the operation hasn''t been performed already; the
+    revision is one the Company returned for this operation, it hasn''t expired, and the request asks for
+    exactly what it describes.'
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._approval_target
@@ -2470,6 +2684,33 @@ requirements:
   - operations.another-user-cannot-approve
   - operations.mcp-approval
   - operations.conversation-approval
+- id: OPS-6-04
+  source: operations
+  section: '6'
+  level: SHOULD
+  role: company
+  text: It SHOULD make them in this order.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._approval_target
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_any_session_of_the_account_approves_and_a_signed_out_one_gets_a_challenge
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_returned_signed_out_is_approved_only_in_that_session
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_is_the_conversations_own
+- id: OPS-6-05
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT let a different internal check order change which Session can approve, the response
+    for a request without valid approval, or the retry and at-most-once behavior in section 7.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._approval_target
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_any_session_of_the_account_approves_and_a_signed_out_one_gets_a_challenge
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_returned_signed_out_is_approved_only_in_that_session
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_is_the_conversations_own
 - id: OPS-6-02
   source: operations
   section: '6'
@@ -2621,8 +2862,8 @@ guide:
   level: SHOULD
   role: both
   text: 'Personal agents: sign Session JWTs with ES256 (MUST, 5.2). Sign client assertions and delegations
-    with ES256, or with PS384 if you sign them blindly (10.7). Companies: accept ES256 and PS384 in client
-    assertions and delegations (MUST, 4.1, 5.2), and RS256 in client assertions. Use RSA keys of at least
+    with ES256, or with PS384 if you sign them blindly (10.7). Companies: accept ES256 (MUST) and PS384 (SHOULD)
+    in client assertions and delegations (4.1, 5.2), and RS256 in client assertions. Use RSA keys of at least
     2048 bits.'
   status: partial
   implementation:
@@ -2672,9 +2913,9 @@ guide:
   level: SHOULD
   role: company
   text: 'Check aud and iat, and exp on client assertions and delegations. Session JWTs have no exp: accept
-    them only within your iat window (5.3). A client assertion or Session JWT has the company''s issuer
-    as its aud, never an endpoint URL (4.1, 5.2). Allow a small clock skew, such as 30 seconds, and reject
-    assertions that claim a long lifetime.'
+    them only within your iat window (5.3). A client assertion has the company''s issuer as its aud; a Session
+    JWT has the Company''s identifier (its issuer, or its HTTPS domain without one), never an endpoint URL
+    (4.1, 5.2). Allow a small clock skew, such as 30 seconds, and reject assertions that claim a long lifetime.'
   status: implemented
   implementation:
   - personal_agent_protocol.company.verify:verify_assertion
@@ -2993,7 +3234,8 @@ guide:
   section: User IDs
   level: SHOULD
   role: personal-agent
-  text: Key user IDs by the company's full issuer, including any path, not by its host.
+  text: 'Key user IDs by the company''s identifier: its full issuer, including any path, or https://{organization.domain}
+    with a lowercase host and no trailing slash when there is no issuer, not by its host.'
   status: implemented
   implementation:
   - personal_agent_protocol.pairwise:SqlitePairwiseUserIdStore
@@ -3749,3 +3991,55 @@ guide:
   - dpop.mcp-challenges-bearer-then-dpop
   - dpop.mcp-bearer-without-a-proof
   - dpop.mcp-server-decides-the-proof
+- id: GUIDE-pa-ids-05
+  source: guide
+  section: User IDs
+  level: SHOULD
+  role: personal-agent
+  text: When adding or changing an issuer changes the Company's identifier, use new user IDs, agent IDs,
+    delegated keys, and sessions. Do not fall back to the domain because issuer discovery failed.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveredCompany.identifier
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  tests:
+  - personal_agent_protocol/__tests__/test_issuerless.py::test_a_known_issuer_is_never_lost_to_an_error
+- id: GUIDE-pa-access-01
+  source: guide
+  section: Planning account access
+  level: SHOULD
+  role: personal-agent
+  text: 'A conversation entry''s access: signed_in hints that it needs account access from the start; without
+    that hint, start signed out and respond to challenges or authorization events.'
+  status: partial
+  reason: The SDK reads the hint (account_access); when to sign in is the host's.
+  implementation:
+  - personal_agent_protocol.models:AgentProtocol.account_access
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+- id: GUIDE-co-web-cookie-01
+  source: guide
+  section: Browser sessions
+  level: SHOULD
+  role: company
+  text: Use a cookie for the session that's separate from your login cookie, and check it first. After a
+    signed-out join, keep the browser's login cookie. After a signed-in join, clear it, so the browser is
+    signed out when the session's sign-in ends.
+  status: not-applicable
+  reason: The reference companies have no website login beyond the Session's cookie, which a later join replaces.
+  implementation: []
+  tests: []
+- id: GUIDE-co-noauth-01
+  source: guide
+  section: Signed-out support without OAuth
+  level: SHOULD
+  role: company
+  text: 'Return 404 from the domain''s protected resource metadata URL, or publish valid metadata without
+    authorization servers. Leave out auth.issuer, sign-in extensions, and access: signed_in hints. Verify
+    Session JWTs against https://{organization.domain}, with the host in lowercase and no trailing slash.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_no_issuer_over_tls

@@ -8,8 +8,9 @@
 
 ## 0.29.0 (unreleased)
 
-DPoP (spec 4.5, RFC 9449) in both SDKs and both reference companies, at the same
-target, upstream `3e9bada`: see the
+DPoP (spec 4.5, RFC 9449) in both SDKs and both reference companies, and the
+target moved to upstream `ec16efa` (revision 2026-10-30, the commit's date: the
+draft states none): see the
 [0.28 → 0.29 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#028--029).
 
 - **Personal agents:** a new contribution point, `pap.dpopProver` (`DPOP_PROVERS`,
@@ -35,6 +36,44 @@ target, upstream `3e9bada`: see the
   store's older access tokens fail to read until they expire (Python; the TypeScript
   company reads a record without it as a Bearer token). A company store sees a new
   record kind, `dpop_nonce`.
+
+The draft as of `ec16efa`, with no compatibility with the earlier text:
+
+- **Companies with no issuer (spec 3.2):** a 404 at the domain's protected resource
+  metadata, or valid metadata with no authorization servers, means no issuer, valid only
+  when the Company offers no sign-in. `DiscoveredCompany.identifier`
+  (`companyIdentifier`) is then `https://{organization.domain}`: the Session JWT's `aud`,
+  and what User IDs and Agent IDs are scoped by. A timeout, another status, invalid
+  metadata or an issuer that fails to verify never falls back. `require_oauth`
+  (`requireOauth`) refuses a sign-in with `no_issuer`. `needs_issuer` now means the
+  Company offers sign-in. Reference companies: `CompanyConfig.oauth=False`, and a
+  `no-issuer` conformance world in all four pairings.
+- **DPoP at MCP (spec 7):** Bearer is the baseline. A token for an MCP server carries a
+  proof only when that server's protected resource metadata lists ES256:
+  `token_for_mcp` takes that metadata (`server=`) in place of `url`, and `ServiceTokens`
+  reads it. Reference companies, with binding on: the server's metadata lists ES256, its
+  challenges name Bearer then DPoP, and `required` gives a Bearer token without a proof
+  for an MCP `resource`, at any grant, which works at that server alone.
+- **Scopes (spec 3.2, 4.7):** `scopes_supported` and `auth.scopes` are optional, and
+  `pap auth` no longer refuses a scope absent from the list for Direct and Device
+  Sign-In.
+- **`agent.protocols[].access` (spec 3.2):** `AgentProtocol.access` and `account_access`
+  (`accountAccess`), `session` or `signed_in`; a hint, never permission.
+- **Browser join (spec 6):** only a browser the agent controls, in `BrowserJoin`'s
+  contract and the guides. The reference companies have no website login beyond the
+  Session's cookie; a join now makes the previous cookie stop working, so one without a
+  token ends the earlier sign-in.
+- **Checked, with tests:** a refresh that omits `refresh_token` keeps the old one, and
+  an `authorization` event with a matching `WWW-Authenticate` on a successful response
+  is one need, the accepted message never resubmitted.
+- **Docs and ledger only:** the Operations check order is a SHOULD; PS384 a SHOULD for
+  Companies, and the reference companies keep accepting it;
+  `token_endpoint_auth_signing_alg_values_supported` describes client assertions only.
+  Session verification is required only before relying on Session claims; the reference
+  companies keep verifying everywhere.
+- **Not built:** operator signatures (spec 5.3, Web Bot Auth, RFC 9421), a new SHOULD:
+  `open` in the ledger.
+- Vendored schemas in `protocol/schemas` and the ledger updated to `ec16efa`.
 
 ## 0.28.0 (2026-10-30)
 

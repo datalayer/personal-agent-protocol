@@ -24,6 +24,137 @@
       }
     },
     {
+      "id": "protocol.auth-scopes-optional",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-4.7-01"
+      ],
+      "check": "discovery_document",
+      "description": "auth.scopes is optional: a document with an auth that describes no scope is used (§3.1, §4.7).",
+      "input": {
+        "protocol_version": "0.3",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "auth": {
+          "issuer": "https://auth.example.com"
+        },
+        "web": {}
+      },
+      "expect": {
+        "valid": true
+      }
+    },
+    {
+      "id": "protocol.scopes-supported-optional",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-22"
+      ],
+      "check": "discovery",
+      "description": "scopes_supported is a SHOULD: issuer metadata without it is used (§3.2).",
+      "input": {
+        "domain": "example.com",
+        "responses": {
+          "https://example.com/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "0.3",
+              "organization": {
+                "name": "Example",
+                "domain": "example.com"
+              },
+              "web": {}
+            }
+          },
+          "https://example.com/.well-known/oauth-protected-resource": {
+            "status": 200,
+            "json": {
+              "resource": "https://example.com",
+              "authorization_servers": [
+                "https://auth.example.com"
+              ]
+            }
+          },
+          "https://auth.example.com/.well-known/oauth-authorization-server": {
+            "status": 200,
+            "json": {
+              "issuer": "https://auth.example.com",
+              "token_endpoint": "https://auth.example.com/token",
+              "revocation_endpoint": "https://auth.example.com/revoke",
+              "grant_types_supported": [
+                "refresh_token"
+              ],
+              "protected_resources": [
+                "https://example.com"
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "issuer": "https://auth.example.com"
+      }
+    },
+    {
+      "id": "protocol.access-hint",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.2-30"
+      ],
+      "check": "discovery_document",
+      "description": "A poppy entry's access is session by default, or signed_in; a value the SDK doesn't know is an absent hint, and another protocol's access says nothing (§3.2).",
+      "input": {
+        "protocol_version": "0.3",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "agent": {
+          "protocols": [
+            {
+              "type": "poppy",
+              "endpoint": "https://example.com/poppy"
+            },
+            {
+              "type": "poppy",
+              "endpoint": "https://example.com/poppy",
+              "access": "session"
+            },
+            {
+              "type": "poppy",
+              "endpoint": "https://example.com/poppy",
+              "access": "signed_in"
+            },
+            {
+              "type": "poppy",
+              "endpoint": "https://example.com/poppy",
+              "access": "members_only"
+            },
+            {
+              "type": "a2a",
+              "endpoint": "https://example.com/poppy",
+              "access": "signed_in"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "valid": true,
+        "account_access": [
+          "session",
+          "session",
+          "signed_in",
+          "session",
+          "session"
+        ]
+      }
+    },
+    {
       "id": "protocol.minor-version-newer",
       "kind": "negative",
       "role": "personal-agent",

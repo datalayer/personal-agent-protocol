@@ -10,7 +10,7 @@ build-backend = "hatchling.build"
 name = "personal-agent-protocol"
 authors = [{ name = "Datalayer", email = "info@datalayer.io" }]
 dynamic = ["version"]
-description = "Python SDK for Personal Agent Protocol draft 0.3 (2026-10-28) and its Operations extension v2"
+description = "Python SDK for Personal Agent Protocol draft 0.3 (2026-10-30) and its Operations extension v2"
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = ["AI", "Agents", "OAuth", "MCP", "Personal Agent Protocol"]

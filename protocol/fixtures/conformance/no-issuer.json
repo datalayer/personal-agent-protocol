@@ -140,7 +140,8 @@
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3.2-26"
+        "PAP-3.2-26",
+        "PAP-3.2-29"
       ],
       "world": "no-issuer",
       "description": "A document that offers sign-in, by auth.issuer, an access signed_in entry or Mediated Sign-In, can't be served by a domain with no issuer.",

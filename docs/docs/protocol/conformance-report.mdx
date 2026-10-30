@@ -6,16 +6,16 @@ title: Compatibility and conformance report
 
 # Compatibility and conformance report
 
-SDK version **0.29.0**, PAP profile **0.3** (draft updated 2026-10-28), Operations extension **v2**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
+SDK version **0.29.0**, PAP profile **0.3** (draft updated 2026-10-30), Operations extension **v2**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
 
 ## Pairings
 
 | Personal agent | Company | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: |
-| Python | Python | 123 | 0 | 0 |
-| Python | TypeScript | 123 | 0 | 0 |
-| TypeScript | Python | 123 | 0 | 0 |
-| TypeScript | TypeScript | 123 | 0 | 0 |
+| Python | Python | 138 | 0 | 0 |
+| Python | TypeScript | 138 | 0 | 0 |
+| TypeScript | Python | 138 | 0 | 0 |
+| TypeScript | TypeScript | 138 | 0 | 0 |
 
 ## Protocol
 
@@ -169,14 +169,21 @@ SDK version **0.29.0**, PAP profile **0.3** (draft updated 2026-10-28), Operatio
 | `dpop.browser-join` | positive | GUIDE-pa-session-03, GUIDE-co-session-06 | pass | pass | pass | pass |
 | `dpop.mcp-token-bound` | positive | GUIDE-pa-session-03, GUIDE-co-session-06 | pass | pass | pass | pass |
 | `dpop.mcp-challenge-keeps-resource-metadata` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.mcp-metadata-lists-es256` | positive | GUIDE-mcp-01 | pass | pass | pass | pass |
+| `dpop.mcp-challenges-bearer-then-dpop` | positive | GUIDE-co-session-06, GUIDE-mcp-01 | pass | pass | pass | pass |
+| `dpop.mcp-bearer-without-a-proof` | positive | GUIDE-mcp-01 | pass | pass | pass | pass |
+| `dpop.mcp-server-decides-the-proof` | positive | GUIDE-mcp-01 | pass | pass | pass | pass |
 
 ## Decided by each SDK alone
 
-60 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
+64 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
 
 | Case | Kind | Check | SDKs |
 | --- | --- | --- | --- |
 | `protocol.major-version-unsupported` | negative | discovery_document | python, typescript |
+| `protocol.auth-scopes-optional` | positive | discovery_document | python, typescript |
+| `protocol.scopes-supported-optional` | positive | discovery | python, typescript |
+| `protocol.access-hint` | positive | discovery_document | python, typescript |
 | `protocol.minor-version-newer` | negative | discovery_document | python, typescript |
 | `protocol.unknown-fields-ignored` | positive | discovery_document | python, typescript |
 | `protocol.older-version-unsupported` | negative | discovery | python, typescript |
@@ -213,7 +220,7 @@ SDK version **0.29.0**, PAP profile **0.3** (draft updated 2026-10-28), Operatio
 | `protocol.redirect-ends-with-a-query` | negative | discovery | python, typescript |
 | `protocol.organization-domain-redirect-www` | positive | discovery | python, typescript |
 | `protocol.organization-domain-case-insensitive` | positive | discovery | python, typescript |
-| `protocol.feedback-needs-auth` | negative | discovery | python, typescript |
+| `protocol.feedback-needs-no-auth` | positive | discovery | python, typescript |
 | `protocol.feedback-endpoint-https` | negative | discovery_document | python, typescript |
 | `protocol.feedback-endpoint-listed` | positive | discovery_document | python, typescript |
 | `security.duplicate-json-members` | negative | strict_json | python, typescript |
@@ -236,5 +243,6 @@ SDK version **0.29.0**, PAP profile **0.3** (draft updated 2026-10-28), Operatio
 | `dpop.proof-only-when-listed` | positive | dpop_token_request | python, typescript |
 | `dpop.dpop-answer-needs-a-proof` | negative | dpop_token_request | python, typescript |
 | `dpop.proof-shape` | positive | dpop_proof_shape | python, typescript |
+| `dpop.mcp-proof-from-the-servers-metadata` | positive | dpop_mcp_token | python, typescript |
 
 The runners' JSON reports (schema 1) carry each case's requirements and messages; see the [conformance guide](/guides/conformance/).

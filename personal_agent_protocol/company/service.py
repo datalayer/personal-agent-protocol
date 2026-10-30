@@ -10,7 +10,7 @@ over plain ASGI). Every part a company would replace is a Reactor
 contribution (`points`): its store, accounts, agent, operation executors,
 client policy and resolver, and replay cache.
 
-What it implements of draft 0.3 (upstream 3e9bada) and Operations v2:
+What it implements of draft 0.3 (upstream ec16efa) and Operations v2:
 
 - Discovery (`/.well-known/poppy.json`), the domain's protected resource
   metadata naming the issuer (`/.well-known/oauth-protected-resource`), and
@@ -431,7 +431,7 @@ class CompanyConfig:
         if set(self.scope_descriptions) != set(self.scopes) or not all(
             self.scope_descriptions.values()
         ):
-            # Every scope in scopes_supported is described (§4.4).
+            # This company describes each scope it offers: a SHOULD it keeps (§4.7).
             raise ValueError("scope_descriptions must describe every scope, and only those")
         for name, (changes, _personal) in self.scope_hints.items():
             if name not in self.scopes or changes not in ("none", "reversible", "irreversible"):
@@ -3777,7 +3777,9 @@ class CompanyService:
         """Step 3 (§6): the browser submits the code with step 1's cookie: the Session's cookie.
 
         A code is used by the first request that submits it, whatever the result. A
-        refusal sets no cookie, not even a cleared one.
+        refusal sets no cookie, not even a cleared one. The cookie replaces the one the
+        browser holds, which stops working, so a join without an access token ends the
+        sign-in of the join before it: this company has no website login beyond this cookie.
         """
 
         refused = self._page(400, "This browser could not join the session.")
@@ -3795,6 +3797,9 @@ class CompanyService:
         joined = issued.authorized
         if not await self._allowed(joined.client_id) or self._now() >= joined.expires_at:
             return refused
+        replaced = _cookie(request, WEB_COOKIE)
+        if replaced is not None:
+            await self.store.delete(BROWSER_COOKIE, _digest(replaced))
         cookie = self._id("web")
         await self.store.put(
             BROWSER_COOKIE, _digest(cookie), joined.to_json(), expires_at=joined.expires_at

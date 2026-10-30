@@ -15,7 +15,7 @@
  * the Python `personal_agent_protocol.company.service` and answers the same
  * requests with the same responses.
  *
- * What it implements of draft 0.3 (upstream 3e9bada) and Operations v2:
+ * What it implements of draft 0.3 (upstream ec16efa) and Operations v2:
  *
  * - Discovery (`/.well-known/poppy.json`), the domain's protected resource
  *   metadata naming the issuer (`/.well-known/oauth-protected-resource`), and
@@ -436,7 +436,7 @@ export class CompanyConfig {
       described.length !== new Set(this.scopes).size ||
       this.scopes.some((scope) => !this.scopeDescriptions[scope])
     ) {
-      // Every scope in scopes_supported is described (§4.4).
+      // This company describes each scope it offers: a SHOULD it keeps (§4.7).
       throw new RangeError("scopeDescriptions must describe every scope, and only those");
     }
     for (const [name, [changes]] of Object.entries(this.scopeHints)) {
@@ -3896,7 +3896,9 @@ export class CompanyService {
    * Step 3 (§6): the browser submits the code with step 1's cookie: the Session's cookie.
    *
    * A code is used by the first request that submits it, whatever the result. A refusal
-   * sets no cookie, not even a cleared one.
+   * sets no cookie, not even a cleared one. The cookie replaces the one the browser holds,
+   * which stops working, so a join without an access token ends the sign-in of the join
+   * before it: this company has no website login beyond this cookie.
    */
   async #browserSession(request: CompanyRequest): Promise<CompanyResponse> {
     const refused = page(400, "This browser could not join the session.");
@@ -3914,6 +3916,8 @@ export class CompanyService {
     }
     const joined = issued.authorized;
     if (!(await this.#allowed(joined.clientId)) || this.#passed(joined.expiresAt)) return refused;
+    const replaced = cookie(request, WEB_COOKIE);
+    if (replaced !== undefined) await this.store.delete(RecordKinds.browserCookie, digest(replaced));
     const webCookie = this.#id("web");
     await this.store.put(
       RecordKinds.browserCookie,

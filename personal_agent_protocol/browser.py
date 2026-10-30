@@ -13,7 +13,11 @@
    Session's cookie. The access token never passes through the browser.
 
 The code is read from the agent's own browser only, by host code the model
-cannot read (§10.2): never from a message or another page.
+cannot read (§10.2): never from a message or another page. Only a browser the
+personal agent controls joins, never the User's own (§6).
+
+A join with a token signs the browser in, in place of any login it had; one without
+leaves the login the browser has, and ends the sign-in of an earlier join (§6).
 """
 
 from __future__ import annotations

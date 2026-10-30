@@ -149,10 +149,11 @@ class BrowserHandoff(Protocol):
 class BrowserJoin(Protocol):
     """The personal agent's own browser, joining a Session through the company's page (§6).
 
-    `load_join_form` opens the endpoint with a GET, as a top-level navigation, and
-    returns the form's one-time `code`, read from that page only; once the agent has
-    authorized the code, `submit_join_form` submits the same form from the same
-    browser, whose cookie ties the code to it.
+    Only a browser the personal agent controls, never the User's own: otherwise the Company
+    would treat the User's own visits as the personal agent's. `load_join_form` opens the
+    endpoint with a GET, as a top-level navigation, and returns the form's one-time `code`,
+    read from that page only; once the agent has authorized the code, `submit_join_form`
+    submits the same form from the same browser, whose cookie ties the code to it.
     """
 
     async def load_join_form(self, endpoint: str) -> SecretStr: ...

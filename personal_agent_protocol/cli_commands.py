@@ -290,11 +290,11 @@ def _render_session(payload: dict) -> None:
 
 
 def _scopes(scope: list[str] | None, company: DiscoveredCompany, kind: str) -> tuple[str, ...]:
-    """The scopes the user named, each one the company offers this sign-in type (§4.4).
+    """The scopes the user named: only what the task needs, none chosen for them (§4.7).
 
-    Direct and Device Sign-In can grant any scope in `scopes_supported`; Mediated only
-    those in the extension's `scopes`. None is chosen for the user: a request asks only
-    for what the task needs (RFC 9700 §2.3).
+    Mediated Sign-In grants only the extension's `scopes`. Direct and Device Sign-In can
+    ask for a scope absent from `scopes_supported`, which may be incomplete: the Company's
+    APIs document scopes too, and it decides what it grants.
     """
 
     metadata = company.oauth_metadata
@@ -304,12 +304,12 @@ def _scopes(scope: list[str] | None, company: DiscoveredCompany, kind: str) -> t
     else:
         offered = tuple(metadata.scopes_supported or ()) if metadata else ()
     if not scope:
-        listed = ", ".join(offered) or "none"
+        listed = ", ".join(offered) or "none listed"
         raise NotConfiguredError(
             "no_scopes", f"Name the scopes the task needs with --scope (offered: {listed})"
         )
     unknown = [item for item in scope if item not in offered]
-    if unknown:
+    if kind == "mediated" and unknown:
         raise NotConfiguredError(
             "invalid_scope", f"Not offered for {kind} sign-in: {', '.join(unknown)}"
         )
@@ -1184,7 +1184,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         requirement: list[str] | None = REQUIREMENT,
         suite: list[str] | None = SUITE,
         world: str | None = typer.Option(
-            None, "--world", help="With --demo: a world of the fixtures, such as dpop-binding."
+            None, "--world", help="With --demo: a world of the fixtures: dpop-binding or no-issuer."
         ),
         output_format: str = typer.Option("text", "--format", help="text, json, or junit."),
         output: Path | None = OUTPUT,

@@ -11,11 +11,11 @@ This page is versioned with the SDK: it describes **SDK 0.29.0**.
 | | Python (`personal_agent_protocol`) | TypeScript (`@datalayer/personal-agent-protocol`) |
 | --- | --- | --- |
 | PAP profile | `PROTOCOL_PROFILE` = `0.3` | `PROTOCOL_PROFILE` = `"0.3"` |
-| Specification revision | `PROTOCOL_REVISION` = `2026-10-28` | `PROTOCOL_REVISION` = `"2026-10-28"` |
+| Specification revision | `PROTOCOL_REVISION` = `2026-10-30` | `PROTOCOL_REVISION` = `"2026-10-30"` |
 | Operations extension | `OPERATIONS_VERSION` = `2` | `OPERATIONS_VERSION` = `"2"` |
 
 Both SDKs implement [PAP draft 0.3](https://personalagentprotocol.org/docs/0.3/spec)
-as its specification page stood on **2026-10-28** (upstream commit `3e9bada`), the **Operations
+as its specification page stood on **2026-10-30** (upstream commit `ec16efa`; the draft states no date of its own, so its revision is that commit's), the **Operations
 extension version 2** and the **Mediated Sign-In extension version 1**. A test holds the two SDKs, this page, the package
 descriptions, `protocol/UPSTREAM.md`, and the requirement ledger
 (`protocol/requirements.yaml`) to the same three values. Upstream is a draft:
@@ -26,7 +26,7 @@ from an unattended fetch.
 
 | SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
 | --- | --- | --- | --- | --- |
-| `0.29.0` | `0.3` | 2026-10-28 | v2 | [0.28 → 0.29](/releases/migration/#028--029): DPoP in both SDKs and reference companies; token requests and Mediated Sign-In name their tenant |
+| `0.29.0` | `0.3` | 2026-10-30 | v2 | [0.28 → 0.29](/releases/migration/#028--029): DPoP in both SDKs and reference companies; token requests and Mediated Sign-In name their tenant; draft 0.3 as of `ec16efa`: Companies with no issuer, Bearer as MCP's baseline |
 | `0.28.0` | `0.3` | 2026-10-28 | v2 | [0.27 → 0.28](/releases/migration/#027--028): draft 0.3 as rewritten at `3e9bada` |
 | `0.27.0` | `0.3` | 2026-10-26 | v1 | [0.26 → 0.27](/releases/migration/#026--027): PAP draft 0.3 |
 | `0.26.0` | `0.2` | 2026-10-18 | v1 | none |

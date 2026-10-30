@@ -27,6 +27,7 @@ import {
   SessionSigners,
   Signers,
   TokenStores,
+  accountAccess,
   buildPapReactor,
   companyIdentifier,
   conversationEndpoint,
@@ -102,6 +103,7 @@ const CHECKS = {
     for (const [key, value] of Object.entries(expect.extra ?? {})) assert.deepEqual(document[key], value);
     if ("known_api_types" in expect) assert.deepEqual(knownApis(document).map((api) => api.type), expect.known_api_types);
     if ("conversation_endpoint" in expect) assert.equal(conversationEndpoint(document), expect.conversation_endpoint);
+    if ("account_access" in expect) assert.deepEqual(document.agent.protocols.map(accountAccess), expect.account_access);
   },
 
   extension_negotiation(given, expect) {

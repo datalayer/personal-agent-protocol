@@ -85,7 +85,8 @@ export interface BrowserHandoff {
 /**
  * The personal agent's own browser, joining a Session through the company's form (§6).
  *
- * `loadJoinForm` opens the endpoint with a GET, as a top-level navigation, and returns the
+ * Only a browser the personal agent controls, never the User's own: otherwise the Company would
+ * treat the User's own visits as the personal agent's. `loadJoinForm` opens the endpoint with a GET, as a top-level navigation, and returns the
  * form's one-time `code`, read from that page only; once the agent has authorized the code,
  * `submitJoinForm` submits the form, the code alone, from the same browser, whose cookie
  * ties the code to it.

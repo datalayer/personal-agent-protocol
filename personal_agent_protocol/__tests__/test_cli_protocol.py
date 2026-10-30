@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import pytest
 import typer
 from cryptography.hazmat.primitives import serialization
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
@@ -20,7 +21,7 @@ from typer.testing import CliRunner
 from personal_agent_protocol import cli_commands
 from personal_agent_protocol.cli import create_app
 from personal_agent_protocol.cli_commands import EXIT_CODES, ExitCode
-from personal_agent_protocol.cli_host import local_host
+from personal_agent_protocol.cli_host import NotConfiguredError, local_host
 from personal_agent_protocol.cli_plugin import MANIFEST, PapCliPlugin
 from personal_agent_protocol.company import CompanyConfig
 from personal_agent_protocol.company.store import AUTHORIZATION, DEVICE, PendingDevice
@@ -33,6 +34,8 @@ from personal_agent_protocol.demo.kit import (
     ScriptedBrowser,
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, CONFIG, manzanita
+from personal_agent_protocol.mediated import MEDIATED_GRANT
+from personal_agent_protocol.models import DiscoveredCompany, DiscoveryDocument, OAuthServerMetadata
 from personal_agent_protocol.reactor import BROWSER_HANDOFFS
 
 
@@ -345,6 +348,43 @@ def test_disconnect_revokes_every_refresh_token_held_for_that_user(tmp_path: Pat
     # Another user of this agent keeps theirs.
     assert pap("sessions", "renew", other_user, "--json")["session"]["signed_in"] is True
     assert pap("api", "openapi", other_user, "GET", "/api/orders", "--json")["body"]["orders"]
+
+
+def test_direct_and_device_may_ask_for_a_scope_absent_from_scopes_supported() -> None:
+    """The list may be incomplete: the Company's APIs document scopes too (§4.7)."""
+
+    document = DiscoveryDocument.model_validate(
+        {
+            "protocol_version": "0.3",
+            "organization": {"name": "Example", "domain": "example.com"},
+            "web": {},
+            "extensions": {
+                "mediated-sign-in": {
+                    "version": "1",
+                    "fields": [{"name": "email", "label": "Email", "secret": False}],
+                    "scopes": ["orders:read"],
+                }
+            },
+        }
+    )
+    metadata = OAuthServerMetadata.model_validate(
+        {
+            "issuer": "https://auth.example.com",
+            "token_endpoint": "https://auth.example.com/token",
+            "revocation_endpoint": "https://auth.example.com/revoke",
+            "grant_types_supported": ["refresh_token", MEDIATED_GRANT],
+            "protected_resources": ["https://example.com"],
+        }
+    )
+    company = DiscoveredCompany(
+        discovery_url="https://example.com/.well-known/poppy.json",
+        document=document,
+        oauth_metadata=metadata,
+    )
+    assert cli_commands._scopes(["api:documented"], company, "direct") == ("api:documented",)
+    assert cli_commands._scopes(["api:documented"], company, "device") == ("api:documented",)
+    with pytest.raises(NotConfiguredError, match="Not offered"):
+        cli_commands._scopes(["api:documented"], company, "mediated")
 
 
 def test_a_company_with_no_issuer_gives_sessions_and_refuses_sign_in(tmp_path: Path) -> None:

@@ -142,6 +142,10 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             assert [api.type for api in known_apis(document)] == expect["known_api_types"]
         if "conversation_endpoint" in expect:
             assert conversation_endpoint(document) == expect["conversation_endpoint"]
+        if "account_access" in expect:
+            assert document.agent is not None
+            protocols = document.agent.protocols
+            assert [item.account_access for item in protocols] == expect["account_access"]
         if "feedback_endpoint" in expect:
             assert feedback_endpoint(document) == expect["feedback_endpoint"]
     elif case.check == "extension_negotiation":

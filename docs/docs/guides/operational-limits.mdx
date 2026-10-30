@@ -109,7 +109,7 @@ the rotation against each reference company.
 
 ## Retries: `Retry-After`, backoff, and jitter
 
-`DpopHttpClient.request` / `DpopFetchClient.request` handle a `429` or `503`:
+`DpopHttpClient.request` / `SessionFetchClient.request` handle a `429` or `503`:
 
 1. A `Retry-After` (seconds or an HTTP date) is always honoured: a request is
    never retried sooner. One longer than `max_retry_after` (10 s by default)

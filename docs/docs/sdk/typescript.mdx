@@ -49,9 +49,9 @@ const company = await discoverCompany("example.com", {
 ```
 
 The published portable ESM entry bundles Reactor's framework-neutral core so it
-can run directly in Node and in browser bundlers. `JoseSigner` is exported by
-both entries; the company's checks of Session JWTs and assertions, replay-cache
-contracts, and Node network policy only by the explicit `./server` entry. Platform signing keys must
+can run directly in Node and in browser bundlers. `JoseSigner`, the company's
+checks of Session JWTs and assertions, replay-cache contracts, and Node network
+policy are exported only by the explicit `./server` entry. Platform signing keys must
 remain on a server or KMS; they must never be shipped in a browser or desktop
 bundle.
 
@@ -155,9 +155,9 @@ token responses. A `DPoP` token type is `unsupported_token_type`: this SDK does
 not send DPoP proofs yet. See [Signed-out sessions](/guides/sessions/) for usage
 and the exact security boundary.
 
-`JoseSigner` signs client assertions and delegations with ES256 or PS384; the
-company's `verifySessionJwt`, `verifyDelegation`, and `verifyAssertion` come from
-`@datalayer/personal-agent-protocol/server`. They use the maintained `jose`
+`JoseSigner` signs client assertions and delegations with ES256 or PS384. It and
+the company's `verifySessionJwt`, `verifyDelegation`, and `verifyAssertion` come
+from `@datalayer/personal-agent-protocol/server`. They use the maintained `jose`
 package and Web Crypto. `BlindJoseSigner` writes the same JWTs on the user's
 device and has the key sign them blindly (RFC 9474), over a `BlindSigningKey`
 such as `RsaBlindSigningKey`, so the key holder never sees them; the result is

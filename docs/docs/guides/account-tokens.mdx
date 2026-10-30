@@ -58,9 +58,9 @@ signed in by carrying that token. A `DPoP` token type is
 A company may rotate the Account Token on every refresh, and a rotated token
 invalidates the one it replaces. Two refreshes racing on the same reference
 would leave one holding a revoked credential. Every use of a reference is
-therefore held under the Reactor `pap.accountTokenLock` contribution
-(`AccountTokenLocks` in TypeScript), and the new token replaces the old in the
-store before the lock is released. The default `InProcessAccountTokenLock` is
+therefore held under the Reactor `pap.refreshTokenLock` contribution
+(`RefreshTokenLocks` in TypeScript), and the new token replaces the old in the
+store before the lock is released. The default `InProcessRefreshTokenLock` is
 for one process; a host with several workers contributes a distributed lock.
 
 ## Narrower, never wider

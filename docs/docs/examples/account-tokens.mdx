@@ -79,9 +79,9 @@ whether a rotation happened, and scope names. The Account Token, Session
 Tokens, Session Keys, client assertions, and DPoP proofs stay host-only, behind opaque
 references in Reactor stores.
 
-TypeScript has the same client: `new AccountTokenClient({ reactor, fetch })`,
-with `refresh(reference, { context, sessionKey, scopes })` and `revoke()`, and
-the lock contributed at `AccountTokenLocks`.
+TypeScript has the same client: `new RefreshTokenClient({ reactor, fetch })`,
+with `refresh(reference, { context, scopes })` and `revoke()`, and the lock
+contributed at `RefreshTokenLocks`.
 
 - Run the [Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/account-tokens).
 - Run the [Agent Runtimes example](https://github.com/datalayer/agent-runtimes/tree/main/examples/personal-agent-protocol/account-tokens).

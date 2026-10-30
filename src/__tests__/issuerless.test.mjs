@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { AuthorizationError, DiscoveryError, ProtocolValidationError, companyIdentifier, discoverCompany, requireOauth } from "../../lib/index.js";
+import { manzanita } from "../../lib/demo/manzanita.js";
 import { CompanyConfig } from "../../lib/server.js";
 
 const RESOURCE_METADATA = "/.well-known/oauth-protected-resource";
@@ -156,4 +157,28 @@ for (const [name, offers] of [
 test("the company's identifier is its lowercase domain", () => {
   assert.equal(config().identifier, "https://shop.example");
   assert.equal(config({ oauth: true, operations: true, writeScopes: ["orders:read"] }).identifier, "https://Shop.Example");
+});
+
+test("the MCP server of a company with no issuer names no metadata", async () => {
+  // Signed out it needs the Session header, and no challenge points at OAuth (§3.2, §7).
+  const fetch = async () => new Response(null, { status: 404 });
+  const { service } = manzanita({
+    fetch,
+    clock: { now: () => new Date() },
+    config: { oauth: false, mediatedFields: [], operations: false },
+  });
+  const url = `${service.config.base}/mcp`;
+  const answer = await service.handle({
+    method: "POST",
+    url,
+    headers: { authorization: "Bearer invented" },
+    body: new TextEncoder().encode('{"jsonrpc":"2.0","id":1,"method":"ping"}'),
+  });
+  assert.deepEqual([answer.status, answer.body], [400, { error: "invalid_session" }]);
+  const metadata = await service.handle({
+    method: "GET",
+    url: `${service.config.base}/.well-known/oauth-protected-resource/mcp`,
+    headers: {},
+  });
+  assert.equal(metadata.status, 404);
 });

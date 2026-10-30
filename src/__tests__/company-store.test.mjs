@@ -11,18 +11,14 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
-  AccountTokenClient,
   ConversationClient,
   DeviceSignInClient,
-  DpopFetchClient,
-  OperationsClient,
+  RefreshTokenClient,
   SessionClient,
+  SessionFetchClient,
   TokenStores,
-  approve,
   discoverCompany,
   firstContribution,
-  operationsEndpoint,
-  parseClientMetadata,
 } from "../../lib/index.js";
 import { MemoryCompanyStore, StoreConformanceError, checkStore } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
@@ -97,19 +93,18 @@ test("a company restarted over its store continues every flow", async () => {
   };
   restart();
   const host = await agentHost({ identity, fetch, clock });
-  const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
+  const transport = new SessionFetchClient({ reactor: host.reactor, fetch });
   const conversations = new ConversationClient({ reactor: host.reactor, transport });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, issuer: metadata.issuer };
   const endpoint = company.document.agent.protocols[0].endpoint;
   const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
   const session = await new SessionClient({ reactor: host.reactor, fetch }).start({
-    clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tokenEndpoint: metadata.token_endpoint, tenantId: TENANT,
+    clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT,
   });
 
   // Before: a conversation with events, and a Device Sign-In the user has not approved.
-  let page = await conversations.start(endpoint, message("Where is my jacket order?"), { ...who, token: session, wait: 0 });
+  let page = await conversations.start(endpoint, message("Where is my jacket order?"), { session, wait: 0 });
   const device = new DeviceSignInClient({ reactor: host.reactor, fetch });
   const started = await device.begin({
     deviceAuthorizationEndpoint: metadata.device_authorization_endpoint,
@@ -118,7 +113,6 @@ test("a company restarted over its store continues every flow", async () => {
     clientId: identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    sessionKey: session.sessionKey,
     organization: { name: "Manzanita", domain: new URL(metadata.protected_resources[0]).hostname },
     protectedResources: metadata.protected_resources,
   });
@@ -132,22 +126,20 @@ test("a company restarted over its store continues every flow", async () => {
   clock.advance(started.pollInterval);
   const done = await device.poll(started.reference);
   assert.equal(done.status, "complete");
-  assert.equal(done.token.sessionKey, session.sessionKey);
-  const reference = done.accountTokenReference;
+  const reference = done.refreshTokenReference;
 
-  // The Account Token rotates before the next restart.
-  const accounts = new AccountTokenClient({ reactor: host.reactor, fetch });
+  // The refresh token rotates before the next restart.
+  const accounts = new RefreshTokenClient({ reactor: host.reactor, fetch });
   const context = {
     tokenEndpoint: metadata.token_endpoint,
     revocationEndpoint: metadata.revocation_endpoint,
     issuer: metadata.issuer,
     clientId: identity.clientId,
     tenantId: TENANT,
-    pairwiseUserId: PAIRWISE,
   };
   const tokens = firstContribution(host.reactor, TokenStores, "token store");
   const before = await tokens.get(reference);
-  const refreshed = await accounts.refresh(reference, { context, sessionKey: session.sessionKey });
+  const refreshed = await accounts.refresh(reference, { context });
   assert.equal(refreshed.status, "signed_in");
   assert.equal(refreshed.rotated, true);
   const rotated = await tokens.get(reference);
@@ -155,35 +147,37 @@ test("a company restarted over its store continues every flow", async () => {
 
   // The conversation continues from its cursor; the company proposes an operation.
   page = await conversations.send(endpoint, page.conversation_id, message("Exchange it for something warmer"), {
-    ...who, token: refreshed.token, cursor: page.cursor, wait: 0,
+    session, token: refreshed.token, cursor: page.cursor, wait: 0,
   });
   const proposal = page.events.filter((e) => e.type !== "state").at(-1).message.operation;
-  assert.equal(proposal.state, "proposed");
+  assert.ok(proposal);
   const cursor = page.cursor;
 
   restart();
 
   // The rotated-away token stays refused after the restart; the new one works.
-  const old = await store.get("account_token", sha256(before.reveal()));
+  const old = await store.get("refresh_token", sha256(before.reveal()));
   assert.equal(old.value.revoked, true);
   await tokens.put(reference, before);
-  assert.equal((await accounts.refresh(reference, { context, sessionKey: session.sessionKey })).status, "signed_out");
+  assert.equal((await accounts.refresh(reference, { context })).status, "signed_out");
   await tokens.put(reference, rotated);
-  const again = await accounts.refresh(reference, { context, sessionKey: session.sessionKey });
+  const again = await accounts.refresh(reference, { context });
   assert.equal(again.status, "signed_in");
 
-  // The operation proposed before the restart is confirmed once after it.
-  const operations = new OperationsClient({ reactor: host.reactor, transport });
-  const target = operationsEndpoint(company.document, parseClientMetadata(identity.metadata));
-  const outcome = await operations.confirm(target, proposal, { ...who, token: again.token, approval: await approve(proposal) });
-  assert.equal(outcome.status, "confirmed");
-  assert.equal(outcome.operation.state, "succeeded");
-  const retried = await operations.confirm(target, proposal, { ...who, token: again.token, approval: await approve(proposal) });
-  assert.equal(retried.operation.state, "succeeded");
+  // The operation returned before the restart is performed once after it.
+  const approval = { operation_id: proposal.operation_id, revision: proposal.revision };
+  for (let time = 0; time < 2; time += 1) {
+    await conversations.send(
+      endpoint,
+      page.conversation_id,
+      { id: conversations.generateMessageId(), author: { type: "agent" }, approval },
+      { session, token: again.token, wait: 0 },
+    );
+  }
   assert.deepEqual(plugin.executor.performed, [proposal.operation_id]);
 
   // The event cursor taken before the restart resumes after it: nothing is lost or repeated.
-  const resumed = await conversations.readEvents(endpoint, page.conversation_id, { ...who, token: again.token, cursor });
+  const resumed = await conversations.readEvents(endpoint, page.conversation_id, { session, token: again.token, cursor });
   assert.ok(resumed.events.every((event) => event.id !== cursor));
   assert.equal(resumed.cursor, resumed.events.at(-1)?.id ?? cursor);
 });

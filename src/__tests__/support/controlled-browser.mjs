@@ -4,11 +4,11 @@
  * BSD 3-Clause License
  */
 
-// The personal agent's own browser (`pap.browserJoin`), never the user's (§5): the port
+// The personal agent's own browser (`pap.browserJoin`), never the user's (§6): the port
 // of Python's personal_agent_protocol.demo.kit.ControlledBrowser. It has its own cookie
 // jar: it loads the join form, reads the one-time code from that page alone, submits the
-// code with the agent's proof, follows the company's redirects, and remembers the page it
-// landed on. Nothing here is part of the SDK: a host owns it.
+// form once the agent authorized the code, follows the company's redirects, and remembers
+// the page it landed on. Nothing here is part of the SDK: a host owns it.
 
 import { BrowserSessionError, SecretValue } from "../../../lib/index.js";
 
@@ -39,15 +39,15 @@ export class ControlledBrowser {
     return new SecretValue(fields.code);
   }
 
-  /** `pap.browserJoin`: submit the code and the proof, and follow where the company sends it. */
-  async submitJoinForm(proof) {
+  /** `pap.browserJoin`: submit the code, and follow where the company sends it. */
+  async submitJoinForm() {
     if (this.join === undefined) throw new BrowserSessionError("invalid_join_form", "No join form was loaded");
     const { endpoint, code } = this.join;
     this.join = undefined;
     this.page = await this.#follow(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ code, proof: proof.reveal() }).toString(),
+      body: new URLSearchParams({ code }).toString(),
     });
   }
 

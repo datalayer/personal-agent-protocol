@@ -15,7 +15,7 @@ import { systemClock, tlsFetch } from "./world.mjs";
 /**
  * Serve Manzanita at `manzanita.example`, and each agent's documents at its domain.
  * The company fetches agents' metadata and keys over the same TLS server. `config`
- * changes Manzanita's configuration (e.g. `{ mcpDpop: false }`).
+ * changes Manzanita's configuration (e.g. `{ web: false }`).
  */
 export async function serveCompany({ cert, key, ca, agents = {}, clock = systemClock, config }) {
   const domains = ["manzanita.example", ...Object.keys(agents)];

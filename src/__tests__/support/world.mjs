@@ -16,15 +16,16 @@ import { Readable } from "node:stream";
 import { exportJWK, generateKeyPair, importJWK } from "jose";
 
 import {
+  ApprovalSurfaces,
   AuthorizationStateStores,
   BrowserHandoffs,
   BrowserJoins,
   Clocks,
-  DpopProofProviders,
-  InMemorySessionKeys,
-  JoseDpopProofProvider,
+  DelegatedSessionSigner,
+  InMemoryDelegatedKeys,
   ProtectedInputs,
   SecretValue,
+  SessionSigners,
   Signers,
   TokenStores,
   buildPapReactor,
@@ -44,16 +45,20 @@ export class MutableClock {
   }
 }
 
-/** A personal agent's identity: its `client_id`, ES256 key, and published documents. */
-export async function agentIdentity({ domain, name, extensions = ["operations"], privateJwk, kid = "key-1" } = {}) {
+/** The version of each extension an agent lists. */
+const EXTENSION_VERSIONS = { operations: "2", "mediated-sign-in": "1" };
+
+/** A personal agent's identity: its `client_id`, ES256 or PS384 key, and published documents. */
+export async function agentIdentity({ domain, name, extensions = ["operations"], privateJwk, kid = "key-1", algorithm = "ES256" } = {}) {
   let privateKey;
   let publicJwk;
   if (privateJwk) {
-    privateKey = await importJWK(privateJwk, "ES256");
+    privateKey = await importJWK(privateJwk, algorithm);
     const { d: _d, ...rest } = privateJwk;
     publicJwk = rest;
   } else {
-    const pair = await generateKeyPair("ES256", { extractable: true });
+    const options = algorithm === "PS384" ? { extractable: true, modulusLength: 3072 } : { extractable: true };
+    const pair = await generateKeyPair(algorithm, options);
     privateKey = pair.privateKey;
     publicJwk = await exportJWK(pair.publicKey);
   }
@@ -64,11 +69,13 @@ export async function agentIdentity({ domain, name, extensions = ["operations"],
     jwks_uri: `https://${domain}/jwks.json`,
     redirect_uris: [`https://${domain}/oauth/callback`],
     token_endpoint_auth_method: "private_key_jwt",
-    extensions: Object.fromEntries(extensions.map((extension) => [extension, { version: "1" }])),
+    extensions: Object.fromEntries(extensions.map((extension) => [extension, { version: EXTENSION_VERSIONS[extension] ?? "1" }])),
   };
-  const jwks = {
-    keys: [{ kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y, kid, use: "sig", alg: "ES256" }],
-  };
+  const members =
+    publicJwk.kty === "RSA"
+      ? { kty: publicJwk.kty, n: publicJwk.n, e: publicJwk.e }
+      : { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y };
+  const jwks = { keys: [{ ...members, kid, use: "sig", alg: algorithm }] };
   return {
     domain,
     name,
@@ -76,7 +83,8 @@ export async function agentIdentity({ domain, name, extensions = ["operations"],
     metadata,
     jwks,
     documents: { "/agent.json": metadata, "/jwks.json": jwks },
-    signer: new JoseSigner({ privateKey, algorithm: "ES256", keyId: kid }),
+    privateKey,
+    signer: new JoseSigner({ privateKey, algorithm, keyId: kid }),
   };
 }
 
@@ -240,16 +248,29 @@ export class ScriptedInput {
   }
 }
 
+/** The host's approval surface: asks the user, here answered by `answer`, and remembers. */
+export class ScriptedApprovals {
+  constructor(answer = () => true) {
+    this.answer = answer;
+    this.asked = [];
+  }
+  async approve(request) {
+    this.asked.push(request);
+    return this.answer(request);
+  }
+}
+
 /**
- * A personal agent's Reactor host: its signer, Session Keys, clock, stores, browser,
- * input, and, when given, its own controlled browser (`pap.browserJoin`).
+ * A personal agent's Reactor host: its signer, delegated keys, clock, stores, browser,
+ * input, approval surface, and, when given, its own controlled browser (`pap.browserJoin`).
  */
-export async function agentHost({ identity, fetch, clock, answers = [], controlledBrowser }) {
+export async function agentHost({ identity, fetch, clock, answers = [], controlledBrowser, approve }) {
   const state = new Map();
   const tokens = new Map();
-  const sessionKeys = new InMemorySessionKeys();
+  const delegatedKeys = new InMemoryDelegatedKeys();
   const browser = new ScriptedBrowser(fetch);
   const input = new ScriptedInput(...answers);
+  const approvals = new ScriptedApprovals(approve);
   const now = () => clock.now();
   const reactor = buildPapReactor({ fetch }, [
     {
@@ -258,9 +279,9 @@ export async function agentHost({ identity, fetch, clock, answers = [], controll
         { point: Clocks, value: clock, options: { id: "clock" } },
         { point: Signers, value: identity.signer, options: { id: "agent-key" } },
         {
-          point: DpopProofProviders,
-          value: new JoseDpopProofProvider({ now, keys: sessionKeys }),
-          options: { id: "dpop-keys" },
+          point: SessionSigners,
+          value: new DelegatedSessionSigner({ custody: delegatedKeys, signer: identity.signer, now }),
+          options: { id: "delegated-keys" },
         },
         {
           point: TokenStores,
@@ -281,13 +302,14 @@ export async function agentHost({ identity, fetch, clock, answers = [], controll
         },
         { point: BrowserHandoffs, value: browser, options: { id: "browser" } },
         { point: ProtectedInputs, value: input, options: { id: "trusted-input" } },
+        { point: ApprovalSurfaces, value: approvals, options: { id: "approvals" } },
         ...(controlledBrowser === undefined
           ? []
           : [{ point: BrowserJoins, value: controlledBrowser, options: { id: "controlled-browser" } }]),
       ],
     },
   ]);
-  return { reactor, browser, input, tokens, sessionKeys, state };
+  return { reactor, browser, input, tokens, delegatedKeys, state, approvals };
 }
 
 /** The system clock, for parties in different processes. */

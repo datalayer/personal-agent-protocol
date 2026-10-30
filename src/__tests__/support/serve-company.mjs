@@ -66,7 +66,8 @@ while (true) {
       now += command.seconds * 1000;
       lines.send({ ok: new Date(now).toISOString() });
     } else if (command.op === "revise") {
-      const current = (await company.service.operationRecord(command.operation_id)).operation;
+      const record = await company.service.operationRecord(command.operation_id);
+      const current = record.revisions.at(-1);
       await company.service.revise(command.operation_id, {
         summary: `${current.summary} Ships in 5 days instead of 2.`,
         terms: { ...(current.terms ?? {}), ships_in_days: 5 },

@@ -16,10 +16,8 @@ import {
   ApiClient,
   ApiError,
   DeviceSignInClient,
-  DpopFetchClient,
-  OperationsClient,
   SessionClient,
-  approve,
+  SessionFetchClient,
   discoverCompany,
   newIdempotencyKey,
 } from "../../lib/index.js";
@@ -44,11 +42,10 @@ async function world(config) {
   const { service: shop, plugin } = manzanita({ fetch, clock, ...(config ? { config } : {}) });
   sites["manzanita.example"] = shop;
   const host = await agentHost({ identity, fetch, clock });
-  const transport = new DpopFetchClient({ reactor: host.reactor, fetch });
+  const transport = new SessionFetchClient({ reactor: host.reactor, fetch });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  const who = { tenantId: TENANT, issuer: metadata.issuer };
-  return { clock, fetch, identity, shop, plugin, host, transport, metadata, who };
+  return { clock, fetch, identity, shop, plugin, host, transport, metadata };
 }
 
 async function session(w) {
@@ -56,12 +53,11 @@ async function session(w) {
     clientId: w.identity.clientId,
     pairwiseUserId: PAIRWISE,
     issuer: w.metadata.issuer,
-    tokenEndpoint: w.metadata.token_endpoint,
     tenantId: TENANT,
   });
 }
 
-async function signIn(w, signedOut) {
+async function signIn(w) {
   const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
   const started = await device.begin({
     deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
@@ -70,7 +66,6 @@ async function signIn(w, signedOut) {
     clientId: w.identity.clientId,
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
-    sessionKey: signedOut.sessionKey,
     organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
     protectedResources: w.metadata.protected_resources,
   });
@@ -95,14 +90,14 @@ async function refusal(promise) {
 async function scripted(answer) {
   const w = await world();
   const sent = [];
-  const transport = new DpopFetchClient({
+  const transport = new SessionFetchClient({
     reactor: w.host.reactor,
     fetch: async (input, init) => {
       sent.push(new Request(input, init));
       return answer();
     },
   });
-  return { api: new ApiClient({ transport }), sent, w, token: await session(w) };
+  return { api: new ApiClient({ transport }), sent, w, session: await session(w) };
 }
 
 test("every write carries a random UUID v4, and a read none", async () => {
@@ -114,24 +109,24 @@ test("every write carries a random UUID v4, and a read none", async () => {
   const s = await scripted(() => Response.json({ ok: true }));
   const keys = [];
   for (const method of FIXTURE.write_methods) {
-    const answer = await s.api.call(method.toLowerCase(), URL_, { ...s.w.who, token: s.token, body: {} });
+    const answer = await s.api.call(method.toLowerCase(), URL_, { session: s.session, body: {} });
     keys.push(s.sent.at(-1).headers.get("Idempotency-Key"));
     assert.match(keys.at(-1), UUID_V4);
     assert.equal(answer.idempotencyKey, keys.at(-1));
   }
   assert.equal(new Set(keys).size, keys.length);
-  const read = await s.api.call("GET", URL_, { ...s.w.who, token: s.token });
+  const read = await s.api.call("GET", URL_, { session: s.session });
   assert.equal(s.sent.at(-1).headers.get("Idempotency-Key"), null);
   assert.equal(read.idempotencyKey, undefined);
 });
 
 test("a retry sends the caller's key, and a refusal carries it", async () => {
   const s = await scripted(() => Response.json({ error: "temporarily_unavailable" }, { status: 503 }));
-  const first = await refusal(s.api.call("POST", URL_, { ...s.w.who, token: s.token, body: { size: "M" } }));
+  const first = await refusal(s.api.call("POST", URL_, { session: s.session, body: { size: "M" } }));
   assert.match(first.idempotencyKey, UUID_V4);
   assert.equal(s.sent.at(-1).headers.get("Idempotency-Key"), first.idempotencyKey);
   const again = await refusal(
-    s.api.call("POST", URL_, { ...s.w.who, token: s.token, body: { size: "M" }, idempotencyKey: first.idempotencyKey }),
+    s.api.call("POST", URL_, { session: s.session, body: { size: "M" }, idempotencyKey: first.idempotencyKey }),
   );
   assert.equal(again.idempotencyKey, first.idempotencyKey);
   assert.equal(s.sent.at(-1).headers.get("Idempotency-Key"), first.idempotencyKey);
@@ -142,12 +137,12 @@ test("a bad key, or a key on a read, is the caller's mistake", async () => {
   const s = await scripted(() => Response.json({}));
   for (const bad of FIXTURE.invalid_keys) {
     await assert.rejects(
-      s.api.call("POST", URL_, { ...s.w.who, token: s.token, body: {}, idempotencyKey: bad }),
+      s.api.call("POST", URL_, { session: s.session, body: {}, idempotencyKey: bad }),
       RangeError,
     );
   }
   await assert.rejects(
-    s.api.call("GET", URL_, { ...s.w.who, token: s.token, idempotencyKey: newIdempotencyKey() }),
+    s.api.call("GET", URL_, { session: s.session, idempotencyKey: newIdempotencyKey() }),
     RangeError,
   );
   assert.equal(s.sent.length, 0);
@@ -155,27 +150,24 @@ test("a bad key, or a key on a read, is the caller's mistake", async () => {
 
 test("the reference company keeps each key per Session for its lifetime", async () => {
   const w = await world({ idempotencyLifetimeSeconds: FIXTURE.lifetime_seconds });
+  const sessions = {};
   const tokens = {};
-  for (const name of ["first", "second"]) tokens[name] = await signIn(w, await session(w));
-  assert.notEqual(tokens.first.sessionKey, tokens.second.sessionKey);
+  for (const name of ["first", "second"]) {
+    sessions[name] = await session(w);
+    tokens[name] = await signIn(w);
+  }
+  assert.notEqual(sessions.first.sid, sessions.second.sid);
   const api = new ApiClient({ transport: w.transport });
   const answers = {};
   for (const step of FIXTURE.steps) {
-    if (step.confirm !== undefined) {
-      const operation = answers[step.confirm].operation;
-      await new OperationsClient({ reactor: w.host.reactor, transport: w.transport }).confirm(
-        w.shop.config.operationsEndpoint,
-        operation,
-        { ...w.who, token: tokens.first, approval: await approve(operation) },
-      );
-      continue;
-    }
     w.clock.advance(step.advance_seconds ?? 0);
+    const operation = step.approve === undefined ? undefined : answers[step.approve].operation;
     const call = api.call("POST", `https://manzanita.example${step.path}`, {
-      ...w.who,
+      session: sessions[step.session ?? "first"],
       token: tokens[step.session ?? "first"],
       body: step.body,
       idempotencyKey: step.key,
+      ...(operation === undefined ? {} : { approval: { operation_id: operation.operation_id, revision: operation.revision } }),
     });
     const expect = step.expect;
     if (expect.error !== undefined) {
@@ -188,29 +180,30 @@ test("the reference company keeps each key per Session for its lifetime", async 
     assert.equal(answer.status, expect.status, step.name);
     assert.equal(answer.idempotencyKey, step.key);
     if (expect.answer === "first") {
-      assert.deepEqual(answer.operation, answers.first.operation, step.name);
-      assert.equal(answer.operation.state, "proposed");
+      assert.deepEqual(answer.body, answers.first.body, step.name);
+    } else if (expect.answer === "performed") {
+      assert.equal(answer.operation, undefined, step.name);
+      assert.ok(answer.body.summary, step.name);
     } else {
       assert.ok(answer.operation, step.name);
       assert.ok(
-        answers.first === undefined || answer.operation.operation_id !== answers.first.operation.operation_id,
+        answers.asked === undefined || answer.operation.operation_id !== answers.asked.operation.operation_id,
         step.name,
       );
     }
     answers[step.name] = answer;
   }
   // The first exchange was performed once, whatever the retries.
-  assert.deepEqual(w.plugin.executor.performed, [answers.first.operation.operation_id]);
+  assert.deepEqual(w.plugin.executor.performed, [answers.asked.operation.operation_id]);
 });
 
 test("a bad key is invalid_request, and a refusal is not remembered", async () => {
   const w = await world();
-  const signedOut = await session(w);
+  const current = await session(w);
   const exchanges = `${URL_}/ord_7Hk2/exchanges`;
   for (const bad of FIXTURE.invalid_keys.filter((key) => /^[\x00-\x7f]*$/u.test(key))) {
     const response = await w.transport.request("POST", exchanges, {
-      ...w.who,
-      token: signedOut,
+      session: current,
       headers: { "Idempotency-Key": bad, "Content-Type": "application/json" },
       body: "{}",
     });
@@ -219,13 +212,11 @@ test("a bad key is invalid_request, and a refusal is not remembered", async () =
   }
   const api = new ApiClient({ transport: w.transport });
   const key = newIdempotencyKey();
-  const refused = await refusal(
-    api.call("POST", exchanges, { ...w.who, token: signedOut, body: {}, idempotencyKey: key }),
-  );
+  const refused = await refusal(api.call("POST", exchanges, { session: current, body: {}, idempotencyKey: key }));
   assert.equal(refused.code, "insufficient_scope");
   // Signed in, the same key is a new request: the refusal was not kept.
-  const token = await signIn(w, signedOut);
-  const answer = await api.call("POST", exchanges, { ...w.who, token, body: {}, idempotencyKey: key });
-  assert.equal(answer.status, 202);
+  const token = await signIn(w);
+  const answer = await api.call("POST", exchanges, { session: current, token, body: {}, idempotencyKey: key });
+  assert.equal(answer.status, 403);
   assert.ok(answer.operation);
 });

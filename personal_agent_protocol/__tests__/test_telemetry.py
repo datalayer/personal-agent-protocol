@@ -33,12 +33,14 @@ from personal_agent_protocol import (
     TelemetryEvent,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
+from personal_agent_protocol.demo.kit import AgentIdentity
 from personal_agent_protocol.reactor import PapCorePlugin
 from personal_agent_protocol.telemetry import safe_attributes
 
 from . import test_company_end_to_end as journeys
 from .test_company_end_to_end import PAIRWISE, TENANT, World
 from .test_company_refusals import signed_in
+from .test_guide_security import session_accepted
 
 FORBIDDEN = (
     "token",
@@ -233,6 +235,37 @@ async def test_a_company_reports_what_it_did_and_refused(
     for event in recorded.events:
         assert set(event.attributes) <= set(TELEMETRY_ATTRIBUTES)
         assert "secret" not in str(event.as_dict())
+
+
+@pytest.mark.asyncio
+async def test_a_forged_session_jwt_is_no_identity_check(
+    recorded: RecordingTelemetrySink,
+) -> None:
+    """Another key under the agent's `client_id`: not remembered, and it names no agent."""
+
+    world = World(durable=True)
+    await world.signed_out_session()
+    impostor = AgentIdentity(domain=world.atlas.domain, name=world.atlas.name)
+    assert not await session_accepted(world, impostor)
+    company = [e for e in recorded.events if e.stage == "company"]
+    assert "pap.company.identity.check" not in [e.name for e in company]
+    assert await world.store.get("client", world.atlas.client_id) is None
+    (refused,) = [e for e in company if e.name == "pap.company.refused"]
+    assert refused.attributes["pap.error"] == "invalid_session"
+    assert "pap.client.id" not in refused.attributes
+
+
+@pytest.mark.asyncio
+async def test_a_session_jwt_verified_first_names_the_agent_in_its_identity_check(
+    recorded: RecordingTelemetrySink,
+) -> None:
+    """An agent's first request can be a Session's: the check comes after, and names it."""
+
+    world = World()
+    await world.signed_out_session()
+    assert await session_accepted(world, world.atlas)
+    (checked,) = [e for e in recorded.events if e.name == "pap.company.identity.check"]
+    assert checked.attributes["pap.client.id"] == world.atlas.client_id
 
 
 @pytest.mark.asyncio

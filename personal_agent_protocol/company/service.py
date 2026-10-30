@@ -2030,11 +2030,12 @@ class CompanyService:
             ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client resolver")
         )
 
+        declared: ClientMetadata | None = None
+
         async def resolve(agent: str, kid: str | None) -> tuple[ClientMetadata, JsonWebKeySet]:
-            metadata, keys = await resolver.resolve(agent, kid=kid)
-            # A request can be the agent's first: a Session needs no OAuth endpoint (§4).
-            await self._remember_client(agent, metadata)
-            return metadata, keys
+            nonlocal declared
+            declared, keys = await resolver.resolve(agent, kid=kid)
+            return declared, keys
 
         verified = await verify_session_jwt(
             header,
@@ -2051,6 +2052,10 @@ class CompanyService:
         exchange = _EXCHANGE.get()
         if exchange is not None:
             exchange.client_id = verified.client_id
+        # A request can be the agent's first: a Session needs no OAuth endpoint (§4). Only now
+        # is its identity verified, so a forged JWT is never reported as a check, or remembered.
+        if declared is not None:
+            await self._remember_client(verified.client_id, declared)
         issued: IssuedAccessToken | None = None
         if presented is not None:
             issued = await self._access_token(presented)

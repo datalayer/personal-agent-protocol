@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Protocol, cast, runtime_checkable
@@ -436,14 +436,15 @@ class KnownClient:
     `pap.company.clientPolicy` (or a store that ages records out).
     """
 
-    extensions: tuple[str, ...] = ()
+    #: The extensions it lists, each with its major version.
+    extensions: Mapping[str, str] = field(default_factory=dict)
 
     def to_json(self) -> JsonObject:
-        return {"extensions": list(self.extensions)}
+        return {"extensions": dict(self.extensions)}
 
     @classmethod
     def from_json(cls, value: JsonObject) -> KnownClient:
-        return cls(extensions=tuple(value["extensions"]))
+        return cls(extensions=dict(value["extensions"]))
 
 
 @dataclass(frozen=True)
@@ -693,41 +694,147 @@ class MessageReceipt:
 
 
 @dataclass(frozen=True)
-class StoredOperation:
-    operation: Operation
-    action: str
-    owner: tuple[str, str]
-    account_id: str
-    #: The scopes a Session must hold to confirm it, recorded when it was proposed.
-    scopes: tuple[str, ...]
-    performed: bool = False
+class OperationRevision:
+    """One revision the company returned (Operations 3).
+
+    `request` fingerprints the request that returned it, so a request with its approval
+    can be checked to ask for exactly what it describes; `asked`, what the company's
+    action said for that request, before any change by the company (`revise`).
+    `withdrawn`: a later revision replaced it because the company can't hold these terms.
+    """
+
+    revision: str
+    summary: str
+    terms: dict[str, Any] | None
+    expires_at: datetime
+    request: str
+    asked: str
+    withdrawn: bool = False
 
     def to_json(self) -> JsonObject:
         return {
-            "operation": self.operation.model_dump(mode="json"),
+            "revision": self.revision,
+            "summary": self.summary,
+            "terms": self.terms,
+            "expires_at": _time(self.expires_at),
+            "request": self.request,
+            "asked": self.asked,
+            "withdrawn": self.withdrawn,
+        }
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> OperationRevision:
+        return cls(
+            revision=value["revision"],
+            summary=value["summary"],
+            terms=value["terms"],
+            expires_at=_parse(value["expires_at"]),
+            request=value["request"],
+            asked=value["asked"],
+            withdrawn=value["withdrawn"],
+        )
+
+
+@dataclass(frozen=True)
+class OperationOutcome:
+    """What a performed operation came to: the response every retry gets (Operations 7)."""
+
+    summary: str
+    data: dict[str, Any] | None = None
+    succeeded: bool = True
+
+    def to_json(self) -> JsonObject:
+        return {"summary": self.summary, "data": self.data, "succeeded": self.succeeded}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> OperationOutcome:
+        return cls(summary=value["summary"], data=value["data"], succeeded=value["succeeded"])
+
+
+@dataclass(frozen=True)
+class StoredOperation:
+    """An operation as the company keeps it, each revision it returned, and what came of it.
+
+    `status`: `open` until an approval passes the checks; `performing` while it is
+    performed, or nobody knows whether it took effect; `performed` with its `outcome`;
+    `withdrawn` when the company will never perform it. `account_id` is `None` for one
+    returned signed out, which only the Session `session_key` can approve (Operations 3).
+    `approved` and `approved_at` are the record of the approval (Operations 8.1).
+    """
+
+    operation_id: str
+    action: str
+    owner: tuple[str, str]
+    #: The `OperationProposal` key that names this action: its requests are one operation.
+    key: str
+    revisions: tuple[OperationRevision, ...]
+    account_id: str | None = None
+    session_key: str | None = None
+    #: The scopes a Session must hold to approve it, recorded when it was returned.
+    scopes: tuple[str, ...] = ()
+    status: Literal["open", "performing", "performed", "withdrawn"] = "open"
+    approved: str | None = None
+    approved_at: datetime | None = None
+    outcome: OperationOutcome | None = None
+
+    @property
+    def latest(self) -> OperationRevision:
+        return self.revisions[-1]
+
+    @property
+    def operation(self) -> Operation:
+        """The latest revision, as an operation."""
+
+        return self.revision(self.latest)
+
+    def revision(self, revision: OperationRevision) -> Operation:
+        return Operation(
+            operation_id=self.operation_id,
+            revision=revision.revision,
+            summary=revision.summary,
+            terms=revision.terms,
+            expires_at=revision.expires_at,
+        )
+
+    def to_json(self) -> JsonObject:
+        return {
+            "operation_id": self.operation_id,
             "action": self.action,
             "owner": list(self.owner),
+            "key": self.key,
+            "revisions": [revision.to_json() for revision in self.revisions],
             "account_id": self.account_id,
+            "session_key": self.session_key,
             "scopes": list(self.scopes),
-            "performed": self.performed,
+            "status": self.status,
+            "approved": self.approved,
+            "approved_at": None if self.approved_at is None else _time(self.approved_at),
+            "outcome": None if self.outcome is None else self.outcome.to_json(),
         }
 
     @classmethod
     def from_json(cls, value: JsonObject) -> StoredOperation:
         client_id, pairwise_user_id = value["owner"]
+        approved_at, outcome = value["approved_at"], value["outcome"]
         return cls(
-            operation=Operation.model_validate(value["operation"]),
+            operation_id=value["operation_id"],
             action=value["action"],
             owner=(client_id, pairwise_user_id),
+            key=value["key"],
+            revisions=tuple(OperationRevision.from_json(item) for item in value["revisions"]),
             account_id=value["account_id"],
+            session_key=value["session_key"],
             scopes=tuple(value["scopes"]),
-            performed=value["performed"],
+            status=value["status"],
+            approved=value["approved"],
+            approved_at=None if approved_at is None else _parse(approved_at),
+            outcome=None if outcome is None else OperationOutcome.from_json(outcome),
         )
 
 
 @dataclass(frozen=True)
 class OperationProposal:
-    """The operation an identical proposal returns (Operations §4: one action, one operation)."""
+    """The operation requests for the same action belong to (Operations 3)."""
 
     operation_id: str
 

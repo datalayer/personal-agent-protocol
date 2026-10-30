@@ -406,13 +406,13 @@ class SessionRecord:
 def approval_mac(key: SecretStr, approval: dict[str, Any]) -> str:
     """The MAC binding a stored approval to the user's approval key.
 
-    It covers the operation ID, revision, digest, and Session: an approval
+    It covers the operation ID, revision, and Session: an approval
     written into `state.json` by anything that cannot read the protected token
     store (another program, a tool a model runs) does not verify.
     """
 
     covered = json.dumps(
-        [approval.get(name) for name in ("operation_id", "revision", "digest", "session")],
+        [approval.get(name) for name in ("operation_id", "revision", "session")],
         separators=(",", ":"),
     )
     mac = hmac.new(key.get_secret_value().encode(), covered.encode(), hashlib.sha256).digest()
@@ -434,11 +434,16 @@ async def approval_key(store: FileSecretStore | Any) -> SecretStr:
 
 @dataclass
 class CliState:
-    """The non-secret local state: Sessions, conversations' Sessions, user approvals."""
+    """The non-secret local state: Sessions, operations to approve, user approvals.
+
+    `operations` keeps each operation as the company returned it, with the request
+    that returned it, sent again exactly with the approval (Operations 6).
+    """
 
     path: Path
     sessions: dict[str, SessionRecord] = field(default_factory=dict)
     approvals: dict[str, dict[str, Any]] = field(default_factory=dict)
+    operations: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> CliState:
@@ -446,7 +451,12 @@ class CliState:
         sessions = {
             key: SessionRecord(**value) for key, value in document.get("sessions", {}).items()
         }
-        return cls(path=path, sessions=sessions, approvals=document.get("approvals", {}))
+        return cls(
+            path=path,
+            sessions=sessions,
+            approvals=document.get("approvals", {}),
+            operations=document.get("operations", {}),
+        )
 
     def save(self) -> None:
         with _locked(self.path):
@@ -456,6 +466,7 @@ class CliState:
                     "schema_version": 1,
                     "sessions": {key: asdict(value) for key, value in self.sessions.items()},
                     "approvals": self.approvals,
+                    "operations": self.operations,
                 },
             )
 

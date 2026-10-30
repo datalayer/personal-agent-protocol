@@ -1,21 +1,20 @@
 # Copyright (c) 2025-2026 Datalayer, Inc.
 # BSD 3-Clause License
 
-"""A Pydantic AI agent demonstrating the PAP Operations extension (version 1)."""
+"""A Pydantic AI agent demonstrating the PAP Operations extension (version 2)."""
 
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
-from datetime import timedelta
-from decimal import Decimal
 from typing import Any
 
 import httpx
 from pydantic_ai import Agent
 
 from personal_agent_protocol import (
+    Approval,
     Author,
     ClientMetadata,
     ConversationClient,
@@ -33,29 +32,26 @@ from personal_agent_protocol.demo.kit import (
     InProcessNetwork,
     MutableClock,
     PersonalAgentHost,
+    ScriptedApprovals,
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.northwind import ACCOUNT, DOMAIN, northwind
 from personal_agent_protocol.operations import (
-    ConfirmOutcome,
     OperationError,
     OperationsClient,
-    StandingPermission,
-    TermLimit,
-    approve,
-    operations_endpoint,
+    operations_negotiated,
+    terms_differences,
 )
 
 TENANT = "atlas-example"
 PAIRWISE = "usr_ada_at_northwind_00000"
-STANDING = ("Northwind Bank", PAIRWISE, "payments.transfer")
 
 
 class LostAnswer(httpx.AsyncBaseTransport):
-    """The network between Atlas and Northwind: one confirmation's answer is lost.
+    """The network between Atlas and Northwind: one message's answer is lost.
 
-    When armed, the next `confirm` reaches the bank (which performs it) and the
-    answer never comes back. Every other request passes through unchanged.
+    When armed, the next message reaches the bank (which performs what it approves)
+    and the answer never comes back. Every other request passes through unchanged.
     """
 
     def __init__(self, inner: httpx.AsyncClient) -> None:
@@ -64,7 +60,7 @@ class LostAnswer(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         response = await self.inner.send(request)
-        if self.armed and request.method == "POST" and request.url.path.endswith("/confirm"):
+        if self.armed and request.url.path.endswith("/messages"):
             self.armed = False
             raise httpx.ReadTimeout("the answer was lost", request=request)
         return httpx.Response(
@@ -72,59 +68,18 @@ class LostAnswer(httpx.AsyncBaseTransport):
         )
 
 
-def recorded(outcome: ConfirmOutcome) -> Operation:
-    """The operation record a confirmation answered with."""
-
-    if outcome.operation is None:
-        raise RuntimeError("the confirmation carried no operation")
-    return outcome.operation
-
-
-async def without_the_extension(
-    network: InProcessNetwork,
-    clock: MutableClock,
-    plain: AgentIdentity,
-    metadata: OAuthServerMetadata,
-    endpoint: str,
-    operation: Operation,
-) -> str:
-    """What the bank tells an agent whose metadata does not list Operations v1."""
-
-    async with network.client() as http:
-        reactor = personal_agent_reactor(
-            PersonalAgentHost(plain, clock), network=network, http_client=http
-        )
-        session = await SessionClient(reactor=reactor, http_client=http).start(
-            client_id=plain.client_id,
-            pairwise_user_id=PAIRWISE,
-            issuer=metadata.issuer,
-            tenant_id=TENANT,
-        )
-        try:
-            await OperationsClient(
-                transport=SessionHttpClient(reactor=reactor, http_client=http)
-            ).read(
-                endpoint,
-                operation.operation_id,
-                session=session,
-            )
-        except OperationError as error:
-            return error.code
-    return "answered"
-
-
 agent = Agent(
     instructions=(
         "Use explain_operations to explain PAP Operations. A chat message is never "
-        "approval: only the user's approval of an exact revision, or a standing "
-        "permission they granted, confirms an operation. Never expose tokens or Session JWTs."
+        "approval: only the user's approval of an exact revision, in the host's own "
+        "interface, approves an operation. Never expose tokens or Session JWTs."
     ),
 )
 
 
 @agent.tool_plain
 async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthrough, in order
-    """Propose, approve, revise, recover, and pre-authorize payments; return safe evidence."""
+    """Ask, approve, revise, and recover a payment; return safe evidence."""
 
     clock = MutableClock()
     network = InProcessNetwork()
@@ -135,7 +90,9 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
     bank, bank_plugin = northwind(network, clock)
     wire = LostAnswer(network.client())
     http = httpx.AsyncClient(transport=wire)
-    host = PersonalAgentHost(atlas, clock)
+    # The host's own approval surface: here a script answers for Ada, each time she is asked.
+    ada = ScriptedApprovals(False, True, True)
+    host = PersonalAgentHost(atlas, clock, approvals=ada)
     reactor = personal_agent_reactor(host, network=network, http_client=http)
     company = await DiscoveryClient(reactor=reactor, http_client=http).discover(DOMAIN)
     metadata = company.oauth_metadata
@@ -166,125 +123,101 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
     if not (token is not None):
         raise RuntimeError("the example world is incomplete")
 
-    # Negotiation: both the bank's poppy.json and the agent's metadata list version 1.
-    endpoint = operations_endpoint(company.document, ClientMetadata.model_validate(atlas.metadata))
-    without = operations_endpoint(company.document, ClientMetadata.model_validate(plain.metadata))
-    if not (endpoint is not None):
-        raise RuntimeError("the example world is incomplete")
+    # Negotiation: both the bank's poppy.json and the agent's metadata list version 2.
+    negotiated = operations_negotiated(
+        company.document, ClientMetadata.model_validate(atlas.metadata)
+    )
+    without = operations_negotiated(
+        company.document, ClientMetadata.model_validate(plain.metadata)
+    )
     transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
-    operations = OperationsClient(transport=transport)
+    operations = OperationsClient(reactor=reactor)
     chat = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    organization = company.document.organization
 
-    async def propose(text: str) -> Operation:
-        page = await conversations.start(
-            chat,
-            Message(id=generate_message_id(reactor), author=Author(type="agent"), text=text),
-            session=session,
-            token=token,
-            wait=0,
+    # 1. The bank returns the payment as an operation in its message: nothing is done.
+    page = await conversations.start(
+        chat,
+        Message(
+            id=generate_message_id(reactor),
+            author=Author(type="agent"),
+            text="Pay INV-0042: EUR 1250.00 to Acme GmbH",
+        ),
+        session=session,
+        token=token,
+        wait=0,
+    )
+    first = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
+    if not (first is not None):
+        raise RuntimeError("the example world is incomplete")
+    conversation = page.conversation_id
+
+    async def approving(approval: Approval, message_id: str) -> Any:
+        message = Message(id=message_id, author=Author(type="agent"), approval=approval)
+        sent = await conversations.send(
+            chat, conversation, message, session=session, token=token, wait=0
         )
-        proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
-        if not (proposal is not None):
-            raise RuntimeError("the example world is incomplete")
-        return proposal
+        return [e for e in sent.events if e.message is not None and e.type != "state"][-1].message
 
-    async def refused(**confirm: Any) -> str:
-        try:
-            await operations.confirm(endpoint, session=session, token=token, **confirm)
-        except OperationError as error:
-            return error.code
-        return "confirmed"
+    # 2. Ada is asked in the host's own interface, and says no: nothing can be sent.
+    try:
+        await operations.ask_user(first, organization=organization, tenant_id=TENANT)
+        declined = "approved"
+    except OperationError as error:
+        declined = error.code
 
-    # 1. A proposal; no standing permission covers it, so the user is asked.
-    first = await propose("Pay INV-0042: EUR 1250.00 to Acme GmbH")
-    unapproved = await refused(operation=first, standing=STANDING)
-
-    # 2. Ada approves revision 1; the bank revises the terms before the confirm lands.
-    approval = approve(first)
+    # 3. She says yes; the bank changes the terms before the approval lands. It performs
+    #    nothing, and answers with a new revision of the same operation, never the one named.
+    approval = await operations.ask_user(first, organization=organization, tenant_id=TENANT)
     await bank.revise(
         first.operation_id,
         summary=first.summary.replace("1250.00", "1262.50") + " Includes a EUR 12.50 fee.",
         terms={**(first.terms or {}), "amount": {"amount": "1262.50", "currency": "EUR"}},
     )
-    changed = await operations.confirm(
-        endpoint, first, approval=approval, session=session, token=token
-    )
-    revised = changed.operation
+    answered = await approving(approval, generate_message_id(reactor))
+    revised = answered.operation
     if not (revised is not None):
         raise RuntimeError("the example world is incomplete")
-    stale_approval = await refused(operation=revised, approval=approval)
 
-    # 3. Ada approves revision 2; the confirm's answer is lost and recovered by reading
-    #    the same operation back, never re-proposed or assumed failed.
+    # 4. An approval covers one revision: Ada is asked again, with what changed.
+    newer = await operations.ask_user(
+        revised, organization=organization, tenant_id=TENANT, replaces=first
+    )
+    changed = ada.asked[-1].changed
+
+    # 5. The answer to the approval is lost. The same approval, in the same message, is
+    #    sent again: the bank performs it once, and a retry adds nothing.
     wire.armed = True
-    recovered = await operations.confirm(
-        endpoint, revised, approval=approve(revised), session=session, token=token
-    )
-    retried = await operations.confirm(
-        endpoint, revised, approval=approve(revised), session=session, token=token
-    )
-    performed_for_first = len(bank_plugin.executor.performed)
-
-    # 4. A standing permission the user granted in the host: Acme GmbH, at most
-    #    EUR 2000.00, one payment, thirty days. Checked term by term, one use reserved.
-    host.standing.permissions["perm_acme"] = StandingPermission(
-        reference="perm_acme",
-        company=STANDING[0],
-        account=STANDING[1],
-        action=STANDING[2],
-        limits=(
-            TermLimit("payee", allowed=frozenset({"Acme GmbH"})),
-            TermLimit("amount.amount", maximum=Decimal("2000.00")),
-            TermLimit("amount.currency", allowed=frozenset({"EUR"})),
-        ),
-        expires_at=clock.now() + timedelta(days=30),
-        uses_remaining=1,
-    )
-    second = await propose("Pay INV-0043: EUR 980.00 to Acme GmbH")
-    within = await operations.confirm(
-        endpoint, second, standing=STANDING, session=session, token=token
-    )
-    beyond = await propose("Pay INV-0044: EUR 3400.00 to Acme GmbH")
-    beyond_bounds = await refused(operation=beyond, standing=STANDING)
-
-    # 5. Cancelling a proposal: nothing is changed.
-    cancelled = await operations.cancel(endpoint, beyond.operation_id, session=session, token=token)
-
-    # 6. An agent that does not list the extension gets no operations from the bank.
-    extension = await without_the_extension(network, clock, plain, metadata, endpoint, beyond)
+    message_id = generate_message_id(reactor)
+    sent = await operations.send(lambda given: approving(given, message_id), newer)
+    told = await conversations.read_events(chat, conversation, session=session, token=token)
+    said = [e.message for e in told.events if e.message is not None and e.message.role == "company"]
+    performed = len(bank_plugin.executor.performed)
     for client in (http, wire.inner):
         await client.aclose()
 
     return {
-        "negotiated": endpoint is not None,
-        "negotiated_without_the_extension": without is not None,
-        "bank_requires_user_approval": first.user_approval_required,
-        "standing_confirm_without_permission": unapproved,
-        "after_bank_revision": changed.status,
-        "new_revision": revised.revision,
-        "changed_terms": changed.changed,
-        "old_approval_on_new_revision": stale_approval,
-        "lost_answer_recovered": recovered.status,
-        "state_after_recovery": recorded(recovered).state,
-        "retry_is_the_same_record": recorded(retried).state,
-        "payments_performed_for_the_first_proposal": performed_for_first,
-        "within_standing_permission": within.status,
-        "approved_by": recorded(within).model_dump()["confirmation"]["approved_by"],
-        "standing_uses_left": host.standing.permissions["perm_acme"].uses_remaining,
-        "beyond_standing_permission": beyond_bounds,
-        "cancelled": cancelled.state,
-        "cancel_result": cancelled.result.summary if cancelled.result else None,
-        "result_summary_as_written": recorded(recovered).model_dump()["result"]["summary"],
-        "agent_without_extension": extension,
+        "negotiated": negotiated,
+        "negotiated_without_the_extension": without,
+        "the_user_said_no": declined,
+        "asked_about_every_revision": len(ada.asked),
+        "company_named_when_asking": ada.asked[0].company_name,
+        "terms_agree_with_the_summary": terms_differences(first) == (),
+        "after_bank_revision": "a new revision" if revised.revision != first.revision else "same",
+        "same_operation": revised.operation_id == first.operation_id,
+        "changed_terms": changed,
+        "lost_answer_retried": sent.status,
+        "payments_performed": performed,
+        "result_as_written": said[-1].text,
         "tokens_and_session_jwts_withheld": True,
     }
 
 
 async def main() -> None:
     result = await agent.run(
-        "Explain how a personal agent confirms a company's proposed payment: exact "
-        "approval, changed terms, a lost answer, and a standing permission.",
+        "Explain how a personal agent gets a user's approval of a company's payment: exact "
+        "approval, changed terms, and a lost answer.",
         model=os.getenv("PAP_EXAMPLE_MODEL", "openai:gpt-4o-mini"),
     )
     sys.stdout.write(f"{result.output}\n")

@@ -46,6 +46,7 @@ from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
     PersonalAgentHost,
+    ScriptedApprovals,
     ScriptedBrowser,
     personal_agent_reactor,
 )
@@ -56,11 +57,7 @@ from personal_agent_protocol.demo.sockets import (
     served_over_tls,
 )
 from personal_agent_protocol.models import Author, ClientMetadata
-from personal_agent_protocol.operations import (
-    OperationsClient,
-    approve,
-    operations_endpoint,
-)
+from personal_agent_protocol.operations import OperationsClient, operations_negotiated
 
 pytest.importorskip("uvicorn")
 
@@ -247,29 +244,41 @@ class _Journey:
             wait=0,
         )
         self.proposal = [e for e in self.page.events if e.type != "state"][-1].message.operation
-        assert self.proposal.state == expect["operation_state"]
-        assert self.proposal.user_approval_required is expect["user_approval_required"]
+        assert (self.proposal is not None) is expect["operation"]
 
-    async def confirm(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
+    async def approve(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
         proposal = self.proposal
-        target = operations_endpoint(
+        assert operations_negotiated(
             self.company.document, ClientMetadata.model_validate(self.identity.metadata)
         )
-        assert target is not None
-        operations = OperationsClient(transport=self.transport)
-        outcome: Any = None
+        endpoint = self.company.document.agent.protocols[0].endpoint
+        approval = await OperationsClient(reactor=self.reactor).ask_user(
+            proposal,
+            organization=self.company.document.organization,
+            tenant_id=self.agent["tenant_id"],
+            surface=ScriptedApprovals(always=True),
+        )
+        told: Any = None
         for _ in range(step["times"]):
-            outcome = await operations.confirm(
-                target,
-                proposal,
-                approval=approve(proposal),
+            page = await self.conversations.send(
+                endpoint,
+                self.page.conversation_id,
+                Message(
+                    id=generate_message_id(self.reactor),
+                    author=Author(type="agent"),
+                    approval=approval,
+                ),
                 session=self.session,
                 token=self.signed_in,
+                wait=0,
             )
-            assert outcome.status == "confirmed"
-            assert outcome.operation.state == expect["state"]
-            assert outcome.operation.confirmation.approved_by == step["approved_by"]
-        assert outcome.operation.result.summary.startswith(expect["summary_starts_with"])
+            said = [
+                event.message
+                for event in page.events
+                if event.message is not None and event.message.role == "company"
+            ]
+            told = told or said[-1]
+        assert told.text.startswith(expect["summary_starts_with"])
         done = await self.performed("orders.exchange")
         assert done == [proposal.operation_id]
         assert len(done) == expect["performed"]
@@ -283,7 +292,7 @@ _STEPS = {
     "sign_in": _Journey.sign_in,
     "api_read": _Journey.api_read,
     "continue": _Journey.continue_step,
-    "confirm": _Journey.confirm,
+    "approve": _Journey.approve,
 }
 
 

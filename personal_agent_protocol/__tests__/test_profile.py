@@ -34,7 +34,7 @@ def _typescript(path: str, name: str) -> str:
 def test_the_typescript_sdk_declares_the_same_profile_and_operations_version() -> None:
     assert _typescript("src/profile.ts", "PROTOCOL_PROFILE") == PROTOCOL_PROFILE == "0.3"
     assert _typescript("src/profile.ts", "PROTOCOL_REVISION") == PROTOCOL_REVISION
-    assert _typescript("src/operations.ts", "OPERATIONS_VERSION") == OPERATIONS_VERSION == "1"
+    assert _typescript("src/operations.ts", "OPERATIONS_VERSION") == OPERATIONS_VERSION == "2"
 
 
 def test_the_requirement_ledger_and_the_upstream_snapshot_say_the_same() -> None:

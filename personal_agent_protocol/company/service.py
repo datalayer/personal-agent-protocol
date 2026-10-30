@@ -10,7 +10,7 @@ over plain ASGI). Every part a company would replace is a Reactor
 contribution (`points`): its store, accounts, agent, operation executors,
 client policy and resolver, and replay cache.
 
-What it implements of draft 0.3 (upstream 3e9bada) and Operations v1:
+What it implements of draft 0.3 (upstream 3e9bada) and Operations v2:
 
 - Discovery (`/.well-known/poppy.json`), the domain's protected resource
   metadata naming the issuer (`/.well-known/oauth-protected-resource`), and
@@ -32,25 +32,26 @@ What it implements of draft 0.3 (upstream 3e9bada) and Operations v1:
   closing; a conversation that is not yours is `conversation_not_found`.
   Once a conversation is handed to the company's people, one of them
   answers in it (`staff_reply`), over the last event they read.
-- Operations v1: proposals from the company agent, read, confirm (latest
-  revision, approval rules, scope, extension negotiation), at most once, and
-  cancel.
+- Operations v2, at no endpoint of their own: a request for an action that needs
+  approval is refused with the operation (`403 approval_required`, an MCP error
+  result, a company message), and the same request with the approval
+  (`Poppy-Approval`, `_meta`, a message's `approval`) is checked in the extension's
+  order and performed at most once; a repeat gets the original response, a request
+  while it is performed `503` and `Retry-After`, and a failed check a new revision.
 - MCP (§7), when a `pap.company.mcp` contribution is present: a Streamable HTTP
   endpoint at `/mcp` accepting the Session header and access tokens issued for
   its url (`resource` = that url), its protected resource metadata (RFC 9728),
-  and tools that propose operations in `structuredContent` (Operations §4.2).
+  and tools that return operations in `structuredContent` (Operations 4).
   A token issued for another resource is `invalid_token` with `resource_metadata`.
 - Feedback (§9.3), with `feedback` (the default): reports of tasks the
   protocol can't do, kept for the company's operator (`feedback_reports`).
 - Web browsing (§6), with `web=True`: the browser-session page with a one-time
   code, `{endpoint}/authorize` for the personal agent, and the company's own
-  cookie for the Session; each operation's `url` shows it in that Session,
-  where it can be confirmed or cancelled — the same operation, performed at
-  most once (Operations §4.4).
+  cookie for the Session.
 - Rate limits (§5.6): HTTP 429 and `Retry-After`, no body.
 - Taking a company down: its owner reads what is under way (`open_work`),
-  settles each open operation as cancelled (`cancel_open_operations`) and
-  ends every sign-in (`end_sign_ins`), before its records go.
+  settles each open operation (`settle_open_operations`) and ends every
+  sign-in (`end_sign_ins`), before its records go.
 """
 
 from __future__ import annotations
@@ -89,17 +90,22 @@ from ..models import (
     DEVICE_CODE_GRANT,
     MEDIATED_RESERVED_FIELDS,
     REFRESH_TOKEN_GRANT,
+    Approval,
     Author,
     ClientMetadata,
     ConversationEvent,
     JsonWebKeySet,
     Message,
     Operation,
-    OperationConfirmation,
-    OperationResult,
     redirect_uri_matches,
 )
-from ..operations import OPERATIONS_VERSION
+from ..operations import (
+    APPROVAL_HEADER,
+    OPERATIONS_EXTENSION,
+    OPERATIONS_VERSION,
+    approval_from_meta,
+    parse_approval_header,
+)
 from ..profile import PROTOCOL_PROFILE
 from ..reactor import (
     CLOCKS,
@@ -124,6 +130,7 @@ from .points import (
     REPLAY_CACHES,
     AccountDirectory,
     AccountSignOuts,
+    ActionResult,
     ApiCall,
     ApiResult,
     ClientPolicy,
@@ -134,6 +141,7 @@ from .points import (
     OperationExecutor,
     OperationFailed,
     OperationOutcomeUnknown,
+    ProposedOperation,
     RateLimit,
     ReplayCache,
     Reply,
@@ -173,7 +181,9 @@ from .store import (
     JsonObject,
     KnownClient,
     MessageReceipt,
+    OperationOutcome,
     OperationProposal,
+    OperationRevision,
     PendingAuthorization,
     PendingDevice,
     PendingMediated,
@@ -405,9 +415,9 @@ class CompanyConfig:
         if any(scope not in self.scopes for scope in self.mediated_scopes):
             raise ValueError("mediated_scopes must be among scopes")
         if self.operations and not self.write_scopes:
-            # Confirming an operation needs a write scope: without one, any signed-in
-            # Session, whatever it was granted, could confirm (Operations §3.3).
-            raise ValueError("operations need write_scopes: the scopes confirming one requires")
+            # Approving an operation needs a write scope: without one, any signed-in
+            # Session, whatever it was granted, could approve.
+            raise ValueError("operations need write_scopes: the scopes approving one requires")
 
     @property
     def base(self) -> str:
@@ -449,10 +459,6 @@ class CompanyConfig:
     @property
     def conversations_endpoint(self) -> str:
         return f"{self.base}/poppy/conversations"
-
-    @property
-    def operations_endpoint(self) -> str:
-        return f"{self.base}/poppy/operations"
 
     @property
     def mcp_url(self) -> str:
@@ -525,8 +531,8 @@ SESSION_HEADER = "poppy-session"
 class OpenWork:
     """What a company has under way: what its owner settles and ends before taking it down.
 
-    `operations` are those still `proposed` or `in_progress` (a proposal past
-    its expiry is not open); `sign_ins` are the agents and accounts, as
+    `operations` are those that can still be approved, or are being performed (one
+    whose revisions have all expired is not open); `sign_ins` are the agents and accounts, as
     `(client_id, account_id)`, with a sign-in not ended — each one ended
     whole by `CompanyService.disconnect`.
     """
@@ -539,8 +545,35 @@ class OpenWork:
         return not self.operations and not self.sign_ins
 
 
-#: The states an operation is not final in (Operations §6).
-_OPEN_STATES = frozenset({"proposed", "in_progress"})
+#: How long a request for an operation being performed waits before trying again.
+_PERFORMING_RETRY_AFTER = "1"
+
+
+@dataclass(frozen=True)
+class _Asked:
+    """What a request asks for: the action, its terms now, and the request's fingerprint."""
+
+    action: str
+    #: The `OperationProposal` key: requests with the same one are the same operation.
+    key: str
+    summary: str
+    terms: dict[str, Any] | None
+    scopes: tuple[str, ...]
+    #: The request's fingerprint, and what the action said for it.
+    request: str
+    digest: str
+
+
+@dataclass(frozen=True)
+class _Decision:
+    """What an operation's request comes to, whichever interface it came through.
+
+    `operation`: ask for approval of this revision. `outcome`: it was performed, the
+    response as it would have been without operations. Neither: it is being performed.
+    """
+
+    operation: Operation | None = None
+    outcome: OperationOutcome | None = None
 
 
 class StaleConversationError(ValueError):
@@ -688,12 +721,10 @@ _NAMED_ROUTES = frozenset(
         "oauth_revoke",
         "poppy_browser_session",
         "poppy_conversations",
-        "poppy_operations",
         "poppy_feedback",
     }
 )
 _ROUTES: dict[str, str] = {
-    "operations": "operation_page",
     "api": "api",
     "mcp": "mcp",
     ".well-known": "discovery",
@@ -912,8 +943,6 @@ class CompanyService:
                 return CompanyResponse(
                     200, {"tasks": [dict(task) for task in self.config.excluded_tasks]}
                 )
-            if path.startswith("/operations/") and self.config.web and self.config.operations:
-                return await self._operation_page(request, method, path.split("/")[2])
             if method == "POST" and path == "/oauth/token":
                 return await self._token(request)
             if method == "GET" and path == "/oauth/authorize" and self.config.direct:
@@ -930,8 +959,6 @@ class CompanyService:
                 return await self._start_conversation(request)
             if path.startswith("/poppy/conversations/"):
                 return await self._conversation_route(request, method, path)
-            if path.startswith("/poppy/operations/") and self.config.operations:
-                return await self._operation_route(request, method, path)
             if method == "POST" and path == "/poppy/feedback" and self.config.feedback:
                 return await self._feedback(request)
         except _RateLimitedError as limited:
@@ -995,10 +1022,7 @@ class CompanyService:
             document["excluded_tasks"] = {"url": config.excluded_tasks_url}
         extensions: dict[str, Any] = {}
         if config.operations:
-            extensions["operations"] = {
-                "version": OPERATIONS_VERSION,
-                "endpoint": config.operations_endpoint,
-            }
+            extensions[OPERATIONS_EXTENSION] = {"version": OPERATIONS_VERSION}
         if config.mediated_fields:
             extensions[MEDIATED_EXTENSION] = {
                 "version": MEDIATED_VERSION,
@@ -1110,7 +1134,7 @@ class CompanyService:
     async def _remember_client(self, client_id: str, metadata: ClientMetadata) -> None:
         """What a personal agent declares, kept whichever request verified it first."""
 
-        extensions = tuple(sorted(metadata.extensions))
+        extensions = {name: item.version for name, item in metadata.extensions.items()}
         known = await self._read(CLIENT, client_id, KnownClient.from_json)
         if known is None or known.extensions != extensions:
             await self.store.put(CLIENT, client_id, KnownClient(extensions).to_json())
@@ -1128,10 +1152,12 @@ class CompanyService:
         return bool(await policy.allows(client_id))
 
     async def _supports_operations(self, client_id: str) -> bool:
-        """Whether the agent declared the Operations extension when it last authenticated."""
+        """Whether the agent listed this version of Operations when it last authenticated."""
 
         known = await self._read(CLIENT, client_id, KnownClient.from_json)
-        return known is not None and "operations" in known.extensions
+        return (
+            known is not None and known.extensions.get(OPERATIONS_EXTENSION) == OPERATIONS_VERSION
+        )
 
     async def _token(self, request: CompanyRequest) -> CompanyResponse:
         """The token endpoint (§4): every grant carries a client assertion, and nothing else.
@@ -1839,7 +1865,7 @@ class CompanyService:
             status, f"<!doctype html><meta charset=utf-8><title>Sign in</title>{body}", headers
         )
 
-    # OpenAPI API (§6, Operations §4.1) -----------------------------------------------------
+    # OpenAPI API (§6, Operations 4, 6) -----------------------------------------------------
 
     def _api(self) -> CompanyApi | None:
         return cast(CompanyApi | None, optional_contribution(self.reactor, COMPANY_APIS, "API"))
@@ -1913,6 +1939,16 @@ class CompanyService:
         session: CallerSession,
         body: Any,
     ) -> CompanyResponse:
+        negotiated = await self._supports_operations(session.client_id)
+        approval = (
+            parse_approval_header(request.headers.get(APPROVAL_HEADER.lower()))
+            if negotiated
+            else None
+        )
+        target = await self._approval_target(session, approval)
+        settled = None if target is None else self._settled(target)
+        if settled is not None:
+            return self._api_decision(settled)
         result: ApiResult = await cast(CompanyApi, self._api()).handle(
             ApiCall(
                 method=method,
@@ -1930,10 +1966,8 @@ class CompanyService:
                 # In the challenge, and signed out with no error code (§7).
                 raise _needs_account(session.account_id, str(body.get("scope", "")).split(" "))
             return CompanyResponse(result.status, result.body)
-        if session.account_id is None:
-            raise _needs_account(None, self.config.write_scopes)
-        if not await self._supports_operations(session.client_id):
-            # At an API, in the WWW-Authenticate challenge with its `extension` (§3.3, §6).
+        if not negotiated:
+            # At an API, in the WWW-Authenticate challenge with its `extension` (§3.3, §7).
             raise _RefusedError(
                 403,
                 "extension_required",
@@ -1942,8 +1976,30 @@ class CompanyService:
                 },
                 extension="operations",
             )
-        operation = await self._propose(session, Reply(operation=result.operation))
-        return CompanyResponse(202, {"operation": operation.model_dump(mode="json")})
+        fingerprint = _fingerprint("api", method, path, urlsplit(request.url).query, body)
+        asked = self._asked(session, result.operation, fingerprint)
+        return self._api_decision(await self._decide(session, asked, approval, target))
+
+    @staticmethod
+    def _api_decision(decision: _Decision) -> CompanyResponse:
+        """The API's answer: the operation, what it came to, or `503` while it is performed."""
+
+        if decision.operation is not None:
+            return _json_error(
+                403, "approval_required", operation=decision.operation.model_dump(mode="json")
+            )
+        outcome = decision.outcome
+        if outcome is None:
+            return _json_error(
+                503, "temporarily_unavailable", {"Retry-After": _PERFORMING_RETRY_AFTER}
+            )
+        body: dict[str, Any] = {"summary": outcome.summary}
+        if outcome.data is not None:
+            body["data"] = outcome.data
+        if outcome.succeeded:
+            return CompanyResponse(200, body)
+        # It didn't finish: an API error, saying every change that was made.
+        return CompanyResponse(422, {"error": "action_failed", **body})
 
     # Resource requests ---------------------------------------------------------------
 
@@ -2509,7 +2565,7 @@ class CompanyService:
                 return replay
         raise _RefusedError(503, "temporarily_unavailable")
 
-    async def _receive(
+    async def _receive(  # noqa: C901 - a message, its approval, and the agent's turn
         self, conversation_id: str, session: CallerSession, message: Message
     ) -> StoredConversation:
         incoming = message.model_dump(mode="json", exclude_none=True)
@@ -2531,7 +2587,9 @@ class CompanyService:
                 events=(*current.events, received, self._state("working", current.responder)),
             )
 
+        negotiated = await self._supports_operations(session.client_id)
         try:
+            target = await self._approval_target(session, message.approval) if negotiated else None
             changed = await self._change(
                 CONVERSATION, conversation_id, StoredConversation.from_json, accept
             )
@@ -2543,32 +2601,38 @@ class CompanyService:
             await self.store.delete(MESSAGE_ID, _composite(*owner, message.id))
             raise
         conversation = changed[1]
-        if conversation.responder == "human":
-            return conversation
-        agent = cast(
-            CompanyAgent, first_contribution(self.reactor, COMPANY_AGENTS, "company agent")
-        )
-        replies = await agent.respond(
-            Turn(
-                conversation_id=conversation_id,
-                text=message.text,
-                data=message.data,
-                author=message.author.type,
-                account_id=session.account_id,
-                scopes=session.scopes,
-                client_id=session.client_id,
-                is_direct=conversation.parent_id is not None,
-                supports_operations=await self._supports_operations(session.client_id),
-            )
-        )
         events: list[StoredEvent] = []
-        for reply in replies:
-            event = await self._reply(session, reply)
+        if target is not None:
+            # Only `approval` approves: its message's text is no question for the agent.
+            event = await self._conversation_approval(conversation_id, session, target, message)
             if event is not None:
                 events.append(event)
+        elif conversation.responder == "human":
+            return conversation
+        elif message.text is not None or message.data is not None or message.approval is None:
+            agent = cast(
+                CompanyAgent, first_contribution(self.reactor, COMPANY_AGENTS, "company agent")
+            )
+            replies = await agent.respond(
+                Turn(
+                    conversation_id=conversation_id,
+                    text=message.text,
+                    data=message.data,
+                    author=message.author.type,
+                    account_id=session.account_id,
+                    scopes=session.scopes,
+                    client_id=session.client_id,
+                    is_direct=conversation.parent_id is not None,
+                    supports_operations=negotiated,
+                )
+            )
+            for reply in replies:
+                event = await self._reply(conversation_id, session, reply)
+                if event is not None:
+                    events.append(event)
 
         def answered(current: StoredConversation) -> StoredConversation:
-            if current.status == "closed":
+            if current.status != "working":
                 return replace(current, events=(*current.events, *events))
             idle = self._state("idle", current.responder)
             return replace(current, status="idle", events=(*current.events, *events, idle))
@@ -2578,7 +2642,52 @@ class CompanyService:
         )
         return conversation if changed is None else changed[1]
 
-    async def _reply(self, session: CallerSession, reply: Reply) -> StoredEvent | None:
+    async def _conversation_approval(
+        self,
+        conversation_id: str,
+        session: CallerSession,
+        target: StoredOperation,
+        message: Message,
+    ) -> StoredEvent | None:
+        """A message's approval: the action performed, and how it went, in a later message.
+
+        A new message with the approval of an operation already performed, or being
+        performed, adds nothing (Operations 7).
+        """
+
+        if self._settled(target) is not None:
+            return None
+        approval = cast(Approval, message.approval)
+        latest = target.latest
+        named = next(
+            (item for item in target.revisions if item.revision == approval.revision), latest
+        )
+        asked = _Asked(
+            action=target.action,
+            key=target.key,
+            summary=latest.summary,
+            terms=latest.terms,
+            scopes=target.scopes,
+            request=_fingerprint("conversation", conversation_id),
+            digest=named.asked,
+        )
+        decision = await self._decide(session, asked, approval, target)
+        author: dict[str, object] = {"type": "agent"}
+        reply: dict[str, object] = {"id": self._id("msg"), "author": author, "role": "company"}
+        if decision.operation is not None:
+            reply["text"] = "That approval doesn't cover these terms. Here they are to approve."
+            reply["operation"] = decision.operation.model_dump(mode="json")
+        elif decision.outcome is None:
+            reply["text"] = "This is still being done. I'll say how it went here."
+        else:
+            reply["text"] = decision.outcome.summary
+            if decision.outcome.data is not None:
+                reply["data"] = decision.outcome.data
+        return self._event(type="message", message=reply)
+
+    async def _reply(
+        self, conversation_id: str, session: CallerSession, reply: Reply
+    ) -> StoredEvent | None:
         if reply.authorization is not None:
             error, scope = reply.authorization
             return self._event(type="authorization", error=error, scope=scope)
@@ -2590,10 +2699,11 @@ class CompanyService:
             message["text"] = reply.text
         if reply.data is not None:
             message["data"] = reply.data
-        if reply.operation is not None and session.account_id is not None:
-            if await self._supports_operations(session.client_id):
-                operation = await self._propose(session, reply)
-                message["operation"] = operation.model_dump(mode="json")
+        if reply.operation is not None and await self._supports_operations(session.client_id):
+            fingerprint = _fingerprint("conversation", conversation_id)
+            asked = self._asked(session, reply.operation, fingerprint)
+            decision = await self._decide(session, asked, None, None)
+            message["operation"] = cast(Operation, decision.operation).model_dump(mode="json")
         if len(message) > 3:
             return self._event(type="message", message=message)
         return None
@@ -2767,94 +2877,245 @@ class CompanyService:
         ]
         return tuple(sorted(reports, key=lambda report: (report.received_at, report.report_id)))
 
-    # Operations ----------------------------------------------------------------------
+    # Operations (the extension's sections 3, 6 and 7) ---------------------------------
 
-    async def _propose(self, session: CallerSession, reply: Reply) -> Operation:
-        proposal = cast(Any, reply.operation)
-        owner = (session.client_id, session.pairwise_user_id)
-        account_id = cast(str, session.account_id)
-        # The same action through another channel is the same operation (Operations §4).
-        key = _composite(
-            *owner,
-            account_id,
-            proposal.action,
-            proposal.summary,
-            json.dumps(proposal.terms, sort_keys=True, default=str),
-        )
-        known = await self._read(PROPOSAL, key, OperationProposal.from_json)
-        if known is not None:
-            current = await self._current_operation(known.operation_id)
-            if (
-                current is not None
-                and current.owner == owner
-                and current.account_id == account_id
-                and current.action == proposal.action
-                and current.operation.state == "proposed"
-                and current.operation.summary == proposal.summary
-                and current.operation.terms == proposal.terms
-            ):
-                return current.operation
-        operation_id = self._id("op")
-        operation = Operation(
-            operation_id=operation_id,
-            revision=1,
-            state="proposed",
-            summary=proposal.summary,
-            terms=proposal.terms,
-            expires_at=self._now() + self.config.operation_lifetime,
-            user_approval_required=proposal.user_approval_required,
-            url=f"{self.config.base}/operations/{operation_id}",
-            confirmation=None,
-            result=None,
-        )
-        stored = StoredOperation(
-            operation=operation,
-            action=proposal.action,
-            owner=owner,
-            account_id=account_id,
-            scopes=self._operation_scopes(proposal),
-        )
-        await self.store.put(OPERATION, operation_id, stored.to_json())
-        await self.store.put(
-            PROPOSAL,
-            key,
-            OperationProposal(operation_id).to_json(),
-            expires_at=operation.expires_at,
-        )
-        return operation
-
-    def _operation_scopes(self, proposal: Any) -> tuple[str, ...]:
-        """The scopes confirming this operation requires: its own, else the write scopes."""
+    def _asked(self, session: CallerSession, proposal: ProposedOperation, request: str) -> _Asked:
+        """What a request asks for: one action of one account, or of one signed-out Session."""
 
         scopes = tuple(proposal.scopes) or self.config.write_scopes
         if any(scope not in self.config.scopes for scope in scopes):
             raise ValueError("an operation's scopes must be among the company's scopes")
-        return scopes
+        return _Asked(
+            action=proposal.action,
+            key=_composite(
+                session.client_id,
+                session.pairwise_user_id,
+                session.account_id or session.session_key,
+                proposal.action,
+                proposal.subject,
+            ),
+            summary=proposal.summary,
+            terms=proposal.terms,
+            scopes=scopes,
+            request=request,
+            digest=_fingerprint(proposal.summary, proposal.terms),
+        )
+
+    async def _approval_target(
+        self, session: CallerSession, approval: Approval | None
+    ) -> StoredOperation | None:
+        """Check 1: the operation, if this Session can approve it (Operations 3, 6).
+
+        One returned signed out can be approved only in that Session. One returned
+        signed in belongs to the account: any Session of the same personal agent and
+        user, signed in to it. A signed-out Session of theirs gets a challenge for the
+        account, and one without its scopes `insufficient_scope`. Anyone else's request
+        is handled as if it had no approval: `None`.
+        """
+
+        if approval is None:
+            return None
+        stored = await self._read(OPERATION, approval.operation_id, StoredOperation.from_json)
+        if stored is None or stored.owner != (session.client_id, session.pairwise_user_id):
+            return None
+        if stored.account_id is None:
+            return stored if stored.session_key == session.session_key else None
+        if session.account_id is None:
+            raise _needs_account(None, stored.scopes)
+        if session.account_id != stored.account_id:
+            return None
+        if any(scope not in session.scopes for scope in stored.scopes):
+            raise _needs_account(session.account_id, stored.scopes)
+        return stored
+
+    @staticmethod
+    def _settled(stored: StoredOperation) -> _Decision | None:
+        """Check 2: what an operation performed, or being performed, answers (Operations 7)."""
+
+        if stored.status == "performed":
+            return _Decision(outcome=stored.outcome)
+        if stored.status == "performing":
+            return _Decision()
+        return None
+
+    def _approves(
+        self, stored: StoredOperation, revision: OperationRevision | None, asked: _Asked
+    ) -> bool:
+        """Check 3: a revision the company returned, unexpired, for exactly this request."""
+
+        return (
+            revision is not None
+            and stored.status == "open"
+            and not revision.withdrawn
+            and self._now() <= revision.expires_at
+            and revision.request == asked.request
+            and revision.asked == asked.digest
+        )
+
+    async def _decide(
+        self,
+        session: CallerSession,
+        asked: _Asked,
+        approval: Approval | None,
+        target: StoredOperation | None,
+    ) -> _Decision:
+        """Checks 1 and 2 passed for `target`, if any: check 3, then perform or ask."""
+
+        same_action = target is not None and target.key == asked.key
+        if target is not None and approval is not None and same_action:
+            revision = next(
+                (item for item in target.revisions if item.revision == approval.revision), None
+            )
+            if self._approves(target, revision, asked):
+                return await self._perform(target, cast(OperationRevision, revision))
+        current = target if same_action else None
+        if current is None or current.status != "open":
+            current = await self._open_operation(asked.key)
+        named = None if approval is None else approval.revision
+        return _Decision(operation=await self._revision_for(session, current, asked, named))
+
+    async def _open_operation(self, key: str) -> StoredOperation | None:
+        known = await self._read(PROPOSAL, key, OperationProposal.from_json)
+        if known is None:
+            return None
+        stored = await self._read(OPERATION, known.operation_id, StoredOperation.from_json)
+        return stored if stored is not None and stored.status == "open" else None
+
+    async def _revision_for(
+        self,
+        session: CallerSession,
+        current: StoredOperation | None,
+        asked: _Asked,
+        named: str | None,
+    ) -> Operation:
+        """The revision to approve for what the request asks: never the one an approval named.
+
+        The latest one, while it still is what this request asks. Otherwise a new one of
+        the same operation, with the same terms when the company changed them since the
+        action said them (`revise`), or a new operation for a new action.
+        """
+
+        expires_at = self._now() + self.config.operation_lifetime
+        fresh = OperationRevision(
+            revision=self._id("rev"),
+            summary=asked.summary,
+            terms=asked.terms,
+            expires_at=expires_at,
+            request=asked.request,
+            asked=asked.digest,
+        )
+        if current is not None:
+            latest = current.latest
+            if self._approves(current, latest, asked) and latest.revision != named:
+                return current.revision(latest)
+            if latest.request == asked.request and latest.asked == asked.digest:
+                fresh = replace(fresh, summary=latest.summary, terms=latest.terms)
+
+            def extend(stored: StoredOperation) -> StoredOperation:
+                if stored.status != "open":
+                    return stored
+                return replace(stored, revisions=(*stored.revisions, fresh))
+
+            changed = await self._change(
+                OPERATION, current.operation_id, StoredOperation.from_json, extend
+            )
+            if changed is not None and changed[1].status == "open":
+                return changed[1].revision(fresh)
+        signed_in = session.account_id is not None
+        stored = StoredOperation(
+            operation_id=self._id("op"),
+            action=asked.action,
+            owner=(session.client_id, session.pairwise_user_id),
+            key=asked.key,
+            revisions=(fresh,),
+            account_id=session.account_id,
+            session_key=None if signed_in else session.session_key,
+            scopes=asked.scopes if signed_in else (),
+        )
+        await self.store.put(OPERATION, stored.operation_id, stored.to_json())
+        await self.store.put(PROPOSAL, asked.key, OperationProposal(stored.operation_id).to_json())
+        return stored.operation
+
+    async def _perform(self, target: StoredOperation, revision: OperationRevision) -> _Decision:
+        """The one compare-and-set from `open` to `performing`: only its winner performs."""
+
+        approved_at = self._now()
+
+        def claim(current: StoredOperation) -> StoredOperation:
+            if current.status != "open":
+                return current
+            return replace(
+                current, status="performing", approved=revision.revision, approved_at=approved_at
+            )
+
+        changed = await self._change(
+            OPERATION, target.operation_id, StoredOperation.from_json, claim
+        )
+        if changed is None:
+            return _Decision()
+        before, claimed = changed
+        if before.status != "open":
+            return self._settled(claimed) or _Decision()
+        executors = [
+            contribution
+            for contribution in self.reactor.get_contributions(OPERATION_EXECUTORS)
+            if getattr(contribution.value, "action", None) == claimed.action
+        ]
+        if not executors or (len(executors) > 1 and executors[0].order == executors[1].order):
+            # Nobody can perform it: being performed, rather than claim a failure.
+            return _Decision()
+        executor = cast(OperationExecutor, executors[0].value)
+        try:
+            result = await executor.perform(claimed.revision(revision), claimed.account_id)
+        except OperationFailed as failed:
+            # Failed partway: the result says every change that was made.
+            return await self._finish(claimed, failed.result, succeeded=False)
+        except OperationOutcomeUnknown:
+            # Never reported as failed while it may have taken effect (Operations 7).
+            return _Decision()
+        return await self._finish(claimed, result, succeeded=True)
+
+    async def _finish(
+        self, claimed: StoredOperation, result: ActionResult, *, succeeded: bool
+    ) -> _Decision:
+        outcome = OperationOutcome(result.summary, result.data, succeeded)
+
+        def finish(current: StoredOperation) -> StoredOperation:
+            if current.status != "performing":
+                return current
+            return replace(current, status="performed", outcome=outcome)
+
+        changed = await self._change(
+            OPERATION, claimed.operation_id, StoredOperation.from_json, finish
+        )
+        return _Decision(outcome=outcome if changed is None else changed[1].outcome)
 
     async def operation_record(self, operation_id: str) -> StoredOperation:
-        """An operation as the company keeps it: its record, action, owner, and account."""
+        """An operation as the company keeps it: each revision, action, owner, and outcome."""
 
-        stored = await self._current_operation(operation_id)
+        stored = await self._read(OPERATION, operation_id, StoredOperation.from_json)
         if stored is None:
             raise KeyError(operation_id)
         return stored
 
     async def revise(self, operation_id: str, *, summary: str, terms: dict[str, Any]) -> Operation:
-        """The company changes a proposal's terms: a new revision, the old one unconfirmable."""
+        """The company changes an operation's terms: a new revision, earlier ones withdrawn."""
 
         def revise(stored: StoredOperation) -> StoredOperation:
-            current = stored.operation
-            if current.state != "proposed":
-                raise ValueError("only a proposed operation can be revised")
+            if stored.status != "open":
+                raise ValueError("only an operation not yet approved can be revised")
+            latest = stored.latest
             return replace(
                 stored,
-                operation=current.model_copy(
-                    update={
-                        "revision": current.revision + 1,
-                        "summary": summary,
-                        "terms": terms,
-                        "expires_at": self._now() + self.config.operation_lifetime,
-                    }
+                revisions=(
+                    *(replace(item, withdrawn=True) for item in stored.revisions),
+                    replace(
+                        latest,
+                        revision=self._id("rev"),
+                        summary=summary,
+                        terms=terms,
+                        expires_at=self._now() + self.config.operation_lifetime,
+                    ),
                 ),
             )
 
@@ -2864,25 +3125,23 @@ class CompanyService:
         return changed[1].operation
 
     async def settle(
-        self, operation_id: str, result: OperationResult, *, succeeded: bool
-    ) -> Operation:
-        """The company found out how an operation left `in_progress` ended."""
+        self, operation_id: str, result: ActionResult, *, succeeded: bool
+    ) -> StoredOperation:
+        """The company found out how an operation being performed ended."""
 
         def settle(stored: StoredOperation) -> StoredOperation:
-            if stored.operation.state != "in_progress":
-                raise ValueError("only an operation in progress can be settled")
+            if stored.status != "performing":
+                raise ValueError("only an operation being performed can be settled")
             return replace(
                 stored,
-                performed=succeeded or stored.performed,
-                operation=stored.operation.model_copy(
-                    update={"state": "succeeded" if succeeded else "failed", "result": result}
-                ),
+                status="performed",
+                outcome=OperationOutcome(result.summary, result.data, succeeded),
             )
 
         changed = await self._change(OPERATION, operation_id, StoredOperation.from_json, settle)
         if changed is None:
             raise KeyError(operation_id)
-        return changed[1].operation
+        return changed[1]
 
     # One of the company's people -------------------------------------------------
 
@@ -2950,13 +3209,20 @@ class CompanyService:
 
     # Taking the company down ---------------------------------------------------------
 
+    def _is_open(self, stored: StoredOperation) -> bool:
+        if stored.status == "performing":
+            return True
+        return stored.status == "open" and any(
+            not item.withdrawn and self._now() <= item.expires_at for item in stored.revisions
+        )
+
     async def open_work(self) -> OpenWork:
         """What is under way: open operations and sign-ins not ended, read from the store."""
 
         operations = []
         for record in await self.store.records(OPERATION):
-            stored = self._expired(StoredOperation.from_json(record.value))
-            if stored.operation.state in _OPEN_STATES:
+            stored = StoredOperation.from_json(record.value)
+            if self._is_open(stored):
                 operations.append(stored.operation)
         sign_ins = set()
         for record in await self.store.records(ACCOUNT_FAMILY):
@@ -2966,50 +3232,41 @@ class CompanyService:
         operations.sort(key=lambda operation: operation.operation_id)
         return OpenWork(operations=tuple(operations), sign_ins=tuple(sorted(sign_ins)))
 
-    async def cancel_open_operations(self, reason: str) -> int:
-        """Settle every open operation as `cancelled`, because of `reason` (a sentence).
+    async def settle_open_operations(self, reason: str) -> int:
+        """Settle every open operation, because of `reason` (a sentence).
 
-        For a company being taken down: nothing will perform or settle them
-        after, and a personal agent would otherwise read one as in progress for
-        ever. A proposal was never performed: *Nothing was changed.* One in
-        progress may have changed something before it stopped, which its result
-        says (Operations §6). A proposal past its expiry is recorded as expired.
-        Returns how many were cancelled.
+        For a company being taken down: nothing will perform or settle them after, and
+        a personal agent retrying an approval would otherwise wait for ever. One not
+        yet approved is withdrawn, never to be performed. One being performed may have
+        changed something before it stopped: a retry is told so, as a failure whose
+        summary says it. Returns how many were settled.
         """
 
         reason = reason.strip()
         if not reason:
-            raise ValueError("say why the operations are cancelled")
-        stopped = OperationResult(
+            raise ValueError("say why the operations are settled")
+        stopped = OperationOutcome(
             summary=(
                 "It was stopped before it finished, and nothing more will be done: "
                 f"whatever it changed until then stands. {reason}"
-            )
+            ),
+            succeeded=False,
         )
-        untouched = OperationResult(summary=f"Nothing was changed. {reason}")
 
-        def cancel(stored: StoredOperation) -> StoredOperation:
-            stored = self._expired(stored)
-            state = stored.operation.state
-            if state not in _OPEN_STATES:
+        def settle(stored: StoredOperation) -> StoredOperation:
+            if not self._is_open(stored):
                 return stored
-            return replace(
-                stored,
-                operation=stored.operation.model_copy(
-                    update={
-                        "state": "cancelled",
-                        "result": stopped if state == "in_progress" else untouched,
-                    }
-                ),
-            )
+            if stored.status == "performing":
+                return replace(stored, status="performed", outcome=stopped)
+            return replace(stored, status="withdrawn")
 
-        cancelled = 0
+        settled = 0
         for record in await self.store.records(OPERATION):
-            operation_id = StoredOperation.from_json(record.value).operation.operation_id
-            changed = await self._change(OPERATION, operation_id, StoredOperation.from_json, cancel)
-            if changed is not None and changed[1].operation.state == "cancelled":
-                cancelled += changed[0].operation.state != "cancelled"
-        return cancelled
+            operation_id = StoredOperation.from_json(record.value).operation_id
+            changed = await self._change(OPERATION, operation_id, StoredOperation.from_json, settle)
+            if changed is not None and self._is_open(changed[0]):
+                settled += 1
+        return settled
 
     async def end_sign_ins(self) -> int:
         """End every sign-in, as each agent's disconnect does: tokens revoked, Sessions signed out.
@@ -3022,221 +3279,7 @@ class CompanyService:
             await self.disconnect(client_id, account_id)
         return len(work.sign_ins)
 
-    async def _operation_route(
-        self, request: CompanyRequest, method: str, path: str
-    ) -> CompanyResponse:
-        parts = path.split("/")
-        operation_id = parts[3]
-        action = parts[4] if len(parts) > 4 else ""
-        _, session = await self._caller(request)
-        if not await self._supports_operations(session.client_id):
-            raise _RefusedError(403, "extension_required", extension="operations")
-        stored = await self._usable(operation_id, session)
-        if method == "GET" and not action:
-            return self._operation_response(stored)
-        if method == "POST" and action == "cancel":
-            return await self._cancel_operation(operation_id)
-        if method == "POST" and action == "confirm":
-            return await self._confirm(request, session, stored)
-        raise _RefusedError(404, "not_found")
-
-    async def _cancel_operation(self, operation_id: str) -> CompanyResponse:
-        def cancel(stored: StoredOperation) -> StoredOperation:
-            stored = self._expired(stored)
-            if stored.operation.state != "proposed":
-                # In progress, it stays so until the company knows whether it stopped (§7).
-                return stored
-            return replace(
-                stored,
-                operation=stored.operation.model_copy(
-                    update={
-                        "state": "cancelled",
-                        "result": OperationResult(summary="Nothing was changed."),
-                    }
-                ),
-            )
-
-        changed = await self._change(OPERATION, operation_id, StoredOperation.from_json, cancel)
-        if changed is None:
-            raise _RefusedError(404, "operation_not_found")
-        return self._operation_response(changed[1])
-
-    async def _usable(self, operation_id: str, session: CallerSession) -> StoredOperation:
-        """The operation, if this Session may use it now (Operations §3.2).
-
-        One proposed signed in belongs to the account: any Session of the same
-        personal agent and user may use it while signed in to that account,
-        checked at each request. Signed out, that Session gets
-        `insufficient_scope` (Operations 3.2); anyone else `operation_not_found`.
-        """
-
-        stored = await self._read(OPERATION, operation_id, StoredOperation.from_json)
-        if stored is None or stored.owner != (session.client_id, session.pairwise_user_id):
-            raise _RefusedError(404, "operation_not_found")
-        if stored.account_id != session.account_id:
-            if session.account_id is None:
-                raise _needs_account(None, self.config.write_scopes)
-            raise _RefusedError(404, "operation_not_found")
-        current = await self._current_operation(operation_id)
-        if current is None:
-            raise _RefusedError(404, "operation_not_found")
-        return current
-
-    async def _current_operation(self, operation_id: str) -> StoredOperation | None:
-        """The operation now: a proposal past its expiry is recorded as expired."""
-
-        changed = await self._change(
-            OPERATION, operation_id, StoredOperation.from_json, self._expired
-        )
-        return None if changed is None else changed[1]
-
-    def _expired(self, stored: StoredOperation) -> StoredOperation:
-        operation = stored.operation
-        if (
-            operation.state == "proposed"
-            and operation.expires_at
-            and self._now() >= operation.expires_at
-        ):
-            return replace(
-                stored,
-                operation=operation.model_copy(
-                    update={
-                        "state": "expired",
-                        "result": OperationResult(
-                            summary="Nothing was changed; the proposal expired."
-                        ),
-                    }
-                ),
-            )
-        return stored
-
-    async def _confirm(
-        self, request: CompanyRequest, session: CallerSession, stored: StoredOperation
-    ) -> CompanyResponse:
-        body = loads_strict(request.body)
-        if not isinstance(body, dict):
-            raise _RefusedError(400, "invalid_request")
-        return await self._confirm_operation(
-            session, stored, body.get("revision"), body.get("approved_by")
-        )
-
-    async def _confirm_operation(
-        self,
-        session: CallerSession,
-        stored: StoredOperation,
-        revision: object,
-        approved_by: object,
-    ) -> CompanyResponse:
-        """Confirm, whichever channel it comes through: at most once (Operations §4.4, §6)."""
-
-        operation = stored.operation
-        # The scopes recorded with the operation when it was proposed, whichever
-        # channel (API, MCP, conversation) proposed it and whichever confirms it.
-        if any(scope not in session.scopes for scope in stored.scopes):
-            raise _RefusedError(403, "insufficient_scope", scope=" ".join(stored.scopes))
-        if operation.state != "proposed":
-            # At most once: a retried or late confirmation returns the record unchanged.
-            return CompanyResponse(200, operation.model_dump(mode="json"))
-        confirmation = self._confirmation(operation, revision, approved_by)
-
-        def confirm(current: StoredOperation) -> StoredOperation:
-            current = self._expired(current)
-            if current.operation.state != "proposed":
-                return current
-            if current.operation.revision != revision:
-                raise _RefusedError(
-                    409, "terms_changed", operation=current.operation.model_dump(mode="json")
-                )
-            return replace(
-                current,
-                operation=current.operation.model_copy(
-                    update={
-                        "state": "in_progress",
-                        "confirmation": confirmation,
-                        "expires_at": None,
-                    }
-                ),
-            )
-
-        # The one compare-and-set from `proposed` to `in_progress`: only its winner performs.
-        changed = await self._change(
-            OPERATION, operation.operation_id, StoredOperation.from_json, confirm
-        )
-        if changed is None:
-            raise _RefusedError(404, "operation_not_found")
-        before, confirmed = changed
-        if before.operation.state != "proposed" or confirmed.operation.state != "in_progress":
-            return CompanyResponse(200, confirmed.operation.model_dump(mode="json"))
-        return await self._perform(confirmed)
-
-    def _confirmation(
-        self, operation: Operation, revision: object, approved_by: object
-    ) -> OperationConfirmation:
-        """The confirmation of the latest revision, approved as the rules allow."""
-
-        if revision != operation.revision:
-            raise _RefusedError(409, "terms_changed", operation=operation.model_dump(mode="json"))
-        if approved_by not in {"user", "standing_permission"}:
-            raise _RefusedError(400, "invalid_request")
-        if approved_by == "standing_permission" and operation.user_approval_required:
-            raise _RefusedError(403, "user_approval_required")
-        return OperationConfirmation(
-            revision=operation.revision,
-            approved_by=approved_by,
-            confirmed_at=self._now(),
-        )
-
-    async def _perform(self, confirmed: StoredOperation) -> CompanyResponse:
-        """Perform a just-confirmed operation with its action's executor.
-
-        The action's lowest-order executor performs it; two at that order are ambiguous.
-        """
-
-        executors = [
-            contribution
-            for contribution in self.reactor.get_contributions(OPERATION_EXECUTORS)
-            if getattr(contribution.value, "action", None) == confirmed.action
-        ]
-        if not executors or (len(executors) > 1 and executors[0].order == executors[1].order):
-            # Nobody can perform it: it stays in progress rather than claim a failure.
-            return self._operation_response(confirmed)
-        executor = cast(OperationExecutor, executors[0].value)
-        try:
-            result = await executor.perform(confirmed.operation, confirmed.account_id)
-        except OperationFailed as failed:
-            # Failed partway: the result says every change that was made (Operations §6).
-            return await self._finish(confirmed, "failed", failed.result)
-        except OperationOutcomeUnknown:
-            # Never `failed` while it may have taken effect: it stays in progress.
-            return self._operation_response(confirmed)
-        return await self._finish(confirmed, "succeeded", result)
-
-    async def _finish(
-        self,
-        confirmed: StoredOperation,
-        state: Literal["succeeded", "failed"],
-        result: OperationResult,
-    ) -> CompanyResponse:
-        def finish(current: StoredOperation) -> StoredOperation:
-            if current.operation.state != "in_progress":
-                return current
-            return replace(
-                current,
-                performed=True,
-                operation=current.operation.model_copy(update={"state": state, "result": result}),
-            )
-
-        changed = await self._change(
-            OPERATION, confirmed.operation.operation_id, StoredOperation.from_json, finish
-        )
-        return self._operation_response(confirmed if changed is None else changed[1])
-
-    @staticmethod
-    def _operation_response(stored: StoredOperation) -> CompanyResponse:
-        headers = {"Retry-After": "5"} if stored.operation.state == "in_progress" else {}
-        return CompanyResponse(200, stored.operation.model_dump(mode="json"), headers)
-
-    # MCP (§4.3, §6, Operations §4.2) -------------------------------------------------------
+    # MCP (§4.3, §6, Operations 4, 6) -------------------------------------------------------
 
     def _mcp(self) -> CompanyMcp | None:
         return cast(
@@ -3349,6 +3392,15 @@ class CompanyService:
         arguments = params.get("arguments") or {}
         if not isinstance(name, str) or not isinstance(arguments, dict):
             return _rpc_error(None, -32602, "Invalid params")
+        negotiated = await self._supports_operations(session.client_id)
+        approval = approval_from_meta(params.get("_meta")) if negotiated else None
+        try:
+            target = await self._approval_target(session, approval)
+        except _RefusedError as refused:
+            return self._mcp_refusal(refused.status, refused.error, str(refused.extra["scope"]))
+        settled = None if target is None else self._settled(target)
+        if settled is not None:
+            return self._mcp_decision(settled)
         answer = await mcp.call(
             name,
             arguments,
@@ -3369,12 +3421,9 @@ class CompanyService:
                 status, error = 401, ""
             return self._mcp_refusal(status, error, scope)
         if answer.operation is not None:
-            if session.account_id is None:
-                # Signed out: the challenge with `scope`, no error code (§7).
-                return self._mcp_refusal(401, "", " ".join(self.config.write_scopes))
-            if not await self._supports_operations(session.client_id):
+            if not negotiated:
                 # A tool can't be refused with `extension_required`, which refuses the
-                # personal agent entirely: an ordinary tool error (Operations §2, §6).
+                # personal agent entirely: an ordinary tool error (Operations 2).
                 return {
                     "content": [
                         {
@@ -3385,16 +3434,8 @@ class CompanyService:
                     ],
                     "isError": True,
                 }
-            operation = await self._propose(session, Reply(operation=answer.operation))
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Proposed: {operation.summary} Not done until confirmed.",
-                    }
-                ],
-                "structuredContent": {"operation": operation.model_dump(mode="json")},
-            }
+            asked = self._asked(session, answer.operation, _fingerprint("mcp", name, arguments))
+            return self._mcp_decision(await self._decide(session, asked, approval, target))
         text = answer.text if answer.text is not None else json.dumps(answer.structured or {})
         result: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
         if answer.structured is not None:
@@ -3403,7 +3444,35 @@ class CompanyService:
             result["isError"] = True
         return result
 
-    # Web browsing (§6, Operations §4.4) --------------------------------------------------
+    @staticmethod
+    def _mcp_decision(decision: _Decision) -> dict[str, Any] | CompanyResponse:
+        """The tool's result: the operation, what it came to, or `503` while it is performed."""
+
+        operation, outcome = decision.operation, decision.outcome
+        if operation is not None:
+            return {
+                "isError": True,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Not done yet. This needs the user's approval: "
+                        f"{operation.summary}",
+                    }
+                ],
+                "structuredContent": {"operation": operation.model_dump(mode="json")},
+            }
+        if outcome is None:
+            return _json_error(
+                503, "temporarily_unavailable", {"Retry-After": _PERFORMING_RETRY_AFTER}
+            )
+        result: dict[str, Any] = {"content": [{"type": "text", "text": outcome.summary}]}
+        if outcome.data is not None:
+            result["structuredContent"] = outcome.data
+        if not outcome.succeeded:
+            result["isError"] = True
+        return result
+
+    # Web browsing (§6) ---------------------------------------------------------------------
 
     async def _join_page(self) -> CompanyResponse:
         """Step 1 of joining a browser (§6): a form with a one-time code, tied to this browser.
@@ -3530,8 +3599,8 @@ class CompanyService:
             },
         )
 
-    async def _web_session(self, cookie: str | None) -> CallerSession | None:
-        """The Session a browser's cookie stands for, as it is now (§6).
+    async def web_session(self, cookie: str | None) -> CallerSession | None:
+        """The Session a browser's cookie stands for, as it is now, for the company's pages (§6).
 
         Signed out once its sign-in has ended (§5.5); gone once its Session has.
         """
@@ -3569,59 +3638,12 @@ class CompanyService:
             family=joined.family if account_id is not None else None,
         )
 
-    async def _operation_page(
-        self, request: CompanyRequest, method: str, operation_id: str
-    ) -> CompanyResponse:
-        cookie = _cookie(request, WEB_COOKIE)
-        session = await self._web_session(cookie)
-        if cookie is None or session is None:
-            return self._page(401, "Your agent's session has ended. Ask it to open this again.")
-        try:
-            stored = await self._usable(operation_id, session)
-        except _RefusedError:
-            return self._page(404, "There is nothing to show here.")
-        page_url = f"{self.config.base}/operations/{operation_id}"
-        csrf = _bound(cookie, f"operation:{operation_id}")
-        if method == "POST":
-            form = dict(parse_qsl(request.body.decode()))
-            # This site's page, in the browser this cookie is in: never another site's
-            # page, nor a form copied from another Session's page (Guides, consent pages).
-            if not _from_this_site(request, self.config.base) or not hmac.compare_digest(
-                form.get("csrf", ""), csrf
-            ):
-                return self._page(403, "This request did not come from this site.")
-            try:
-                if form.get("action") == "cancel":
-                    await self._cancel_operation(operation_id)
-                else:
-                    revision = int(form["revision"]) if form.get("revision", "").isdigit() else None
-                    await self._confirm_operation(
-                        session, stored, revision, form.get("approved_by", "user")
-                    )
-            except _RefusedError as refusal:
-                return self._page(refusal.status, f"Not done: {html.escape(refusal.error)}.")
-            return CompanyResponse(303, None, {"Location": page_url, "Cache-Control": "no-store"})
-        if method != "GET":
-            return self._page(405, "Not allowed.")
-        operation = stored.operation
-        body = (
-            f"<h1>{html.escape(self.config.name)}</h1>"
-            f'<section data-operation-id="{html.escape(operation.operation_id)}" '
-            f'data-revision="{operation.revision}" data-state="{operation.state}">'
-            f"<p>{html.escape(operation.summary)}</p><p>Status: {operation.state}</p>"
-        )
-        if operation.result is not None:
-            body += f"<p>{html.escape(operation.result.summary)}</p>"
-        if operation.state == "proposed":
-            body += (
-                f'<form method="post" action="{page_url}">'
-                f'<input type="hidden" name="revision" value="{operation.revision}">'
-                '<input type="hidden" name="approved_by" value="user">'
-                f'<input type="hidden" name="csrf" value="{csrf}">'
-                '<button name="action" value="confirm">Confirm</button>'
-                '<button name="action" value="cancel">Cancel</button></form>'
-            )
-        return self._page(200, body + "</section>")
+
+def _fingerprint(*parts: object) -> str:
+    """A digest of what a request asks, or of what an action said: canonical JSON."""
+
+    canonical = json.dumps(parts, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _rpc_error(request_id: object, code: int, message: str) -> CompanyResponse:

@@ -2,83 +2,101 @@
 #
 # BSD 3-Clause License
 
-"""PAP Operations extension v1: exact approval, one record, at most once.
+"""PAP Operations extension v2: exact approval, at most once, no endpoints of its own.
 
-An operation is something a company proposes (from an API's `202`, an MCP
-tool's `structuredContent`, a conversation `message`, or its website) and
-performs only once it is confirmed at `{endpoint}/{operation_id}/confirm`.
+A company that wants the user's approval for an action refuses the request and
+returns the operation: the terms, in plain language and as JSON. The personal
+agent gets the user's approval and makes the same request again with it, through
+the interface that returned the operation:
+
+- an API's `403` with `error: approval_required` and `operation`, answered by the
+  same request with the `Poppy-Approval` header (`ApiClient.call(approval=...)`);
+- an MCP tool's error result with `structuredContent.operation`, answered by the
+  same call with `_meta["personalagentprotocol.org/approval"]`
+  (`McpClient.call_tool(approval=...)`);
+- a company message's `operation`, answered by a message with `approval`.
 
 What this client guarantees on the personal agent's side:
 
 - **Negotiation.** Operations are used only when the company's `poppy.json`
-  and the agent's client metadata both list `operations` version 1.
-- **Exact approval.** A user approval names one `operation_id` and one
-  `revision` (`approve()` after the host showed the summary); a confirmation
-  for any other revision is refused locally, and only the latest revision can
-  be confirmed at the company. `terms_changed` returns the new revision and
-  what changed, to show the user before asking again.
-- **Standing permissions.** Confirming with `standing_permission` needs the
-  Reactor `pap.standingPermissionStore` to reserve a use whose company,
-  account, action, and every limit cover the revision's terms; the use is
-  released when the company refuses, kept when it confirms. A revision that
-  requires the user's approval is never confirmed this way.
-- **Recovery.** A confirm whose answer was lost is read back by the same ID;
-  an operation is never re-proposed or assumed failed while it is unknown.
-- **Disclosure.** `result.summary` is returned as the company wrote it.
-
-Nothing here reads conversation text as approval: a message never confirms.
+  and the agent's client metadata both list `operations` version 2.
+- **The user decides.** `OperationsClient.ask_user` asks the host's own approval
+  surface (`pap.approvalSurface`) about every operation, naming the company and
+  the revision's summary: only the surface's `True` makes an `Approval`. Nothing
+  here reads conversation text as approval, approves in advance, or approves on
+  the user's behalf; without a surface, nothing is approved.
+- **Exact terms.** `terms_differences` checks `terms` against the `summary` and
+  against what the agent asked for, and the surface is told any difference. An
+  approval covers one revision: a new one needs a new approval.
+- **At most once.** After a failure or a timeout, `OperationsClient.send` sends
+  the same approval again, waiting for `Retry-After`. A new operation in answer
+  to such a retry doesn't say whether the first was performed: it is `unknown`,
+  and the host finds out another way before asking the user again.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
+import asyncio
 import re
-from dataclasses import dataclass, replace
-from datetime import datetime
-from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, Protocol, cast, runtime_checkable
-from urllib.parse import urlsplit
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, Generic, Literal, TypeVar, cast
 
-import httpx
+from pydantic import ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .errors import PersonalAgentProtocolError, ProtocolValidationError, TransportError
-from .json import loads_strict
-from .models import ClientMetadata, DiscoveryDocument, Message, Operation, ProtocolModel
-from .reactor import CLOCKS, STANDING_PERMISSION_STORES, Clock, first_contribution
-from .refusals import refusal_code, refusal_details
-from .sessions import AccessToken, PapSession
-from .telemetry import by_endpoint, operation_result, traced
-from .transport import SessionHttpClient
+from .errors import PersonalAgentProtocolError, TransportError
+from .models import (
+    Approval,
+    ClientMetadata,
+    DiscoveryDocument,
+    Message,
+    Operation,
+    Organization,
+)
+from .reactor import (
+    APPROVAL_SURFACES,
+    CLOCKS,
+    ApprovalRequest,
+    ApprovalSurface,
+    Clock,
+    first_contribution,
+    optional_contribution,
+)
+from .telemetry import operation_result, traced
 
 OPERATIONS_EXTENSION = "operations"
-OPERATIONS_VERSION = "1"
-FINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "expired"})
-_IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+OPERATIONS_VERSION = "2"
+#: The header that carries an approval to an API (Operations 6).
+APPROVAL_HEADER = "Poppy-Approval"
+#: The `_meta` key that carries an approval to an MCP tool (Operations 6).
+APPROVAL_META_KEY = "personalagentprotocol.org/approval"
+#: How many times `send` sends an approval, unless told otherwise.
+SEND_ATTEMPTS = 3
+
+_T = TypeVar("_T")
 
 
 class OperationError(PersonalAgentProtocolError):
-    """An operation could not be read, confirmed, or cancelled."""
+    """An operation could not be approved, or its approval could not be sent."""
 
 
-def operations_endpoint(document: DiscoveryDocument, metadata: ClientMetadata) -> str | None:
-    """The company's operations endpoint when both sides list version 1, else `None`."""
+def operations_negotiated(document: DiscoveryDocument, metadata: ClientMetadata) -> bool:
+    """Whether both sides list `operations` with this version (another major doesn't count)."""
 
     company = document.extensions.get(OPERATIONS_EXTENSION)
     agent = metadata.extensions.get(OPERATIONS_EXTENSION)
-    if company is None or agent is None:
-        return None
-    if company.version != OPERATIONS_VERSION or agent.version != OPERATIONS_VERSION:
-        return None
-    endpoint = (company.model_extra or {}).get("endpoint")
-    return endpoint if isinstance(endpoint, str) and endpoint.startswith("https://") else None
+    return (
+        company is not None
+        and agent is not None
+        and company.version == OPERATIONS_VERSION
+        and agent.version == OPERATIONS_VERSION
+    )
 
 
 def operation_from(payload: object) -> Operation:
-    """The one operation object, from whichever channel carried it (Operations §4).
+    """The one operation object, from whichever interface carried it (Operations 4).
 
-    Accepts an API's `202` body (`{"operation": …}`), an MCP tool result
+    Accepts an API's `403` body (`{"operation": …}`), an MCP tool result
     (`{"structuredContent": {"operation": …}}`), a conversation message
     (`{"operation": …}`, or a `Message`), or the operation itself.
     """
@@ -99,460 +117,420 @@ def operation_from(payload: object) -> Operation:
     return Operation.model_validate(candidate)
 
 
-def operation_page(operation: Operation, company_domain: str) -> str:
-    """The operation's `url`, once checked to be the company's own HTTPS page (§4.4, §5).
+# The `Poppy-Approval` header: an RFC 9651 Dictionary ---------------------------------------
 
-    The personal agent opens it in its own browser joined to the Session
-    (`BrowserSessionClient.join(return_to=...)`), never in the user's. What
-    is confirmed there is the same operation, read back by its ID.
+
+def approval_header(approval: Approval) -> str:
+    """The value of `Poppy-Approval`: the two members, as Strings."""
+
+    return f'operation_id="{approval.operation_id}", revision="{approval.revision}"'
+
+
+class _DictionaryError(ValueError):
+    """The value is not an RFC 9651 Dictionary: the whole field is ignored."""
+
+
+_KEY = re.compile(r"[a-z*][a-z0-9_.*-]*")
+_TOKEN = re.compile(r"[A-Za-z*][A-Za-z0-9!#$%&'*+.^_`|~:/-]*")
+_NUMBER = re.compile(r"-?\d{1,15}(\.\d{1,3})?")
+_BYTES = re.compile(r":[A-Za-z0-9+/=]*:")
+_DISPLAY = re.compile(r'%"[^"]*"')
+_WHITESPACE = " \t"
+
+
+class _Dictionary:
+    """A strict parser of an RFC 9651 Dictionary, keeping the Strings a caller reads."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text.strip(" ")
+        self.at = 0
+
+    def _peek(self) -> str:
+        return self.text[self.at] if self.at < len(self.text) else ""
+
+    def _match(self, pattern: re.Pattern[str]) -> str:
+        found = pattern.match(self.text, self.at)
+        if found is None:
+            raise _DictionaryError(self.text)
+        self.at = found.end()
+        return found.group()
+
+    def members(self) -> dict[str, object]:
+        members: dict[str, object] = {}
+        while self.at < len(self.text):
+            key = self._match(_KEY)
+            value: object = True
+            if self._peek() == "=":
+                self.at += 1
+                value = self._inner_list() if self._peek() == "(" else self._bare_item()
+            self._parameters()
+            members[key] = value  # the last one wins, in the first one's place
+            while self._peek() and self._peek() in _WHITESPACE:
+                self.at += 1
+            if self.at == len(self.text):
+                break
+            if self._peek() != ",":
+                raise _DictionaryError(self.text)
+            self.at += 1
+            while self._peek() and self._peek() in _WHITESPACE:
+                self.at += 1
+            if self.at == len(self.text):
+                raise _DictionaryError(self.text)  # a trailing comma
+        return members
+
+    def _parameters(self) -> None:
+        while self._peek() == ";":
+            self.at += 1
+            while self._peek() == " ":
+                self.at += 1
+            self._match(_KEY)
+            if self._peek() == "=":
+                self.at += 1
+                self._bare_item()
+
+    def _inner_list(self) -> list[object]:
+        self.at += 1
+        items: list[object] = []
+        while True:
+            while self._peek() == " ":
+                self.at += 1
+            if self._peek() == ")":
+                self.at += 1
+                return items
+            items.append(self._bare_item())
+            self._parameters()
+            if self._peek() not in (" ", ")"):
+                raise _DictionaryError(self.text)
+
+    def _bare_item(self) -> object:
+        first = self._peek()
+        if first == '"':
+            return self._string()
+        if first == "?":
+            self.at += 1
+            if self._peek() not in ("0", "1"):
+                raise _DictionaryError(self.text)
+            self.at += 1
+            return self.text[self.at - 1] == "1"
+        # Only a String is a `str` here: nothing else names an operation or a revision.
+        if first == ":":
+            return (self._match(_BYTES),)
+        if first == "@":
+            self.at += 1
+            return (self._match(_NUMBER),)
+        if first == "%":
+            return (self._match(_DISPLAY),)
+        if first == "-" or first.isdigit():
+            return (self._match(_NUMBER),)
+        return (self._match(_TOKEN),)
+
+    def _string(self) -> str:
+        self.at += 1
+        value: list[str] = []
+        while self.at < len(self.text):
+            char = self.text[self.at]
+            self.at += 1
+            if char == "\\":
+                escaped = self._peek()
+                if escaped not in ('"', "\\") or not escaped:
+                    raise _DictionaryError(self.text)
+                self.at += 1
+                value.append(escaped)
+            elif char == '"':
+                return "".join(value)
+            elif not " " <= char <= "~":
+                raise _DictionaryError(self.text)
+            else:
+                value.append(char)
+        raise _DictionaryError(self.text)
+
+
+def parse_approval_header(value: str | None) -> Approval | None:
+    """The approval a `Poppy-Approval` value states, or `None`.
+
+    A value that isn't a Dictionary is ignored whole (RFC 9651), and so is one
+    without both members as Strings of the IDs' characters. Members this version
+    doesn't recognize are ignored, so later versions can add them (Operations 6).
     """
 
-    if operation.url is None:
-        raise OperationError("no_operation_page", "The company gave no page for this operation")
-    parsed = urlsplit(operation.url)
-    host = (parsed.hostname or "").lower()
-    domain = company_domain.lower().removeprefix("www.")
-    if parsed.scheme != "https" or not (host == domain or host.endswith(f".{domain}")):
-        raise OperationError(
-            "foreign_operation_page", "An operation's page must be on the company's own domain"
+    if not value:
+        return None
+    try:
+        members = _Dictionary(value).members()
+        return Approval.model_validate(
+            {"operation_id": members.get("operation_id"), "revision": members.get("revision")}
         )
-    return operation.url
-
-
-def terms_digest(operation: Operation) -> str:
-    """A digest of exactly what a revision says: its summary and its terms."""
-
-    canonical = json.dumps(
-        {"summary": operation.summary, "terms": operation.terms or {}},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-class UserApproval(ProtocolModel):
-    """The user approved this revision, as it was shown to them."""
-
-    operation_id: str
-    revision: int
-    digest: str
-
-
-def approve(operation: Operation) -> UserApproval:
-    """Record the user's approval of the revision the host just showed them."""
-
-    if operation.state != "proposed":
-        raise OperationError("not_proposed", "Only a proposed operation can be approved")
-    return UserApproval(
-        operation_id=operation.operation_id,
-        revision=operation.revision,
-        digest=terms_digest(operation),
-    )
-
-
-@dataclass(frozen=True)
-class TermLimit:
-    """A bound on one term, named by its dotted path in `terms`.
-
-    `maximum` compares as a decimal (amounts are strings on the wire);
-    `allowed` lists the only values accepted. A limit names a term the
-    revision must carry: a missing term is a question for the user.
-    """
-
-    path: str
-    maximum: Decimal | None = None
-    allowed: frozenset[str] | None = None
-
-
-@dataclass(frozen=True)
-class StandingPermission:
-    """What the user allowed in advance: one company, account, and action."""
-
-    reference: str
-    company: str
-    account: str
-    action: str
-    limits: tuple[TermLimit, ...]
-    expires_at: datetime
-    uses_remaining: int | None = None
-
-
-@dataclass(frozen=True)
-class StandingPermissionRequest:
-    company: str
-    account: str
-    action: str
-    operation: Operation
-
-
-@runtime_checkable
-class StandingPermissionStore(Protocol):
-    """Reserve, commit, and release uses of standing permissions.
-
-    `reserve` returns an opaque reservation when a permission in effect
-    covers the request (its company, account, action, every limit), holding
-    one use for a limited-use permission; `commit` spends it once the company
-    confirmed; `release` gives it back when the company refused.
-    """
-
-    async def reserve(self, request: StandingPermissionRequest, *, now: datetime) -> str | None: ...
-
-    async def commit(self, reservation: str) -> None: ...
-
-    async def release(self, reservation: str) -> None: ...
-
-
-def _term(terms: dict[str, Any], path: str) -> Any:
-    value: Any = terms
-    for part in path.split("."):
-        if not isinstance(value, dict) or part not in value:
-            raise KeyError(path)
-        value = value[part]
-    return value
-
-
-def covers(
-    permission: StandingPermission, request: StandingPermissionRequest, now: datetime
-) -> bool:
-    """Whether a standing permission covers this revision, term by term."""
-
-    if (
-        permission.company != request.company
-        or permission.account != request.account
-        or permission.action != request.action
-        or now >= permission.expires_at
-        or permission.uses_remaining == 0
-        or request.operation.user_approval_required
-    ):
-        return False
-    terms = request.operation.terms or {}
-    for limit in permission.limits:
-        try:
-            value = _term(terms, limit.path)
-        except KeyError:
-            return False
-        if limit.allowed is not None and str(value) not in limit.allowed:
-            return False
-        if limit.maximum is not None:
-            try:
-                if Decimal(str(value)) > limit.maximum:
-                    return False
-            except InvalidOperation:
-                return False
-    return True
-
-
-class InMemoryStandingPermissionStore:
-    """A single-process store of standing permissions, for examples and tests."""
-
-    def __init__(self, permissions: tuple[StandingPermission, ...] = ()) -> None:
-        self.permissions = {permission.reference: permission for permission in permissions}
-        self.reservations: dict[str, str] = {}
-
-    async def reserve(self, request: StandingPermissionRequest, *, now: datetime) -> str | None:
-        for reference, permission in self.permissions.items():
-            if covers(permission, request, now):
-                if permission.uses_remaining is not None:
-                    self.permissions[reference] = _replace_uses(
-                        permission, permission.uses_remaining - 1
-                    )
-                reservation = f"rsv_{len(self.reservations) + 1}_{request.operation.operation_id}"
-                self.reservations[reservation] = reference
-                return reservation
+    except (_DictionaryError, ValidationError):
         return None
 
-    async def commit(self, reservation: str) -> None:
-        self.reservations.pop(reservation, None)
 
-    async def release(self, reservation: str) -> None:
-        reference = self.reservations.pop(reservation, None)
-        permission = self.permissions.get(reference) if reference else None
-        if permission is not None and permission.uses_remaining is not None:
-            self.permissions[permission.reference] = _replace_uses(
-                permission, permission.uses_remaining + 1
-            )
+def approval_from_meta(meta: object) -> Approval | None:
+    """The approval in an MCP tool call's `_meta`, or `None` (unknown members are ignored)."""
 
-
-def _replace_uses(permission: StandingPermission, uses: int) -> StandingPermission:
-    return replace(permission, uses_remaining=uses)
+    if not isinstance(meta, Mapping):
+        return None
+    try:
+        return Approval.model_validate(meta.get(APPROVAL_META_KEY))
+    except ValidationError:
+        return None
 
 
-class ConfirmOutcome(ProtocolModel):
-    """What a confirmation did.
+# The terms check ---------------------------------------------------------------------------
 
-    `confirmed`: the company accepted the revision (`operation.state` is final,
-    or `in_progress` with `retry_after`). `terms_changed`: a newer revision
-    (`operation`) to show the user, with the `changed` term paths.
-    `approval_required`: the company wants the user's own approval.
-    `not_confirmed`: the operation was already cancelled or expired, returned
-    as it is; nothing was confirmed or performed.
+#: A value a `summary` states with decimals, such as an amount.
+_DECIMAL = re.compile(r"(?<![\w.])\d[\d,]*\.\d+(?![\w])")
+_NUMERIC = re.compile(r"^\d+(\.\d+)?$")
+
+
+def _leaves(value: object, path: str = "") -> dict[str, object]:
+    if isinstance(value, Mapping):
+        leaves: dict[str, object] = {}
+        for key, item in value.items():
+            leaves.update(_leaves(item, f"{path}.{key}" if path else str(key)))
+        return leaves
+    return {path: value}
+
+
+def terms_differences(
+    operation: Operation, asked: Mapping[str, object] | None = None
+) -> tuple[str, ...]:
+    """Where `terms` disagree with the `summary`, or with what the agent asked for.
+
+    The company writes both, so the summary alone could describe something other
+    than the terms (Operations 5). `asked` gives the values the agent asked for,
+    keyed by their dotted paths in `terms`: a different or missing value is a
+    difference. Amounts are compared with the summary both ways: every decimal in
+    the summary is in the terms, and every number in the terms is in the summary.
+    Identifiers aren't, since a summary is written for people. Without `terms`
+    there is nothing to compare with.
     """
 
-    status: Literal["confirmed", "terms_changed", "approval_required", "not_confirmed"]
-    operation: Operation | None = None
-    changed: tuple[str, ...] = ()
-    retry_after: int | None = None
+    leaves = _leaves(operation.terms or {})
+    differences: list[str] = []
+    for path, wanted in (asked or {}).items():
+        if path not in leaves:
+            differences.append(f"You asked for {path} {wanted}; the terms don't say.")
+        elif str(leaves[path]) != str(wanted):
+            differences.append(f"You asked for {path} {wanted}; the terms say {leaves[path]}.")
+    if operation.terms is None:
+        return tuple(differences)
+    stated = {match.replace(",", "") for match in _DECIMAL.findall(operation.summary)}
+    numbers = {
+        path: str(value)
+        for path, value in leaves.items()
+        if not isinstance(value, bool)
+        and isinstance(value, str | int | float)
+        and _NUMERIC.fullmatch(str(value))
+    }
+    for path, value in numbers.items():
+        if value not in operation.summary.replace(",", ""):
+            differences.append(f"The terms say {path} {value}; the summary doesn't.")
+    for value in sorted(stated - set(numbers.values())):
+        differences.append(f"The summary says {value}; the terms don't.")
+    return tuple(differences)
 
 
-class OperationsClient:
-    """Read, confirm, and cancel operations at a negotiated endpoint."""
+def _changed(before: Operation, after: Operation) -> tuple[str, ...]:
+    """What a new revision changed: `summary`, `expires_at`, and the terms' paths."""
 
-    def __init__(
-        self, *, transport: SessionHttpClient, max_response_bytes: int = 256 * 1024
-    ) -> None:
-        if max_response_bytes <= 0:
-            raise ValueError("max_response_bytes must be positive")
-        self.transport = transport
-        self.reactor: PluginPlatform = transport.reactor
-        self.max_response_bytes = max_response_bytes
-
-    @traced("pap.operation.read", before=by_endpoint, after=operation_result)
-    async def read(
-        self,
-        endpoint: str,
-        operation_id: str,
-        *,
-        session: PapSession,
-        token: AccessToken | None = None,
-    ) -> Operation:
-        response = await self._request("GET", endpoint, operation_id, None, session, token)
-        payload = self._payload(response)
-        if response.status_code != 200:
-            raise self._error(response, payload)
-        return self._operation(payload, operation_id)
-
-    @traced("pap.operation.confirm", before=by_endpoint, after=operation_result)
-    async def confirm(
-        self,
-        endpoint: str,
-        operation: Operation,
-        *,
-        approval: UserApproval | None = None,
-        standing: tuple[str, str, str] | None = None,
-        session: PapSession,
-        token: AccessToken | None = None,
-    ) -> ConfirmOutcome:
-        """Confirm the revision the user approved, or one a standing permission covers.
-
-        `approval` is `approve(operation)` for this exact revision. `standing`
-        is `(company, account, action)` to look up a standing permission. A
-        lost answer is recovered by reading the same operation back.
-        """
-
-        approved_by, held = await self._authorize(operation, approval, standing)
-        body = json.dumps(
-            {"revision": operation.revision, "approved_by": approved_by}, separators=(",", ":")
-        ).encode()
-        try:
-            response = await self._request(
-                "POST",
-                endpoint,
-                f"{operation.operation_id}/confirm",
-                body,
-                session,
-                token,
-            )
-        except TransportError:
-            # The answer was lost: the company may have performed it. Read it back.
-            current = await self.read(
-                endpoint,
-                operation.operation_id,
-                session=session,
-                token=token,
-            )
-            await _settle(held, spent=current.state != "proposed")
-            if current.state == "proposed":
-                raise OperationError(
-                    "confirm_not_received", "The confirmation did not reach the company; retry it"
-                ) from None
-            return ConfirmOutcome(status="confirmed", operation=current)
-
-        payload = self._payload(response)
-        await _settle(held, spent=response.status_code == 200)
-        if response.status_code == 200:
-            confirmed = self._operation(payload, operation.operation_id)
-            if confirmed.confirmation is None and confirmed.state in {"cancelled", "expired"}:
-                # A repeated or late confirm is safe: the record comes back unchanged.
-                return ConfirmOutcome(status="not_confirmed", operation=confirmed)
-            if confirmed.revision != operation.revision or confirmed.confirmation is None:
-                raise OperationError(
-                    "invalid_operation", "The company confirmed a revision other than the one sent"
-                )
-            retry_after = response.headers.get("retry-after")
-            return ConfirmOutcome(
-                status="confirmed",
-                operation=confirmed,
-                retry_after=int(retry_after) if retry_after and retry_after.isdigit() else None,
-            )
-        error = payload.get("error") if isinstance(payload, dict) else None
-        if error == "terms_changed" and isinstance(payload, dict):
-            current = self._operation(payload.get("operation"), operation.operation_id)
-            return ConfirmOutcome(
-                status="terms_changed",
-                operation=current,
-                changed=_changed_paths(operation, current),
-            )
-        if error == "user_approval_required":
-            return ConfirmOutcome(status="approval_required", operation=operation)
-        raise self._error(response, payload)
-
-    async def _authorize(
-        self,
-        operation: Operation,
-        approval: UserApproval | None,
-        standing: tuple[str, str, str] | None,
-    ) -> tuple[Literal["user", "standing_permission"], _Held | None]:
-        if (approval is None) == (standing is None):
-            raise OperationError(
-                "approval_required",
-                "Confirm with exactly one of a user approval or a standing permission",
-            )
-        if operation.state != "proposed":
-            raise OperationError("not_proposed", "Only a proposed operation can be confirmed")
-        if approval is not None:
-            if (
-                approval.operation_id != operation.operation_id
-                or approval.revision != operation.revision
-                or approval.digest != terms_digest(operation)
-            ):
-                raise OperationError(
-                    "approval_mismatch", "The user approved a different revision than this one"
-                )
-            return "user", None
-        if operation.user_approval_required:
-            raise OperationError(
-                "user_approval_required", "This revision needs the user's own approval"
-            )
-        store = cast(
-            StandingPermissionStore,
-            first_contribution(
-                self.reactor, STANDING_PERMISSION_STORES, "standing permission store"
-            ),
-        )
-        clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
-        company, account, action = cast(tuple[str, str, str], standing)
-        reservation = await store.reserve(
-            StandingPermissionRequest(
-                company=company, account=account, action=action, operation=operation
-            ),
-            now=clock.now(),
-        )
-        if reservation is None:
-            raise OperationError(
-                "no_standing_permission",
-                "No standing permission covers this revision: ask the user",
-            )
-        return "standing_permission", _Held(store, reservation)
-
-    @traced("pap.operation.cancel", before=by_endpoint, after=operation_result)
-    async def cancel(
-        self,
-        endpoint: str,
-        operation_id: str,
-        *,
-        session: PapSession,
-        token: AccessToken | None = None,
-    ) -> Operation:
-        """Cancel: a proposal becomes `cancelled`; one in progress stops if it can."""
-
-        response = await self._request(
-            "POST",
-            endpoint,
-            f"{operation_id}/cancel",
-            b"{}",
-            session,
-            token,
-        )
-        payload = self._payload(response)
-        if response.status_code != 200:
-            raise self._error(response, payload)
-        return self._operation(payload, operation_id)
-
-    async def _request(
-        self,
-        method: str,
-        endpoint: str,
-        path: str,
-        body: bytes | None,
-        session: PapSession,
-        token: AccessToken | None = None,
-    ) -> httpx.Response:
-        if not _IDENTIFIER.fullmatch(path.split("/", 1)[0]):
-            raise ProtocolValidationError("invalid_identifier", "operation ID is invalid")
-        headers = {"Accept": "application/json"}
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-        return await self.transport.request(
-            method,
-            f"{endpoint.rstrip('/')}/{path}",
-            session=session,
-            token=token,
-            headers=headers,
-            content=body,
-        )
-
-    def _payload(self, response: httpx.Response) -> object:
-        if len(response.content) > self.max_response_bytes:
-            raise OperationError("response_too_large", "operation response exceeded limit")
-        try:
-            return loads_strict(response.content) if response.content else {}
-        except (ValueError, ProtocolValidationError) as exc:
-            raise OperationError("invalid_json", "operation response was not JSON") from exc
-
-    @staticmethod
-    def _operation(payload: object, operation_id: str) -> Operation:
-        candidate = payload.get("operation", payload) if isinstance(payload, dict) else payload
-        try:
-            operation = Operation.model_validate(candidate)
-        except ValueError as exc:
-            raise OperationError("invalid_operation", "operation was malformed") from exc
-        if operation.operation_id != operation_id:
-            raise OperationError("invalid_operation", "the company answered for another operation")
-        return operation
-
-    @staticmethod
-    def _error(response: httpx.Response, payload: object) -> OperationError:
-        # In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
-        code = refusal_code(response, payload, "operation_request_failed")
-        details = refusal_details(response, payload)
-        return OperationError(
-            code if isinstance(code, str) else "operation_request_failed",
-            "the operation request was refused",
-            status_code=response.status_code,
-            details=details or None,
-        )
-
-
-@dataclass(frozen=True)
-class _Held:
-    store: StandingPermissionStore
-    reservation: str
-
-
-async def _settle(held: _Held | None, *, spent: bool) -> None:
-    """Spend a reserved use once the company confirmed; give it back otherwise."""
-
-    if held is None:
-        return
-    if spent:
-        await held.store.commit(held.reservation)
-    else:
-        await held.store.release(held.reservation)
-
-
-def _changed_paths(before: Operation, after: Operation) -> tuple[str, ...]:
-    def flatten(value: Any, prefix: str = "") -> dict[str, Any]:
-        if isinstance(value, dict):
-            flat: dict[str, Any] = {}
-            for key, item in value.items():
-                flat.update(flatten(item, f"{prefix}{key}."))
-            return flat
-        return {prefix.rstrip("."): value}
-
-    old = flatten(before.terms or {})
-    new = flatten(after.terms or {})
+    old, new = _leaves(before.terms or {}), _leaves(after.terms or {})
     changed = sorted(path for path in old.keys() | new.keys() if old.get(path) != new.get(path))
+    if before.expires_at != after.expires_at:
+        changed.insert(0, "expires_at")
     if before.summary != after.summary:
         changed.insert(0, "summary")
     return tuple(changed)
+
+
+# Asking the user, and sending the approval ---------------------------------------------------
+
+
+class ApprovalSent(Generic[_T]):
+    """What came of sending an approval.
+
+    `answered`: the company answered as it would without operations; `answer` is
+    that answer, the same on every retry. `new_revision`: it returned an operation
+    to approve, `operation`, for a first send: show what changed and ask again.
+    `unknown`: a send failed or timed out and nothing since says whether the action
+    was performed, with `operation` when the company answered a retry with one, or
+    the company is still performing it: find out another way, such as from the
+    order in the company's API, before asking the user about the same action again.
+    """
+
+    def __init__(
+        self,
+        status: Literal["answered", "new_revision", "unknown"],
+        *,
+        answer: _T | None = None,
+        operation: Operation | None = None,
+        retry_after: str | None = None,
+    ) -> None:
+        self.status = status
+        self.answer = answer
+        self.operation = operation
+        self.retry_after = retry_after
+
+
+def _retry_after(error: PersonalAgentProtocolError) -> str | None:
+    details = error.details if isinstance(error.details, Mapping) else {}
+    value = details.get("retry_after")
+    return value if isinstance(value, str) else None
+
+
+class OperationsClient:
+    """Get the user's approval of an operation, and send it at most once.
+
+    `sleep` waits for `Retry-After` between sends; `max_wait` is the longest wait
+    it will do.
+    """
+
+    def __init__(
+        self,
+        *,
+        reactor: PluginPlatform,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        max_wait: float = 30.0,
+    ) -> None:
+        self.reactor = reactor
+        self.sleep = sleep
+        self.max_wait = max_wait
+
+    @traced("pap.operation.ask_user", after=operation_result)
+    async def ask_user(
+        self,
+        operation: Operation,
+        *,
+        organization: Organization,
+        tenant_id: str,
+        asked: Mapping[str, object] | None = None,
+        replaces: Operation | None = None,
+        surface: ApprovalSurface | None = None,
+    ) -> Approval:
+        """Ask the user about this revision, through the host's own surface.
+
+        Shows the company's name and the revision's `summary`, with any difference
+        the terms check finds, and with what changed from `replaces`, the revision
+        this one replaces. Only `True` from the surface approves; anything else is
+        `not_approved`, a revision past its expiry is `revision_expired` (make the
+        request again for new terms), and a host with no surface is
+        `no_approval_surface`. `surface` overrides the contribution, for a host
+        whose interface is the caller's own.
+        """
+
+        clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
+        if clock.now() > operation.expires_at:
+            raise OperationError("revision_expired", "This revision has expired")
+        request = ApprovalRequest(
+            action_id="pap.operations.approve",
+            action_name="Approve an operation",
+            summary=operation.summary,
+            arguments={"operation_id": operation.operation_id, "revision": operation.revision},
+            tenant_id=tenant_id,
+            company_name=organization.name,
+            company_domain=organization.domain,
+            terms=operation.terms,
+            expires_at=operation.expires_at,
+            differences=terms_differences(operation, asked),
+            changed=() if replaces is None else _changed(replaces, operation),
+        )
+        if await self._approved(request, surface) is not True:
+            raise OperationError("not_approved", "The user did not approve")
+        return Approval(operation_id=operation.operation_id, revision=operation.revision)
+
+    async def _approved(self, request: ApprovalRequest, surface: ApprovalSurface | None) -> object:
+        chosen = surface
+        if chosen is None:
+            try:
+                contributed = optional_contribution(
+                    self.reactor, APPROVAL_SURFACES, "approval surface"
+                )
+            except RuntimeError as error:
+                raise OperationError(
+                    "approval_surface_ambiguous", "Two approval surfaces at one order"
+                ) from error
+            if contributed is None:
+                raise OperationError(
+                    "no_approval_surface", "This host has no surface to ask the user through"
+                )
+            chosen = cast(ApprovalSurface, contributed)
+        try:
+            return await chosen.approve(request)
+        except Exception as error:
+            raise OperationError(
+                "approval_failed", "The approval surface failed: nothing was approved"
+            ) from error
+
+    @traced("pap.operation.send", after=operation_result)
+    async def send(
+        self,
+        request: Callable[[Approval], Awaitable[_T]],
+        approval: Approval,
+        *,
+        attempts: int = SEND_ATTEMPTS,
+    ) -> ApprovalSent[_T]:
+        """Send one approval: the saved request, the same every time.
+
+        `request(approval)` makes the request that returned the operation, with
+        the approval: `api.call(..., approval=approval)`, or the tool call, or the
+        same message with the same ID. A failure, a timeout, or a `503` sends it
+        again with the same approval, waiting for `Retry-After`. After `attempts`,
+        or a longer wait than `max_wait`, the outcome is `unknown`.
+        """
+
+        if attempts < 1:
+            raise ValueError("attempts must be positive")
+        uncertain = False
+        retry_after: str | None = None
+        for attempt in range(attempts):
+            try:
+                answer = await request(approval)
+            except TransportError:
+                uncertain, retry_after = True, None
+            except PersonalAgentProtocolError as error:
+                if error.status_code != 503:
+                    raise
+                uncertain, retry_after = True, _retry_after(error)
+            else:
+                return self._sent(answer, approval, uncertain=uncertain)
+            if attempt + 1 < attempts and not await self._waited(retry_after):
+                break
+        return ApprovalSent("unknown", retry_after=retry_after)
+
+    @staticmethod
+    def _sent(answer: Any, approval: Approval, *, uncertain: bool) -> ApprovalSent[Any]:
+        operation = getattr(answer, "operation", None)
+        if not isinstance(operation, Operation):
+            return ApprovalSent("answered", answer=answer)
+        if operation.revision == approval.revision:
+            # Answering an approval with the revision it names would loop for ever.
+            raise OperationError(
+                "invalid_operation", "The company answered an approval with the same revision"
+            )
+        return ApprovalSent("unknown" if uncertain else "new_revision", operation=operation)
+
+    async def _waited(self, retry_after: str | None) -> bool:
+        """Wait for `Retry-After`: `False` when it asks for longer than this client waits."""
+
+        seconds = int(retry_after) if retry_after is not None and retry_after.isdigit() else 0
+        if seconds > self.max_wait:
+            return False
+        if seconds:
+            await self.sleep(float(seconds))
+        return True
+
+
+__all__ = [
+    "APPROVAL_HEADER",
+    "APPROVAL_META_KEY",
+    "OPERATIONS_EXTENSION",
+    "OPERATIONS_VERSION",
+    "ApprovalSent",
+    "OperationError",
+    "OperationsClient",
+    "approval_from_meta",
+    "approval_header",
+    "operation_from",
+    "operations_negotiated",
+    "parse_approval_header",
+    "terms_differences",
+]

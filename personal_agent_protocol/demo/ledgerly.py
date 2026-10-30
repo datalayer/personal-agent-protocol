@@ -14,17 +14,12 @@ no company-to-company protocol, so this is **composition**:
   Northwind account through Device Sign-In that she approves on Northwind's
   page.
 
-Every approval is an Operation, never a chat message:
-
-- A payment Northwind proposes is relayed to Ada as a Ledgerly operation
-  (`northwind.payment`) quoting Northwind's summary as written. When Ada
-  approves it, Ledgerly's executor checks the Northwind revision is unchanged
-  and confirms it at Northwind with `approved_by: user`; Northwind's
-  `result.summary` becomes Ledgerly's, as written.
-- A standing permission is itself an operation Ada approves
-  (`ledgerly.standing_permission`). Within its bounds, Ledgerly confirms
-  Northwind's proposals with `approved_by: standing_permission` and tells
-  Ada what was done; beyond them, it asks her again.
+Every approval is an Operation, never a chat message. A payment Northwind asks
+approval for is relayed to Ada as a Ledgerly operation (`northwind.payment`) quoting
+Northwind's summary as written. When Ada approves it, Ledgerly's executor checks the
+Northwind revision is unchanged and sends Northwind the approval of that exact
+revision, in the conversation that returned it; what Northwind says it came to
+becomes Ledgerly's answer, as written. Ada is asked about every payment.
 """
 
 from __future__ import annotations
@@ -32,9 +27,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import timedelta
-from decimal import Decimal
-from typing import Any, cast
+from typing import cast
 
 import httpx
 from pydantic import SecretStr
@@ -44,6 +37,7 @@ from ..company import (
     COMPANY_ACCOUNTS,
     COMPANY_AGENTS,
     OPERATION_EXECUTORS,
+    ActionResult,
     Authenticated,
     CompanyConfig,
     CompanyService,
@@ -57,16 +51,7 @@ from ..company import (
 from ..conversations import ConversationClient, generate_message_id
 from ..device import DeviceSignInClient
 from ..discovery import DiscoveryClient
-from ..models import Author, ClientMetadata, DiscoveredCompany, Message, Operation, OperationResult
-from ..operations import (
-    InMemoryStandingPermissionStore,
-    OperationError,
-    OperationsClient,
-    StandingPermission,
-    TermLimit,
-    approve,
-    operations_endpoint,
-)
+from ..models import Approval, Author, DiscoveredCompany, Message, Operation
 from ..sessions import AccessToken, PapSession, SessionClient, generate_pairwise_user_id
 from ..transport import SessionHttpClient
 from .kit import (
@@ -120,17 +105,16 @@ class LedgerlyAsPersonalAgent:
 
     def __init__(self, network: InProcessNetwork, clock: MutableClock) -> None:
         self.identity = AgentIdentity(domain=DOMAIN, name="Ledgerly", path="/poppy/agent.json")
-        self.standing = InMemoryStandingPermissionStore()
-        self.host = PersonalAgentHost(self.identity, clock, standing=self.standing)
+        self.host = PersonalAgentHost(self.identity, clock)
         self.http: httpx.AsyncClient = network.client()
         self.reactor: PluginPlatform = personal_agent_reactor(
             self.host, network=network, http_client=self.http
         )
         transport = SessionHttpClient(reactor=self.reactor, http_client=self.http)
         self.conversations = ConversationClient(transport=transport)
-        self.operations = OperationsClient(transport=transport)
         self.links: dict[str, NorthwindLink] = {}
-        self.pending: dict[str, Operation] = {}
+        #: Each payment waiting for Ada, and the Northwind conversation that returned it.
+        self.pending: dict[str, tuple[Operation, str]] = {}
         self.company: DiscoveredCompany | None = None
 
     async def bank(self) -> DiscoveredCompany:
@@ -179,14 +163,16 @@ class LedgerlyAsPersonalAgent:
                 link.device_reference = None
         return link
 
-    async def ask_to_pay(self, link: NorthwindLink, reference: str) -> Operation:
-        """Ask Northwind's agent to pay an invoice; return the operation it proposes."""
-
+    async def conversation_endpoint(self) -> str:
         company = await self.bank()
+        return company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+
+    async def ask_to_pay(self, link: NorthwindLink, reference: str) -> tuple[Operation, str]:
+        """Ask Northwind's agent to pay an invoice: the operation, and its conversation."""
+
         amount, currency, payee = INVOICES[reference]
-        endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
         page = await self.conversations.start(
-            endpoint,
+            await self.conversation_endpoint(),
             Message(
                 id=generate_message_id(self.reactor),
                 author=Author(type="agent"),
@@ -198,29 +184,30 @@ class LedgerlyAsPersonalAgent:
         )
         for event in reversed(page.events):  # type: ignore[union-attr]
             if event.message is not None and event.message.operation is not None:
-                return event.message.operation
-        raise RuntimeError("Northwind proposed no payment")
+                return event.message.operation, page.conversation_id
+        raise RuntimeError("Northwind returned no payment to approve")
 
-    def endpoint(self, company: DiscoveredCompany) -> str:
-        endpoint = operations_endpoint(
-            company.document, ClientMetadata.model_validate(self.identity.metadata)
+    async def send_approval(
+        self, link: NorthwindLink, proposal: Operation, conversation_id: str
+    ) -> Message:
+        """Send Northwind Ada's approval of this exact revision: what it says it came to."""
+
+        page = await self.conversations.send(
+            await self.conversation_endpoint(),
+            conversation_id,
+            Message(
+                id=generate_message_id(self.reactor),
+                author=Author(type="agent"),
+                approval=Approval(operation_id=proposal.operation_id, revision=proposal.revision),
+            ),
+            session=link.session,  # type: ignore[arg-type]
+            token=link.token,
+            wait=0,
         )
-        if endpoint is None:
-            raise RuntimeError("Ledgerly and Northwind do not both list Operations v1")
-        return endpoint
-
-
-def _standing_terms(
-    payee: str, maximum: str, currency: str, uses: int, days: int
-) -> dict[str, Any]:
-    return {
-        "company": "Northwind Bank",
-        "action": "payments.transfer",
-        "payee": payee,
-        "maximum": {"amount": maximum, "currency": currency},
-        "uses": uses,
-        "days": days,
-    }
+        for event in reversed(page.events):  # type: ignore[union-attr]
+            if event.message is not None and event.message.role == "company":
+                return event.message
+        raise RuntimeError("Northwind has not finished the payment")
 
 
 class LedgerlyAgent:
@@ -253,125 +240,46 @@ class LedgerlyAgent:
                     },
                 )
             ]
-        if "allow" in text.lower() and "without asking" in text.lower():
-            terms = _standing_terms("Acme GmbH", "2000.00", "EUR", 5, 30)
-            return [
-                Reply(
-                    text="Here is the permission, to approve.",
-                    operation=ProposedOperation(
-                        action="ledgerly.standing_permission",
-                        summary=(
-                            "Let Ledgerly pay Acme GmbH from your Northwind account without "
-                            "asking, up to EUR 2000.00 each, at most 5 payments, for 30 days."
-                        ),
-                        terms=terms,
-                        user_approval_required=True,
-                    ),
-                )
-            ]
         invoice = _INVOICE.search(text)
         if invoice is None:
             return [Reply(text="Your books are up to date. Which invoice should I pay?")]
-        proposal = await self.at.ask_to_pay(link, invoice.group())
-        company = await self.at.bank()
-        outcome = None
-        try:
-            outcome = await self.at.operations.confirm(
-                self.at.endpoint(company),
-                proposal,
-                standing=("Northwind Bank", link.pairwise_user_id, "payments.transfer"),
-                session=link.session,  # type: ignore[arg-type]
-                token=link.token,
-            )
-        except OperationError as error:
-            if error.code != "no_standing_permission":
-                raise
-        if outcome is not None and outcome.operation is not None and outcome.operation.result:
-            return [
-                Reply(
-                    text=(
-                        "Paid under your standing permission. Northwind Bank: "
-                        f"{outcome.operation.result.summary}"
-                    ),
-                    data={"northwind_operation_id": proposal.operation_id},
-                )
-            ]
-        self.at.pending[proposal.operation_id] = proposal
+        proposal, conversation_id = await self.at.ask_to_pay(link, invoice.group())
+        self.at.pending[proposal.operation_id] = (proposal, conversation_id)
         return [
             Reply(
-                text="Northwind Bank proposes this payment; it needs your approval.",
+                text="Northwind Bank asks approval for this payment.",
                 operation=ProposedOperation(
                     action="northwind.payment",
+                    subject=invoice.group(),
                     summary=f"At Northwind Bank: {proposal.summary}",
                     terms={
                         "northwind_operation_id": proposal.operation_id,
                         "northwind_revision": proposal.revision,
                         **(proposal.terms or {}),
                     },
-                    user_approval_required=True,
                 ),
             )
         ]
 
 
 class NorthwindPaymentExecutor:
-    """Confirm at Northwind the exact revision Ada approved in Ledgerly."""
+    """Send Northwind the approval of the exact revision Ada approved in Ledgerly."""
 
     action = "northwind.payment"
 
     def __init__(self, at_northwind: LedgerlyAsPersonalAgent) -> None:
         self.at = at_northwind
 
-    async def perform(self, operation: Operation, account_id: str) -> OperationResult:
+    async def perform(self, operation: Operation, account_id: str | None) -> ActionResult:
         terms = operation.terms or {}
-        proposal = self.at.pending.pop(str(terms["northwind_operation_id"]))
+        proposal, conversation_id = self.at.pending.pop(str(terms["northwind_operation_id"]))
         relayed = {k: v for k, v in terms.items() if not k.startswith("northwind_")}
         if proposal.revision != terms["northwind_revision"] or proposal.terms != relayed:
-            raise RuntimeError("Northwind's proposal is not what Ada approved")
-        link = self.at.links[account_id]
-        company = await self.at.bank()
-        # Ada approved these exact terms in Ledgerly: Ledgerly's own interface (Operations §5).
-        outcome = await self.at.operations.confirm(
-            self.at.endpoint(company),
-            proposal,
-            approval=approve(proposal),
-            session=link.session,  # type: ignore[arg-type]
-            token=link.token,
-        )
-        result = outcome.operation.result if outcome.operation else None
-        if result is None:
-            raise RuntimeError("Northwind has not finished the payment")
-        return OperationResult(summary=f"Northwind Bank: {result.summary}", data=result.data)
-
-
-class StandingPermissionExecutor:
-    """Record the standing permission Ada approved, bounded term by term."""
-
-    action = "ledgerly.standing_permission"
-
-    def __init__(self, at_northwind: LedgerlyAsPersonalAgent, clock: MutableClock) -> None:
-        self.at = at_northwind
-        self.clock = clock
-
-    async def perform(self, operation: Operation, account_id: str) -> OperationResult:
-        terms = operation.terms or {}
-        link = self.at.links[account_id]
-        maximum = terms["maximum"]
-        permission = StandingPermission(
-            reference=f"perm_{operation.operation_id}",
-            company="Northwind Bank",
-            account=link.pairwise_user_id,
-            action=str(terms["action"]),
-            limits=(
-                TermLimit("payee", allowed=frozenset({str(terms["payee"])})),
-                TermLimit("amount.amount", maximum=Decimal(str(maximum["amount"]))),
-                TermLimit("amount.currency", allowed=frozenset({str(maximum["currency"])})),
-            ),
-            expires_at=self.clock.now() + timedelta(days=int(terms["days"])),
-            uses_remaining=int(terms["uses"]),
-        )
-        self.at.standing.permissions[permission.reference] = permission
-        return OperationResult(summary=operation.summary.replace("Let Ledgerly", "Ledgerly may"))
+            raise RuntimeError("Northwind's operation is not what Ada approved")
+        link = self.at.links[cast(str, account_id)]
+        # Ada approved these exact terms in Ledgerly: Ledgerly's own interface (Operations 5).
+        answer = await self.at.send_approval(link, proposal, conversation_id)
+        return ActionResult(summary=f"Northwind Bank: {answer.text}", data=answer.data)
 
 
 class LedgerlyAccounts:
@@ -385,20 +293,14 @@ class LedgerlyAccounts:
 
 
 class LedgerlyPlugin:
-    def __init__(self, at_northwind: LedgerlyAsPersonalAgent, clock: MutableClock) -> None:
+    def __init__(self, at_northwind: LedgerlyAsPersonalAgent) -> None:
         self.at = at_northwind
-        self.clock = clock
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         contribute(COMPANY_ACCOUNTS, LedgerlyAccounts(), contribution_id="accounts")
         contribute(COMPANY_AGENTS, LedgerlyAgent(self.at), contribution_id="agent")
         contribute(OPERATION_EXECUTORS, NorthwindPaymentExecutor(self.at), contribution_id="pay")
-        contribute(
-            OPERATION_EXECUTORS,
-            StandingPermissionExecutor(self.at, self.clock),
-            contribution_id="standing",
-        )
 
 
 def ledgerly(
@@ -412,7 +314,7 @@ def ledgerly(
         http_client=network.client(),
         address_resolver=network.resolve,
         plugins=[
-            (PluginManifest(name="ledgerly", version="1"), LedgerlyPlugin(at_northwind, clock)),
+            (PluginManifest(name="ledgerly", version="1"), LedgerlyPlugin(at_northwind)),
             (PluginManifest(name="ledgerly-clock", version="1"), ClockPlugin(clock)),
         ],
     )

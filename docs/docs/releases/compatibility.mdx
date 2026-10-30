@@ -12,7 +12,7 @@ This page is versioned with the SDK: it describes **SDK 0.27.0**.
 | --- | --- | --- |
 | PAP profile | `PROTOCOL_PROFILE` = `0.3` | `PROTOCOL_PROFILE` = `"0.3"` |
 | Specification revision | `PROTOCOL_REVISION` = `2026-10-26` | `PROTOCOL_REVISION` = `"2026-10-26"` |
-| Operations extension | `OPERATIONS_VERSION` = `1` | `OPERATIONS_VERSION` = `"1"` |
+| Operations extension | `OPERATIONS_VERSION` = `2` | `OPERATIONS_VERSION` = `"2"` |
 
 Both SDKs implement [PAP draft 0.3](https://personalagentprotocol.org/docs/0.3/spec)
 as its specification page stood on **2026-10-26** (upstream commit `a95b757`), and the **Operations
@@ -74,7 +74,7 @@ release, and the [conformance report](/protocol/conformance-report/) lists
 every case's outcome; a case a side cannot run is skipped, never passed, with
 its reason. Use the same SDK version on both sides when you control both;
 across organizations, the wire is the protocol: any two implementations of
-draft 0.3 and Operations v1 are meant to interoperate, and the conformance
+draft 0.3 and Operations v2 are meant to interoperate, and the conformance
 runner (`pap conformance run`) checks a company against it.
 
 ## Agent Runtimes

@@ -4,93 +4,124 @@ title: Operations
 
 # Operations
 
-The Operations extension (version 1) gives actions an exact, durable
-approval. A company proposes an operation (from an API's `202`, an MCP tool's
-`structuredContent`, a conversation `message`, or its website) and performs it
-only once it is confirmed at `{endpoint}/{operation_id}/confirm`. The
-`OperationsClient` is the personal agent's side.
+The Operations extension (version 2) gives actions an exact, durable approval,
+and adds no endpoints. A company that wants the user's approval refuses the
+request for the action and returns the operation: the terms, in plain language
+and as JSON. The personal agent gets the user's approval and makes the same
+request again with it. The company checks it, performs the action at most once,
+and responds as it would have without operations.
+
+| Interface | The operation arrives as | The approval goes back as |
+| --- | --- | --- |
+| API | HTTP 403 with `error: approval_required` and `operation` | The same request with the `Poppy-Approval` header |
+| MCP | An error result with `structuredContent.operation` | The same call with `_meta["personalagentprotocol.org/approval"]` |
+| Conversation | A company message's `operation` | A message with `approval` |
+
+An operation is `operation_id`, an opaque `revision`, `summary`, optional
+`terms`, and `expires_at`. It has no state, no URL, and no result: the answer to
+the approved request is the result.
 
 ## Negotiate
 
 ```python
-from personal_agent_protocol import OperationsClient, approve, operations_endpoint
+from personal_agent_protocol import OperationsClient, operations_negotiated
 
-endpoint = operations_endpoint(discovered.document, my_client_metadata)
-if endpoint is None:
-    ...  # one side does not list operations version 1: do not use Operations
-operations = OperationsClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
+negotiated = operations_negotiated(discovered.document, my_client_metadata)
+if not negotiated:
+    ...  # one side doesn't list operations version 2: the company handles approval itself
+operations = OperationsClient(reactor=reactor)
 ```
 
-A company answers an agent that did not negotiate the extension with
-`extension_required`; the client puts the extension name in `error.details`.
+A company that needs the extension answers an agent that doesn't list it with
+`extension_required`, and an MCP tool with an ordinary tool error. Another major
+version doesn't count as support.
 
-## Approve exactly what the user saw
+## Ask the user, then send the same request
 
 ```python
-show_to_user(operation.summary, operation.terms)        # the host's own interface
-approval = approve(operation)                           # revision + digest of summary and terms
-outcome = await operations.confirm(
-    endpoint, operation, approval=approval, session=session, token=token
+approval = await operations.ask_user(
+    operation,
+    organization=organization,          # the company's name and domain, shown with the summary
+    tenant_id=tenant_id,
 )
-if outcome.status == "terms_changed":
-    show_changes(outcome.operation, outcome.changed)    # e.g. ("summary", "amount.amount")
-    # ask again; the old approval cannot confirm the new revision
+sent = await operations.send(
+    lambda approval: api.call(
+        "POST", url, session=session, token=token, body=body, approval=approval
+    ),
+    approval,
+)
 ```
 
 ```typescript
-const approval = await approve(operation);   // async: the digest uses Web Crypto
-const outcome = await operations.confirm(endpoint, operation, { approval, token, tenantId, issuer });
+const approval = await operations.askUser(operation, { organization, tenantId });
+const sent = await operations.send((approval) => api.call("POST", url, { body, token, approval }), approval);
 ```
 
-- `approve()` is called by the host when the user approves in its interface,
-  never because a model or a chat message said so.
-- A confirmation for any other revision, or for different terms, is refused
-  locally (`approval_mismatch`). Only the latest revision can be confirmed at
-  the company; an older one is `terms_changed`, returned with the new revision
-  and the changed term paths.
-- The company's `result.summary` is returned as written: show it, do not
-  paraphrase it into something it did not say.
+- `ask_user` goes through the host's own approval surface
+  (`pap.approvalSurface`, an `ApprovalSurface`). It is asked about every
+  operation, with the company's name and domain, the `summary` as the company
+  wrote it, `expires_at`, and any difference the terms check found. Only `True`
+  from the surface approves; anything else is `not_approved`, and a host with no
+  surface can't approve at all (`no_approval_surface`).
+- Nothing approves on the user's behalf, even when they said they would approve
+  something like it. A company that lets users allow an action in advance doesn't
+  return an operation for it.
+- Text from the company is never the user's approval, and in a conversation only
+  a message's `approval` approves, whatever its `text` says.
+- Save the request that returned the operation, and send exactly that. Don't
+  have the model write it again.
 
-## Recover, never re-propose
+## Check the terms
 
-A confirmation whose answer is lost may have been performed. The client reads
-the same operation back by ID: a final or `in_progress` state is the outcome;
-still `proposed` means it did not arrive (`confirm_not_received`) and the host
-may retry. Confirming is idempotent at the company, so a retry returns the
-same record. `in_progress` may carry `retry_after`; poll with `read()`.
-
-## Standing permissions
-
-A user may allow some operations in advance. A `StandingPermission` names one
-company, account, and action, with limits on term paths (`TermLimit`: a
-decimal `maximum` or a set of `allowed` values), an expiry, and optional uses.
+`terms_differences(operation, asked)` compares the terms with the summary, since
+the company writes both, and with what you asked for: `asked` maps a dotted path
+in `terms` to the value you expected. `ask_user(asked=...)` passes what it finds
+to the surface, to point out to the user.
 
 ```python
-outcome = await operations.confirm(
-    endpoint, operation,
-    standing=("Northwind Bank", account, "payments.transfer"),
-    session=session, token=token,
-)
+terms_differences(operation, {"order_id": "ord_7Hk2", "price_difference.currency": "USD"})
 ```
 
-The client asks the Reactor `pap.standingPermissionStore`
-(`StandingPermissionStores` in TypeScript) to **reserve** a use. A permission
-covers a revision only when every limit's term is present and within bounds,
-it has not expired, and it has uses left. The use is **committed** when the
-company confirms and **released** when it refuses. Nothing covers it:
-`no_standing_permission`, ask the user. A revision with
-`user_approval_required` is never confirmed this way, and a company that
-insists answers `user_approval_required` (`approval_required`).
+## A new revision
 
-`InMemoryStandingPermissionStore` is for examples and tests. A production
-store is durable and atomic, and the act of granting a permission deserves its
-own exact approval: in the [two companies](/examples/two-companies/) example a
-standing permission is itself an operation the user approves.
+An approval covers one revision. When terms change the company returns the same
+`operation_id` with a new `revision`, and asks for approval again. If an
+approval's revision can't be accepted (one it never returned, one past its
+`expires_at`, one for another request), the company performs nothing and returns
+a new revision: never the one named, so a retry can't loop. `send` reports it as
+`new_revision`; show what changed (`ask_user(replaces=earlier)`) and ask again.
 
-## Cancel
+## Retries, at most once
 
-`cancel()` turns a proposal into `cancelled`; an operation in progress stops
-if the company can stop it. Closing a conversation does not cancel anything.
+`send` keeps the same approval after a failure, a timeout, or a `503`, waiting for
+`Retry-After`. The company answers a repeat with the original response, and `503`
+with `Retry-After` while the action is being performed or its outcome isn't known.
+
+When a retry gets a new operation, or no answer comes in the end, `sent.status`
+is `unknown`. Don't ask the user to approve the same action again until you know
+whether the first was performed: find out another way, such as from the order in
+the company's API. An `Idempotency-Key` doesn't carry over to the request with
+the approval.
+
+## For a company
+
+An API or tool returns `ApiResult(operation=ProposedOperation(...))` or
+`ToolResult(operation=...)`, and a `CompanyAgent` a `Reply(operation=...)`, without
+acting. `action` names the `pap.company.operationExecutor` that performs it, and
+with `subject`, what it is done to: requests for the same action and subject are
+one operation.
+
+The service does the rest, in the extension's order: the Session can approve it,
+it hasn't been performed already, and the revision is one it returned, unexpired,
+for exactly this request. An operation returned signed out can be approved only
+in that Session. One returned signed in can be approved in any Session of the same
+personal agent and user signed in to that account; a signed-out Session of theirs
+gets the challenge, and anyone else's request is handled as if it had no approval.
+
+The executor returns an `ActionResult`, raises `OperationFailed` with what changed,
+or `OperationOutcomeUnknown` while it isn't known whether it took effect, which
+retries answer with `503` until `settle`. `revise` replaces the terms, withdrawing
+the earlier revisions. The record keeps the approval: the revision and the time.
 
 ## Show what is asked: `PapConfirm`
 
@@ -102,6 +133,7 @@ in its result's `_meta["reactor.ui/display"]`; any page with a renderer for
 the type draws the card, and a page without one shows its text.
 
 ```python
+from personal_agent_protocol import terms_differences
 from personal_agent_protocol.ui import PapConfirm, PapSessionShown
 
 display = PapConfirm(
@@ -109,10 +141,11 @@ display = PapConfirm(
     summary=operation.summary,                  # the company's words, verbatim
     terms=operation.terms or {},
     operation_ref=operation.operation_id,
-    revision=str(operation.revision),
+    revision=operation.revision,
+    expires_at=operation.expires_at,
+    differences=list(terms_differences(operation)),
     does="buy",                                 # what it does, as the application's Rules class it
     session=PapSessionShown.of(session_key, signed_in=True),
-    expires_at=operation.expires_at,
 )
 meta = display.tool_meta()   # an MCP result's `_meta`: the page draws the card
 said = display.text()        # what a page without a renderer, a transcript and a model read
@@ -127,8 +160,8 @@ said = display.text()        # what a page without a renderer, a transcript and 
   the SHA-256 of its Session Key), never the key or a token, and only the page sees even
   that: `model_view()` tells a model the company's words, the terms, what it
   does, the revision and whether the person is signed in there.
-- The buttons are the host's own. Approving still goes through `approve()`
-  in the host, never because a model saw the display.
+- The buttons are the host's own. Approving still goes through the host's
+  approval surface, never because a model saw the display.
 
 On the page, the TypeScript SDK types the same display and checks it:
 
@@ -145,10 +178,14 @@ against one committed example, `protocol/fixtures/pap-confirm-display.json`.
 
 ## Security boundary
 
-- Conversation text never confirms an operation, whoever wrote it.
-- The model may explain a proposal and its changes; the approval is the
+- Conversation text never approves an operation, whoever wrote it.
+- The model may explain an operation and what changed; the approval is the
   user's, in the host's interface, bound to one revision.
-- Tokens and proofs stay host-only; errors carry codes only.
+- A summary can't send the user elsewhere or load content while they decide:
+  links, images and HTML show as text.
+- An approval shows what the personal agent stated, not that the user saw the
+  terms; a company that needs proof asks the user on its own website.
+- Tokens stay host-only; errors carry codes only.
 
 See the runnable [Operations example](/examples/operations/) and the upstream
 [Operations extension](https://personalagentprotocol.org/docs/0.3/extensions/operations).

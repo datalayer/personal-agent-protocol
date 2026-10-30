@@ -12,7 +12,7 @@
   process; nothing leaves it.
 - `personal_agent_reactor` assembles the personal agent's Reactor host: its
   signer, delegated keys (its Session signer), clock, token and state stores, protected input, and
-  standing permissions, each a contribution.
+  approval surface, each a contribution.
 """
 
 from __future__ import annotations
@@ -33,8 +33,9 @@ from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untype
 from ..company.points import COMPANY_STORES, CompanyStore
 from ..crypto import DelegatedSessionSigner, InMemoryDelegatedKeys, JoseSigner
 from ..errors import BrowserSessionError, DiscoveryError
-from ..operations import STANDING_PERMISSION_STORES, InMemoryStandingPermissionStore
+from ..extensions import SUPPORTED_EXTENSIONS
 from ..reactor import (
+    APPROVAL_SURFACES,
     AUTHORIZATION_STATE_STORES,
     BROWSER_HANDOFFS,
     BROWSER_JOINS,
@@ -43,6 +44,7 @@ from ..reactor import (
     SESSION_SIGNERS,
     SIGNERS,
     TOKEN_STORES,
+    ApprovalRequest,
     ProtectedInputRequest,
     build_pap_reactor,
 )
@@ -118,7 +120,9 @@ class AgentIdentity:
             "jwks_uri": f"https://{self.domain}/jwks.json",
             "redirect_uris": [f"https://{self.domain}/oauth/callback"],
             "token_endpoint_auth_method": "private_key_jwt",
-            "extensions": {name: {"version": "1"} for name in self.extensions},
+            "extensions": {
+                name: {"version": SUPPORTED_EXTENSIONS.get(name, "1")} for name in self.extensions
+            },
         }
 
     def website(self) -> Asgi:
@@ -193,6 +197,22 @@ class ScriptedInput:
     async def collect(self, request: ProtectedInputRequest) -> dict[str, SecretStr]:
         self.asked.append(request)
         return {name: SecretStr(value) for name, value in self.answers.pop(0).items()}
+
+
+class ScriptedApprovals:
+    """The host's own approval surface, answered from a script: the user's answers in order.
+
+    `always` is a user who says yes to every question; they are still asked each time.
+    """
+
+    def __init__(self, *answers: bool, always: bool = False) -> None:
+        self.answers = list(answers)
+        self.always = always
+        self.asked: list[ApprovalRequest] = []
+
+    async def approve(self, request: ApprovalRequest) -> bool:
+        self.asked.append(request)
+        return self.always or (bool(self.answers) and self.answers.pop(0))
 
 
 class ScriptedBrowser:
@@ -275,9 +295,7 @@ class PersonalAgentHost:
     clock: MutableClock
     vault: MemoryVault = field(default_factory=MemoryVault)
     protected_input: ScriptedInput = field(default_factory=ScriptedInput)
-    standing: InMemoryStandingPermissionStore = field(
-        default_factory=InMemoryStandingPermissionStore
-    )
+    approvals: ScriptedApprovals | None = None
     browser: ScriptedBrowser | None = None
     controlled_browser: ControlledBrowser | None = None
     #: The delegated keys, one per User ID: the host's, so a Reactor built again keeps them.
@@ -296,7 +314,8 @@ class PersonalAgentHost:
         contribute(TOKEN_STORES, self.vault, contribution_id="vault")
         contribute(AUTHORIZATION_STATE_STORES, self.vault, contribution_id="vault")
         contribute(PROTECTED_INPUTS, self.protected_input, contribution_id="trusted-input")
-        contribute(STANDING_PERMISSION_STORES, self.standing, contribution_id="standing")
+        if self.approvals is not None:
+            contribute(APPROVAL_SURFACES, self.approvals, contribution_id="the-user")
         if self.browser is not None:
             contribute(BROWSER_HANDOFFS, self.browser, contribution_id="browser")
         if self.controlled_browser is not None:

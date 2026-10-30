@@ -68,8 +68,8 @@ FIXTURE_SCHEMAS = {
     "invalid-session-valid.json": "oauth-error",
 }
 
-#: Fixtures of Operations version 1, which upstream's schemas no longer describe.
-OPERATIONS_V1 = {
+#: Fixtures of Operations version 2, as upstream's schemas describe it.
+OPERATIONS_V2 = {
     "operation-valid.json": "operation",
     "conversation-events-valid.json": "events-response",
 }
@@ -88,8 +88,7 @@ def test_a_shared_fixture_is_valid_by_its_upstream_schema(fixture: str, schema: 
     assert errors(schema, json.loads((FIXTURES / fixture).read_text())) == []
 
 
-@pytest.mark.xfail(reason="Operations v2 port pending", strict=True)
-@pytest.mark.parametrize(("fixture", "schema"), sorted(OPERATIONS_V1.items()))
+@pytest.mark.parametrize(("fixture", "schema"), sorted(OPERATIONS_V2.items()))
 def test_an_operations_fixture_is_valid_by_its_upstream_schema(fixture: str, schema: str) -> None:
     assert errors(schema, json.loads((FIXTURES / fixture).read_text())) == []
 

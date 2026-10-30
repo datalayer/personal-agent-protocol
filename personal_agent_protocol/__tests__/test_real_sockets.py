@@ -20,10 +20,9 @@ import httpcore
 import httpx
 import pytest
 
-from personal_agent_protocol import DiscoveryClient
+from personal_agent_protocol import Approval, DiscoveryClient
 from personal_agent_protocol.apis import ApiClient
 from personal_agent_protocol.demo.sockets import _certificates, served_over_tls
-from personal_agent_protocol.operations import OperationsClient, approve
 
 from .test_direct_and_api import begin, direct_world
 
@@ -54,14 +53,18 @@ async def test_discovery_sign_in_read_and_operation_over_tls() -> None:
             token=signed_in,
             body={},
         )
-        done = await OperationsClient(transport=world.transport).confirm(
-            world.shop.config.operations_endpoint,
-            proposed.operation,  # type: ignore[arg-type]
-            approval=approve(proposed.operation),
+        assert proposed.operation is not None
+        done = await api.call(
+            "POST",
+            "https://manzanita.example/api/orders/ord_7Hk2/exchanges",
             session=session,
             token=signed_in,
+            body={},
+            approval=Approval(
+                operation_id=proposed.operation.operation_id, revision=proposed.operation.revision
+            ),
         )
-        assert done.operation.state == "succeeded"  # type: ignore[union-attr]
+        assert done.status == 200
         # The company verified the agent by fetching its metadata over TLS too.
         page = await world.http.get(f"https://{world.atlas.domain}/agent.json")
         assert page.json()["client_id"] == world.atlas.client_id

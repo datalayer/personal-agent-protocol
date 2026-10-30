@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import httpx
 import jwt
@@ -23,7 +24,8 @@ from personal_agent_protocol import (
 )
 from personal_agent_protocol.company import CLIENT_POLICIES
 from personal_agent_protocol.company.store import DEVICE, PendingDevice
-from personal_agent_protocol.operations import OperationError, OperationsClient, approve
+from personal_agent_protocol.conversations import generate_message_id
+from personal_agent_protocol.models import Approval
 from personal_agent_protocol.transport import session_headers
 
 from .test_company_end_to_end import TENANT, World
@@ -180,7 +182,7 @@ async def test_a_direct_conversation_locks_its_parent_until_it_closes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_revised_operation_is_terms_changed_and_never_performed_twice() -> None:
+async def test_a_revised_operation_answers_a_new_revision_and_is_never_performed_twice() -> None:
     world = World()
     token = await signed_in(world)
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
@@ -197,24 +199,27 @@ async def test_a_revised_operation_is_terms_changed_and_never_performed_twice() 
         summary="Exchange for USD 85.00 more.",  # type: ignore[union-attr]
         terms={"order_id": "ord_7Hk2", "price_difference": {"amount": "85.00", "currency": "USD"}},
     )
-    operations = OperationsClient(transport=world.transport)
-    ops = world.shop.config.operations_endpoint
-    outcome = await operations.confirm(
-        ops, proposal, approval=approve(proposal), session=world.session, token=token
-    )  # type: ignore[arg-type]
-    assert outcome.status == "terms_changed"
-    assert outcome.changed == ("summary", "price_difference.amount")
-    newer = outcome.operation
-    # A standing permission is never used for a revision that needs the user.
-    with pytest.raises(OperationError) as raised:
-        await operations.confirm(
-            ops, newer, standing=("x", "y", "orders.exchange"), session=world.session, token=token
-        )  # type: ignore[arg-type]
-    assert raised.value.code == "user_approval_required"
-    done = await operations.confirm(
-        ops, newer, approval=approve(newer), session=world.session, token=token
-    )  # type: ignore[arg-type]
-    assert done.operation.state == "succeeded"  # type: ignore[union-attr]
+    send = world.conversations.send
+
+    async def approving(operation: Any) -> Any:
+        message = Message(
+            id=generate_message_id(world.reactor),
+            author=Author(type="agent"),
+            approval=Approval(operation_id=operation.operation_id, revision=operation.revision),
+        )
+        page_ = await send(
+            endpoint, page.conversation_id, message, session=world.session, token=token, wait=0
+        )
+        return [e.message for e in page_.events if e.message is not None][-1]
+
+    told = await approving(proposal)
+    newer = told.operation
+    assert newer is not None and newer.operation_id == proposal.operation_id  # type: ignore[union-attr]
+    assert newer.revision != proposal.revision  # type: ignore[union-attr]
+    assert newer.summary == "Exchange for USD 85.00 more."
+    assert world.plugin.executor.performed == []
+    done = await approving(newer)
+    assert done.operation is None and done.text.startswith("Exchanged")
     assert world.plugin.executor.performed == [proposal.operation_id]  # type: ignore[union-attr]
 
 

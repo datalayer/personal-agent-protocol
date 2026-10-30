@@ -28,7 +28,7 @@ from .models import ExtensionDescriptor
 from .refusals import challenge_parameters
 
 #: Extensions this SDK implements, by name and major version.
-SUPPORTED_EXTENSIONS: Mapping[str, str] = {"operations": "1", "mediated-sign-in": "1"}
+SUPPORTED_EXTENSIONS: Mapping[str, str] = {"operations": "2", "mediated-sign-in": "1"}
 
 #: Extensions a company recognizes from the request: the agent doesn't list them (§3.3).
 RECOGNIZED_FROM_THE_REQUEST: frozenset[str] = frozenset({"mediated-sign-in"})

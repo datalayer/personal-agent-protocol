@@ -26,13 +26,7 @@ from personal_agent_protocol.mcp import (
     fetch_mcp_server_metadata,
     mcp_api,
 )
-from personal_agent_protocol.operations import (
-    OperationError,
-    OperationsClient,
-    approve,
-    operation_from,
-    operation_page,
-)
+from personal_agent_protocol.models import Approval
 from personal_agent_protocol.sessions import AccessToken
 from personal_agent_protocol.transport import (
     SessionHttpClient,
@@ -162,19 +156,20 @@ async def test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation() -> 
         body={},
     )
     through_mcp = await mcp.call_tool("exchange_jacket")
-    assert through_mcp.operation is not None and "Not done until confirmed" in through_mcp.text
-    assert through_mcp.operation == proposed.operation  # one record across channels
-    assert operation_from({"structuredContent": {"operation": through_mcp.operation}}) == (
-        operation_from({"operation": proposed.operation})
+    assert through_mcp.operation is not None and through_mcp.is_error
+    assert "Not done yet" in through_mcp.text
+    # One operation across interfaces, each with its own revision: its own request.
+    assert proposed.operation is not None
+    assert through_mcp.operation.operation_id == proposed.operation.operation_id
+    assert through_mcp.operation.terms == proposed.operation.terms
+    done = await mcp.call_tool(
+        "exchange_jacket",
+        approval=Approval(
+            operation_id=through_mcp.operation.operation_id,
+            revision=through_mcp.operation.revision,
+        ),
     )
-    done = await OperationsClient(transport=world.transport).confirm(
-        world.shop.config.operations_endpoint,
-        through_mcp.operation,
-        approval=approve(through_mcp.operation),
-        session=session,
-        token=token,
-    )
-    assert done.operation is not None and done.operation.state == "succeeded"
+    assert not done.is_error and done.text.startswith("Exchanged")
     assert world.plugin.executor.performed == [through_mcp.operation.operation_id]
 
 
@@ -212,7 +207,6 @@ async def test_an_mcp_token_is_refused_everywhere_but_its_mcp_server() -> None:
     endpoints = [
         ("GET", "https://manzanita.example/api/orders"),
         ("POST", "https://manzanita.example/poppy/conversations"),
-        ("GET", "https://manzanita.example/poppy/operations/op_any"),
         ("POST", "https://manzanita.example/poppy/feedback"),
     ]
     for method, url in endpoints:
@@ -260,7 +254,7 @@ async def test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url() ->
         await mcp.call_tool("list_orders")
     assert (refused.value.code, refused.value.status_code) == ("insufficient_scope", 401)
     assert refused.value.details is not None and refused.value.details["scope"] == "orders:read"
-    # A signed-out proposal is refused the same way: nothing is proposed to no one.
+    # A signed-out call for the account's action is refused the same way.
     with pytest.raises(McpError) as proposal:
         await mcp.call_tool("exchange_jacket")
     assert proposal.value.code == "insufficient_scope"
@@ -361,75 +355,27 @@ async def join(
 
 
 @pytest.mark.asyncio
-async def test_the_operation_confirmed_on_the_website_is_the_same_operation_once() -> None:
-    world, browser = web_world()
-    token = await signed_in(world)
-    session = world.session
-    assert session is not None
-    proposed = await ApiClient(transport=world.transport).call(
-        "POST",
-        "https://manzanita.example/api/orders/ord_7Hk2/exchanges",
-        session=session,
-        token=token,
-        body={},
-    )
-    operation = proposed.operation
-    assert operation is not None
-    page_url = operation_page(operation, world.company.document.organization.domain)
-    assert page_url == f"https://manzanita.example/operations/{operation.operation_id}"
-
-    await join(world, browser, session, token, page_url)
-    page = browser.page
-    assert page is not None and page.status_code == 200 and str(page.url) == page_url
-    assert operation.summary in page.text and 'data-state="proposed"' in page.text
-    session_cookie = browser.http.cookies.get("__Host-poppy_session")
-    assert session_cookie is not None
-    assert page.headers["x-frame-options"] == "DENY"
-
-    confirmed = await browser.submit(
-        page_url, {"action": "confirm", "revision": str(operation.revision), "approved_by": "user"}
-    )
-    assert 'data-state="succeeded"' in confirmed.text
-
-    operations = OperationsClient(transport=world.transport)
-    endpoint = world.shop.config.operations_endpoint
-    read = await operations.read(endpoint, operation.operation_id, session=session, token=token)
-    assert read.operation_id == operation.operation_id and read.state == "succeeded"
-    assert read.confirmation is not None and read.confirmation.approved_by == "user"
-    again = await operations.confirm(
-        endpoint, operation, approval=approve(operation), session=session, token=token
-    )
-    assert again.operation == read  # confirming at the endpoint too changes nothing
-    assert world.plugin.executor.performed == [operation.operation_id]
-
-
-@pytest.mark.asyncio
-async def test_the_website_follows_the_session_and_refuses_bad_assertions() -> None:
+async def test_a_joined_browser_follows_the_session() -> None:
     world, browser = web_world()
     token, reference = await signed_in_with_reference(world)
     session = world.session
     assert session is not None
-    proposed = await ApiClient(transport=world.transport).call(
-        "POST",
-        "https://manzanita.example/api/orders/ord_7Hk2/gift-wrap",
-        session=session,
-        token=token,
-        body={},
-    )
-    operation = proposed.operation
-    assert operation is not None and operation.url is not None
-    await join(world, browser, session, token, operation.url)
-    assert browser.page is not None and browser.page.status_code == 200
+    await join(world, browser, session, token, "https://manzanita.example/")
+    cookie = browser.http.cookies.get("__Host-poppy_session")
+    assert cookie is not None
+    joined = await world.shop.web_session(cookie)
+    assert joined is not None and joined.account_id == "acct_ada" and joined.sid == session.sid
 
-    # Signing out reaches the website on its next request: the account's operation is gone.
+    # Signing out reaches the website on its next request: the Session continues signed out.
     await RefreshTokenClient(reactor=world.reactor, http_client=world.http).revoke(
         reference, context=context(world)
     )
-    assert (await browser.get(operation.url)).status_code == 404
+    signed_out = await world.shop.web_session(cookie)
+    assert signed_out is not None and signed_out.account_id is None
 
     # Ending the Session ends the browser's cookie with it (§6).
     assert await world.shop.end_session(session.client_id, session.sid)
-    assert (await browser.get(operation.url)).status_code == 401
+    assert await world.shop.web_session(cookie) is None
 
 
 @pytest.mark.asyncio
@@ -525,28 +471,6 @@ async def test_a_join_needs_its_own_browser_its_code_once_and_a_live_session() -
         await client.aclose()
 
 
-def test_an_operation_page_off_the_company_domain_is_refused() -> None:
-    operation = operation_from(
-        {
-            "operation": {
-                "operation_id": "op_1",
-                "revision": 1,
-                "state": "proposed",
-                "summary": "Gift wrap.",
-                "expires_at": "2026-10-11T10:00:00Z",
-                "url": "https://pay.elsewhere.example/op_1",
-                "confirmation": None,
-                "result": None,
-            }
-        }
-    )
-    with pytest.raises(OperationError) as raised:
-        operation_page(operation, "manzanita.example")
-    assert raised.value.code == "foreign_operation_page"
-    shop = operation.model_copy(update={"url": "https://shop.manzanita.example/op_1"})
-    assert operation_page(shop, "manzanita.example") == "https://shop.manzanita.example/op_1"
-
-
 @pytest.mark.asyncio
 async def test_an_mcp_429_is_rate_limited_with_its_retry_after() -> None:
     """A 429 is `rate_limited` with the `Retry-After` kept, as the API and conversation
@@ -602,7 +526,7 @@ async def test_an_mcp_429_is_rate_limited_with_its_retry_after() -> None:
         refusals.append(httpx.Response(503, headers={"Retry-After": "30"}))
         with pytest.raises(McpError) as raised:
             await mcp.list_tools()
-        assert (raised.value.code, raised.value.status_code) == ("http_error", 503)
+        assert (raised.value.code, raised.value.status_code) == ("temporarily_unavailable", 503)
 
 
 @pytest.mark.asyncio

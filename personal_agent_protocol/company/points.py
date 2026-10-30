@@ -14,7 +14,7 @@ without touching the service:
   Mediated Sign-In, and stands for the company's own sign-in page in Device
   Sign-In.
 - `pap.company.agent` answers conversation messages: the company agent.
-- `pap.company.operationExecutor` performs a confirmed operation, by action.
+- `pap.company.operationExecutor` performs an approved operation, by action.
 - `pap.company.clientPolicy` allows or blocks personal agents by `client_id`.
 - `pap.company.clientResolver` fetches a personal agent's client metadata
   and JWKS (over HTTPS through `AgentIdentityClient` by default).
@@ -22,11 +22,11 @@ without touching the service:
   default in the contributed store (`StoreReplayCache`), so every replica
   sharing a durable store shares the cache.
 - `pap.company.api` answers the company's OpenAPI API (`/api/…`), its
-  consequential calls proposing operations (`202`, Operations §4.1).
+  consequential calls returning operations (`403 approval_required`, Operations 4).
 - `pap.company.mcp` answers the company's MCP server (`/mcp`): its tools,
   called with the Session header and access tokens issued for its url (§7), a
-  consequential tool proposing an operation in `structuredContent`
-  (Operations §4.2).
+  consequential tool returning an operation in `structuredContent`
+  (Operations 4).
 - `pap.company.rateLimit` says how often the company answers one personal
   agent and one signed-in account: once a request's Session is verified, a
   refusal is HTTP 429 with `Retry-After` and no body (§5.6). None by default.
@@ -43,7 +43,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from pydantic import SecretStr
 from reactor import define_contribution_point  # type: ignore[import-untyped]
 
-from ..models import ClientMetadata, JsonWebKeySet, Operation, OperationResult
+from ..models import ClientMetadata, JsonWebKeySet, Operation
 from ..reactor import Clock, SystemClock
 from .store import (
     REPLAY,
@@ -138,23 +138,27 @@ class Turn:
     scopes: tuple[str, ...]
     client_id: str
     is_direct: bool
-    #: Whether the personal agent negotiated Operations: without it, a proposed
-    #: operation is never sent, so the agent's words must not promise one.
+    #: Whether the personal agent negotiated Operations: without it, an operation is
+    #: never sent, so the agent's words must not promise one.
     supports_operations: bool
 
 
 @dataclass(frozen=True)
 class ProposedOperation:
-    """An operation the agent proposes; the service gives it an ID and expiry.
+    """What an action needs the user's approval of; the service gives it its IDs and expiry.
 
-    `scopes` are what a Session must hold to confirm it, recorded with it;
-    none named, the company's `write_scopes`.
+    `action` says which executor performs it, and with `subject`, what it is done to
+    in the company's records, such as the order: requests for the same action and
+    subject are one operation, whose terms can change (Operations 3). `summary` and
+    `terms` are what it would do now: anything that affects the action is in them.
+    `scopes` are what a Session must hold to approve it, recorded with it; none
+    named, the company's `write_scopes`.
     """
 
     action: str
     summary: str
-    terms: dict[str, Any]
-    user_approval_required: bool = False
+    terms: dict[str, Any] | None = None
+    subject: str = ""
     scopes: tuple[str, ...] = ()
 
 
@@ -163,8 +167,8 @@ class Reply:
     """What the company agent says back.
 
     `authorization` asks the personal agent to sign in or widen scopes
-    (§7.11) instead of answering; `operation` proposes an operation with the
-    reply (Operations §4.3).
+    (§7.11) instead of answering; `operation` asks for the user's approval with
+    the reply (Operations 4).
     """
 
     text: str | None = None
@@ -183,30 +187,40 @@ class CompanyAgent(Protocol):
     async def respond(self, turn: Turn) -> Sequence[Reply]: ...
 
 
+@dataclass(frozen=True)
+class ActionResult:
+    """What an action came to: the response a request with the approval gets, every time."""
+
+    summary: str
+    data: dict[str, Any] | None = None
+
+
 class OperationFailed(Exception):  # noqa: N818 - an outcome, raised by an executor
     """The action was not completed; `result.summary` says every change that was made."""
 
-    def __init__(self, result: OperationResult) -> None:
+    def __init__(self, result: ActionResult) -> None:
         super().__init__(result.summary)
         self.result = result
 
 
 class OperationOutcomeUnknown(Exception):  # noqa: N818 - an outcome, raised by an executor
-    """A downstream system did not answer: the operation stays `in_progress` (Operations §6)."""
+    """A downstream system did not answer: retries get `503` until `settle` (Operations 7)."""
 
 
 @runtime_checkable
 class OperationExecutor(Protocol):
-    """Perform one confirmed operation; `operation_id` is its idempotency key.
+    """Perform one approved operation; `operation_id` is its idempotency key.
 
-    Return the result of a completed action; raise `OperationFailed` with the
-    changes made when it failed partway, or `OperationOutcomeUnknown` while it
-    is not known whether it took effect (never reported as failed).
+    `operation` is the revision the user approved, and `account_id` the account it
+    belongs to, `None` for one returned signed out. Return the result of a completed
+    action; raise `OperationFailed` with the changes made when it failed partway, or
+    `OperationOutcomeUnknown` while it is not known whether it took effect (never
+    reported as failed).
     """
 
     action: str
 
-    async def perform(self, operation: Operation, account_id: str) -> OperationResult: ...
+    async def perform(self, operation: Operation, account_id: str | None) -> ActionResult: ...
 
 
 @runtime_checkable
@@ -329,7 +343,7 @@ class ApiCall:
 
 @dataclass(frozen=True)
 class ApiResult:
-    """The API's answer: a JSON body, or an operation to propose (`202`)."""
+    """The API's answer: a JSON body, or an operation (`403 approval_required`)."""
 
     status: int = 200
     body: Any = None
@@ -357,7 +371,7 @@ class CompanyApi(Protocol):
 
 @dataclass(frozen=True)
 class ToolResult:
-    """An MCP tool's answer: text and structured content, or an operation to propose.
+    """An MCP tool's answer: text and structured content, or an operation to approve.
 
     `refusal` is `(status, error, scope)` for a token error the server returns
     over HTTP with a Bearer challenge (`insufficient_scope`, naming the scopes needed).
@@ -397,6 +411,7 @@ __all__ = [
     "REPLAY_CACHES",
     "AccountDirectory",
     "AccountGrant",
+    "ActionResult",
     "AllowEveryAgent",
     "ApiCall",
     "ApiResult",

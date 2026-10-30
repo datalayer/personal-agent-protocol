@@ -200,7 +200,7 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
     write = pap("api", "openapi", session, "POST", "/api/orders/ord_7Hk2/exchanges", "--json")
     proposed = write["operation"]
     operation = proposed["operation_id"]
-    assert proposed["state"] == "proposed"
+    assert write["status"] == 403 and "state" not in proposed
     # A retry with the printed Idempotency-Key gets the original answer.
     key = write["idempotency_key"]
     retried = pap(
@@ -221,9 +221,11 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
     through_mcp = pap("api", "mcp", session, "exchange_jacket", "--json")["operation"]
     assert through_mcp["operation_id"] == operation
 
-    # Approval names the exact ID and revision; confirming needs that approval.
-    pap("operations", "confirm", session, operation, "--revision", "1", code=6)
-    pap("operations", "approve", session, operation, "--revision", "2", code=6)
+    # Approval names the exact ID and revision; sending needs that approval.
+    revision = through_mcp["revision"]
+    pap("operations", "send", session, operation, "--revision", revision, code=6)
+    pap("operations", "approve", session, operation, "--revision", "other", code=6)
+    pap("operations", "approve", session, "op_unknown", "--revision", revision, code=3)
     # Piped input is never the user's approval: only their terminal (or the host's surface).
     pap(
         "operations",
@@ -231,36 +233,37 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
         session,
         operation,
         "--revision",
-        "1",
+        revision,
         input=f"{operation}\n",
         code=4,
     )
     # An approval written into state.json by anything but `approve` (no MAC under the key in
-    # the token store) is not the user's: confirm refuses it.
-    from personal_agent_protocol.models import Operation
-    from personal_agent_protocol.operations import approve
-
+    # the token store) is not the user's: sending refuses it.
     state = json.loads((pap.state / "state.json").read_text())
     current = pap("operations", "show", session, operation, "--json")["operation"]
-    # The right digest of the right revision: only the binding to the token store is missing.
-    real = approve(Operation.model_validate(current)).model_dump(mode="json")
-    forged = {**real, "session": session, "mac": "forged"}
+    forged = {
+        "operation_id": current["operation_id"],
+        "revision": current["revision"],
+        "session": session,
+        "mac": "forged",
+    }
     state["approvals"] = {operation: forged}
     (pap.state / "state.json").write_text(json.dumps(state))
-    pap("operations", "confirm", session, operation, "--revision", "1", code=6)
+    pap("operations", "send", session, operation, "--revision", revision, code=6)
     monkeypatch.setattr(cli_commands, "user_terminal", lambda: True)
-    pap("operations", "approve", session, operation, "--revision", "1", input="no\n", code=6)
-    pap("operations", "approve", session, operation, "--revision", "1", "--no-input", code=4)
+    pap("operations", "approve", session, operation, "--revision", revision, input="no\n", code=6)
+    pap("operations", "approve", session, operation, "--revision", revision, "--no-input", code=4)
     approved = pap(
-        "operations", "approve", session, operation, "--revision", "1", "--json",
+        "operations", "approve", session, operation, "--revision", revision, "--json",
         input=f"{operation}\n",
     )  # fmt: skip
-    assert approved["approved"] == {"operation_id": operation, "revision": 1}
-    pap("operations", "confirm", session, operation, "--revision", "2", code=6)
-    done = pap("operations", "confirm", session, operation, "--revision", "1", "--json")
-    assert done["operation"]["state"] == "succeeded" and done["status"] == "confirmed"
-    shown = pap("operations", "show", session, operation, "--json")["operation"]
-    assert shown["confirmation"]["approved_by"] == "user"
+    assert approved["approved"] == {"operation_id": operation, "revision": revision}
+    pap("operations", "send", session, operation, "--revision", "other", code=6)
+    done = pap("operations", "send", session, operation, "--revision", revision, "--json")
+    assert done["status"] == "answered"
+    # Gone once answered: nothing is left to approve, and the same operation can't be sent twice.
+    pap("operations", "show", session, operation, code=3)
+    pap("operations", "send", session, operation, "--revision", revision, code=6)
     assert pap.plugin.executor.performed == [operation]
 
     # Conversations.

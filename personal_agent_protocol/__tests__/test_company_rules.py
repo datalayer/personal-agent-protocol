@@ -5,7 +5,7 @@
 """The reference company's rules of draft 0.3, each with the personal agent's view of it.
 
 A Session signed in on each request, by whichever account's token it carries (§5.4);
-what continues after sign-out (§5.5, Operations §3.2); the Mediated Sign-In extension's
+what continues after sign-out (§5.5, Operations 3); the Mediated Sign-In extension's
 statuses and errors; conversation requests (§8.2 to §8.13); a new Session in place of
 one that ended (§5.5); `extension_required` at an API (§3.3).
 """
@@ -44,8 +44,7 @@ from personal_agent_protocol.mediated import (
     MediatedSignInClient,
     mediated_sign_in,
 )
-from personal_agent_protocol.models import Author, ConversationEventPage
-from personal_agent_protocol.operations import OperationError, OperationsClient
+from personal_agent_protocol.models import Approval, Author, ConversationEventPage
 from personal_agent_protocol.sessions import PapSession
 
 from .test_company_end_to_end import TENANT, World
@@ -177,7 +176,7 @@ async def test_mediated_sign_in_in_a_session_another_account_used_signs_in() -> 
     )
 
 
-# After sign-out (§5.5, §8.11, Operations §3.2) --------------------------------------------
+# After sign-out (§5.5, §8.11, Operations 3) --------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -210,13 +209,11 @@ async def test_after_sign_out_what_used_the_account_stays_and_asks_for_sign_in()
         await world.conversations.read_events(endpoint, page.conversation_id, session=session)
     assert (read.value.code, read.value.status_code) == ("insufficient_scope", 401)
     # The operation belongs to the account: signed out, the same Session is asked to sign in.
-    operations = OperationsClient(transport=world.transport)
-    with pytest.raises(OperationError) as op:
-        await operations.read(
-            world.shop.config.operations_endpoint,
-            proposed.operation.operation_id,
-            session=session,
-        )
+    api = ApiClient(transport=world.transport)
+    operation = proposed.operation
+    approval = Approval(operation_id=operation.operation_id, revision=operation.revision)
+    with pytest.raises(ApiError) as op:
+        await api.call("POST", EXCHANGE, session=session, body={}, approval=approval)
     assert (op.value.code, op.value.status_code) == ("insufficient_scope", 401)
     # Signed in again to the same account, the Session continues both.
     back, _, _ = await device_sign_in(world, "acct_ada")
@@ -225,25 +222,18 @@ async def test_after_sign_out_what_used_the_account_stays_and_asks_for_sign_in()
         endpoint, page.conversation_id, session=session, token=back
     )
     assert again.conversation_id == page.conversation_id
-    current = await operations.read(
-        world.shop.config.operations_endpoint,
-        proposed.operation.operation_id,
-        session=session,
-        token=back,
-    )
-    assert current.operation_id == proposed.operation.operation_id
-    # Another account never learns it exists.
+    # Another account never learns it exists: as if the approval weren't there.
     stranger = await world.signed_out_session()
     bob, _, _ = await device_sign_in(world, "acct_bob")
     assert bob is not None
-    with pytest.raises(OperationError) as hidden:
-        await operations.read(
-            world.shop.config.operations_endpoint,
-            proposed.operation.operation_id,
-            session=stranger,
-            token=bob,
-        )
-    assert hidden.value.code == "operation_not_found"
+    hidden = await api.call(
+        "POST", EXCHANGE, session=stranger, token=bob, body={}, approval=approval
+    )
+    assert hidden.operation is not None and hidden.operation.operation_id != operation.operation_id
+    assert world.plugin.executor.performed == []
+    done = await api.call("POST", EXCHANGE, session=session, token=back, body={}, approval=approval)
+    assert done.status == 200
+    assert world.plugin.executor.performed == [operation.operation_id]
 
 
 # Mediated Sign-In's errors --------------------------------------------------------------------

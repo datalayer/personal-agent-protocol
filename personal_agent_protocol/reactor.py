@@ -257,10 +257,17 @@ class ProtectedInput(Protocol):
 
 @dataclass(frozen=True)
 class ApprovalRequest:
-    """A live-session action that changes or ends what the user holds, to approve first.
+    """What a user is asked to approve: nothing has been done yet.
 
-    `summary` says what it does in plain words; `arguments` are the action's own
-    (Session and operation IDs, never a credential). Nothing has been done yet.
+    A live-session action that changes or ends what the user holds: `summary` says
+    what it does in plain words; `arguments` are the action's own (Session and
+    operation IDs, never a credential).
+
+    An operation (Operations 5): `summary` is the company's own, shown as it is and
+    as text, its links, images and HTML not rendered (`ui.inert_summary`, wherever
+    Markdown is); `company_name` and `company_domain` say who asks, and are shown
+    with it; `terms` and `expires_at` are the revision's; `differences` what the
+    terms check found, to point out; `changed` what a new revision changed.
     """
 
     action_id: str
@@ -268,14 +275,22 @@ class ApprovalRequest:
     summary: str
     arguments: Mapping[str, str]
     tenant_id: str
+    company_name: str | None = None
+    company_domain: str | None = None
+    terms: Mapping[str, Any] | None = None
+    expires_at: datetime | None = None
+    differences: tuple[str, ...] = ()
+    changed: tuple[str, ...] = ()
 
 
 @runtime_checkable
 class ApprovalSurface(Protocol):
     """The host's own approval surface: the user, not a model, answers.
 
-    Only `True` approves. Without a contribution, a destructive live-session
-    action is refused (`approval_required`); it stays available from `pap`.
+    Only `True` approves. The surface asks the user every time: it never answers
+    from an earlier decision, and never because of text from a company. Without a
+    contribution, a destructive live-session action is refused
+    (`approval_required`), staying available from `pap`, and no operation is approved.
     """
 
     async def approve(self, request: ApprovalRequest) -> bool: ...
@@ -509,11 +524,9 @@ REFRESH_TOKEN_LOCKS = define_contribution_point("pap.refreshTokenLock")
 PROTECTED_INPUTS = define_contribution_point("pap.protectedInput")
 RETRY_POLICIES = define_contribution_point("pap.retryPolicy")
 RATE_LIMIT_BUDGETS = define_contribution_point("pap.rateLimitBudget")
-#: `operations.StandingPermissionStore`: the user's standing permissions (Operations).
-STANDING_PERMISSION_STORES = define_contribution_point("pap.standingPermissionStore")
 #: `TelemetrySink`: where traces and analytics events go; none, and nothing is emitted.
 TELEMETRY_SINKS = define_contribution_point("pap.telemetry")
-#: `ApprovalSurface`: a host's approval for destructive live-session actions (Python hosts).
+#: `ApprovalSurface`: a host's approval of operations and destructive live-session actions.
 APPROVAL_SURFACES = define_contribution_point("pap.approvalSurface")
 
 
@@ -992,7 +1005,6 @@ def build_pap_reactor(
                 PROTECTED_INPUTS.id,
                 RETRY_POLICIES.id,
                 RATE_LIMIT_BUDGETS.id,
-                STANDING_PERMISSION_STORES.id,
                 TELEMETRY_SINKS.id,
                 APPROVAL_SURFACES.id,
             ],

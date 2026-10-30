@@ -195,16 +195,6 @@ def _scenario_json() -> dict[str, Any]:
 
     scenario = MANZANITA_SCENARIO
 
-    def limits(values: Any) -> list[dict[str, Any]]:
-        return [
-            {
-                "path": limit.path,
-                **({"maximum": str(limit.maximum)} if limit.maximum is not None else {}),
-                **({"allowed": sorted(limit.allowed)} if limit.allowed is not None else {}),
-            }
-            for limit in values
-        ]
-
     return {
         "read_path": scenario.read_path,
         "read_scope": scenario.read_scope,
@@ -218,15 +208,11 @@ def _scenario_json() -> dict[str, Any]:
             }
             for kind, proposal in scenario.proposals.items()
         },
-        "standing_action": scenario.standing_action,
-        "standing_limits": limits(scenario.standing_limits),
-        "standing_too_low": limits(scenario.standing_too_low),
         "operation_prompt": scenario.operation_prompt,
         "account_prompt": scenario.account_prompt,
         "greeting": scenario.greeting,
         "mcp_read_tool": scenario.mcp_read_tool,
         "mcp_propose_tool": scenario.mcp_propose_tool,
-        "web_confirm_form": scenario.web_confirm_form,
     }
 
 

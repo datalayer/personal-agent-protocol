@@ -75,9 +75,8 @@ TELEMETRY_EVENTS: dict[str, Stage] = {
     "pap.conversation.start_direct": "conversation",
     "pap.conversation.handoff": "conversation",
     "pap.conversation.close": "conversation",
-    "pap.operation.read": "operation",
-    "pap.operation.confirm": "operation",
-    "pap.operation.cancel": "operation",
+    "pap.operation.ask_user": "operation",
+    "pap.operation.send": "operation",
     # What a company built on `personal_agent_protocol.company` did and refused.
     "pap.company.identity.check": "company",
     "pap.company.session.start": "company",
@@ -148,9 +147,7 @@ TELEMETRY_ATTRIBUTES: dict[str, Callable[[object], bool]] = {
     "pap.scopes.missing": _count,
     "pap.conversation.status": _identifier,
     "pap.conversation.events": _count,
-    "pap.operation.state": _identifier,
     "pap.operation.status": _identifier,
-    "pap.operation.revision": _count,
     "pap.client.id": _issuer,
     "pap.interface": _one_of(*INTERFACES),
     "pap.company.route": _identifier,
@@ -419,11 +416,7 @@ def conversation_result(result: Any) -> dict[str, object]:
 
 
 def operation_result(result: Any) -> dict[str, object]:
-    operation = getattr(result, "operation", result)
-    return {
-        "pap.operation.status": getattr(result, "status", None)
-        if operation is not result
-        else None,
-        "pap.operation.state": getattr(operation, "state", None),
-        "pap.operation.revision": getattr(operation, "revision", None),
-    }
+    """How an approval step ended: never the operation's terms or its IDs."""
+
+    status = getattr(result, "status", None)
+    return {"pap.operation.status": status if isinstance(status, str) else "approved"}

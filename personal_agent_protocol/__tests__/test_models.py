@@ -27,8 +27,10 @@ def test_discovery_fixture_round_trips_and_preserves_extensions() -> None:
 
     assert document.protocol_version == "0.3"
     assert document.apis[1].type == "mcp"
-    assert document.extensions["operations"].model_extra == {
-        "endpoint": "https://api.example.com/poppy/operations"
+    assert document.extensions["operations"].version == "2"
+    assert document.extensions["mediated-sign-in"].model_extra == {
+        "fields": source["extensions"]["mediated-sign-in"]["fields"],
+        "scopes": ["orders:read"],
     }
 
 
@@ -64,19 +66,15 @@ def test_strict_json_rejects_duplicate_members() -> None:
         loads_strict('{"issuer":"first","issuer":"second"}')
 
 
-def test_operation_requires_exact_current_revision() -> None:
-    with pytest.raises(ValidationError, match="current revision"):
+def test_an_operation_of_the_old_shape_is_refused() -> None:
+    with pytest.raises(ValidationError):
         Operation.model_validate(
             {
                 "operation_id": "op_123",
                 "revision": 2,
                 "state": "in_progress",
                 "summary": "Change the booking",
-                "confirmation": {
-                    "revision": 1,
-                    "approved_by": "user",
-                    "confirmed_at": "2026-10-10T10:00:00Z",
-                },
+                "confirmation": None,
                 "result": None,
             }
         )
@@ -92,7 +90,7 @@ def test_shared_client_conversation_and_operation_fixtures() -> None:
     )
 
     assert client.extensions["example.org/preferences"].model_extra == {"mode": "compact"}
-    assert operation.user_approval_required is True
+    assert operation.revision == "1791487200-k3Jd9Qx2mW8v"
     assert page.events[0].message is not None
     assert page.events[0].message.operation == operation
     assert page.events[2].type == "example.org/future-event"
@@ -100,7 +98,9 @@ def test_shared_client_conversation_and_operation_fixtures() -> None:
 
 
 def test_message_requires_content() -> None:
-    with pytest.raises(ValidationError, match="requires text, data, context, or operation"):
+    with pytest.raises(
+        ValidationError, match="requires text, data, context, operation, or approval"
+    ):
         Message.model_validate({"id": "msg_empty", "author": {"type": "agent"}})
 
 

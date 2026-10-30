@@ -60,7 +60,7 @@ PAP_CONFIRM_TYPE = "application/vnd.datalayer.pap.confirm+json"
 #: The display type of what a company answered in a conversation.
 PAP_REPLIES_TYPE = "application/vnd.datalayer.pap.replies+json"
 
-#: What confirming an operation does, as an application's Rules class it.
+#: What approving an operation does, as an application's Rules class it.
 PapActionClass = Literal["read", "write", "send", "buy", "delete", "publish"]
 
 #: An operation ID or revision (Operations 3).

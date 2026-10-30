@@ -48,7 +48,7 @@ SAFE = {
     "pap.requirements.list",
     "pap.requirements.show",
 }
-NEEDS_APPROVAL = {"pap.operations.cancel", "pap.sessions.end", "pap.auth.disconnect"}
+NEEDS_APPROVAL = {"pap.sessions.end", "pap.auth.disconnect"}
 
 
 class Approvals:
@@ -139,7 +139,7 @@ def test_each_safe_action_is_one_implementation_on_every_surface(tmp_path: Path)
         session=session,
         operation_id=operation,
     )
-    assert proposed["operation"]["state"] == "proposed"
+    assert proposed["operation"]["operation_id"] == operation
     page = _same_everywhere(
         world,
         "pap.conversations.events",
@@ -214,9 +214,8 @@ def test_unknown_actions_and_arguments_are_usage_errors(tmp_path: Path) -> None:
 
 def test_destructive_actions_are_refused_without_an_approval_surface(tmp_path: Path) -> None:
     world = World(tmp_path)
-    session, operation = world.session, world.operation
+    session = world.session
     arguments = {
-        "pap.operations.cancel": {"session": session, "operation_id": operation},
         "pap.sessions.end": {"session": session},
         "pap.auth.disconnect": {"session": session},
     }
@@ -230,49 +229,54 @@ def test_destructive_actions_are_refused_without_an_approval_surface(tmp_path: P
         )
         out = world.run(action_id, *words, code=ExitCode.NOT_APPROVED)
         assert "approval_required" in out
-    # Nothing was done: the Session is held and signed in, the operation still proposed.
+    # Nothing was done: the Session is held and signed in.
     held = world.pap("sessions", "show", session, "--json")["session"]
     assert held["signed_in"] is True and held["refresh_reference"]
-    shown = world.pap("operations", "show", session, operation, "--json")["operation"]
-    assert shown["state"] == "proposed"
     # The same actions stay available as CLI-only commands.
     assert world.pap("auth", "disconnect", session, "--json")["session"]["signed_in"] is False
 
 
 def test_the_approval_surface_is_shown_the_action_and_only_yes_does_it(tmp_path: Path) -> None:
-    approvals = Approvals(False, RuntimeError("the dialog crashed"), True, True)
+    approvals = Approvals(False, RuntimeError("the dialog crashed"), True)
     world = World(tmp_path, (PluginManifest(name="host-approval", version="1"), approvals))
-    session, operation = world.session, world.operation
+    session = world.session
 
     with pytest.raises(ApprovalRequiredError) as declined:
-        world.studio("pap.operations.cancel", {"session": session, "operation_id": operation})
+        world.studio("pap.sessions.end", {"session": session})
     assert declined.value.code == "not_approved"
-    out = world.run("pap.operations.cancel", session, operation, code=ExitCode.NOT_APPROVED)
+    out = world.run("pap.sessions.end", session, code=ExitCode.NOT_APPROVED)
     assert "approval_failed" in out and "crashed" not in out
-    assert (
-        world.pap("operations", "show", session, operation, "--json")["operation"]["state"]
-        == "proposed"
-    )
+    assert world.pap("sessions", "show", session, "--json")["session"]["id"] == session
 
-    cancelled = world.studio(
-        "pap.operations.cancel", {"session": session, "operation_id": operation}
-    )
-    assert cancelled["operation"]["state"] == "cancelled"
     ended = world.repl(f"/pap.sessions.end {session}")
     assert isinstance(ended, dict) and ended["ended"] == session
     world.pap("sessions", "show", session, code=ExitCode.NOT_CONFIGURED)
 
     request = approvals.asked[0]
-    assert request.action_id == "pap.operations.cancel"
-    assert request.summary == f"Cancel operation {operation} at the company."
-    assert dict(request.arguments) == {"session": session, "operation_id": operation}
+    assert request.action_id == "pap.sessions.end"
+    assert request.summary == f"End Session {session} and forget its token."
+    assert dict(request.arguments) == {"session": session}
     assert request.tenant_id == "pap-cli"
-    assert [r.action_id for r in approvals.asked] == [
-        "pap.operations.cancel",
-        "pap.operations.cancel",
-        "pap.operations.cancel",
-        "pap.sessions.end",
-    ]
+    assert [r.action_id for r in approvals.asked] == ["pap.sessions.end"] * 3
+
+
+def test_an_operation_is_approved_on_the_hosts_surface_with_what_is_asked(tmp_path: Path) -> None:
+    approvals = Approvals(False, True)
+    world = World(tmp_path, (PluginManifest(name="host-approval", version="1"), approvals))
+    session, operation = world.session, world.operation
+    shown = world.pap("operations", "show", session, operation, "--json")["operation"]
+    revision = shown["revision"]
+    world.pap("operations", "approve", session, operation, "--revision", revision, code=6)
+    world.pap("operations", "approve", session, operation, "--revision", revision, "--json")
+    request = approvals.asked[-1]
+    assert (request.company_name, request.company_domain) == (
+        "Manzanita Outfitters",
+        "manzanita.example",
+    )
+    assert request.summary == shown["summary"]
+    assert dict(request.arguments) == {"operation_id": operation, "revision": revision}
+    done = world.pap("operations", "send", session, operation, "--revision", revision, "--json")
+    assert done["answer"]["summary"].startswith("Exchanged the Ridge Jacket")
 
 
 def test_two_approval_surfaces_at_one_order_fail_closed(tmp_path: Path) -> None:
@@ -316,7 +320,7 @@ def test_only_safe_and_approval_gated_actions_are_registered(tmp_path: Path) -> 
         "pap.sessions.start",
         "pap.conversations.send",
         "pap.operations.approve",
-        "pap.operations.confirm",
+        "pap.operations.send",
         "pap.api.openapi",
     ):
         assert cli_only not in ACTIONS

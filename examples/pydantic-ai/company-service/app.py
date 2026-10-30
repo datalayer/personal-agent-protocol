@@ -5,12 +5,12 @@
 
 Juniper Library is a fictional company built here from `personal_agent_protocol.company`:
 a `CompanyConfig`, a company store that passes `check_store`, a company agent that
-proposes renewing a loan, and the operation executor that performs it. The service
+asks approval to renew a loan, and the operation executor that performs it. The service
 is served over ASGI with `company_app` on an in-process network, and Atlas, Ada's
 personal agent from the same SDK, talks to it end to end: discovery, a signed-out
 Session, a conversation answered with `insufficient_scope`, Device Sign-In on the library's
 page, the renewal proposed, Ada's approval of that exact revision, and the renewal
-performed once however often the confirmation is sent.
+performed once however often the approval is sent.
 
 The tool hands the model the steps, the library's summaries, and counts; no token,
 code, or Session JWT enters it.
@@ -42,6 +42,7 @@ from personal_agent_protocol.company import (
     COMPANY_AGENTS,
     COMPANY_STORES,
     OPERATION_EXECUTORS,
+    ActionResult,
     CompanyConfig,
     MemoryCompanyStore,
     ProposedOperation,
@@ -57,10 +58,11 @@ from personal_agent_protocol.demo.kit import (
     InProcessNetwork,
     MutableClock,
     PersonalAgentHost,
+    ScriptedApprovals,
     personal_agent_reactor,
 )
-from personal_agent_protocol.models import Operation, OperationResult
-from personal_agent_protocol.operations import OperationsClient, approve, operations_endpoint
+from personal_agent_protocol.models import Operation
+from personal_agent_protocol.operations import OperationsClient, operations_negotiated
 
 DOMAIN = "juniper.example"
 TENANT = "atlas-example"
@@ -83,7 +85,7 @@ RENEWAL = ProposedOperation(
     action="loans.renew",
     summary="Renew 'The Left Hand of Darkness' (loan_31) for three weeks, until 2026-11-10.",
     terms={"loan_id": "loan_31", "due": "2026-11-10"},
-    user_approval_required=True,
+    subject="loan_31",
 )
 
 
@@ -111,10 +113,10 @@ class RenewExecutor:
     def __init__(self) -> None:
         self.performed: list[str] = []
 
-    async def perform(self, operation: Operation, account_id: str) -> OperationResult:
+    async def perform(self, operation: Operation, account_id: str | None) -> ActionResult:
         self.performed.append(operation.operation_id)
         due = (operation.terms or {}).get("due")
-        return OperationResult(summary=f"Renewed until {due}.", data={"due": due})
+        return ActionResult(summary=f"Renewed until {due}.", data={"due": due})
 
 
 class JuniperPlugin:
@@ -171,7 +173,9 @@ async def run_company_service() -> dict[str, Any]:
     network.add(atlas.domain, atlas.website())
     http = network.client()
     reactor = personal_agent_reactor(
-        PersonalAgentHost(atlas, clock), network=network, http_client=http
+        PersonalAgentHost(atlas, clock, approvals=ScriptedApprovals(always=True)),
+        network=network,
+        http_client=http,
     )
     transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
@@ -225,23 +229,33 @@ async def run_company_service() -> dict[str, Any]:
         wait=0,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
-    ops = operations_endpoint(company.document, ClientMetadata.model_validate(atlas.metadata))
-    if proposal is None or ops is None:
+    negotiated = operations_negotiated(
+        company.document, ClientMetadata.model_validate(atlas.metadata)
+    )
+    if proposal is None or not negotiated:
         raise RuntimeError("the example world is incomplete")
-    steps.append(f"the library proposed revision {proposal.revision}: {proposal.summary}")
+    steps.append(f"the library asked approval of revision {proposal.revision}: {proposal.summary}")
 
-    operations = OperationsClient(transport=transport)
-    approval = approve(proposal)
-    confirmed = await operations.confirm(
-        ops, proposal, approval=approval, session=session, token=signed_in
+    approval = await OperationsClient(reactor=reactor).ask_user(
+        proposal, organization=company.document.organization, tenant_id=TENANT
     )
-    again = await operations.confirm(
-        ops, proposal, approval=approval, session=session, token=signed_in
-    )
-    record = confirmed.operation
-    if record is None or again.operation is None:
-        raise RuntimeError("the example world is incomplete")
-    steps.append("Ada approved that exact revision; the confirmation was sent twice")
+
+    async def send_approval() -> Any:
+        return await conversations.send(
+            endpoint,
+            page.conversation_id,
+            Message(
+                id=generate_message_id(reactor), author=Author(type="agent"), approval=approval
+            ),
+            session=session,
+            token=signed_in,
+            wait=0,
+        )
+
+    answered = await send_approval()
+    told = [e.message for e in answered.events if e.message and e.message.role == "company"][-1]
+    await send_approval()
+    steps.append("Ada approved that exact revision; the approval was sent twice")
     await http.aclose()
 
     return {
@@ -251,15 +265,8 @@ async def run_company_service() -> dict[str, Any]:
             name: hint.model_dump(exclude_none=True)
             for name, hint in company.document.auth.scope_hints.items()
         },
-        "proposal": {
-            "summary": proposal.summary,
-            "revision": proposal.revision,
-            "user_approval_required": proposal.user_approval_required,
-        },
-        "confirmed": record.state,
-        "result": record.result.summary if record.result else None,
-        "second_confirmation": again.operation.state,
-        "same_operation": again.operation.operation_id == record.operation_id,
+        "operation": {"summary": proposal.summary, "revision": proposal.revision},
+        "result": told.text,
         "times_performed": len(plugin.executor.performed),
         "tokens_codes_and_session_jwts_withheld": True,
     }

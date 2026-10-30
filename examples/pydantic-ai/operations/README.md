@@ -1,15 +1,13 @@
 # Operations
 
-This example confirms Northwind Bank's proposed payments with the real Python
-SDK `OperationsClient`: negotiation, a refused standing confirm, the user's
-exact approval, `terms_changed` after the bank revises, an old approval refused
-locally, a lost confirmation answer recovered by reading the same operation
-back, a standing permission checked term by term through the Reactor
-`pap.standingPermissionStore`, cancellation, and `extension_required` for an
-agent that does not list the extension.
+This example gets the user's approval of Northwind Bank's payments with the real
+Python SDK `OperationsClient`: negotiation, the user asked through the host's own
+approval surface about every revision, a user who says no, a new revision of the
+same operation after the bank changes its terms, and a lost answer sent again with
+the same approval, the payment performed once.
 
-The tool returns states, changed term paths, and the bank's `result.summary`
-as written. Tokens and proofs stay in the host.
+The tool returns what the user was asked, the changed term paths, and what the bank
+said it came to, as written. Tokens stay in the host.
 
 ```bash
 PAP_EXAMPLE_MODEL=openai:gpt-4o-mini python app.py

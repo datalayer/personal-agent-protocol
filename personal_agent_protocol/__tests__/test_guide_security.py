@@ -20,23 +20,18 @@ import pytest
 from pydantic import SecretStr
 
 from personal_agent_protocol import DirectSignInClient, SessionClient
-from personal_agent_protocol.apis import ApiClient
 from personal_agent_protocol.company import CompanyConfig, CompanyRequest, ConsentDecision
 from personal_agent_protocol.company.service import CONSENT_COOKIE
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
-    ControlledBrowser,
     PersonalAgentHost,
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import CONFIG
-from personal_agent_protocol.operations import OperationsClient, operation_page
 from personal_agent_protocol.reactor import BROWSER_HANDOFFS
 from personal_agent_protocol.transport import session_headers
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
-from .test_company_refusals import signed_in
-from .test_mcp_and_web import join, web_world
 
 AUTHORIZE = "https://manzanita.example/oauth/authorize"
 ORDERS = "https://manzanita.example/api/orders"
@@ -306,63 +301,3 @@ async def test_a_hosted_consent_page_gets_no_binding_and_no_built_in_decision() 
             post({"request_id": request_id, "csrf": "x", "decision": "allow"}, cookie="c")
         )
     await browser.aclose()
-
-
-# The website's operation page (company.mdx) -----------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_the_operation_page_refuses_cross_site_and_another_browsers_form() -> None:
-    world, browser = web_world()
-    token = await signed_in(world)
-    session = world.session
-    assert session is not None
-    proposed = await ApiClient(transport=world.transport).call(
-        "POST",
-        "https://manzanita.example/api/orders/ord_7Hk2/exchanges",
-        session=session,
-        token=token,
-        body={},
-    )
-    operation = proposed.operation
-    assert operation is not None
-    page_url = operation_page(operation, "manzanita.example")
-    await join(world, browser, session, token, page_url)
-    assert browser.page is not None
-    form = dict(_HIDDEN.findall(browser.page.text))
-    assert set(form) == {"revision", "approved_by", "csrf"}
-
-    # A second browser of the same Session: its own cookie, so its own token.
-    second = ControlledBrowser(world.network.client())
-    world.host.controlled_browser = second
-    world.reactor = personal_agent_reactor(
-        world.host, network=world.network, http_client=world.http
-    )
-    await join(world, second, session, token, page_url)
-    assert second.page is not None and second.page.status_code == 200
-    second_form = dict(_HIDDEN.findall(second.page.text))
-    assert second_form["csrf"] != form["csrf"]
-
-    confirm = {**form, "action": "confirm"}
-    same = {"Origin": "https://manzanita.example", "Sec-Fetch-Site": "same-origin"}
-    attempts = {
-        "a cross-site POST": (browser, confirm, {**same, "Sec-Fetch-Site": "cross-site"}),
-        "another origin": (browser, confirm, {**same, "Origin": "https://evil.example"}),
-        "no CSRF token": (browser, {k: v for k, v in confirm.items() if k != "csrf"}, same),
-        "the first browser's form in the second": (second, confirm, same),
-    }
-    for what, (who, data, headers) in attempts.items():
-        answer = await who.http.post(page_url, data=data, headers=headers)
-        assert answer.status_code == 403, what
-        assert answer.headers["x-frame-options"] == "DENY", what
-    assert world.plugin.executor.performed == []
-    read = await OperationsClient(transport=world.transport).read(
-        world.shop.config.operations_endpoint, operation.operation_id, session=session, token=token
-    )
-    assert read.state == "proposed"
-
-    # Each browser's own form works: the first press confirms, once.
-    done = await browser.submit(page_url, {"action": "confirm"})
-    assert 'data-state="succeeded"' in done.text
-    assert world.plugin.executor.performed == [operation.operation_id]
-    await second.http.aclose()

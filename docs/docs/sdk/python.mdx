@@ -26,7 +26,7 @@ python -m pytest -p no:cacheprovider
 | `DiscoveryDocument`, `OAuthServerMetadata`              | Implemented           | Strict, forward-compatible wire models.                                                         |
 | `ClientMetadata`, `JsonWebKeySet`                       | Implemented           | Validate HTTPS client identity plus approved public assertion keys.                             |
 | `Message`, `ConversationEvent`, `ConversationEventPage` | Implemented models    | Validate known conversation shapes while preserving unknown event types and fields.             |
-| `Operation`, `OperationConfirmation`, `OperationResult` | Implemented models    | Validate Operations v1 states, exact confirmation revisions, timestamps, and final results.     |
+| `Operation`, `Approval`                                 | Implemented models    | Validate Operations v2 operations and approvals: opaque revisions and timestamps.               |
 | `build_pap_reactor`                                     | Implemented           | Build the default Reactor host.                                                                 |
 | `generate_pairwise_user_id`                             | Implemented primitive | Generate an unlinkable random identifier.                                                       |
 | `SqlitePairwiseUserIdStore`, `resolve_pairwise_user_id` | Implemented           | Atomically persist/resolve stable IDs by tenant, local user, and verified issuer.               |
@@ -170,8 +170,8 @@ orchestrator and the portable primitives shared with TypeScript.
 Conversation pages preserve unknown future event types so callers can skip
 them as draft 0.3 requires. Known event types are validated for their required
 payload: messages, state changes, authorization requests, user requests, and
-Direct Conversation links. Operations validate the exact confirmed revision,
-timezone-bearing timestamps, proposed expiry, and final result presence.
+Direct Conversation links. Operations validate their IDs and opaque revision, and
+a timezone-bearing `expires_at`.
 
 `ConversationClient` implements message creation, continuation, one-page event
 reads, and a de-duplicating long-poll iterator with cursor-expiry recovery.

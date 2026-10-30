@@ -6,14 +6,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
 
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
-from personal_agent_protocol.company.store import OPERATION, StoredOperation
+from personal_agent_protocol.company.store import OPERATION, OperationOutcome, StoredOperation
 from personal_agent_protocol.device import DeviceSignInClient
-from personal_agent_protocol.models import OperationResult
 
 from .test_company_end_to_end import TENANT, World
 
@@ -43,20 +43,17 @@ async def _signed_in(world: World):  # type: ignore[no-untyped-def]
 
 
 async def _copy(world: World, stored: StoredOperation, operation_id: str, **update: object) -> None:
-    copied = stored.operation.model_copy(update={"operation_id": operation_id, **update})
     assert world.store is not None
     await world.store.put(
         OPERATION,
         operation_id,
-        StoredOperation(
-            copied, stored.action, stored.owner, stored.account_id, stored.scopes
-        ).to_json(),
+        replace(stored, operation_id=operation_id, **update).to_json(),  # type: ignore[arg-type]
     )
 
 
 @pytest.mark.asyncio
 async def test_taking_a_company_down_settles_its_operations_and_ends_its_sign_ins() -> None:
-    """Open operations settled as cancelled, saying so; final ones
+    """Open operations settled, saying so; performed ones
     untouched; every sign-in ended whole; nothing open after, and doing it again is nothing."""
 
     world = World(durable=True)
@@ -79,13 +76,14 @@ async def test_taking_a_company_down_settles_its_operations_and_ends_its_sign_in
         wait=0,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
-    assert proposal is not None and proposal.state == "proposed"
+    assert proposal is not None
     stored = await world.shop.operation_record(proposal.operation_id)
-    # One being performed when the company stopped, one finished, one proposal past its expiry.
-    await _copy(world, stored, "op_performing", state="in_progress", expires_at=None)
-    finished = OperationResult(summary="Exchanged.")
-    await _copy(world, stored, "op_finished", state="succeeded", expires_at=None, result=finished)
-    await _copy(world, stored, "op_stale", expires_at=world.clock.now() - timedelta(seconds=1))
+    # One being performed when the company stopped, one finished, one past its expiry.
+    await _copy(world, stored, "op_performing", status="performing")
+    finished = OperationOutcome(summary="Exchanged.")
+    await _copy(world, stored, "op_finished", status="performed", outcome=finished)
+    gone = replace(stored.latest, expires_at=world.clock.now() - timedelta(seconds=1))
+    await _copy(world, stored, "op_stale", revisions=(gone,))
 
     work = await world.shop.open_work()
     assert [operation.operation_id for operation in work.operations] == sorted(
@@ -95,19 +93,17 @@ async def test_taking_a_company_down_settles_its_operations_and_ends_its_sign_in
     assert not work.empty
 
     with pytest.raises(ValueError, match="say why"):
-        await world.shop.cancel_open_operations("  ")
-    assert await world.shop.cancel_open_operations(TAKEN_DOWN) == 2
-    proposed = (await world.shop.operation_record(proposal.operation_id)).operation
-    assert proposed.state == "cancelled"
-    assert proposed.result is not None
-    assert proposed.result.summary == f"Nothing was changed. {TAKEN_DOWN}"
-    performing = (await world.shop.operation_record("op_performing")).operation
-    assert performing.state == "cancelled" and performing.result is not None
-    assert performing.result.summary.startswith("It was stopped before it finished")
-    assert "whatever it changed until then stands" in performing.result.summary
-    assert performing.result.summary.endswith(TAKEN_DOWN)
-    assert (await world.shop.operation_record("op_finished")).operation.result == finished
-    assert (await world.shop.operation_record("op_stale")).operation.state == "expired"
+        await world.shop.settle_open_operations("  ")
+    assert await world.shop.settle_open_operations(TAKEN_DOWN) == 2
+    assert (await world.shop.operation_record(proposal.operation_id)).status == "withdrawn"
+    performing = await world.shop.operation_record("op_performing")
+    assert performing.status == "performed" and performing.outcome is not None
+    assert not performing.outcome.succeeded
+    assert performing.outcome.summary.startswith("It was stopped before it finished")
+    assert "whatever it changed until then stands" in performing.outcome.summary
+    assert performing.outcome.summary.endswith(TAKEN_DOWN)
+    assert (await world.shop.operation_record("op_finished")).outcome == finished
+    assert (await world.shop.operation_record("op_stale")).status == "open"
 
     assert await world.shop.end_sign_ins() == 1
     assert (await world.shop.open_work()).empty
@@ -126,5 +122,5 @@ async def test_taking_a_company_down_settles_its_operations_and_ends_its_sign_in
     assert refreshed.status == "signed_out"
 
     # Again: nothing left to settle or end.
-    assert await world.shop.cancel_open_operations(TAKEN_DOWN) == 0
+    assert await world.shop.settle_open_operations(TAKEN_DOWN) == 0
     assert await world.shop.end_sign_ins() == 0

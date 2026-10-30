@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from personal_agent_protocol import AuthorizationError, DirectSignInClient
+from personal_agent_protocol import Approval, AuthorizationError, DirectSignInClient
 from personal_agent_protocol.apis import ApiClient, ApiError, openapi_url
 from personal_agent_protocol.demo.kit import ScriptedBrowser, personal_agent_reactor
-from personal_agent_protocol.operations import OperationsClient, approve
 from personal_agent_protocol.transport import SessionHttpClient
 
 from .test_company_end_to_end import TENANT, World
@@ -75,20 +74,23 @@ async def test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchang
         "orders": [{"order_id": "ord_7Hk2", "item": "Ridge Jacket, size M", "status": "delivered"}]
     }
 
-    # A consequential call answers 202 with an operation: proposed, not performed.
+    # A consequential call is refused with an operation: nothing is done.
     proposed = await api.call(
         "POST", f"{orders}/ord_7Hk2/exchanges", session=session, token=signed_in, body={}
     )
-    assert proposed.status == 202 and proposed.operation is not None
+    assert proposed.status == 403 and proposed.operation is not None
     assert world.plugin.executor.performed == []
-    done = await OperationsClient(transport=world.transport).confirm(
-        world.shop.config.operations_endpoint,
-        proposed.operation,
-        approval=approve(proposed.operation),
+    done = await api.call(
+        "POST",
+        f"{orders}/ord_7Hk2/exchanges",
         session=session,
         token=signed_in,
+        body={},
+        approval=Approval(
+            operation_id=proposed.operation.operation_id, revision=proposed.operation.revision
+        ),
     )
-    assert done.operation.state == "succeeded"  # type: ignore[union-attr]
+    assert done.status == 200 and done.body["summary"].startswith("Exchanged")
     assert world.plugin.executor.performed == [proposed.operation.operation_id]
 
 

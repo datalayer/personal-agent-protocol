@@ -5,8 +5,7 @@
 
 Draft 0.3 defines no company-to-company protocol. Ledgerly, an accounting firm, is
 a PAP company to Ada's personal agent (Atlas) and, for the same Ada, a PAP personal
-agent at Northwind Bank. Every approval is an Operation, and a standing permission
-is itself an Operation Ada approves.
+agent at Northwind Bank. Every approval is an Operation, and Ada is asked about each.
 """
 
 from __future__ import annotations
@@ -33,12 +32,13 @@ from personal_agent_protocol.demo.kit import (
     InProcessNetwork,
     MutableClock,
     PersonalAgentHost,
+    ScriptedApprovals,
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.ledgerly import DOMAIN as LEDGERLY
 from personal_agent_protocol.demo.ledgerly import ledgerly
 from personal_agent_protocol.demo.northwind import ACCOUNT, northwind
-from personal_agent_protocol.operations import OperationsClient, approve
+from personal_agent_protocol.operations import OperationsClient
 
 TENANT = "atlas-example"
 PAIRWISE = "usr_ada_at_ledgerly_00000000"
@@ -63,12 +63,12 @@ async def run_two_companies() -> dict[str, Any]:
     bank, bank_plugin = northwind(network, clock)
     firm, at_northwind = ledgerly(network, clock)
     http = network.client()
-    reactor = personal_agent_reactor(
-        PersonalAgentHost(atlas, clock), network=network, http_client=http
-    )
+    ada = ScriptedApprovals(always=True)
+    host = PersonalAgentHost(atlas, clock, approvals=ada)
+    reactor = personal_agent_reactor(host, network=network, http_client=http)
     transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
-    operations = OperationsClient(transport=transport)
+    operations = OperationsClient(reactor=reactor)
 
     # Atlas signs Ada in to Ledgerly (Device Sign-In on Ledgerly's page).
     company = await DiscoveryClient(reactor=reactor, http_client=http).discover(LEDGERLY)
@@ -98,11 +98,10 @@ async def run_two_companies() -> dict[str, Any]:
     if not (token is not None):
         raise RuntimeError("the example world is incomplete")
     chat = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
-    ops = firm.config.operations_endpoint
     cursor: dict[str, Any] = {}
 
-    async def say(text: str):  # type: ignore[no-untyped-def]
-        message = Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
+    async def send(fields: dict[str, Any]):  # type: ignore[no-untyped-def]
+        message = Message(id=generate_message_id(reactor), **fields)
         if not cursor:
             page = await conversations.start(chat, message, session=session, token=token, wait=0)
         else:
@@ -118,34 +117,27 @@ async def run_two_companies() -> dict[str, Any]:
         cursor.update(id=page.conversation_id, at=page.cursor)
         return [e for e in page.events if e.type != "state"][-1].message
 
+    async def say(text: str):  # type: ignore[no-untyped-def]
+        return await send({"author": Author(type="human"), "text": text})
+
     # 1. Ledgerly is not yet connected to Northwind: Ada approves it on Northwind's page.
     connect = (await say("Pay INV-0042")).data["connect"]
     await bank.approve_device(connect["user_code"], account_id=ACCOUNT)
     clock.advance(5)
 
-    # 2. Northwind's proposal comes back as a Ledgerly operation quoting it as written.
+    # 2. Northwind's operation comes back as a Ledgerly operation quoting it as written.
     relayed = (await say("Done. Pay INV-0042")).operation
     performed_before_approval = len(bank_plugin.executor.performed)
 
-    # 3. Ada approves in Atlas; Ledgerly confirms that exact revision at Northwind.
-    paid = await operations.confirm(
-        ops, relayed, approval=approve(relayed), session=session, token=token
+    # 3. Ada approves in Atlas; Ledgerly sends Northwind the approval of that exact revision.
+    approval = await operations.ask_user(
+        relayed, organization=company.document.organization, tenant_id=TENANT
     )
-    first = (await bank.operation_record(bank_plugin.executor.performed[0])).operation
+    paid = await send({"author": Author(type="agent"), "approval": approval})
+    first = await bank.operation_record(bank_plugin.executor.performed[0])
 
-    # 4. A standing permission is itself an operation Ada approves.
-    allow = "Allow Ledgerly to pay Acme invoices up to EUR 2000 without asking"
-    grant = (await say(allow)).operation
-    granted = await operations.confirm(
-        ops, grant, approval=approve(grant), session=session, token=token
-    )
-
-    # 5. Within the bounds: paid under the permission, Ada told what was done.
-    told = await say("Pay INV-0043")
-    second = (await bank.operation_record(bank_plugin.executor.performed[1])).operation
-
-    # 6. Beyond the bounds: Ada is asked again.
-    over = (await say("Pay INV-0044")).operation
+    # 4. The next payment is asked about too: an approval says nothing of the next one.
+    second = (await say("Pay INV-0043")).operation
     await http.aclose()
 
     return {
@@ -156,18 +148,11 @@ async def run_two_companies() -> dict[str, Any]:
         "ledgerly_identity_at_northwind": at_northwind.identity.client_id,
         "connect_at": connect["verification_uri"],
         "relayed_summary": relayed.summary,
-        "relayed_requires_ada": relayed.user_approval_required,
+        "ada_was_asked_by": ada.asked[0].company_name,
         "bank_payments_before_ada_approved": performed_before_approval,
-        "after_ada_approved": paid.operation.result.summary if paid.operation else None,
-        "bank_record_approved_by": first.confirmation.approved_by if first.confirmation else None,
-        "standing_permission_summary": grant.summary,
-        "standing_permission_granted": granted.operation.state if granted.operation else None,
-        "within_bounds_told": told.text,
-        "within_bounds_new_proposal_for_ada": told.operation is not None,
-        "within_bounds_bank_record_approved_by": second.confirmation.approved_by
-        if second.confirmation
-        else None,
-        "beyond_bounds_asks_ada": over.summary if over else None,
+        "after_ada_approved": paid.text,
+        "bank_record_approved_revision": first.approved,
+        "next_payment_asks_ada": second.summary if second else None,
         "bank_payments_performed": len(bank_plugin.executor.performed),
         "tokens_codes_and_session_jwts_withheld": True,
     }
@@ -175,8 +160,7 @@ async def run_two_companies() -> dict[str, Any]:
 
 async def main() -> None:
     result = await agent.run(
-        "Have Ledgerly pay my Acme invoices from my Northwind account. Pay the first with "
-        "my approval, then let Ledgerly pay Acme up to EUR 2000 without asking.",
+        "Have Ledgerly pay my Acme invoices from my Northwind account, each with my approval.",
         model=os.getenv("PAP_EXAMPLE_MODEL", "openai:gpt-4o-mini"),
     )
     sys.stdout.write(f"{result.output}\n")

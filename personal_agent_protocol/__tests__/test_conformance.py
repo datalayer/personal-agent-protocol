@@ -91,7 +91,7 @@ async def test_a_driver_without_a_capability_skips_rather_than_passes() -> None:
     world = ManzanitaConformance()
     world.driver.capabilities = frozenset()  # type: ignore[misc]
     report = await run_conformance(
-        world.context(), cases=select_cases(ids=["operations.terms-changed"])
+        world.context(), cases=select_cases(ids=["operations.new-revision-on-changed-terms"])
     )
     assert [(r.outcome, r.message) for r in report.results] == [
         ("skipped", "the driver cannot revise")
@@ -112,5 +112,6 @@ async def test_the_mcp_cases_pass_with_a_token_for_the_servers_url() -> None:
         "lifecycle.mcp-token-for-its-url",
         "lifecycle.mcp-token-only-at-mcp",
         "operations.cross-channel-mcp",
+        "operations.mcp-approval",
     ]
     assert _failures(report) == []

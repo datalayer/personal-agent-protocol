@@ -15,8 +15,9 @@ Session header alone, which a server that accepts it may allow.
 `McpSessionAuth` is an `httpx.Auth` that refuses any other URL before a request
 is sent, usable with any MCP client built on httpx. `McpClient` is a minimal
 Streamable HTTP client (initialize, tools/list, tools/call) over it, with no MCP
-SDK dependency. `McpToolResult.operation` is the operation a consequential tool
-proposes in `structuredContent.operation` (Operations §4.2).
+SDK dependency. `McpToolResult.operation` is the operation a tool returns for the
+user's approval, in `structuredContent.operation` of an error result, and
+`call_tool(approval=...)` calls it again with the approval (Operations 4, 6).
 """
 
 from __future__ import annotations
@@ -35,13 +36,14 @@ from .errors import PersonalAgentProtocolError, ProtocolValidationError, Transpo
 from .json import loads_strict
 from .models import (
     ApiDescriptor,
+    Approval,
     DiscoveryDocument,
     Operation,
     ProtectedResourceMetadata,
     ProtocolModel,
     protected_resource_metadata_url,
 )
-from .operations import operation_from
+from .operations import APPROVAL_META_KEY, operation_from
 from .reactor import SystemClock, parse_retry_after, send_bounded
 from .refusals import challenge_parameters, refuse_redirect
 from .sessions import AccessToken, PapSession
@@ -169,7 +171,7 @@ class McpSessionAuth(httpx.Auth):
 
 
 class McpToolResult(ProtocolModel):
-    """A tool's answer; `operation` is set when it proposed one (Operations §4.2)."""
+    """A tool's answer; `operation` is set when it needs the user's approval (Operations 4)."""
 
     content: list[dict[str, Any]] = Field(default_factory=list)
     structured_content: dict[str, Any] | None = None
@@ -228,9 +230,25 @@ class McpClient:
             raise McpError("invalid_response", "tools/list did not return tools")
         return tools
 
-    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> McpToolResult:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        approval: Approval | None = None,
+    ) -> McpToolResult:
+        """Call a tool; `approval` goes with the same call as the one that returned it."""
+
         await self._ensure_initialized()
-        result = await self._call("tools/call", {"name": name, "arguments": arguments or {}})
+        params: dict[str, Any] = {"name": name, "arguments": arguments or {}}
+        if approval is not None:
+            params["_meta"] = {
+                APPROVAL_META_KEY: {
+                    "operation_id": approval.operation_id,
+                    "revision": approval.revision,
+                }
+            }
+        result = await self._call("tools/call", params)
         structured = result.get("structuredContent")
         operation = None
         if isinstance(structured, dict) and "operation" in structured:
@@ -238,7 +256,7 @@ class McpClient:
                 operation = operation_from(result)
             except ValueError as exc:
                 raise McpError(
-                    "invalid_operation", "the tool proposed a malformed operation"
+                    "invalid_operation", "the tool returned a malformed operation"
                 ) from exc
         content = result.get("content")
         return McpToolResult(
@@ -309,6 +327,15 @@ class McpClient:
             return None
         if response.status_code == 429:
             raise _rate_limited(response)
+        if response.status_code == 503:
+            # Being performed, or not known yet: send it again (Operations 7).
+            retry_after = response.headers.get("retry-after")
+            raise McpError(
+                "temporarily_unavailable",
+                "the MCP server can't answer yet",
+                status_code=503,
+                details={"retry_after": retry_after} if retry_after else None,
+            )
         if response.status_code != 200:
             raise McpError("http_error", "MCP request failed", status_code=response.status_code)
         if len(response.content) > self.max_response_bytes:

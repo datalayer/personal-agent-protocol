@@ -5,7 +5,7 @@
 
 Ada asks her personal agent, Atlas, to exchange a jacket at Manzanita Outfitters:
 discovery, a signed-out Session, sign-in mid-conversation, an exact approval, a
-confirmed exchange, and finally narrowing and revoking the refresh token.
+approved exchange, and finally narrowing and revoking the refresh token.
 """
 
 from __future__ import annotations
@@ -34,10 +34,11 @@ from personal_agent_protocol.demo.kit import (
     InProcessNetwork,
     MutableClock,
     PersonalAgentHost,
+    ScriptedApprovals,
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import DOMAIN, manzanita
-from personal_agent_protocol.operations import OperationsClient, approve, operations_endpoint
+from personal_agent_protocol.operations import OperationsClient, operations_negotiated
 
 TENANT = "atlas-example"
 PAIRWISE = "usr_ada_at_manzanita_000000"
@@ -62,8 +63,9 @@ async def run_manzanita_journey() -> dict[str, Any]:
     network.add(atlas.domain, atlas.website())
     shop, shop_plugin = manzanita(network, clock)
     http = network.client()
+    approvals = ScriptedApprovals(always=True)  # the host's own surface, a script for Ada
     reactor = personal_agent_reactor(
-        PersonalAgentHost(atlas, clock), network=network, http_client=http
+        PersonalAgentHost(atlas, clock, approvals=approvals), network=network, http_client=http
     )
     transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
@@ -130,21 +132,29 @@ async def run_manzanita_journey() -> dict[str, Any]:
         raise RuntimeError("the example world is incomplete")
     steps.append(f"company proposed revision {proposal.revision}: {proposal.summary}")
 
-    # Ada approves exactly that revision; it is confirmed once.
-    operations_url = operations_endpoint(
-        company.document, ClientMetadata.model_validate(atlas.metadata)
-    )
-    if not (operations_url is not None):
+    # Ada approves exactly that revision, in the host's own interface; it is done once.
+    if not operations_negotiated(company.document, ClientMetadata.model_validate(atlas.metadata)):
         raise RuntimeError("the example world is incomplete")
-    operations = OperationsClient(transport=transport)
-    outcome = await operations.confirm(
-        operations_url, proposal, approval=approve(proposal), session=session, token=signed_in
+    approval = await OperationsClient(reactor=reactor).ask_user(
+        proposal, organization=company.document.organization, tenant_id=TENANT
     )
-    again = await operations.confirm(
-        operations_url, proposal, approval=approve(proposal), session=session, token=signed_in
-    )
-    result = outcome.operation.result if outcome.operation else None
-    steps.append(f"Ada approved; Manzanita: {result.summary if result else 'pending'}")
+
+    async def send_approval() -> Any:
+        return await conversations.send(
+            endpoint,
+            page.conversation_id,
+            Message(
+                id=generate_message_id(reactor), author=Author(type="agent"), approval=approval
+            ),
+            session=session,
+            token=signed_in,
+            wait=0,
+        )
+
+    outcome = await send_approval()
+    result = [e.message for e in outcome.events if e.message and e.message.role == "company"][-1]
+    await send_approval()
+    steps.append(f"Ada approved; Manzanita: {result.text}")
 
     # The refresh token: narrowed for read-only follow-up, then revoked.
     accounts = RefreshTokenClient(reactor=reactor, http_client=http)
@@ -167,12 +177,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
     return {
         "steps": steps,
         "conversation_kept_its_id_across_sign_in": page.conversation_id == conversation_id,
-        "user_approval_required": proposal.user_approval_required,
-        "confirmed_state": outcome.operation.state if outcome.operation else None,
-        "approved_by": outcome.operation.confirmation.approved_by
-        if outcome.operation and outcome.operation.confirmation
-        else None,
-        "second_confirm_state": again.operation.state if again.operation else None,
+        "ada_was_asked": len(approvals.asked),
         "exchanges_performed": len(shop_plugin.executor.performed),
         "narrowed_to": narrowed.granted_scopes,
         "revoked": revoked.revoked,

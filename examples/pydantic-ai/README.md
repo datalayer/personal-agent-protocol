@@ -22,7 +22,7 @@ the Agent Runtimes repository under `examples/personal-agent-protocol`.
 | [`conversation-control`](./conversation-control/)         | `insufficient_scope`, Direct, handoff, close                    | Statuses and event types          |
 | [`account-tokens`](./account-tokens/)                     | Refresh, rotation, narrowing, expiry, revocation                | Statuses and scopes only          |
 | [`mediated-sign-in`](./mediated-sign-in/)                 | Protected input, one endpoint, one-time code                    | Labels and statuses only          |
-| [`operations`](./operations/)                             | Exact approval, `terms_changed`, recovery, standing permissions | States and company summaries      |
+| [`operations`](./operations/)                             | Exact approval, new revisions, a lost answer sent again          | States and company summaries      |
 | [`user-with-a-company`](./user-with-a-company/)           | The whole journey with Manzanita                                | Steps in plain words              |
 | [`two-companies`](./two-companies/)                       | Ledgerly at Northwind for Ada (composition)                     | Summaries and approvers           |
 | [`live-session-actions`](./live-session-actions/)         | Actions by ID, as Studio, a REPL and `pap commands run` invoke  | Answers and refusal codes         |

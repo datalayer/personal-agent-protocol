@@ -46,11 +46,14 @@ from .test_company_refusals import signed_in
 MCP = "https://manzanita.example/mcp"
 
 
-async def _post_json(world: World, session: object, url: str, body: object) -> httpx.Response:
+async def _post_json(
+    world: World, session: object, url: str, body: object, *, token: object = None
+) -> httpx.Response:
     return await world.transport.request(
         "POST",
         url,
         session=session,  # type: ignore[arg-type]
+        token=token,  # type: ignore[arg-type]
         content=json.dumps(body).encode(),
         headers={"content-type": "application/json"},
     )
@@ -241,8 +244,6 @@ def test_finding_5_operations_without_a_write_scope_is_a_configuration_error() -
 
 @pytest.mark.asyncio
 async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
-    from personal_agent_protocol.operations import OperationError, OperationsClient, approve
-
     world = World()
     session = await world.signed_out_session()
     md = world.company.oauth_metadata
@@ -269,6 +270,7 @@ async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
         wait=0,
     )
     proposal = next(e.message.operation for e in page.events if e.message and e.message.operation)
+    conversation_id = page.conversation_id
     record = await world.shop.operation_record(proposal.operation_id)
     assert record.scopes == ("orders:write",)
     narrowed = await RefreshTokenClient(reactor=world.reactor, http_client=world.http).refresh(
@@ -283,16 +285,25 @@ async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
         scopes=("orders:read",),
     )
     assert narrowed.token is not None
-    operations = OperationsClient(transport=world.transport)
-    with pytest.raises(OperationError) as raised:
-        await operations.confirm(
-            world.company.document.extensions["operations"].endpoint,  # type: ignore[index,union-attr]
-            proposal,
-            approval=approve(proposal),
-            session=session,
-            token=narrowed.token,
-        )
-    assert raised.value.code == "insufficient_scope"
+    answer = await _post_json(
+        world,
+        session,
+        f"{endpoint}/{conversation_id}/messages",
+        {
+            "message": {
+                "id": world.message("x").id,
+                "author": {"type": "agent"},
+                "approval": {
+                    "operation_id": proposal.operation_id,
+                    "revision": proposal.revision,
+                },
+            }
+        },
+        token=narrowed.token,
+    )
+    assert answer.status_code == 403
+    assert 'error="insufficient_scope"' in answer.headers["www-authenticate"]
+    assert world.plugin.executor.performed == []
 
 
 @pytest.mark.asyncio
@@ -919,23 +930,11 @@ async def _signed_in_with_proposal(world: World):  # type: ignore[no-untyped-def
 
 
 @pytest.mark.asyncio
-async def test_o1_an_operation_past_proposed_has_no_null_expires_at() -> None:
-    from personal_agent_protocol.operations import OperationsClient, approve
-
+async def test_o1_an_operation_has_no_null_members() -> None:
     world = World()
-    token, _, proposal = await _signed_in_with_proposal(world)
-    ops = world.company.document.extensions["operations"].endpoint  # type: ignore[index,union-attr]
-    session = world.session
-    assert session is not None
-    await OperationsClient(transport=world.transport).confirm(
-        ops, proposal, approval=approve(proposal), session=session, token=token
-    )
-    read = await world.transport.request(
-        "GET", f"{ops}/{proposal.operation_id}", session=session, token=token
-    )
-    body = read.json()
-    assert body["state"] == "succeeded"
-    assert "expires_at" not in body
+    _, _, proposal = await _signed_in_with_proposal(world)
+    body = proposal.model_dump(mode="json")
+    assert set(body) == {"operation_id", "revision", "summary", "terms", "expires_at"}
     assert [name for name, value in body.items() if value is None] == []
 
 

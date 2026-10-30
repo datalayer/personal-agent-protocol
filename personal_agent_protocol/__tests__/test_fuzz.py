@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from personal_agent_protocol.conformance import _propose, _signed_in_user
+from personal_agent_protocol.conformance import _approved, _propose, _request, _signed_in_user
 from personal_agent_protocol.demo.conformance import ManzanitaConformance
 from personal_agent_protocol.errors import (
     DiscoveryError,
@@ -31,12 +31,10 @@ from personal_agent_protocol.errors import (
     ProtocolValidationError,
 )
 from personal_agent_protocol.json import loads_strict
-from personal_agent_protocol.operations import OperationError, approve
 from personal_agent_protocol.reactor import ApprovedUrl, PublicUrlSafetyPolicy
 
 SEED = int(os.environ.get("PAP_FUZZ_SEED", "20261011"))
 ITERATIONS = int(os.environ.get("PAP_FUZZ_ITERATIONS", "300"))
-FINAL = {"succeeded", "failed", "cancelled", "expired"}
 
 
 def _key(rng: random.Random) -> str:
@@ -222,55 +220,44 @@ async def test_url_safety_approves_only_https_public_addresses() -> None:
 
 
 @pytest.mark.asyncio
-async def test_random_operation_histories_keep_the_state_machine() -> None:  # noqa: C901
-    """Confirm, cancel, revise and time passing, in any order: the invariants hold.
+async def test_random_operation_histories_keep_at_most_once() -> None:  # noqa: C901
+    """Approvals, stale approvals, revisions and time passing, in any order.
 
-    A final state never changes; an operation is performed at most once; only a
-    confirmed operation carries a confirmation; a stale revision never confirms.
+    An operation is performed at most once, whatever is sent; a revision the company
+    replaced never performs it; the company never answers an approval with the
+    revision it named.
     """
 
     rng = random.Random(SEED + 3)
     world = ManzanitaConformance()
     ctx = world.context()
-    endpoint = await ctx.operations_endpoint()
+    await ctx.operations_negotiated()
     histories = max(8, ITERATIONS // 30)
     for _ in range(histories):
         user, signed = await _signed_in_user(ctx)
         kind = rng.choice(["user", "user", "fails", "unknown"])
-        first = await _propose(ctx, user, signed, kind)
+        first = await _propose(ctx, signed, kind)
         latest = first
-        final: Any = None
         for _ in range(rng.randint(1, 6)):
-            action = rng.choice(["confirm", "confirm_stale", "cancel", "revise", "wait"])
+            action = rng.choice(["approve", "approve_stale", "ask", "revise", "wait"])
             try:
-                if action == "confirm":
-                    await ctx.agent.operations.confirm(
-                        endpoint,
-                        latest,
-                        approval=approve(latest),
-                        session=signed.session,
-                        token=signed.token,
-                    )
-                elif action == "confirm_stale":
-                    outcome = await ctx.agent.operations.confirm(
-                        endpoint,
-                        first,
-                        approval=approve(first),
-                        session=signed.session,
-                        token=signed.token,
-                    )
-                    if first.revision != latest.revision and outcome.status == "confirmed":
-                        raise AssertionError("a stale revision confirmed")
-                elif action == "cancel":
-                    await ctx.agent.operations.cancel(
-                        endpoint, first.operation_id, session=signed.session, token=signed.token
-                    )
+                if action in {"approve", "approve_stale"}:
+                    named = latest if action == "approve" else first
+                    answer = await _request(ctx, signed, kind, _approved(named))
+                    if answer.operation is not None:
+                        assert answer.operation.revision != named.revision
+                        latest = answer.operation
+                    elif action == "approve_stale" and first.revision != latest.revision:
+                        record = await world.service.operation_record(first.operation_id)
+                        assert record.approved != first.revision or not record.latest.withdrawn
+                elif action == "ask":
+                    latest = (await _request(ctx, signed, kind)).operation or latest
                 elif action == "revise":
                     await world.driver.revise(first.operation_id)
                 else:
                     world.clock.advance(rng.choice([1, 60, 600, 1200]))
-            except (OperationError, PersonalAgentProtocolError, ValueError, KeyError):
-                pass  # a refusal is fine; the invariants below are what matter
+            except (PersonalAgentProtocolError, ValueError, KeyError):
+                pass  # a refusal is fine; the invariant below is what matters
             if action == "wait":
                 refreshed = await ctx.agent.accounts.refresh(
                     signed.reference,
@@ -278,18 +265,4 @@ async def test_random_operation_histories_keep_the_state_machine() -> None:  # n
                 )
                 if refreshed.token is not None:
                     signed.token = refreshed.token
-            current = await ctx.agent.operations.read(
-                endpoint, first.operation_id, session=signed.session, token=signed.token
-            )
-            if current.state == "proposed":
-                latest = current
-            assert current.revision >= latest.revision
-            if final is not None:
-                assert current == final, "a final operation never changes"
-            if current.state in FINAL:
-                final = current
-            if current.confirmation is not None:
-                assert current.state in {"succeeded", "failed", "in_progress"}
-            else:
-                assert current.state not in {"succeeded", "failed"}
             assert await world.driver.performed(first.operation_id) <= 1

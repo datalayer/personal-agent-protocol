@@ -16,7 +16,8 @@ from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenCon
 from personal_agent_protocol.company import MemoryCompanyStore
 from personal_agent_protocol.company.store import REFRESH_TOKEN, AccountGrant, JsonObject
 from personal_agent_protocol.company.testing import StoreConformanceError, check_store
-from personal_agent_protocol.operations import OperationsClient, approve
+from personal_agent_protocol.conversations import generate_message_id
+from personal_agent_protocol.models import Approval, Author, Message
 from personal_agent_protocol.reactor import TOKEN_STORES, TokenStore, first_contribution
 
 from .test_company_end_to_end import TENANT, World
@@ -140,7 +141,7 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
         wait=0,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
-    assert proposal is not None and proposal.state == "proposed"
+    assert proposal is not None
     cursor = page.cursor
 
     world.restart()
@@ -154,18 +155,21 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
     again = await accounts.refresh(reference, context=context)
     assert again.status == "signed_in" and again.token is not None
 
-    # The operation proposed before the restart is confirmed once after it.
-    operations = OperationsClient(transport=world.transport)
-    ops = world.shop.config.operations_endpoint
-    outcome = await operations.confirm(
-        ops, proposal, approval=approve(proposal), session=session, token=again.token
-    )
-    assert outcome.status == "confirmed"
-    assert outcome.operation.state == "succeeded"  # type: ignore[union-attr]
-    retried = await operations.confirm(
-        ops, proposal, approval=approve(proposal), session=session, token=again.token
-    )
-    assert retried.operation.state == "succeeded"  # type: ignore[union-attr]
+    # The operation returned before the restart is performed once after it.
+    approval = Approval(operation_id=proposal.operation_id, revision=proposal.revision)
+    for _ in range(2):
+        await world.conversations.send(
+            endpoint,
+            page.conversation_id,
+            Message(
+                id=generate_message_id(world.reactor),
+                author=Author(type="agent"),
+                approval=approval,
+            ),
+            session=session,
+            token=again.token,  # type: ignore[arg-type]
+            wait=0,
+        )
     assert world.plugin.executor.performed == [proposal.operation_id]
 
     # The event cursor taken before the restart resumes after it: nothing is lost or repeated.

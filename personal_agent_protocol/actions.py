@@ -41,10 +41,8 @@ from .cli_host import CliRuntime, InputSource, NotConfiguredError, SessionRecord
 from .conversations import ConversationClient, StreamReconnected, TextDelta
 from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError
-from .identity import AgentIdentityClient
 from .mediated import mediated_sign_in
-from .models import ConversationEvent, DiscoveredCompany, Operation
-from .operations import OperationsClient, operations_endpoint
+from .models import ConversationEvent, DiscoveredCompany, Operation, Organization
 from .reactor import APPROVAL_SURFACES, ApprovalRequest, ApprovalSurface, optional_contribution
 from .requirements import load_ledger
 from .sessions import AccessToken, PapSession
@@ -158,19 +156,44 @@ async def conversation_client(
     return client, endpoint
 
 
-async def operations_client(
-    runtime: CliRuntime, record: SessionRecord
-) -> tuple[OperationsClient, str, str]:
+async def remember_operation(
+    runtime: CliRuntime, session: str, operation: Operation, request: dict[str, Any]
+) -> None:
+    """Keep an operation as the company returned it, with the request that returned it.
+
+    `request` is what is sent again with the approval, exactly: the model never
+    writes it again (Operations 6). A new revision replaces the one before, kept
+    to show what changed.
+    """
+
+    record = runtime.session(session)
     company = await company_of(runtime, record.domain)
-    identity = AgentIdentityClient(reactor=runtime.reactor, http_client=runtime.http)
-    metadata = await identity.fetch_metadata(record.client_id)
-    endpoint = operations_endpoint(company.document, metadata)
-    if endpoint is None:
-        raise NotConfiguredError("no_operations", "Operations v1 is not negotiated")
-    client = OperationsClient(
-        transport=SessionHttpClient(reactor=runtime.reactor, http_client=runtime.http)
+    earlier = runtime.state.operations.get(operation.operation_id)
+    runtime.state.operations[operation.operation_id] = {
+        "session": session,
+        "operation": operation.model_dump(mode="json"),
+        "replaces": None if earlier is None else earlier["operation"],
+        "company": company.document.organization.model_dump(mode="json"),
+        "request": request,
+    }
+    runtime.state.save()
+
+
+def saved_operation(
+    runtime: CliRuntime, session: str, operation_id: str
+) -> tuple[Operation, Operation | None, Organization, dict[str, Any]]:
+    """The operation this Session holds to approve, what it replaces, its company, its request."""
+
+    saved = runtime.state.operations.get(operation_id)
+    if saved is None or saved["session"] != session:
+        raise NotConfiguredError("unknown_operation", "No such operation in this Session")
+    replaces = saved["replaces"]
+    return (
+        Operation.model_validate(saved["operation"]),
+        None if replaces is None else Operation.model_validate(replaces),
+        Organization.model_validate(saved["company"]),
+        saved["request"],
     )
-    return client, endpoint, company.document.organization.name
 
 
 # The implementations: each `pap` command of the same name runs these ----------------------
@@ -277,23 +300,9 @@ async def follow_events(
 
 
 async def show_operation(runtime: CliRuntime, session: str, operation_id: str) -> dict[str, Any]:
-    """`pap operations show`: read an operation by its ID (Operations §6)."""
+    """`pap operations show`: an operation this Session holds, as the company returned it."""
 
-    record = runtime.session(session)
-    client, endpoint, _ = await operations_client(runtime, record)
-    operation = await client.read(endpoint, operation_id, **await credentials(runtime, record))
-    return operation_view(operation)
-
-
-async def cancel_operation(runtime: CliRuntime, session: str, operation_id: str) -> dict[str, Any]:
-    """`pap operations cancel`: decline a proposal, or ask to stop one (Operations §7)."""
-
-    record = runtime.session(session)
-    client, endpoint, _ = await operations_client(runtime, record)
-    operation = await client.cancel(endpoint, operation_id, **await credentials(runtime, record))
-    runtime.state.approvals.pop(operation_id, None)
-    runtime.state.save()
-    return operation_view(operation)
+    return operation_view(saved_operation(runtime, session, operation_id)[0])
 
 
 def list_requirements(
@@ -435,7 +444,7 @@ ACTIONS: dict[str, SessionAction] = {
         SessionAction(
             "pap.operations.show",
             "Show an operation",
-            "Read an operation by its ID: its state, revision, and summary.",
+            "An operation this Session holds to approve: its terms, revision, and summary.",
             lambda runtime, values: show_operation(
                 runtime, values["session"], values["operation_id"]
             ),
@@ -465,18 +474,6 @@ ACTIONS: dict[str, SessionAction] = {
             _show_requirement,
             (ActionArgument("requirement_id", "The requirement, e.g. OPS-6-02."),),
             emoji="📜",
-        ),
-        SessionAction(
-            "pap.operations.cancel",
-            "Cancel an operation",
-            "Decline a proposal, or ask the company to stop one in progress.",
-            lambda runtime, values: cancel_operation(
-                runtime, values["session"], values["operation_id"]
-            ),
-            (SESSION, OPERATION),
-            needs_approval=True,
-            summary="Cancel operation {operation_id} at the company.",
-            emoji="✋",
         ),
         SessionAction(
             "pap.sessions.end",
@@ -569,7 +566,7 @@ def _takes(names: list[str]) -> str:
     return ", ".join(names) if names else "no arguments"
 
 
-#: What an approval's summary may quote: an opaque Session or operation ID, nothing else.
+#: What an approval's summary may quote: an opaque ID, nothing else.
 _QUOTABLE = re.compile(r"[A-Za-z0-9_-]{1,256}")
 
 

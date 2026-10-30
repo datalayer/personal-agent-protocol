@@ -108,7 +108,7 @@ async def test_each_stage_of_a_journey_is_one_event(recorded: RecordingTelemetry
         "pap.conversation.start",
         "pap.conversation.send",
         "pap.conversation.close",
-        "pap.operation.confirm",
+        "pap.operation.ask_user",
         # The company's own: a Session, the agent verified, a sign-in ended by its revocation.
         "pap.company.identity.check",
         "pap.company.session.start",
@@ -136,13 +136,8 @@ async def test_each_stage_of_a_journey_is_one_event(recorded: RecordingTelemetry
         and e.attributes["pap.error"] in {"authorization_pending", "slow_down"}
     ]
     assert polls[-1]["pap.session.signed_in"] is True
-    confirms = [e.attributes for e in recorded.events if e.name == "pap.operation.confirm"]
-    assert confirms[0] == {
-        "pap.company.domain": "manzanita.example",
-        "pap.operation.status": "confirmed",
-        "pap.operation.state": "succeeded",
-        "pap.operation.revision": 1,
-    }
+    approvals = [e.attributes for e in recorded.events if e.name == "pap.operation.ask_user"]
+    assert approvals[0] == {"pap.operation.status": "approved"}
     refreshes = [e for e in recorded.events if e.name == "pap.sign_in.refresh_token.refresh"]
     assert [e.attributes["pap.sign_in.status"] for e in refreshes] == [
         "signed_in",
@@ -267,9 +262,7 @@ def test_no_allowlisted_attribute_names_a_secret() -> None:
         ("pap.error", "00000001CANARYAAAAAAAAAAAAAAAA"),
         ("pap.error", "invalid grant: eyJhbGciOi"),
         ("pap.sign_in.status", SecretStr("signed_in")),
-        ("pap.operation.state", "x" * 49),
-        ("pap.operation.revision", -1),
-        ("pap.operation.revision", True),
+        ("pap.operation.status", "x" * 49),
         ("pap.session.signed_in", "yes"),
         ("pap.sign_in.method", "password"),
     ],

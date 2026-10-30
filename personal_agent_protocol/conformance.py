@@ -5,7 +5,7 @@
 """A personal-agent conformance suite, run against any PAP company's base URL.
 
 The suite plays a personal agent with a demo-kit identity (`AgentIdentity`):
-it discovers the company, starts Sessions, signs in, talks, and confirms
+it discovers the company, starts Sessions, signs in, talks, and approves
 operations through the public SDK, and sends the forged, replayed, and
 mismatched requests a company MUST refuse. Every case is described by a
 shared fixture (`protocol/fixtures/conformance/*.json`) and names the ledger
@@ -75,17 +75,12 @@ from .discovery import DiscoveryClient
 from .errors import PersonalAgentProtocolError, TransportError
 from .feedback import feedback_endpoint
 from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
-from .models import Author, ConversationEvent, DiscoveredCompany, Message, Operation
+from .models import Approval, Author, ConversationEvent, DiscoveredCompany, Message, Operation
 from .operations import (
-    STANDING_PERMISSION_STORES,
-    InMemoryStandingPermissionStore,
-    OperationError,
+    APPROVAL_HEADER,
     OperationsClient,
-    StandingPermission,
-    TermLimit,
-    approve,
-    operation_page,
-    operations_endpoint,
+    approval_header,
+    operations_negotiated,
 )
 from .profile import PROTOCOL_PROFILE
 from .reactor import (
@@ -198,7 +193,7 @@ class UserDriver(Protocol):
 
 @dataclass(frozen=True)
 class Proposal:
-    """A company API call that proposes an operation (Operations §4.1).
+    """A company API call that needs the user's approval (Operations 4).
 
     `documented_as` is how the company's OpenAPI description names the path.
     """
@@ -213,29 +208,22 @@ class Proposal:
 class Scenario:
     """What the suite asks of one company: its scopes, paths, and prompts.
 
-    `proposals` are keyed `user` (needs the user's approval), `standing`
-    (a standing permission may cover it), `fails` (fails partway), and
-    `unknown` (its outcome stays unknown). `operation_prompt` makes the
-    company agent propose the `user` proposal in a conversation;
+    `proposals` are keyed `user` (it is performed), `fails` (it fails partway),
+    and `unknown` (its outcome stays unknown). `operation_prompt` makes the
+    company agent return the `user` operation in a conversation;
     `account_prompt` makes it ask for sign-in. `mcp_read_tool` needs
-    `read_scope`; `mcp_propose_tool` proposes the `user` proposal.
-    `web_confirm_form` is what the operation's page posts to confirm it
-    (`{revision}` is replaced), since the website's form is the company's own.
+    `read_scope`; `mcp_propose_tool` returns the `user` operation.
     """
 
     read_path: str
     read_scope: str
     scopes: tuple[str, ...]
     proposals: dict[str, Proposal] = field(default_factory=dict)
-    standing_action: str | None = None
-    standing_limits: tuple[TermLimit, ...] = ()
-    standing_too_low: tuple[TermLimit, ...] = ()
     operation_prompt: str | None = None
     account_prompt: str | None = None
     greeting: str = "Hello."
     mcp_read_tool: str | None = None
     mcp_propose_tool: str | None = None
-    web_confirm_form: dict[str, str] | None = None
 
 
 class SkipCase(Exception):  # noqa: N818 - control flow for a case that cannot run
@@ -271,7 +259,6 @@ class Agent:
         self.identity = identity
         self.http = http
         self.vault = MemoryVault()
-        self.standing = InMemoryStandingPermissionStore()
         self.browser = ControlledBrowser(browser_http) if browser_http is not None else None
         #: The user's browser: the authorization URLs Direct Sign-In opened, for the driver.
         self.user_browser = _UserBrowser()
@@ -279,7 +266,6 @@ class Agent:
             identity,
             cast(MutableClock, clock),
             vault=self.vault,
-            standing=self.standing,
             controlled_browser=self.browser,
             browser=cast(Any, self.user_browser),
         )
@@ -295,7 +281,7 @@ class Agent:
         self.accounts = RefreshTokenClient(reactor=self.reactor, http_client=http)
         self.api = ApiClient(transport=self.transport)
         self.conversations = ConversationClient(transport=self.transport)
-        self.operations = OperationsClient(transport=self.transport)
+        self.operations = OperationsClient(reactor=self.reactor, sleep=lambda _: asyncio.sleep(0))
 
 
 class _UserBrowser:
@@ -396,14 +382,11 @@ class ConformanceContext:
             raise SkipCase("the company lists no poppy conversation protocol")
         return endpoint
 
-    async def operations_endpoint(self) -> str:
-        endpoint = operations_endpoint(
-            (await self.company()).document,
-            _client_metadata(self.agent.identity),
-        )
-        if endpoint is None:
-            raise SkipCase("operations v1 is not negotiated with this company")
-        return endpoint
+    async def operations_negotiated(self) -> None:
+        if not operations_negotiated(
+            (await self.company()).document, _client_metadata(self.agent.identity)
+        ):
+            raise SkipCase("operations v2 is not negotiated with this company")
 
     def url(self, path: str) -> str:
         """An API path at the company's API (its OpenAPI `url`'s origin), else its origin."""
@@ -1812,398 +1795,410 @@ async def _signed_in_user(ctx: ConformanceContext) -> tuple[str, SignedIn]:
     return user, signed
 
 
-async def _propose(ctx: ConformanceContext, user: str, signed: SignedIn, kind: str) -> Operation:
+async def _propose(ctx: ConformanceContext, signed: SignedIn, kind: str) -> Operation:
+    """The request for the action: refused, with the operation (Operations 4)."""
+
+    answer = await _request(ctx, signed, kind)
+    check(answer.status == 403 and answer.operation is not None, "approval_required, HTTP 403")
+    return cast(Operation, answer.operation)
+
+
+async def _request(
+    ctx: ConformanceContext,
+    signed: SignedIn,
+    kind: str,
+    approval: Approval | None = None,
+    *,
+    token: AccessToken | None = None,
+    session: PapSession | None = None,
+) -> Any:
     proposal = ctx.proposal(kind)
+    return await ctx.agent.api.call(
+        proposal.method,
+        ctx.url(proposal.path),
+        session=signed.session if session is None else session,
+        token=signed.token if token is None else token,
+        body=proposal.body if proposal.body is not None else {},
+        approval=approval,
+    )
+
+
+async def _performed(ctx: ConformanceContext, operation: Operation, times: int) -> None:
+    if "performed" in ctx.driver.capabilities:
+        count = await ctx.driver.performed(operation.operation_id)
+        check(count == times, f"performed {times} time(s), not {count}")
+
+
+def _approved(operation: Operation) -> Approval:
+    """A statement of the user's approval: the conformance runner plays the user here."""
+
+    return Approval(operation_id=operation.operation_id, revision=operation.revision)
+
+
+def _check_new_revision(answer: Any, operation: Operation, named: str) -> Operation:
+    check(answer.operation is not None, "the company returns the operation, performing nothing")
+    fresh = cast(Operation, answer.operation)
+    check(fresh.revision != named, "never the revision the approval named")
+    check(fresh.operation_id == operation.operation_id, "the same action, the same operation")
+    return fresh
+
+
+@case("operations.approval-required")
+async def _approval_required(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    check(operation.summary.strip(), "it has a summary")
+    check(operation.revision, "it has an opaque revision")
+    check(operation.expires_at > ctx.now(), "it can still be approved")
+    await _performed(ctx, operation, 0)
+    proposal = ctx.proposal("user")
+    if proposal.documented_as is not None:
+        api = openapi_url((await ctx.company()).document)
+        paths = (await ctx.send("GET", api)).json().get("paths", {}) if api else {}
+        documented = proposal.documented_as
+        check(
+            "approval_required" in json.dumps(paths.get(documented, {})),
+            "the API description says the endpoint can return approval_required",
+        )
+
+
+@case("operations.same-request-same-revision")
+async def _same_revision(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    first = await _propose(ctx, signed, "user")
+    second = await _propose(ctx, signed, "user")
+    check(second == first, "the same request, the same terms: the same revision")
+
+
+@case("operations.approved-performed")
+async def _performs(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    done = await _request(ctx, signed, "user", _approved(operation))
+    check(done.operation is None and 200 <= done.status < 300, f"performed, got {done.status}")
+    await _performed(ctx, operation, 1)
+
+
+@case("operations.retry-after-the-outcome")
+async def _at_most_once(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    approval = _approved(operation)
+    first = await _request(ctx, signed, "user", approval)
+    second = await _request(ctx, signed, "user", approval)
+    check(second.body == first.body, "a retry gets the original response")
+    await _performed(ctx, operation, 1)
+
+
+@case("operations.retry-before-the-outcome")
+async def _before_outcome(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "unknown")
+    approval = _approved(operation)
+    for attempt in ("the first request", "a retry"):
+        with _raises(ApiError) as raised:
+            await _request(ctx, signed, "unknown", approval)
+        check(raised.value.status_code == 503, f"{attempt} waits, HTTP 503, never a failure")
+        check(
+            (raised.value.details or {}).get("retry_after"),
+            f"{attempt} says when: Retry-After",
+        )
+    await _performed(ctx, operation, 1)
+
+
+@case("operations.new-revision-on-changed-terms")
+async def _changed_terms(ctx: ConformanceContext, _: FixtureCase) -> None:
+    ctx.require("revise")
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    await ctx.driver.revise(operation.operation_id)
+    answer = await _request(ctx, signed, "user", _approved(operation))
+    current = _check_new_revision(answer, operation, operation.revision)
+    check(current.summary != operation.summary, "the new revision has the new terms")
+    await _performed(ctx, operation, 0)
+    done = await _request(ctx, signed, "user", _approved(current))
+    check(done.operation is None, "the new revision, approved, is performed")
+    await _performed(ctx, operation, 1)
+
+
+@case("operations.approval-of-a-revision-never-returned")
+async def _never_returned(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    forged = Approval(operation_id=operation.operation_id, revision="never_returned_0000")
+    answer = await _request(ctx, signed, "user", forged)
+    _check_new_revision(answer, operation, forged.revision)
+    await _performed(ctx, operation, 0)
+
+
+@case("operations.approval-of-another-request")
+async def _another_request(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    proposal = ctx.proposal("user")
     answer = await ctx.agent.api.call(
         proposal.method,
         ctx.url(proposal.path),
         session=signed.session,
         token=signed.token,
-        body=proposal.body if proposal.body is not None else {},
+        body={"changed": "this request is not the one that returned the operation"},
+        approval=_approved(operation),
     )
-    check(answer.status == 202 and answer.operation is not None, "the API answers 202")
-    return cast(Operation, answer.operation)
+    _check_new_revision(answer, operation, operation.revision)
+    await _performed(ctx, operation, 0)
 
 
-@case("operations.proposed-not-performed")
-async def _proposed(ctx: ConformanceContext, _: FixtureCase) -> None:
-    await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    check(operation.state == "proposed", "a proposal is proposed")
-    check(operation.summary.strip(), "it has a summary")
-    check(operation.confirmation is None and operation.result is None, "nothing happened yet")
-    if "performed" in ctx.driver.capabilities:
-        check(await ctx.driver.performed(operation.operation_id) == 0, "nothing was performed")
-    description = openapi_url((await ctx.company()).document)
-    documented = ctx.proposal("user").documented_as
-    if description is not None and documented is not None:
-        paths = (await ctx.http.get(description)).json().get("paths", {})
-        check(
-            "operation" in json.dumps(paths.get(documented, {})),
-            "the API description says the endpoint returns an operation",
-        )
-
-
-@case("operations.readable-until-final")
-async def _readable(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    read = await ctx.agent.operations.read(
-        endpoint, operation.operation_id, session=signed.session, token=signed.token
-    )
-    check(read == operation, "the same operation, unchanged")
-
-
-@case("operations.confirm-succeeded")
-async def _confirm(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    outcome = await ctx.agent.operations.confirm(
-        endpoint,
-        operation,
-        approval=approve(operation),
-        session=signed.session,
-        token=signed.token,
-    )
-    done = cast(Operation, outcome.operation)
-    check(outcome.status == "confirmed" and done.state == "succeeded", f"got {done.state}")
-    check(done.confirmation is not None, "the confirmation is recorded")
-    confirmation = cast(Any, done.confirmation)
-    check(confirmation.revision == operation.revision, "for the approved revision")
-    check(confirmation.approved_by == "user", "approved by the user")
-    check(done.result is not None and done.result.summary, "the result says what happened")
-    check(done.terms == operation.terms, "it did what the revision described")
-
-
-@case("operations.at-most-once")
-async def _at_most_once(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    approval = approve(operation)
-    first = await ctx.agent.operations.confirm(
-        endpoint, operation, approval=approval, session=signed.session, token=signed.token
-    )
-    second = await ctx.agent.operations.confirm(
-        endpoint, operation, approval=approval, session=signed.session, token=signed.token
-    )
-    check(first.operation == second.operation, "a repeated confirm returns the same record")
-    if "performed" in ctx.driver.capabilities:
-        check(await ctx.driver.performed(operation.operation_id) == 1, "performed once")
-
-
-@case("operations.terms-changed")
-async def _terms_changed(ctx: ConformanceContext, _: FixtureCase) -> None:
-    ctx.require("revise")
-    endpoint = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    await ctx.driver.revise(operation.operation_id)
-    outcome = await ctx.agent.operations.confirm(
-        endpoint, operation, approval=approve(operation), session=signed.session, token=signed.token
-    )
-    check(outcome.status == "terms_changed", f"got {outcome.status}")
-    current = cast(Operation, outcome.operation)
-    check(current.revision == operation.revision + 1, "the current revision comes back")
-    check(outcome.changed, "with what changed")
-    done = await ctx.agent.operations.confirm(
-        endpoint, current, approval=approve(current), session=signed.session, token=signed.token
-    )
-    check(done.status == "confirmed", "the new revision, approved, confirms")
-
-
-@case("operations.user-approval-required")
-async def _approval_required(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    if not operation.user_approval_required:
-        raise SkipCase("the scenario's user proposal does not require the user's approval")
-    with _raises(OperationError) as local:
-        await ctx.agent.operations.confirm(
-            endpoint,
-            operation,
-            standing=("company", "account", "action"),
-            session=signed.session,
-            token=signed.token,
-        )
-    check(local.value.code == "user_approval_required", "the SDK refuses it locally")
-    url = f"{endpoint}/{operation.operation_id}/confirm"
+@case("operations.approval-unknown-members-ignored")
+async def _unknown_members(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    proposal = ctx.proposal("user")
+    url = ctx.url(proposal.path)
     response = await ctx.send(
-        "POST",
+        proposal.method,
         url,
         headers={
-            **await ctx.auth(signed.session, "POST", url, signed.token),
+            **await ctx.auth(signed.session, proposal.method, url, signed.token),
             "Content-Type": "application/json",
+            APPROVAL_HEADER: f"later=1, {approval_header(_approved(operation))}, flag;a=b",
         },
-        content=json.dumps(
-            {"revision": operation.revision, "approved_by": "standing_permission"}
-        ).encode(),
+        content=json.dumps(proposal.body if proposal.body is not None else {}).encode(),
     )
-    expect_refusal(response, 403, "user_approval_required", "a standing permission")
+    check(response.status_code == 200, f"unknown members are ignored, got {response.status_code}")
+    await _performed(ctx, operation, 1)
 
 
-def _permission(
-    ctx: ConformanceContext, limits: tuple[TermLimit, ...], uses: int | None
-) -> tuple[str, str, str]:
-    store = first_contribution(ctx.agent.reactor, STANDING_PERMISSION_STORES, "standing")
-    if not isinstance(store, InMemoryStandingPermissionStore):
-        raise SkipCase("the standing permission store cannot be seeded")
-    action = ctx.scenario.standing_action
-    if action is None:
-        raise SkipCase("the scenario has no standing-permission action")
-    # Each case starts from the user's permissions it grants itself, and no others.
-    store.permissions.clear()
-    reference = f"perm_{secrets.token_hex(8)}"
-    company, account = ctx.domain, ctx.driver.accounts[0]
-    store.permissions[reference] = StandingPermission(
-        reference=reference,
-        company=company,
-        account=account,
-        action=action,
-        limits=limits,
-        expires_at=ctx.now() + timedelta(hours=1),
-        uses_remaining=uses,
-    )
-    return company, account, action
-
-
-@case("operations.standing-permission-within-bounds")
-async def _standing_ok(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    standing = _permission(ctx, ctx.scenario.standing_limits, uses=2)
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "standing")
-    outcome = await ctx.agent.operations.confirm(
-        endpoint, operation, standing=standing, session=signed.session, token=signed.token
-    )
-    done = cast(Operation, outcome.operation)
-    check(outcome.status == "confirmed", f"got {outcome.status}")
-    check(done.confirmation is not None, "confirmed")
-    confirmation = cast(Any, done.confirmation)
-    check(confirmation.approved_by == "standing_permission", "under the standing permission")
-
-
-@case("operations.standing-permission-out-of-bounds")
-async def _standing_too_low(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    if not ctx.scenario.standing_too_low:
-        raise SkipCase("the scenario has no out-of-bounds limits")
-    standing = _permission(ctx, ctx.scenario.standing_too_low, uses=None)
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "standing")
-    with _raises(OperationError) as raised:
-        await ctx.agent.operations.confirm(
-            endpoint, operation, standing=standing, session=signed.session, token=signed.token
+@case("operations.malformed-approval-header-ignored")
+async def _malformed(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    proposal = ctx.proposal("user")
+    url = ctx.url(proposal.path)
+    for value in (
+        f"operation_id={operation.operation_id}",  # Tokens, not Strings
+        f'operation_id="{operation.operation_id}"',  # no revision
+        f'operation_id="{operation.operation_id}", revision="{operation.revision}',  # unclosed
+    ):
+        response = await ctx.send(
+            proposal.method,
+            url,
+            headers={
+                **await ctx.auth(signed.session, proposal.method, url, signed.token),
+                "Content-Type": "application/json",
+                APPROVAL_HEADER: value,
+            },
+            content=json.dumps(proposal.body if proposal.body is not None else {}).encode(),
         )
-    check(raised.value.code == "no_standing_permission", f"got {raised.value.code}")
-    read = await ctx.agent.operations.read(
-        endpoint, operation.operation_id, session=signed.session, token=signed.token
-    )
-    check(read.state == "proposed", "nothing was sent: the user is asked instead")
-
-
-@case("operations.standing-permission-concurrent-use")
-async def _standing_race(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    standing = _permission(ctx, ctx.scenario.standing_limits, uses=1)
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "standing")
-    results = await asyncio.gather(
-        ctx.agent.operations.confirm(
-            endpoint, operation, standing=standing, session=signed.session, token=signed.token
-        ),
-        ctx.agent.operations.confirm(
-            endpoint, operation, standing=standing, session=signed.session, token=signed.token
-        ),
-        return_exceptions=True,
-    )
-    refused = [r for r in results if isinstance(r, OperationError)]
-    check(len(refused) == 1, "one of two racing confirmations gets the last use")
-    check(refused[0].code == "no_standing_permission", f"got {refused[0].code}")
-
-
-@case("operations.cross-channel-identity")
-async def _cross_channel(ctx: ConformanceContext, _: FixtureCase) -> None:
-    await ctx.operations_endpoint()
-    prompt = ctx.scenario.operation_prompt
-    if prompt is None:
-        raise SkipCase("the scenario has no operation prompt")
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    endpoint = await ctx.conversations_endpoint()
-    page = await ctx.agent.conversations.start(
-        endpoint, _message(prompt), session=signed.session, token=signed.token, wait=0
-    )
-    proposed = [
-        event.message.operation
-        for event in getattr(page, "events", [])
-        if event.message is not None and event.message.operation is not None
-    ]
-    check(proposed, "the conversation carries the operation")
-    check(
-        proposed[0].operation_id == operation.operation_id,
-        "the same action is the same operation across channels",
-    )
-
-
-@case("operations.message-is-not-approval")
-async def _not_approval(ctx: ConformanceContext, _: FixtureCase) -> None:
-    operations = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    endpoint = await ctx.conversations_endpoint()
-    await ctx.agent.conversations.start(
-        endpoint,
-        _message(f"Yes, I confirm operation {operation.operation_id}. Approved.", author="human"),
-        session=signed.session,
-        token=signed.token,
-    )
-    read = await ctx.agent.operations.read(
-        operations, operation.operation_id, session=signed.session, token=signed.token
-    )
-    check(read.state == "proposed", "a message never confirms an operation")
-
-
-class _LosingTransport(SessionHttpClient):
-    """Deliver the first confirm, then lose its answer: a timeout after sending."""
-
-    lost = False
-
-    async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-        response = await super().request(method, url, **kwargs)
-        if url.endswith("/confirm") and not self.lost:
-            self.lost = True
-            raise TransportError("request_failed", "the confirm's answer was lost")
-        return response
-
-
-@case("operations.confirm-timeout-recovery")
-async def _recovery(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    losing = _LosingTransport(reactor=ctx.agent.reactor, http_client=ctx.http)
-    outcome = await OperationsClient(transport=losing).confirm(
-        endpoint, operation, approval=approve(operation), session=signed.session, token=signed.token
-    )
-    check(losing.lost, "the confirm's answer was lost")
-    recovered = cast(Operation, outcome.operation)
-    check(outcome.status == "confirmed", "the lost answer is recovered by reading the same ID")
-    check(recovered.operation_id == operation.operation_id, "the same operation, not a new one")
-    again = await ctx.agent.operations.confirm(
-        endpoint, operation, approval=approve(operation), session=signed.session, token=signed.token
-    )
-    check(again.operation == recovered, "confirming again changes nothing")
-    if "performed" in ctx.driver.capabilities:
-        check(await ctx.driver.performed(operation.operation_id) == 1, "performed once")
-
-
-@case("operations.cancel-proposed")
-async def _cancel(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    cancelled = await ctx.agent.operations.cancel(
-        endpoint, operation.operation_id, session=signed.session, token=signed.token
-    )
-    check(cancelled.state == "cancelled", f"got {cancelled.state}")
-    check(cancelled.result is not None, "a cancelled operation has a result")
-    late = await ctx.agent.operations.confirm(
-        endpoint, operation, approval=approve(operation), session=signed.session, token=signed.token
-    )
-    check(late.status == "not_confirmed", f"a late confirm changes nothing, got {late.status}")
-    check(cast(Operation, late.operation).state == "cancelled", "it stays cancelled")
-    if "performed" in ctx.driver.capabilities:
-        check(await ctx.driver.performed(operation.operation_id) == 0, "never performed")
-
-
-@case("operations.in-progress-outcome-unknown")
-async def _unknown(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "unknown")
-    outcome = await ctx.agent.operations.confirm(
-        endpoint, operation, approval=approve(operation), session=signed.session, token=signed.token
-    )
-    current = cast(Operation, outcome.operation)
-    check(current.state == "in_progress", f"an unknown outcome is in_progress, got {current.state}")
-    check(outcome.retry_after is not None, "with Retry-After")
-    url = f"{endpoint}/{operation.operation_id}"
-    read = await ctx.send(
-        "GET",
-        url,
-        headers={
-            **await ctx.auth(signed.session, "GET", url, signed.token),
-        },
-    )
-    check(read.json().get("state") == "in_progress", "never failed while unknown")
-    check("retry-after" in read.headers, "a read in progress carries Retry-After")
-    cancelled = await ctx.agent.operations.cancel(
-        endpoint, operation.operation_id, session=signed.session, token=signed.token
-    )
-    check(cancelled.state == "in_progress", "cancelling leaves it in progress until known")
-
-
-@case("operations.failed-partial-result")
-async def _failed(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "fails")
-    outcome = await ctx.agent.operations.confirm(
-        endpoint,
-        operation,
-        approval=approve(operation),
-        session=signed.session,
-        token=signed.token,
-    )
-    done = cast(Operation, outcome.operation)
-    check(done.state == "failed", f"got {done.state}")
-    check(done.result is not None and done.result.summary, "the result says what was changed")
+        expect_refusal(response, 403, "approval_required", "a request without an approval")
+    await _performed(ctx, operation, 0)
 
 
 @case("operations.expired")
 async def _expired(ctx: ConformanceContext, _: FixtureCase) -> None:
     ctx.require("clock")
-    endpoint = await ctx.operations_endpoint()
+    await ctx.operations_negotiated()
     user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    check(operation.expires_at is not None, "a proposal has expires_at")
-    expires_at = cast(datetime, operation.expires_at)
-    await ctx.driver.wait((expires_at - ctx.now()).total_seconds() + 1)
+    operation = await _propose(ctx, signed, "user")
+    await ctx.driver.wait((operation.expires_at - ctx.now()).total_seconds() + 1)
     # The access token may have expired meanwhile: a new one from the refresh token.
     refreshed = await ctx.agent.accounts.refresh(
         signed.reference, context=await ctx.account_context(user)
     )
     token = cast(AccessToken, refreshed.token)
-    read = await ctx.agent.operations.read(
-        endpoint, operation.operation_id, session=signed.session, token=token
-    )
-    check(read.state == "expired", f"got {read.state}")
-    late = await ctx.agent.operations.confirm(
-        endpoint, operation, approval=approve(operation), session=signed.session, token=token
-    )
-    check(late.status == "not_confirmed", "an expired operation is returned as it is")
+    answer = await _request(ctx, signed, "user", _approved(operation), token=token)
+    _check_new_revision(answer, operation, operation.revision)
+    await _performed(ctx, operation, 0)
 
 
-@case("operations.not-found-indistinguishable")
-async def _operation_not_found(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    owner, owner_signed = await _signed_in_user(ctx)
-    theirs = await _propose(ctx, owner, owner_signed, "user")
+@case("operations.any-session-of-the-account-approves")
+async def _account_session(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    another = await ctx.session(user)
+    done = await _request(ctx, signed, "user", _approved(operation), session=another)
+    check(done.operation is None, "another Session, signed in to the account, approves it")
+    await _performed(ctx, operation, 1)
+
+
+@case("operations.signed-out-session-gets-a-challenge")
+async def _signed_out_challenge(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    proposal = ctx.proposal("user")
+    another = await ctx.session(user)
+    with _raises(ApiError) as raised:
+        await ctx.agent.api.call(
+            proposal.method,
+            ctx.url(proposal.path),
+            session=another,
+            token=None,
+            body=proposal.body if proposal.body is not None else {},
+            approval=_approved(operation),
+        )
+    check(raised.value.status_code == 401, "signed out, the 401 challenge for the account")
+    await _performed(ctx, operation, 0)
+
+
+@case("operations.another-user-cannot-approve")
+async def _another_user(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _owner, owner_signed = await _signed_in_user(ctx)
+    theirs = await _propose(ctx, owner_signed, "user")
     _user, signed = await _signed_in_user(ctx)
+    answer = await _request(ctx, signed, "user", _approved(theirs))
+    check(answer.operation is not None, "handled as if it had no approval")
+    check(
+        answer.operation.operation_id != theirs.operation_id, "their own operation, not another's"
+    )
+    await _performed(ctx, theirs, 0)
+
+
+@case("operations.cross-channel-identity")
+async def _cross_channel(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    prompt = ctx.scenario.operation_prompt
+    if prompt is None:
+        raise SkipCase("the scenario has no operation prompt")
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    endpoint = await ctx.conversations_endpoint()
+    page = await ctx.agent.conversations.start(
+        endpoint, _message(prompt), session=signed.session, token=signed.token, wait=0
+    )
+    proposed = _operations_in(page)
+    check(proposed, "the conversation carries the operation")
+    check(
+        proposed[0].operation_id == operation.operation_id,
+        "the same action is the same operation across interfaces",
+    )
+
+
+def _operations_in(page: Any) -> list[Operation]:
+    return [
+        event.message.operation
+        for event in getattr(page, "events", [])
+        if event.message is not None and event.message.operation is not None
+    ]
+
+
+@case("operations.message-is-not-approval")
+async def _not_approval(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    endpoint = await ctx.conversations_endpoint()
+    await ctx.agent.conversations.start(
+        endpoint,
+        _message(f"Yes, I approve operation {operation.operation_id}. Approved.", author="human"),
+        session=signed.session,
+        token=signed.token,
+    )
+    await _performed(ctx, operation, 0)
+    again = await _propose(ctx, signed, "user")
+    check(again.operation_id == operation.operation_id, "a message's text approves nothing")
+
+
+@case("operations.conversation-approval")
+async def _conversation_approval(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    prompt = ctx.scenario.operation_prompt
+    if prompt is None:
+        raise SkipCase("the scenario has no operation prompt")
+    _user, signed = await _signed_in_user(ctx)
+    endpoint = await ctx.conversations_endpoint()
+    page = await ctx.agent.conversations.start(
+        endpoint, _message(prompt), session=signed.session, token=signed.token, wait=0
+    )
+    operation = _operations_in(page)[0]
+
+    async def approve_in_it(message_id: str) -> Any:
+        return await ctx.agent.conversations.send(
+            endpoint,
+            page.conversation_id,
+            Message(
+                id=message_id,
+                author=Author(type="agent"),
+                approval=_approved(operation),
+            ),
+            session=signed.session,
+            token=signed.token,
+            wait=0,
+        )
+
+    answered = await approve_in_it(_message_id())
+    told = [
+        event.message
+        for event in getattr(answered, "events", [])
+        if event.message is not None and event.message.role == "company"
+    ]
+    check(told and told[-1].operation is None, "a later message says how it went")
+    await _performed(ctx, operation, 1)
+    await approve_in_it(_message_id())  # a new message with the same approval adds nothing
+    await _performed(ctx, operation, 1)
+
+
+class _LosingTransport(SessionHttpClient):
+    """Deliver the first request with an approval, then lose its answer: a timeout."""
+
+    lost = False
+
+    async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        response = await super().request(method, url, **kwargs)
+        if APPROVAL_HEADER in (kwargs.get("headers") or {}) and not self.lost:
+            self.lost = True
+            raise TransportError("request_failed", "the answer was lost")
+        return response
+
+
+@case("operations.lost-answer-same-approval")
+async def _recovery(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    losing = _LosingTransport(reactor=ctx.agent.reactor, http_client=ctx.http)
+    api = ApiClient(transport=losing)
+    proposal = ctx.proposal("user")
+
+    async def request(approval: Approval) -> Any:
+        return await api.call(
+            proposal.method,
+            ctx.url(proposal.path),
+            session=signed.session,
+            token=signed.token,
+            body=proposal.body if proposal.body is not None else {},
+            approval=approval,
+        )
+
+    sent = await ctx.agent.operations.send(request, _approved(operation))
+    check(losing.lost, "the answer was lost")
+    check(sent.status == "answered", f"the same approval, sent again, got {sent.status}")
+    await _performed(ctx, operation, 1)
+
+
+@case("operations.failed-partial-result")
+async def _failed(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "fails")
     answers = []
-    for operation_id in (theirs.operation_id, "op_conformance_unknown_0000"):
-        with _raises(OperationError) as raised:
-            await ctx.agent.operations.read(
-                endpoint, operation_id, session=signed.session, token=signed.token
-            )
+    for _attempt in range(2):
+        with _raises(ApiError) as raised:
+            await _request(ctx, signed, "fails", _approved(operation))
         answers.append((raised.value.code, raised.value.status_code))
-    check(answers[0] == answers[1], "another user's and an unknown operation look the same")
-    check(answers[0] == ("operation_not_found", 404), f"got {answers[0]}")
+    check(answers[0] == answers[1], "a retry gets the same answer")
+    await _performed(ctx, operation, 1)
 
 
 # MCP (§4.5, §7) ------------------------------------------------------------------------
@@ -2300,8 +2295,6 @@ async def _mcp_only(ctx: ConformanceContext, _: FixtureCase) -> None:
     targets = [("GET", ctx.url(ctx.scenario.read_path))]
     with contextlib.suppress(SkipCase):
         targets.append(("POST", await ctx.conversations_endpoint()))
-    with contextlib.suppress(SkipCase):
-        targets.append(("GET", f"{await ctx.operations_endpoint()}/op_conformance_any"))
     for method, target in targets:
         headers = {
             **await ctx.auth(signed.session, method, target, token),
@@ -2376,13 +2369,32 @@ async def _mcp_sign_out(ctx: ConformanceContext, _: FixtureCase) -> None:
 
 @case("operations.cross-channel-mcp")
 async def _cross_channel_mcp(ctx: ConformanceContext, _: FixtureCase) -> None:
-    await ctx.operations_endpoint()
+    await ctx.operations_negotiated()
     propose_tool = _tool(ctx.scenario.mcp_propose_tool)
-    user, signed, token, url = await _signed_in_mcp(ctx)
-    through_api = await _propose(ctx, user, signed, "user")
+    _user, signed, token, url = await _signed_in_mcp(ctx)
+    through_api = await _propose(ctx, signed, "user")
     answer = await (await _mcp_client(ctx, signed.session, token, url)).call_tool(propose_tool)
-    check(answer.operation is not None, "the tool returns structuredContent.operation")
-    check(answer.operation == through_api, "the same operation as through the API")
+    check(answer.is_error, "an error result, nothing done")
+    check(answer.operation is not None, "with structuredContent.operation")
+    check(
+        cast(Operation, answer.operation).operation_id == through_api.operation_id,
+        "the same operation as through the API",
+    )
+
+
+@case("operations.mcp-approval")
+async def _mcp_approval(ctx: ConformanceContext, _: FixtureCase) -> None:
+    await ctx.operations_negotiated()
+    propose_tool = _tool(ctx.scenario.mcp_propose_tool)
+    _user, signed, token, url = await _signed_in_mcp(ctx)
+    client = await _mcp_client(ctx, signed.session, token, url)
+    operation = cast(Operation, (await client.call_tool(propose_tool)).operation)
+    approval = _approved(operation)
+    done = await client.call_tool(propose_tool, approval=approval)
+    check(not done.is_error and done.operation is None, "the same call, approved, is performed")
+    again = await client.call_tool(propose_tool, approval=approval)
+    check(again.text == done.text, "a retry gets the original result")
+    await _performed(ctx, operation, 1)
 
 
 # Draft 0.2 company rules --------------------------------------------------------------
@@ -2458,7 +2470,7 @@ async def _read_fields(ctx: ConformanceContext, _: FixtureCase) -> None:
     check(empty["events"] == [], "events is an empty list when there are none")
 
 
-# The website (§6, Operations §4.4) ---------------------------------------------------
+# The website (§6) ---------------------------------------------------
 
 
 async def _browser(ctx: ConformanceContext) -> tuple[ControlledBrowser, str]:
@@ -2492,7 +2504,7 @@ async def _join(
 
 @case("lifecycle.browser-joins-session")
 async def _browser_joins(ctx: ConformanceContext, _: FixtureCase) -> None:
-    browser, endpoint = await _browser(ctx)
+    _browser_used, endpoint = await _browser(ctx)
     loaded = await ctx.send("GET", endpoint)
     check(loaded.status_code == 200, "the join page loads with a GET")
     for name, value in (
@@ -2504,10 +2516,8 @@ async def _browser_joins(ctx: ConformanceContext, _: FixtureCase) -> None:
     join_cookie = loaded.headers.get("set-cookie", "")
     for flag in ("__Host-", "Secure", "HttpOnly", "SameSite=Strict"):
         check(flag.lower() in join_cookie.lower(), f"the join cookie has {flag}")
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "standing")
-    page = operation_page(operation, (await ctx.company()).document.organization.domain)
-    joined = await _join(ctx, signed, page)
+    _user, signed = await _signed_in_user(ctx)
+    joined = await _join(ctx, signed, ctx.url("/"))
     cookies = [
         value
         for response in joined
@@ -2518,11 +2528,6 @@ async def _browser_joins(ctx: ConformanceContext, _: FixtureCase) -> None:
     for flag in ("Secure", "HttpOnly"):
         check(flag.lower() in session_cookie.lower(), f"the Session's cookie is {flag}")
     check("max-age" not in session_cookie.lower(), "the cookie has no lifetime of its own")
-    landed = cast(httpx.Response, browser.page)
-    check(landed.status_code == 200, "the operation's page shows in the Session")
-    await ctx.agent.accounts.revoke(signed.reference, context=await ctx.account_context(user))
-    after = await browser.get(page)
-    check(after.status_code in {401, 403, 404}, "signed out, the website shows it no more")
 
 
 @case("lifecycle.browser-join-refused")
@@ -2585,32 +2590,6 @@ async def _browser_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
     check((await authorize(code)).status_code == 204, "the agent authorizes a new code")
     valid = await submit(browser, code)
     check(valid.status_code == 303 and joined(valid), "a valid join sets the Session's cookie")
-
-
-@case("operations.web-confirm-at-most-once")
-async def _web_confirm(ctx: ConformanceContext, _: FixtureCase) -> None:
-    endpoint = await ctx.operations_endpoint()
-    browser, _endpoint = await _browser(ctx)
-    form = ctx.scenario.web_confirm_form
-    if form is None:
-        raise SkipCase("the scenario does not know the website's confirm form")
-    user, signed = await _signed_in_user(ctx)
-    operation = await _propose(ctx, user, signed, "user")
-    page = operation_page(operation, (await ctx.company()).document.organization.domain)
-    await _join(ctx, signed, page)
-    fields = {name: value.format(revision=operation.revision) for name, value in form.items()}
-    await browser.submit(page, fields)
-    read = await ctx.agent.operations.read(
-        endpoint, operation.operation_id, session=signed.session, token=signed.token
-    )
-    check(read.state != "proposed", "confirmed on the website")
-    check(read.confirmation is not None, "with its confirmation")
-    again = await ctx.agent.operations.confirm(
-        endpoint, operation, approval=approve(operation), session=signed.session, token=signed.token
-    )
-    check(again.operation == read, "confirming at the endpoint too changes nothing")
-    if "performed" in ctx.driver.capabilities:
-        check(await ctx.driver.performed(operation.operation_id) == 1, "performed once")
 
 
 # Running and reporting ----------------------------------------------------------------

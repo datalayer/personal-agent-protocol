@@ -237,19 +237,18 @@
             "version": "1"
           },
           "operations": {
-            "version": "1",
-            "endpoint": "https://api.example.com/poppy/operations"
+            "version": "2"
           }
         },
         "agent": {
           "operations": {
-            "version": "1"
+            "version": "2"
           }
         }
       },
       "expect": {
         "negotiated": {
-          "operations": "1"
+          "operations": "2"
         }
       }
     },
@@ -264,19 +263,20 @@
       "input": {
         "company": {
           "operations": {
-            "version": "2",
+            "version": "1",
             "endpoint": "https://api.example.com/poppy/operations"
           }
         },
         "agent": {
           "operations": {
-            "version": "1"
+            "version": "2"
           }
         }
       },
       "expect": {
         "negotiated": {}
-      }
+      },
+      "description": "An entry of another major version isn't support for this one."
     },
     {
       "id": "protocol.extension-recognized-from-the-request",
@@ -326,7 +326,7 @@
           "color": "red"
         },
         "operations": {
-          "version": "1"
+          "version": "2"
         },
         "gift-wrap": {
           "version": "1"
@@ -448,12 +448,9 @@
       "check": "operation",
       "input": {
         "operation_id": "exc_5Rt2",
-        "revision": 2,
-        "state": "proposed",
+        "revision": "1791487200-k3Jd9Qx2mW8v",
         "summary": "Exchange the jacket for USD 70.00 more.",
         "expires_at": "2026-10-10T18:00:00Z",
-        "confirmation": null,
-        "result": null,
         "loyalty_points": 120
       },
       "expect": {

@@ -20,11 +20,9 @@ async with served_over_tls(world.network):
 from __future__ import annotations
 
 from collections.abc import Sequence
-from decimal import Decimal
 
 from ..company import CompanyRequest, CompanyService
 from ..conformance import ConformanceContext, Proposal, Scenario
-from ..operations import TermLimit
 from .kit import AgentIdentity, InProcessNetwork, MutableClock
 from .manzanita import DOMAIN, ManzanitaPlugin, manzanita
 
@@ -39,21 +37,13 @@ MANZANITA_SCENARIO = Scenario(
             "/api/orders/ord_7Hk2/exchanges",
             documented_as="/api/orders/{order_id}/exchanges",
         ),
-        "standing": Proposal("POST", "/api/orders/ord_7Hk2/gift-wrap"),
         "fails": Proposal("POST", "/api/orders/ord_7Hk2/returns"),
         "unknown": Proposal("POST", "/api/orders/ord_7Hk2/repairs"),
     },
-    standing_action="orders.gift_wrap",
-    standing_limits=(
-        TermLimit("price.amount", maximum=Decimal("10.00")),
-        TermLimit("price.currency", allowed=frozenset({"USD"})),
-    ),
-    standing_too_low=(TermLimit("price.amount", maximum=Decimal("1.00")),),
     operation_prompt="The jacket is not warm enough: can we exchange it for a warmer one?",
     account_prompt="Where is my jacket order?",
     mcp_read_tool="list_orders",
     mcp_propose_tool="exchange_jacket",
-    web_confirm_form={"action": "confirm", "revision": "{revision}", "approved_by": "user"},
 )
 
 

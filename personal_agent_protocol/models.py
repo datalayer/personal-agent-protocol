@@ -63,6 +63,12 @@ def _https_url(value: str, label: str) -> str:
     return value
 
 
+def _identifier(value: str, label: str) -> str:
+    if not _IDENTIFIER.fullmatch(value):
+        raise ValueError(f"{label} must use the URL-safe base64 alphabet")
+    return value
+
+
 def _scope(value: str) -> str:
     if not _SCOPE.fullmatch(value):
         raise ValueError("a scope must follow OAuth scope syntax")
@@ -528,81 +534,49 @@ class JsonWebKeySet(ProtocolModel):
     keys: list[JsonWebKey] = Field(min_length=1)
 
 
-class OperationResult(ProtocolModel):
-    summary: str = Field(min_length=1)
-    data: dict[str, Any] | None = None
-
-
-class OperationConfirmation(ProtocolModel):
-    revision: int = Field(ge=1)
-    approved_by: Literal["user", "standing_permission"]
-    confirmed_at: datetime
-
-    @field_validator("confirmed_at")
-    @classmethod
-    def validate_timestamp(cls, value: datetime) -> datetime:
-        if value.tzinfo is None:
-            raise ValueError("confirmed_at must include a timezone")
-        return value
-
-
 class Operation(ProtocolModel):
+    """One action the Company performs once the User approves it (Operations 3).
+
+    `revision` is opaque: it identifies these terms, and the Company changes it
+    whenever the `summary`, `terms`, or `expires_at` change.
+    """
+
     operation_id: str
-    revision: int = Field(ge=1)
-    state: Literal["proposed", "in_progress", "succeeded", "failed", "cancelled", "expired"]
+    revision: str
     summary: str = Field(min_length=1)
     terms: dict[str, Any] | None = None
-    expires_at: datetime | None = None
-    user_approval_required: bool = False
-    url: str | None = None
-    confirmation: OperationConfirmation | None
-    result: OperationResult | None
+    expires_at: datetime
 
     @model_serializer(mode="wrap")
     def _absent_not_null(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """Optional members with no value are absent, never `null` (Operations §3).
-
-        Only `confirmation` and `result` are "null until" something happens;
-        `expires_at` (required while proposed), `terms`, and `url` are omitted.
-        """
+        """`terms`, when there are none, is absent, never `null`."""
 
         value = handler(self)
-        for name in ("expires_at", "terms", "url"):
-            if value.get(name) is None:
-                value.pop(name, None)
+        if value.get("terms") is None:
+            value.pop("terms", None)
         return value
 
-    @field_validator("operation_id")
-    @classmethod
-    def validate_id(cls, value: str) -> str:
-        if not _IDENTIFIER.fullmatch(value):
-            raise ValueError("operation ID must use the URL-safe base64 alphabet")
-        return value
-
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, value: str | None) -> str | None:
-        return _https_url(value, "operation URL") if value is not None else None
+    _ids = field_validator("operation_id", "revision")(
+        lambda value: _identifier(value, "an operation ID or revision")
+    )
 
     @field_validator("expires_at")
     @classmethod
-    def validate_expiry(cls, value: datetime | None) -> datetime | None:
-        if value is not None and value.tzinfo is None:
+    def validate_expiry(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
             raise ValueError("expires_at must include a timezone")
         return value
 
-    @model_validator(mode="after")
-    def validate_state(self) -> Operation:
-        if self.state == "proposed" and self.expires_at is None:
-            raise ValueError("a proposed operation requires expires_at")
-        if self.state == "proposed" and self.confirmation is not None:
-            raise ValueError("a proposed operation cannot be confirmed")
-        if self.confirmation and self.confirmation.revision != self.revision:
-            raise ValueError("confirmation must name the current revision")
-        final = self.state in {"succeeded", "failed", "cancelled", "expired"}
-        if final and self.result is None:
-            raise ValueError("a final operation requires a result")
-        return self
+
+class Approval(ProtocolModel):
+    """A statement that the User approved this revision of an operation (Operations 5, 6)."""
+
+    operation_id: str
+    revision: str
+
+    _ids = field_validator("operation_id", "revision")(
+        lambda value: _identifier(value, "an operation ID or revision")
+    )
 
 
 class Author(ProtocolModel):
@@ -639,7 +613,10 @@ class Message(ProtocolModel):
     text: str | None = None
     data: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
+    #: A Company message's operation, for the User's approval (Operations 4).
     operation: Operation | None = None
+    #: A Personal Agent message's approval: only this approves, never `text` (Operations 6).
+    approval: Approval | None = None
 
     @field_validator("id")
     @classmethod
@@ -668,8 +645,9 @@ class Message(ProtocolModel):
 
     @model_validator(mode="after")
     def validate_content(self) -> Message:
-        if all(value is None for value in (self.text, self.data, self.context, self.operation)):
-            raise ValueError("a message requires text, data, context, or operation")
+        content = (self.text, self.data, self.context, self.operation, self.approval)
+        if all(value is None for value in content):
+            raise ValueError("a message requires text, data, context, operation, or approval")
         return self
 
 

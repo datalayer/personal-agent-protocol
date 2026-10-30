@@ -7,11 +7,13 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import httpx
 import pytest
 
 from personal_agent_protocol import (
+    AccessToken,
     ConversationClient,
     ConversationError,
     DeviceSignInClient,
@@ -30,13 +32,14 @@ from personal_agent_protocol.demo.kit import (
     InProcessNetwork,
     MutableClock,
     PersonalAgentHost,
+    ScriptedApprovals,
     ScriptedInput,
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
 from personal_agent_protocol.mediated import MEDIATED_GRANT, MediatedSignInClient
 from personal_agent_protocol.models import Author, ClientMetadata
-from personal_agent_protocol.operations import OperationsClient, approve, operations_endpoint
+from personal_agent_protocol.operations import OperationsClient, operations_negotiated
 
 SHOP = "https://manzanita.example"
 TENANT = "atlas-demo"
@@ -54,7 +57,10 @@ class World:
         self.shop, self.plugin = manzanita(self.network, self.clock, store=self.store)
         self.http = self.network.client()
         self.host = PersonalAgentHost(
-            self.atlas, self.clock, protected_input=ScriptedInput(*answers)
+            self.atlas,
+            self.clock,
+            protected_input=ScriptedInput(*answers),
+            approvals=ScriptedApprovals(always=True),
         )
         self.reactor = personal_agent_reactor(
             self.host, network=self.network, http_client=self.http
@@ -76,6 +82,27 @@ class World:
             ).client_authentication(client_id=self.atlas.client_id, issuer=SHOP),
         }
         return await self.http.post(f"{SHOP}/oauth/token", data=form)
+
+    def account_context(self) -> RefreshTokenContext:
+        metadata = self.company.oauth_metadata
+        assert metadata is not None
+        return RefreshTokenContext(
+            token_endpoint=metadata.token_endpoint,
+            revocation_endpoint=metadata.revocation_endpoint,
+            issuer=metadata.issuer,
+            client_id=self.atlas.client_id,
+            tenant_id=TENANT,
+        )
+
+    async def refreshed(self, scopes: tuple[str, ...] | None = None) -> AccessToken:
+        """A new access token from the refresh token `signed_in` kept, narrowed to `scopes`."""
+
+        assert self.refresh_reference is not None
+        result = await RefreshTokenClient(reactor=self.reactor, http_client=self.http).refresh(
+            self.refresh_reference, context=self.account_context(), scopes=scopes
+        )
+        assert result.token is not None
+        return result.token
 
     async def signed_out_session(self):  # type: ignore[no-untyped-def]
         company = await DiscoveryClient(reactor=self.reactor, http_client=self.http).discover(
@@ -147,23 +174,34 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
         wait=0,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
-    assert proposal is not None and proposal.state == "proposed"
+    assert proposal is not None
 
-    # The user approves exactly this revision; it is confirmed once.
+    # The user approves exactly this revision; it is performed once.
     client_metadata = ClientMetadata.model_validate(world.atlas.metadata)
-    ops_endpoint = operations_endpoint(world.company.document, client_metadata)
-    assert ops_endpoint is not None
-    operations = OperationsClient(transport=world.transport)
-    outcome = await operations.confirm(
-        ops_endpoint, proposal, approval=approve(proposal), session=session, token=signed_in
+    assert operations_negotiated(world.company.document, client_metadata)
+    approval = await OperationsClient(reactor=world.reactor).ask_user(
+        proposal, organization=world.company.document.organization, tenant_id=TENANT
     )
-    assert outcome.status == "confirmed"
-    assert outcome.operation.state == "succeeded"  # type: ignore[union-attr]
-    assert outcome.operation.result.summary.startswith("Exchanged the Ridge Jacket")  # type: ignore[union-attr]
-    again = await operations.confirm(
-        ops_endpoint, proposal, approval=approve(proposal), session=session, token=signed_in
-    )
-    assert again.operation.state == "succeeded"  # type: ignore[union-attr]
+    assert world.host.approvals.asked[-1].summary == proposal.summary  # type: ignore[union-attr]
+
+    async def approved() -> Any:
+        return await world.conversations.send(
+            endpoint,
+            page.conversation_id,
+            Message(
+                id=generate_message_id(world.reactor),
+                author=Author(type="agent"),
+                approval=approval,
+            ),
+            session=session,
+            token=signed_in,
+            wait=0,
+        )
+
+    outcome = await approved()
+    told = [e.message for e in outcome.events if e.message is not None][-1]
+    assert told.text.startswith("Exchanged the Ridge Jacket")
+    await approved()
     assert world.plugin.executor.performed == [proposal.operation_id]
 
     # The Account Token: narrower refresh, then revocation signs the Session out.

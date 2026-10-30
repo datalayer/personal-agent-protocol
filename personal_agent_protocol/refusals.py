@@ -44,7 +44,7 @@ def refusal_details(response: httpx.Response, payload: object) -> dict[str, obje
     `extension_required` names its extension in the JSON body at the token
     endpoint and the endpoints the protocol or an extension defines, and in
     the `WWW-Authenticate` challenge at APIs (§3.3); either shape is read.
-    `retry_after` is kept as sent on a 429 (§4.3), never acted on here.
+    `retry_after` is kept as sent on a 429 or 503 (§5.6), never acted on here.
     """
 
     challenge = challenge_parameters(response.headers.get("www-authenticate", ""))
@@ -61,7 +61,7 @@ def refusal_details(response: httpx.Response, payload: object) -> dict[str, obje
         # A token not issued for this service: its metadata, to read again (§4.5).
         details["resource_metadata"] = metadata
     retry_after = response.headers.get("retry-after")
-    if response.status_code == 429 and retry_after:
+    if response.status_code in {429, 503} and retry_after:
         details["retry_after"] = retry_after
     if body.get("error") == "code_required":
         # What continues a Mediated Sign-In (Mediated Sign-In 4).

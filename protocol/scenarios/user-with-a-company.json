@@ -1,6 +1,6 @@
 {
   "name": "user-with-a-company",
-  "description": "A user with a company, one journey for every language pairing: discovery, a signed-out Session, a question that needs signing in, Direct Sign-In, an API read, the conversation continued, and an operation confirmed once.",
+  "description": "A user with a company, one journey for every language pairing: discovery, a signed-out Session, a question that needs signing in, Direct Sign-In, an API read, the conversation continued, and an operation approved and performed once.",
   "company": {
     "domain": "manzanita.example",
     "name": "Manzanita Outfitters",
@@ -36,13 +36,12 @@
     {
       "step": "continue",
       "text": "Exchange it for something warmer",
-      "expect": { "operation_state": "proposed", "user_approval_required": true }
+      "expect": { "operation": true }
     },
     {
-      "step": "confirm",
-      "approved_by": "user",
+      "step": "approve",
       "times": 2,
-      "expect": { "state": "succeeded", "summary_starts_with": "Exchanged the Ridge Jacket", "performed": 1 }
+      "expect": { "summary_starts_with": "Exchanged the Ridge Jacket", "performed": 1 }
     }
   ]
 }

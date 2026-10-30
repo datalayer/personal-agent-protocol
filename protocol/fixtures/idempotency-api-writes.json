@@ -26,35 +26,45 @@
     "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
   ],
   "answers": {
-    "fresh": "the API answered anew: an operation other than the first step's",
-    "first": "the first step's response again, exactly as it was sent (the operation still proposed, though since confirmed)"
+    "fresh": "the API answered anew: approval_required with an operation other than the first's",
+    "first": "the first performed response again, exactly as it was sent"
   },
   "steps": [
     {
-      "name": "first",
+      "name": "asked",
       "path": "/api/orders/ord_7Hk2/exchanges",
       "body": {
         "size": "M"
       },
-      "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
+      "key": "7d9e1c44-6a2b-4f30-8e15-3b7a9c0d2e6f",
       "expect": {
-        "status": 202,
+        "status": 403,
         "answer": "fresh"
       }
     },
     {
-      "name": "confirmed",
-      "confirm": "first"
-    },
-    {
-      "name": "retry",
+      "name": "first",
+      "approve": "asked",
       "path": "/api/orders/ord_7Hk2/exchanges",
       "body": {
         "size": "M"
       },
       "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
       "expect": {
-        "status": 202,
+        "status": 200,
+        "answer": "performed"
+      }
+    },
+    {
+      "name": "retry",
+      "approve": "asked",
+      "path": "/api/orders/ord_7Hk2/exchanges",
+      "body": {
+        "size": "M"
+      },
+      "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
+      "expect": {
+        "status": 200,
         "answer": "first"
       }
     },
@@ -90,7 +100,7 @@
       },
       "key": "0b6d3f6e-2c1a-4e7b-9d8f-5a4c3b2e1f0d",
       "expect": {
-        "status": 202,
+        "status": 403,
         "answer": "fresh"
       }
     },
@@ -103,7 +113,7 @@
       },
       "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
       "expect": {
-        "status": 202,
+        "status": 403,
         "answer": "fresh"
       }
     },
@@ -116,7 +126,7 @@
       },
       "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
       "expect": {
-        "status": 202,
+        "status": 403,
         "answer": "fresh"
       }
     }

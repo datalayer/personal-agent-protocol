@@ -57,8 +57,7 @@
   },
   "extensions": {
     "operations": {
-      "version": "1",
-      "endpoint": "https://api.example.com/poppy/operations"
+      "version": "2"
     },
     "mediated-sign-in": {
       "version": "1",

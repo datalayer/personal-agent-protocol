@@ -43,7 +43,8 @@ from personal_agent_protocol.company import (
 from personal_agent_protocol.company.store import DEVICE
 from personal_agent_protocol.demo import manzanita as manzanita_demo
 from personal_agent_protocol.demo.kit import ClockPlugin, StorePlugin
-from personal_agent_protocol.operations import OperationError, OperationsClient, approve
+from personal_agent_protocol.models import Approval
+from personal_agent_protocol.operations import OperationsClient
 from personal_agent_protocol.reactor import TOKEN_STORES, first_contribution
 from personal_agent_protocol.sessions import AccessToken
 from personal_agent_protocol.transport import session_headers
@@ -136,20 +137,30 @@ async def device_sign_in(world: World) -> tuple[AccessToken, str]:
     return done.token, done.refresh_token_reference
 
 
-async def proposal(world: World, session: PapSession, token: AccessToken) -> Any:
-    """Ada asks for a warmer jacket: Manzanita proposes the exchange, performing nothing."""
+EXCHANGE = "https://manzanita.example/api/orders/ord_7Hk2/exchanges"
 
-    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
-    page = await world.conversations.start(
-        endpoint,
-        world.message("Exchange it for something warmer"),
+
+async def proposal(world: World, session: PapSession, token: AccessToken) -> Any:
+    """Ada asks for a warmer jacket: Manzanita returns the exchange, performing nothing."""
+
+    answer = await ApiClient(transport=world.transport).call(
+        "POST", EXCHANGE, session=session, token=token, body={}
+    )
+    assert answer.status == 403 and answer.operation is not None
+    return answer.operation
+
+
+async def approve_it(world: World, operation: Any, session: PapSession, token: AccessToken) -> Any:
+    """The same request again, with the approval of this revision."""
+
+    return await ApiClient(transport=world.transport).call(
+        "POST",
+        EXCHANGE,
         session=session,
         token=token,
-        wait=0,
+        body={},
+        approval=Approval(operation_id=operation.operation_id, revision=operation.revision),
     )
-    operation = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
-    assert operation is not None and operation.state == "proposed"
-    return operation
 
 
 @pytest.mark.asyncio
@@ -171,14 +182,11 @@ async def test_replay_is_refused() -> None:
     replayed = await wire.resend(world, wire.last("GET", "/api/orders"))
     assert replayed.status_code == 400 and replayed.json()["error"] == "invalid_session"
     assert "orders" not in replayed.text
-    # An operation's confirmation, replayed, performs nothing more.
+    # A request with an approval, replayed, performs nothing more.
     operation = await proposal(world, session, token)
-    ops = world.shop.config.operations_endpoint
-    await OperationsClient(transport=world.transport).confirm(
-        ops, operation, approval=approve(operation), session=session, token=token
-    )
-    confirm = wire.last("POST", f"/poppy/operations/{operation.operation_id}/confirm")
-    assert (await wire.resend(world, confirm)).status_code == 400
+    await approve_it(world, operation, session, token)
+    approved = wire.last("POST", "/api/orders/ord_7Hk2/exchanges")
+    assert (await wire.resend(world, approved)).status_code == 400
     assert world.plugin.executor.performed == [operation.operation_id]
     # The agent itself carries on: a fresh Session JWT every time.
     assert await probe(world, session, token) == 200
@@ -270,42 +278,29 @@ async def test_stale_approval_is_refused() -> None:
     session = world.session
     assert session is not None
     operation = await proposal(world, session, token)
-    stale = approve(operation)
     await world.shop.revise(
         operation.operation_id,
         summary="Exchange for USD 85.00 more.",
         terms={"order_id": "ord_7Hk2", "price_difference": {"amount": "85.00", "currency": "USD"}},
     )
-    operations = OperationsClient(transport=world.transport)
-    ops = world.shop.config.operations_endpoint
-
-    outcome = await operations.confirm(ops, operation, approval=stale, session=session, token=token)
-    assert outcome.status == "terms_changed"
-    assert outcome.changed == ("summary", "price_difference.amount")
-    newer = outcome.operation
-    assert newer is not None and newer.revision == 2
-    # The stale approval does not fit the new revision, locally, before anything is sent.
-    with pytest.raises(OperationError) as refused:
-        await operations.confirm(ops, newer, approval=stale, session=session, token=token)
-    assert refused.value.code == "approval_mismatch"
+    # The approval of the replaced revision performs nothing: the new one comes back.
+    answered = await approve_it(world, operation, session, token)
+    newer = answered.operation
+    assert newer is not None and newer.operation_id == operation.operation_id
+    assert newer.revision != operation.revision and newer.summary.startswith("Exchange for USD 85")
     assert world.plugin.executor.performed == []
 
-    done = await operations.confirm(
-        ops, newer, approval=approve(newer), session=session, token=token
-    )
-    assert done.status == "confirmed" and done.operation.state == "succeeded"  # type: ignore[union-attr]
-    # The stale approval of the first revision, presented once more, performs nothing.
-    # Manzanita answers with the record as it is (revision 2, succeeded), which the agent
-    # refuses to take as a confirmation of revision 1.
-    with pytest.raises(OperationError) as late:
-        await operations.confirm(ops, operation, approval=stale, session=session, token=token)
-    assert late.value.code == "invalid_operation"
+    done = await approve_it(world, newer, session, token)
+    assert done.status == 200
+    # The approval of the first revision, presented once more, gets the response given.
+    late = await approve_it(world, operation, session, token)
+    assert late.body == done.body
     assert world.plugin.executor.performed == [operation.operation_id]
 
 
 @pytest.mark.asyncio
 async def test_retries_are_safe() -> None:
-    """A retried message is one message; a confirmation whose answer is lost is done once."""
+    """A retried message is one message; an approval whose answer is lost is done once."""
 
     world = World()
     wire = Wire(world)
@@ -325,21 +320,21 @@ async def test_retries_are_safe() -> None:
     sent = [e for e in page.events if e.message is not None and e.message.id == message.id]
     assert len(sent) == 1
 
-    # The confirmation reaches Manzanita, which performs it; its answer is lost on the way back.
+    # The approval reaches Manzanita, which performs it; its answer is lost on the way back.
     operation = await proposal(world, session, token)
-    operations = OperationsClient(transport=world.transport)
-    ops = world.shop.config.operations_endpoint
-    wire.lose = f"/{operation.operation_id}/confirm"
-    recovered = await operations.confirm(
-        ops, operation, approval=approve(operation), session=session, token=token
+    wire.lose = "/api/orders/ord_7Hk2/exchanges"
+    api = ApiClient(transport=world.transport)
+
+    async def request(approval: Approval) -> Any:
+        return await api.call(
+            "POST", EXCHANGE, session=session, token=token, body={}, approval=approval
+        )
+
+    sent = await OperationsClient(reactor=world.reactor).send(
+        request, Approval(operation_id=operation.operation_id, revision=operation.revision)
     )
-    assert recovered.status == "confirmed"
-    assert recovered.operation.state == "succeeded"  # type: ignore[union-attr]
-    # Read back by the same ID, never assumed failed; retried, it is not performed twice.
-    retried = await operations.confirm(
-        ops, operation, approval=approve(operation), session=session, token=token
-    )
-    assert retried.operation.state == "succeeded"  # type: ignore[union-attr]
+    # Sent again with the same approval, never assumed failed, and not performed twice.
+    assert sent.status == "answered" and sent.answer.status == 200  # type: ignore[union-attr]
     assert world.plugin.executor.performed == [operation.operation_id]
 
 
@@ -361,19 +356,13 @@ async def test_restart_is_safe() -> None:
     assert (await wire.resend(world, captured)).status_code == 400
     # The Session, the proposal and its single performance carry over.
     assert await probe(world, session, token) == 200
-    ops = world.shop.config.operations_endpoint
-    operations = OperationsClient(transport=world.transport)
-    done = await operations.confirm(
-        ops, operation, approval=approve(operation), session=session, token=token
-    )
-    assert done.operation.state == "succeeded"  # type: ignore[union-attr]
+    done = await approve_it(world, operation, session, token)
+    assert done.status == 200
     performed = list(world.plugin.executor.performed)
 
     world.restart()
-    again = await operations.confirm(
-        ops, operation, approval=approve(operation), session=session, token=token
-    )
-    assert again.operation.state == "succeeded"  # type: ignore[union-attr]
+    again = await approve_it(world, operation, session, token)
+    assert again.body == done.body
     assert performed == [operation.operation_id] and world.plugin.executor.performed == []
 
 
@@ -392,12 +381,8 @@ async def test_rollback_is_safe() -> None:
     assert refreshed.rotated and refreshed.token is not None
     rotated = await tokens.get(reference)
     operation = await proposal(world, session, refreshed.token)
-    ops = world.shop.config.operations_endpoint
-    operations = OperationsClient(transport=world.transport)
-    done = await operations.confirm(
-        ops, operation, approval=approve(operation), session=session, token=refreshed.token
-    )
-    assert done.operation.state == "succeeded"  # type: ignore[union-attr]
+    done = await approve_it(world, operation, session, refreshed.token)
+    assert done.status == 200
     assert world.store is not None and world.store.keys(DEVICE) == []  # the code was taken
 
     # Roll back: the previous release (no website yet), over the same store.
@@ -424,11 +409,9 @@ async def test_rollback_is_safe() -> None:
     await tokens.put(reference, rotated)
     current = await accounts.refresh(reference, context=context(world))
     assert current.status == "signed_in" and current.token is not None
-    # The confirmed operation is not performed again by the earlier release.
-    again = await operations.confirm(
-        ops, operation, approval=approve(operation), session=session, token=current.token
-    )
-    assert again.operation.state == "succeeded"  # type: ignore[union-attr]
+    # The performed operation is not performed again by the earlier release.
+    again = await approve_it(world, operation, session, current.token)
+    assert again.body == done.body
     assert plugin.executor.performed == []
     # The earlier release serves what it has: no website, the same API and Sessions.
     assert world.company.document.web is not None  # what the agent discovered before

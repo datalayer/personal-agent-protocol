@@ -48,7 +48,6 @@ from .actions import (
     ActionUsageError,
     ApprovalRequiredError,
     account_context,
-    cancel_operation,
     company_of,
     conversation_client,
     credentials,
@@ -57,8 +56,9 @@ from .actions import (
     follow_events,
     list_requirements,
     operation_view,
-    operations_client,
     read_events,
+    remember_operation,
+    saved_operation,
     session_view,
     show_operation,
     show_requirement,
@@ -81,15 +81,14 @@ from .errors import PersonalAgentProtocolError
 from .identity import AgentIdentityClient
 from .mcp import McpClient, fetch_mcp_server_metadata, mcp_api
 from .mediated import MediatedSignInClient, mediated_sign_in
-from .models import Author, DiscoveredCompany, Message, Operation
-from .operations import UserApproval, approve
+from .models import Approval, Author, DiscoveredCompany, Message, Operation
+from .operations import ApprovalSent, OperationError, OperationsClient
 from .pairwise import resolve_pairwise_user_id
 from .reactor import (
     APPROVAL_SURFACES,
     SIGNERS,
     TOKEN_STORES,
     ApprovalRequest,
-    ApprovalSurface,
     first_contribution,
     optional_contribution,
 )
@@ -121,7 +120,7 @@ EXIT_CODES: dict[int, str] = {
     ExitCode.INPUT_REQUIRED: "Input required, but --no-input was given or no terminal is attached.",
     ExitCode.PENDING: "Still pending: the user has not finished signing in before --timeout.",
     ExitCode.NOT_APPROVED: (
-        "Not approved: no approval for this exact operation ID and revision, or the terms changed;"
+        "Not approved: no approval for this exact operation ID and revision, or new terms;"
         " or a live-session action the host's approval surface did not approve."
     ),
     ExitCode.INTERRUPTED: "Interrupted.",
@@ -130,6 +129,26 @@ EXIT_CODES: dict[int, str] = {
 
 class PendingError(PersonalAgentProtocolError):
     """The user has not finished yet (exit code 5)."""
+
+
+class TerminalApproval:
+    """The approval surface of `pap` at a terminal: the user types the operation ID."""
+
+    async def approve(self, request: ApprovalRequest) -> bool:
+        operation_id = request.arguments["operation_id"]
+        typer.echo(f"{request.company_name} ({request.company_domain}) asks to:", err=True)
+        typer.echo(f"  {request.summary}", err=True)
+        for change in request.changed:
+            typer.echo(f"  Changed: {change}", err=True)
+        for difference in request.differences:
+            typer.echo(f"  Check: {difference}", err=True)
+        typer.echo(
+            f"  (operation {operation_id}, revision {request.arguments['revision']}, "
+            f"until {request.expires_at})",
+            err=True,
+        )
+        typed = typer.prompt("Type the operation ID to approve", err=True)
+        return typed.strip() == operation_id
 
 
 class NotApprovedError(PersonalAgentProtocolError):
@@ -298,12 +317,87 @@ def _scopes(scope: list[str] | None, company: DiscoveredCompany, kind: str) -> t
 
 def _render_operation(payload: dict) -> None:
     operation = payload["operation"]
-    typer.echo(
-        f"{operation['operation_id']} revision {operation['revision']}: {operation['state']}"
-    )
+    typer.echo(f"{operation['operation_id']} revision {operation['revision']}")
     typer.echo(operation["summary"])
-    if operation.get("result"):
-        typer.echo(f"Result: {operation['result']['summary']}")
+    typer.echo(f"Until {operation['expires_at']}")
+
+
+async def _remember_events(
+    runtime: CliRuntime, session: str, conversation_id: str, answer: Any
+) -> None:
+    """Keep the operations a company's messages carry, to approve in this conversation."""
+
+    for event in getattr(answer, "events", None) or ():
+        if event.message is not None and event.message.operation is not None:
+            await remember_operation(
+                runtime,
+                session,
+                event.message.operation,
+                {"kind": "conversation", "conversation_id": conversation_id},
+            )
+
+
+async def _mcp_client(runtime: CliRuntime, record: SessionRecord) -> tuple[McpClient, str]:
+    """The company's MCP server in the Session, with a token issued for its url only."""
+
+    company = await company_of(runtime, record.domain)
+    server = mcp_api(company.document)
+    if server is None:
+        raise NotConfiguredError("no_mcp", "The company lists no MCP server")
+    await fetch_mcp_server_metadata(runtime.http, server.url, issuer=record.issuer)
+    token: AccessToken | None = None
+    if record.refresh_reference is not None:
+        result = await RefreshTokenClient(
+            reactor=runtime.reactor, http_client=runtime.http
+        ).token_for_mcp(record.refresh_reference, context=account_context(record), url=server.url)
+        token = result.token
+    client = McpClient(
+        http_client=runtime.http,
+        url=server.url,
+        session=runtime.session_of(record),
+        reactor=runtime.reactor,
+        token=token,
+    )
+    return client, server.url
+
+
+async def _send_approval(
+    runtime: CliRuntime, record: SessionRecord, approved: dict[str, Any], saved: dict[str, Any]
+) -> ApprovalSent[Any]:
+    """Send the request that returned the operation again, with the user's approval."""
+
+    held = await credentials(runtime, record)
+    approval = Approval.model_validate({key: approved[key] for key in ("operation_id", "revision")})
+    client = OperationsClient(reactor=runtime.reactor)
+    if saved["kind"] == "api":
+        api = ApiClient(
+            transport=SessionHttpClient(reactor=runtime.reactor, http_client=runtime.http)
+        )
+        return await client.send(
+            lambda given: api.call(
+                saved["method"], saved["url"], body=saved["body"], approval=given, **held
+            ),
+            approval,
+        )
+    if saved["kind"] == "mcp":
+        tools, _ = await _mcp_client(runtime, record)
+        return await client.send(
+            lambda given: tools.call_tool(saved["tool"], saved["arguments"], approval=given),
+            approval,
+        )
+    conversations, endpoint = await conversation_client(runtime, record)
+
+    async def message(given: Approval) -> Any:
+        # The same ID on every attempt: a retried message gets the original response.
+        sent = Message(
+            id=approved["message_id"],
+            author=Author(type="agent"),
+            text="The user approved.",
+            approval=given,
+        )
+        return await conversations.send(endpoint, saved["conversation_id"], sent, wait=0, **held)
+
+    return await client.send(message, approval)
 
 
 def _message(reactor: Any, text: str, human: bool) -> Message:
@@ -340,7 +434,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
     auth = typer.Typer(name="auth", help="Sign a Session in, or sign out (the user signs in).")
     api = typer.Typer(name="api", help="Call a company's OpenAPI or MCP API in a Session.")
     conversations = typer.Typer(name="conversations", help="Talk with the company agent.")
-    operations = typer.Typer(name="operations", help="Show, approve, confirm, cancel operations.")
+    operations = typer.Typer(name="operations", help="Show, approve, and send operations.")
     requirements = typer.Typer(name="requirements", help="The normative requirement ledger.")
     conformance = typer.Typer(name="conformance", help="Run and report the conformance suite.")
     key = typer.Typer(name="key", help="The agent's signing key (imported, never printed).")
@@ -663,12 +757,13 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             if body_file is not None:
                 raw = sys.stdin.read() if str(body_file) == "-" else body_file.read_text()
                 body = json.loads(raw)
+            sent_body = body if body is not None or method.upper() == "GET" else {}
             answer = await ApiClient(
                 transport=SessionHttpClient(reactor=runtime.reactor, http_client=runtime.http)
             ).call(
                 method.upper(),
                 url,
-                body=body if body is not None or method.upper() == "GET" else {},
+                body=sent_body,
                 idempotency_key=idempotency_key,
                 **await credentials(runtime, record),
             )
@@ -678,12 +773,18 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 else {"idempotency_key": answer.idempotency_key}
             )
             if answer.operation is not None:
+                await remember_operation(
+                    runtime,
+                    session,
+                    answer.operation,
+                    {"kind": "api", "method": method.upper(), "url": url, "body": sent_body},
+                )
                 return {"status": answer.status, **sent, **operation_view(answer.operation)}
             return {"status": answer.status, **sent, "body": answer.body}
 
         def render(payload: dict) -> None:
             if "operation" in payload:
-                typer.echo("Proposed, not done until confirmed:")
+                typer.echo("Not done yet. This needs the user's approval:")
                 _render_operation(payload)
             else:
                 typer.echo(json.dumps(payload["body"], indent=2))
@@ -691,7 +792,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         run(work, json_output=json_output, render=render)
 
     @api.command("mcp")
-    def api_mcp(  # noqa: C901 - signed in or out, list or call
+    def api_mcp(
         session: str = typer.Argument(...),
         tool: str | None = typer.Argument(None, help="The tool to call; omitted, list them."),
         arguments: str = typer.Option("{}", "--arguments", help="The tool's JSON arguments."),
@@ -704,35 +805,23 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session)
-            company = await company_of(runtime, record.domain)
-            server = mcp_api(company.document)
-            if server is None:
-                raise NotConfiguredError("no_mcp", "The company lists no MCP server")
-            await fetch_mcp_server_metadata(runtime.http, server.url, issuer=record.issuer)
-            token: AccessToken | None = None
-            if record.refresh_reference is not None:
-                result = await RefreshTokenClient(
-                    reactor=runtime.reactor, http_client=runtime.http
-                ).token_for_mcp(
-                    record.refresh_reference, context=account_context(record), url=server.url
-                )
-                token = result.token
-            client = McpClient(
-                http_client=runtime.http,
-                url=server.url,
-                session=runtime.session_of(record),
-                reactor=runtime.reactor,
-                token=token,
-            )
+            client, _ = await _mcp_client(runtime, record)
             if tool is None:
                 return {"tools": await client.list_tools()}
-            answer = await client.call_tool(tool, json.loads(arguments))
+            given = json.loads(arguments)
+            answer = await client.call_tool(tool, given)
             payload: dict[str, Any] = {
                 "content": answer.content,
                 "structured_content": answer.structured_content,
                 "is_error": answer.is_error,
             }
             if answer.operation is not None:
+                await remember_operation(
+                    runtime,
+                    session,
+                    answer.operation,
+                    {"kind": "mcp", "tool": tool, "arguments": given},
+                )
                 payload.update(operation_view(answer.operation))
             return payload
 
@@ -770,6 +859,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 wait=wait,
                 **await credentials(runtime, record),
             )
+            await _remember_events(runtime, session, answer.conversation_id, answer)
             return answer.model_dump(mode="json")
 
         run(work, json_output=json_output, render=_render_receipt_or_page)
@@ -795,6 +885,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 wait=wait,
                 **await credentials(runtime, record),
             )
+            await _remember_events(runtime, session, conversation_id, answer)
             return answer.model_dump(mode="json")
 
         run(work, json_output=json_output, render=_render_receipt_or_page)
@@ -912,7 +1003,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         operation_id: str = typer.Argument(...),
         json_output: bool = JSON,
     ) -> None:
-        """Read an operation by its ID (Operations §6)."""
+        """An operation this Session holds to approve, as the company returned it."""
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             return await show_operation(runtime, session, operation_id)
@@ -923,60 +1014,51 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
     def operations_approve(
         session: str = typer.Argument(...),
         operation_id: str = typer.Argument(...),
-        revision: int = typer.Option(..., "--revision", min=1, help="The exact revision."),
+        revision: str = typer.Option(..., "--revision", help="The exact revision."),
         json_output: bool = JSON,
         no_input: bool = NO_INPUT,
     ) -> None:
         """Show the company's name and the summary, and take the user's approval here.
 
         The user types the operation ID to approve this exact revision; no
-        message, option, or other text ever counts as approval (Operations §5.1).
+        message, option, or other text ever counts as approval (Operations 5).
         """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
-            record = runtime.session(session)
-            client, endpoint, company_name = await operations_client(runtime, record)
-            operation = await client.read(
-                endpoint, operation_id, **await credentials(runtime, record)
-            )
+            operation, replaces, organization, _ = saved_operation(runtime, session, operation_id)
             if operation.revision != revision:
                 raise NotApprovedError(
                     "revision_changed", f"The current revision is {operation.revision}"
                 )
             if no_input:
                 raise InputRequiredError("input_required", "The user approves at the prompt")
-            surface = optional_contribution(runtime.reactor, APPROVAL_SURFACES, "approval surface")
-            if surface is not None:
-                # The host's own approval surface asks the user.
-                answer = await cast(ApprovalSurface, surface).approve(
-                    ApprovalRequest(
-                        action_id="operations.approve",
-                        action_name="Approve an operation",
-                        summary=f"{company_name} asks to: {operation.summary}",
-                        arguments={"operation_id": operation_id, "revision": str(revision)},
-                        tenant_id=runtime.tenant_id,
-                    )
+            contributed = optional_contribution(
+                runtime.reactor, APPROVAL_SURFACES, "approval surface"
+            )
+            if contributed is None and not user_terminal():
+                # Approval is the user's, typed at their terminal: never piped input,
+                # which a script or a model's tool could write (Operations 5).
+                raise InputRequiredError(
+                    "input_required", "The user approves at a terminal, not from piped input"
                 )
-                if answer is not True:
-                    raise NotApprovedError("not_approved", "The user did not approve")
-            else:
-                if not user_terminal():
-                    # Approval is the user's, typed at their terminal: never piped input,
-                    # which a script or a model's tool could write (Operations §5.1).
-                    raise InputRequiredError(
-                        "input_required", "The user approves at a terminal, not from piped input"
-                    )
-                typer.echo(f"{company_name} asks to:", err=True)
-                typer.echo(f"  {operation.summary}", err=True)
-                typer.echo(f"  (operation {operation_id}, revision {revision})", err=True)
-                typed = typer.prompt("Type the operation ID to approve", err=True)
-                if typed.strip() != operation_id:
-                    raise NotApprovedError("not_approved", "The user did not approve")
-            approval = approve(operation)
-            stored = {**approval.model_dump(mode="json"), "session": session}
+            try:
+                approval = await OperationsClient(reactor=runtime.reactor).ask_user(
+                    operation,
+                    organization=organization,
+                    tenant_id=runtime.tenant_id,
+                    replaces=replaces,
+                    surface=None if contributed is not None else TerminalApproval(),
+                )
+            except OperationError as error:
+                raise NotApprovedError(error.code, "The user did not approve") from error
+            stored = {
+                **approval.model_dump(mode="json"),
+                "session": session,
+                "message_id": generate_message_id(runtime.reactor),
+            }
             store = first_contribution(runtime.reactor, TOKEN_STORES, "token store")
             # Bound to a key in the protected token store: an approval written into
-            # state.json by anything else does not verify at confirm.
+            # state.json by anything else does not verify when sent.
             stored["mac"] = approval_mac(await approval_key(store), stored)
             runtime.state.approvals[operation_id] = stored
             runtime.state.save()
@@ -988,14 +1070,17 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
 
         run(work, json_output=json_output, render=render, no_input=no_input)
 
-    @operations.command("confirm")
-    def operations_confirm(
+    @operations.command("send")
+    def operations_send(
         session: str = typer.Argument(...),
         operation_id: str = typer.Argument(...),
-        revision: int = typer.Option(..., "--revision", min=1, help="The exact revision."),
+        revision: str = typer.Option(..., "--revision", help="The exact revision."),
         json_output: bool = JSON,
     ) -> None:
-        """Confirm the exact operation ID and revision the user approved (Operations §5.2)."""
+        """Send the approval: the request that returned the operation, again (Operations 6).
+
+        After a failure, send it again: the same approval, performed at most once.
+        """
 
         async def work(runtime: CliRuntime) -> dict[str, Any]:
             record = runtime.session(session)
@@ -1014,41 +1099,23 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 raise NotApprovedError(
                     "not_approved", "This approval was not made here: approve at the prompt"
                 )
-            client, endpoint, _ = await operations_client(runtime, record)
-            held = await credentials(runtime, record)
-            operation = await client.read(endpoint, operation_id, **held)
-            approval = UserApproval.model_validate(
-                {key: approved[key] for key in ("operation_id", "revision", "digest")}
-            )
-            try:
-                outcome = await client.confirm(endpoint, operation, approval=approval, **held)
-            except PersonalAgentProtocolError as error:
-                if error.code in {"approval_mismatch", "not_proposed"}:
-                    raise NotApprovedError(error.code, "Approve the current revision") from error
-                raise
-            if outcome.status == "terms_changed":
-                raise NotApprovedError("terms_changed", "The terms changed: approve them again")
-            if outcome.status == "approval_required":
-                raise NotApprovedError("user_approval_required", "The user must approve")
-            runtime.state.approvals.pop(operation_id, None)
+            *_, saved = saved_operation(runtime, session, operation_id)
+            sent = await _send_approval(runtime, record, approved, saved)
+            if sent.status == "unknown":
+                # The approval is kept: the same one is sent again, never a new one.
+                raise PendingError("outcome_unknown", "Send it again, or ask the company")
+            del runtime.state.approvals[operation_id]
+            if sent.status == "new_revision":
+                await remember_operation(runtime, session, cast(Operation, sent.operation), saved)
+                raise NotApprovedError("new_revision", "New terms: approve them first")
+            del runtime.state.operations[operation_id]
             runtime.state.save()
-            payload = operation_view(cast(Operation, outcome.operation))
-            return {**payload, "status": outcome.status, "retry_after": outcome.retry_after}
+            return {"status": sent.status, "answer": _answered(sent.answer)}
 
-        run(work, json_output=json_output, render=_render_operation)
+        def render(payload: dict) -> None:
+            typer.echo(json.dumps(payload["answer"], indent=2))
 
-    @operations.command("cancel")
-    def operations_cancel(
-        session: str = typer.Argument(...),
-        operation_id: str = typer.Argument(...),
-        json_output: bool = JSON,
-    ) -> None:
-        """Decline a proposal, or ask the company to stop one in progress (Operations §7)."""
-
-        async def work(runtime: CliRuntime) -> dict[str, Any]:
-            return await cancel_operation(runtime, session, operation_id)
-
-        run(work, json_output=json_output, render=_render_operation)
+        run(work, json_output=json_output, render=render)
 
     # requirements ----------------------------------------------------------------------
 
@@ -1234,6 +1301,13 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
     for group in (sessions, auth, api, conversations, operations, requirements, conformance):
         cli.add_typer(group)
     plugin.agent_group.add_typer(key)
+
+
+def _answered(answer: Any) -> Any:
+    """A request's answer, as JSON: an API's body, a tool's result, a message's receipt."""
+
+    body = getattr(answer, "body", None)
+    return body if body is not None else answer.model_dump(mode="json", exclude_none=True)
 
 
 def _render_receipt_or_page(payload: dict) -> None:

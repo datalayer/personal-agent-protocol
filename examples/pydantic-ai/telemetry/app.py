@@ -5,7 +5,7 @@
 
 Atlas, Ada's personal agent, contributes a `pap.telemetry` sink to its Reactor and
 runs a journey: discovery, a signed-out Session, a question, Device Sign-In, and a
-confirmed exchange. Each protocol stage is one event whose attributes come from an
+approved exchange. Each protocol stage is one event whose attributes come from an
 allowlist — a domain, an issuer, a status, a count — so what the tool hands the
 model is exactly what a trace or an analytics pipeline would receive, and holds no
 token, code, Session JWT, or identifier. With `opentelemetry-api` installed, the same
@@ -26,7 +26,6 @@ from reactor import PluginManifest
 from personal_agent_protocol import (
     TELEMETRY_SINKS,
     Author,
-    ClientMetadata,
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
@@ -41,10 +40,11 @@ from personal_agent_protocol.demo.kit import (
     InProcessNetwork,
     MutableClock,
     PersonalAgentHost,
+    ScriptedApprovals,
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import DOMAIN, manzanita
-from personal_agent_protocol.operations import OperationsClient, approve, operations_endpoint
+from personal_agent_protocol.operations import OperationsClient
 
 TENANT = "atlas-example"
 PAIRWISE = "usr_ada_at_manzanita_000000"
@@ -79,7 +79,7 @@ async def read_pap_telemetry() -> dict[str, Any]:
     shop, _ = manzanita(network, clock)
     http = network.client()
     reactor = personal_agent_reactor(
-        PersonalAgentHost(atlas, clock),
+        PersonalAgentHost(atlas, clock, approvals=ScriptedApprovals(always=True)),
         network=network,
         http_client=http,
         plugins=[(PluginManifest(name="atlas-telemetry", version="1"), Telemetry(sink))],
@@ -131,11 +131,20 @@ async def read_pap_telemetry() -> dict[str, Any]:
         wait=0,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
-    ops = operations_endpoint(company.document, ClientMetadata.model_validate(atlas.metadata))
-    if proposal is None or ops is None:
+    if proposal is None:
         raise RuntimeError("the example world is incomplete")
-    await OperationsClient(transport=transport).confirm(
-        ops, proposal, approval=approve(proposal), session=session, token=signed_in
+    approval = await OperationsClient(reactor=reactor).ask_user(
+        proposal, organization=company.document.organization, tenant_id=TENANT
+    )
+    await conversations.send(
+        endpoint,
+        page.conversation_id,
+        Message(
+            id=generate_message_id(reactor), author=Author(type="agent"), approval=approval
+        ),
+        session=session,
+        token=signed_in,
+        wait=0,
     )
 
     events = [event.as_dict() for event in sink.events]

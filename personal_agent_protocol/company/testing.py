@@ -38,7 +38,6 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ..models import Operation, OperationConfirmation, OperationResult
 from .points import ReplayCache
 from .store import (
     ACCESS_TOKEN,
@@ -74,7 +73,9 @@ from .store import (
     JoinCode,
     KnownClient,
     MessageReceipt,
+    OperationOutcome,
     OperationProposal,
+    OperationRevision,
     PendingAuthorization,
     PendingDevice,
     PendingMediated,
@@ -123,17 +124,28 @@ def record_samples(now: datetime) -> dict[str, Any]:
         scopes=("orders:read",),
         family="fam_1",
     )
-    operation = Operation(
+    operation = StoredOperation(
         operation_id="op_1",
-        revision=2,
-        state="succeeded",
-        summary="Exchange the jacket.",
-        terms={"order_id": "ord_1", "price": {"amount": "1.00", "currency": "USD"}},
-        expires_at=None,
-        user_approval_required=True,
-        url="https://shop.example/operations/op_1",
-        confirmation=OperationConfirmation(revision=2, approved_by="user", confirmed_at=now),
-        result=OperationResult(summary="Exchanged."),
+        action="exchange",
+        owner=("c", "u"),
+        key="key",
+        revisions=(
+            OperationRevision(
+                revision="rev_1",
+                summary="Exchange the jacket.",
+                terms={"order_id": "ord_1", "price": {"amount": "1.00", "currency": "USD"}},
+                expires_at=later,
+                request="request",
+                asked="asked",
+                withdrawn=True,
+            ),
+        ),
+        account_id="acct_1",
+        scopes=("orders:write",),
+        status="performed",
+        approved="rev_1",
+        approved_at=now,
+        outcome=OperationOutcome("Exchanged.", {"order": "ord_1"}),
     )
     return {
         SESSION: StoredSession(
@@ -148,7 +160,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
         REFRESH_TOKEN: AccountGrant("acct_1", "c", ("a", "b"), later, True, "fam_1", now),
         ACCOUNT_FAMILY: AccountFamily("c", "acct_1", ("t1", "t2"), ("a1",), True),
         ACCOUNT_AGENT: AccountAgent(("fam_1", "fam_2")),
-        CLIENT: KnownClient(("operations",)),
+        CLIENT: KnownClient({"operations": "2"}),
         DEVICE: PendingDevice("c", ("a",), "ABCD-EFGH", later, 10, now, "acct_1", ("a",), True),
         USER_CODE: UserCode("dev_digest"),
         AUTHORIZATION: PendingAuthorization(
@@ -170,9 +182,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
             forgotten=frozenset({"evt_0"}),
         ),
         MESSAGE_ID: MessageReceipt("cnv_1", "digest"),
-        OPERATION: StoredOperation(
-            operation, "exchange", ("c", "u"), "acct_1", ("orders:write",), True
-        ),
+        OPERATION: operation,
         PROPOSAL: OperationProposal("op_1"),
         BROWSER_COOKIE: web,
         JOIN_CODE: JoinCode("browser_digest", web),
@@ -181,7 +191,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
         FEEDBACK: StoredFeedback(
             "fb_1", "Pay with a gift card", "No gift card field.", "c", "u", now
         ),
-        IDEMPOTENCY: IdempotencyRecord("digest", 202, {"operation": {"operation_id": "op_1"}}),
+        IDEMPOTENCY: IdempotencyRecord("digest", 200, {"summary": "Exchanged."}),
     }
 
 

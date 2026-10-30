@@ -43,6 +43,7 @@ from .points import (
     REPLAY_CACHES,
     AccountDirectory,
     AccountSignOuts,
+    ActionResult,
     AllowEveryAgent,
     ApiCall,
     ApiResult,
@@ -147,7 +148,7 @@ def build_company(
 
     The company's plugins contribute at least `pap.company.accounts` and
     `pap.company.agent`, and one `pap.company.operationExecutor` per action
-    its agent proposes; a lower `order` replaces any default.
+    its agent returns; a lower `order` replaces any default.
     """
 
     reactor, _ = build_pap_reactor(http_client=http_client, address_resolver=address_resolver)
@@ -196,6 +197,7 @@ __all__ = [
     "REPLAY_CACHES",
     "AccountDirectory",
     "AccountSignOuts",
+    "ActionResult",
     "AllowEveryAgent",
     "ApiCall",
     "ApiResult",

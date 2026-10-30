@@ -2,12 +2,13 @@
 #
 # BSD 3-Clause License
 
-"""Call a company's OpenAPI API with the Session's DPoP token (§6, Operations §4.1).
+"""Call a company's OpenAPI API with the Session's access token (§7, Operations 4, 6).
 
-A read answers its JSON body. A consequential call answers `202` with an
-operation: proposed, not performed, until it is confirmed at the operations
-endpoint (`OperationsClient`). The same operation object arrives through a
-conversation, so one approval flow serves both channels.
+A read answers its JSON body. An action that needs the user's approval answers
+`403 approval_required` with an operation: refused, nothing done. The same request
+again with the user's approval (`approval=`, the `Poppy-Approval` header) performs
+it. The same operation object arrives through a conversation or an MCP tool, so one
+approval flow serves every interface (`OperationsClient`).
 
 Every write (POST, PUT, PATCH, DELETE) carries an `Idempotency-Key` (guides,
 *Retries*): a random UUID (version 4), or the caller's own key when it
@@ -27,7 +28,8 @@ import httpx
 
 from .errors import PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
-from .models import ApiDescriptor, DiscoveryDocument, Operation, ProtocolModel
+from .models import ApiDescriptor, Approval, DiscoveryDocument, Operation, ProtocolModel
+from .operations import APPROVAL_HEADER, approval_header
 from .refusals import refusal_code, refusal_details
 from .sessions import AccessToken, PapSession
 from .transport import SessionHttpClient
@@ -43,7 +45,7 @@ class ApiError(PersonalAgentProtocolError):
 
 
 class ApiResponse(ProtocolModel):
-    """A successful API answer: the body, or the operation it proposes."""
+    """An API answer: the body, or the operation to approve (`403 approval_required`)."""
 
     status: int
     body: Any = None
@@ -115,11 +117,14 @@ class ApiClient:
         token: AccessToken | None = None,
         body: Any = None,
         idempotency_key: str | None = None,
+        approval: Approval | None = None,
     ) -> ApiResponse:
-        """One call; `insufficient_scope` carries the scopes the request needs (§6).
+        """One call; `insufficient_scope` carries the scopes the request needs (§7).
 
         A write sends `idempotency_key`, or a new random one; pass the key of an
-        earlier attempt to retry the same request. A read takes none.
+        earlier attempt to retry the same request. A read takes none. `approval`
+        goes with the same request as the one that returned the operation: its
+        `Idempotency-Key` doesn't carry over (Operations 6).
         """
 
         method = method.upper()
@@ -132,6 +137,8 @@ class ApiClient:
             headers["Idempotency-Key"] = key
         elif idempotency_key is not None:
             raise ValueError("only a write (POST, PUT, PATCH, DELETE) takes an Idempotency-Key")
+        if approval is not None:
+            headers[APPROVAL_HEADER] = approval_header(approval)
         content = None
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -152,17 +159,22 @@ class ApiClient:
 
     def _answer(self, response: httpx.Response, key: str | None) -> ApiResponse:
         payload = self._payload(response)
-        if response.status_code == 202:
-            operation = payload.get("operation") if isinstance(payload, dict) else None
+        if (
+            response.status_code == 403
+            and isinstance(payload, dict)
+            and payload.get("error") == "approval_required"
+        ):
             try:
                 return ApiResponse(
-                    status=202,
-                    operation=Operation.model_validate(operation),
+                    status=403,
+                    operation=Operation.model_validate(payload.get("operation")),
                     idempotency_key=key,
                 )
             except ValueError as exc:
                 raise ApiError(
-                    "invalid_operation", "202 answer carries no valid operation", status_code=202
+                    "invalid_operation",
+                    "approval_required carries no valid operation",
+                    status_code=403,
                 ) from exc
         if response.is_success:
             return ApiResponse(status=response.status_code, body=payload, idempotency_key=key)

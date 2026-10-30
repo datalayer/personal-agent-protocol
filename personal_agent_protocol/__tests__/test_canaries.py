@@ -474,16 +474,14 @@ async def test_no_credential_reaches_logs_errors_urls_or_model_text(harvest: Har
     # MCP with a token for its url, and the website with its cookie.
     await test_mcp_and_web.test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation()
     await test_mcp_and_web.test_an_mcp_token_is_refused_everywhere_but_its_mcp_server()
-    await test_mcp_and_web.test_the_operation_confirmed_on_the_website_is_the_same_operation_once()
-    await test_mcp_and_web.test_the_website_follows_the_session_and_refuses_bad_assertions()
-    await test_guide_security.test_the_operation_page_refuses_cross_site_and_another_browsers_form()
+    await test_mcp_and_web.test_a_joined_browser_follows_the_session()
     # Refusals: replays, other keys, polling too fast, conflicts.
     await test_company_refusals.test_a_replayed_token_request_is_refused()
     await test_company_refusals.test_a_session_jwt_signed_with_another_key_is_refused()
     await test_company_refusals.test_polling_too_fast_is_slow_down()
     # Northwind and Ledgerly: two companies, Ledgerly a personal agent at the bank.
     two = test_two_companies
-    await two.test_ledgerly_pays_at_northwind_for_ada_with_her_approval_then_within_her_bounds()
+    await two.test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment()
     # The conformance runner: every positive, negative, and recovery case but the one
     # whose probe puts an access token in a URL on purpose, to see the company refuse it.
     world = ManzanitaConformance()

@@ -16,8 +16,7 @@ A company advertises support in its discovery document:
 {
   "extensions": {
     "operations": {
-      "version": "1",
-      "endpoint": "https://api.example.com/poppy/operations"
+      "version": "2"
     }
   }
 }
@@ -32,18 +31,21 @@ ignore unknown extensions and unknown fields.
 
 Both SDKs negotiate the same way: an extension is used only when the company
 and the agent both list it, at the same major version, and this SDK
-implements that version (`SUPPORTED_EXTENSIONS`: Operations version 1).
+implements that version (`SUPPORTED_EXTENSIONS`: Operations version 2, Mediated
+Sign-In version 1). An extension the company recognizes from the request itself, such
+as Mediated Sign-In with its grant type, needs no entry on the agent's side, and a
+company can't refuse it with `extension_required`.
 
 ```python
 from personal_agent_protocol.extensions import negotiate_extensions
 from personal_agent_protocol.models import ExtensionDescriptor
 
 company = {
-    "operations": ExtensionDescriptor(version="1", endpoint="https://api.example.com/poppy/operations"),
+    "operations": ExtensionDescriptor(version="2"),
     "example.com/gift-wrap": ExtensionDescriptor(version="2"),
 }
-agent = {"operations": ExtensionDescriptor(version="1")}
-assert negotiate_extensions(company, agent) == {"operations": "1"}
+agent = {"operations": ExtensionDescriptor(version="2")}
+assert negotiate_extensions(company, agent) == {"operations": "2"}
 ```
 
 ```typescript
@@ -51,16 +53,16 @@ import { negotiateExtensions } from '@datalayer/personal-agent-protocol';
 
 const negotiated = negotiateExtensions(
   {
-    operations: { version: '1', endpoint: 'https://api.example.com/poppy/operations' },
+    operations: { version: '2' },
     'example.com/gift-wrap': { version: '2' },
   },
-  { operations: { version: '1' } },
+  { operations: { version: '2' } },
 );
-console.log(negotiated); // { operations: '1' }
+console.log(negotiated); // { operations: '2' }
 ```
 
 The Operations behavior itself lives in `OperationsClient` (Python and
-TypeScript), negotiated with `operations_endpoint()` / `operationsEndpoint()`;
+TypeScript), negotiated with `operations_negotiated()` / `operationsNegotiated()`;
 see the [Operations guide](/guides/operations/). The SDK has no contribution
 point for other extensions' behavior yet: a third-party extension is used by
 the host's own code once negotiation says both sides list it.

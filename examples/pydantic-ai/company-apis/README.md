@@ -4,7 +4,7 @@ Atlas, Ada's personal agent, reaches Manzanita Outfitters through the two APIs
 its `poppy.json` lists. The OpenAPI API is called with `ApiClient` and the
 Session's DPoP-bound token: signed out, it answers `insufficient_scope` with the
 scope it needs; signed in, it reads Ada's orders and answers the exchange with
-`202` and a proposed operation. The MCP server is called with `McpClient` and a
+`403 approval_required` and an operation. The MCP server is called with `McpClient` and a
 token issued for its URL alone, chosen by its protected resource metadata
 (`fetch_mcp_server_metadata`):
 
@@ -17,7 +17,7 @@ token issued for its URL alone, chosen by its protected resource metadata
 
 The journey runs against both: Manzanita as published, and Manzanita with an
 MCP server without DPoP. Each time the MCP server lists its tools, reads the
-same orders, and proposes the same exchange, one operation record across both
+same orders, and returns the same exchange, one operation across both
 channels, and the company refuses the MCP token anywhere else.
 
 The tool returns statuses, scopes, tool names, the orders, and Manzanita's

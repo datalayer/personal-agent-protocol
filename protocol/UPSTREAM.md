@@ -7,7 +7,9 @@
 - Last reviewed by this repository: 2026-10-27
 - Specification: https://personalagentprotocol.org/docs/0.3/spec
 - Guides: https://personalagentprotocol.org/docs/0.3/guides
-- Operations extension: version 1
+- Operations extension: version 2
+- Mediated Sign-In extension: version 1
+- Mediated Sign-In extension page: https://personalagentprotocol.org/docs/0.3/extensions/mediated-sign-in
 - Operations extension page: https://personalagentprotocol.org/docs/0.3/extensions/operations
 
 Draft 0.3 is still being written upstream, at /docs/spec; this repository

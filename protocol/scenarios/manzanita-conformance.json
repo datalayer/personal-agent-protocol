@@ -13,12 +13,6 @@
       "body": null,
       "documented_as": "/api/orders/{order_id}/exchanges"
     },
-    "standing": {
-      "method": "POST",
-      "path": "/api/orders/ord_7Hk2/gift-wrap",
-      "body": null,
-      "documented_as": null
-    },
     "fails": {
       "method": "POST",
       "path": "/api/orders/ord_7Hk2/returns",
@@ -32,33 +26,9 @@
       "documented_as": null
     }
   },
-  "standing_action": "orders.gift_wrap",
-  "standing_limits": [
-    {
-      "path": "price.amount",
-      "maximum": "10.00"
-    },
-    {
-      "path": "price.currency",
-      "allowed": [
-        "USD"
-      ]
-    }
-  ],
-  "standing_too_low": [
-    {
-      "path": "price.amount",
-      "maximum": "1.00"
-    }
-  ],
   "operation_prompt": "The jacket is not warm enough: can we exchange it for a warmer one?",
   "account_prompt": "Where is my jacket order?",
   "greeting": "Hello.",
   "mcp_read_tool": "list_orders",
-  "mcp_propose_tool": "exchange_jacket",
-  "web_confirm_form": {
-    "action": "confirm",
-    "revision": "{revision}",
-    "approved_by": "user"
-  }
+  "mcp_propose_tool": "exchange_jacket"
 }

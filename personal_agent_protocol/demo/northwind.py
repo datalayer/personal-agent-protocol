@@ -2,11 +2,10 @@
 #
 # BSD 3-Clause License
 
-"""Northwind Bank: a fictional bank whose company agent proposes payments.
+"""Northwind Bank: a fictional bank whose company agent returns payments to approve.
 
-A payment is an operation (`payments.transfer`) that does not require the
-user's own approval, so a personal agent may confirm it under a standing
-permission the user gave it. The bank performs each payment once.
+A payment is an operation (`payments.transfer`): the bank performs it only with
+the user's approval of its exact terms, and at most once.
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ from ..company import (
     COMPANY_ACCOUNTS,
     COMPANY_AGENTS,
     OPERATION_EXECUTORS,
+    ActionResult,
     Authenticated,
     CompanyConfig,
     CompanyService,
@@ -31,7 +31,7 @@ from ..company import (
     build_company,
     company_app,
 )
-from ..models import Operation, OperationResult
+from ..models import Operation
 from .kit import ClockPlugin, InProcessNetwork, MutableClock
 
 DOMAIN = "northwind.example"
@@ -79,7 +79,7 @@ class NorthwindAccounts:
 
 
 class NorthwindAgent:
-    """Answers balances and proposes the payments it is asked for, exactly as asked."""
+    """Answers balances and returns the payments it is asked for, exactly as asked."""
 
     async def respond(self, turn: Turn) -> Sequence[Reply]:
         if turn.account_id is None:
@@ -103,6 +103,7 @@ class NorthwindAgent:
                 text=f"Ready to pay {reference}.",
                 operation=ProposedOperation(
                     action="payments.transfer",
+                    subject=reference,
                     summary=(
                         f"Pay {currency} {amount} to {payee} for {reference} from the current "
                         f"account {IBAN}, today. Payments cannot be recalled once sent."
@@ -113,7 +114,6 @@ class NorthwindAgent:
                         "reference": reference,
                         "from_account": IBAN,
                     },
-                    user_approval_required=False,
                 ),
             )
         ]
@@ -125,11 +125,11 @@ class TransferExecutor:
     def __init__(self) -> None:
         self.performed: list[str] = []
 
-    async def perform(self, operation: Operation, account_id: str) -> OperationResult:
+    async def perform(self, operation: Operation, account_id: str | None) -> ActionResult:
         self.performed.append(operation.operation_id)
         terms = operation.terms or {}
         amount = terms["amount"]
-        return OperationResult(
+        return ActionResult(
             summary=(
                 f"Sent {amount['currency']} {amount['amount']} to {terms['payee']} for "
                 f"{terms['reference']} from {IBAN}. Bank reference NW-{len(self.performed):04d}."

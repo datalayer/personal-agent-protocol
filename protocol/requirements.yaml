@@ -330,6 +330,7 @@ requirements:
   reason: The reference company is one Company per CompanyService, its issuer its own base URL; it hosts
     no other Company. Personal agents find an issuer with a path at its RFC 8414 URL (discovery._metadata_url,
     protocol.issuer-with-a-path).
+  tests: []
 - id: PAP-3.2-09
   section: '3.2'
   level: MUST
@@ -354,6 +355,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService.oauth_metadata
   reason: Withdrawn upstream (3e9bada) with Poppy's DPoP rules; the reference company issues Bearer access
     tokens and lists no dpop_signing_alg_values_supported.
+  tests: []
 - id: PAP-3.2-11
   section: '3.2'
   level: MUST
@@ -391,9 +393,9 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.extensions:negotiate_extensions
-  - personal_agent_protocol.operations:operations_endpoint
+  - personal_agent_protocol.operations:operations_negotiated
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_operations_are_used_only_when_both_sides_list_version_1
+  - personal_agent_protocol/__tests__/test_operations.py::test_operations_are_used_only_when_both_sides_list_version_2
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   conformance:
   - protocol.unknown-extension-ignored
@@ -444,6 +446,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._token
   reason: The company parses requests with the same extra-tolerant models and ignores unknown form fields,
     but no test sends it unknown fields.
+  tests: []
 - id: PAP-4.1-01
   section: '4.1'
   level: MUST
@@ -588,6 +591,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._issue
   reason: The reference company issues random opaque tokens (sat_…) that carry nothing; the Session is
     looked up by the token's digest.
+  tests: []
 - id: PAP-4.2-07
   section: '4.2'
   level: MUST
@@ -640,6 +644,7 @@ requirements:
   - personal_agent_protocol.pairwise:SqlitePairwiseUserIdStore
   reason: 'The SDK offers no anonymous browsing mode: every User ID comes from the pairwise store, one
     stable ID per tenant, user, and issuer, so there is no anonymous ID to refuse a sign-in with.'
+  tests: []
 - id: PAP-4.2-11
   section: '4.2'
   level: MUST
@@ -675,6 +680,7 @@ requirements:
     owns keeping personal information out of it, as for User IDs.
   tests:
   - personal_agent_protocol/__tests__/test_sessions.py::test_an_agent_id_rides_in_the_session
+  implementation: []
 - id: PAP-4.2-21
   section: '4.2'
   level: MUST
@@ -696,6 +702,7 @@ requirements:
   status: implemented
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_an_ended_sessions_sid_is_refused_not_a_new_session
+  implementation: []
 - id: PAP-4.2-23
   section: '4.2'
   level: MUST NOT
@@ -721,7 +728,7 @@ requirements:
   implementation:
   - personal_agent_protocol.browser:BrowserSessionClient.join
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_joined_browser_follows_the_session
 - id: PAP-4.3-01
   section: '4.3'
   level: MUST
@@ -1206,6 +1213,7 @@ requirements:
   - personal_agent_protocol.accounts:RefreshTokenClient.revoke
   reason: No helper replaces and revokes the previous Account Token after a wider sign-in; the host calls
     revoke().
+  tests: []
 - id: PAP-4.4-05
   section: '4.4'
   level: SHOULD
@@ -1215,6 +1223,7 @@ requirements:
   status: open
   reason: No helper maps a task's scopes to a held Account Token; the host decides.
   implementation: []
+  tests: []
 - id: PAP-4.4-21
   section: '4.4'
   level: SHOULD
@@ -1226,6 +1235,7 @@ requirements:
     types.'
   implementation:
   - personal_agent_protocol.company.service:CompanyConfig
+  tests: []
 - id: PAP-4.4-22
   section: '4.4'
   level: MUST
@@ -1497,6 +1507,7 @@ requirements:
   status: not-applicable
   reason: The reference company checks on each request (PAP-4.9-01).
   implementation: []
+  tests: []
 - id: PAP-4.9-03
   section: '4.9'
   level: SHOULD NOT
@@ -1639,9 +1650,9 @@ requirements:
     scopes change, the website reflects it on the next request.'
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._web_session
+  - personal_agent_protocol.company.service:CompanyService.web_session
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_website_follows_the_session_and_refuses_bad_assertions
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_joined_browser_follows_the_session
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - lifecycle.browser-joins-session
@@ -1652,10 +1663,10 @@ requirements:
   text: The cookie MUST NOT outlive the Session.
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._web_session
+  - personal_agent_protocol.company.service:CompanyService.web_session
   - personal_agent_protocol.company.service:CompanyService._browser_session
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_operation_confirmed_on_the_website_is_the_same_operation_once
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_joined_browser_follows_the_session
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - lifecycle.browser-joins-session
@@ -1683,7 +1694,8 @@ requirements:
   reason: The reference website has one page, an operation's; its refusals say the Session ended rather
     than name a scope.
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._operation_page
+  - personal_agent_protocol.company.service:CompanyService.web_session
+  tests: []
 - id: PAP-6-01
   section: '6'
   level: MUST
@@ -1839,6 +1851,7 @@ requirements:
   status: not-applicable
   reason: Message text is written by the host's agent and the company agent; the SDK carries it unchanged.
   implementation: []
+  tests: []
 - id: PAP-7.4-03
   section: '7.4'
   level: MUST
@@ -1860,6 +1873,7 @@ requirements:
   status: not-applicable
   reason: What a message shares is the host's decision; the SDK adds nothing to it.
   implementation: []
+  tests: []
 - id: PAP-7.5-01
   section: '7.5'
   level: MUST
@@ -2200,10 +2214,10 @@ requirements:
   implementation:
   - personal_agent_protocol.ui:PapReplies
   - personal_agent_protocol.ui:PapConfirm
-  - personal_agent_protocol.operations:approve
+  - personal_agent_protocol.operations:OperationsClient.ask_user
   tests:
   - personal_agent_protocol/__tests__/test_ui.py::test_direct_and_mediated_answers
-  - personal_agent_protocol/__tests__/test_operations.py::test_an_approval_of_another_revision_is_refused_locally
+  - personal_agent_protocol/__tests__/test_operations.py::test_only_true_from_the_users_surface_approves
   reason: The SDK hands company text to the host attributed to the company, verbatim (PapReplies, PapConfirm,
     PapOutcome), and acts only through the host's own calls; how a model treats that text is the host's
     model policy.
@@ -2216,6 +2230,8 @@ requirements:
   status: not-applicable
   reason: Every SDK call is scoped to one company (its issuer, Session, and keys) and made by the host;
     deciding what to do from another company's content is the host's model policy.
+  implementation: []
+  tests: []
 - id: PAP-9.1-03
   section: '9.1'
   level: SHOULD
@@ -2225,6 +2241,7 @@ requirements:
   reason: What a message, report, or API call says is the host's decision; the SDK adds no personal context
     of its own.
   implementation: []
+  tests: []
 - id: PAP-9.1-04
   section: '9.1'
   level: MUST NOT
@@ -2234,10 +2251,10 @@ requirements:
     Company as the User''s approval.'
   status: implemented
   implementation:
-  - personal_agent_protocol.operations:approve
-  - personal_agent_protocol.operations:UserApproval
+  - personal_agent_protocol.operations:OperationsClient.ask_user
+  - personal_agent_protocol.models:Approval
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_an_approval_of_another_revision_is_refused_locally
+  - personal_agent_protocol/__tests__/test_operations.py::test_only_true_from_the_users_surface_approves
 - id: PAP-9.2-01
   section: '9.2'
   level: MUST
@@ -2415,103 +2432,6 @@ requirements:
   - personal_agent_protocol.models:OAuthServerMetadata.offers_direct
   - personal_agent_protocol.models:OAuthServerMetadata.offers_device
   tests: []
-- id: OPS-2-01
-  source: operations
-  section: '2'
-  level: MUST NOT
-  role: company
-  text: A Company MUST NOT return operations to a Personal Agent that doesn't list the extension.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService._api_call
-  - personal_agent_protocol.company.service:CompanyService._reply
-  - personal_agent_protocol.company.service:CompanyService._operation_route
-  tests:
-  - personal_agent_protocol/__tests__/test_company_refusals.py::test_an_agent_without_the_extension_gets_no_operations
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
-  conformance:
-  - protocol.extension-required-error
-  - protocol.extension-required-company
-- id: OPS-3-01
-  source: operations
-  section: '3'
-  level: MUST
-  role: company
-  text: Everything that affects the action, such as the item, quantity, price, recipient, date, or a condition
-    for cancelling, MUST be in the revision's summary, and in terms if present.
-  status: partial
-  implementation:
-  - personal_agent_protocol.company.points:ProposedOperation
-  tests:
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.proposed-not-performed
-  reason: The service requires a summary and carries terms unchanged; whether the summary names every
-    term is the proposing contribution's job.
-- id: OPS-3-02
-  source: operations
-  section: '3'
-  level: MUST
-  role: company
-  text: The Company MUST perform only what the confirmed revision describes.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService._confirm
-  tests:
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.confirm-succeeded
-  - operations.web-confirm-at-most-once
-- id: OPS-3-03
-  source: operations
-  section: '3'
-  level: MUST NOT
-  role: company
-  text: Proposing an operation doesn't perform it, and the Company MUST NOT start the action before it
-    is confirmed.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService._propose
-  tests:
-  - personal_agent_protocol/__tests__/test_direct_and_api.py::test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchange
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.proposed-not-performed
-- id: OPS-3.1-01
-  source: operations
-  section: '3.1'
-  level: MUST NOT
-  role: company
-  text: 'Each revision is fixed once issued: the Company MUST NOT change the terms of a revision, and
-    only the latest revision can be confirmed.'
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService.revise
-  - personal_agent_protocol.company.service:CompanyService._confirm
-  tests:
-  - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_revised_operation_is_terms_changed_and_never_performed_twice
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.terms-changed
-- id: OPS-3.2-01
-  source: operations
-  section: '3.2'
-  level: MUST
-  role: company
-  text: The Company MUST keep an operation readable at least until it is final.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService._operation_route
-  - personal_agent_protocol.company.store:MemoryCompanyStore
-  tests:
-  - personal_agent_protocol/__tests__/test_company_store.py::test_a_company_restarted_over_its_store_continues_every_flow
-  - personal_agent_protocol/__tests__/test_company_store.py::test_the_memory_store_keeps_the_contract
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.readable-until-final
-  - operations.expired
-  - operations.not-found-indistinguishable
 - id: PAP-3.2-20
   section: '3.2'
   level: MUST
@@ -2547,214 +2467,329 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService.oauth_metadata
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_scopes_are_the_companys_described_and_never_poppy
-- id: OPS-4-01
+- id: OPS-2-01
   source: operations
-  section: '4'
-  level: SHOULD
+  section: '2'
+  level: MUST NOT
   role: company
-  text: If the same action comes up again through another channel, for example in an API call after a
-    conversation proposed it, the Company SHOULD return the existing operation instead of proposing a
-    new one.
+  text: A Company MUST NOT return operations to a Personal Agent that doesn't list that version.
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._propose
-  - personal_agent_protocol.operations:operation_from
-  - personal_agent_protocol.mcp:McpClient.call_tool
+  - personal_agent_protocol.company.service:CompanyService._api_answer
+  - personal_agent_protocol.company.service:CompanyService._reply
+  - personal_agent_protocol.company.service:CompanyService._mcp_tool
+  - personal_agent_protocol.company.service:CompanyService._supports_operations
   tests:
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_agent_listing_version_1_is_not_sent_an_operation
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_an_agent_without_the_extension_gets_no_operations
   conformance:
-  - operations.cross-channel-identity
-  - operations.cross-channel-mcp
-- id: OPS-4.1-01
+  - protocol.extension-required-error
+  - protocol.extension-required-company
+- id: OPS-3-01
   source: operations
-  section: '4.1'
-  level: SHOULD
+  section: '3'
+  level: MUST
   role: company
-  text: The Company SHOULD say in its OpenAPI description which endpoints return operations.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.demo.manzanita:ManzanitaApi.openapi
-  tests:
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.proposed-not-performed
-- id: OPS-5.1-01
-  source: operations
-  section: '5.1'
-  level: MUST
-  role: personal-agent
-  text: 'Before confirming, the Personal Agent MUST have the User''s approval for the revision it confirms,
-    in one of two ways: user or standing_permission.'
-  status: implemented
-  implementation:
-  - personal_agent_protocol.operations:approve
-  - personal_agent_protocol.operations:OperationsClient._authorize
-  tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_the_user_approves_one_revision_and_it_is_confirmed_once
-  - personal_agent_protocol/__tests__/test_operations.py::test_an_approval_of_another_revision_is_refused_locally
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.confirm-succeeded
-  - operations.terms-changed
-- id: OPS-5.1-02
-  source: operations
-  section: '5.1'
-  level: MUST
-  role: personal-agent
-  text: The Personal Agent MUST show the User the Company's name and the revision's summary, and MUST
-    take the User's answer through its own interface.
+  text: Everything that affects the action, such as what it changes, any amount, date, or recipient, or
+    a condition for cancelling, MUST be in the revision's summary, and in terms if present.
   status: partial
+  reason: 'The terms are the Company''s own: the SDK carries them and can''t tell whether they are complete.'
   implementation:
-  - personal_agent_protocol.operations:UserApproval
-  - personal_agent_protocol.operations:terms_digest
+  - personal_agent_protocol.company.points:ProposedOperation
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_an_approval_of_another_revision_is_refused_locally
-  reason: An approval is bound to the digest of the summary and terms the host showed; the company's name
-    is not part of it, and showing is the host's.
-- id: OPS-5.1-03
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_request_is_refused_with_the_operation_and_nothing_is_done
+  conformance:
+  - operations.approval-required
+- id: OPS-3-02
   source: operations
-  section: '5.1'
+  section: '3'
+  level: MUST NOT
+  role: company
+  text: It MUST NOT give two different sets of terms the same revision, so an approval of one revision
+    never applies to other terms.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._revision_for
+  - personal_agent_protocol.company.service:CompanyService.revise
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_new_terms_from_the_action_are_a_new_revision_of_the_same_operation
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_companys_revision_withdraws_the_earlier_ones
+  conformance:
+  - operations.same-request-same-revision
+  - operations.new-revision-on-changed-terms
+- id: OPS-3-03
+  source: operations
+  section: '3'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT start the action before it receives an approval for it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._decide
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_request_is_refused_with_the_operation_and_nothing_is_done
+  conformance:
+  - operations.approval-required
+- id: OPS-3-04
+  source: operations
+  section: '3'
+  level: MUST
+  role: company
+  text: The Company MUST perform only what the approved revision describes.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._perform
+  - personal_agent_protocol.company.service:CompanyService._approves
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_executor_gets_the_revision_approved_with_its_account
+  conformance:
+  - operations.approved-performed
+- id: OPS-3-05
+  source: operations
+  section: '3'
+  level: MUST NOT
+  role: company
+  text: 'operation_id identifies the action: the Company MUST NOT use it for another action.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._revision_for
+  - personal_agent_protocol.company.service:CompanyService._open_operation
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_new_request_after_the_action_is_a_new_operation
+- id: OPS-3-06
+  source: operations
+  section: '3'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent MUST NOT render links, images, or HTML in a summary, and shows them as text.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.ui:inert_summary
+  - personal_agent_protocol.ui:PapConfirm
+  tests:
+  - personal_agent_protocol/__tests__/test_ui.py::test_the_summary_is_shown_as_text_its_links_images_and_html_inert
+- id: OPS-3-07
+  source: operations
+  section: '3'
+  level: SHOULD
+  role: company
+  text: expires_at SHOULD leave the User long enough to read the terms and decide, unless the Company
+    can't hold the terms that long.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_default_expiry_leaves_the_user_fifteen_minutes
+- id: OPS-5-01
+  source: operations
+  section: '5'
+  level: MUST NOT
+  role: personal-agent
+  text: When a request returns an operation, the Personal Agent MUST NOT treat the action as done.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.apis:ApiResponse
+  - personal_agent_protocol.mcp:McpToolResult
+  - personal_agent_protocol.operations:OperationsClient.send
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_new_revision_for_a_first_send_is_for_the_user
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_tool_returns_an_error_result_and_the_same_call_with_the_approval_performs
+- id: OPS-5-02
+  source: operations
+  section: '5'
   level: MUST
   role: personal-agent
   text: The Personal Agent MUST show the User the Company's name and the revision's summary, and MUST
     take the User's answer through its own interface.
   status: implemented
   implementation:
-  - personal_agent_protocol.operations:approve
+  - personal_agent_protocol.operations:OperationsClient.ask_user
+  - personal_agent_protocol.reactor:ApprovalSurface
+  - personal_agent_protocol.ui:PapConfirm
   tests:
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-- id: OPS-5.1-04
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_user_is_asked_with_the_company_the_summary_and_any_difference
+  - personal_agent_protocol/__tests__/test_operations.py::test_without_a_surface_nothing_is_approved
+- id: OPS-5-03
   source: operations
-  section: '5.1'
+  section: '5'
   level: MUST NOT
   role: personal-agent
   text: It MUST NOT treat text from the Company, such as a conversation message, as the User's approval.
   status: implemented
   implementation:
-  - personal_agent_protocol.operations:approve
-  - personal_agent_protocol.operations:OperationsClient.confirm
+  - personal_agent_protocol.operations:OperationsClient.ask_user
   tests:
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_operations.py::test_only_true_from_the_users_surface_approves
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_messages_text_approves_nothing_whatever_it_says
   conformance:
   - operations.message-is-not-approval
-- id: OPS-5.1-05
+- id: OPS-5-04
   source: operations
-  section: '5.1'
+  section: '5'
   level: MUST
   role: personal-agent
-  text: A standing permission MUST cover the Company, the account, the action, and every term of the revision,
-    and still be in effect.
+  text: The Personal Agent MUST ask the User about each operation.
   status: implemented
   implementation:
-  - personal_agent_protocol.operations:covers
-  - personal_agent_protocol.operations:InMemoryStandingPermissionStore.reserve
+  - personal_agent_protocol.operations:OperationsClient.ask_user
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_a_standing_permission_covers_every_term_and_spends_one_use
-  - personal_agent_protocol/__tests__/test_operations.py::test_a_standing_permission_that_does_not_cover_it_asks_the_user
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.user-approval-required
-  - operations.standing-permission-within-bounds
-  - operations.standing-permission-out-of-bounds
-- id: OPS-5.1-06
+  - personal_agent_protocol/__tests__/test_operations.py::test_every_operation_is_asked_about_never_approved_on_the_users_behalf
+- id: OPS-5-05
   source: operations
-  section: '5.1'
+  section: '5'
+  level: MUST NOT
+  role: personal-agent
+  text: It MUST NOT approve one on the User's behalf, even when the User said earlier that they would
+    approve something like it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.ask_user
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_every_operation_is_asked_about_never_approved_on_the_users_behalf
+  - personal_agent_protocol/__tests__/test_two_companies.py::test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment
+- id: OPS-5-06
+  source: operations
+  section: '5'
   level: SHOULD
   role: personal-agent
-  text: When the revision has terms, the Personal Agent SHOULD show the User the values that matter next
-    to the summary, such as amounts, dates, and items, or check that they agree with it, before asking
-    for approval.
+  text: When the operation has terms, the Personal Agent SHOULD check that they agree with the summary
+    and with what it asked for before asking for approval, and point out any difference to the User.
   status: implemented
   implementation:
-  - personal_agent_protocol.ui:PapConfirm
-  - personal_agent_protocol.operations:terms_digest
+  - personal_agent_protocol.operations:terms_differences
+  - personal_agent_protocol.operations:OperationsClient.ask_user
   tests:
-  - personal_agent_protocol/__tests__/test_ui.py::test_an_operation_to_confirm_is_the_committed_display_both_sdks_read
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_terms_check_points_out_a_summary_that_says_otherwise
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_terms_check_compares_what_was_asked_for
 - id: OPS-6-01
   source: operations
   section: '6'
-  level: SHOULD
+  level: MUST
   role: company
-  text: While it is in_progress, the Company SHOULD include Retry-After, and the Personal Agent reads
-    again after that time.
+  text: 'Before performing the action, the Company MUST check, in this order: the Session can approve
+    the operation, else it handles the request as if it had no approval; the operation hasn''t been performed
+    already; the revision is one the Company returned for this operation, it hasn''t expired, and the
+    request asks for exactly what it describes.'
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._operation_response
-  - personal_agent_protocol.operations:ConfirmOutcome.retry_after
+  - personal_agent_protocol.company.service:CompanyService._approval_target
+  - personal_agent_protocol.company.service:CompanyService._settled
+  - personal_agent_protocol.company.service:CompanyService._approves
   tests:
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_operations.py::test_any_session_of_the_account_approves_and_a_signed_out_one_gets_a_challenge
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_returned_signed_out_is_approved_only_in_that_session
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_is_the_conversations_own
   conformance:
-  - operations.in-progress-outcome-unknown
+  - operations.approved-performed
+  - operations.any-session-of-the-account-approves
+  - operations.signed-out-session-gets-a-challenge
+  - operations.another-user-cannot-approve
+  - operations.malformed-approval-header-ignored
+  - operations.mcp-approval
+  - operations.conversation-approval
 - id: OPS-6-02
   source: operations
   section: '6'
   level: MUST
   role: company
-  text: The Company MUST perform each operation at most once, however many times and through whichever
-    channels it is confirmed.
+  text: Companies MUST ignore members of Poppy-Approval they don't recognize, so later versions can add
+    members.
   status: implemented
   implementation:
-  - personal_agent_protocol.company.store:CompanyStore
-  - personal_agent_protocol.company.service:CompanyService._confirm_operation
-  - personal_agent_protocol.company.service:CompanyService._operation_page
+  - personal_agent_protocol.operations:parse_approval_header
+  - personal_agent_protocol.operations:approval_from_meta
   tests:
-  - personal_agent_protocol/__tests__/test_company_store.py::test_a_company_restarted_over_its_store_continues_every_flow
-  - personal_agent_protocol/__tests__/test_company_store.py::test_the_memory_store_keeps_the_contract
-  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_operation_confirmed_on_the_website_is_the_same_operation_once
-  - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_revised_operation_is_terms_changed_and_never_performed_twice
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_header_parses_as_a_dictionary_ignoring_unknown_members
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_mcp_approval_is_read_from_meta_ignoring_unknown_members
   conformance:
-  - operations.at-most-once
-  - operations.web-confirm-at-most-once
-  - operations.cancel-proposed
+  - operations.approval-unknown-members-ignored
 - id: OPS-6-03
   source: operations
   section: '6'
   level: MUST NOT
   role: company
-  text: The Company MUST NOT report failed while it doesn't know whether the action took effect, for example
-    after a timeout in one of its own systems.
+  text: A Company MUST NOT answer an approval with the revision it names, so a Personal Agent never retries
+    the same approval in a loop.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._revision_for
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_failed_check_3_answers_a_new_revision_never_the_one_named
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_failed_check_in_a_conversation_is_a_message_with_a_new_revision
+  conformance:
+  - operations.new-revision-on-changed-terms
+  - operations.approval-of-a-revision-never-returned
+  - operations.approval-of-another-request
+  - operations.expired
+- id: OPS-7-01
+  source: operations
+  section: '7'
+  level: MUST
+  role: company
+  text: The Company MUST perform each operation at most once, however many times its approval is sent.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._perform
+  - personal_agent_protocol.company.store:CompanyStore
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_same_request_with_the_approval_is_performed_once
+  - personal_agent_protocol/__tests__/test_operations.py::test_two_requests_at_once_perform_it_once
+  - personal_agent_protocol/__tests__/test_company_store.py::test_a_company_restarted_over_its_store_continues_every_flow
+  conformance:
+  - operations.retry-after-the-outcome
+  - operations.retry-before-the-outcome
+  - operations.conversation-approval
+  - operations.mcp-approval
+  - operations.failed-partial-result
+  - operations.lost-answer-same-approval
+- id: OPS-7-02
+  source: operations
+  section: '7'
+  level: MUST
+  role: company
+  text: The Company MUST remember that it performed an operation at least until the approved revision's
+    expires_at, and while it is being performed.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.store:StoredOperation
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_same_request_with_the_approval_is_performed_once
+  - personal_agent_protocol/__tests__/test_security_demonstrations.py::test_restart_is_safe
+  conformance:
+  - operations.retry-after-the-outcome
+- id: OPS-7-03
+  source: operations
+  section: '7'
+  level: MUST NOT
+  role: company
+  text: While an operation is being performed, or the Company doesn't know whether it took effect, the
+    Company MUST NOT respond as if it failed.
   status: implemented
   implementation:
   - personal_agent_protocol.company.points:OperationOutcomeUnknown
-  - personal_agent_protocol.company.service:CompanyService._confirm
+  - personal_agent_protocol.company.service:CompanyService._api_decision
+  - personal_agent_protocol.company.service:CompanyService._mcp_decision
   tests:
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_operations.py::test_while_it_is_performed_a_retry_gets_503_and_retry_after_never_a_failure
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_tool_still_being_performed_answers_503
   conformance:
-  - operations.in-progress-outcome-unknown
-- id: OPS-6-04
+  - operations.retry-before-the-outcome
+- id: OPS-7-04
   source: operations
-  section: '6'
+  section: '7'
   level: MUST NOT
   role: personal-agent
-  text: If a confirm request fails or times out, the Personal Agent retries it or reads the operation,
-    with the same operation ID. It MUST NOT ask for a new proposal of the same action until the operation
-    is final.
+  text: The Personal Agent MUST NOT ask the User to approve a new operation for the same action until
+    it knows whether the first one was performed.
   status: implemented
   implementation:
-  - personal_agent_protocol.operations:OperationsClient.confirm
+  - personal_agent_protocol.operations:OperationsClient.send
+  - personal_agent_protocol.operations:ApprovalSent
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_a_lost_answer_is_read_back_by_the_same_id_never_assumed_failed
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_new_operation_in_answer_to_a_retry_says_nothing_of_the_first
+  - personal_agent_protocol/__tests__/test_operations.py::test_still_unknown_after_every_attempt
   conformance:
-  - operations.confirm-timeout-recovery
-- id: OPS-6-05
-  source: operations
-  section: '6'
-  level: MUST
-  role: company
-  text: In a final state, result.summary MUST describe every change that was made, including any made
-    by an operation that failed or was cancelled partway.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.points:OperationFailed
-  - personal_agent_protocol.company.service:CompanyService._confirm
-  tests:
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.confirm-succeeded
-  - operations.failed-partial-result
+  - operations.lost-answer-same-approval
 guide:
 - id: GUIDE-secrets-01
   source: guide
@@ -2782,6 +2817,7 @@ guide:
   status: open
   reason: No logging or tracing hook redacts headers yet.
   implementation: []
+  tests: []
 - id: GUIDE-secrets-03
   source: guide
   section: Handling secrets
@@ -2998,6 +3034,7 @@ guide:
   - personal_agent_protocol.sessions:SessionClient.token_request
   reason: Withdrawn or reshaped upstream at 3e9bada; this entry is rewritten when the ledger is regenerated
     from that commit.
+  tests: []
 - id: GUIDE-retry-03
   source: guide
   section: Retries
@@ -3035,6 +3072,7 @@ guide:
   status: open
   reason: The reference company does not rate-limit.
   implementation: []
+  tests: []
 - id: GUIDE-rate-02
   source: guide
   section: Rate limits
@@ -3139,6 +3177,7 @@ guide:
   status: not-applicable
   reason: A privacy notice is the host's.
   implementation: []
+  tests: []
 - id: GUIDE-pa-ids-03
   source: guide
   section: User IDs
@@ -3149,6 +3188,7 @@ guide:
   status: not-applicable
   reason: The SDK offers no anonymous browsing mode (see PAP-4.2-10).
   implementation: []
+  tests: []
 - id: GUIDE-pa-ids-04
   source: guide
   section: User IDs
@@ -3251,6 +3291,7 @@ guide:
   status: open
   reason: The SDK offers all three; no helper chooses among them.
   implementation: []
+  tests: []
 - id: GUIDE-pa-browser-01
   source: guide
   section: Web browsing
@@ -3260,6 +3301,7 @@ guide:
   status: open
   reason: The browser is a host contribution (pap.browserFormPost); isolation is not checked.
   implementation: []
+  tests: []
 - id: GUIDE-pa-conv-01
   source: guide
   section: Conversations
@@ -3282,11 +3324,11 @@ guide:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._page
   - personal_agent_protocol.company.service:CompanyService.consent_decision
-  - personal_agent_protocol.company.service:CompanyService._operation_page
+  - personal_agent_protocol.company.service:CompanyService.web_session
   tests:
   - personal_agent_protocol/__tests__/test_direct_and_api.py::test_the_consent_page_is_never_framed_and_bad_redirects_are_not_followed
   - personal_agent_protocol/__tests__/test_guide_security.py::test_the_consent_form_is_bound_to_the_browser_that_was_shown_it
-  - personal_agent_protocol/__tests__/test_guide_security.py::test_the_operation_page_refuses_cross_site_and_another_browsers_form
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_join_page_is_one_time_tied_to_its_browser_and_never_framed
 - id: GUIDE-co-consent-02
   source: guide
   section: Consent pages
@@ -3439,7 +3481,7 @@ guide:
   - personal_agent_protocol.company.service:CompanyService.settle
   - personal_agent_protocol.company.service:CompanyService._perform
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_operations_are_used_only_when_both_sides_list_version_1
+  - personal_agent_protocol/__tests__/test_operations.py::test_operations_are_used_only_when_both_sides_list_version_2
   reason: An operation in progress is settled by the company (settle) whatever its Session Token; no test
     lets a token expire mid-work.
 - id: GUIDE-co-sessions-02
@@ -3453,6 +3495,7 @@ guide:
   reason: The reference company performs an operation when it is confirmed; nothing runs on the account
     afterwards that revocation would need to stop.
   implementation: []
+  tests: []
 - id: GUIDE-co-hosting-01
   source: guide
   section: Hosting several companies
@@ -3465,6 +3508,7 @@ guide:
   reason: The reference company is one company per CompanyService and store; a provider runs one per company,
     each with its own issuer and records.
   implementation: []
+  tests: []
 - id: GUIDE-co-account-01
   source: guide
   section: Account settings
@@ -3490,6 +3534,7 @@ guide:
   implementation:
   - personal_agent_protocol.company.service:CompanyService._stream
   reason: The stream opens with a comment and ends after the backlog; it does not stay open with keep-alives.
+  tests: []
 - id: GUIDE-co-conv-02
   source: guide
   section: Conversations
@@ -3514,7 +3559,7 @@ guide:
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._owned
-  - personal_agent_protocol.company.service:CompanyService._operation_route
+  - personal_agent_protocol.company.service:CompanyService._supports_operations
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
 - id: GUIDE-ops-pa-01
@@ -3522,56 +3567,64 @@ guide:
   section: 'Operations: personal agents'
   level: SHOULD
   role: personal-agent
-  text: When a new revision arrives, show the user what changed before asking them to approve it again.
+  text: When a new revision of an operation arrives, with the same operation_id, drop the earlier one
+    and show the user what changed before asking them to approve the new one.
   status: implemented
   implementation:
-  - personal_agent_protocol.operations:ConfirmOutcome.changed
+  - personal_agent_protocol.operations:OperationsClient.ask_user
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_terms_changed_returns_the_new_revision_and_what_changed
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_user_is_asked_with_the_company_the_summary_and_any_difference
 - id: GUIDE-ops-pa-02
   source: guide
   section: 'Operations: personal agents'
   level: SHOULD
   role: personal-agent
-  text: If a term you need to check is missing from terms, ask the user instead.
+  text: Show when the revision expires. If it expires before the user answers, make the request again
+    for new terms, and ask again.
   status: implemented
   implementation:
-  - personal_agent_protocol.operations:covers
+  - personal_agent_protocol.operations:OperationsClient.ask_user
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_a_standing_permission_that_does_not_cover_it_asks_the_user
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_revision_past_its_expiry_is_not_put_to_the_user
 - id: GUIDE-ops-pa-03
   source: guide
   section: 'Operations: personal agents'
   level: SHOULD
   role: personal-agent
-  text: For a permission with a limited number of uses, reserve a use before you confirm, so two tasks
-    running at once can't both use the last one. Release the reservation if the company rejects the confirmation.
+  text: Save the request that returned the operation, and send exactly that with the approval. Don't have
+    the model write the request again.
   status: implemented
   implementation:
-  - personal_agent_protocol.operations:StandingPermissionStore
-  - personal_agent_protocol.operations:OperationsClient.confirm
+  - personal_agent_protocol.operations:OperationsClient.send
+  - personal_agent_protocol.cli_host:CliState
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_a_refused_confirmation_gives_the_use_back
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
-  conformance:
-  - operations.standing-permission-within-bounds
-  - operations.standing-permission-concurrent-use
+  - personal_agent_protocol/__tests__/test_cli_protocol.py::test_a_user_with_manzanita_from_the_command_line
 - id: GUIDE-ops-pa-04
   source: guide
   section: 'Operations: personal agents'
   level: SHOULD
   role: personal-agent
-  text: After a confirm times out, read the operation or confirm again with the same revision. Wait for
-    Retry-After between reads.
+  text: After a request with an approval times out or gets a 503, send it again with the same approval,
+    waiting for Retry-After if there is one.
   status: implemented
   implementation:
-  - personal_agent_protocol.operations:OperationsClient.confirm
+  - personal_agent_protocol.operations:OperationsClient.send
   tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_a_lost_answer_is_read_back_by_the_same_id_never_assumed_failed
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_failure_or_timeout_keeps_the_same_approval
   conformance:
-  - operations.confirm-timeout-recovery
+  - operations.lost-answer-same-approval
+- id: GUIDE-ops-pa-05
+  source: guide
+  section: 'Operations: personal agents'
+  level: SHOULD
+  role: personal-agent
+  text: Check terms against what you asked for, such as the order, item, and amount, and tell the user
+    about any difference.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:terms_differences
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_terms_check_compares_what_was_asked_for
 - id: GUIDE-ops-co-01
   source: guide
   section: 'Operations: companies'
@@ -3583,16 +3636,57 @@ guide:
   implementation:
   - personal_agent_protocol.company.points:OperationExecutor
   tests:
-  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_executor_gets_the_revision_approved_with_its_account
 - id: GUIDE-ops-co-02
   source: guide
   section: 'Operations: companies'
   level: SHOULD
   role: company
-  text: To spot the same action coming up in another channel, look for an open operation in the same session
-    or account with the same terms before proposing a new one.
+  text: Decide which requests are for the same action from your own records, and return the same operation_id
+    for it, whichever interface it came through.
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService._propose
+  - personal_agent_protocol.company.service:CompanyService._asked
+  - personal_agent_protocol.company.service:CompanyService._open_operation
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_approval_with_another_request_is_refused_with_a_new_revision
+  - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation
+  conformance:
+  - operations.cross-channel-identity
+  - operations.cross-channel-mcp
+- id: GUIDE-ops-co-03
+  source: guide
+  section: 'Operations: companies'
+  level: SHOULD
+  role: company
+  text: Say in your OpenAPI description which endpoints can return approval_required.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.demo.manzanita:ManzanitaApi.openapi
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - operations.approval-required
+- id: GUIDE-ops-co-04
+  source: guide
+  section: 'Operations: companies'
+  level: SHOULD
+  role: company
+  text: If you store operations, store each revision's terms with a fingerprint of the request, so you
+    can check that a request with an approval asks for exactly what was approved.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.store:OperationRevision
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_approval_with_another_request_is_refused_with_a_new_revision
+- id: GUIDE-ops-co-05
+  source: guide
+  section: 'Operations: companies'
+  level: SHOULD
+  role: company
+  text: 'Keep a record of each approval: the operation, revision, client_id, account, and time.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.store:StoredOperation
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_same_request_with_the_approval_is_performed_once

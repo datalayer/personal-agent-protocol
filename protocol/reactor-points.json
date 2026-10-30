@@ -248,21 +248,6 @@
       "tenant": null
     },
     {
-      "id": "pap.standingPermissionStore",
-      "role": "personal-agent",
-      "python": "STANDING_PERMISSION_STORES",
-      "typescript": "StandingPermissionStores",
-      "contract": "StandingPermissionStore",
-      "members": [
-        "reserve",
-        "commit",
-        "release"
-      ],
-      "default": null,
-      "resolution": "single",
-      "tenant": null
-    },
-    {
       "id": "pap.telemetry",
       "role": "personal-agent",
       "python": "TELEMETRY_SINKS",
@@ -288,7 +273,7 @@
       "default": null,
       "resolution": "optional",
       "tenant": null,
-      "note": "Python hosts only: it gates the live-session actions (actions.py) that Studio, a REPL and `pap commands run` invoke through Reactor's command registries, which only the Python SDK registers. Without one, a destructive action is refused."
+      "note": "Python hosts for now: it asks the user about every operation (OperationsClient.ask_user), and gates the live-session actions (actions.py) that Studio, a REPL and `pap commands run` invoke through Reactor's command registries. Without one, nothing is approved and a destructive action is refused."
     },
     {
       "id": "pap.company.store",

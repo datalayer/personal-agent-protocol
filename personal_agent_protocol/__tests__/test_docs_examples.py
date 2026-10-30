@@ -26,8 +26,6 @@ import json
 import re
 import types
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +50,7 @@ from personal_agent_protocol import (
     StreamReconnected,
     TextDelta,
     resolve_pairwise_user_id,
+    terms_differences,
 )
 from personal_agent_protocol import discovery as discovery_module
 from personal_agent_protocol import identity as identity_module
@@ -71,6 +70,7 @@ from personal_agent_protocol.demo.kit import (
     InProcessNetwork,
     MutableClock,
     PersonalAgentHost,
+    ScriptedApprovals,
     ScriptedBrowser,
     ScriptedInput,
     _Routing,
@@ -78,10 +78,6 @@ from personal_agent_protocol.demo.kit import (
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, ManzanitaPlugin
 from personal_agent_protocol.models import Author, ClientMetadata, DiscoveryDocument, Message
-from personal_agent_protocol.operations import (
-    StandingPermission,
-    TermLimit,
-)
 from personal_agent_protocol.reactor import first_contribution, resolve_addresses
 
 ROOT = Path(__file__).parents[2]
@@ -180,6 +176,7 @@ class Docs:
             self.agent,
             self.clock,
             protected_input=ScriptedInput(dict(ADA), {"code": ADA_CODE}),
+            approvals=ScriptedApprovals(always=True),
             browser=self.browser,
         )
         pairwise = SqlitePairwiseUserIdStore(tmp_path / "pairwise.sqlite3")
@@ -520,38 +517,43 @@ async def _proposed(docs: Docs, domain: str) -> dict[str, Any]:
 @case("docs/docs/guides/operations.mdx#0")
 async def _operations_client(docs: Docs) -> tuple[dict[str, Any], Check]:
     async def check(namespace: dict[str, Any], out: str) -> None:
-        assert namespace["endpoint"] == "https://shop.example/poppy/operations"
+        assert namespace["negotiated"] is True
         assert isinstance(namespace["operations"], OperationsClient)
 
     return {
+        "reactor": docs.reactor,
         "discovered": await docs.discovered("shop.example"),
         "my_client_metadata": ClientMetadata.model_validate(docs.agent.metadata),
-        "SessionHttpClient": SessionHttpClient,
-        "reactor": docs.reactor,
-        "http": docs.http,
     }, check
 
 
 @case("docs/docs/guides/operations.mdx#1")
-async def _confirm(docs: Docs) -> tuple[dict[str, Any], Check]:
+async def _approve(docs: Docs) -> tuple[dict[str, Any], Check]:
     proposed = await _proposed(docs, "shop.example")
-    shown: list[Any] = []
+    surface = docs.host.approvals
+    assert surface is not None
 
     async def check(namespace: dict[str, Any], out: str) -> None:
-        assert namespace["outcome"].status == "confirmed"
-        assert namespace["outcome"].operation.state == "succeeded"
-        assert shown == [(proposed["operation"].summary, proposed["operation"].terms)]
-
-    from personal_agent_protocol import approve
+        assert namespace["sent"].status == "answered"
+        assert namespace["sent"].answer.body["summary"].startswith("Exchanged")
+        assert surface.asked[0].summary == proposed["operation"].summary
 
     return {
         **proposed,
-        "approve": approve,
-        "operations": OperationsClient(transport=docs.transport),
-        "endpoint": "https://shop.example/poppy/operations",
-        "show_to_user": lambda *shown_values: shown.append(shown_values),
-        "show_changes": lambda *changed: None,
+        "api": ApiClient(transport=docs.transport),
+        "url": "https://shop.example/api/orders/ord_7Hk2/exchanges",
+        "body": {},
+        "organization": (await docs.discovered("shop.example")).document.organization,
+        "tenant_id": "tenant",
+        "operations": OperationsClient(reactor=docs.reactor),
     }, check
+
+
+@case("docs/docs/guides/operations.mdx#2")
+async def _terms_check(docs: Docs) -> tuple[dict[str, Any], Check]:
+    proposed = await _proposed(docs, "shop.example")
+
+    return {"operation": proposed["operation"], "terms_differences": terms_differences}, _nothing
 
 
 @case("docs/docs/guides/operations.mdx#3")
@@ -569,46 +571,10 @@ async def _confirm_display(docs: Docs) -> tuple[dict[str, Any], Check]:
         )
         assert "ses_docs" not in json.dumps(namespace["display"].model_view())
 
-    return {"operation": operation, "session_key": "ses_docs"}, check
-
-
-@case("docs/docs/guides/operations.mdx#2")
-async def _standing(docs: Docs) -> tuple[dict[str, Any], Check]:
-    domain = northwind_demo.DOMAIN
-    session, token, _ = await docs.signed_in(domain, ("accounts:read", "payments:write"))
-    endpoint = (await docs.discovered(domain)).document.agent.protocols[0].endpoint
-    conversations = ConversationClient(transport=docs.transport)
-    message = Message(
-        id=generate_message_id(docs.reactor),
-        author=Author(type="human"),
-        text="Pay INV-1042: EUR 120.00 to Ledgerly",
-    )
-    page = await conversations.start(endpoint, message, session=session, token=token, wait=0)
-    operation = next(
-        event.message.operation
-        for event in page.events
-        if event.message is not None and event.message.operation is not None
-    )
-    docs.host.standing.permissions["perm_1"] = StandingPermission(
-        reference="perm_1",
-        company="Northwind Bank",
-        account="current account",
-        action="payments.transfer",
-        limits=(TermLimit(path="amount.amount", maximum=Decimal("500.00")),),
-        expires_at=docs.clock.now() + timedelta(days=30),
-    )
-
-    async def check(namespace: dict[str, Any], out: str) -> None:
-        assert namespace["outcome"].status == "confirmed"
-        assert docs.bank.executor.performed == [operation.operation_id]
-
     return {
-        "operations": OperationsClient(transport=docs.transport),
-        "endpoint": f"https://{domain}/poppy/operations",
         "operation": operation,
-        "account": "current account",
-        "session": session,
-        "token": token,
+        "session_key": "ses_docs",
+        "terms_differences": terms_differences,
     }, check
 
 

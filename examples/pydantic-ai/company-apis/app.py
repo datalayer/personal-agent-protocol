@@ -9,8 +9,8 @@ MCP server, called with a token issued for that server's URL alone. Every reques
 carries the Session header. Signed out, the API answers `insufficient_scope` with
 the scope it needs; once Ada signs in on Manzanita's page, Atlas reads her orders
 through both and proposes the same exchange through both — a `202` with an
-operation from the API, an `operation` from the MCP tool, one record. Nothing is
-done until Ada confirms it.
+operation from the API, an `operation` from the MCP tool, one operation. Nothing is
+done until Ada approves it.
 
 The MCP token is a refresh with `resource` set to the server's URL (§4.5, §7): the
 refresh token stays in the host, and the token is used at that server alone.
@@ -54,8 +54,8 @@ PAIRWISE = "usr_ada_at_manzanita_000000"
 agent = Agent(
     instructions=(
         "Use run_company_apis to show how Ada's personal agent reads and proposes "
-        "through a company's OpenAPI API and its MCP server. A proposed operation is "
-        "not done until Ada confirms it. Never expose tokens, codes, or Session JWTs."
+        "through a company's OpenAPI API and its MCP server. An operation is "
+        "not done until Ada approves it. Never expose tokens, codes, or Session JWTs."
     ),
 )
 
@@ -128,7 +128,7 @@ async def _journey() -> dict[str, Any]:
         raise RuntimeError("the example world is incomplete")
     signed_in = done.token
 
-    # The OpenAPI API, with the access token: a read, then a proposal (202).
+    # The OpenAPI API, with the access token: a read, then `approval_required` (403).
     read = await api.call("GET", orders_url, session=session, token=signed_in)
     proposed = await api.call("POST", exchange_url, session=session, token=signed_in, body={})
     if proposed.operation is None:
@@ -178,12 +178,11 @@ async def _journey() -> dict[str, Any]:
         "openapi": {
             "read_status": read.status,
             "orders": read.body["orders"] if isinstance(read.body, dict) else None,
-            "proposal_status": proposed.status,
-            "proposal": {
-                "state": proposed.operation.state,
+            "approval_required_status": proposed.status,
+            "operation": {
                 "revision": proposed.operation.revision,
                 "summary": proposed.operation.summary,
-                "user_approval_required": proposed.operation.user_approval_required,
+                "expires_at": proposed.operation.expires_at.isoformat(),
             },
         },
         "mcp": {
@@ -192,9 +191,11 @@ async def _journey() -> dict[str, Any]:
             "tools": tools,
             "list_orders": listed.text,
             "exchange_jacket": through_mcp.text,
-            "proposal_state": through_mcp.operation.state,
+            "exchange_is_an_error_result": through_mcp.is_error,
         },
-        "one_operation_across_channels": through_mcp.operation == proposed.operation,
+        "one_operation_across_interfaces": (
+            through_mcp.operation.operation_id == proposed.operation.operation_id
+        ),
         "mcp_token_refused_at_the_api": at_the_api,
     }
 

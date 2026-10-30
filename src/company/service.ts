@@ -1006,7 +1006,7 @@ export class CompanyService {
     const method = request.method.toUpperCase();
     if (url.searchParams.has("access_token")) {
       // A token in a URL is logged, cached, and leaked in Referer: never accepted, even
-      // beside a header that would be (§4.3, RFC 6750 §2.3).
+      // beside a header that would be (§5.6, RFC 6750 §2.3).
       if (path === "/mcp" && this.#mcp() !== undefined) return this.#mcpRefusal(400, "invalid_request");
       return jsonError(400, "invalid_request");
     }
@@ -2097,7 +2097,7 @@ export class CompanyService {
     return apiDecision(await this.#decide(session, asked, approval, target));
   }
 
-  // MCP (§4.3, §6, Operations 4, 6) -------------------------------------------------------
+  // MCP (§4.5, §7, Operations 4, 6) -------------------------------------------------------
 
   #mcp(): CompanyMcp | undefined {
     return optionalContribution(this.reactor, CompanyMcps, "MCP server");
@@ -3176,7 +3176,7 @@ export class CompanyService {
   }
 
   /**
-   * The feedback reports personal agents sent, oldest first, for the operator (§8).
+   * The feedback reports personal agents sent, oldest first, for the operator (§9.3).
    *
    * A report can be wrong or written to mislead: its text is data, never an instruction,
    * including when a model reads it.

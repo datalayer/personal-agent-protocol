@@ -15,6 +15,7 @@ import {
   ApiClient,
   ApiError,
   AuthorizationError,
+  BlindJoseSigner,
   ConversationClient,
   ConversationError,
   DeviceSignInClient,
@@ -24,6 +25,7 @@ import {
   MediatedSignInClient,
   OperationsClient,
   RefreshTokenClient,
+  RsaBlindSigningKey,
   SecretValue,
   SessionClient,
   SessionFetchClient,
@@ -46,7 +48,7 @@ const ORDERS = "https://manzanita.example/api/orders";
 const ORDER = `${ORDERS}/ord_7Hk2`;
 const REDIRECT = "https://atlas.example/oauth/callback";
 
-async function world({ answers = [], extensions, config, plugins, algorithm } = {}) {
+async function world({ answers = [], extensions, config, plugins, algorithm, blind = false } = {}) {
   const clock = new MutableClock();
   const sites = {};
   const fetch = inProcessFetch(sites);
@@ -57,6 +59,11 @@ async function world({ answers = [], extensions, config, plugins, algorithm } = 
     ...(algorithm ? { algorithm } : {}),
   });
   sites["atlas.example"] = identity.documents;
+  if (blind) {
+    const [publicKey] = identity.jwks.keys;
+    const key = new RsaBlindSigningKey(await exportJWK(identity.privateKey));
+    identity.signer = new BlindJoseSigner({ key, publicKey, keyId: publicKey.kid });
+  }
   const { service: shop, plugin } = manzanita({ fetch, clock, ...(config ? { config } : {}), ...(plugins ? { plugins } : {}) });
   sites["manzanita.example"] = shop;
   const host = await agentHost({ identity, fetch, clock, answers });
@@ -1031,6 +1038,13 @@ test("PS384 client assertions and delegations", async () => {
   const { result } = await directSignIn(w);
   const headers = await sessionHeaders(w.host.reactor, "GET", ORDERS, { session, token: result.token });
   assert.equal(decodeProtectedHeader(decodeProtectedHeader(headers["Poppy-Session"]).pap_dlg).alg, "PS384");
+  assert.equal((await w.api.call("GET", ORDERS, { session, token: result.token })).status, 200);
+});
+
+test("a key that signs blindly: its PS384 client assertions and delegations are ordinary ones here", async () => {
+  const w = await world({ algorithm: "PS384", blind: true });
+  const session = await w.start();
+  const { result } = await directSignIn(w);
   assert.equal((await w.api.call("GET", ORDERS, { session, token: result.token })).status, 200);
 });
 

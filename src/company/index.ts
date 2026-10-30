@@ -142,7 +142,7 @@ export interface BuildCompanyOptions extends PapCoreOptions {
  *
  * The company's plugins contribute at least `pap.company.accounts` and
  * `pap.company.agent`, and one `pap.company.operationExecutor` per action
- * its agent proposes; a lower `order` replaces any default.
+ * that needs approval; a lower `order` replaces any default.
  */
 export function buildCompany(
   config: CompanyConfig,

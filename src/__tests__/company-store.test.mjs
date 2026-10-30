@@ -145,7 +145,7 @@ test("a company restarted over its store continues every flow", async () => {
   const rotated = await tokens.get(reference);
   assert.notEqual(rotated.reveal(), before.reveal());
 
-  // The conversation continues from its cursor; the company proposes an operation.
+  // The conversation continues from its cursor; the company returns an operation.
   page = await conversations.send(endpoint, page.conversation_id, message("Exchange it for something warmer"), {
     session, token: refreshed.token, cursor: page.cursor, wait: 0,
   });

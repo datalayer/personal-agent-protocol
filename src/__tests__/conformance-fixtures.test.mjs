@@ -11,11 +11,15 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  ApiClient,
   ConversationClient,
-  DpopFetchClient,
-  DpopProofProviders,
+  DelegatedSessionSigner,
+  InMemoryDelegatedKeys,
   SecretValue,
   SessionClient,
+  SessionError,
+  SessionFetchClient,
+  SessionSigners,
   Signers,
   buildPapReactor,
   conversationEndpoint,
@@ -31,6 +35,7 @@ import {
   parseOperation,
 } from "../../lib/index.js";
 import { NodeUrlSafetyPolicy } from "../../lib/server.js";
+import { agentIdentity } from "./support/world.mjs";
 
 const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations"];
 const KNOWN_EVENT_TYPES = new Set(["message", "state", "authorization", "user_requested", "direct_opened", "direct_closed"]);
@@ -158,40 +163,50 @@ const CHECKS = {
   },
 
   async rate_limited(given, expect) {
-    const fetch = async () =>
-      new Response(JSON.stringify(given.body), { status: given.status, headers: { ...given.headers, "content-type": "application/json" } });
-    const reactor = buildPapReactor({ fetch }, [
-      {
-        name: "@tests/rate-limited",
-        contributes: [
-          { point: Signers, value: { sign: async () => new SecretValue("assertion") }, options: { id: "signer" } },
-          { point: DpopProofProviders, value: { newSessionKey: async () => "K".repeat(43), create: async () => new SecretValue("proof"), discardSessionKey: async () => {} }, options: { id: "proofs" } },
-        ],
-      },
-    ]);
-    const refused = (error) => error.code === expect.error && error.details?.retry_after === expect.retry_after;
-    await assert.rejects(
-      new SessionClient({ reactor, fetch }).start({
-        clientId: "https://atlas.example/agent.json",
+    const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
+    // A 429 has `Retry-After` and no body (§5.6); one sent as JSON all the same reads alike.
+    for (const body of [null, JSON.stringify(given.body)]) {
+      const headers = { ...given.headers, ...(body === null ? {} : { "content-type": "application/json" }) };
+      const fetch = async () => new Response(body, { status: given.status, headers });
+      const reactor = buildPapReactor({ fetch }, [
+        {
+          name: "@tests/rate-limited",
+          contributes: [
+            { point: Signers, value: identity.signer, options: { id: "signer" } },
+            {
+              point: SessionSigners,
+              value: new DelegatedSessionSigner({ custody: new InMemoryDelegatedKeys(), signer: identity.signer }),
+              options: { id: "delegated-keys" },
+            },
+          ],
+        },
+      ]);
+      const refused = (error) =>
+        error.code === expect.error && JSON.stringify(error.details) === JSON.stringify({ retry_after: expect.retry_after });
+      const sessions = new SessionClient({ reactor, fetch });
+      await assert.rejects(
+        sessions.tokenRequest({
+          clientId: identity.clientId,
+          issuer: "https://shop.example",
+          tokenEndpoint: "https://shop.example/oauth/token",
+          form: () => ({ grant_type: "refresh_token", refresh_token: "rt_rate_limited" }),
+          error: SessionError,
+        }),
+        refused,
+      );
+      // An API call is not retried either: the caller is told how long to wait.
+      const session = await sessions.start({
+        clientId: identity.clientId,
         pairwiseUserId: "usr_rate_limited_0000000",
         issuer: "https://shop.example",
-        tokenEndpoint: "https://shop.example/oauth/token",
         tenantId: "t",
-      }),
-      refused,
-    );
-    // An API read is not retried either: the caller is told how long to wait.
-    const token = { accessToken: new SecretValue("sat"), tokenType: "DPoP", expiresIn: 60, scopes: [], sessionKey: "K".repeat(43), signedIn: false };
-    const conversations = new ConversationClient({ reactor, transport: new DpopFetchClient({ reactor, fetch }) });
-    await assert.rejects(
-      conversations.readEvents("https://shop.example/poppy/conversations", "cnv_rate_limited", {
-        token,
-        tenantId: "t",
-        issuer: "https://shop.example",
-      }),
-      refused,
-    );
-    reactor.stop();
+      });
+      const transport = new SessionFetchClient({ reactor, fetch });
+      await assert.rejects(new ApiClient({ transport }).call("GET", "https://shop.example/api/orders", { session }), refused);
+      const conversations = new ConversationClient({ reactor, transport });
+      await assert.rejects(conversations.readEvents("https://shop.example/poppy/conversations", "cnv_rate_limited", { session }), refused);
+      reactor.stop();
+    }
   },
 };
 

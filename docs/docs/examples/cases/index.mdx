@@ -1,0 +1,39 @@
+---
+title: Cases
+description: Four stories of the Personal Agent Protocol, each a deck, and each played on datalayer.ai.
+---
+
+import { CaseList } from '@site/src/components/CaseDeck';
+
+# Cases
+
+Four stories, told in a reader's words: who is there, what happens step by step,
+what the protocol does, and why it matters. Each is a deck shipped by the
+package, so what you read here is what the Protocols tab of the
+[Datalayer home page](https://datalayer.ai) presents, in the same order and under
+the same names.
+
+<CaseList />
+
+## Use the decks
+
+The decks are part of the npm package, at `./decks`. Each is YAML in the format
+of [Datalayer Decks](https://github.com/datalayer/decks), and the same deck parsed:
+
+```js
+import { PAP_DECKS, papDeck } from '@datalayer/personal-agent-protocol/decks';
+
+const deck = papDeck('pap-approve-once');
+deck.yaml; // the deck, as YAML
+deck.spec; // the same deck, parsed: { deck, slides }
+```
+
+## Two more, over other protocols
+
+The Protocols tab plays two more cases that aren't the Personal Agent Protocol's,
+so their decks live with the code that integrates those protocols, in Agent
+Runtimes:
+[A Purchase, Approved](https://agent-runtimes.datalayer.tech/protocols/ucp-a-purchase-approved)
+over UCP, and
+[A Personal Agent at a Business](https://agent-runtimes.datalayer.tech/protocols/pact-a-personal-agent-at-a-business)
+over PACT.

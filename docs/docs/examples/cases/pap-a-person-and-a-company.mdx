@@ -1,0 +1,24 @@
+---
+title: A Person and a Company
+description: Ada's agent asks a shop about her order, and she signs in at the shop itself.
+---
+
+import CaseDeck from '@site/src/components/CaseDeck';
+
+# A Person and a Company
+
+<CaseDeck id="pap-a-person-and-a-company" />
+
+Ada's agent finds Manzanita Outfitters by its domain, asks about her Ridge Jacket
+before anybody signed in, and is told to sign in. Ada signs in on Manzanita's own
+page, allows "See your orders", and the company answers.
+
+What each step uses, in the example flows:
+
+- Reading what the company publishes: [Company discovery](/examples/company-discovery).
+- Proving who the agent is, signed out: [Session JWT](/examples/session-jwt) and [Session lifecycle](/examples/session-lifecycle).
+- The company asking for a sign-in, then signing in: [Conversation control](/examples/conversation-control) and [Device Sign-In](/examples/device-sign-in).
+
+[A user with a company](/examples/user-with-a-company) runs this case and
+the [next one](/examples/cases/pap-approve-once) as one journey, on the wire, both
+sides from the SDK. There the agent is called Atlas.

@@ -19,11 +19,15 @@
     "./server": {
       "types": "./lib/server.d.ts",
       "import": "./lib/server.js"
+    },
+    "./decks": {
+      "types": "./lib/decks/index.d.ts",
+      "import": "./lib/decks/index.js"
     }
   },
   "files": ["lib", "README.md"],
   "scripts": {
-    "build": "tsc -p tsconfig.json && esbuild src/index.ts src/server.ts src/demo/manzanita.ts --bundle --splitting --platform=neutral --format=esm --sourcemap --outdir=lib --outbase=src --external:node:*",
+    "build": "tsc -p tsconfig.json && esbuild src/index.ts src/server.ts src/decks/index.ts src/demo/manzanita.ts --bundle --splitting --platform=neutral --format=esm --sourcemap --outdir=lib --outbase=src --external:node:*",
     "build:lib": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test src/__tests__/*.test.mjs",
@@ -35,7 +39,8 @@
   },
   "dependencies": {
     "@datalayer/reactor": "^1.0.5",
-    "jose": "^6.2.12"
+    "jose": "^6.2.12",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

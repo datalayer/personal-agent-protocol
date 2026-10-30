@@ -8,75 +8,64 @@
     {
       "type": "title",
       "title": "Operations",
-      "subtitle": "Confirm exactly what the user approved, at most once, and recover a lost answer",
+      "subtitle": "Approve exactly what the company proposed, performed at most once, and recover a lost answer",
       "meta": "Personal Agent Protocol · example",
-      "notes": "An operation is something a company proposes and performs only once it is confirmed: a payment, an exchange, a cancellation. This example confirms Northwind Bank's proposed payments with the Operations extension, version 1."
+      "notes": "An operation is an action a company performs only once the user approves its exact terms: a payment, an exchange, a cancellation. This example gets Ada's approval of Northwind Bank's payments with the Operations extension, version 2."
     },
     {
       "type": "statement",
       "title": "Why operations",
-      "statement": "The approval is **exact** and **durable**: a chat message never confirms anything.",
-      "notes": "Money moves only on an explicit confirmation of one revision of the terms. The user approves in the host's own interface, and the company performs a confirmed operation once, even when answers get lost."
+      "statement": "The approval is **exact** and **durable**: a chat message never approves anything.",
+      "notes": "Money moves only on an explicit approval of one revision of the terms. The user approves in the host's own interface, every time, and the company performs an approved action at most once, even when answers get lost."
     },
     {
       "type": "mermaid",
       "title": "Who takes part",
-      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Ada's side, trusted\"]\n    direction TB\n    U[\"Ada\"] -- \"approves\" --> H[\"Atlas host<br/>OperationsClient\"]\n    H -- \"reserve a use\" --> S[\"Standing permission store\"]\n  end\n  subgraph CO[\"Northwind Bank\"]\n    direction TB\n    B[\"Operations endpoint<br/>proposes, then performs\"]\n  end\n  CO -- \"proposal, revision, terms\" --> HOST\n  HOST -- \"confirm one revision\" --> CO\n  HOST -. \"states and summaries only\" .-> M",
-      "caption": "Only Ada, or a permission she set, approves; the model can explain an operation but never confirm it.",
-      "notes": "Start on the right: Northwind Bank proposes a payment, with a revision and its terms. On the left, inside Ada's trusted side, the Atlas host shows it to Ada, and she approves in the host's own interface. For payments the bank marks as not needing Ada herself, the host may instead reserve a use from the Reactor standing permission store. Either way the host confirms one exact revision back at the bank. Off to the side, the model receives states and summaries only, never the power to approve."
+      "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Ada's side, trusted\"]\n    direction TB\n    U[\"Ada\"] -- \"approves\" --> H[\"Atlas host<br/>OperationsClient\"]\n  end\n  subgraph CO[\"Northwind Bank\"]\n    direction TB\n    B[\"Conversation or API<br/>proposes, then performs\"]\n  end\n  CO -- \"operation: revision, summary, terms\" --> HOST\n  HOST -- \"the same request, with the approval\" --> CO\n  HOST -. \"summaries only\" .-> M",
+      "caption": "Only Ada approves; the model can explain an operation but never approve it.",
+      "notes": "Start on the right: Northwind Bank proposes a payment, as an operation with a revision and its terms. On the left, inside Ada's trusted side, the Atlas host shows it to Ada, and she approves in the host's own interface. The host then makes the same request again, with her approval of that exact revision. Off to the side, the model receives summaries only, never the power to approve."
     },
     {
       "type": "flow",
       "title": "Approval, and changed terms",
       "items": [
-        { "label": "1", "title": "Negotiate", "detail": "Both sides list operations version 1" },
-        { "label": "2", "title": "Proposal", "detail": "op_1 revision 1: EUR 1250.00 to Acme GmbH" },
-        { "label": "3", "title": "Approve", "detail": "Ada approves revision 1: revision + digest" },
-        { "label": "4", "title": "terms_changed", "detail": "Revision 2: EUR 1262.50, a fee added", "current": true }
+        { "label": "1", "title": "Negotiate", "detail": "Both sides list operations version 2" },
+        { "label": "2", "title": "Proposal", "detail": "An operation: EUR 1250.00 to Acme GmbH" },
+        { "label": "3", "title": "Approve", "detail": "Ada approves this revision" },
+        { "label": "4", "title": "New revision", "detail": "EUR 1262.50, a fee added: nothing done", "current": true }
       ],
-      "notes": "The host finds the endpoint only when the bank and the agent both list the extension. Nothing standing covers op_1, so Ada sees the summary and terms and approves revision 1. The bank has since added a fee, so the confirm is refused with terms_changed and the new revision."
+      "notes": "Operations apply only when the bank and the agent both list the extension. Ada sees the summary and terms and approves that revision. The bank has since added a fee, so it performs nothing and returns a new revision of the same operation."
     },
     {
       "type": "flow",
-      "title": "Confirm, and recover",
+      "title": "Approve again, and recover",
       "items": [
         { "label": "5", "title": "Show the change", "detail": "summary, amount.amount" },
-        { "label": "6", "title": "Approve again", "detail": "Ada approves revision 2" },
+        { "label": "6", "title": "Approve again", "detail": "Ada approves the new revision" },
         { "label": "7", "title": "Answer lost", "detail": "The bank performed it; the reply never came" },
-        { "label": "8", "title": "Read back", "detail": "GET op_1: succeeded, result.summary", "current": true }
+        { "label": "8", "title": "Send again", "detail": "The same approval: the original response", "current": true }
       ],
-      "notes": "The host shows Ada which terms changed and she approves revision 2. The bank performs the payment but the answer is lost. The SDK reads the same operation back: it is never re-proposed or assumed failed, and a retried confirm returns the same record."
+      "notes": "The host shows Ada which terms changed and she approves the new revision. The bank performs the payment but the answer is lost. The SDK sends the same request with the same approval, and the bank answers with its original response: the payment happens once."
     },
     {
       "type": "mermaid",
-      "title": "The life of an operation",
-      "diagram": "stateDiagram-v2\n  [*] --> proposed\n  proposed --> proposed : terms changed, new revision\n  proposed --> in_progress : confirm latest revision\n  proposed --> cancelled : cancel\n  proposed --> expired\n  in_progress --> succeeded\n  in_progress --> failed\n  succeeded --> [*]\n  failed --> [*]\n  cancelled --> [*]\n  expired --> [*]",
-      "caption": "Only the latest revision can be confirmed; a lost answer is read back, never re-proposed.",
-      "notes": "Follow an operation from the top. It starts proposed. If the company changes the terms, it stays proposed with a new revision, and the old approval no longer fits: the host refuses it locally with approval_mismatch, and the company answers terms_changed. Confirming the latest revision moves it on, possibly through in progress, to succeeded or failed, each with the company's result summary. A proposal can also be cancelled or expire. If a confirm's answer is lost, the host reads the operation back: still proposed means the confirm never arrived and may be retried."
-    },
-    {
-      "type": "flow",
-      "title": "A standing permission",
-      "items": [
-        { "label": "1", "title": "Proposal", "detail": "op_2: EUR 980.00" },
-        { "label": "2", "title": "Reserve", "detail": "Payee, amount ≤ 2000.00, EUR, one use" },
-        { "label": "3", "title": "Confirm", "detail": "approved_by standing_permission" },
-        { "label": "4", "title": "Commit", "detail": "A refusal would release the use", "current": true }
-      ],
-      "notes": "A standing permission names one company, account and action, with limits on term paths, an expiry and optional uses. The store reserves a use only when every limit covers the revision, commits it when the bank confirms, and releases it when the bank refuses. A revision that requires the user's approval is never confirmed this way."
+      "title": "What an approval can meet",
+      "diagram": "flowchart LR\n  A[\"The request,<br/>with an approval\"] --> Q{\"Revision accepted?\"}\n  Q -- \"yes\" --> P[\"Performed once,<br/>the usual response\"]\n  Q -- \"new terms, expired,<br/>another request\" --> N[\"Nothing done,<br/>a new revision\"]\n  N --> ASK[\"Ask the user again\"]\n  P -- \"sent again\" --> R[\"The original response\"]\n  A -- \"while it runs\" --> W[\"503 with Retry-After\"]",
+      "caption": "An operation has no state of its own: the answer to the approved request is the result.",
+      "notes": "An operation has no state, no URL and no result: the answer to the approved request is the result. Follow a request with an approval. If the company accepts the revision, it performs the action once and answers as usual, and a repeat gets that original response. If the revision is one it can't accept, because the terms changed, it expired, or it was for another request, the company performs nothing and returns a new revision, and the user is asked again. While the action is being performed, a repeat gets 503 with Retry-After. When no answer comes in the end the outcome is unknown, and the host finds out before it asks again."
     },
     {
       "type": "two-columns",
       "title": "What stays where",
       "left": { "heading": "Host and user only", "type": "bullets", "items": ["Tokens and proofs", "The decision to approve"] },
-      "right": { "heading": "What the model sees", "type": "bullets", "items": ["States and revisions", "Changed term paths", "Error codes", "The bank's result.summary, as written"] },
-      "notes": "The model can explain what happened, but it cannot approve. Tokens and proofs stay in the host, and the decision stays with the user in the host's own interface. A cancelled proposal's summary says nothing was changed."
+      "right": { "heading": "What the model sees", "type": "bullets", "items": ["Revisions", "Changed term paths", "Error codes", "What the bank says it came to, as written"] },
+      "notes": "The model can explain what happened, but it cannot approve. Tokens and proofs stay in the host, and the decision stays with the user in the host's own interface."
     },
     {
       "type": "closing",
       "title": "Run it yourself",
-      "cta": "The Pydantic AI and Agent Runtimes examples confirm Northwind Bank's payments end to end",
-      "notes": "Run the Pydantic AI example with PAP_EXAMPLE_MODEL set to the model you want. TypeScript offers OperationsClient, operationsEndpoint and an asynchronous approve, with standing permissions contributed at StandingPermissionStores."
+      "cta": "The Pydantic AI and Agent Runtimes examples get Ada's approval of Northwind Bank's payments end to end",
+      "notes": "Run the Pydantic AI example with PAP_EXAMPLE_MODEL set to the model you want. TypeScript offers the same OperationsClient, with askUser and send, and the host's surface contributed at ApprovalSurfaces."
     }
   ]
 }

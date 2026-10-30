@@ -1,6 +1,6 @@
 ---
 title: A user with a company
-description: One user, one company, from a first question to a confirmed exchange and sign-out.
+description: One user, one company, from a first question to an approved exchange and sign-out.
 ---
 
 import Deck from '@theme/Deck';
@@ -9,6 +9,10 @@ import deck from '@site/decks/examples/user-with-a-company.deck.json';
 # A user with a company
 
 <Deck spec={deck} />
+
+The cases [A Person and a Company](/examples/cases/pap-a-person-and-a-company) and
+[A Change, Approved Once](/examples/cases/pap-approve-once) tell this story in a
+reader's words; this page is both, on the wire.
 
 The whole journey of the upstream home page's example: Ada's jacket is not
 warm enough, and she asks her personal agent, Atlas, to exchange it at
@@ -24,23 +28,23 @@ sequenceDiagram
   participant Atlas as Atlas (personal agent)
   participant M as Manzanita (company)
   Atlas->>M: Discovery + OAuth metadata
-  Atlas->>M: Signed-out Session (assertion + DPoP by a new Session Key)
+  Atlas->>M: Signed-out Session (Poppy-Session JWT, a delegated key)
   Ada->>Atlas: Where is my jacket order?
   Atlas->>M: Start conversation
   M-->>Atlas: Sign in first + authorization: insufficient_scope
   Atlas->>M: Device authorization for the same Session
   Atlas->>Ada: Open manzanita.example/device and enter the code
   Ada->>M: Signs in and approves on Manzanita's page
-  Atlas->>M: Poll with the Session Key → same Session signed in + Account Token
+  Atlas->>M: Poll → same Session signed in + Account Token
   Ada->>Atlas: Exchange it for something warmer
   Atlas->>M: Same conversation, signed in
-  M-->>Atlas: Operation op_1 rev 1: USD 70.00 more
+  M-->>Atlas: An operation: USD 70.00 more
   Atlas->>Ada: Show summary and terms
   Ada->>Atlas: Approve this revision
-  Atlas->>M: Confirm rev 1 (approved_by user)
-  M-->>Atlas: succeeded + result.summary
-  Atlas->>M: Confirm again (a retry)
-  M-->>Atlas: Same record, performed once
+  Atlas->>M: The same request, with the approval
+  M-->>Atlas: Exchanged ..., in Manzanita's words
+  Atlas->>M: The same approval again (a retry)
+  M-->>Atlas: The original response, performed once
   Atlas->>M: Refresh narrowed to orders:read
   Ada->>Atlas: Sign me out
   Atlas->>M: Revoke the Account Token
@@ -54,7 +58,7 @@ event, [Device Sign-In](./device-sign-in), [Operations](./operations), and
 
 The model sees the steps in plain words: what the company asked, where Ada
 signed in, what was proposed, what she approved, and what Manzanita did, in
-its own words. It never sees the device code, a token, an assertion, or a
+its own words. It never sees the device code, a token, a delegation, or a
 proof. Ada approves in the host's interface; the model can explain the
 proposal but cannot approve it.
 

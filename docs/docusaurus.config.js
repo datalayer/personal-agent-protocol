@@ -4,6 +4,31 @@
  * BSD 3-Clause License
  */
 
+const path = require('path');
+
+/**
+ * The package's `./decks` entry, from its source: the site shows the decks the
+ * package ships without a build of the package first.
+ */
+function papDecks() {
+  return {
+    name: 'pap-decks',
+    configureWebpack() {
+      return {
+        resolve: {
+          alias: {
+            '@datalayer/personal-agent-protocol/decks$': path.resolve(__dirname, '../src/decks/index.ts'),
+          },
+          // The source's `./x.js` imports name `./x.ts`.
+          extensionAlias: { '.js': ['.ts', '.js'] },
+          // `yaml`, for that source: it sits outside the site's node_modules.
+          modules: [path.resolve(__dirname, 'node_modules'), 'node_modules'],
+        },
+      };
+    },
+  };
+}
+
 /** @type {import('@docusaurus/types').DocusaurusConfig} */
 module.exports = {
   title: '🤖 🌸 Personal Agent Protocol',
@@ -29,6 +54,7 @@ module.exports = {
   },
   plugins: [
     'docusaurus-lunr-search',
+    papDecks,
     // Each example explained as a short deck (docs/decks), at most ten slides.
     ['@datalayer/decks-docusaurus', { decksDir: 'decks', maxSlides: 10 }],
   ],

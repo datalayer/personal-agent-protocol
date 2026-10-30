@@ -19,6 +19,9 @@ the same Ada, with its own `client_id` and keys on its own domain.
 
 :::
 
+The case [Two Companies Together](/examples/cases/pap-two-companies) tells this
+story in a reader's words; this page is the same story on the wire.
+
 Ledgerly, an accounting firm, pays Ada's supplier invoices from her Northwind
 account. Every approval is an Operation, never a chat message, and Ada is asked
 about every payment.
@@ -60,7 +63,7 @@ What each party enforces:
   through the host's own surface, and sends only what Ada approved.
 
 The model sees summaries as the companies wrote them, and that the composition involves no company-to-company protocol.
-It never sees a token, code, or proof of any of the three parties.
+It never sees a token, code, or Session JWT of any of the three parties.
 
 The same world runs in `personal_agent_protocol/__tests__/test_two_companies.py`.
 

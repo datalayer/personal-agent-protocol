@@ -91,6 +91,18 @@ const sidebars = {
       collapsed: false,
       items: [
         "examples/index",
+        {
+          type: "category",
+          label: "Cases",
+          collapsed: false,
+          link: { type: "doc", id: "examples/cases/index" },
+          items: [
+            "examples/cases/pap-a-person-and-a-company",
+            "examples/cases/pap-approve-once",
+            "examples/cases/pap-your-application-a-company",
+            "examples/cases/pap-two-companies",
+          ],
+        },
         "examples/company-discovery",
         "examples/agent-identity",
         "examples/delegation",

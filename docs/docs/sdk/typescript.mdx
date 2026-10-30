@@ -187,6 +187,13 @@ Conversations, and closing are implemented in `ConversationClient`, and
 approval (see the [Operations guide](/guides/operations/)). Parsing an object
 alone does not perform durable cursor persistence or approval.
 
+## Decks
+
+The entry `@datalayer/personal-agent-protocol/decks` ships the
+[four cases](/examples/cases/) as decks: `PAP_DECKS`, `PAP_DECK_IDS` and
+`papDeck(id)`, each with its `yaml` and the same deck parsed as `spec`. It
+brings in `yaml` and nothing of the SDK.
+
 ## Server-side URL safety
 
 The portable default rejects obvious local and private literal addresses. It

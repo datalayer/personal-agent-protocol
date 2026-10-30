@@ -28,32 +28,31 @@
     {
       "type": "mermaid",
       "title": "The first payment",
-      "diagram": "sequenceDiagram\n  actor Ada\n  participant A as Atlas\n  participant L as Ledgerly\n  participant N as Northwind\n  L->>N: Pay INV-0042\n  N-->>L: Operation n_1, EUR 1250.00\n  L-->>A: Operation l_1, quoting n_1\n  Ada->>A: Approve l_1\n  A->>L: Confirm l_1 (user)\n  L->>N: n_1 unchanged? Confirm n_1\n  N-->>L: Sent, NW-0001\n  L-->>A: Northwind's summary, as written",
-      "notes": "Ledgerly asks Northwind to pay the invoice, and Northwind proposes an Operation. Ledgerly relays it to Atlas as its own Operation, quoting Northwind's as written. Ada approves; Ledgerly checks Northwind's revision and terms have not changed, confirms, and relays Northwind's summary."
+      "diagram": "sequenceDiagram\n  actor Ada\n  participant A as Atlas\n  participant L as Ledgerly\n  participant N as Northwind\n  L->>N: Pay INV-0042\n  N-->>L: Operation n_1, EUR 1250.00\n  L-->>A: Operation l_1, quoting n_1\n  Ada->>A: Approve l_1\n  A->>L: Message with the approval of l_1\n  L->>N: n_1 unchanged? Message with the approval of n_1\n  N-->>L: Sent, NW-0001\n  L-->>A: Northwind's words, as written",
+      "notes": "Ledgerly asks Northwind to pay the invoice, and Northwind proposes an Operation. Ledgerly relays it to Atlas as its own Operation, quoting Northwind's as written. Ada approves; Ledgerly checks Northwind's revision and terms have not changed, sends the approval of that exact revision, and relays what Northwind says it came to."
     },
     {
       "type": "statement",
       "title": "Every approval is an Operation",
-      "statement": "Never a chat message. Even a **standing permission** is an Operation Ada approves.",
-      "notes": "Approving money movement in a chat message would be too easy to fake or misread. In this example every approval, including the permission to pay without asking, is an Operation with a summary and terms the user approves."
+      "statement": "Never a chat message, and **Ada is asked about every payment**.",
+      "notes": "Approving money movement in a chat message would be too easy to fake or misread. In this example every approval is an Operation with a summary and terms the user approves, and draft 0.3 asks the user about each one."
     },
     {
       "type": "flow",
-      "title": "Standing permission",
+      "title": "Every payment, asked",
       "items": [
-        { "label": "1", "title": "Ask", "detail": "Allow Acme payments up to EUR 2000 without asking" },
-        { "label": "2", "title": "Approve", "detail": "An Operation: 5 uses, 30 days" },
-        { "label": "3", "title": "Within bounds", "detail": "EUR 980.00: Ledgerly confirms itself", "current": true },
-        { "label": "4", "title": "Beyond bounds", "detail": "EUR 3400.00: a new Operation for Ada" }
+        { "label": "1", "title": "INV-0042", "detail": "EUR 1250.00: Ada approves, Northwind sends it" },
+        { "label": "2", "title": "\"Without asking\"", "detail": "Ada asks: Ledgerly tells her it cannot" },
+        { "label": "3", "title": "INV-0043", "detail": "EUR 980.00: a new Operation for Ada", "current": true }
       ],
-      "notes": "Ada approves a standing permission with term-by-term bounds. The next payment fits, so Ledgerly confirms it at Northwind with approved_by standing_permission and tells Ada what was done. The one after that is too large, so Ada is asked again."
+      "notes": "Ada approves the first payment. She then asks Ledgerly to pay Acme without asking her each time, and the answer is no: every operation Northwind returns goes to Ada, and nothing approves one in her name. So the next bill, INV-0043, is a new Operation for her to approve."
     },
     {
       "type": "mermaid",
-      "title": "How Ledgerly confirms",
-      "diagram": "flowchart LR\n  N[\"Northwind proposes\"] --> S[\"Within standing<br/>bounds?\"]\n  S -- \"yes\" --> C1[\"Confirm itself<br/>standing_permission\"]\n  S -- \"no\" --> O[\"Operation for Ada\"]\n  O -- \"Ada approves\" --> U[\"Revision and terms<br/>unchanged?\"]\n  U -- \"yes\" --> C2[\"Confirm<br/>approved_by user\"]",
-      "caption": "Ledgerly confirms only what Ada approved, exactly or through bounds she approved.",
-      "notes": "Follow one Northwind proposal. Ledgerly first asks whether a standing permission covers it, term by term. If it does, Ledgerly confirms itself, approved_by standing_permission, and tells Ada what was done. If not, it proposes an Operation for Ada, which Atlas shows with its summary and terms, as it would for any company. When Ada approves, Ledgerly checks that Northwind's revision and terms have not changed, and only then confirms, approved_by user. Northwind records who approved each payment, and Ledgerly relays its result summary as written."
+      "title": "How Ledgerly approves",
+      "diagram": "flowchart LR\n  N[\"Northwind proposes\"] --> O[\"Operation for Ada\"]\n  O -- \"Ada approves\" --> U[\"Revision and terms<br/>unchanged?\"]\n  U -- \"yes\" --> C[\"Sends Northwind<br/>the approval\"]\n  O -- \"Ada declines\" --> X[\"Nothing is paid\"]",
+      "caption": "Ledgerly approves at Northwind only the exact revision Ada approved.",
+      "notes": "Follow one Northwind proposal. Ledgerly proposes an Operation for Ada, which Atlas shows with its summary and terms, as it would for any company. If Ada declines, nothing is paid. When Ada approves, Ledgerly checks that Northwind's revision and terms have not changed, and only then sends Northwind the approval of that revision. Northwind's records keep the revision approved and when, and Ledgerly relays what Northwind says it came to, as written."
     },
     {
       "type": "two-columns",
@@ -66,7 +65,7 @@
       "type": "closing",
       "title": "Run it yourself",
       "cta": "The Pydantic AI and Agent Runtimes examples run all three parties in one process",
-      "notes": "The same world runs in the SDK's two-companies test. Read the Operations guide for approvals and standing permissions, and the company guide to build either side."
+      "notes": "The same world runs in the SDK's two-companies test. Read the Operations guide for approvals, and the company guide to build either side."
     }
   ]
 }

@@ -10,7 +10,14 @@ import deck from '@site/decks/examples/index.deck.json';
 
 <Deck spec={deck} />
 
-These pages explain the protocol behavior demonstrated by the runnable Python
+Start with the [four cases](./cases/), stories told in a reader's words and played
+on [datalayer.ai](https://datalayer.ai/examples?stage=pap-a-person-and-a-company):
+[A Person and a Company](./cases/pap-a-person-and-a-company),
+[A Change, Approved Once](./cases/pap-approve-once),
+[Your Application, a Company](./cases/pap-your-application-a-company) and
+[Two Companies Together](./cases/pap-two-companies).
+
+The pages below explain the protocol behavior demonstrated by the runnable Python
 and Agent Runtimes examples. Each flow shows where data travels, which Reactor
 capability owns sensitive work, and what may safely cross into model context.
 
@@ -19,7 +26,7 @@ capability owns sensitive work, and what may safely cross into model context.
 | [Company discovery](./company-discovery)               | Resolve and validate public PAP capabilities                  | A company domain           |
 | [Agent identity](./agent-identity)                     | Verify personal-agent metadata and signing policy             | An `agent.json` URL        |
 | [Delegation](./delegation)                             | Vouch for a delegated key, naming no User and no Company      | Verified metadata          |
-| [Direct Sign-In boundary](./direct-sign-in-boundary)   | Keep OAuth state and PKCE outside the model                   | A signed-out Session       |
+| [Direct Sign-In boundary](./direct-sign-in-boundary)   | Keep OAuth state and PKCE outside the model                   | The scopes a task needs    |
 | [Session JWT](./session-jwt)                           | Bind one Session JWT to one HTTP request                      | A protected key            |
 | [Session transport](./session-transport)               | Restart and redirect without leaking tokens or Session JWTs   | A Session and access token |
 | [Conversation messages](./conversation-messages)       | Create and retry idempotent messages safely                   | A conversation endpoint    |
@@ -27,7 +34,7 @@ capability owns sensitive work, and what may safely cross into model context.
 | [Session lifecycle](./session-lifecycle)               | Start a signed-out Session, and restart it when refused       | A company issuer           |
 | [Direct Sign-In lifecycle](./direct-sign-in-lifecycle) | Sign in after user consent, keep the tokens in the host       | A browser callback         |
 | [Browser Session](./browser-session)                   | Join the agent's browser to the same Session                  | A join code and a Session  |
-| [Account Tokens](./account-tokens) | Refresh, rotate, narrow, expire, and revoke without exposing the token | A signed-in Session |
+| [Refresh tokens](./account-tokens) | Refresh, rotate, narrow, expire, and revoke without exposing the token | A sign-in |
 | [Mediated Sign-In](./mediated-sign-in) | Protected input to the token endpoint as an extension grant, then a one-time code | The extension's fields |
 | [Conversation streaming](./conversation-streaming) | Stream over SSE, reconnect from `Last-Event-ID`, never act on deltas | An open conversation |
 | [Conversation control](./conversation-control) | Sign in mid-conversation, go direct, hand off, and close | An `authorization` event |
@@ -40,7 +47,7 @@ guide that explains them:
 
 | Example | What it teaches | Guide |
 | --- | --- | --- |
-| [Company APIs](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis) | Read and propose through a company's OpenAPI API (DPoP) and its MCP server (a Bearer for its URL alone) | [APIs coverage](/protocol/coverage/apis/) |
+| [Company APIs](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis) | Read and propose through a company's OpenAPI API and its MCP server (an access token for its URL alone) | [APIs coverage](/protocol/coverage/apis/) |
 | [Company service](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-service) | Build a company with `personal_agent_protocol.company` and use it end to end | [Integrate a company](/guides/company/) |
 | [Sign-in display](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/sign-in-display) | What a page gets of a `PapSignIn` display, and what a model is told | [Device Sign-In](/guides/device-sign-in/) |
 | [Telemetry](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/telemetry) | One allowlisted event per protocol stage | [Telemetry](/guides/telemetry/) |
@@ -51,7 +58,7 @@ reference company in `personal_agent_protocol.demo`: real keys and real HTTP
 over ASGI in one process, with no network. The two journeys at the end of the
 table combine several features; each other page showcases one. Production hosts replace those
 fixtures through Reactor contributions for egress, state, browsers, signing,
-DPoP, key custody, and token storage.
+delegated key custody, and token storage.
 
 ## Two implementations, one boundary
 
@@ -66,11 +73,11 @@ flowchart LR
   subgraph HOST["Host code and Reactor contributions"]
     direction TB
     T["PAP capability<br/>DiscoveryClient, SessionClient, ..."]
-    S["Signer, DPoP provider,<br/>token store, browser"]
+    S["Signer, Session signer,<br/>token store, browser"]
     T --- S
   end
   CO["Company"]
-  HOST -- "assertions, proofs, tokens" --> CO
+  HOST -- "assertions, Session JWTs, tokens" --> CO
   CO -- "verified responses" --> HOST
   HOST -. "summary: status, scopes, booleans" .-> M
 ```
@@ -144,5 +151,5 @@ summary.
 Direct Sign-In is a separate authorization-gateway workflow. Studio starts it
 through a trusted Preview browser handoff, keeps PKCE and one-use state in host
 storage, and returns only status or an opaque connection reference to the
-application. Browser callbacks, proofs, credentials, and tokens are never agent
+application. Browser callbacks, Session JWTs, credentials, and tokens are never agent
 tool arguments or results.

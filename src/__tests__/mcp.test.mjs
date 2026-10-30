@@ -127,10 +127,21 @@ test("the company advertises its MCP server and its issuer", async () => {
   // Tokens are Bearer tokens: nothing here speaks of DPoP (§4.5).
   assert.equal("dpop_signing_alg_values_supported" in metadata, false);
 
-  // No Session header is `invalid_session`, as at any resource (§5.3).
+  // A client with no Session header and no token gets where to read the metadata (§7).
   const bare = await w.fetch(MCP, { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"jsonrpc":"2.0","id":1,"method":"ping"}' });
-  assert.equal(bare.status, 400);
-  assert.equal((await bare.json()).error, "invalid_session");
+  assert.equal(bare.status, 401);
+  assert.match(bare.headers.get("www-authenticate"), /resource_metadata=/);
+  assert.doesNotMatch(bare.headers.get("www-authenticate"), /error=/);
+
+  // An invented token is `invalid_token`, whatever else the request lacks (§7).
+  const invented = await w.fetch(MCP, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer invented" },
+    body: '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+  });
+  assert.equal(invented.status, 401);
+  assert.match(invented.headers.get("www-authenticate"), /error="invalid_token"/);
+  assert.match(invented.headers.get("www-authenticate"), /resource_metadata=/);
 
   // A token not issued for the server: one Bearer challenge with `resource_metadata` (§7).
   const { session: mine, token } = await signedIn(w);

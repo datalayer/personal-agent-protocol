@@ -2139,6 +2139,14 @@ export class CompanyService {
    * alone; a token issued for another resource is `invalid_token` with `resource_metadata`.
    */
   async #mcpCaller(request: CompanyRequest): Promise<CallerSession | CompanyResponse> {
+    // An invented token is `invalid_token`, and a request with neither token nor Session
+    // header gets the challenge: where a client finds how to sign in (§7). Only a token this
+    // company issued, without the header, is `invalid_session` (§5.3).
+    if (!request.headers[SESSION_HEADER]) {
+      const presented = (request.headers.authorization ?? "").split(" ")[1];
+      if (!presented) return this.#mcpRefusal(401, SIGNED_OUT);
+      if ((await this.#accessToken(presented)) === undefined) return this.#mcpRefusal(401, "invalid_token");
+    }
     let session: CallerSession;
     try {
       [, session] = await this.#caller(request, this.config.mcpUrl);
@@ -3687,15 +3695,11 @@ export class CompanyService {
   /**
    * Step 3 (§6): the browser submits the code with step 1's cookie: the Session's cookie.
    *
-   * A code is used by the first request that submits it, whatever the result; one not
-   * authorized in step 2 sets no cookie.
+   * A code is used by the first request that submits it, whatever the result. A refusal
+   * sets no cookie, not even a cleared one.
    */
   async #browserSession(request: CompanyRequest): Promise<CompanyResponse> {
-    const refused = page(
-      400,
-      "This browser could not join the session.",
-      `${JOIN_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`,
-    );
+    const refused = page(400, "This browser could not join the session.");
     const code = pairs(text(request.body)).code ?? "";
     const browser = cookie(request, JOIN_COOKIE);
     const issued = code

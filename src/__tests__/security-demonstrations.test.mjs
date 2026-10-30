@@ -436,6 +436,15 @@ test("§10.6: an attacker's code, authorized in its own browser, joins nobody el
   const code = codeOf(await attackersBrowser.get(BROWSER_SESSION));
   assert.equal((await authorize(w, attacker, code)).status, 204);
 
+  // A refused form sets no cookie, not even a cleared one (§6).
+  const cookieless = await w.fetch(BROWSER_SESSION, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "code=bc_never_issued",
+  });
+  assert.equal(cookieless.status, 400);
+  assert.deepEqual(cookieless.headers.getSetCookie(), []);
+
   // The victim's browser has no join cookie: the code alone joins nothing.
   const victim = new ControlledBrowser(w.network);
   const forged = await victim.postForm(BROWSER_SESSION, { code });

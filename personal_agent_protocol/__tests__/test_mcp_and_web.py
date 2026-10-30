@@ -101,10 +101,21 @@ async def test_the_company_advertises_its_mcp_server_and_its_issuer() -> None:
     # Tokens are Bearer tokens: nothing here speaks of DPoP (§4.5).
     assert "dpop_signing_alg_values_supported" not in metadata
 
-    # No Session header is `invalid_session`, as at any resource (§5.3).
+    # A client with no Session header and no token gets where to read the metadata (§7).
     unauthenticated = await world.http.post(MCP, json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
-    assert unauthenticated.status_code == 400
-    assert unauthenticated.json()["error"] == "invalid_session"
+    assert unauthenticated.status_code == 401
+    assert "resource_metadata=" in unauthenticated.headers["www-authenticate"]
+    assert "error=" not in unauthenticated.headers["www-authenticate"]
+
+    # An invented token is `invalid_token`, whatever else the request lacks (§7).
+    invented = await world.http.post(
+        MCP,
+        json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        headers={"Authorization": "Bearer invented"},
+    )
+    assert invented.status_code == 401
+    assert 'error="invalid_token"' in invented.headers["www-authenticate"]
+    assert "resource_metadata=" in invented.headers["www-authenticate"]
 
     # A token not issued for the server: one Bearer challenge with `resource_metadata` (§7).
     token, _ = await signed_in_with_reference(world)
@@ -444,7 +455,7 @@ async def test_a_join_needs_its_own_browser_its_code_once_and_a_live_session() -
     browser, code = await _join_form(world)
     unauthorized = await browser.post(BROWSER_SESSION, data={"code": code})
     assert unauthorized.status_code == 400
-    assert "__Host-poppy_session" not in unauthorized.headers.get("set-cookie", "")
+    assert "set-cookie" not in unauthorized.headers  # no cookie, not even a cleared one (§6)
 
     # A code that was never issued can't be authorized.
     assert (await _authorize(world, session, "bc_" + "x" * 22)).json()["error"] == (

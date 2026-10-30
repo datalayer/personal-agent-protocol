@@ -3329,9 +3329,17 @@ class CompanyService:
 
         The reference MCP server accepts the Session header, so signed-out calls carry
         it alone; a token issued for another resource is `invalid_token` with
-        `resource_metadata`.
+        `resource_metadata`. So is an invented one, and a request with neither token nor
+        Session header gets the challenge: where a client finds how to sign in (§7). Only
+        a token this company issued, without the header, is `invalid_session` (§5.3).
         """
 
+        if not request.headers.get(SESSION_HEADER):
+            _, _, presented = request.headers.get("authorization", "").partition(" ")
+            if not presented:
+                return self._mcp_refusal(401, "")
+            if await self._access_token(presented) is None:
+                return self._mcp_refusal(401, "invalid_token")
         try:
             _, session = await self._caller(request, resource=self.config.mcp_url)
         except _RateLimitedError:
@@ -3558,19 +3566,11 @@ class CompanyService:
     async def _browser_session(self, request: CompanyRequest) -> CompanyResponse:
         """Step 3 (§6): the browser submits the code with step 1's cookie: the Session's cookie.
 
-        A code is used by the first request that submits it, whatever the result; one
-        not authorized in step 2 sets no cookie.
+        A code is used by the first request that submits it, whatever the result. A
+        refusal sets no cookie, not even a cleared one.
         """
 
-        refused = replace(
-            self._page(400, "This browser could not join the session."),
-            headers={
-                **self._page(400, "").headers,
-                "Set-Cookie": (
-                    f"{JOIN_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict"
-                ),
-            },
-        )
+        refused = self._page(400, "This browser could not join the session.")
         form = dict(parse_qsl(request.body.decode()))
         code, browser = form.get("code", ""), _cookie(request, JOIN_COOKIE)
         taken = await self.store.take(JOIN_CODE, _digest(code)) if code else None

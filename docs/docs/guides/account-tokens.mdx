@@ -1,12 +1,12 @@
 ---
-title: Account Tokens
+title: Refresh tokens
 ---
 
-# Account Tokens
+# Refresh tokens
 
-A Direct, Device, or Mediated Sign-In returns an Account Token: the OAuth
+A Direct, Device, or Mediated Sign-In returns a refresh token: the OAuth
 `refresh_token` that keeps the user signed in after the short-lived access
-token expires (PAP draft 0.3 §4.8, §4.9). It is the most valuable credential a
+token expires (PAP draft 0.3 §4.4, §4.5). It is the most valuable credential a
 personal agent holds for a user, so the SDK never hands it to a caller. It is
 written straight into the Reactor `pap.tokenStore` by the sign-in client and
 used only at the company's `token_endpoint` and `revocation_endpoint`.
@@ -55,7 +55,7 @@ signed in by carrying that token. A `DPoP` token type is
 
 ## Rotation is serialized
 
-A company may rotate the Account Token on every refresh, and a rotated token
+A company may rotate the refresh token on every refresh, and a rotated token
 invalidates the one it replaces. Two refreshes racing on the same reference
 would leave one holding a revoked credential. Every use of a reference is
 therefore held under the Reactor `pap.refreshTokenLock` contribution
@@ -69,35 +69,30 @@ for one process; a host with several workers contributes a distributed lock.
 returns that was not requested is `scope_escalation`. Asking for more than the
 token holds draws the company's `invalid_scope`, reported as
 `re_consent_required`: the user decides on wider access by signing in again,
-and the SDK does not retry.
+and the SDK does not retry. `token_for_mcp` (`tokenForMcp`) is a refresh with
+`resource` set to an MCP server's `url`.
 
 ## Expiry and revocation
 
-- `invalid_grant` with a new Session Key: the Account Token has expired, been
-  revoked, or been rotated away. The stored copy is deleted and the user stays
-  signed out (`signed_out`).
-- `invalid_grant` with an existing Session's key can also mean the Session has
-  ended. The SDK tells them apart by renewing the Session with its assertion:
-  refused there, the Session has ended, its key is discarded, and the result is
-  `session_ended` (the Account Token is kept: refresh without `session_key` to
-  start a new Session); accepted, the Account Token is what ended, its copy is
-  deleted, and the Session continues signed out (`signed_out`, with the renewed
-  signed-out token).
-- `revoke()` sends an RFC 7009 revocation, without DPoP, with
-  `token_type_hint=refresh_token`. The company signs out every Session signed
-  in with the token and should invalidate the Session Tokens issued under that
-  sign-in, so sign-out takes effect at once (RFC 7009 §2.1); those Sessions
-  usually continue signed out. The local copy is deleted **only after** the company has
-  answered; a refused revocation keeps it so the host can retry, because a
-  token the user believes revoked must be.
+- `invalid_grant`: the refresh token has expired, been revoked, or been rotated
+  away. The stored copy is deleted and the result is `signed_out`. The Sessions
+  continue signed out, sending the Session header alone.
+- `revoke()` sends an RFC 7009 revocation, with a client assertion and
+  `token_type_hint=refresh_token`. The local copy is deleted **only after** the
+  company has answered; a refused revocation keeps it so the host can retry,
+  because a token the user believes revoked must be.
+- `sign_out()` (`signOut`) revokes every refresh token held for the account, the
+  protocol's sign-out: the account is signed out once none is valid, and its
+  Sessions continue signed out (§5.5). What happens to access tokens already
+  issued follows RFC 7009 §2.1; the reference companies stop them at once.
 
 ## Security boundary
 
-- The Account Token never reaches a model, a conversation, a URL, a log, or an
+- The refresh token never reaches a model, a conversation, a URL, a log, or an
   error: errors carry the company's error code, never a response body.
 - Store tokens encrypted and tenant-isolated; the SDK ships no default
   `pap.tokenStore`.
 - Sign-out in the product revokes, then deletes.
 
-See the runnable [Account Tokens example](/examples/account-tokens/) and the
-upstream [Account Tokens specification](https://personalagentprotocol.org/docs/0.3/spec#account-tokens).
+See the runnable [refresh tokens example](/examples/account-tokens/) and the
+upstream [refresh tokens specification](https://personalagentprotocol.org/docs/0.3/spec#refresh-tokens).

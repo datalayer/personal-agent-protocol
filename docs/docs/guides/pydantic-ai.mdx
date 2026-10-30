@@ -45,15 +45,15 @@ python scripts/validate_pydantic_ai_examples.py
 ```
 
 The company and identity tools may return only verified public summaries. The
-Session, Direct Sign-In, and DPoP tools create real cryptographic material
+Session, Direct Sign-In, and Session JWT tools create real cryptographic material
 internally but return policy status only. Pairwise subjects, `jti`, assertions,
-authorization URLs, OAuth state, PKCE verifiers, proofs, nonces, key material,
+authorization URLs, OAuth state, PKCE verifiers, Session JWTs, key material,
 and tokens never enter the prompt, tool result, or transcript.
 
 Use `direct-sign-in-boundary` when learning how an authorization request is
 constructed. Use `direct-sign-in-lifecycle` when integrating the complete
 asynchronous flow: it installs Reactor contributions for one-use state,
-trusted browser handoff, signing, and DPoP; upgrades an existing Session; and
+trusted browser handoff, and signing; signs in an existing Session; and
 proves that replayed callback state is rejected. The callback is synthesized
 inside host code because callback URLs and authorization codes are never valid
 model inputs.

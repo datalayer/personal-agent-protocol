@@ -95,7 +95,8 @@ a new revision: never the one named, so a retry can't loop. `send` reports it as
 
 `send` keeps the same approval after a failure, a timeout, or a `503`, waiting for
 `Retry-After`. The company answers a repeat with the original response, and `503`
-with `Retry-After` while the action is being performed or its outcome isn't known.
+with `Retry-After` while the action is being performed or its outcome isn't known
+(`Retry-After: 5` at the reference companies).
 
 When a retry gets a new operation, or no answer comes in the end, `sent.status`
 is `unknown`. Don't ask the user to approve the same action again until you know
@@ -103,13 +104,19 @@ whether the first was performed: find out another way, such as from the order in
 the company's API. An `Idempotency-Key` doesn't carry over to the request with
 the approval.
 
+An action that fails partway answers `action_failed`. An API call raises an
+`ApiError` whose `body` holds what the company said: its `summary` of every change
+made and its `data`. That is content from the company, for the host to show;
+`str(error)` never carries it.
+
 ## For a company
 
 An API or tool returns `ApiResult(operation=ProposedOperation(...))` or
 `ToolResult(operation=...)`, and a `CompanyAgent` a `Reply(operation=...)`, without
 acting. `action` names the `pap.company.operationExecutor` that performs it, and
 with `subject`, what it is done to: requests for the same action and subject are
-one operation.
+one operation. `ApiCall.carries_approval` (`carriesApproval` in TypeScript) tells
+an API a retry from a first ask.
 
 The service does the rest, in the extension's order: the Session can approve it,
 it hasn't been performed already, and the revision is one it returned, unexpired,
@@ -157,7 +164,7 @@ said = display.text()        # what a page without a renderer, a transcript and 
   (`inert_summary`): a page shows `summary` as text too, with at most emphasis,
   paragraphs and lists.
 - The Session is a one-way reference (`PapSessionShown.of`: 12 hex digits of
-  the SHA-256 of its Session Key), never the key or a token, and only the page sees even
+  the SHA-256 of the Session's ID), never the ID or a token, and only the page sees even
   that: `model_view()` tells a model the company's words, the terms, what it
   does, the revision and whether the person is signed in there.
 - The buttons are the host's own. Approving still goes through the host's

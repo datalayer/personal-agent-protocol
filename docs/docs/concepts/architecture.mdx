@@ -22,7 +22,7 @@ flowchart LR
   App[Application] --> SDK[PAP protocol core]
   SDK --> Transport[Discovery transport]
   SDK --> Safety[URL safety policy]
-  SDK --> Keys[Signer and DPoP proofs]
+  SDK --> Keys[Signer and Session signer]
   SDK --> Stores[Token, state and pairwise stores]
   Transport & Safety & Keys & Stores --> Reactor[Datalayer Reactor]
 ```
@@ -42,7 +42,8 @@ assemble a host with safe defaults.
 
 A **PAP extension** is negotiated on the wire by name and major version. A
 **Reactor extension** packages plugins and manages their lifecycle. The SDK
-implements one PAP extension, Operations version 1; see
+implements two PAP extensions, Operations version 2 and Mediated Sign-In version
+1; see
 [Extensions](/guides/extensions/).
 
 Plugins cannot turn off domain/issuer binding, secret redaction, token/resource

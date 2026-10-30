@@ -5,19 +5,15 @@ title: Direct Sign-In
 # Direct Sign-In
 
 Both SDKs implement safe Direct Sign-In primitives: random OAuth state, RFC
-7636 S256 PKCE, authorization URL construction with `dpop_jkt`, callback state
+7636 S256 PKCE, authorization URL construction, callback state
 and issuer validation, and a redacted authorization-code exchange grant. Both also
 implement the complete personal-agent orchestration through
 `DirectSignInClient`.
 
-Direct Sign-In is the OAuth 2.0 authorization code flow with PKCE, plus one
-thing: the code is bound to the Session Key (§4.5). The authorization URL
-carries `dpop_jkt`, the Session Key's thumbprint
-([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449) §10), so the company knows
-which Session to sign in, and only a DPoP proof made with that key can redeem
-the code: a code taken from the redirect is useless with any other key. A
-company that uses pushed authorization requests gets the same binding from the
-PAR request's DPoP proof.
+Direct Sign-In is the OAuth 2.0 authorization code flow with PKCE (§4.2). It
+names no Session: a Session is signed in by carrying the access token it gives. A
+code taken from the redirect is useless without the PKCE verifier and the agent's
+client assertion.
 
 :::caution Host services remain mandatory
 
@@ -67,7 +63,7 @@ Session is signed in by carrying it. Extra scopes are rejected; omitted scopes
 are returned in `missing_scopes` so the application can continue with reduced
 authority or ask the user what to do. If the response includes a refresh token,
 `complete()` moves it into the Reactor `pap.tokenStore` contribution behind an
-opaque `refresh_…` reference before returning (§4.8): the result's `token` never
+opaque `refresh_…` reference before returning (§4.4): the result's `token` never
 carries it, and `refresh_token_reference` names it. Refresh, narrowing, and
 revocation take that reference (`RefreshTokenClient`), exactly as after Device
 and Mediated Sign-In.
@@ -128,17 +124,13 @@ The lifecycle has two asynchronous halves separated by user action:
 
 | Stage | Host responsibility | Safe application-visible state |
 | --- | --- | --- |
-| 1. Begin | Create random state and S256 PKCE; put the Session Key's thumbprint in `dpop_jkt`; persist the pending request with an expiry | `waiting_for_user`, requested scopes, expiry |
+| 1. Begin | Create random state and S256 PKCE; persist the pending request with an expiry | `waiting_for_user`, requested scopes, expiry |
 | 2. Handoff | Open the authorization URL in a user-owned browser | Browser opened |
 | 3. Callback | Atomically consume state; verify the exact redirect and issuer | `callback_accepted` or a safe error code |
-| 4. Exchange | Redeem the code with a fresh client assertion and a DPoP proof by the Session Key it is bound to | Granted and missing scopes |
-| 5. Continue | Store credentials behind opaque references and resume the same conversation | `signed_in`, the same Session Key |
+| 4. Exchange | Redeem the code with a fresh client assertion and the PKCE verifier | Granted and missing scopes |
+| 5. Continue | Store credentials behind opaque references and resume the same conversation | `signed_in`, the same `sid` |
 
-A `use_dpop_nonce` response repeats only stage 4. The SDK keeps the original
-authorization code and PKCE verifier for that retry, but creates a fresh
-client assertion and fresh proof carrying the company's nonce. It retries at
-most once. The state was already consumed, so a second callback cannot start
-another exchange.
+Stage 3 consumes the state, so a second callback cannot start another exchange.
 
 Two paired runnable examples exercise these invariants against a deterministic
 local company endpoint without contacting an identity provider:

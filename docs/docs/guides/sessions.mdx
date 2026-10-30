@@ -2,7 +2,7 @@
 title: Signed-out sessions
 ---
 
-# Start and renew signed-out sessions
+# Start signed-out sessions
 
 The runnable
 [`session-lifecycle` Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/session-lifecycle)
@@ -11,51 +11,59 @@ one restart after `invalid_session` over a deterministic local HTTP transport. I
 returns only lifecycle evidence to the model; identifiers and credentials remain
 inside the host.
 
-The Python and TypeScript `SessionClient` implementations cover the PAP 4.2
-personal-agent side of signed-out session creation and renewal. They send the
-JWT bearer grant to the company's token endpoint and return an opaque,
-proof-bound session token.
+The Python and TypeScript `SessionClient` implementations cover the
+personal-agent side of starting a Session (PAP §5). A Session needs nothing from
+the company's authorization server: `start` makes a `PapSession` locally and
+sends no request.
 
-## Session Keys name Sessions
+## A random `sid` names a Session
 
-Each Session has its own DPoP key, the Session Key. Starting a Session makes a
-new one; its JWK thumbprint ([RFC 7638](https://www.rfc-editor.org/rfc/rfc7638))
-is what names the Session, at the company and in the SDK (`token.session_key`,
-`token.sessionKey`). No Session ID is sent, read, or stored: the company
-recognises the Session by the key that signs each request's DPoP proof.
+The personal agent chooses each Session's `sid`: at least 128 random bits, in
+URL-safe characters. `PapSession` keeps it with `sub` (the User ID), the optional
+`agent_id`, `issuer`, `client_id`, and `tenant_id`; its `handle`, `ses_` and the
+`sid`, is its name for a person or a CLI.
 
-- **Start** (`start`): a new Session Key, the JWT bearer grant, a signed-out
-  Session.
-- **Renew** (`renew`): a fresh assertion, proved with the same Session Key.
-  The renewed token is for the same Session. Earlier tokens of the Session keep
-  working until they expire; each reflects the Session as it was when issued,
-  since several tasks can share one Session (§4.4).
-- **Ended**: when the company answers `invalid_grant` for a Session Key, the
-  Session has ended. The SDK discards that key and never uses it again; start a
-  new Session, with a new key.
+Every request to a company's APIs, conversations, feedback, browser-session
+`/authorize`, MCP, and extension endpoints carries a Session JWT in the
+`Poppy-Session` header, signed for that one request. OAuth endpoints and web
+pages get none. The company keeps Sessions by `client_id` and `sid`, and learns of
+a new one from the first request that names it.
 
-The token response carries no Session ID and no `signed_in`. `SessionToken`
-keeps `session_key` and `signed_in` as local fields, filled from the grant: the
-JWT bearer grant gives a signed-out Session, a sign-in or an Account Token a
-signed-in one. A signed-out response's absent `scope` means no scopes.
+- **Start** (`start`): a new `sid`, and no request.
+- **Signed in**: sign-in names no Session. A request is signed in when it carries
+  an access token beside the Session header, with that token's account and
+  scopes, so one sign-in can serve several Sessions (§5.4).
+- **Ended**: a company answers `invalid_session` (HTTP 400) when a Session header
+  fails a check or names a Session it ended. `SessionHttpClient` and
+  `SessionFetchClient` then start a new Session once (`session.restart()`: a new
+  `sid`, the same User ID and Agent ID) and send the request again; a second
+  refusal goes to the caller. To end a Session yourself, stop using its `sid`. Its
+  refresh tokens are unaffected.
+
+Sign-in and refresh are plain OAuth and give an `AccessToken`: `access_token`, a
+`Bearer` `token_type`, `expires_in`, `scope`, and `resource` when it was issued
+for one service. A `DPoP` token type is refused (`unsupported_token_type`): the
+specification says a personal agent SHOULD support DPoP, and these SDKs don't send
+DPoP proofs yet.
 
 A personal agent that acts for a user through several agents MAY name which one
 a Session is for with an Agent ID (`agent_id`, `agentId`). It follows the same
 rules as the User ID: stable, opaque, different for each company, never derived
-from personal information. A Session keeps the Agent ID it started with, so
-`renew` must pass the same one, or none.
+from personal information. A Session keeps the Agent ID it started with, and a
+restart keeps it too.
 
-The client is intentionally not a key-management system. Before calling it,
-the host must register exactly one active `pap.signer` and
-`pap.dpopProofProvider` contribution in its Reactor platform. Those providers
-must keep private keys in protected custody and return only compact signed
-values. The DPoP provider makes Session Keys (`new_session_key`), signs with
-the one a thumbprint names, and forgets a discarded one
-(`discard_session_key`); `JoseDpopProofProvider` over `InMemorySessionKeys` is
-the reference, and a host supplies its own `SessionKeyCustody` for durable,
+The client is intentionally not a key-management system. Before sending requests,
+the host must register exactly one active `pap.signer` and `pap.sessionSigner`
+contribution in its Reactor platform. Those providers must keep private keys in
+protected custody and return only compact signed values. `DelegatedSessionSigner`
+is the reference session signer: one delegated P-256 key per tenant, issuer, and
+User ID, never shared across User IDs, with a delegation of at most 24 hours from
+the `pap.signer` key in the agent's `jwks_uri`. It rotates the key before the
+delegation expires and never signs past it. `InMemoryDelegatedKeys` is the
+in-memory custody, and a host supplies its own `DelegatedKeyCustody` for durable,
 protected keys. Missing or equal-priority providers fail closed.
 
-The pairwise user ID is the User ID of §4.2: a pairwise subject identifier, as
+The pairwise user ID is the User ID of §5.1: a pairwise subject identifier, as
 in OpenID Connect Core §8, except that the personal agent assigns it, one for
 each pair of user and company. It is not a profile identifier, must not contain
 or be derived from personal information (not even through a keyed hash), and
@@ -118,19 +126,20 @@ carries a Session JWT from `pap.sessionSigner` (`SessionSigners` in TypeScript).
 
 ## Enforced request boundary
 
-For each attempt, the client:
+For each attempt, the transport (`SessionHttpClient`, `SessionFetchClient`):
 
-- creates fresh session and private-key JWT claims using Reactor time and
-  cryptographic randomness;
-- signs both assertions through `pap.signer`;
-- creates a fresh proof through `pap.dpopProofProvider`, signed with the
-  Session's own key;
-- sends a form-encoded POST without browser credentials or redirects;
-- accepts only bounded `application/json` responses parsed with duplicate
-  member rejection;
-- requires a `DPoP` token from a proof-bound request; and
-- retries `use_dpop_nonce` once with fresh assertions and a fresh proof; and
-- on `invalid_grant` for an existing Session, discards its Session Key.
+- asks `pap.sessionSigner` for a fresh Session JWT, bound to the request's method
+  and URL, the company's issuer, and the access token's hash (`ath`) when one is
+  sent;
+- sends it in `Poppy-Session`, with any access token in `Authorization`, and
+  refuses every redirect;
+- rejects a caller-supplied `Authorization`, `DPoP`, or `Poppy-Session` header; and
+- on `invalid_session`, starts a new Session once and sends the request again.
+
+Each token request gets a fresh client assertion from `pap.signer` and no Session
+header. It is a form-encoded POST without browser credentials or redirects, and
+accepts only bounded `application/json` responses parsed with duplicate member
+rejection.
 
 Remote error descriptions and response bodies are not copied into public
 errors. The stable OAuth error code, HTTP status, and optional `Retry-After`
@@ -138,11 +147,12 @@ value remain available for policy and retry decisions.
 
 ## Deliberate limits
 
-The SDK ships JOSE signing plus DPoP creation and verification, but it does not
-ship managed key custody, a durable replay cache, or a company-side token
+The SDK ships JOSE signing plus Session JWT creation and verification, but it
+does not ship managed key custody, a durable replay cache, or a company-side token
 service. An application must supply those host capabilities before using real
-credentials. Direct, Device, and Mediated Sign-In happen after this signed-out
-Session and sign in that same Session: same Session Key, same conversations.
+credentials. Direct, Device, and Mediated Sign-In name no Session, so they can
+happen at any time after one starts: the same `sid` and the same conversations
+continue, signed in once requests carry the access token.
 
 Python includes `SqlitePairwiseUserIdStore` as a file-backed, atomic reference
 implementation for local deployments and tests. It rejects in-memory SQLite so
@@ -150,6 +160,6 @@ the mapping cannot disappear on restart. Distributed production hosts should
 contribute a transactional database implementation; Datalayer maps `tenant_id`
 to the stable application identity and owns retention and erasure in IAM.
 
-See the upstream [session specification](https://personalagentprotocol.org/docs/0.3/spec#starting-sessions)
+See the upstream [session specification](https://personalagentprotocol.org/docs/0.3/spec#sessions)
 and the local [protocol status](/protocol/status/) for the current coverage
 boundary.

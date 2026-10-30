@@ -41,12 +41,12 @@ Every point, its contract, default, and tenant scope is in
 [Contribution points](/concepts/contribution-points/)).
 
 Lower contribution order wins. Equal winning priorities fail closed. Plugins
-cannot disable issuer/domain binding, redaction, proof freshness,
+cannot disable issuer/domain binding, redaction, Session JWT freshness,
 token/resource binding, replay protection, or exact-revision approval.
 
 Python and TypeScript export the same point IDs and contracts. The core plugin
 provides the clock, random source, metadata transport and URL policy, cache,
-Account Token lock, retry policy, and rate-limit budget. Signing, DPoP proofs,
+refresh token lock, retry policy, and rate-limit budget. Signing, Session JWTs,
 tokens, sign-in state, pairwise IDs, browser handoff, and protected input
 intentionally have no fallback: a caller that needs one and has no active
 provider fails closed. Tests cover, for every point, its default, a host

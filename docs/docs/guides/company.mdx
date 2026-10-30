@@ -51,46 +51,49 @@ interfaces that are deployed and authorized consistently.
 }
 ```
 
-The issuer's OAuth metadata (RFC 8414) must list `https://{domain}` in
+The domain's protected resource metadata, at
+`/.well-known/oauth-protected-resource`, names the issuer: its `resource` is
+exactly `https://{domain}`, and `authorization_servers` lists the issuer. The
+issuer's OAuth metadata (RFC 8414) must list `https://{domain}` in
 `protected_resources`, alongside the other resources its tokens are for (an
-MCP server's URL, say), and `grant_types_supported` must include the JWT
-bearer and `refresh_token` grants. Which sign-in modes the company offers
+MCP server's URL, say), and `grant_types_supported` must include the
+`refresh_token` grant. Which sign-in modes the company offers
 comes from that metadata too: Direct Sign-In when it has an
-`authorization_endpoint` and the authorization code grant, Device Sign-In when
-it has a `device_authorization_endpoint` and the device code grant, Token
-Exchange when it lists that grant. The `mediated-sign-in` extension in
-`poppy.json`, with its grant type in `grant_types_supported`, offers Mediated
-Sign-In.
+`authorization_endpoint` and the authorization code grant, and Device Sign-In when
+it has a `device_authorization_endpoint` and the device code grant. The
+`mediated-sign-in` extension in `poppy.json`, with its grant type in
+`grant_types_supported`, offers Mediated Sign-In.
 
 Scopes are the company's own: name them for what they allow (`orders:read`,
 `payments:write`), describe each in `auth.scopes` (or in an OpenAPI
 description the company lists), and list them in the metadata's
-`scopes_supported`. The `poppy:` prefix is reserved for the protocol: never
-name a scope with it. `auth.scope_hints` says, per scope, what its most
+`scopes_supported`. `auth.scope_hints` says, per scope, what its most
 consequential operation `changes` (`none`, `reversible`, `irreversible`) and
 whether it touches `personal_data`, so a personal agent can choose the
 narrowest scopes a task needs. Tasks the company chose not to offer through
-the protocol are listed at `excluded_tasks.url` (§8.1), each with an optional
+the protocol are listed at `excluded_tasks.url` (§9.1), each with an optional
 alternative.
 
 Keep endpoint authorization in application code or a gateway; never ask a
 model to enforce scopes. A request whose token lacks a scope gets
 `insufficient_scope` with the `scope` it needs, on APIs (`WWW-Authenticate`),
-in a conversation's `authorization` event, and on Operations.
+in a conversation's `authorization` event, and on Operations. A signed-out
+request for account data gets a `401` challenge with the same `scope`.
 
 ## Implement in this order
 
 1. Publish discovery and OAuth metadata with ordinary signed-out access.
-2. Verify personal-agent client metadata, public keys, assertions, and replay
-   IDs.
-3. Issue short-lived DPoP-bound session tokens.
-4. Add direct sign-in and central scope enforcement.
+2. Verify personal-agent client metadata, public keys, delegations, Session JWTs,
+   and replay IDs, and keep Sessions by `client_id` and `sid`.
+3. Add Direct Sign-In with client assertions, issuing short-lived access tokens
+   and refresh tokens.
+4. Add central scope enforcement.
 5. Expose structured APIs or a company-agent conversation endpoint.
 6. Add Operations when actions require exact, durable approval.
 
 ## Required operational controls
 
-- One distributed replay cache for assertion and DPoP identifiers: the
+- One distributed replay cache for assertion and Session JWT identifiers: the
   default keeps them in the company store, so a store shared by every replica
   is enough.
 - Rate limits by personal-agent client, user, session, and account as relevant.
@@ -107,7 +110,7 @@ in a conversation's `authorization` event, and on Operations.
   locked or recovered: a directory that also answers `signed_out_before(account_id)`
   (`AccountSignOuts`; TypeScript: `signedOutBefore`) is asked on each signed-in
   request, and a sign-in from before that moment is refused and revoked whole —
-  its Account Tokens, and the Sessions signed in with them continuing signed out —
+  its refresh tokens, and the Sessions that used them continuing signed out —
   while a sign-in after it works.
 - Identical authorization semantics across APIs, conversations, browser
   sessions, company-agent tools, and human-support tools.
@@ -143,38 +146,32 @@ app = company_app(service)  # any ASGI server, or httpx.ASGITransport in tests
 `CompanyService.handle()` takes a neutral request and returns a neutral
 response, so any web framework can serve it; `company_app()` serves it over
 plain ASGI and rebuilds each request URL on the company's published origin so
-DPoP `htu` checks compare against what the personal agent signed. It
+Session JWT `htu` checks compare against what the personal agent signed. It
 implements, of draft 0.3 and Operations v2:
 
 - discovery (`/.well-known/poppy.json`) and OAuth metadata on one issuer,
   with `protected_resources`, `grant_types_supported`, `scopes_supported`,
   `auth.scopes` and `auth.scope_hints`;
-- Sessions named by their DPoP keys: a JWT bearer grant proved with a key the
-  company doesn't know starts a Session (verified client and Session
-  assertions), one proved with a known key renews it (same `client_id` and
-  User ID, else `invalid_grant`), and an ended Session's key is remembered and
-  refused with `invalid_grant` (`ended_session_memory`). A Session's earlier
-  tokens keep working until they expire: each reflects the Session as it was
-  when issued, so renewal and sign-in revoke none of them;
-- Direct Sign-In with the authorization code bound to the Session Key named
-  by `dpop_jkt` (the exchange's proof must use that key), and loopback
-  redirect URIs matched whatever their port;
-- Device Sign-In with `authorization_pending` and `slow_down`, the device
-  code bound to the first poll's key (`await approve_device()` stands for the
-  company's own approval page);
+- Sessions kept by `client_id` and `sid`: the Session header on every request,
+  verified in the specification's order (delegation, delegated key, claims,
+  access token). An unknown `sid` starts a signed-out Session, a known one must
+  keep its User ID and Agent ID, and an ended one is remembered
+  (`ended_session_memory`). Any failure is `invalid_session` (HTTP 400), and so is
+  a JWT signed directly by a `jwks_uri` key, with no delegation. An access token
+  without the Session header is refused;
+- Direct Sign-In, with loopback redirect URIs matched whatever their port;
+- Device Sign-In with `authorization_pending` and `slow_down`
+  (`await approve_device()` stands for the company's own approval page);
 - Mediated Sign-In with a one-time code, an attempt limit, and uniform
   failures;
-- Account Tokens rotated on every refresh, narrower scopes only, not bound to
-  a Session Key (a new key starts a new signed-in Session), `invalid_grant`
-  for expired, revoked, or rotated-away tokens, and revocation that signs out
-  every Session signed in with the token and invalidates the Session Tokens of
-  that sign-in;
-- Token Exchange, when the MCP server doesn't support DPoP (`mcp_dpop=False`):
-  a DPoP Session Token as `subject_token` and the MCP server's URL as
-  `resource` give a Bearer token for that server alone; a token of the wrong
-  type either way is `invalid_target`. With `mcp_dpop` (the default), the
-  server's protected resource metadata lists DPoP and agents ask for a DPoP
-  token with `resource`;
+- Bearer access tokens and refresh tokens rotated on every refresh, narrower
+  scopes only, `invalid_grant` for expired, revoked, or rotated-away tokens, and
+  revocation that ends the whole sign-in: its refresh and access tokens stop
+  working;
+- tokens for one service: a refresh with `resource` set to the MCP server's URL
+  gives an access token for that server alone, a `resource` the company doesn't
+  serve is `invalid_target`, and a token not issued for the server is
+  `invalid_token` with `resource_metadata`;
 - excluded tasks (`/poppy/excluded-tasks.json`) and feedback, answering a
   report about a task that can be done after all with its alternative
   (`feedback_answers`);
@@ -196,15 +193,15 @@ implements, of draft 0.3 and Operations v2:
   through `Poppy-Approval`, `_meta` or a message's `approval`, checked in the
   extension's order and performed at most once, a new revision answering a failed
   check, and `revise()` for new terms;
-- with `web` (`web=True`, `web: true` in TypeScript), the website (§5). A GET
+- with `web` (`web=True`, `web: true` in TypeScript), the website (§6). A GET
   of the browser-session endpoint answers a form with a one-time `code` (at
-  least 128 random bits, at most 60 seconds) and an empty `proof` field, tied
+  least 128 random bits, at most 60 seconds), tied
   to that browser by a `__Host-poppy_join` cookie (`SameSite=Strict`,
   `HttpOnly`, `Secure`), never cached, framed, or kept by its opener. The
-  agent's browser posts the code with a DPoP proof over it (`nonce` = the
-  code) signed with the Session Key; the company checks cookie and code (used
-  once, whatever the result), the proof, and that its key is an active
-  Session's (an unknown key is an error, never a new Session), then answers
+  agent authorizes the code at `{endpoint}/authorize` with the Session header
+  and, signed in, the access token (`204`). The browser then posts the code; the
+  company checks cookie and code (used once, whatever the result) and that the
+  agent authorized it, then answers
   `303` with its `__Host-poppy_session` cookie. `web_session(cookie)` tells the
   company's own pages which Session a browser stands for.
 
@@ -218,17 +215,17 @@ plugins contribute with a lower `order` to replace a default.
 | `pap.company.store` | `CompanyStore`: versioned JSON records by kind and key (below) | `MemoryCompanyStore` (one process) |
 | `pap.company.accounts` | `AccountDirectory`: `authenticate(credentials, context)` and `check_code` for Mediated Sign-In; `context` (`SignInContext`) names the agent and Session, and the directory must throttle its own checks too; optionally `AccountSignOuts.signed_out_before(account_id)`, since when the account's earlier sign-ins are over (a password reset) | None: the company contributes it |
 | `pap.company.agent` | `CompanyAgent.respond(turn)`: replies, `authorization` requests, operations to approve | None: the company contributes it |
-| `pap.company.operationExecutor` | `OperationExecutor.perform(operation, account_id)`, one per `action`; `operation_id` is the idempotency key | None: an unperformable operation stays `in_progress` |
+| `pap.company.operationExecutor` | `OperationExecutor.perform(operation, account_id)`, one per `action`; `operation_id` is the idempotency key | None: an unperformable operation stays `performing` |
 | `pap.company.clientPolicy` | `ClientPolicy.allows(client_id)` | `AllowEveryAgent` |
 | `pap.company.clientResolver` | Verified client metadata and JWKS for a `client_id` | `IdentityClientResolver` over HTTPS |
-| `pap.company.replayCache` | `mark_once(key)` for assertion and proof IDs | `StoreReplayCache`: an atomic `create` in `pap.company.store`, so a shared store is a shared cache |
+| `pap.company.replayCache` | `mark_once(key)` for assertion and Session JWT IDs | `StoreReplayCache`: an atomic `create` in `pap.company.store`, so a shared store is a shared cache |
 
 The PAP core points (`pap.clock`, `pap.randomSource`, and the rest) apply on
 the company side too.
 
 ### The store
 
-Everything the company remembers — Sessions and their tokens, Account Tokens
+Everything the company remembers — Sessions, access tokens, refresh tokens
 and the sign-ins they rotate from, pending device, Direct, and Mediated
 sign-ins, one-use codes, conversations and their events, message IDs,
 operations — is a JSON record in the `pap.company.store` contribution, by kind
@@ -259,21 +256,21 @@ of the atomic methods:
 - an API write's `Idempotency-Key` is held with `create` before the API runs,
   so a repeated key is answered once with the original response
   ([idempotency keys](/guides/operational-limits/#idempotency-keys-on-api-writes));
-- device approval and polling, Account Token rotation (the presented token is
+- device approval and polling, refresh token rotation (the presented token is
   claimed by exactly one refresh; reusing it is `invalid_grant`), revocation
   of a whole sign-in, Mediated attempt counting, conversation events and
-  status, and operation confirmation (one compare-and-set from `proposed` to
-  `in_progress`, whose winner alone calls the executor) use `replace`.
+  status, and operation approval (one compare-and-set from `open` to
+  `performing`, whose winner alone calls the executor) use `replace`.
 
 A company restarted, replaced, or rolled back over the same store continues
-every flow: a pending device sign-in can be approved, a rotated-away Account
-Token stays refused, an operation returned before is performed once after, and
+every flow: a pending device sign-in can be approved, a rotated-away refresh
+token stays refused, an operation returned before is performed once after, and
 an event cursor resumes where it was.
 
 A version that no longer offers a scope — rolled back to one without it, or
-narrowed — does not honour what was granted for it: a Session holding that
-scope is refused as `invalid_token`, so the personal agent starts a new
-Session within what is offered, and an Account Token refreshed for it is
+narrowed — does not honour what was granted for it: an access token holding
+that scope is refused as `invalid_token`, so the personal agent gets a new
+one within what is offered, and a refresh token refreshed for it is
 `invalid_scope` (the agent's client says `re_consent_required`), while a
 refresh asking only for scopes still offered succeeds with the same token.
 
@@ -322,7 +319,7 @@ to the kit as `now`.
 
 - Credentials sent to the mediated endpoint go to the account directory as
   `SecretStr` and are cleared after the check.
-- Account Tokens and device codes are stored as digests.
+- Refresh tokens and device codes are stored as digests.
 - A company agent receives a `Turn` with the account, scopes, and whether the
   conversation is direct; it never sees tokens.
 - Errors are generic codes that do not disclose whether another user's

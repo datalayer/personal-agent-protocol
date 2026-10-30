@@ -1,8 +1,8 @@
 ---
-title: JOSE and DPoP
+title: JOSE and Session JWTs
 ---
 
-# JOSE signing and DPoP proofs
+# JOSE signing and Session JWTs
 
 The runnable
 [`session-jwt` Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/session-jwt)
@@ -10,18 +10,25 @@ signs and verifies a Session JWT, rejects its replay, and exposes only boolean
 policy evidence to the model. It is the reference example for the host/model
 boundary described below.
 
-Both SDKs implement the asymmetric cryptographic operations needed by the
-current session slice:
+Both SDKs implement the asymmetric cryptographic operations of draft 0.3:
 
-- `JoseSigner` signs client and session assertions with ES256 or RS256;
-- `JoseDpopProofProvider` makes a Session Key for each Session and creates a
-  fresh RFC 9449 proof, signed with that Session's key, for each request; and
-- `verify_dpop_proof` / `verifyDpopProof` verify the signature, method, URL,
-  issuance window, nonce, access-token hash, and replay state.
+- `JoseSigner` signs client assertions and delegations with a key from
+  `jwks_uri`, with ES256 or PS384. Its `purpose` sets the header's `typ`: `JWT`
+  for a client assertion, `pap-delegation+jwt` for a delegation.
+- `DelegatedSessionSigner` (`pap.sessionSigner`) keeps one delegated P-256 key
+  per tenant, issuer and User ID, and signs a fresh Session JWT with it for each
+  request. The JWT is ES256 and carries its delegation in `pap_dlg`.
+- `BlindJoseSigner` is a `pap.signer` that signs client assertions and
+  delegations blindly (RFC 9474), so each is an ordinary PS384 signature.
+- `verify_session_jwt` / `verifySessionJwt` verify the delegation, then the
+  signature, the method, URL, issuance window, access-token hash and replay
+  state.
 
-ES256 is the default. RS256 is accepted for interoperability. Symmetric
-algorithms and `none` are rejected even if the underlying JOSE library supports
-them.
+ES256 is the default. PS384 is what blind signing produces. A company accepts
+both, and nothing else: RS256, symmetric algorithms and `none` are rejected even
+if the underlying JOSE library supports them.
+
+The SDKs send no DPoP proofs: see [DPoP](#dpop).
 
 In TypeScript, import device-side `DelegatedSessionSigner` and `BlindJoseSigner`
 from the portable package entry. Import `JoseSigner`, `verifySessionJwt`, and
@@ -32,54 +39,115 @@ custody.
 
 ## Key custody
 
-The local signers receive an asymmetric private key object. The DPoP provider
-keeps Session Keys in a `SessionKeyCustody` (`generate`, `get`, `discard`, by
-tenant, company issuer, and thumbprint): `new_session_key` (`newSessionKey`)
-makes one for a new Session and returns its RFC 7638 thumbprint, which names
-the Session; `create` signs with the key the request's `session_key` names,
-and an unknown or discarded thumbprint is `unknown_session_key`, never a
-stand-in key; `discard_session_key` forgets the key of a Session that has
-ended, which is never used again. `InMemorySessionKeys` is for tests and
-examples; a host contributes durable, protected custody. The protected header
-contains only the public JWK; a JWK with any private member is rejected.
+The local signers receive an asymmetric private key object. The signer keeps
+delegated keys in a `DelegatedKeyCustody` (`current`, `replace`, `forget`, by
+tenant, company issuer, and User ID). A User ID's key is made on first use with
+a delegation that lasts `delegation_lifetime` (`delegationLifetime`, one hour by
+default, at most 24 hours), and is replaced by a new key and delegation
+`rotate_before` (`rotateBefore`, five minutes by default) the delegation's
+expiry. A Session JWT is never signed after its delegation's `exp`.
+
+Each delegated key signs for one User ID only, so its thumbprint and its
+delegation's `jti` name one User at one Company. A delegation names no User and
+no Company. `InMemoryDelegatedKeys` is for tests and examples; a host contributes
+durable, protected custody. `cnf.jwk` holds only the public key; a JWK with any
+private member is rejected.
 
 For local development, an in-process private key is sufficient. TypeScript can
 also use a non-exportable Web Crypto key in trusted device code. Production
 hosts using an HSM, KMS, or another remote custody service should contribute
-their own Reactor signer and DPoP provider. Never place private JWKs, PEM
-values, proofs, assertions, or access tokens in configuration returned to a
+their own Reactor signer and delegated key custody. Never place private JWKs, PEM
+values, Session JWTs, assertions, or access tokens in configuration returned to a
 browser, logs, analytics, tool arguments, or model context.
+
+## Blind signing and what it gives up
+
+A key that signs blindly never sees what it signs. The device writes the JWT,
+draws its `jti`, blinds the signing input with
+RSABSSA-SHA384-PSS-Deterministic, and sends only the blinded message to a
+`BlindSigningKey`. It unblinds the answer into an ordinary PS384 signature, which
+any company verifies like another. The key holder never learns which company a
+client assertion names, and can't recognize a delegation it signed when a company
+shows it. `RsaBlindSigningKey` is a reference holder, with an RSA key of at least
+2048 bits (3072 suggested).
+
+The privacy has a price, which [spec 10.7](https://personalagentprotocol.org/docs/0.3/spec#delegated-key-security)
+states and a host has to accept before it turns this on:
+
+- **The signature stops meaning approval.** A key that signs blindly signs
+  whatever a device sends it, and a company accepts any client assertion or
+  delegation that verifies. So a device that can get blind signatures can get any
+  client assertion or delegation the agent could issue. The agent MUST NOT rely on
+  a signature to mean its own systems approved what was signed, for example to
+  limit delegation lifetimes or to stop a User.
+- **Both or neither.** For the same reason, an agent that signs blindly MUST sign
+  both its client assertions and its delegations blindly. One `BlindJoseSigner`
+  does both.
+- **Any User can authenticate as the agent.** A refresh token works only with a
+  client assertion from its client, and an access token only with a Session JWT
+  from its client. With blind signing any User of the agent can make either, so a
+  token stolen from one User works for any other User of the same agent. The same
+  holds whenever devices can get client assertions, blindly or not. Keep refresh
+  and access tokens on the User's device, protected like its other secrets.
+- **Signatures need a limit.** The key holder still sees when a User asks for a
+  signature, and has nothing else to go on. Limit how many signatures each User can
+  get, in the holder. The SDK's reference holder has no such limit.
+- **The `jti` carries the safety.** The deterministic variant adds no randomness to
+  the message, so it is safe only because the message holds a value the signer
+  can't guess. The `jti` MUST be drawn on the User's device. `BlindJoseSigner`
+  refuses a `jti` too short to be one.
+
+Unless its own systems need to see which companies a User works with, the spec
+says an agent SHOULD sign blindly. The SDKs' default signer doesn't: running blind
+is the host's choice, and it needs a `BlindSigningKey` of its own.
+
+## DPoP
+
+Whether a company binds its access tokens with DPoP is its choice (spec 4.5), and
+the spec says a personal agent SHOULD support it. These SDKs don't yet:
+
+- They send no DPoP proofs, at the token endpoint or anywhere else.
+- A company's `dpop_signing_alg_values_supported` is its own to list, with any
+  algorithms. Both SDKs read the list and act on nothing in it, so a company that
+  lists it and still issues Bearer tokens works.
+- A token response whose `token_type` is `DPoP` is refused with
+  `unsupported_token_type`, so these SDKs can't sign in at a company that requires
+  DPoP.
+
+The reference companies issue Bearer tokens and list no DPoP algorithms. A Session
+JWT's `ath` already makes a copied access token useless without the agent's
+delegated key, except at an MCP server that ignores the Session header.
 
 ## Replay cache contract
 
 Verification requires an atomic replay-cache implementation. Its `mark_once` /
-`markOnce` operation receives a key composed from the public-key thumbprint and
-proof `jti`, plus an expiry. It must return true exactly once across every
-process that can accept proofs for that company. An ordinary per-process map is
+`markOnce` operation receives a key, composed from the agent's `client_id` and the
+JWT's `jti`, plus an expiry. It must return true exactly once across every process
+that can accept requests for that company. An ordinary per-process map is
 appropriate only for tests.
 
 The expiry is the last moment the verifier would still accept the identifier: a
-DPoP proof's `iat` plus the acceptance window, a client or Session assertion's
-`exp` plus the 30-second clock skew. A cache must
-refuse the identifier until then and may forget it after: the default
-`MemoryReplayCache` sweeps expired identifiers whenever it has doubled, so it
-holds about twice those still alive. `check_replay_cache` /
+Session JWT's `iat` plus the acceptance window, a client assertion's `exp` plus the
+30-second clock skew. A cache must refuse the identifier until then and may forget
+it after: the default `MemoryReplayCache` sweeps expired identifiers whenever it
+has doubled, so it holds about twice those still alive. `check_replay_cache` /
 `checkReplayCache` (`personal_agent_protocol.company.testing`, the `./server`
 entry) checks a cache: of many callers marking one identifier at once, exactly
 one wins. See [Load tests](/protocol/load-tests/).
 
-The verifier checks replay state last, after signature and binding validation,
-so invalid traffic cannot fill the replay cache with attacker-chosen IDs.
+Rejecting a reused Session JWT `jti` is a choice the spec leaves to the company;
+the reference companies make it. The verifier checks replay state last, after
+signature and binding validation, so invalid traffic cannot fill the replay cache
+with attacker-chosen IDs.
 
 ## URL and token binding
 
-The proof's `htu` excludes query and fragment, as required by DPoP, while `htm`
-uses the uppercase HTTP method. An API proof includes `ath`, the base64url
-SHA-256 hash of the exact access token. A token-endpoint proof must omit `ath`.
-When the company requests a nonce, the verifier requires an exact match.
+A Session JWT's `htu` excludes query and fragment, while `htm` uses the uppercase
+HTTP method. A request with an access token carries `ath`, the base64url SHA-256
+hash of the exact token; a request without one must omit it. The verifier also
+checks that the token was issued to the JWT's `iss`.
 
-The helper returns the verified public JWK and its RFC 7638 thumbprint, which
-is the Session Key: the reference companies key each Session's record by it,
-bind issued tokens to it, and check a browser join's proof against an active
-Session's key. A join proof carries the join form's code as its `nonce` and
-no `ath`.
+Delegated keys bind nothing a company stores. Sessions are named by `client_id`
+and `sid`, and refresh tokens by `client_id`, so a company never expects a
+delegated key to stay the same between requests or Sessions. A browser join is
+authorized by a request carrying the Session header, not by a proof over its code.

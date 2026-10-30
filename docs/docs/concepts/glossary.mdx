@@ -12,12 +12,12 @@ title: Glossary
 | `poppy.json` | The discovery document at `/.well-known/poppy.json`. |
 | User ID | A stable, opaque identifier for one user at one company issuer, assigned by the personal agent. It is not PII. |
 | Agent ID | An optional, stable, opaque identifier for one of a user's agents at one company; it names no separate party. |
-| Session | One user's activity at one company through one personal agent. |
-| Session Key | The DPoP key pair a personal agent creates for one Session. Its JWK thumbprint names the Session. |
-| Session Token | A short-lived, opaque credential for a session. |
-| Account Token | A long-lived refresh credential representing approved account access. |
-| DPoP proof | A per-request proof, signed with the Session Key, that the caller holds the key bound to a token. |
-| Token Exchange | The RFC 8693 grant that turns a DPoP Session Token into a Bearer token for one MCP server without DPoP. |
+| Session | One user's activity at one company through one personal agent, named by a random `sid` the personal agent chooses. |
+| Session header | The `Poppy-Session` header: a JWT the personal agent signs for each request, naming the Session and the User ID. |
+| Delegated key | A short-lived key a personal agent signs its Session JWTs with, one for each User ID. |
+| Delegation | A JWT of at most 24 hours, signed by a key in the agent's `jwks_uri`, that vouches for a delegated key. It names no User and no company. |
+| Refresh token | A long-lived OAuth credential from a sign-in, used only at the company's token endpoint. It isn't tied to a Session. |
+| Access token | A short-lived OAuth credential for an account. A Session is signed in on each request that carries one. |
 | Scope hints | Per scope, what its most consequential operation `changes` and whether it touches `personal_data` (`auth.scope_hints`). |
 | Excluded task | A task the company chose not to offer through the protocol, with an optional alternative. |
 | Company Agent | The company's conversational agent advertised by discovery. |
@@ -27,17 +27,20 @@ title: Glossary
 
 ## OAuth terms
 
-PAP builds on OAuth but names some things for what they do in a Session,
-because they are narrower than the OAuth terms:
+PAP uses OAuth's own names for its tokens: refresh token and access token.
+(Earlier drafts called them Account Token and Session Token.) It names a few
+other things for what they do, because they are narrower than the OAuth terms:
 
 | PAP term | OAuth term | Why the PAP name |
 | --- | --- | --- |
-| Session Token | Access token | It is always for one Session, named by its Session Key, whether DPoP-bound or a Bearer token for an MCP server. |
-| Account Token | Refresh token | The company issues one only when the user signs in to an account; a signed-out Session renews with the agent's assertion instead. It can also start new Sessions. |
-| User ID | Pairwise subject identifier, `sub` in the assertion | The personal agent assigns it, not the company's OAuth server as in OpenID Connect. |
-| Sign-in | User authorization | Mediated Sign-In isn't an OAuth grant. |
+| User ID | Pairwise subject identifier, `sub` in the Session JWT | The personal agent assigns it, not the company's OAuth server as in OpenID Connect. |
+| Sign-in | User authorization | It names the user's approval of the agent's access, whatever the flow. |
 | Sign-out | Revoking the refresh token | It is the user ending the agent's access to their account; the Sessions continue signed out. |
 | Signed out | Pseudonymous | The company recognizes the user by User ID but doesn't know who they are. |
+
+DPoP ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)) is a company's choice,
+as in OAuth, and personal agents SHOULD support it. These SDKs don't send DPoP
+proofs yet, and refuse a `DPoP` token type.
 
 The upstream specification is authoritative when terminology here and the
 [draft specification](https://personalagentprotocol.org/docs/0.3/spec#terms) differ.

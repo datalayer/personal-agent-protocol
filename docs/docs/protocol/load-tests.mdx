@@ -22,10 +22,10 @@ PAP_LOAD_SIZE=512 node --test src/__tests__/load.test.mjs
 
 | Test | Load | Holds when |
 | --- | --- | --- |
-| One DPoP proof, one client assertion | `SIZE` concurrent verifications of each | exactly one is accepted; the rest are `invalid_dpop_proof` / `invalid_client` |
-| One token request at the company | the same request (assertion and proof) sent `SIZE` times at once | exactly one `200` |
+| One Session JWT, one client assertion | `SIZE` concurrent verifications of each | exactly one is accepted; the rest are `invalid_session` / `invalid_client` |
+| One token request at the company | the same request (its client assertion) sent `SIZE` times at once | exactly one `200` |
 | Store and replay-cache kits | `check_store` / `check_replay_cache` (`checkStore` / `checkReplayCache`) at `concurrency=SIZE` | one `take`, one `create`, one compare-and-set, one `mark_once` win |
-| Memory replay cache | 20 rounds of at least 1024 proofs, each round expiring | the cache never holds more than about twice one round's identifiers |
+| Memory replay cache | 20 rounds of at least 1024 identifiers, each round expiring | the cache never holds more than about twice one round's identifiers |
 | Shared budgets | `SIZE` callers on each of four companies at once, 2000 requests per second, bursts of 8 | no request goes before its company's budget allows it |
 | A company's pause | a `Retry-After` pause, then `SIZE` + 64 callers with `max_wait` 50 ms | nobody goes before the pause ends; those whose turn is beyond `max_wait` are refused at once with `rate_limited` |
 | Device polling | `SIZE` Device Sign-Ins polled together | eager polls send nothing; each interval sends one poll per sign-in; `slow_down` adds five seconds for every poller; two polls of one sign-in at once send one |
@@ -34,7 +34,8 @@ PAP_LOAD_SIZE=512 node --test src/__tests__/load.test.mjs
 ## One run
 
 Python 3.13 and Node 22 on a laptop, `PAP_LOAD_SIZE=512`, everything in one
-process (the in-process network: real HTTP over ASGI, real keys):
+process (the in-process network: real HTTP over ASGI, real keys). This run
+predates Session JWTs, so its first row is the DPoP proof that test replayed then:
 
 | Test | Result |
 | --- | --- |
@@ -52,8 +53,8 @@ process (the in-process network: real HTTP over ASGI, real keys):
 - The memory replay cache never forgot an identifier, so a long-running company
   grew it forever. It now drops identifiers once they have expired, swept
   whenever it doubles, and the verifiers remember each identifier as long as
-  they would accept it: a DPoP proof until its `iat` leaves the acceptance
-  window, a client or Session assertion until `exp` plus the 30-second skew.
+  they would accept it: a Session JWT until its `iat` leaves the acceptance
+  window, a client assertion until `exp` plus the 30-second skew.
 - The shared budget held its lock while a caller slept, so `max_wait` bounded
   each caller's own sleep but not its time in the queue: under load callers
   waited far longer than `max_wait`. It now reserves each caller's turn when it

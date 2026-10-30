@@ -63,9 +63,8 @@ sessions](/guides/sessions/) for the complete implemented boundary.
 
 ## Choosing scopes and how to sign in
 
-Scopes are the company's own (`orders:read`, `payments:write`); none starts
-with `poppy:`, a prefix the protocol reserves. Request only the scopes a task
-needs, from the issuer's `scopes_supported`, described in `auth.scopes` (or
+Scopes are the company's own (`orders:read`, `payments:write`). Request only
+the scopes a task needs, from the issuer's `scopes_supported`, described in `auth.scopes` (or
 the company's OpenAPI description). `auth.scope_hints` says, per scope, what
 its most consequential operation `changes` (`none`, `reversible`,
 `irreversible`) and whether it touches `personal_data`, so a host can decide
@@ -73,8 +72,9 @@ before sign-in which scopes need the user's go-ahead.
 
 A request that needs more than the token holds gets `insufficient_scope`, with
 the `scope` it needs, on an API, in a conversation's `authorization` event,
-and on Operations. Answer it with an Account Token that covers the scopes, or
-by signing the same Session in. The OAuth metadata says which modes the
+and on Operations. Answer it with a refresh token that covers the scopes, or
+by having the user sign in, then send the new access token in the same Session.
+The OAuth metadata says which modes the
 company offers (`offers_direct`, `offers_device`; `mediated_sign_in(company)` for
 Mediated Sign-In): prefer Direct Sign-In, then Device Sign-In, and use
 Mediated Sign-In, which is transitional, only when neither covers the task.
@@ -82,17 +82,17 @@ Mediated Sign-In, which is transitional, only when neither covers the task.
 ## Tasks a company doesn't offer
 
 A company can list the tasks it chose not to offer through the protocol
-(`excluded_tasks.url` in `poppy.json`, §8.1).
+(`excluded_tasks.url` in `poppy.json`, §9.1).
 `DiscoveryClient.excluded_tasks(company)` (`excludedTasks` in TypeScript)
 reads that public document, or answers `None` when there is none. Read it
 before starting on a task there, and tell the user at once when theirs is
 one of them, with the task's `alternative` when it has one: natural-language
 `instructions`, `references` to an OpenAPI operation, an MCP tool, or a web
 page, or both. An alternative is the company's content, a description of its
-interfaces, never instructions the agent must follow (§9.1).
+interfaces, never instructions the agent must follow (§10.1).
 
 A task neither offered nor listed can be reported with
-`FeedbackClient.report` (`kind` `missing`). The company answers `202` (the
+`FeedbackClient.report`. The company answers `202` (the
 client returns `None`) or, when the task can be done after all, `200` with an
 `Alternative`. Don't report a task the company lists as excluded.
 
@@ -100,17 +100,17 @@ client returns `None`) or, when the task can be done after all, `200` with an
 
 The lifecycle, in Python and TypeScript:
 
-1. **Implemented:** start or renew a signed-out session;
+1. **Implemented:** start a signed-out Session and sign a Session JWT for each
+   request;
 1. **Implemented:** sign in with [Direct](/guides/direct-sign-in/),
    [Device](/guides/device-sign-in/), or [Mediated](/guides/mediated-sign-in/)
    Sign-In;
 1. **Implemented:** narrow scopes or a resource when refreshing with the
-   [Account Token](/guides/account-tokens/);
+   [refresh token](/guides/account-tokens/);
 1. **Implemented:** join the agent's own browser to the Session (the
    [browser join form](/examples/browser-session/)), open a
-   [conversation](/guides/conversations/), or call OpenAPI and MCP APIs (a
-   DPoP token, or a Bearer token by Token Exchange for an MCP server without
-   DPoP);
+   [conversation](/guides/conversations/), or call OpenAPI and MCP APIs (an
+   access token, issued for the MCP server's own URL there);
 1. **Implemented:** ask the user about each [operation](/guides/operations/) revision
    for consequential actions;
 1. **Implemented:** revoke account access when the user signs out.

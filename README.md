@@ -30,14 +30,14 @@ A typical interaction has five parts:
 
 1. **Discover** — the personal agent reads the company's public
    `/.well-known/poppy.json` document.
-1. **Start a Session** — the two agents establish a pairwise, initially
-   signed-out relationship.
+1. **Start a Session** — the personal agent names a new Session itself, signed
+   out, and signs a Session JWT for each request.
 1. **Converse** — the personal agent can ask questions without disclosing the
    person's company identity.
 1. **Sign in when required** — the company opens its own authorization page.
    Credentials remain between the person and the company.
-1. **Continue safely** — the same conversation resumes with proof-bound access
-   and the scopes the person approved.
+1. **Continue safely** — the same conversation resumes with an access token
+   for the scopes the person approved, beside the signed Session header.
 
 ```mermaid
 sequenceDiagram
@@ -47,15 +47,14 @@ sequenceDiagram
     participant Auth as Company authorization server
 
     PA->>Company: Discover /.well-known/poppy.json
-    Company-->>PA: Agent, Session, and authorization endpoints
-    PA->>Auth: Start a signed-out Session
-    Auth-->>PA: DPoP-bound Session Token
-    PA->>Company: Start a conversation
+    Company-->>PA: Agent, API, and authorization endpoints
+    PA->>PA: Start a signed-out Session, no request sent
+    PA->>Company: Start a conversation, with a signed Session header
     Company-->>PA: Sign-in required for account data
     PA-->>Person: Open the company's sign-in page
     Person->>Auth: Sign in and approve scopes
-    Auth-->>PA: Signed-in Session
-    PA->>Company: Continue the same conversation
+    Auth-->>PA: Refresh token and access token
+    PA->>Company: Continue the same conversation, with the access token
     Company-->>PA: Account-aware response
 ```
 
@@ -102,8 +101,8 @@ console.log(company.document.agent.protocols);
 ```
 
 Discovery is deliberately a small first example. Production Session,
-sign-in, and conversation flows also require host-owned signing keys, DPoP
-proof generation, token storage, and browser handoff. Those capabilities are
+sign-in, and conversation flows also require host-owned signing keys, delegated
+key custody, token storage, and browser handoff. Those capabilities are
 provided through Reactor rather than hidden global state.
 
 ## Reactor is the extension foundation
@@ -116,7 +115,7 @@ contributions for:
 - discovery transport and URL-safety policy;
 - protocol profiles and extension handlers;
 - clocks and cryptographic randomness;
-- signing, protected keys, and DPoP proofs;
+- signing, delegated keys, and Session JWTs;
 - pairwise identity, token storage, and caching;
 - browser handoff and authorization-state storage;
 - CLI commands supplied by PAP or third-party extensions.
@@ -173,12 +172,12 @@ surface:
 | Area            | Current support                                                                                                                   |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | Models          | Forward-compatible discovery, OAuth metadata, client metadata, messages, events, and Operations v2 models                         |
-| Discovery       | `poppy.json`, company-domain and issuer validation, `poppy_domains`, bounded responses, and redirect controls                     |
-| Sessions        | Pairwise user IDs, PAP 4.2 assertions, signed-out start and renewal, redacted tokens, and DPoP nonce retry                        |
-| Cryptography    | ES256/RS256 JOSE, RFC 9449 DPoP creation and verification, freshness, token hash, nonce, and replay checks                        |
-| Direct Sign-In  | State, S256 PKCE, callback validation, browser handoff, and one-use token exchange orchestration                                  |
-| Browser Session | Assertion creation, controlled form POST, replay-safe verification, and company-domain return validation                          |
-| Transport       | Host-owned authorization headers, fresh redirect-bound proofs, one nonce retry, and cross-origin credential isolation             |
+| Discovery       | `poppy.json`, company-domain and issuer validation, bounded responses, and redirect controls                                      |
+| Sessions        | Pairwise user IDs, local Sessions named by a random `sid`, a Session JWT on every request, and redacted tokens                    |
+| Cryptography    | ES256/PS384 JOSE, delegated keys and delegations, Session JWT creation and verification, blind signing, and replay checks         |
+| Direct Sign-In  | State, S256 PKCE, callback validation, browser handoff, and one-use code exchange orchestration                                   |
+| Browser Session | One-time code, the agent's authorization of it with the Session header, controlled form POST, and replay-safe verification        |
+| Transport       | Host-owned authorization and Session headers, a fresh Session JWT per attempt, one restart after `invalid_session`, no redirects  |
 | Conversations   | Start and continue, random user-global message IDs, ordered long polling, cursor recovery, duplicate suppression, and safe errors |
 | Extensibility   | Reactor contribution points for platform, security, protocol, storage, and CLI behavior                                           |
 | CLI             | Non-secret profiles, company verification, extension diagnostics, and versioned JSON output                                       |
@@ -202,16 +201,19 @@ Duplicate JSON members are rejected at Python and TypeScript trust boundaries.
 
 Every flow of draft 0.3 and Operations v2 is implemented in both SDKs and
 both reference companies: discovery, Sessions, Direct, Device and Mediated
-Sign-In, Account Tokens, OpenAPI and MCP (DPoP or resource-bound Bearer),
-conversations with SSE, handoff and close, browser sessions, feedback, and
-Operations. What remains:
+Sign-In, refresh tokens, OpenAPI and MCP, conversations with SSE, handoff and
+close, browser sessions, feedback, and Operations. What remains:
 
+- DPoP, which the specification says personal agents SHOULD support: the SDKs
+  send no DPoP proofs yet and refuse a `DPoP` token type from a token endpoint,
+  so they can't sign in at a company that requires it. The reference companies
+  issue Bearer tokens;
 - production backends the host contributes: the SDK ships no KMS/HSM signer
-  or DPoP key custody, no durable token store, and only in-memory company
-  stores and replay caches (`check_store` checks a durable one);
+  or durable delegated key custody, no durable token store, and only in-memory
+  company stores and replay caches (`check_store` checks a durable one);
 - helpers the Guides suggest but the host decides today: choosing among the
-  sign-in methods, matching a task's scopes to a held Account Token, and
-  revoking the previous Account Token after a wider sign-in;
+  sign-in methods, matching a task's scopes to a held refresh token, and
+  revoking the previous refresh token after a wider sign-in;
 - rate limits and `RateLimit` headers in the reference companies (a host can
   contribute `pap.company.rateLimit`), and redaction hooks for logs and
   traces;
@@ -225,14 +227,14 @@ Each open or partial requirement is listed with its reason in
 
 PAP credentials belong to the host, not to an agent model or tool call.
 
-- Session Tokens, Account Tokens, proofs, nonces, authorization codes, and
+- Access tokens, refresh tokens, Session JWTs, authorization codes, and
   pairwise identifiers must not enter prompts or model-visible tool results.
-- Direct Sign-In requires host-provided state storage, browser handoff,
-  signing, and DPoP contributions.
-- Session requests fail closed until suitable signer and DPoP providers are
-  installed.
-- Redirects receive fresh, target-bound proofs; caller-supplied
-  `Authorization` and `DPoP` headers are rejected.
+- Direct Sign-In requires host-provided state storage, browser handoff, and
+  signing contributions.
+- Session requests fail closed until suitable `pap.signer` and
+  `pap.sessionSigner` contributions are installed.
+- Every redirect from a protocol endpoint is refused; caller-supplied
+  `Authorization`, `DPoP`, and `Poppy-Session` headers are rejected.
 - CLI profiles store configuration only—never tokens or private keys.
 
 The guides explain these boundaries at each flow rather than treating them as
@@ -259,7 +261,7 @@ third-party extensions.
 The [`examples/pydantic-ai`](./examples/pydantic-ai/) directory contains small,
 focused Python examples. Each example teaches one feature—discovery, identity,
 Sessions, Direct Sign-In, Browser Session, cryptography, conversations, or
-proof-bound transport—without giving protocol secrets to the model.
+Session transport—without giving protocol secrets to the model.
 
 [Datalayer Agent Runtimes](https://github.com/datalayer/agent-runtimes) is the
 first consumer of these SDKs. Its Personal Agent Protocol gallery turns the

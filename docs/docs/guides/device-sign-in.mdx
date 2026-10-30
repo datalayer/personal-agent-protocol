@@ -37,7 +37,7 @@ sequenceDiagram
   U->>C: Open company page, sign in, confirm code and scopes
   loop No faster than current interval
     A->>R: Atomically take pending state
-    A->>C: Poll with private device_code + DPoP by the Session Key
+    A->>C: Poll with private device_code + client assertion
     alt authorization_pending
       C-->>A: Wait
       A->>R: Restore state with next poll time
@@ -45,8 +45,8 @@ sequenceDiagram
       C-->>A: Add five seconds
       A->>R: Restore state with longer interval
     else success
-      C-->>A: Account Token + signed-in Session Token
-      A->>R: Store Account Token · expose opaque reference
+      C-->>A: Refresh token + access token
+      A->>R: Store refresh token · expose opaque reference
       A-->>U: Continue the same conversation with granted scopes
     end
   end
@@ -107,8 +107,8 @@ seconds after `slow_down`, and consumes state after success, denial, or expiry.
 This makes scheduling explicit for workers and prevents an LLM loop from
 accidentally hammering the company endpoint.
 
-On success, extra scopes are rejected and missing scopes are reported. The Account
-Token is written directly to the Reactor `TokenStore`; only its opaque reference
+On success, extra scopes are rejected and missing scopes are reported. The refresh
+token is written directly to the Reactor `TokenStore`; only its opaque reference
 crosses into application code. Hosts must provide durable, encrypted,
 tenant-isolated state and token stores in production.
 

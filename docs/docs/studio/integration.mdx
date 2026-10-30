@@ -23,15 +23,15 @@ a personal agent, and publish a deployed application as a PAP company.
 1. Preview starts signed out and asks the person to sign in only when needed.
 1. A task can continue through an API, conversation, or isolated browser while
    Activity records transitions without exposing credentials.
-1. Consequential work is shown as one revisioned proposal that is explicitly
-   approved or declined before confirmation.
+1. Consequential work is shown as one revisioned operation that the person
+   explicitly approves or declines before the request is sent again.
 
 ## Publish a company
 
 The Ship experience selects company-agent conversations, OpenAPI, MCP, browser
 session joining, and optional Operations v2. It also configures guest access,
 scopes, accepted personal agents, rate limits, and actions requiring exact
-confirmation.
+approval.
 
 Each deployment receives a dedicated Datalayer subdomain first, with verified
 custom domains later. The domain publishes `/.well-known/poppy.json`; a shared
@@ -42,15 +42,16 @@ normal runtime boundary. It does not reinterpret an A2A endpoint as PAP.
 
 ## Backend ownership
 
-- IAM owns consent, direct/device authorization, encrypted account tokens,
+- IAM owns consent, direct/device authorization, encrypted refresh tokens,
   revocation, app principals, scope grants, and expiring authorization state
   with atomic consume semantics.
-- KMS-backed signing owns client assertion keys and published metadata/JWKS.
+- KMS-backed signing owns the keys for client assertions and delegations, and
+  published metadata/JWKS.
 - Durable services own pairwise IDs, sessions, replay IDs, conversations,
   events, operation revisions/results, and idempotency records.
 - The MCP gateway accepts only resource-bound PAP Bearer tokens.
 - Deployment gateways serve discovery, authorization, conversation, browser,
-  API, and operation routes and enforce limits.
+  and API routes and enforce limits.
 - A backend metadata gateway owns all outbound PAP document fetches. Its Node
   Reactor host installs `NodeUrlSafetyPolicy` from the SDK's server entry,
   rejects a hostname when any A or AAAA result is non-public, sends no ambient
@@ -71,12 +72,12 @@ Models and tools receive safe handles, never credentials. Signing, storage,
 approval, rotation, and token attachment remain deterministic capabilities
 outside the model loop.
 
-Agent Runtimes now depends on PAP 0.3.1 in Python and TypeScript and owns an
+Agent Runtimes depends on the SDK in Python and TypeScript and owns an
 aligned `PapPersonalAgentCapability`. Its company-discovery and agent-identity
 methods return top-level-frozen/read-only public summaries: organization, protocol version,
 verified issuer, interface kinds, sign-in methods, extension versions, client
 name, redirect count, and signing algorithms. Operational endpoint URLs, raw documents,
-JWK coordinates, authorization material, assertions, proofs, and tokens are
+JWK coordinates, authorization material, assertions, Session JWTs, and tokens are
 absent by construction and regression-tested in both languages. The didactic
 examples perform metadata calls in process; a Datalayer deployment injects a
 typed metadata gateway carrying opaque tenant/application context so DNS
@@ -84,22 +85,21 @@ pinning, caches, egress, rate limits, and audit remain server-owned. Direct
 Sign-In stays a separate authorization gateway plus trusted Preview handoff
 and is never exposed as an agent tool.
 
-The Agent Runtimes DPoP examples make the same split executable. A read-only
-Loop tool creates and verifies a real ES256 proof, rejects replay, and returns
-only policy evidence. Its Reactor-contributed browser view creates fresh
-proofs with non-exportable Web Crypto keys and never places a proof, token,
-nonce, identifier, or JWK in React state. Studio can reuse that portable
-creation pattern, while the authorization gateway alone imports `./server`
-for signature and durable replay verification.
+The Agent Runtimes examples still show the SDK's 0.27 shape, DPoP proofs among
+it, until that package moves to 0.28. The split they make executable carries over:
+a read-only Loop tool works with real signed material and returns only policy
+evidence, a Reactor-contributed browser view never places a Session JWT, token,
+identifier, or JWK in React state, and the authorization gateway alone imports
+`./server` for signature and durable replay verification.
 
 The paired Session lifecycle examples extend this into the authorization
 gateway contract. Studio supplies only opaque tenant, user, and company
-references; the gateway resolves the stable pairwise subject, signer, DPoP
-provider, and token endpoint, then calls `SessionClient.start` or `renew`.
-Nonce retry and credential replacement stay inside that request. Canvas and
+references; the gateway resolves the stable pairwise subject, signer, Session
+signer, and token endpoint, then calls `SessionClient.start`. Credential
+replacement stays inside the gateway. Canvas and
 the model receive only lifecycle status, granted scope names, and an opaque
-Session reference—not the pairwise subject, Session Key, assertions, proofs,
-nonces, or token response.
+Session reference—not the pairwise subject, `sid`, assertions, Session JWTs, or
+token response.
 
 The Agent Runtimes `PAP Guided Journey` is the reference UX for explaining
 this boundary in Studio. A single step index drives the user conversation,
@@ -120,10 +120,9 @@ user-interaction authority remains in the backend.
 Generated Python and TypeScript API inventories now define the supported SDK
 boundary and are checked for drift in documentation CI. Datalayer backend and
 Studio packages should import only those public symbols. Node services import
-network policy, `JoseSigner`, DPoP verification, and replay-cache contracts
+network policy, `JoseSigner`, Session JWT verification, and replay-cache contracts
 from the explicit `./server` subpath; browser and Canvas bundles stay on the
-portable entry and can create device-held DPoP proofs without receiving company
-signing or verification APIs. Package regression tests inspect the emitted
+portable entry and receive no company signing or verification APIs. Package regression tests inspect the emitted
 portable entry for these forbidden server symbols. This prevents product
 integration from quietly depending on SDK internals or bundling company key
 custody into Studio UI code.
@@ -136,9 +135,10 @@ For Datalayer, the entry split maps to a deployable ownership boundary:
   TypeScript client stays in a trusted Node/desktop host even though its types
   are portable, because its Reactor resolves signing and protected state;
 - the backend metadata and authorization gateways import `./server`, attach
-  the DNS policy, and perform proof verification against durable replay state;
-- the KMS plugin implements the Reactor `Signer` contract so client/session
-  assertion private keys remain non-extractable and outside Node process
+  the DNS policy, and perform Session JWT verification against durable replay
+  state;
+- the KMS plugin implements the Reactor `Signer` contract so the private keys
+  behind client assertions and delegations remain non-extractable and outside Node process
   memory; and
 - IAM contributes `pap.pairwiseUserIdStore`, atomically keyed by application,
   Datalayer user, and exact verified issuer; runtimes receive only the random
@@ -147,16 +147,15 @@ For Datalayer, the entry split maps to a deployable ownership boundary:
   pending state and atomic `take`; keys are hashes of OAuth state, and the
   consumed verifier and authorization code flow directly to the token exchange
   without entering Canvas, A2UI, Activity payloads, or model-visible tools;
-- after a successful exchange, the callback controller immediately moves any
-  returned Account Token into IAM's `pap.tokenStore`, clears it from the
-  response passed onward, and exposes only an opaque token reference to backend
-  capabilities; Account Token lifecycle remains a follow-on SDK milestone;
+- `DirectSignInClient.complete` moves any returned refresh token into IAM's
+  `pap.tokenStore` and exposes only an opaque token reference to backend
+  capabilities, which use it through `RefreshTokenClient`;
 - Preview contributes `pap.browserHandoff` to open the user's trusted browser,
   while the registered Datalayer callback route reconstructs no authority from
   URL parameters beyond passing the full URL to `DirectSignInClient.complete`;
   denial or callback failure requires a new flow rather than reused state; and
 - CI must fail any browser artifact that contains the server entry, signing
-  key material, raw tokens, assertions, or proof-verification endpoints.
+  key material, raw tokens, assertions, or Session JWT verification code.
 
 ## Appspec shape
 
@@ -183,15 +182,17 @@ metadata are generated or resolved at ship time rather than stored in the spec.
 
 ## Rules and Operations
 
-Studio evaluates its rule before confirming a PAP operation. **Do it** still
-requires company scope and fixed safety constraints. **Do it if I asked**
-requires a live structured grant covering the exact action and revision.
-**Ask me first** presents the company's summary, structured terms, cost,
-expiry, company, operation ID, and revision. **Leave it to me** never confirms.
+Studio evaluates its rule before it sends a request that can return a PAP
+operation. **Do it** still requires company scope and fixed safety constraints.
+**Do it if I asked** requires a live structured grant covering the exact action.
+**Ask me first** checks with the person before the request. **Leave it to me**
+never sends it.
 
-When the company requires fresh user approval, only explicit approval of the
-current revision is valid. A new revision invalidates earlier approval. The
-operation ID and revision become part of the Studio audit record.
+No rule approves an operation. Every operation the company returns goes to the
+person through `pap.approvalSurface`, with the company's summary, structured
+terms, cost, expiry, company, operation ID, and revision, and only explicit
+approval of the current revision is valid. A new revision invalidates earlier
+approval. The operation ID and revision become part of the Studio audit record.
 
 ## Studio surfaces
 
@@ -200,7 +201,7 @@ operation ID and revision become part of the Studio audit record.
 - **Preview:** signed-out state, human-completed sign-in, requested/granted/
   missing scopes, responder identity, conversations, and disconnect. The UI
   receives only safe status and opaque handles; callback URLs, codes, PKCE
-  verifiers, assertions, proofs, and tokens remain backend-only.
+  verifiers, assertions, Session JWTs, and tokens remain backend-only.
 - **Validate:** discovery, identity, sign-in, interface, conversation,
   operations, secret, replay, rate-limit, tenant, and Appspec tests.
 - **Ship and Activity:** domain health gates, public metadata, verification,
@@ -211,8 +212,8 @@ Two SDK contracts serve these surfaces. A Python Studio host registers the
 actions](/guides/cli/#live-session-actions) from its palette with
 `execute_command` — the same implementation a REPL's slash commands and
 `pap commands run` invoke — and contributes its confirmation dialog as the
-`pap.approvalSurface`, without which ending a Session, signing out, or
-cancelling an operation is refused. Activity's protocol events can come from a
+`pap.approvalSurface`, without which ending a Session or signing out is
+refused. Activity's protocol events can come from a
 `pap.telemetry` sink: one [allowlisted event](/guides/telemetry/) per
 protocol stage, in either SDK, safe to store and display because no
 credential or identifier can be in it.

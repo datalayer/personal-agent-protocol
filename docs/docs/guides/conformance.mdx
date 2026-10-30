@@ -4,7 +4,7 @@ title: Conformance and compatibility
 
 # Conformance and compatibility
 
-The SDKs target PAP draft `0.2`. Draft changes may be incompatible, so support
+The SDKs target PAP draft `0.3`. Draft changes may be incompatible, so support
 is expressed as a protocol profile rather than inferred from package version.
 
 ## Compatibility rules
@@ -41,12 +41,8 @@ do. Each of the four pairings runs every positive, negative and recovery case:
 | TypeScript | TypeScript | `conformance-pairing.test.mjs` |
 
 Every pairing passes every case, with no skips: both personal agents fetch
-a token for each MCP server's own URL (a DPoP token, asked for with
-`resource`, when the server's protected resource metadata lists
-`dpop_signing_alg_values_supported`; otherwise a Bearer token by Token
-Exchange, `token_for_mcp`, `tokenForMcp`; the MCP cases also run
-against a company whose MCP server takes Bearer tokens only) and call tools with
-`McpClient`, and both join a browser of their own (Python `browser_http`,
+a token for each MCP server's own URL (a refresh with `resource` set to it,
+`token_for_mcp`, `tokenForMcp`) and call tools with `McpClient`, and both join a browser of their own (Python `browser_http`,
 TypeScript `browserFetch`, each with its own cookie jar) to the Session on both
 reference companies. A runner given no browser skips the website cases, saying so.
 

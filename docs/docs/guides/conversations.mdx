@@ -5,13 +5,13 @@ title: Conversations
 # Conversations
 
 A PAP conversation is how a personal agent talks to a company's agent (draft
-0.3 §7). `ConversationClient` sends idempotent messages and reads an ordered
+0.3 §8). `ConversationClient` sends idempotent messages and reads an ordered
 event log by long polling (see [conversation messages](/examples/conversation-messages/)
 and [conversation events](/examples/conversation-events/)). This guide covers
 streaming and the controls: sign-in mid-conversation, Direct Conversations,
 handoff, and closing.
 
-## Streaming over SSE (§7.6)
+## Streaming over SSE (§8.6)
 
 ```python
 async for item in conversations.stream(endpoint, conversation_id, session=session):
@@ -44,25 +44,25 @@ for await (const item of conversations.stream(endpoint, conversationId, { sessio
   `text/event-stream` is `sse_unsupported`: use `events()`.
 - The iterator ends on a `state` event with `closed`.
 
-## Sign-in mid-conversation (§7.11)
+## Sign-in mid-conversation (§8.11)
 
 When the company needs the user's account, or more scopes, it adds an
 `authorization` event: `error` is always `insufficient_scope`, with the same
 meaning as the API error, and `scope` always names the scopes needed. The host
-responds as it would to that error, with its Account Token or by running a
-sign-in mode the company offers for the **same Session** (the same Session
-Key), then keeps sending to the **same conversation ID** with the new Session
-Token. Nothing in the conversation is restarted; the model never sees the
+responds as it would to that error, with a refresh token that covers the scopes
+or by running a sign-in mode the company offers, then keeps sending to the
+**same conversation ID** in the **same Session** (the same `sid`) with the new
+access token. Nothing in the conversation is restarted; the model never sees the
 sign-in's codes or tokens.
 
-A conversation isn't tied to one Session Token or even one Session: the agent
-may switch tokens partway, after signing in, renewing, or signing out, or
+A conversation isn't tied to one access token or even one Session: the agent
+may switch tokens partway, after signing in, refreshing, or signing out, or
 continue in a new Session, as long as the token matches the conversation's
 owner. Once a conversation has used the user's account, a request on it from a
 token not signed in to that account gets `insufficient_scope`; the
 conversation stays open, so the user can sign in again and continue it.
 
-## Direct Conversations (§7.10)
+## Direct Conversations (§8.10)
 
 `start_direct(endpoint, parent_id, message)` (`startDirect` in TypeScript)
 opens a conversation under an open parent for the user to talk with the
@@ -72,18 +72,17 @@ While it is open, the parent refuses messages and handoff with
 `error.details["conversation_id"]` so the host can route the user there. The
 parent receives `direct_opened` and `direct_closed` events.
 
-## Handoff (§7.9) and closing (§7.12)
+## Handoff (§8.9) and closing (§8.12)
 
 `handoff()` asks for a person at the company: the conversation is `queued`,
 then `responder` becomes `human` when someone takes it, or the company says
 none is available and its agent continues. `close()` ends the conversation;
 the company refuses later messages with `conversation_closed`. Closing does
-not cancel operations the conversation proposed or started: cancel those
-through [Operations](/guides/operations/).
+not cancel anything the conversation started, such as an order or a return.
 
 ## Who wrote each message: `author`
 
-Every message names its `author` (§7.4): `type` is `agent` or `human`, and a
+Every message names its `author` (§8.4): `type` is `agent` or `human`, and a
 company's message may add who, with `id`, display `name`, and `image` (an
 HTTPS URL) for its person or AI persona. The personal agent never sends those
 three: its own messages are `Message(id=..., author=Author(type="agent"), ...)`,
@@ -123,7 +122,7 @@ The TypeScript SDK types it (`PapRepliesData`) and checks it with
 
 ## Security boundary
 
-- Session Tokens, Session Keys, DPoP proofs, pairwise IDs, and cursors stay in
+- Access tokens, delegated keys, Session JWTs, pairwise IDs, and cursors stay in
   the host.
 - A model receives the event fields it needs: company text, data, event types,
   and statuses. It never treats conversation text, from either side, as the

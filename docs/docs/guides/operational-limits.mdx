@@ -32,12 +32,12 @@ client metadata, and JWKS are public, and each fetch is bounded:
   and 5 seconds in all (`timeout` / `timeoutMs`), however slowly the server
   sends: a body trickled a few bytes at a time is abandoned with
   `metadata_timeout`.
-- **No credentials.** No cookie, `Authorization`, or `DPoP` header is sent.
+- **No credentials.** No cookie, `Authorization`, or `Poppy-Session` header is sent.
 
 ## Everything else sent to a company
 
 A company's metadata names its other endpoints — token, sign-in,
-conversations, API, Operations, MCP — and a company can point those names
+conversations, API, MCP — and a company can point those names
 anywhere, its own network included. A host that acts for many people (a
 gateway inside a cluster) sends them through `create_resolving_client` in
 Python, the same boundary as `createResolvingFetch` on Node: before every
@@ -109,7 +109,7 @@ the rotation against each reference company.
 
 ## Retries: `Retry-After`, backoff, and jitter
 
-`DpopHttpClient.request` / `SessionFetchClient.request` handle a `429` or `503`:
+`SessionHttpClient.request` / `SessionFetchClient.request` handle a `429` or `503`:
 
 1. A `Retry-After` (seconds or an HTTP date) is always honoured: a request is
    never retried sooner. One longer than `max_retry_after` (10 s by default)
@@ -121,7 +121,7 @@ the rotation against each reference company.
 4. Only safe methods (`GET`, `HEAD`, `OPTIONS`) are retried on their own.
    A write is returned to the caller, which retries it with its idempotency
    key or message ID unchanged.
-5. Every attempt has a fresh DPoP proof.
+5. Every attempt has a fresh Session JWT.
 
 ## Idempotency keys on API writes
 
@@ -150,8 +150,8 @@ path, query and body and the response, never the credentials:
 
 The Guides name no error for a repeated key with a different body;
 `idempotency_key_conflict` (409) is this SDK's choice, alongside
-`message_id_conflict` for a reused conversation message ID. Operations'
-confirm takes no key: the operation ID identifies a retry.
+`message_id_conflict` for a reused conversation message ID. An operation's
+approval takes no key: the operation ID identifies a retry.
 
 ## Shared rate-limit budgets
 

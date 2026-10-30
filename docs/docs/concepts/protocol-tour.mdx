@@ -19,13 +19,14 @@ scopes (`auth.scopes`, with `auth.scope_hints`), the tasks it doesn't offer
 Discovery is a trust bootstrap, not ordinary JSON fetching. A redirect may go
 to another host, but the document is used only when the final URL's path is
 exactly `/.well-known/poppy.json`, with no query. The agent verifies that
-`organization.domain` is the host that served it. It then fetches the OAuth
-issuer's metadata ([RFC 8414](https://www.rfc-editor.org/rfc/rfc8414)) and
-checks both the exact issuer and that its `protected_resources` lists
+`organization.domain` is the host that served it. It finds the company's OAuth
+issuer from the domain's protected resource metadata
+([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)), then fetches the issuer's
+metadata ([RFC 8414](https://www.rfc-editor.org/rfc/rfc8414)) and checks both the
+exact issuer and that its `protected_resources` lists
 `https://{organization.domain}`. The same metadata says which sign-in modes
 the company offers, through `grant_types_supported`: Direct Sign-In with the
-authorization code grant, Device Sign-In with the device code grant, and Token
-Exchange for MCP servers without DPoP.
+authorization code grant, and Device Sign-In with the device code grant.
 
 ## 2. Start a Session
 
@@ -37,38 +38,34 @@ agent assigns it, one for each pair of user and company. An agent that acts
 for a user through several agents may also name which one a Session is for,
 with an Agent ID.
 
-The personal agent starts a Session with the JWT bearer grant
-([RFC 7523](https://www.rfc-editor.org/rfc/rfc7523) §2.1). It issues the
-assertion itself, as [draft-ietf-wimse-aims](https://datatracker.ietf.org/doc/draft-ietf-wimse-aims/)
-§10.4.2 describes, except that AIMS names the agent in `sub` while PAP names it
-in `iss` and the user in `sub`, because the token is for that user. The
-assertion's `aud` is the company's issuer alone, narrower than
-[draft-ietf-oauth-rfc7523bis](https://datatracker.ietf.org/doc/draft-ietf-oauth-rfc7523bis/),
-which also allows the token endpoint URL.
+The personal agent starts a Session on its own: it picks a random `sid` and
+sends nothing. Every request then carries the **Session header**, `Poppy-Session`,
+a JWT the agent signs for that request. It names the Session (`sid`), the User ID
+(`sub`), and any Agent ID, is addressed to the company's issuer, and is bound to
+the request's method and URL, and to the access token when there is one (`ath`).
+The company learns of a Session from its first request.
 
-Each Session has its own DPoP key, the **Session Key**. Its thumbprint names
-the Session: a proof from a new key starts a Session, a proof from a known key
-renews it or signs it in, and no Session ID travels on the wire. The token is
-opaque to the personal agent. Earlier tokens of a Session keep working until
-they expire, each reflecting the Session as it was when issued.
+Each JWT is signed with a **delegated key**, a short-lived key the agent keeps for
+one User ID. A **delegation** in the JWT's `pap_dlg` header vouches for it: a JWT
+of at most 24 hours, signed by a key in the agent's `jwks_uri`, that says nothing
+about the user or the company. The company checks the delegation, then the Session
+JWT. Any failure is `invalid_session`, and the agent starts a new Session.
 
-Off-the-shelf authorization servers generally don't accept this grant as it
-is: they accept a JWT bearer assertion only for a subject they already know,
-and the company has usually never seen the User ID before. So a company needs
-some custom work for the grant that starts a Session, such as an extension to
-its authorization server or a service in front of its token endpoint. The
-requests after it are standard OAuth requests.
+Signed-out requests need nothing from the authorization server, so a company can
+use an existing one that supports the standards it needs. The Session header is
+checked where each request arrives.
 
 ## 3. Sign in only when needed
 
-If a task needs account access, the company answers `insufficient_scope` with
-the scopes it needs. PAP supports Direct, Device, and Mediated Sign-In, each
-signing in the **same Session**:
+If a task needs account access, the company answers with the scopes it needs:
+a challenge when signed out, `insufficient_scope` when a token lacks them. PAP
+supports Direct, Device, and Mediated Sign-In. Sign-in is plain OAuth and names no
+Session: the **same Session** is signed in on each request that carries the
+access token.
 
-- **Direct Sign-In**: the OAuth authorization code flow with PKCE, the code
-  bound to the Session Key with `dpop_jkt`.
-- **Device Sign-In**: the device authorization grant, the device code bound
-  to the key of the first poll. It follows the cross-device best practices of
+- **Direct Sign-In**: the OAuth authorization code flow with PKCE.
+- **Device Sign-In**: the device authorization grant. It follows the cross-device
+  best practices of
   [RFC 10027](https://www.rfc-editor.org/rfc/rfc10027) (BCP 247), so an agent
   uses Direct Sign-In when it can.
 - **Mediated Sign-In**: the agent relays the user's credentials. It is
@@ -76,20 +73,20 @@ signing in the **same Session**:
   until it can add Direct or Device Sign-In, and the protocol plans to remove
   it at a date set with version 1.0.
 
-Successful sign-in produces a long-lived Account Token; it is used only at the
-token endpoint, to obtain scoped, short-lived Session Tokens for an existing
-Session or a new one.
+Successful sign-in produces a long-lived refresh token. It is used only at the
+token endpoint, with a client assertion, to obtain scoped, short-lived access
+tokens that any of the user's Sessions can use.
 
 ## 4. Choose an interface
 
 The discovery document may offer several ways to work:
 
 - **OpenAPI** for structured operations;
-- **MCP** for tool-oriented access, with a DPoP token for a server that
-  supports DPoP, or a Bearer token for that server alone by Token Exchange;
+- **MCP** for tool-oriented access, with an access token issued for that server
+  alone;
 - **web browsing**, the agent's own browser joined to the same Session
-  through the company's form, with a one-time code and a proof by the Session
-  Key; and
+  through the company's form: the agent authorizes its one-time code with the
+  Session header, and the browser submits it; and
 - **conversations** with a company agent or company representative, each
   message naming its `author`.
 
@@ -101,41 +98,40 @@ alternative when there is one, so the agent can tell the user at once.
 ## 5. Confirm consequential actions
 
 The optional Operations extension separates proposing an action from carrying
-it out. The personal agent presents the company's exact current revision to
-the user and confirms that revision. Retries refer to the same operation so the
-company does not perform the action twice.
+it out. The company refuses the request with the operation. The personal agent
+presents the company's exact current revision to the user and, once they approve,
+makes the same request again with that approval. Retries carry the same approval,
+so the company does not perform the action twice.
 
 ## PAP and OAuth
 
 PAP builds on OAuth: [RFC 6749](https://www.rfc-editor.org/rfc/rfc6749),
-[RFC 7523](https://www.rfc-editor.org/rfc/rfc7523) (the JWT bearer grant and
-client authentication), [RFC 7636](https://www.rfc-editor.org/rfc/rfc7636)
-(PKCE), [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628) (the device
-authorization grant), [RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)
-(DPoP), [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) (resource
-indicators), [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009) (revocation),
+[RFC 7523](https://www.rfc-editor.org/rfc/rfc7523) (client authentication),
+[RFC 7636](https://www.rfc-editor.org/rfc/rfc7636) (PKCE),
+[RFC 8628](https://www.rfc-editor.org/rfc/rfc8628) (the device authorization
+grant), [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) (resource indicators),
+[RFC 7009](https://www.rfc-editor.org/rfc/rfc7009) (revocation),
 and the OAuth 2.0 Security Best Current Practice,
-[RFC 9700](https://www.rfc-editor.org/rfc/rfc9700). Token Exchange is
-[RFC 8693](https://www.rfc-editor.org/rfc/rfc8693). Every request except
-Mediated Sign-In is a standard OAuth request.
+[RFC 9700](https://www.rfc-editor.org/rfc/rfc9700). A company may also bind its
+access tokens with [DPoP](https://www.rfc-editor.org/rfc/rfc9449), which these
+SDKs don't support yet. Mediated Sign-In is an extension grant, as RFC 6749 §4.5
+allows; the other requests to the authorization server are standard OAuth.
 
-What a company's authorization server needs beyond those specifications
-(§4.10):
+What PAP adds to OAuth (§4.8):
 
-- Sessions named by DPoP keys, with a record for each Session;
-- assertions the personal agent issues, naming itself in `iss`, the User ID
-  in `sub`, and optionally an Agent ID;
-- one account per Session: a Session signed in to one account can't sign in
-  to another (`account_mismatch`);
-- described scopes: each scope in `scopes_supported` described in an OpenAPI
-  description the company lists or in `auth.scopes`;
-- Account Tokens that start Sessions, since they aren't bound to a Session Key;
-- Bearer tokens only by Token Exchange, each for one MCP server; and
-- a few fields and codes: `refresh_token_expires_in`, `extension_required`,
-  and the reserved `poppy:` scope prefix.
+- choices stricter than OAuth: a `client_id` that is the URL of a client metadata
+  document, authenticated with `private_key_jwt` and an assertion addressed to the
+  issuer; `iss` in every authorization response and exact matching of
+  `redirect_uri`; and `scope` on every sign-in request, with at least one scope
+  granted and none beyond those requested;
+- discovery and descriptions: `poppy.json`, client extensions, described scopes
+  (`auth.scopes` or an OpenAPI description the company lists), and scope hints;
+- Sessions: the Session header on every request, signed with a delegated key,
+  without an authorization-server grant; and
+- an extension grant for Mediated Sign-In.
 
-Outside OAuth, the protocol adds `poppy.json`, Mediated Sign-In, the browser
-join form, conversations, and extensions.
+Above OAuth, the protocol adds the browser join form, APIs, conversations,
+excluded tasks and feedback, and extensions.
 
 Continue with the [personal-agent guide](/guides/personal-agent/), the
 [company guide](/guides/company/), or the upstream

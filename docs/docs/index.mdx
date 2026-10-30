@@ -10,7 +10,7 @@ Python and TypeScript SDKs for the
 [Personal Agent Protocol](https://personalagentprotocol.org) (PAP, or Poppy),
 targeting [draft 0.3](https://personalagentprotocol.org/docs/0.3/spec) and its
 [Operations extension](https://personalagentprotocol.org/docs/0.3/extensions/operations)
-version 1.
+version 2.
 
 Build software that lets a personal agent work with a company on a user's
 behalf, without pretending to be the user or hiding automation. PAP gives
@@ -83,8 +83,8 @@ sequenceDiagram
   participant C as Company
   P->>C: Discover /.well-known/poppy.json
   C-->>P: Identity, auth, APIs, web, agent, feedback, extensions
-  P->>C: Start a signed-out session
-  C-->>P: Short-lived, proof-bound session token
+  P->>P: Start a signed-out Session, no request sent
+  P->>C: Ask, with a signed Session header
   P->>U: Ask for sign-in or exact approval when needed
   U-->>P: Consent
   P->>C: Use an authorized interface
@@ -102,8 +102,8 @@ sequenceDiagram
 The SDKs implement both sides of PAP:
 
 1. A **personal agent client** discovers and works with companies for one
-   user: Sessions, every sign-in type, Account Tokens, APIs and MCP, the
+   user: Sessions, every sign-in type, refresh tokens, APIs and MCP, the
    website, conversations, feedback, and Operations.
 1. A **reference company**, in Python and in TypeScript, publishes discovery,
-   issues Sessions, and serves APIs, MCP, a company agent and Operations; every
+   keeps Sessions, and serves APIs, MCP, a company agent and Operations; every
    replaceable part is a Reactor contribution point.

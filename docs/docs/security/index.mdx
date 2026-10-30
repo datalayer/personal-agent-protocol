@@ -9,16 +9,17 @@ PAP handles credentials and actions on a user's behalf. Treat these as release
 requirements:
 
 - Never put tokens, credentials, authorization codes, private keys, assertions,
-  DPoP proofs, or cookies in model context, logs, URLs, analytics, or errors.
+  Session JWTs, or cookies in model context, logs, URLs, analytics, or errors.
 - Validate the exact discovery domain and OAuth issuer relationship.
 - Defend metadata requests against SSRF and DNS rebinding; bound redirects,
   response bytes, duration, and caching.
 - Generate pairwise user IDs randomly and persist the mapping. Do not derive
   them from personal data, even with a keyed hash.
-- Keep account tokens encrypted at rest and session tokens in memory where
+- Keep refresh tokens encrypted at rest and access tokens in memory where
   practical.
-- Create a fresh DPoP proof for every request and every retry.
-- Use resource-bound Bearer tokens only for MCP; require DPoP elsewhere.
+- Sign a fresh Session JWT for every request and every retry.
+- Use an access token only at the service it was issued for, always with the
+  Session header.
 - Require the user's approval of the exact revision before performing an operation.
 
 [Open security points](/security/review/) lists what is open now: residual
@@ -32,15 +33,15 @@ properties end to end.
 | -------------------- | ----------------------------------------------------------------------------------- |
 | Remote metadata      | HTTPS, bounded redirects/bytes/time, strict JSON, SSRF and DNS-rebinding defenses.  |
 | Agent identity       | Fetch verified client metadata and JWKS; allow only asymmetric approved algorithms. |
-| Session request      | Verify issuer, subject, audience, time window, signature, and single-use `jti`.     |
-| Authorized request   | Verify token, DPoP proof, method, URL, nonce, replay ID, resource, and scopes.      |
+| Session header       | Verify the delegation, delegated key, audience, method, URL, time window, and single-use `jti`. |
+| Authorized request   | Verify the token, its `ath` in the Session JWT, resource, and scopes.               |
 | Model/tool boundary  | Pass opaque references, never credentials or private signing material.              |
 | Consequential action | Approve the exact operation revision, through the host's own surface.                |
 
 ## Secret inventory
 
-Treat session and account tokens, private keys, client and session assertions,
-DPoP proofs, authorization codes, device codes, one-time codes, mediated
+Treat access and refresh tokens, private keys, client assertions, delegations,
+Session JWTs, authorization codes, device codes, one-time codes, mediated
 credentials, and cookies as secrets. Redact them before requests reach logging,
 tracing, error reporting, analytics, or model instrumentation.
 
@@ -55,7 +56,7 @@ redirect. Never forward credentials, cookies, or authorization headers.
 fetches a `client_id` without redirects, requires the returned identifier to
 equal the fetched URL, and validates same-domain redirect and JWKS URLs. JWKS
 retrieval permits only bounded same-host redirects and accepts complete public
-P-256/ES256 or RSA/RS256 signing keys. Symmetric keys and every standard
+P-256/ES256 or RSA/PS384 signing keys. Symmetric keys and every standard
 private JWK member are rejected before a key can reach assertion verification.
 
 For Node backends, `@datalayer/personal-agent-protocol/server` provides
@@ -74,8 +75,8 @@ only those (`PinnedNetworkBackend`), with SNI and certificate checks still on
 the host name; metadata fetches also stop at a byte limit and a total time
 limit, however slowly the server sends, and carry no cookie or credential.
 
-The same server entry owns TypeScript company-side assertion signing, DPoP
-verification, and replay-cache contracts. Package tests inspect the emitted
+The same server entry owns TypeScript company-side assertion signing, Session
+JWT verification, and replay-cache contracts. Package tests inspect the emitted
 portable entry to ensure those symbols and Node DNS APIs are absent. This
 prevents accidental imports into browser and Canvas bundles; production key
 custody must still use a KMS/HSM-backed Reactor signer or an equivalent remote
@@ -85,14 +86,14 @@ signing service.
 
 A canary suite proves it, in both SDKs (`test_canaries.py`,
 `canaries.test.mjs`). The demo worlds run end to end — Manzanita (Device,
-Direct, and Mediated Sign-In, Account Tokens, conversations, operations, MCP
+Direct, and Mediated Sign-In, refresh tokens, conversations, operations, MCP
 with a Bearer token, the website), Northwind with Ledgerly, every conformance
 case, and the Pydantic AI examples' tools — with a `pap.randomSource` that
 writes `CANARY` and a counter into every value it mints, and canary passwords.
-Every credential exchanged is harvested from the wire by kind (Session and
-Bearer tokens, Account Tokens, DPoP proofs and private keys, client and
-Session assertions, authorization, browser join and device codes, PKCE verifiers,
-mediated passwords and one-time codes, website cookies), and the suite fails
+Every credential exchanged is harvested from the wire by kind (Bearer access
+tokens, refresh tokens, Session JWTs, delegations, delegated and signing private
+keys, client assertions, authorization, browser join and device codes, PKCE
+verifiers, mediated passwords and one-time codes, website cookies), and the suite fails
 if any of them appears in:
 
 - a log record of any logger at `DEBUG` (Python), or a console line
@@ -114,7 +115,7 @@ requested by an agent: the authorization code, in the redirect to the agent's
 `redirect_uri` (OAuth 2.0), and the device `user_code`, in
 `verification_uri_complete` (RFC 8628), which the user's browser opens. The
 user code may also travel in a message's `data` for the person's page, never
-in its text. The one conformance probe that puts a Session Token in a URL on
+in its text. The one conformance probe that puts an access token in a URL on
 purpose, to see the company refuse it (`security.token-in-url-refused`), is
 left out of the run.
 
@@ -137,7 +138,8 @@ The SDKs' defaults are correct in one process. A deployment provides a
 durable, shared company store (which also holds the replay cache), key
 custody, and the agent's token, pairwise ID, and authorization-state stores
 and browser handoff; [Open security points](/security/review/) lists them
-with the residual risks.
+with the residual risks. The SDKs send no DPoP proofs yet and refuse a `DPoP`
+token type.
 
 See the official [implementation guides](https://personalagentprotocol.org/docs/0.3/guides)
 for the complete upstream guidance.

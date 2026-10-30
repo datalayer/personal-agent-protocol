@@ -71,19 +71,19 @@ and SHOULDs.
 | Area | Required behavior |
 | --- | --- |
 | Discovery | Fetch `/.well-known/poppy.json`; require the supported `major.minor` version (`0.3`), the final URL's path exactly `/.well-known/poppy.json` with no query, `organization.domain` equal to the host that served it after HTTPS redirects (case-insensitive), HTTPS for every URL, interfaces, issuer, and extensions; cache within safe bounds. |
-| Company identity | Fetch RFC 8414 metadata (path-aware for an issuer with a path) and bind the issuer, compared character for character, to a `protected_resources` entry `https://{domain}`; `grant_types_supported` with the JWT bearer and `refresh_token` grants; one issuer per company, the same `auth` on every domain naming it. |
-| Personal-agent identity | Publish and verify HTTPS client metadata, same-domain JWKS and redirects, and `private_key_jwt` authentication; client and Session assertions name the company's `auth.issuer` in `aud`, live at most five minutes, and a `jti` is refused again per `client_id`. |
+| Company identity | Read the issuer from the domain's protected resource metadata (`resource` exactly `https://{domain}`; `auth.issuer` when several authorization servers are listed); fetch RFC 8414 metadata (path-aware for an issuer with a path) and bind the issuer, compared character for character, to a `protected_resources` entry `https://{domain}`; `grant_types_supported` with `refresh_token`; one issuer per company, the same `auth` on every domain naming it. |
+| Personal-agent identity | Publish and verify HTTPS client metadata, same-domain JWKS and redirects, and `private_key_jwt` authentication; client assertions name the company's issuer in `aud`, are short-lived, and are signed with `ES256` or `PS384`, the last blindly if the agent chooses. |
 | User identity | Maintain one stable, opaque, non-personal ID per user and company issuer (a pairwise subject identifier the agent assigns); optional Agent IDs under the same rules. |
-| Sessions | Start signed out with a new Session Key, whose thumbprint names the Session; renew with the same key; on `invalid_grant`, discard the key and start anew; earlier tokens keep working until they expire; treat session tokens as opaque. |
-| Proof of possession | A DPoP key per Session (the Session Key); sign ES256 (or a listed algorithm); a new proof per request; nonces; RFC 9449 §4.3 checks at the company, replay refused at the token endpoint; 400 OAuth errors at the token endpoint, 401 challenges elsewhere. |
-| Sign-in | Direct authorization code with PKCE and the code bound to the Session Key by `dpop_jkt`, loopback redirect URIs; device authorization (the code bound to the first poll's key; link only on the issuer host or a host of its `protected_resources`, with the company's name and domain); and mediated sign-in (HTTP 200 statuses, `invalid_scope` / `account_mismatch` / `sign_in_not_found`, credentials chosen by issuer and discarded after); a Session stays tied to the account it was ever signed in to. |
-| Account access | Store rotating account tokens as secrets; exchange them only at the token endpoint, for an existing Session's key or a new one; narrow scopes/resources and revoke on sign-out. |
-| APIs | DPoP for OpenAPI, `insufficient_scope` with the needed `scope`; for MCP, a token valid only at the server's exact URL: a DPoP token requested with `resource` when its protected resource metadata lists `dpop_signing_alg_values_supported`, otherwise a Bearer token by Token Exchange (the Session's DPoP token as `subject_token`); no redirect followed outside discovery. |
-| Web | Join the agent's own browser to the Session through the company's form: a one-time code tied to that browser by a `SameSite=Strict` cookie, signed over with a DPoP proof by the Session Key. |
+| Sessions | A Session is local: a random `sid`, no network call. Every request to a company's APIs, conversations and protocol endpoints carries `Poppy-Session`; a company keys Sessions by `client_id` and `sid`; `invalid_session` starts one new Session, then stops. |
+| Delegated keys | One delegated P-256 key per User ID signs each request's `poppy-session+jwt`; a `pap-delegation+jwt` of at most 24 hours in `pap_dlg` vouches for it and names no User or Company; the company verifies in the spec's four steps, and may cache a verified delegation. A jwks key never signs a Session JWT. |
+| Sign-in | Direct authorization code with PKCE, loopback redirect URIs; device authorization (the link only on the issuer host or a host of its `protected_resources`, with the company's name and domain); and the Mediated Sign-In extension, an OAuth extension grant (`code_required`, `invalid_grant`, `expired_token`, `access_denied`, `invalid_scope`, credentials chosen by issuer). Sign-in doesn't know the Session and returns a refresh token. |
+| Account access | Store rotating refresh tokens as secrets; get access tokens from them at the token endpoint, narrowed by scope or for one `resource`; sign out by revoking every refresh token held for the account. Access tokens are Bearer tokens: the SDKs send no DPoP proofs yet, and refuse a `DPoP` token type. |
+| APIs | The Session header and an access token at OpenAPI and MCP; a 401 challenge with `scope` when signed out, `insufficient_scope` with the needed `scope`; a token for a service whose protected resource metadata names its own `resource`; for MCP, a token requested with `resource` = the server's `url`, valid only there; no redirect followed outside discovery. |
+| Web | Join the agent's own browser to the Session through the company's form: a one-time code tied to that browser by a `__Host-` `SameSite=Strict` cookie, authorized by the agent at `{browser_session_endpoint}/authorize` with the Session header. |
 | Conversations | Create, retry idempotently, read cursor events (`cursor`, `wait` as query parameters; `conversation_id` and `events` on every read), poll or stream (`Last-Event-ID` wins), identify speakers (`role` set by the company, `author` with its `type` and, for a company's person or persona, `id`, `name`, `image`), hand off and close idempotently, sign in, stay open after sign-out. |
 | Extensions | Negotiate named major versions while ignoring unsupported extensions and unknown fields. |
-| Excluded tasks and feedback | Read the tasks a company doesn't offer (`excluded_tasks`, each with an optional alternative); report a missing task (`kind` `missing`, `task`, `description`) with a Session Token; the company answers 202, or 200 with an alternative when the task can be done after all. |
-| Operations v2 | Refuse an action with its operation, get the user's approval of one revision, send it through the same interface, perform at most once, across interfaces. |
+| Excluded tasks and feedback | Read the tasks a company doesn't offer (`excluded_tasks`, each with an optional alternative); report a missing task (`task`, `description`) with the Session header; the company answers 202, or 200 with an alternative when the task can be done after all. |
+| Operations v2 | Refuse an action with 403 `approval_required` and its operation, ask the user about every operation, retry the same request with its approval, perform at most once, across interfaces, with 503 and `Retry-After` while performing. |
 
 ## Coverage expectations
 
@@ -91,27 +91,27 @@ The overview's principles—existing standards, user control, privacy,
 progressive adoption, and extensibility—must appear in defaults, APIs,
 examples, and Studio copy. Security guidance becomes automated tests wherever
 possible: secret redaction, safe metadata fetches, key and token custody,
-fresh proofs, retries, rate limits, sign-in preferences, consent presentation,
+fresh Session JWTs, retries, rate limits, sign-in preferences, consent presentation,
 and safe errors.
 
 Operations is implemented as an optional Reactor-backed PAP extension: the
 client in Python and TypeScript, the company side in both reference
-companies. Its conformance suite must cover exact revisions, ownership, expiry,
-idempotent confirmation, recovery, and cancellation regardless of the channel
-where an operation was proposed.
+companies. Its conformance suite covers exact revisions, ownership, expiry, a
+retry before and after the outcome, and a new revision on changed terms,
+regardless of the channel where an operation was refused.
 
 ## Where each area stands
 
 | Area | Personal-agent client | Company side | Runnable flow |
 | --- | --- | --- | --- |
-| Discovery, identity, Sessions, DPoP | Python and TypeScript | Python and TypeScript reference companies | [Company discovery](/examples/company-discovery/), [Session lifecycle](/examples/session-lifecycle/) |
+| Discovery, identity, Sessions, delegated keys | Python and TypeScript | Python and TypeScript reference companies | [Company discovery](/examples/company-discovery/), [Session lifecycle](/examples/session-lifecycle/) |
 | Direct and Device Sign-In | Python and TypeScript | Python and TypeScript reference companies (own or hosted pages) | [Device Sign-In](/examples/device-sign-in/) |
 | Mediated Sign-In | Python and TypeScript | Python and TypeScript reference companies | [Mediated Sign-In](/examples/mediated-sign-in/) |
-| Account Tokens | Python and TypeScript | Python and TypeScript reference companies | [Account Tokens](/examples/account-tokens/) |
+| Refresh tokens | Python and TypeScript | Python and TypeScript reference companies | [Refresh tokens](/examples/account-tokens/) |
 | Conversations: messages, events, SSE, handoff, Direct, sign-in, close | Python and TypeScript | Python and TypeScript reference companies | [Streaming](/examples/conversation-streaming/), [control](/examples/conversation-control/) |
-| Operations v2 | Python and TypeScript | Python and TypeScript reference companies | [Operations](/examples/operations/) |
+| Operations v2 | Refuse an action with 403 `approval_required` and its operation, ask the user about every operation, retry the same request with its approval, perform at most once, across interfaces, with 503 and `Retry-After` while performing. |
 | Web (Browser Session) | Python and TypeScript | Python and TypeScript reference companies | [Browser Session](/examples/browser-session/) |
-| OpenAPI and MCP | Python and TypeScript (`ApiClient`, `McpClient`, a resource-bound DPoP token or a Bearer token by Token Exchange) | Python and TypeScript reference companies | [TypeScript SDK](/sdk/typescript/#openapi-and-mcp) |
+| OpenAPI and MCP | Python and TypeScript (`ApiClient`, `McpClient`, a token by `resource`) | Python and TypeScript reference companies | [TypeScript SDK](/sdk/typescript/#openapi-and-mcp) |
 | Feedback | Python and TypeScript (`FeedbackClient`) | Python and TypeScript reference companies (`POST /poppy/feedback`) | [Feedback coverage](/protocol/coverage/feedback/) |
 
 The end-to-end journeys, [a user with a company](/examples/user-with-a-company/)

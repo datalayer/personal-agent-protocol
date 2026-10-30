@@ -24,10 +24,10 @@ The command groups are:
 | `pap company`        | Discover and verify a company's PAP document.                                           |
 | `pap agent`          | Verify personal-agent metadata and public JWKS; import the agent's signing key.         |
 | `pap extensions`     | List advertised PAP extensions and check one required major version.                    |
-| `pap sessions`       | `start`, `renew`, `show`, and `end` Sessions (§4.2).                                    |
-| `pap auth`           | `direct`, `device`, and `mediated` sign-in, and `disconnect` (sign out, §4.4–§4.9).     |
-| `pap api`            | `openapi` calls with DPoP, and `mcp` tools with a Bearer for the MCP url only (§4.3, §6). |
-| `pap conversations`  | `start`, `send`, `events`, `follow` (SSE), `handoff`, `direct`, `close` (§7).           |
+| `pap sessions`       | `start`, `show`, and `end` Sessions; `renew` a Session's access token with its refresh token (§5). |
+| `pap auth`           | `direct`, `device`, and `mediated` sign-in, and `disconnect` (sign out, §4, §5.5).      |
+| `pap api`            | `openapi` calls, and `mcp` tools with a token for the MCP url only (§7).                |
+| `pap conversations`  | `start`, `send`, `events`, `follow` (SSE), `handoff`, `direct`, `close` (§8).           |
 | `pap operations`     | `show`, `approve`, `send` (Operations v2).                                              |
 | `pap requirements`   | `list` and `show` the normative requirement ledger.                                     |
 | `pap conformance`    | `run` the conformance suite (`--demo`, `--tls`) and `report` JSON or JUnit.             |
@@ -47,7 +47,7 @@ command that needs input stops with exit code 4 instead of asking.
 ```bash
 pap config set client_id https://agent.example/agent.json
 pap agent key import --stdin < agent-signing-key.pem   # printed: key:key-1 and its thumbprint
-pap sessions start example.com --json                 # a new Session Key names the Session
+pap sessions start example.com --json                 # a new random `sid` names the Session
 pap auth device "$SESSION" --scope orders:read     # the user signs in on any device
 pap auth mediated "$SESSION" --stdin < credentials.txt  # one field per line, then the code
 pap api openapi "$SESSION" GET /orders
@@ -57,13 +57,13 @@ pap api mcp "$SESSION" search_products --arguments '{"q": "jacket"}'
 The CLI's personal agent is a Reactor host. Its defaults live under
 `$XDG_STATE_HOME/pap` (or `~/.local/state/pap`), owner-only and written
 atomically: the token store (`secrets.json`, `pap.tokenStore`), the signing
-key and the Session Keys (`keys.json`; a Session Key's thumbprint names its
-Session), pairwise User IDs (`pairwise.sqlite3`), and the non-secret Session
-records and approvals (`state.json`). Commands name a Session by its handle,
-`ses_` and its key's thumbprint (`$SESSION`), which `pap sessions start` prints. Plugins installed
+key and one delegated key per user and company (`keys.json`), pairwise User IDs
+(`pairwise.sqlite3`), and the non-secret Session records and approvals
+(`state.json`). Commands name a Session by its handle, `ses_` and its first `sid`
+(`$SESSION`), which `pap sessions start` prints. Plugins installed
 under the `personal_agent_protocol.plugins` entry-point group are discovered
 after these defaults and can replace any of them, for example with a system
-keyring. Only opaque references (`session:…`, `account:…`, `key:…`) are
+keyring. Only opaque references (`session:…`, `refresh_…`, `key:…`) are
 printed.
 
 ## Operations: approve, then send
@@ -133,14 +133,14 @@ prints each effective value's source; its JSON representation is versioned
 with `schema_version: 1`.
 
 `tenant` (or `PAP_TENANT`; `pap-cli` by default) keeps applications apart in
-one state directory: pairwise User IDs and DPoP keys are per tenant, and every
-command sees only its tenant's Sessions. `pap sessions show` lists them, and
-another tenant's Session Key is answered like an unknown one (exit code 3), for
+one state directory: pairwise User IDs and delegated keys are per tenant, and
+every command sees only its tenant's Sessions. `pap sessions show` lists them, and
+another tenant's Session is answered like an unknown one (exit code 3), for
 every command. A tenant is 1 to 64 letters, digits, `.`, `_` or `-`.
 
-The configuration store deliberately rejects unknown keys. Do not put Account
-Tokens, passwords, authorization codes, private keys, assertions, DPoP proofs,
-or mediated secrets in this file or in command arguments. Commands that need
+The configuration store deliberately rejects unknown keys. Do not put access
+or refresh tokens, passwords, authorization codes, private keys, assertions,
+Session JWTs, or mediated secrets in this file or in command arguments. Commands that need
 secrets resolve Reactor contributions and expose only opaque references.
 
 ## Inspect a company
@@ -174,7 +174,7 @@ to equal the exact URL fetched. It validates HTTPS and same-domain JWKS and
 redirect URIs. `jwks` first repeats that metadata verification, then retrieves
 the key set through the same Reactor transport and URL-safety policy. JWKS
 redirects are bounded and cannot leave the client ID host. Only public P-256
-ES256 and RSA RS256 signing keys are accepted; private members and symmetric
+ES256 and RSA PS384 signing keys are accepted; private members and symmetric
 keys are rejected. Both responses are public, schema-versioned inspection
 output and never include assertions or private key material.
 
@@ -260,7 +260,7 @@ pap commands run pap.requirements.list level='MUST NOT' role=company
 pap commands run pap.sessions.end "$SESSION"             # exit code 6: approval_required
 ```
 
-`session` is a Session Key, the thumbprint `pap sessions show` lists. Arguments
+`session` is a Session's handle, the `ses_…` value `pap sessions show` lists. Arguments
 are text: by position, as `name=value`, as a JSON object (a REPL
 line or Studio), or as a mapping (Studio). An unknown name, a missing required
 argument, or an unknown action is a usage error (exit code 2). An action runs
@@ -269,12 +269,12 @@ Sessions, and never asks for input.
 
 What is not an action stays CLI-only: configuration (`pap config`), raw
 credential entry (`pap agent key import`, `pap auth direct|device|mediated`),
-starting and renewing Sessions, sending messages, calling APIs, and approving
+starting Sessions, renewing their access tokens, sending messages, calling APIs, and approving
 or sending operations, which keep their own exact-ID-and-revision prompt.
 
 ### The approval surface
 
-The three actions that change or end what the user holds run only where the
+The two actions that end what the user holds run only where the
 host contributes an approval surface to the personal agent's Reactor
 (`pap.approvalSurface`, for Python hosts). It receives an `ApprovalRequest` —
 the action's ID and name, a plain-words `summary`, its arguments (IDs, never a

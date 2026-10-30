@@ -30,19 +30,20 @@ python -m pytest -p no:cacheprovider
 | `build_pap_reactor`                                     | Implemented           | Build the default Reactor host.                                                                 |
 | `generate_pairwise_user_id`                             | Implemented primitive | Generate an unlinkable random identifier.                                                       |
 | `SqlitePairwiseUserIdStore`, `resolve_pairwise_user_id` | Implemented           | Atomically persist/resolve stable IDs by tenant, local user, and verified issuer.               |
-| `build_session_assertion_claims`                        | Implemented primitive | Build unsigned, short-lived session claims.                                                     |
-| `TokenResponse`, `SessionToken`                         | Implemented primitive | The token response on the wire, and the Session Token with its local `session_key` and `signed_in`. |
-| `SessionClient`                                         | Implemented           | Start (a new Session Key) and renew (the same key) signed-out Sessions; Token Exchange for MCP. |
-| `JoseSigner`, `JoseDpopProofProvider`                   | Implemented           | Sign ES256/RS256 assertions; make Session Keys and fresh DPoP proofs.                           |
-| `SessionKeyCustody`, `InMemorySessionKeys`, `jwk_thumbprint` | Implemented           | Keep Session Keys (one per Session); the RFC 7638 thumbprint that names a Session.              |
-| `verify_dpop_proof`                                     | Implemented           | Verify proof signature, request/token binding, nonce, freshness, and replay state.              |
-| `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL with `dpop_jkt`.                    |
+| `build_client_assertion_claims`                         | Implemented primitive | Build unsigned, short-lived client assertion claims.                                            |
+| `TokenResponse`, `AccessToken`                          | Implemented primitive | The token response on the wire, and the access token the SDK keeps, with its `scope` and `resource`. |
+| `SessionClient`, `PapSession`                           | Implemented           | Start a local Session (a random `sid`, no request); send token requests with a client assertion. |
+| `JoseSigner`, `BlindJoseSigner`, `RsaBlindSigningKey`   | Implemented           | Sign ES256/PS384 client assertions and delegations, blindly (RFC 9474) when needed.             |
+| `DelegatedSessionSigner`, `DelegatedKeyCustody`, `InMemoryDelegatedKeys`, `jwk_thumbprint` | Implemented           | Sign each request's Session JWT with a delegated key per User ID; the RFC 7638 thumbprint in its `kid`. |
+| `personal_agent_protocol.company.verify`                | Implemented           | Verify a Session JWT and its delegation: request and token binding, freshness, and replay state. |
+| `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL.                                    |
 | `validate_direct_sign_in_callback`                      | Implemented primitive | Verify callback redirect, state, issuer, denial, and code.                                      |
-| `DirectSignInClient`                                    | Implemented           | Perform one-use browser handoff and proof-bound exchange with partial-scope reporting.          |
-| `BrowserSessionClient`                                  | Implemented           | Join the agent's own browser: a proof by the Session Key over the join form's one-time code.    |
-| `DpopHttpClient`                                        | Implemented           | Send DPoP resource requests with nonce retry; refuse every redirect (draft 0.3 §3).                  |
+| `DirectSignInClient`                                    | Implemented           | Perform one-use browser handoff and code exchange with partial-scope reporting.                 |
+| `RefreshTokenClient`, `RefreshTokenContext`             | Implemented           | Refresh, narrow, revoke, and sign out, never handing the refresh token to a caller.             |
+| `BrowserSessionClient`                                  | Implemented           | Join the agent's own browser: the agent authorizes the join form's one-time code.               |
+| `SessionHttpClient`                                     | Implemented           | Send the Session header and access token; restart once on `invalid_session`; refuse every redirect. |
 | `ConversationClient`, `generate_message_id`             | Implemented           | Start and continue conversations with user-global idempotent message IDs.                       |
-| Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, DPoP proofs, stores, browser handoff, and browser join.      |
+| Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, Session JWTs, stores, browser handoff, and browser join.     |
 
 ## Discovery
 
@@ -75,11 +76,10 @@ ownership of that dependency.
 The default client creates a core host using HTTPX and a public-network safety
 policy. Keep the client in an async context so its owned HTTP resources close.
 
-The core plugin also supplies `pap.clock` and `pap.randomSource`. A host must
-contribute `pap.signer`, `pap.dpopProofProvider`, `pap.keyStore`,
-`pap.tokenStore`, `pap.pairwiseUserIdStore`, `pap.authorizationStateStore`,
-`pap.cache`, and `pap.browserHandoff` before a flow requiring those services
-begins. Browser Session also requires `pap.browserJoin`, the agent's own
+The core plugin also supplies `pap.clock`, `pap.randomSource`, and `pap.cache`.
+A host must contribute `pap.signer`, `pap.sessionSigner`, `pap.tokenStore`,
+`pap.pairwiseUserIdStore`, `pap.authorizationStateStore`, and
+`pap.browserHandoff` before a flow requiring those services begins. Browser Session also requires `pap.browserJoin`, the agent's own
 browser. Resolution fails
 when a required provider is missing or tied at the
 winning priority; there is no insecure in-memory fallback.
@@ -110,7 +110,7 @@ asyncio.run(inspect())
 Metadata retrieval rejects redirects and a `client_id` that differs from the
 fetched URL. Key retrieval repeats metadata verification, bounds response size
 and redirects, prevents a redirect to another host, and accepts only public
-P-256 ES256 or RSA RS256 keys. The client rejects duplicate JSON members,
+P-256 ES256 or RSA PS384 keys. The client rejects duplicate JSON members,
 private JWK members, symmetric keys, unsafe resolved addresses, and non-JSON
 responses. Applications verifying assertions must select only a key from this
 verified set and must still enforce `kid`, signature, claims, lifetime, and
@@ -131,7 +131,7 @@ closed when no unambiguous store is active.
 A Session is local: `start` signs nothing and sends nothing. Signing remains
 behind a key-custody contribution so private keys never enter application or
 model context. The Session names the agent in `client_id` and the User ID in
-`sub`, for the company's `auth.issuer` alone.
+`sub`, for the company's issuer alone.
 
 ```python
 from personal_agent_protocol import SessionClient, resolve_pairwise_user_id
@@ -158,8 +158,8 @@ a fresh Session JWT for each request. See [Signed-out sessions](/guides/sessions
 usage and the exact security boundary.
 
 The maintained `PyJWT[crypto]` dependency backs local JOSE operations. Only
-ES256 and RS256 are accepted; ES256 is the default. Symmetric algorithms and
-`none` are rejected. See [JOSE and DPoP](/guides/cryptography/) before choosing
+ES256 and PS384 are accepted; ES256 is the default. Symmetric algorithms and
+`none` are rejected. See [Cryptography](/guides/cryptography/) before choosing
 key custody or implementing a company verifier.
 
 Continue with [Direct Sign-In](/guides/direct-sign-in/) for the complete Python
@@ -174,9 +174,10 @@ Direct Conversation links. Operations validate their IDs and opaque revision, an
 a timezone-bearing `expires_at`.
 
 `ConversationClient` implements message creation, continuation, one-page event
-reads, and a de-duplicating long-poll iterator with cursor-expiry recovery.
-Durable cursor persistence, SSE streaming, approval capture, confirmation, and
-advanced lifecycle actions remain the caller's responsibility.
+reads, a de-duplicating long-poll iterator with cursor-expiry recovery, SSE
+streaming, handoff, Direct Conversations, and closing. `OperationsClient` asks
+the user and sends the approval. Durable cursor persistence remains the caller's
+responsibility.
 
 ## Errors
 

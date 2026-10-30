@@ -14,6 +14,11 @@ says what each release changed. Report a new problem as the
 
 ## Residual risks in the SDKs
 
+- **No DPoP yet.** The specification says personal agents SHOULD support DPoP
+  (§4.5). The SDKs send no DPoP proofs and refuse a `DPoP` token type
+  (`unsupported_token_type`), so they can't sign in at a company that requires it.
+  The reference companies issue Bearer tokens, which they accept only beside a
+  Session JWT whose `ath` covers the token.
 - **Known-client records grow with every agent that authenticates.** A
   company keeps one `KnownClient` record per `client_id` (the extensions the
   agent declared), written at its first successful client authentication and
@@ -40,12 +45,13 @@ replaces them where it runs more than one:
   same way.
 - **Key custody.** The signer, the agent's private keys, and the company's
   keys are the host's. Production keys belong in a KMS or HSM behind a
-  contributed `pap.signer` (or an equivalent remote signing service).
+  contributed `pap.signer` (or an equivalent remote signing service), and durable
+  delegated keys behind a `DelegatedKeyCustody`.
 - **Agent-side state.** The core plugin contributes no token store, pairwise
   user ID store, authorization-state store, browser handoff, protected input,
   or approval surface; the host contributes them (the `pap` CLI host keeps
-  local files, under a lock, for one user). Account Tokens must be encrypted at
-  rest. The Account Token lock and the rate-limit budget default to
+  local files, under a lock, for one user). Refresh tokens must be encrypted at
+  rest. The refresh token lock and the rate-limit budget default to
   `in-process`: an agent running several processes contributes shared ones.
 - **Network policy for Node.** The portable TypeScript bundle can only check
   URLs textually; DNS resolution and address pinning are in the `./server`
@@ -57,14 +63,9 @@ replaces them where it runs more than one:
 The SDKs take a position on each; another implementation may take another,
 and the conformance runner reports the difference.
 
-- **DPoP refusal at a resource: `400` or `401`.** The conformance runner
-  expects each refusal's exact status, so a company answering `400` with a
-  `DPoP` challenge where a fixture expects `401` is reported as a failure.
 - **State events around every reply.** The SDKs frame each agent reply with
   `working` and `idle` state events; the draft's wording ("every change to
   either one adds a state event") does not say it explicitly.
-- **A renewed-away Session Token.** Whether it must stop at once is not a
-  company MUST; the conformance suite does not require it.
 
 ## Interoperability not yet exercised
 

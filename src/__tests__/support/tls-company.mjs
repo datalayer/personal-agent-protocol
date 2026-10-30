@@ -25,6 +25,9 @@ export async function serveCompany({ cert, key, ca, agents = {}, clock = systemC
   const sites = { "manzanita.example": companyRequestListener(service) };
   for (const [domain, documents] of Object.entries(agents)) sites[domain] = jsonSite(documents);
   const server = createServer({ cert, key }, byHost(sites));
+  // Longer than any Retry-After a client waits out: a connection dropped as it is
+  // reused loses a POST the client can't resend.
+  server.keepAliveTimeout = 60_000;
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = server.address().port;
   return {

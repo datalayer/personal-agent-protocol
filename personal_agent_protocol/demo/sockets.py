@@ -187,6 +187,9 @@ async def served_over_tls(network: InProcessNetwork) -> AsyncIterator[InProcessN
                 ssl_keyfile=str(key),
                 log_level="warning",
                 lifespan="on",
+                # Longer than any `Retry-After` the agent waits out: a connection the
+                # server drops as it is reused loses a POST the client can't resend.
+                timeout_keep_alive=60,
             )
         )
         task = asyncio.create_task(server.serve(sockets=[listener]))

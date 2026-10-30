@@ -16,6 +16,8 @@
  * narrows to a `PapConfirmDisplay`.
  */
 
+import { knownResponder, knownStatus } from "./models.js";
+
 /** The display type of an operation waiting for the person's approval. */
 export const PAP_CONFIRM_TYPE = "application/vnd.datalayer.pap.confirm+json";
 
@@ -281,10 +283,23 @@ export function papRepliesText(data: PapRepliesData): string {
     .join("\n");
 }
 
-/** What a company answered as its display, `text` included; throws when `data` is not one. */
+/**
+ * What a company answered as its display, `text` included; throws when `data` is not one.
+ *
+ * A `status` or `responder` of a later version reads as the most careful known one: `working`
+ * and `human` (§8.7), so a display only ever carries the values above.
+ */
 export function papRepliesDisplay(id: string, data: PapRepliesData): PapRepliesDisplay {
-  if (!id || !isPapRepliesData(data)) {
+  const read: unknown =
+    typeof data === "object" && data !== null
+      ? {
+          ...data,
+          status: typeof data.status === "string" ? knownStatus(data.status) : data.status,
+          responder: typeof data.responder === "string" ? knownResponder(data.responder) : data.responder,
+        }
+      : data;
+  if (!id || !isPapRepliesData(read)) {
     throw new TypeError("Not a company's replies: PapReplies' fields, each of its type, and no other");
   }
-  return { type: PAP_REPLIES_TYPE, version: PAP_REPLIES_VERSION, id, text: papRepliesText(data), data, actions: [] };
+  return { type: PAP_REPLIES_TYPE, version: PAP_REPLIES_VERSION, id, text: papRepliesText(read), data: read, actions: [] };
 }

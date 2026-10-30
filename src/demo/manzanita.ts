@@ -219,16 +219,16 @@ export class ManzanitaApi implements CompanyApi {
       paths: {
         "/api/orders": { get: { summary: "Your orders (orders:read)" } },
         "/api/orders/{order_id}/exchanges": {
-          post: { summary: "An exchange (orders:write): 403 approval_required and an operation" },
+          post: { summary: "An exchange (orders:write): 403 approval_required" },
         },
         "/api/orders/{order_id}/gift-wrap": {
-          post: { summary: "Gift wrap (orders:write): 403 approval_required and an operation" },
+          post: { summary: "Gift wrap (orders:write): 403 approval_required" },
         },
         "/api/orders/{order_id}/returns": {
-          post: { summary: "A return (orders:write): 403 approval_required and an operation" },
+          post: { summary: "A return (orders:write): 403 approval_required" },
         },
         "/api/orders/{order_id}/repairs": {
-          post: { summary: "A repair (orders:write): 403 approval_required and an operation" },
+          post: { summary: "A repair (orders:write): 403 approval_required" },
         },
       },
     };

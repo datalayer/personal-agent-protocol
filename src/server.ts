@@ -7,14 +7,7 @@
 import { vetHost, type NodeAddressResolver } from "./node-network.js";
 import type { UrlSafetyPolicy } from "./reactor.js";
 
-export {
-  JoseSigner,
-  verifyDpopProof,
-  type DpopReplayCache,
-  type JoseSignerOptions,
-  type VerifiedDpopProof,
-  type VerifyDpopProofOptions,
-} from "./crypto.js";
+export { JoseSigner, type JoseSignerOptions } from "./crypto.js";
 export * from "./company/index.js";
 
 export { isGlobalAddress } from "./addresses.js";

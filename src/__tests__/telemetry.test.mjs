@@ -19,8 +19,63 @@ import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./suppor
 
 const FORBIDDEN = [
   "token", "assertion", "proof", "code", "cookie", "password", "secret", "credential",
-  "mediated", "key", "session_id", "user_id", "pairwise", "url",
+  "mediated", "key", "session_key", "user_id", "pairwise", "url",
 ];
+
+/** Every event, as personal_agent_protocol/telemetry.py names it. */
+const EVENTS = {
+  "pap.discovery.discover": "discovery",
+  "pap.session.start": "session",
+  "pap.sign_in.direct.begin": "sign_in",
+  "pap.sign_in.direct.complete": "sign_in",
+  "pap.sign_in.device.begin": "sign_in",
+  "pap.sign_in.device.poll": "sign_in",
+  "pap.sign_in.mediated.sign_in": "sign_in",
+  "pap.sign_in.mediated.submit_code": "sign_in",
+  "pap.sign_in.refresh_token.refresh": "sign_in",
+  "pap.sign_in.refresh_token.revoke": "sign_in",
+  "pap.conversation.start": "conversation",
+  "pap.conversation.send": "conversation",
+  "pap.conversation.read_events": "conversation",
+  "pap.conversation.start_direct": "conversation",
+  "pap.conversation.handoff": "conversation",
+  "pap.conversation.close": "conversation",
+  "pap.operation.ask_user": "operation",
+  "pap.operation.send": "operation",
+  "pap.company.identity.check": "company",
+  "pap.company.session.start": "company",
+  "pap.company.interface.switch": "company",
+  "pap.company.sign_out": "company",
+  "pap.company.refused": "company",
+};
+
+/** Every attribute, as personal_agent_protocol/telemetry.py names it. */
+const ATTRIBUTES = [
+  "pap.client.id",
+  "pap.company.domain",
+  "pap.company.issuer",
+  "pap.company.route",
+  "pap.conversation.events",
+  "pap.conversation.status",
+  "pap.error",
+  "pap.http.status",
+  "pap.interface",
+  "pap.operation.status",
+  "pap.outcome",
+  "pap.replayed",
+  "pap.scopes.granted",
+  "pap.scopes.missing",
+  "pap.session.signed_in",
+  "pap.sign_in.method",
+  "pap.sign_in.status",
+  "pap.stage",
+];
+
+test("the event and attribute names are Python's", () => {
+  assert.deepEqual({ ...pap.TELEMETRY_EVENTS }, EVENTS);
+  assert.deepEqual(Object.keys(pap.TELEMETRY_ATTRIBUTES).sort(), ATTRIBUTES);
+  assert.deepEqual([...pap.TELEMETRY_STAGES], ["discovery", "session", "sign_in", "conversation", "operation", "company"]);
+});
 
 const sinkPlugin = (name, sink, order = 50) => ({
   name,
@@ -55,6 +110,7 @@ test("each stage of the journey is one event, its attributes allowlisted", async
   await journey(sinkPlugin("tests", sink));
   const stages = new Set(sink.events.map((event) => event.stage));
   assert.deepEqual([...stages].sort(), ["conversation", "discovery", "operation", "session", "sign_in"]);
+  // The session stage asks the company nothing: a Session is local (§5.2).
   const names = new Set(sink.events.filter((e) => e.outcome === "ok").map((e) => e.name));
   for (const name of [
     "pap.discovery.discover",
@@ -62,7 +118,8 @@ test("each stage of the journey is one event, its attributes allowlisted", async
     "pap.sign_in.direct.begin",
     "pap.sign_in.direct.complete",
     "pap.conversation.start",
-    "pap.operation.confirm",
+    "pap.conversation.send",
+    "pap.operation.ask_user",
   ]) {
     assert.ok(names.has(name), name);
   }
@@ -71,9 +128,8 @@ test("each stage of the journey is one event, its attributes allowlisted", async
     "pap.company.domain": "manzanita.example",
     "pap.company.issuer": "https://manzanita.example",
   });
-  const confirm = sink.events.find((e) => e.name === "pap.operation.confirm" && e.outcome === "ok");
-  assert.equal(confirm.attributes["pap.operation.status"], "confirmed");
-  assert.equal(confirm.attributes["pap.operation.state"], "succeeded");
+  const approved = sink.events.find((e) => e.name === "pap.operation.ask_user");
+  assert.deepEqual({ ...approved.attributes }, { "pap.operation.status": "approved" });
   for (const event of sink.events) {
     assert.ok(event.durationMs >= 0);
     for (const name of Object.keys(event.attributes)) assert.ok(name in pap.TELEMETRY_ATTRIBUTES, name);
@@ -117,7 +173,8 @@ test("a company reports what it did and refused: identity, Sessions, replays", a
   assert.deepEqual({ ...checks[0].attributes }, {
     "pap.company.issuer": "https://manzanita.example",
     "pap.company.domain": "manzanita.example",
-    "pap.company.route": "oauth_token",
+    // A Session needs no OAuth endpoint: its first request is a conversation.
+    "pap.company.route": "poppy_conversations",
     "pap.client.id": identity.clientId,
   });
   const started = company.find((event) => event.name === "pap.company.session.start");
@@ -155,26 +212,111 @@ test("a company reports what it did and refused: identity, Sessions, replays", a
   }
 });
 
+test("a forged Session JWT is no identity check, and names no agent", async () => {
+  const sink = new pap.RecordingTelemetrySink();
+  const clock = new MutableClock();
+  const sites = {};
+  const fetch = inProcessFetch(sites);
+  const { service } = manzanita({ fetch, clock, plugins: [sinkPlugin("company-tests", sink)] });
+  sites["manzanita.example"] = service;
+  const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
+  sites["atlas.example"] = identity.documents;
+  // Another key under the agent's `client_id`, its `kid`, and its documents left in place.
+  const impostor = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
+  const host = await agentHost({ identity: impostor, fetch, clock });
+  const session = await new pap.SessionClient({ reactor: host.reactor, fetch }).start({
+    clientId: identity.clientId,
+    pairwiseUserId: "usr_ada_at_manzanita_000000",
+    issuer: "https://manzanita.example",
+    tenantId: "atlas-demo",
+  });
+  const url = "https://manzanita.example/poppy/conversations";
+  const refused = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await pap.sessionHeaders(host.reactor, "POST", url, { session })) },
+    body: "{}",
+  });
+  assert.deepEqual([refused.status, await refused.json()], [400, { error: "invalid_session" }]);
+  assert.deepEqual(sink.events.filter((event) => event.name === "pap.company.identity.check"), []);
+  const [event] = sink.events.filter((item) => item.name === "pap.company.refused");
+  assert.equal(event.attributes["pap.error"], "invalid_session");
+  assert.equal("pap.client.id" in event.attributes, false);
+});
+
 test("a refusal is an error event carrying its code only", async () => {
   const sink = new pap.RecordingTelemetrySink();
   const { host, fetch } = await journey(sinkPlugin("tests", sink));
   const conversations = new pap.ConversationClient({
     reactor: host.reactor,
-    transport: new pap.DpopFetchClient({ reactor: host.reactor, fetch }),
+    transport: new pap.SessionFetchClient({ reactor: host.reactor, fetch }),
   });
-  const token = { accessToken: new pap.SecretValue("not-a-token"), tokenType: "DPoP", expiresIn: 60, scopes: [], sessionKey: "K".repeat(43), signedIn: false };
-  await assert.rejects(
-    conversations.readEvents("https://manzanita.example/poppy/conversations", "conv_unknown", {
-      token,
-      tenantId: "atlas-demo",
-      issuer: "https://manzanita.example",
-    }),
-  );
+  const session = await new pap.SessionClient({ reactor: host.reactor, fetch }).start({
+    clientId: "https://atlas.example/agent.json",
+    pairwiseUserId: "usr_a_stranger_0000000000",
+    issuer: "https://manzanita.example",
+    tenantId: "atlas-demo",
+  });
+  await assert.rejects(conversations.readEvents("https://manzanita.example/poppy/conversations", "conv_unknown", { session }));
   const refused = sink.events.at(-1);
   assert.equal(refused.name, "pap.conversation.read_events");
   assert.equal(refused.outcome, "error");
-  assert.deepEqual(Object.keys(refused.attributes).sort(), ["pap.company.domain", "pap.error"]);
-  assert.match(refused.attributes["pap.error"], /^[a-z][a-z0-9_]*$/);
+  assert.deepEqual({ ...refused.attributes }, { "pap.company.domain": "manzanita.example", "pap.error": "conversation_not_found" });
+});
+
+test("a send's status, whatever came of it", async () => {
+  const sink = new pap.RecordingTelemetrySink();
+  const reactor = pap.buildPapReactor({}, [sinkPlugin("tests", sink)]);
+  const client = new pap.OperationsClient({ reactor });
+  const approval = { operation_id: "exc_5Rt2", revision: "r1" };
+  await client.send(async () => ({ status: 200, body: {} }), approval);
+  await client.send(async () => { throw new pap.TransportError("request_failed", "lost"); }, approval, { attempts: 1 });
+  reactor.stop();
+  const sends = sink.events.filter((e) => e.name === "pap.operation.send");
+  assert.deepEqual(sends.map((e) => e.attributes["pap.operation.status"]), ["answered", "unknown"]);
+});
+
+test("a refresh says how it ended", async () => {
+  const sink = new pap.RecordingTelemetrySink();
+  const answers = [
+    Response.json({ access_token: "t", token_type: "Bearer", scope: "orders:read" }),
+    Response.json({ error: "invalid_scope" }, { status: 400 }),
+    Response.json({ error: "invalid_grant" }, { status: 400 }),
+  ];
+  const fetch = async () => answers.shift();
+  const tokens = new Map([["ref", new pap.SecretValue("refresh-token")]]);
+  const reactor = pap.buildPapReactor({ fetch }, [
+    sinkPlugin("tests", sink),
+    {
+      name: "vault",
+      contributes: [
+        { point: pap.Signers, value: { sign: async () => new pap.SecretValue("assertion") }, options: { id: "signer" } },
+        {
+          point: pap.TokenStores,
+          value: {
+            async put(reference, token) { tokens.set(reference, token); },
+            async get(reference) { return tokens.get(reference); },
+            async delete(reference) { tokens.delete(reference); },
+          },
+          options: { id: "vault" },
+        },
+      ],
+    },
+  ]);
+  const client = new pap.RefreshTokenClient({ reactor, fetch });
+  const context = {
+    tokenEndpoint: "https://shop.example/oauth/token",
+    issuer: "https://shop.example",
+    clientId: "https://agent.example/agent.json",
+    tenantId: "t",
+  };
+  await client.refresh("ref", { context, scopes: ["orders:read"] });
+  await client.refresh("ref", { context, scopes: ["orders:write"] });
+  await client.refresh("ref", { context });
+  reactor.stop();
+  const refreshes = sink.events.filter((e) => e.name === "pap.sign_in.refresh_token.refresh");
+  assert.deepEqual(refreshes.map((e) => e.attributes["pap.sign_in.status"]), ["signed_in", "re_consent_required", "signed_out"]);
+  assert.deepEqual(refreshes.map((e) => e.outcome), ["ok", "ok", "ok"]);
+  assert.equal(refreshes[0].attributes["pap.sign_in.method"], "refresh_token");
 });
 
 test("no allowlisted attribute names a secret", () => {
@@ -195,15 +337,16 @@ test("a value that fails its rule is dropped; a name outside the allowlist is re
     ["pap.error", "00000001CANARYAAAAAAAAAAAAAAAA"],
     ["pap.error", "invalid grant: eyJhbGciOi"],
     ["pap.sign_in.status", new pap.SecretValue("signed_in")],
-    ["pap.operation.state", "x".repeat(49)],
-    ["pap.operation.revision", -1],
-    ["pap.operation.revision", true],
+    ["pap.operation.status", "x".repeat(49)],
+    ["pap.conversation.events", -1],
+    ["pap.conversation.events", true],
     ["pap.session.signed_in", "yes"],
     ["pap.sign_in.method", "password"],
   ]) {
     assert.deepEqual(pap.safeAttributes({ [name]: value }), {}, `${name}=${String(value)}`);
   }
-  for (const name of ["pap.session.token", "pap.operation.id", "authorization", "pap.url"]) {
+  // The attributes of the withdrawn operation shape are gone with it.
+  for (const name of ["pap.session.token", "pap.operation.id", "pap.operation.state", "pap.operation.revision", "authorization", "pap.url"]) {
     assert.throws(() => pap.safeAttributes({ [name]: "x" }), /not a telemetry attribute/);
   }
   assert.throws(

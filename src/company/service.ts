@@ -2296,10 +2296,10 @@ export class CompanyService {
       throw new SessionError("invalid_session", "Refused agent", { statusCode: 400 });
     }
     const resolver = firstContribution(this.reactor, ClientResolvers, "client resolver");
+    let metadata: ClientMetadata | undefined;
     const resolve: ResolveClient = async (agent, kid) => {
       const resolved = await resolver.resolve(agent, kid === undefined ? {} : { kid });
-      // A request can be the agent's first: a Session needs no OAuth endpoint (§4).
-      await this.#rememberClient(agent, resolved[0]);
+      metadata = resolved[0];
       return resolved;
     };
     const verified = await verifySessionJwt(header, {
@@ -2315,6 +2315,9 @@ export class CompanyService {
     });
     const exchange = exchanges.getStore();
     if (exchange !== undefined) exchange.clientId = verified.clientId;
+    // A request can be the agent's first: a Session needs no OAuth endpoint (§4). Only now is
+    // its identity verified, so a forged JWT is never reported as a check, or remembered.
+    if (metadata !== undefined) await this.#rememberClient(verified.clientId, metadata);
     let issued: IssuedAccessToken | undefined;
     if (presented !== undefined) {
       issued = await this.#accessToken(presented);

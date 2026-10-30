@@ -20,6 +20,8 @@ Both SDKs implement the asymmetric cryptographic operations of draft 0.3:
   request. The JWT is ES256 and carries its delegation in `pap_dlg`.
 - `BlindJoseSigner` is a `pap.signer` that signs client assertions and
   delegations blindly (RFC 9474), so each is an ordinary PS384 signature.
+- `JoseDpopProver` is a `pap.dpopProver` that signs each request's DPoP proof with
+  a key of its own (Python).
 - `verify_session_jwt` / `verifySessionJwt` verify the delegation, then the
   signature, the method, URL, issuance window, access-token hash and replay
   state.
@@ -28,7 +30,7 @@ ES256 is the default. PS384 is what blind signing produces. A company accepts
 both, and nothing else: RS256, symmetric algorithms and `none` are rejected even
 if the underlying JOSE library supports them.
 
-The SDKs send no DPoP proofs: see [DPoP](#dpop).
+A DPoP proof is a separate signature by a separate key: see [DPoP](#dpop).
 
 In TypeScript, import device-side `DelegatedSessionSigner` and `BlindJoseSigner`
 from the portable package entry. Import `JoseSigner`, `verifySessionJwt`, and
@@ -103,20 +105,42 @@ is the host's choice, and it needs a `BlindSigningKey` of its own.
 
 ## DPoP
 
-Whether a company binds its access tokens with DPoP is its choice (spec 4.5), and
-the spec says a personal agent SHOULD support it. These SDKs don't yet:
+Whether a company binds its access tokens with DPoP
+([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)) is its choice (spec 4.5), and
+the spec says a personal agent SHOULD support it. The Python SDK does. The TypeScript SDK doesn't send DPoP proofs yet,
+and refuses a `DPoP` token type with `unsupported_token_type`, so it can't sign in at
+a company that requires DPoP.
 
-- They send no DPoP proofs, at the token endpoint or anywhere else.
-- A company's `dpop_signing_alg_values_supported` is its own to list, with any
-  algorithms. Both SDKs read the list and act on nothing in it, so a company that
-  lists it and still issues Bearer tokens works.
-- A token response whose `token_type` is `DPoP` is refused with
-  `unsupported_token_type`, so these SDKs can't sign in at a company that requires
-  DPoP.
+- **Keys.** `pap.dpopProver` signs each proof. Its default, `JoseDpopProver`, keeps
+  one P-256 key per company for a tenant in a `DpopKeyCustody`, never a delegated
+  key and never one from `jwks_uri`: a proof and a Session JWT are separate
+  signatures with separate keys (spec 5.2). The default custody, `InMemoryDpopKeys`,
+  is for one process; the `pap` CLI keeps its keys in its key file.
+- **A proof** has `typ` `dpop+jwt`, `alg` ES256 and the public `jwk` in its header,
+  and `jti` (128 random bits), `htm`, `htu` without query or fragment, and `iat` in
+  its claims, with `ath` when an access token goes and `nonce` when the server gave
+  one.
+- **Token requests** send a proof when the issuer's
+  `dpop_signing_alg_values_supported` includes ES256, and only then: a company that
+  lists nothing, or a list without ES256, gets exactly the request it got before.
+  `use_dpop_nonce` with a `DPoP-Nonce` header is retried once, with a fresh proof and
+  a fresh client assertion.
+- **Token responses** can be `Bearer` or `DPoP`, ignoring case. Binding is the
+  company's choice, so `Bearer` after a proof is fine. `DPoP` when no proof went is
+  refused (`unsupported_token_type`).
+- **Resources.** A `DPoP` token goes as `Authorization: DPoP`, with a proof whose
+  `ath` covers it and the Session header, whose `ath` covers the same token. Each
+  request and retry has a fresh proof and a fresh Session JWT. A 401
+  `DPoP error="use_dpop_nonce"` is retried once, and the latest `DPoP-Nonce` is kept
+  per origin in the transport.
+- **Refresh tokens aren't bound** (RFC 9449 §5, a confidential client). A lost key
+  means refreshing, which gets a token for a new key, not signing in again.
 
-The reference companies issue Bearer tokens and list no DPoP algorithms. A Session
-JWT's `ath` already makes a copied access token useless without the agent's
-delegated key, except at an MCP server that ignores the Session header.
+The reference company binds its tokens when configured to, with `dpop_binding` (see
+[the company guide](/guides/company/)); by default it issues Bearer tokens and lists
+no DPoP algorithm. A Session JWT's `ath` already makes a copied access token useless
+without the agent's delegated key, except at an MCP server that ignores the Session
+header.
 
 ## Replay cache contract
 

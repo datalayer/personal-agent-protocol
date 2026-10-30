@@ -29,8 +29,8 @@ An SDK gap is different: draft 0.3 or Operations v2 already defines the
 behavior, and this repository doesn't implement it yet or leaves it to the host.
 Current examples include:
 
-- DPoP, a SHOULD for personal agents: the SDKs send no DPoP proofs yet and refuse
-  a `DPoP` token type;
+- DPoP, a SHOULD for personal agents: the Python SDK does it. The TypeScript SDK doesn't send DPoP proofs yet
+  and refuses a `DPoP` token type;
 - helpers the Guides suggest: choosing among the sign-in methods, matching a
   task's scopes to a held refresh token, and revoking the previous refresh token
   after a wider sign-in;

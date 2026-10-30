@@ -74,11 +74,16 @@ Unknown or internal symbols are deliberately excluded.
 - [`DiscoveryClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/discovery.py) — Class. Discover and authenticate a company's PAP declaration.
 - [`DiscoveryDocument`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `DiscoveryDocument` class.
 - [`DiscoveryError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Discovery could not be completed safely.
+- [`DPOP_PROVERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `DPOP_PROVERS` constant.
+- [`DpopKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. One DPoP key: `thumbprint` is what the Company binds a token to (RFC 9449 §6).
+- [`DpopKeyCustody`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Where DPoP keys live: one per Company for a tenant, made on first use.
+- [`DpopProofRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. What one DPoP proof is signed for (§4.5, RFC 9449 §4.2).
+- [`DpopProver`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign the DPoP proof of one request (§4.5).
 - [`ExcludedTask`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A task the company chose not to offer through the protocol (§8.1).
 - [`ExcludedTasks`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The document at `excluded_tasks.url` (§8.1): the same for every user.
 - [`ExcludedTasksDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where the tasks the Company chose not to offer through the protocol are listed (§8.1).
 - [`feedback_endpoint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Function. The company's feedback endpoint, when it asks for feedback.
-- [`FeedbackClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. Send feedback reports with a Session Token, signed in or out, and a DPoP proof.
+- [`FeedbackClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. Send feedback reports in a Session, signed in or out.
 - [`FeedbackDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where personal agents report a task the protocol can't do at this company (§8).
 - [`FeedbackError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. The company refused a feedback report: `invalid_request`, `rate_limited`, a token error.
 - [`FeedbackReport`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. One report of a task the company offers no way to do through the protocol (§8).
@@ -86,10 +91,12 @@ Unknown or internal symbols are deliberately excluded.
 - [`generate_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. Generate a non-PII user ID to persist for one user/company issuer pair.
 - [`IdentityError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Personal-agent metadata or public keys could not be verified safely.
 - [`InMemoryDelegatedKeys`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Delegated keys in this process's memory, one per User ID.
+- [`InMemoryDpopKeys`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. DPoP keys in this process's memory, one per Company for a tenant.
 - [`InMemoryProtocolCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default `pap.cache`: a bounded, least-recently-used map in one process.
 - [`InProcessRefreshTokenLock`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default refresh token lock for a single process.
 - [`is_loopback_redirect`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. A loopback redirect URI (RFC 8252 §7.3): `http` to a loopback IP literal, any port.
 - [`JoseAlgorithm`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Constant. Public `JoseAlgorithm` constant.
+- [`JoseDpopProver`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. `pap.dpopProver`: a fresh proof for each request, by the Company's DPoP key (§4.5).
 - [`JoseSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Sign client assertions and delegations with a key from the agent's `jwks_uri`.
 - [`JsonWebKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. One asymmetric public signing key published by a personal agent.
 - [`JsonWebKeySet`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A non-empty set of public keys suitable for PAP assertion verification.
@@ -104,6 +111,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`MediatedSignInResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Class. Where a Mediated Sign-In stands, without any credential.
 - [`Message`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Message sent by either side or returned in a conversation event.
 - [`MetadataFetch`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The bounds of one public metadata fetch: size, total time, approved addresses.
+- [`new_dpop_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Function. A new P-256 key, used for nothing but DPoP proofs (§5.2).
 - [`new_idempotency_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. A fresh key for a write: a random UUID (version 4).
 - [`new_session_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. A new `sid`: 128 random bits, 22 URL-safe characters, never used again (§5.2).
 - [`OAuthServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The issuer's RFC 8414 metadata, with the fields this protocol requires (§3.2).

@@ -31,17 +31,18 @@ python -m pytest -p no:cacheprovider
 | `generate_pairwise_user_id`                             | Implemented primitive | Generate an unlinkable random identifier.                                                       |
 | `SqlitePairwiseUserIdStore`, `resolve_pairwise_user_id` | Implemented           | Atomically persist/resolve stable IDs by tenant, local user, and verified issuer.               |
 | `build_client_assertion_claims`                         | Implemented primitive | Build unsigned, short-lived client assertion claims.                                            |
-| `TokenResponse`, `AccessToken`                          | Implemented primitive | The token response on the wire, and the access token the SDK keeps, with its `scope` and `resource`. |
+| `TokenResponse`, `AccessToken`                          | Implemented primitive | The token response on the wire, and the access token the SDK keeps, with its `token_type` (`Bearer` or `DPoP`), `scope` and `resource`. |
 | `SessionClient`, `PapSession`                           | Implemented           | Start a local Session (a random `sid`, no request); send token requests with a client assertion. |
 | `JoseSigner`, `BlindJoseSigner`, `RsaBlindSigningKey`   | Implemented           | Sign ES256/PS384 client assertions and delegations, blindly (RFC 9474) when needed.             |
 | `DelegatedSessionSigner`, `DelegatedKeyCustody`, `InMemoryDelegatedKeys`, `jwk_thumbprint` | Implemented           | Sign each request's Session JWT with a delegated key per User ID; the RFC 7638 thumbprint in its `kid`. |
+| `JoseDpopProver`, `DpopKeyCustody`, `InMemoryDpopKeys`, `DpopProofRequest` | Implemented           | Sign each request's DPoP proof with a key of its own per company, for a tenant. |
 | `personal_agent_protocol.company.verify`                | Implemented           | Verify a Session JWT and its delegation: request and token binding, freshness, and replay state. |
 | `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL.                                    |
 | `validate_direct_sign_in_callback`                      | Implemented primitive | Verify callback redirect, state, issuer, denial, and code.                                      |
 | `DirectSignInClient`                                    | Implemented           | Perform one-use browser handoff and code exchange with partial-scope reporting.                 |
 | `RefreshTokenClient`, `RefreshTokenContext`             | Implemented           | Refresh, narrow, revoke, and sign out, never handing the refresh token to a caller.             |
 | `BrowserSessionClient`                                  | Implemented           | Join the agent's own browser: the agent authorizes the join form's one-time code.               |
-| `SessionHttpClient`                                     | Implemented           | Send the Session header and access token; restart once on `invalid_session`; refuse every redirect. |
+| `SessionHttpClient`                                     | Implemented           | Send the Session header, access token and any DPoP proof; restart once on `invalid_session`; retry `use_dpop_nonce` once; refuse every redirect. |
 | `ConversationClient`, `generate_message_id`             | Implemented           | Start and continue conversations with user-global idempotent message IDs.                       |
 | Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, Session JWTs, stores, browser handoff, and browser join.     |
 
@@ -164,6 +165,23 @@ key custody or implementing a company verifier.
 
 Continue with [Direct Sign-In](/guides/direct-sign-in/) for the complete Python
 orchestrator and the portable primitives shared with TypeScript.
+
+## DPoP
+
+A company that binds its access tokens lists ES256 in its metadata's
+`dpop_signing_alg_values_supported`. Pass what the metadata says to whatever sends a
+token request; a `DPoP` token then needs nothing more from the host:
+
+- `DeviceSignInClient.begin` and `DirectSignInClient.begin` take `dpop_signing_algs`;
+- so does `RefreshTokenContext`, for refreshes and tokens for one service;
+- `MediatedSignInClient.sign_in` reads it from `company`, and takes the `tenant_id`
+  whose key proves.
+
+With a list that doesn't include ES256, or none, no proof goes. The default
+`pap.dpopProver` keeps its keys in memory: a host whose tokens outlive a process
+contributes `JoseDpopProver` with a durable `DpopKeyCustody` (`key_for`, `forget`),
+below the default's order of 100. A lost key means refreshing: refresh tokens aren't
+bound. See [DPoP](/guides/cryptography/#dpop).
 
 ## Conversation and Operations models
 

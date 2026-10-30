@@ -66,6 +66,8 @@ started = await client.begin(
     organization=company.document.organization,
     # The link must be on the issuer's host or one of its protected resources'.
     protected_resources=metadata.protected_resources,
+    # A DPoP proof goes with each poll when this includes ES256.
+    dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
 )
 
 # Render only these human-facing values. A UI may turn the complete URI into a QR.

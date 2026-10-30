@@ -46,8 +46,8 @@ sequenceDiagram
 - Callback state is consumed before exchange, so denial, failure, and success
   cannot leave replayable state behind.
 - Redirect location, issuer, state, expiry, content type, response size, token
-  type, and scopes are all validated. The SDK sends no DPoP proofs and refuses a
-  `DPoP` token type.
+  type, and scopes are all validated. The company lists no DPoP algorithm here, so
+  no proof goes, and a `DPoP` token type would be refused.
 - Neither the authorization URL nor the code exchange names a Session: one sign-in
   can serve several Sessions.
 - The company cannot return scopes the user did not request. Missing scopes are

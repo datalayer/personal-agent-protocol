@@ -39,8 +39,8 @@ other things for what they do, because they are narrower than the OAuth terms:
 | Signed out | Pseudonymous | The company recognizes the user by User ID but doesn't know who they are. |
 
 DPoP ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)) is a company's choice,
-as in OAuth, and personal agents SHOULD support it. These SDKs don't send DPoP
-proofs yet, and refuse a `DPoP` token type.
+as in OAuth, and personal agents SHOULD support it. The Python SDK does.
+The TypeScript SDK doesn't send DPoP proofs yet, and refuses a `DPoP` token type.
 
 The upstream specification is authoritative when terminology here and the
 [draft specification](https://personalagentprotocol.org/docs/0.3/spec#terms) differ.

@@ -41,10 +41,12 @@ a new one from the first request that names it.
   refresh tokens are unaffected.
 
 Sign-in and refresh are plain OAuth and give an `AccessToken`: `access_token`, a
-`Bearer` `token_type`, `expires_in`, `scope`, and `resource` when it was issued
-for one service. A `DPoP` token type is refused (`unsupported_token_type`): the
-specification says a personal agent SHOULD support DPoP, and these SDKs don't send
-DPoP proofs yet.
+`token_type` of `Bearer` or `DPoP`, `expires_in`, `scope`, and `resource` when it
+was issued for one service. The specification says a personal agent SHOULD support
+DPoP. The Python SDK does: it sends a proof with token requests when the issuer lists
+ES256, and with every request that carries a `DPoP` token. A `DPoP` token type with
+no proof sent is refused (`unsupported_token_type`). The TypeScript SDK doesn't send DPoP proofs yet, and refuses a
+`DPoP` token type. See [DPoP](/guides/cryptography/#dpop).
 
 A personal agent that acts for a user through several agents MAY name which one
 a Session is for with an Agent ID (`agent_id`, `agentId`). It follows the same
@@ -133,11 +135,15 @@ For each attempt, the transport (`SessionHttpClient`, `SessionFetchClient`):
   sent;
 - sends it in `Poppy-Session`, with any access token in `Authorization`, and
   refuses every redirect;
-- rejects a caller-supplied `Authorization`, `DPoP`, or `Poppy-Session` header; and
-- on `invalid_session`, starts a new Session once and sends the request again.
+- with a `DPoP` token, asks `pap.dpopProver` for a fresh proof, whose `ath` covers
+  the same token, and sends it in `DPoP`;
+- rejects a caller-supplied `Authorization`, `DPoP`, or `Poppy-Session` header;
+- on `invalid_session`, starts a new Session once and sends the request again; and
+- on a `use_dpop_nonce` challenge, sends the request again once with the nonce, and
+  keeps the latest `DPoP-Nonce` per origin for later requests.
 
-Each token request gets a fresh client assertion from `pap.signer` and no Session
-header. It is a form-encoded POST without browser credentials or redirects, and
+Each token request gets a fresh client assertion from `pap.signer`, a DPoP proof when
+the issuer lists ES256, and no Session header. It is a form-encoded POST without browser credentials or redirects, and
 accepts only bounded `application/json` responses parsed with duplicate member
 rejection.
 

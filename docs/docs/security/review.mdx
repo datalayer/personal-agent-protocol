@@ -14,11 +14,14 @@ says what each release changed. Report a new problem as the
 
 ## Residual risks in the SDKs
 
-- **No DPoP yet.** The specification says personal agents SHOULD support DPoP
-  (§4.5). The SDKs send no DPoP proofs and refuse a `DPoP` token type
-  (`unsupported_token_type`), so they can't sign in at a company that requires it.
-  The reference companies issue Bearer tokens, which they accept only beside a
-  Session JWT whose `ath` covers the token.
+- **No DPoP in TypeScript yet.** The specification says personal agents SHOULD
+  support DPoP (§4.5). The Python SDK does. The TypeScript SDK doesn't send DPoP proofs yet and refuses a `DPoP` token
+  type (`unsupported_token_type`), so it can't sign in at a company that requires it.
+  By default the reference companies issue Bearer tokens, which they accept only
+  beside a Session JWT whose `ath` covers the token.
+- **The default DPoP keys live in memory.** `InMemoryDpopKeys` is for one process. A
+  key lost with it means refreshing, because refresh tokens aren't bound; a bound
+  access token stops working at once. A host contributes a durable `DpopKeyCustody`.
 - **Known-client records grow with every agent that authenticates.** A
   company keeps one `KnownClient` record per `client_id` (the extensions the
   agent declared), written at its first successful client authentication and

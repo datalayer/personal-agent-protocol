@@ -42,6 +42,8 @@ async with httpx.AsyncClient() as http:
         redirect_uri="https://agent.example/oauth/callback",
         scopes=("orders:read",),  # the company's own scopes, from `auth.scopes`
         tenant_id="application-42",
+        # A DPoP proof goes with the code exchange when the issuer's metadata lists ES256:
+        # dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
     )
 
     # Later, at the registered callback route. Never pass this URL to a model.

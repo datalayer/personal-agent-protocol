@@ -44,7 +44,7 @@
         { "label": "6", "title": "Tokens", "detail": "A Bearer access token and a refresh token" },
         { "label": "7", "title": "Signed in", "detail": "`orders:read` only", "current": true }
       ],
-      "notes": "The host exchanges the code with the PKCE verifier and a fresh client assertion. The answer is plain OAuth: a Bearer access token, with orders:read, and a refresh token. The SDK sends no DPoP proofs and refuses a DPoP token type. Nothing on the wire names a Session; the next request that carries the access token signs its Session in."
+      "notes": "The host exchanges the code with the PKCE verifier and a fresh client assertion. The answer is plain OAuth: a Bearer access token, with orders:read, and a refresh token. This company lists no DPoP algorithm, so no proof goes. Nothing on the wire names a Session; the next request that carries the access token signs its Session in."
     },
     {
       "type": "bullets",

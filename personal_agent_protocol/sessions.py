@@ -244,7 +244,7 @@ class AccessToken(ProtocolModel):
     """
 
     access_token: SecretStr
-    token_type: Literal["Bearer"] = "Bearer"  # noqa: S105 - an OAuth token type
+    token_type: Literal["Bearer"] = "Bearer"
     expires_in: int | None = None
     scope: str = ""
     resource: str | None = None

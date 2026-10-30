@@ -139,9 +139,7 @@ async def read_pap_telemetry() -> dict[str, Any]:
     await conversations.send(
         endpoint,
         page.conversation_id,
-        Message(
-            id=generate_message_id(reactor), author=Author(type="agent"), approval=approval
-        ),
+        Message(id=generate_message_id(reactor), author=Author(type="agent"), approval=approval),
         session=session,
         token=signed_in,
         wait=0,

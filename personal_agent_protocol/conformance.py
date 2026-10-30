@@ -2033,7 +2033,7 @@ async def _account_session(ctx: ConformanceContext, _: FixtureCase) -> None:
 
 
 @case("operations.signed-out-session-gets-a-challenge")
-async def _signed_out_challenge(ctx: ConformanceContext, _: FixtureCase) -> None:
+async def _signed_out_operation_challenge(ctx: ConformanceContext, _: FixtureCase) -> None:
     await ctx.operations_negotiated()
     user, signed = await _signed_in_user(ctx)
     operation = await _propose(ctx, signed, "user")

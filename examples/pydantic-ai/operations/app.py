@@ -21,8 +21,6 @@ from personal_agent_protocol import (
     DeviceSignInClient,
     DiscoveryClient,
     Message,
-    OAuthServerMetadata,
-    Operation,
     SessionClient,
     SessionHttpClient,
     generate_message_id,
@@ -78,7 +76,7 @@ agent = Agent(
 
 
 @agent.tool_plain
-async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthrough, in order
+async def explain_operations() -> dict[str, Any]:
     """Ask, approve, revise, and recover a payment; return safe evidence."""
 
     clock = MutableClock()
@@ -127,9 +125,7 @@ async def explain_operations() -> dict[str, Any]:  # noqa: C901 - one walkthroug
     negotiated = operations_negotiated(
         company.document, ClientMetadata.model_validate(atlas.metadata)
     )
-    without = operations_negotiated(
-        company.document, ClientMetadata.model_validate(plain.metadata)
-    )
+    without = operations_negotiated(company.document, ClientMetadata.model_validate(plain.metadata))
     transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
     operations = OperationsClient(reactor=reactor)

@@ -31,7 +31,7 @@ _EXTENSION_VERSION = re.compile(r"^(0|[1-9][0-9]*)$")
 #: OAuth scope syntax (RFC 6749 §3.3): one scope token.
 _SCOPE = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]+$")
 #: The grant a Company's token endpoint MUST accept (§3.2, §4.4).
-REFRESH_TOKEN_GRANT = "refresh_token"  # noqa: S105 - an OAuth token or grant type, not a credential
+REFRESH_TOKEN_GRANT = "refresh_token"
 #: The grants that say the Company offers Direct and Device Sign-In (§3.2, §4.4).
 AUTHORIZATION_CODE_GRANT = "authorization_code"
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
@@ -461,7 +461,7 @@ class ClientMetadata(ProtocolModel):
     logo_uri: str | None = None
     jwks_uri: str
     redirect_uris: list[str] = Field(default_factory=list)
-    token_endpoint_auth_method: Literal["private_key_jwt"] = "private_key_jwt"  # noqa: S105
+    token_endpoint_auth_method: Literal["private_key_jwt"] = "private_key_jwt"
     extensions: dict[str, ExtensionDescriptor] = Field(default_factory=dict)
 
     @field_validator("client_id", "logo_uri", "jwks_uri")

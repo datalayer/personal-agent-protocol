@@ -10,6 +10,29 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.28 → 0.29
+
+0.29.0 implements DPoP (spec 4.5, RFC 9449) in both SDKs and both reference
+companies. The draft is unchanged, and a company that lists no DPoP algorithm sees
+the same requests as from 0.28. Python spells the names below in `snake_case`,
+TypeScript in `camelCase`.
+
+| Change | What to do |
+| --- | --- |
+| A token request names its tenant and what the issuer lists | `SessionClient.token_request(..., tenant_id=, dpop_signing_algs=)`: both required, `dpop_signing_algs` `None` when the metadata lists nothing |
+| Each sign-in and refresh passes `dpop_signing_alg_values_supported` on, or sends no proof | `DeviceSignInClient.begin(..., dpop_signing_algs=)`, `DirectSignInClient.begin(..., dpop_signing_algs=)`, `RefreshTokenContext.dpop_signing_algs`, from `metadata.dpop_signing_alg_values_supported` |
+| Mediated Sign-In names its tenant, whose DPoP key proves | `MediatedSignInClient.sign_in(..., tenant_id=)` is required; it reads the algorithms from `company` |
+| An access token is `Bearer` or `DPoP` | `TokenResponse.token_type` and `AccessToken.token_type` are one of the two; a host that keeps a token keeps its type, and a `DPoP` token sent by hand needs a proof: use `session_headers` |
+| A `DPoP` token type is refused only when no proof went | `unsupported_token_type` no longer means every `DPoP` answer |
+| A new contribution point, `pap.dpopProver` | Nothing, for one process: the default keeps one key per company for a tenant in memory. A host whose tokens outlive a process contributes `JoseDpopProver` with a durable `DpopKeyCustody` |
+| Reference company: `dpop_binding`, off by default | `CompanyConfig.dpop_binding` (`off`, `optional`, `required`), `dpop_nonces`, `dpop_nonce_lifetime`, `dpop_proof_window`; turning it on lists ES256 and changes the `WWW-Authenticate` schemes (`token_schemes`) |
+
+A custom company store sees one new record kind, `dpop_nonce`, and a new
+`dpop_jkt` field in the Python company's access-token record. A durable store's
+older Python access tokens fail to read until they expire: let them expire, or add
+`"dpop_jkt": null` to them. The TypeScript company reads a record without the
+field as a Bearer token, which it is.
+
 ## 0.27 → 0.28
 
 0.28.0 implements [PAP draft 0.3](https://personalagentprotocol.org/docs/0.3/spec)

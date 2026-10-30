@@ -324,7 +324,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
   }
   return definePlugin({
     name: "@datalayer/personal-agent-protocol-core",
-    version: "0.28.0",
+    version: "0.29.0",
     contributionPoints: [
       DiscoveryTransports,
       UrlSafetyPolicies,

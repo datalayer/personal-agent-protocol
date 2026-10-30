@@ -6,6 +6,37 @@
 
 # Changelog
 
+## 0.29.0 (unreleased)
+
+DPoP (spec 4.5, RFC 9449) in both SDKs and both reference companies, at the same
+target, upstream `3e9bada`: see the
+[0.28 → 0.29 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#028--029).
+
+- **Personal agents:** a new contribution point, `pap.dpopProver` (`DPOP_PROVERS`,
+  `DpopProvers`), whose default `JoseDpopProver` keeps one P-256 key per company for
+  a tenant in a `DpopKeyCustody`, never a delegated key and never a key from
+  `jwks_uri`. A token request sends a proof when the issuer's
+  `dpop_signing_alg_values_supported` includes ES256, and only then, and retries
+  `use_dpop_nonce` once. `Bearer` and `DPoP` token types are both taken; `DPoP` is
+  refused when no proof went. A `DPoP` token goes with a fresh proof on every request
+  and retry, streams and MCP included, the latest nonce kept per origin. Refresh
+  tokens aren't bound, so a lost key means refreshing.
+- **Reference companies:** `CompanyConfig.dpop_binding` (`dpopBinding`): `off` by
+  default, `optional` or `required`, with `dpop_nonces`, `dpop_nonce_lifetime` and
+  `dpop_proof_window`. Off, nothing changes. On, the metadata lists ES256, a proof
+  is checked after the client assertion and before any grant, and a bound token needs
+  the `DPoP` scheme and a proof by its key at every API, conversation, feedback, MCP
+  and browser `/authorize` request. Challenges name each scheme a resource accepts.
+- **Conformance:** a `dpop` suite: 25 cases in a world that binds, with nonces, in
+  all four pairings, and three the SDKs decide alone. `pap conformance run --world
+  dpop-binding` runs them against the demo company.
+- **Breaking:** `SessionClient.token_request` and `MediatedSignInClient.sign_in`
+  take a `tenant_id` (and `token_request` the issuer's `dpop_signing_algs`). The
+  `dpop_jkt` field is new in a company store's access-token record, so a durable
+  store's older access tokens fail to read until they expire (Python; the TypeScript
+  company reads a record without it as a Bearer token). A company store sees a new
+  record kind, `dpop_nonce`.
+
 ## 0.28.0 (2026-10-30)
 
 PAP draft 0.3 as rewritten upstream at `3e9bada` (revision 2026-10-28), in both

@@ -6,16 +6,16 @@ title: Compatibility and conformance report
 
 # Compatibility and conformance report
 
-SDK version **0.28.0**, PAP profile **0.3** (draft updated 2026-10-28), Operations extension **v2**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
+SDK version **0.29.0**, PAP profile **0.3** (draft updated 2026-10-28), Operations extension **v2**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
 
 ## Pairings
 
 | Personal agent | Company | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: |
-| Python | Python | 98 | 0 | 0 |
-| Python | TypeScript | 98 | 0 | 0 |
-| TypeScript | Python | 98 | 0 | 0 |
-| TypeScript | TypeScript | 98 | 0 | 0 |
+| Python | Python | 123 | 0 | 0 |
+| Python | TypeScript | 123 | 0 | 0 |
+| TypeScript | Python | 123 | 0 | 0 |
+| TypeScript | TypeScript | 123 | 0 | 0 |
 
 ## Protocol
 
@@ -140,9 +140,39 @@ SDK version **0.28.0**, PAP profile **0.3** (draft updated 2026-10-28), Operatio
 | `operations.lost-answer-same-approval` | recovery | OPS-7-01, OPS-7-04, GUIDE-ops-pa-04 | pass | pass | pass | pass |
 | `operations.failed-partial-result` | positive | OPS-7-01 | pass | pass | pass | pass |
 
+## DPoP
+
+| Case | Kind | Requirements | Python → Python | Python → TypeScript | TypeScript → Python | TypeScript → TypeScript |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dpop.metadata-lists-es256` | positive | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.token-bound-and-used` | positive | PAP-4.5-01, GUIDE-pa-session-03, GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.session-and-proof-different-keys` | positive | GUIDE-pa-session-03 | pass | pass | pass | pass |
+| `dpop.token-request-needs-a-proof` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.token-proof-for-another-url` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.token-proof-with-ath` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.token-proof-outside-the-window` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.token-proof-wrong-typ` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.nonce-at-the-token-endpoint` | recovery | GUIDE-pa-session-03, GUIDE-co-session-06, GUIDE-retry-02 | pass | pass | pass | pass |
+| `dpop.nonce-at-a-resource` | recovery | GUIDE-pa-session-03, GUIDE-co-session-06, GUIDE-retry-02 | pass | pass | pass | pass |
+| `dpop.bound-token-without-a-proof` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.bound-token-as-bearer` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.proof-of-another-key` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.proof-replayed` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.proof-wrong-ath` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.proof-wrong-htm` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.proof-wrong-htu` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.proof-outside-the-window` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.session-header-still-checked` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.refresh-after-the-key-is-lost` | recovery | PAP-4.5-01 | pass | pass | pass | pass |
+| `dpop.conversation-and-stream` | positive | GUIDE-pa-session-03, GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.feedback` | positive | GUIDE-pa-session-03, GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.browser-join` | positive | GUIDE-pa-session-03, GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.mcp-token-bound` | positive | GUIDE-pa-session-03, GUIDE-co-session-06 | pass | pass | pass | pass |
+| `dpop.mcp-challenge-keeps-resource-metadata` | negative | GUIDE-co-session-06 | pass | pass | pass | pass |
+
 ## Decided by each SDK alone
 
-57 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
+60 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
 
 | Case | Kind | Check | SDKs |
 | --- | --- | --- | --- |
@@ -203,5 +233,8 @@ SDK version **0.28.0**, PAP profile **0.3** (draft updated 2026-10-28), Operatio
 | `security.metadata-not-json` | negative | discovery | python, typescript |
 | `security.delegated-key-shared-across-user-ids` | negative | delegated_key_per_user_id | python, typescript |
 | `lifecycle.rate-limit-retry-after` | negative | rate_limited | python, typescript |
+| `dpop.proof-only-when-listed` | positive | dpop_token_request | python, typescript |
+| `dpop.dpop-answer-needs-a-proof` | negative | dpop_token_request | python, typescript |
+| `dpop.proof-shape` | positive | dpop_proof_shape | python, typescript |
 
 The runners' JSON reports (schema 1) carry each case's requirements and messages; see the [conformance guide](/guides/conformance/).

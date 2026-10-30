@@ -12,6 +12,10 @@
   P-256 key per User ID (tenant, issuer, `sub`), vouched for by a delegation
   the `pap.signer` key signs, and a fresh Session JWT for each request. Keys
   live in a `DelegatedKeyCustody`; `InMemoryDelegatedKeys` is for one process.
+- `JoseDpopProver` is the `pap.dpopProver` default: one P-256 key per Company for
+  a tenant, never a delegated key and never one from `jwks_uri` (§4.5, §5.2), and
+  a fresh RFC 9449 proof for each request. Keys live in a `DpopKeyCustody`;
+  `InMemoryDpopKeys` is for one process.
 """
 
 from __future__ import annotations
@@ -35,7 +39,7 @@ from pydantic import SecretStr
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import ProofError
-from .reactor import SIGNERS, SessionJwtRequest, Signer, first_contribution
+from .reactor import SIGNERS, DpopProofRequest, SessionJwtRequest, Signer, first_contribution
 
 JoseAlgorithm = Literal["ES256", "PS384"]
 SigningKey: TypeAlias = EllipticCurvePrivateKey | RSAPrivateKey | jwt.PyJWK | str | bytes
@@ -49,6 +53,9 @@ SESSION_JWT_ALGORITHM = "ES256"
 DELEGATION_TYPE = "pap-delegation+jwt"
 #: A delegation expires at most this long after it is issued (§5.2).
 DELEGATION_MAX_LIFETIME = timedelta(hours=24)
+#: A DPoP proof's `typ` and `alg` (§4.5, RFC 9449 §4.2).
+DPOP_PROOF_TYPE = "dpop+jwt"
+DPOP_ALGORITHM = "ES256"
 #: The `typ` each `pap.signer` purpose signs with.
 SIGNER_TYPES = {"client_assertion": "JWT", "delegation": DELEGATION_TYPE}
 
@@ -80,7 +87,7 @@ def normalized_htu(value: str) -> str:
 
     parsed = urlsplit(value)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-        raise ProofError("invalid_htu", "A Session JWT's target must be an HTTPS URL")
+        raise ProofError("invalid_htu", "A signed request's target must be an HTTPS URL")
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
@@ -359,9 +366,127 @@ class DelegatedSessionSigner:
         )
 
 
+@dataclass(frozen=True)
+class DpopKey:
+    """One DPoP key: `thumbprint` is what the Company binds a token to (RFC 9449 §6)."""
+
+    private_key: EllipticCurvePrivateKey
+    public_jwk: dict[str, Any]
+    thumbprint: str
+
+
+def dpop_key_from(private_key: EllipticCurvePrivateKey) -> DpopKey:
+    """The `DpopKey` of a P-256 private key."""
+
+    public = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(private_key.public_key()))
+    return DpopKey(private_key=private_key, public_jwk=public, thumbprint=jwk_thumbprint(public))
+
+
+def new_dpop_key() -> DpopKey:
+    """A new P-256 key, used for nothing but DPoP proofs (§5.2)."""
+
+    return dpop_key_from(ec.generate_private_key(ec.SECP256R1()))
+
+
+class DpopKeyCustody(Protocol):
+    """Where DPoP keys live: one per Company for a tenant, made on first use.
+
+    `key_for` returns the key of `(tenant_id, issuer)`, and makes it if there is
+    none, at once: two callers never get two keys. `forget` loses it: refresh tokens
+    aren't bound, so the next refresh gets a token for a new key (RFC 9449 §5). A host
+    keeps them on the User's device or in its KMS; `InMemoryDpopKeys` is for one
+    process.
+    """
+
+    async def key_for(self, *, tenant_id: str, issuer: str) -> DpopKey: ...
+
+    async def forget(self, *, tenant_id: str, issuer: str) -> None: ...
+
+
+class InMemoryDpopKeys:
+    """DPoP keys in this process's memory, one per Company for a tenant."""
+
+    def __init__(self) -> None:
+        self._keys: dict[tuple[str, str], DpopKey] = {}
+
+    async def key_for(self, *, tenant_id: str, issuer: str) -> DpopKey:
+        key = self._keys.get((tenant_id, issuer))
+        return (
+            key if key is not None else self._keys.setdefault((tenant_id, issuer), new_dpop_key())
+        )
+
+    async def forget(self, *, tenant_id: str, issuer: str) -> None:
+        self._keys.pop((tenant_id, issuer), None)
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+
+def dpop_proof_claims(
+    request: DpopProofRequest,
+    *,
+    issued_at: datetime,
+    random_bytes: Callable[[int], bytes] = secrets.token_bytes,
+) -> dict[str, object]:
+    """A DPoP proof's claims for one request (RFC 9449 §4.2).
+
+    `jti`, `htm`, `htu` (no query or fragment) and `iat`; `ath` with an access token,
+    `nonce` when the server gave one.
+    """
+
+    entropy = random_bytes(16)
+    if len(entropy) < 16:
+        raise ProofError("weak_randomness", "A DPoP proof's jti needs 128 random bits")
+    claims: dict[str, object] = {
+        "jti": _base64url(entropy),
+        "htm": request.method.upper(),
+        "htu": normalized_htu(request.url),
+        "iat": int(issued_at.timestamp()),
+    }
+    if request.access_token is not None:
+        claims["ath"] = token_hash(request.access_token)
+    if request.nonce is not None:
+        claims["nonce"] = request.nonce
+    return claims
+
+
+class JoseDpopProver:
+    """`pap.dpopProver`: a fresh proof for each request, by the Company's DPoP key (§4.5)."""
+
+    def __init__(
+        self,
+        keys: DpopKeyCustody,
+        *,
+        now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        random_bytes: Callable[[int], bytes] = secrets.token_bytes,
+    ) -> None:
+        self.keys = keys
+        self.now = now
+        self.random_bytes = random_bytes
+
+    async def prove(self, request: DpopProofRequest) -> SecretStr:
+        issued_at = self.now()
+        if issued_at.tzinfo is None:
+            raise ProofError("invalid_clock", "The DPoP clock must be timezone-aware")
+        claims = dpop_proof_claims(request, issued_at=issued_at, random_bytes=self.random_bytes)
+        key = await self.keys.key_for(tenant_id=request.tenant_id, issuer=request.issuer)
+        try:
+            encoded = jwt.encode(
+                claims,
+                key.private_key,
+                algorithm=DPOP_ALGORITHM,
+                headers={"typ": DPOP_PROOF_TYPE, "jwk": key.public_jwk},
+            )
+        except (TypeError, ValueError, jwt.PyJWTError) as exc:
+            raise ProofError("signing_failed", "Could not sign the DPoP proof") from exc
+        return SecretStr(encoded)
+
+
 __all__ = [
     "DELEGATION_MAX_LIFETIME",
     "DELEGATION_TYPE",
+    "DPOP_ALGORITHM",
+    "DPOP_PROOF_TYPE",
     "JOSE_ALGORITHMS",
     "SESSION_JWT_ALGORITHM",
     "SESSION_JWT_TYPE",
@@ -369,10 +494,17 @@ __all__ = [
     "DelegatedKey",
     "DelegatedKeyCustody",
     "DelegatedSessionSigner",
+    "DpopKey",
+    "DpopKeyCustody",
     "InMemoryDelegatedKeys",
+    "InMemoryDpopKeys",
+    "JoseDpopProver",
     "JoseSigner",
     "delegation_claims",
+    "dpop_key_from",
+    "dpop_proof_claims",
     "jwk_thumbprint",
+    "new_dpop_key",
     "normalized_htu",
     "public_jwk",
     "session_jwt_claims",

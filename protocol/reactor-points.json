@@ -186,6 +186,23 @@
       "note": "Signs the Session JWT of one request (§5.2) from a SessionJwtRequest: method, url, tenant_id, issuer, client_id, sid, sub, agent_id, access_token. DelegatedSessionSigner keeps one delegated P-256 key per (tenant_id, issuer, sub) in a DelegatedKeyCustody, never shared across User IDs, its delegation signed by the pap.signer key with purpose delegation, rotated before exp."
     },
     {
+      "id": "pap.dpopProver",
+      "role": "personal-agent",
+      "python": "DPOP_PROVERS",
+      "typescript": null,
+      "contract": "DpopProver",
+      "members": [
+        "prove"
+      ],
+      "default": {
+        "python": "in-memory",
+        "typescript": null
+      },
+      "resolution": "single",
+      "tenant": "DpopProofRequest.tenant_id",
+      "note": "Signs the DPoP proof of one request (§4.5, RFC 9449 §4.2) from a DpopProofRequest: method, url, tenant_id, issuer, access_token, nonce. JoseDpopProver keeps one P-256 key per (tenant_id, issuer) in a DpopKeyCustody, InMemoryDpopKeys by default: never a delegated key and never a key from jwks_uri (§5.2). A host that keeps tokens past one process contributes a durable custody, as the CLI's FileDpopKeys does. Python only until the TypeScript SDK proves too."
+    },
+    {
       "id": "pap.refreshTokenLock",
       "role": "personal-agent",
       "python": "REFRESH_TOKEN_LOCKS",

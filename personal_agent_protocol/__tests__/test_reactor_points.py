@@ -27,6 +27,7 @@ from reactor.contributions import ContributionPoint  # type: ignore[import-untyp
 import personal_agent_protocol
 import personal_agent_protocol.company as company
 from personal_agent_protocol import (
+    DPOP_PROVERS,
     PAIRWISE_USER_ID_STORES,
     SESSION_SIGNERS,
     PapSession,
@@ -193,7 +194,7 @@ def test_each_point_follows_its_plugins_lifecycle(entry: dict[str, Any]) -> None
 
 def test_the_tenant_scoped_points_are_the_inventorys() -> None:
     scoped = {entry["id"] for entry in POINTS if entry["tenant"] is not None}
-    assert scoped == {PAIRWISE_USER_ID_STORES.id, SESSION_SIGNERS.id}
+    assert scoped == {PAIRWISE_USER_ID_STORES.id, SESSION_SIGNERS.id, DPOP_PROVERS.id}
 
 
 @pytest.mark.asyncio

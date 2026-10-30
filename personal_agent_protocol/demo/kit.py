@@ -31,7 +31,13 @@ from pydantic import SecretStr
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 
 from ..company.points import COMPANY_STORES, CompanyStore
-from ..crypto import DelegatedSessionSigner, InMemoryDelegatedKeys, JoseSigner
+from ..crypto import (
+    DelegatedSessionSigner,
+    InMemoryDelegatedKeys,
+    InMemoryDpopKeys,
+    JoseDpopProver,
+    JoseSigner,
+)
 from ..errors import BrowserSessionError, DiscoveryError
 from ..extensions import SUPPORTED_EXTENSIONS
 from ..reactor import (
@@ -40,6 +46,7 @@ from ..reactor import (
     BROWSER_HANDOFFS,
     BROWSER_JOINS,
     CLOCKS,
+    DPOP_PROVERS,
     PROTECTED_INPUTS,
     SESSION_SIGNERS,
     SIGNERS,
@@ -300,6 +307,8 @@ class PersonalAgentHost:
     controlled_browser: ControlledBrowser | None = None
     #: The delegated keys, one per User ID: the host's, so a Reactor built again keeps them.
     delegated_keys: InMemoryDelegatedKeys = field(default_factory=InMemoryDelegatedKeys)
+    #: The DPoP keys, one per Company: the host's too.
+    dpop_keys: InMemoryDpopKeys = field(default_factory=InMemoryDpopKeys)
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
@@ -310,6 +319,11 @@ class PersonalAgentHost:
             SESSION_SIGNERS,
             DelegatedSessionSigner(self.delegated_keys, signer=signer, now=self.clock.now),
             contribution_id="delegated-keys",
+        )
+        contribute(
+            DPOP_PROVERS,
+            JoseDpopProver(self.dpop_keys, now=self.clock.now),
+            contribution_id="dpop-keys",
         )
         contribute(TOKEN_STORES, self.vault, contribution_id="vault")
         contribute(AUTHORIZATION_STATE_STORES, self.vault, contribution_id="vault")

@@ -47,6 +47,7 @@ other fails CI.
 | `pap.browserHandoff` | `BROWSER_HANDOFFS` | `BrowserHandoffs` | Opens a sign-in page on a trusted surface | — (host contributes) |  |
 | `pap.browserJoin` | `BROWSER_JOINS` | `BrowserJoins` | The agent's own browser: loads the join form's one-time code and submits the form | — (host contributes) |  |
 | `pap.sessionSigner` | `SESSION_SIGNERS` | `SessionSigners` | The Session JWT of each request, signed with a delegated key per User ID, private keys kept in custody | — (host contributes) | yes |
+| `pap.dpopProver` | `DPOP_PROVERS` | — (Python for now) | The DPoP proof of each request, signed with a key of its own per Company, never a delegated key or a key from `jwks_uri` | `in-memory` | yes |
 | `pap.refreshTokenLock` | `REFRESH_TOKEN_LOCKS` | `RefreshTokenLocks` | Serializes refresh token rotation | `in-process` |  |
 | `pap.protectedInput` | `PROTECTED_INPUTS` | `ProtectedInputs` | Collects credentials and codes outside the model | — (host contributes) |  |
 | `pap.retryPolicy` | `RETRY_POLICIES` | `RetryPolicies` | When a refused request is retried | `default` |  |
@@ -76,11 +77,11 @@ approved by the policy first.
 
 ## Tenants
 
-Two contracts are tenant-scoped: `pap.pairwiseUserIdStore` receives the
-`tenant_id` (`tenantId`) with each request, and `pap.sessionSigner`
-receives it in each `SessionJwtRequest`. The SDK always passes the tenant of
-the call it is making, so a host keeps one tenant's pairwise IDs and delegated
-keys apart from another's; the tests check that one tenant's ID is never
-returned for another and that each Session JWT is asked for the request's own
-tenant. A company is one tenant of its own points: a host serving several
+Three contracts are tenant-scoped: `pap.pairwiseUserIdStore` receives the
+`tenant_id` (`tenantId`) with each request, `pap.sessionSigner` receives it in
+each `SessionJwtRequest`, and `pap.dpopProver` in each `DpopProofRequest`. The SDK
+always passes the tenant of the call it is making, so a host keeps one tenant's
+pairwise IDs, delegated keys and DPoP keys apart from another's; the tests check
+that one tenant's ID is never returned for another and that each Session JWT is
+asked for the request's own tenant. A company is one tenant of its own points: a host serving several
 companies builds one company (and one Reactor) for each.

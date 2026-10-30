@@ -19,7 +19,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 from urllib.parse import urlsplit
 
 import httpcore
@@ -190,6 +190,35 @@ class SessionSigner(Protocol):
     """
 
     async def sign(self, request: SessionJwtRequest) -> SecretStr: ...
+
+
+@dataclass(frozen=True)
+class DpopProofRequest:
+    """What one DPoP proof is signed for (§4.5, RFC 9449 §4.2).
+
+    `method` and `url` are the request's (`htm`, `htu`). `tenant_id` and `issuer`
+    say whose key signs: one key per Company, for a tenant. `access_token`, when the
+    request carries one, is hashed into `ath`, and `nonce` is the latest the
+    server gave.
+    """
+
+    method: str
+    url: str
+    tenant_id: str
+    issuer: str
+    access_token: SecretStr | None = None
+    nonce: str | None = None
+
+
+@runtime_checkable
+class DpopProver(Protocol):
+    """Sign the DPoP proof of one request (§4.5).
+
+    Never with a delegated key or a key from `jwks_uri`: a proof and a Session JWT
+    are separate signatures, by separate keys (§5.2).
+    """
+
+    async def prove(self, request: DpopProofRequest) -> SecretStr: ...
 
 
 @runtime_checkable
@@ -520,6 +549,8 @@ CACHES = define_contribution_point("pap.cache")
 BROWSER_HANDOFFS = define_contribution_point("pap.browserHandoff")
 BROWSER_JOINS = define_contribution_point("pap.browserJoin")
 SESSION_SIGNERS = define_contribution_point("pap.sessionSigner")
+#: `DpopProver`: the DPoP proof of a request, when the Company lists ES256 or bound a token.
+DPOP_PROVERS = define_contribution_point("pap.dpopProver")
 REFRESH_TOKEN_LOCKS = define_contribution_point("pap.refreshTokenLock")
 PROTECTED_INPUTS = define_contribution_point("pap.protectedInput")
 RETRY_POLICIES = define_contribution_point("pap.retryPolicy")
@@ -927,13 +958,29 @@ class PublicUrlSafetyPolicy:
 class PapCorePlugin:
     """Contribute PAP's secure defaults through Reactor."""
 
-    def __init__(self, transport: DiscoveryTransport, url_policy: UrlSafetyPolicy) -> None:
+    def __init__(
+        self, transport: DiscoveryTransport, url_policy: UrlSafetyPolicy, platform: PluginPlatform
+    ) -> None:
         self._transport = transport
         self._url_policy = url_policy
+        self._platform = platform
 
     @hookimpl
     def provide_contributions(self, contributions: object) -> None:
+        # Imported here: crypto's signers read this module's contracts.
+        from .crypto import InMemoryDpopKeys, JoseDpopProver
+
         contribute = contributions.contribute  # type: ignore[attr-defined]
+        platform = self._platform
+
+        def now() -> datetime:
+            # Whichever clock the host contributes, read when a proof is signed.
+            return cast(Clock, first_contribution(platform, CLOCKS, "clock")).now()
+
+        def random_bytes(length: int) -> bytes:
+            source = first_contribution(platform, RANDOM_SOURCES, "random source")
+            return cast(RandomSource, source).bytes(length)
+
         contribute(DISCOVERY_TRANSPORTS, self._transport, contribution_id="httpx", order=100)
         contribute(URL_SAFETY_POLICIES, self._url_policy, contribution_id="public", order=100)
         contribute(CLOCKS, SystemClock(), contribution_id="system", order=100)
@@ -953,6 +1000,12 @@ class PapCorePlugin:
         contribute(RETRY_POLICIES, RetryPolicy(), contribution_id="default", order=100)
         contribute(
             RATE_LIMIT_BUDGETS, SharedRateLimitBudget(), contribution_id="in-process", order=100
+        )
+        contribute(
+            DPOP_PROVERS,
+            JoseDpopProver(InMemoryDpopKeys(), now=now, random_bytes=random_bytes),
+            contribution_id="in-memory",
+            order=100,
         )
 
     @hookimpl
@@ -1001,6 +1054,7 @@ def build_pap_reactor(
                 BROWSER_HANDOFFS.id,
                 BROWSER_JOINS.id,
                 SESSION_SIGNERS.id,
+                DPOP_PROVERS.id,
                 REFRESH_TOKEN_LOCKS.id,
                 PROTECTED_INPUTS.id,
                 RETRY_POLICIES.id,
@@ -1015,6 +1069,7 @@ def build_pap_reactor(
                 address_resolver,
                 allow_private_networks=allow_private_networks,
             ),
+            platform,
         ),
     )
     for manifest, implementation in plugins:

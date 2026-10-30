@@ -11,7 +11,7 @@ replaceable parts are contributions, defaulting to local files under
 - `pap.tokenStore` — `FileSecretStore`: Session, Account, and Bearer tokens
   behind opaque references (`secrets.json`). A keyring plugin replaces it
   with a lower `order`.
-- `pap.signer` and `pap.dpopProofProvider` — `FileKeyStore`: the agent's
+- `pap.signer`, `pap.sessionSigner` and `pap.dpopProver` — `FileKeyStore`: the agent's
   signing key (imported once, from protected input) and one delegated key per
   user and company (`keys.json`).
 - `pap.pairwiseUserIdStore` — SQLite (`pairwise.sqlite3`).
@@ -57,8 +57,12 @@ from .crypto import (
     ContributedSigner,
     DelegatedKey,
     DelegatedSessionSigner,
+    DpopKey,
+    JoseDpopProver,
     JoseSigner,
+    dpop_key_from,
     jwk_thumbprint,
+    new_dpop_key,
 )
 from .errors import PersonalAgentProtocolError
 from .json import loads_strict
@@ -67,6 +71,7 @@ from .reactor import (
     AUTHORIZATION_STATE_STORES,
     BROWSER_HANDOFFS,
     CLOCKS,
+    DPOP_PROVERS,
     PAIRWISE_USER_ID_STORES,
     PROTECTED_INPUTS,
     SESSION_SIGNERS,
@@ -293,6 +298,42 @@ class FileKeyStore:
     @staticmethod
     def _private(pem: str) -> Any:
         return serialization.load_pem_private_key(pem.encode(), password=None)
+
+
+class FileDpopKeys:
+    """`DpopKeyCustody` in the key file: one DPoP key per Company for a tenant (§4.5).
+
+    Kept there so a token stays bound across the CLI's runs.
+    """
+
+    def __init__(self, keys: FileKeyStore) -> None:
+        self.path = keys.path
+
+    async def key_for(self, *, tenant_id: str, issuer: str) -> DpopKey:
+        with _locked(self.path):
+            document = _read(self.path)
+            kept = document.setdefault("dpop", {})
+            stored = kept.get(f"{tenant_id}|{issuer}")
+            if stored is not None:
+                return dpop_key_from(
+                    cast(ec.EllipticCurvePrivateKey, FileKeyStore._private(stored["pem"]))
+                )
+            key = new_dpop_key()
+            kept[f"{tenant_id}|{issuer}"] = {
+                "pem": key.private_key.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.PKCS8,
+                    serialization.NoEncryption(),
+                ).decode()
+            }
+            _write_private(self.path, document)
+            return key
+
+    async def forget(self, *, tenant_id: str, issuer: str) -> None:
+        with _locked(self.path):
+            document = _read(self.path)
+            if document.get("dpop", {}).pop(f"{tenant_id}|{issuer}", None) is not None:
+                _write_private(self.path, document)
 
 
 def _public_jwk(key: Any) -> dict[str, Any]:
@@ -565,6 +606,13 @@ class CliHostPlugin:
             ),
             contribution_id="file",
             order=100,
+        )
+        # Below the SDK's in-memory default: a token stays bound across the CLI's runs.
+        contribute(
+            DPOP_PROVERS,
+            JoseDpopProver(FileDpopKeys(runtime.keys), now=now),
+            contribution_id="file",
+            order=50,
         )
         signer = runtime.keys.signer()
         if signer is not None:

@@ -36,6 +36,13 @@ import {
   DeviceSignInClient,
   DirectSignInClient,
   DpopProvers,
+  OperatorSigners,
+  OPERATOR_SIGNATURE_REFUSED,
+  SIGNATURE_AGENT_HEADER,
+  SIGNATURE_HEADER,
+  SIGNATURE_INPUT_HEADER,
+  WEB_BOT_AUTH_TAG,
+  WebBotAuthSigner,
   FeedbackClient,
   InMemoryDelegatedKeys,
   McpClient,
@@ -48,6 +55,7 @@ import {
   RefreshTokenClient,
   SESSION_JWT_ALGORITHM,
   SESSION_JWT_TYPE,
+  SESSION_HEADER,
   SecretValue,
   ServiceTokens,
   SessionClient,
@@ -70,6 +78,10 @@ import {
   jwkThumbprint,
   mcpApi,
   newDpopKey,
+  newOperatorKey,
+  operatorDirectory,
+  operatorKeyFrom,
+  signOperatorRequest,
   offersDevice,
   offersDirect,
   openapiUrl,
@@ -85,7 +97,7 @@ import {
 import { JoseSigner } from "../../../lib/server.js";
 import { ControlledBrowser } from "./controlled-browser.mjs";
 
-const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop", "no-issuer"];
+const SUITES = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop", "operator", "no-issuer"];
 const CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const DAY_SECONDS = 24 * 60 * 60;
 
@@ -165,10 +177,20 @@ async function expectRefusal(response, status, error, what) {
  * A personal agent's identity from its private JWK: `client_id`, published documents,
  * and the key the forged assertions are signed with.
  */
-export async function identityFrom({ domain, name, privateJwk, extensions = ["operations"], kid = "key-1" }) {
+export async function identityFrom({ domain, name, privateJwk, operatorJwk, extensions = ["operations"], kid = "key-1" }) {
   const privateKey = await importJWK(privateJwk, "ES256");
   const { d: _d, ...publicJwk } = privateJwk;
   const clientId = `https://${domain}/agent.json`;
+  const operatorKey = operatorJwk === undefined ? await newOperatorKey() : await operatorKeyFrom(operatorJwk);
+  const jwks = { keys: [{ kty: "EC", crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y, kid, use: "sig", alg: "ES256" }] };
+  const metadata = {
+    client_id: clientId,
+    client_name: name,
+    jwks_uri: `https://${domain}/jwks.json`,
+    redirect_uris: [`https://${domain}/oauth/callback`],
+    token_endpoint_auth_method: "private_key_jwt",
+    extensions: Object.fromEntries(extensions.map((extension) => [extension, { version: extension === "operations" ? OPERATIONS_VERSION : "1" }])),
+  };
   return {
     domain,
     name,
@@ -176,14 +198,15 @@ export async function identityFrom({ domain, name, privateJwk, extensions = ["op
     extensions,
     clientId,
     privateKey,
-    jwks: { keys: [{ kty: "EC", crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y, kid, use: "sig", alg: "ES256" }] },
-    metadata: {
-      client_id: clientId,
-      client_name: name,
-      jwks_uri: `https://${domain}/jwks.json`,
-      redirect_uris: [`https://${domain}/oauth/callback`],
-      token_endpoint_auth_method: "private_key_jwt",
-      extensions: Object.fromEntries(extensions.map((extension) => [extension, { version: extension === "operations" ? OPERATIONS_VERSION : "1" }])),
+    jwks,
+    metadata,
+    // The operator's key, no key of `jwks_uri`, and where it is published (§5.3).
+    operatorKey,
+    operatorUrl: `https://${domain}/operator-keys.json`,
+    documents: {
+      "/agent.json": metadata,
+      "/jwks.json": jwks,
+      "/operator-keys.json": operatorDirectory([operatorKey]),
     },
   };
 }
@@ -218,6 +241,14 @@ export class Agent {
             point: Signers,
             value: new JoseSigner({ privateKey: identity.privateKey, algorithm: "ES256", keyId: identity.kid }),
             options: { id: "agent-key" },
+          },
+          {
+            point: OperatorSigners,
+            value: new WebBotAuthSigner(identity.operatorKey, {
+              signatureAgent: identity.operatorUrl,
+              now: () => clock.now(),
+            }),
+            options: { id: "operator-key" },
           },
           {
             point: SessionSigners,
@@ -1887,6 +1918,202 @@ caseFor("lifecycle.browser-join-refused")(async (ctx) => {
   check((await authorize(code)).status === 204, "the agent authorizes a new code");
   const valid = await submit(browser, code);
   check(valid.status === 303 && joined(valid), "a valid join sets the Session's cookie");
+});
+
+// Operator signatures (§5.3, RFC 9421, Web Bot Auth) -----------------------------------
+
+const operatorHeaders = [SIGNATURE_AGENT_HEADER, SIGNATURE_INPUT_HEADER, SIGNATURE_HEADER];
+
+/** `headers` under a signature the SDK would never send: one thing wrong. */
+async function forgedSignature(ctx, method, url, headers, { key, signatureAgent, mutation = {} } = {}) {
+  const identity = ctx.agent.identity;
+  const created = Math.floor(ctx.now().getTime() / 1000) + (mutation.created_offset ?? 0);
+  const signed = await signOperatorRequest(
+    {
+      method,
+      url,
+      tenantId: "pap-conformance",
+      sessionJwt: new SecretValue(headers[SESSION_HEADER]),
+      ...(headers.Authorization === undefined ? {} : { authorization: new SecretValue(headers.Authorization) }),
+    },
+    key ?? identity.operatorKey,
+    {
+      signatureAgent: signatureAgent ?? identity.operatorUrl,
+      created,
+      expires: created + 60,
+      nonce: "conformance",
+      tag: mutation.tag ?? WEB_BOT_AUTH_TAG,
+      ...(mutation.components === undefined ? {} : { components: mutation.components }),
+    },
+  );
+  const out = {
+    ...headers,
+    [SIGNATURE_AGENT_HEADER]: signed.signatureAgent,
+    [SIGNATURE_INPUT_HEADER]: signed.signatureInput,
+    [SIGNATURE_HEADER]: signed.signature,
+  };
+  if (mutation.tamper) {
+    const [label, value] = signed.signature.split("=:");
+    out[SIGNATURE_HEADER] = `${label}=:${value[0] === "A" ? "B" : "A"}${value.slice(1)}`;
+  }
+  if (mutation.drop_agent) delete out[SIGNATURE_AGENT_HEADER];
+  return out;
+}
+
+function unsigned(headers) {
+  const out = { ...headers };
+  for (const name of operatorHeaders) delete out[name];
+  return out;
+}
+
+/** A signed-in user, the API URL they read, and the headers the SDK sends it. */
+async function operatorRead(ctx) {
+  const [, signed] = await signedInUser(ctx);
+  const url = ctx.url(ctx.scenario.read_path);
+  return [signed, url, await ctx.auth(signed.session, "GET", url, signed.token)];
+}
+
+async function operatorRefused(response, what) {
+  const asked = response.headers.get("accept-signature") ?? "";
+  await expectRefusal(response, 403, OPERATOR_SIGNATURE_REFUSED, what);
+  check(asked.includes('"poppy-session"'), `${what}: Accept-Signature asks for poppy-session`);
+  check(asked.includes('tag="web-bot-auth"'), `${what}: Accept-Signature names the tag`);
+  return asked;
+}
+
+function served(response, what) {
+  check(response.status === 200, `${what}: expected HTTP 200, got ${response.status}`);
+}
+
+caseFor("operator.signed-read")(async (ctx) => {
+  const [signed, url, headers] = await operatorRead(ctx);
+  const given = headers[SIGNATURE_INPUT_HEADER];
+  check(given.includes('tag="web-bot-auth"'), "the signature is tagged web-bot-auth");
+  check(given.includes(`keyid="${ctx.agent.identity.operatorKey.keyid}"`), "it names the operator key");
+  for (const name of ['"poppy-session"', '"authorization"', '"signature-agent";key=']) {
+    check(given.includes(name), `it covers ${name}`);
+  }
+  served(await ctx.send("GET", url, { headers }), "a verified request");
+  served(await ctx.agent.transport.request("GET", url, { session: signed.session, token: signed.token }), "the transport's request");
+});
+
+caseFor("operator.signed-conversation-and-stream")(async (ctx) => {
+  const session = await ctx.session(ctx.newUser());
+  const endpoint = await ctx.conversationsEndpoint();
+  const headers = await ctx.auth(session, "GET", ctx.url("/"));
+  const given = headers[SIGNATURE_INPUT_HEADER];
+  check(given.includes('"poppy-session"'), "a signed-out request covers poppy-session");
+  check(!given.includes('"authorization"'), "and no authorization, as it has none");
+  const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { session });
+  const items = [];
+  for await (const item of ctx.agent.conversations.stream(endpoint, receipt.conversation_id, { session, maxReconnects: 0 })) {
+    items.push(item);
+    break;
+  }
+  check(items.length > 0, "the stream answers a signed request");
+});
+
+caseFor("operator.signed-mcp")(async (ctx) => {
+  const readTool = tool(ctx.scenario.mcp_read_tool);
+  const { signed, token, url } = await signedInMcp(ctx);
+  const answer = await mcpClient(ctx, signed.session, token, url).callTool(readTool);
+  check(!answer.isError, "the MCP server accepts signed requests");
+});
+
+caseFor("operator.signed-feedback")(async (ctx) => {
+  const [, signed] = await signedInUser(ctx);
+  const endpoint = feedbackEndpoint((await ctx.company()).document);
+  if (endpoint === undefined) throw new SkipCase("the company lists no feedback endpoint");
+  await new FeedbackClient({ transport: ctx.agent.transport }).report(
+    endpoint,
+    { task: "operator conformance", description: "A signed report." },
+    { session: signed.session, token: signed.token },
+  );
+});
+
+caseFor("operator.required-unsigned-refused")(async (ctx) => {
+  const [, url, headers] = await operatorRead(ctx);
+  const asked = await operatorRefused(await ctx.send("GET", url, { headers: unsigned(headers) }), "an unsigned request");
+  check(asked.includes('"authorization"'), "it asks to cover the token");
+});
+
+caseFor("operator.required-mcp-refused")(async (ctx) => {
+  const { signed, token, url } = await signedInMcp(ctx);
+  const headers = { ...unsigned(await ctx.auth(signed.session, "POST", url, token)), "Content-Type": "application/json" };
+  const answer = await ctx.send("POST", url, { headers, body: '{"jsonrpc":"2.0","id":1,"method":"ping"}' });
+  check(!answer.headers.has("www-authenticate"), "no token challenge");
+  await operatorRefused(answer, "an unsigned MCP request");
+});
+
+caseFor("operator.required-key-not-published")(async (ctx) => {
+  const [, url, headers] = await operatorRead(ctx);
+  const forged = await forgedSignature(ctx, "GET", url, headers, { key: await newOperatorKey() });
+  await operatorRefused(await ctx.send("GET", url, { headers: forged }), "a key not published");
+});
+
+caseFor("operator.off-ignored", "operator.other-tag-ignored")(async (ctx, fixture) => {
+  const [, url, headers] = await operatorRead(ctx);
+  const forged = await forgedSignature(ctx, "GET", url, headers, { mutation: fixture.mutation });
+  served(await ctx.send("GET", url, { headers: forged }), fixture.id);
+});
+
+caseFor("operator.unsigned-accepted")(async (ctx) => {
+  const [, url, headers] = await operatorRead(ctx);
+  served(await ctx.send("GET", url, { headers: unsigned(headers) }), "an unsigned request");
+});
+
+caseFor("operator.key-not-published")(async (ctx) => {
+  const [, url, headers] = await operatorRead(ctx);
+  const forged = await forgedSignature(ctx, "GET", url, headers, { key: await newOperatorKey() });
+  served(await ctx.send("GET", url, { headers: forged }), "a key not published");
+});
+
+caseFor("operator.directory-unreadable")(async (ctx) => {
+  const [, url, headers] = await operatorRead(ctx);
+  const gone = `https://${ctx.agent.identity.domain}/no-such-directory.json`;
+  const forged = await forgedSignature(ctx, "GET", url, headers, { signatureAgent: gone });
+  served(await ctx.send("GET", url, { headers: forged }), "a directory that can't be read");
+});
+
+caseFor(
+  "operator.required-other-tag",
+  "operator.wrong-signature",
+  "operator.session-header-not-covered",
+  "operator.token-not-covered",
+  "operator.authority-not-covered",
+  "operator.agent-member-not-covered",
+  "operator.no-signature-agent",
+  "operator.expired",
+  "operator.created-in-the-future",
+)(async (ctx, fixture) => {
+  const [, url, headers] = await operatorRead(ctx);
+  const forged = await forgedSignature(ctx, "GET", url, headers, { mutation: fixture.mutation });
+  await operatorRefused(await ctx.send("GET", url, { headers: forged }), fixture.id);
+});
+
+caseFor("operator.session-header-swapped")(async (ctx) => {
+  const [signed, url, headers] = await operatorRead(ctx);
+  const fresh = await ctx.auth(signed.session, "GET", url, signed.token);
+  const swapped = { ...headers, [SESSION_HEADER]: fresh[SESSION_HEADER] };
+  await operatorRefused(await ctx.send("GET", url, { headers: swapped }), "another Session JWT");
+});
+
+caseFor("operator.refusal-keeps-the-session")(async (ctx, fixture) => {
+  const [signed, url, headers] = await operatorRead(ctx);
+  const forged = await forgedSignature(ctx, "GET", url, headers, { mutation: fixture.mutation });
+  await operatorRefused(await ctx.send("GET", url, { headers: forged }), "a wrong signature");
+  const { sid } = signed.session;
+  served(await ctx.agent.transport.request("GET", url, { session: signed.session, token: signed.token }), "the same Session, signed");
+  check(signed.session.sid === sid, "the Session did not restart");
+});
+
+caseFor("operator.signature-never-vouches-for-the-session")(async (ctx) => {
+  const [, url, headers] = await operatorRead(ctx);
+  const jwt = headers[SESSION_HEADER];
+  const signature = jwt.split(".")[2];
+  const bad = { ...headers, [SESSION_HEADER]: [...jwt.split(".").slice(0, 2), `${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`].join(".") };
+  const forged = await forgedSignature(ctx, "GET", url, bad);
+  await expectRefusal(await ctx.send("GET", url, { headers: forged }), 400, "invalid_session", "a signed request whose Session JWT fails");
 });
 
 // DPoP (§4.5, RFC 9449) ---------------------------------------------------------------

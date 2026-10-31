@@ -18,6 +18,7 @@ Each writes its report (schema 1, the runner's JSON) where
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -29,6 +30,7 @@ from typing import Any
 import httpx
 import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
 
 from personal_agent_protocol.conformance import ConformanceReport, run_conformance, select_cases
 from personal_agent_protocol.demo.conformance import (
@@ -60,7 +62,25 @@ TYPESCRIPT_AGENT_GAPS: dict[str, str] = {}
 
 #: The conformance worlds the TypeScript side runs. `None` is the default world, Bearer
 #: tokens; each pairing runs each of them, a world's report beside the pairing's.
-TYPESCRIPT_WORLDS: tuple[str | None, ...] = (None, "dpop-binding", "no-issuer")
+TYPESCRIPT_WORLDS: tuple[str | None, ...] = (
+    None,
+    "dpop-binding",
+    "no-issuer",
+    "operator-signatures",
+    "operator-signatures-required",
+)
+
+
+def _operator_jwk(identity: AgentIdentity) -> dict[str, str]:
+    """The operator's private JWK, for the TypeScript runner to sign as this identity."""
+
+    raw = identity.operator_key.private_key.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    secret = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    return {**identity.operator_key.public_jwk, "d": secret}
 
 
 def _save(name: str, report: dict[str, Any], world: str | None) -> None:
@@ -152,10 +172,7 @@ async def test_python_runner_against_the_typescript_company(
                 "ca": str(ca),
                 "clock": clock.now().isoformat().replace("+00:00", "Z"),
                 "world": world,
-                "agents": {
-                    identity.domain: {"/agent.json": identity.metadata, "/jwks.json": identity.jwks}
-                    for identity in (atlas, plain)
-                },
+                "agents": {identity.domain: identity.documents for identity in (atlas, plain)},
             }
         )
     )
@@ -267,10 +284,14 @@ async def test_typescript_runner_against_the_python_company(
         key = tmp_path / f"{name}-key.json"
         key.write_text(jwt.algorithms.ECAlgorithm.to_jwk(identity.private_key))
         key.chmod(0o600)
+        operator = tmp_path / f"{name}-operator-key.json"
+        operator.write_text(json.dumps(_operator_jwk(identity)))
+        operator.chmod(0o600)
         return {
             "domain": identity.domain,
             "name": identity.name,
             "key": str(key),
+            "operator_key": str(operator),
             "extensions": list(identity.extensions),
         }
 

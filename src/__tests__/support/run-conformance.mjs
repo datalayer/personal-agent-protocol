@@ -37,6 +37,7 @@ try {
       name: agent.name,
       extensions: agent.extensions,
       privateJwk: JSON.parse(readFileSync(agent.key, "utf8")),
+      operatorJwk: JSON.parse(readFileSync(agent.operator_key, "utf8")),
     });
   const clock = new MutableClock(new Date(config.clock));
   const driver = {

@@ -42,6 +42,9 @@ import {
   parseMessage,
   parseOperation,
   parseProtectedResourceMetadata,
+  operatorKeyFrom,
+  operatorSignatureBase,
+  signOperatorRequest,
 } from "../../lib/index.js";
 import { NodeUrlSafetyPolicy } from "../../lib/server.js";
 import { agentIdentity } from "./support/world.mjs";
@@ -318,6 +321,41 @@ const CHECKS = {
       });
       assert.equal(sent[0].has("dpop"), expect[index].proof);
       reactor.stop();
+    }
+  },
+
+  /** The draft's vector: its base, and its signature over that base (Web Bot Auth E.2.1). */
+  async operator_signature_base(given, expect) {
+    const base = operatorSignatureBase(given.method, given.url, given.headers);
+    assert.equal(new TextDecoder().decode(base), expect.base);
+    const value = given.headers.signature.split("=:")[1].replace(/:$/, "");
+    const signature = Uint8Array.from(atob(value), (letter) => letter.charCodeAt(0));
+    const jwk = { kty: "OKP", crv: "Ed25519", x: given.x };
+    const key = await crypto.subtle.importKey("jwk", jwk, "Ed25519", false, ["verify"]);
+    assert.ok(await crypto.subtle.verify("Ed25519", key, signature, base));
+  },
+
+  /** Both SDKs write these headers, and the base they sign covers §5.3's fields. */
+  async operator_signature_sign(given, expect) {
+    for (const [index, item] of given.entries()) {
+      const key = await operatorKeyFrom({ kty: "OKP", crv: "Ed25519", x: "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs", d: item.d });
+      const signed = await signOperatorRequest(
+        {
+          method: item.method,
+          url: item.url,
+          tenantId: "vector",
+          sessionJwt: new SecretValue(item.session_jwt),
+          ...(item.authorization === null ? {} : { authorization: new SecretValue(item.authorization) }),
+        },
+        key,
+        { signatureAgent: item.signature_agent, created: item.created, expires: item.expires, nonce: item.nonce },
+      );
+      const wanted = expect[index];
+      assert.deepEqual(signed, {
+        signatureAgent: wanted.signature_agent,
+        signatureInput: wanted.signature_input,
+        signature: wanted.signature,
+      });
     }
   },
 

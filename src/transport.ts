@@ -21,9 +21,11 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 import { TransportError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { budgetKey, parseRetryAfter, RetryPolicy } from "./limits.js";
+import { SIGNATURE_AGENT_HEADER, SIGNATURE_HEADER, SIGNATURE_INPUT_HEADER } from "./operator-signatures.js";
 import {
   Clocks,
   DpopProvers,
+  OperatorSigners,
   RandomSources,
   RateLimitBudgets,
   RetryPolicies,
@@ -32,6 +34,7 @@ import {
   optionalContribution,
 } from "./reactor.js";
 import { dpopNonceAsked, refuseRedirect } from "./refusals.js";
+import { SecretValue } from "./secret.js";
 import { DPOP_HEADER, DPOP_NONCE_HEADER, type AccessToken, type PapSession } from "./sessions.js";
 
 /** The header that carries the Session JWT (§5.2). */
@@ -41,7 +44,14 @@ const later = new Set([429, 503]);
 /** Methods retried on their own: they change nothing at the company. */
 const safeMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 /** Headers the host owns: a caller never sets them. */
-const hostOwned = new Set(["authorization", "dpop", "poppy-session"]);
+const hostOwned = new Set([
+  "authorization",
+  "dpop",
+  "poppy-session",
+  SIGNATURE_HEADER.toLowerCase(),
+  SIGNATURE_INPUT_HEADER.toLowerCase(),
+  SIGNATURE_AGENT_HEADER.toLowerCase(),
+]);
 
 function httpsUrl(value: string): URL {
   let url: URL;
@@ -78,7 +88,8 @@ export async function invalidSession(response: Response): Promise<boolean> {
  *
  * `Poppy-Session` always; with an access token, `Authorization`; with a `DPoP` token, a `DPoP`
  * proof too, whose `ath` covers the same token as the Session JWT's. `dpopNonce` is the
- * server's latest for this origin.
+ * server's latest for this origin. Last, with a `pap.operatorSigner` contributed, the operator
+ * signature over them (§5.3).
  */
 export async function sessionHeaders(
   reactor: ReactorPlatformView,
@@ -104,9 +115,8 @@ export async function sessionHeaders(
     ...(token === undefined ? {} : { accessToken: token.accessToken }),
   });
   const headers: Record<string, string> = { [SESSION_HEADER]: jwt.reveal() };
-  if (token === undefined) return headers;
-  headers.Authorization = `${token.tokenType} ${token.accessToken.reveal()}`;
-  if (token.tokenType === "DPoP") {
+  if (token !== undefined) headers.Authorization = `${token.tokenType} ${token.accessToken.reveal()}`;
+  if (token?.tokenType === "DPoP") {
     const proof = await firstContribution(reactor, DpopProvers, "DPoP prover").prove({
       method: method.toUpperCase(),
       url,
@@ -116,6 +126,19 @@ export async function sessionHeaders(
       ...(dpopNonce === undefined ? {} : { nonce: dpopNonce }),
     });
     headers[DPOP_HEADER] = proof.reveal();
+  }
+  const operator = optionalContribution(reactor, OperatorSigners, "operator signer");
+  if (operator !== undefined) {
+    const signed = await operator.sign({
+      method: method.toUpperCase(),
+      url,
+      tenantId: session.tenantId,
+      sessionJwt: jwt,
+      ...(headers.Authorization === undefined ? {} : { authorization: new SecretValue(headers.Authorization) }),
+    });
+    headers[SIGNATURE_AGENT_HEADER] = signed.signatureAgent;
+    headers[SIGNATURE_INPUT_HEADER] = signed.signatureInput;
+    headers[SIGNATURE_HEADER] = signed.signature;
   }
   return headers;
 }
@@ -234,7 +257,7 @@ export class SessionFetchClient {
     if (Object.keys(supplied).some((name) => hostOwned.has(name.toLowerCase()))) {
       throw new TransportError(
         "protected_header",
-        "Authorization, DPoP and Poppy-Session headers are host-owned",
+        "Authorization, DPoP, Poppy-Session and signature headers are host-owned",
       );
     }
     const target = httpsUrl(url);

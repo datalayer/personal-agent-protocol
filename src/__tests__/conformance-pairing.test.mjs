@@ -36,12 +36,11 @@ async function runPairing({ config, cases } = {}) {
   const plain = await agent("plain.example", "Plain", []);
   const clock = new MutableClock();
   const tls = certificates(["manzanita.example", atlas.domain, plain.domain]);
-  const documents = (identity) => ({ "/agent.json": identity.metadata, "/jwks.json": identity.jwks });
   const company = await serveCompany({
     ...tls,
     clock,
     ...(config === undefined ? {} : { config }),
-    agents: { [atlas.domain]: documents(atlas), [plain.domain]: documents(plain) },
+    agents: { [atlas.domain]: atlas.documents, [plain.domain]: plain.documents },
   });
   const executors = [company.plugin.executor, company.plugin.giftWrap, company.plugin.returns, company.plugin.repairs];
   // The agent's own browser: its own connections and cookie jar.
@@ -123,6 +122,22 @@ test("the DPoP cases: TypeScript agent ↔ TypeScript company over TLS, in the w
   assert.deepEqual(new Set(report.cases.map((item) => item.kind)), new Set(["positive", "negative", "recovery"]));
 });
 
+for (const world of ["operator-signatures", "operator-signatures-required"]) {
+  test(`the operator cases: TypeScript agent ↔ TypeScript company over TLS, in ${world}`, async () => {
+    const cases = companyCases(world);
+    assert.ok(cases.length >= 7);
+    const report = await runPairing({ config: worldConfig(world), cases });
+    const reports = process.env.PAP_CONFORMANCE_REPORTS;
+    if (reports) {
+      mkdirSync(reports, { recursive: true });
+      writeFileSync(join(reports, `typescript-agent-typescript-company.${world}.json`), `${JSON.stringify(report, null, 2)}\n`);
+    }
+    const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
+    assert.deepEqual(failed, {});
+    assert.deepEqual(report.summary, { passed: cases.length, failed: 0, skipped: 0 });
+  });
+}
+
 test("the no-issuer cases: TypeScript agent ↔ TypeScript company over TLS, with no OAuth server", async () => {
   const world = "no-issuer";
   const cases = companyCases(world);
@@ -140,11 +155,12 @@ test("the no-issuer cases: TypeScript agent ↔ TypeScript company over TLS, wit
 });
 
 test("every case belongs to one world", () => {
-  const fixtures = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop", "no-issuer"].flatMap((suite) =>
+  const fixtures = ["protocol", "security", "lifecycle", "conversations", "operations", "dpop", "operator", "no-issuer"].flatMap((suite) =>
     JSON.parse(readFileSync(new URL(`../../protocol/fixtures/conformance/${suite}.json`, import.meta.url), "utf8"))
       .cases.filter((item) => item.check === undefined),
   );
-  const selected = [...companyCases(), ...companyCases("dpop-binding"), ...companyCases("no-issuer")].map((item) => item.id);
+  const worlds = [undefined, "dpop-binding", "no-issuer", "operator-signatures", "operator-signatures-required"];
+  const selected = worlds.flatMap((world) => companyCases(world)).map((item) => item.id);
   assert.deepEqual(selected.sort(), fixtures.map((item) => item.id).sort());
 });
 

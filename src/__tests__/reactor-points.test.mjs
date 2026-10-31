@@ -133,7 +133,7 @@ for (const entry of points) {
 test("the tenant-scoped points are the inventory's", () => {
   assert.deepEqual(
     inventory.points.filter((entry) => entry.tenant !== null).map((entry) => entry.id).sort(),
-    ["pap.dpopProver", "pap.pairwiseUserIdStore", "pap.sessionSigner"],
+    ["pap.dpopProver", "pap.operatorSigner", "pap.pairwiseUserIdStore", "pap.sessionSigner"],
   );
 });
 

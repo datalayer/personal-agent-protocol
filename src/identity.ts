@@ -6,10 +6,14 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
+import type { JWK } from "jose";
+
 import { MetadataCache } from "./caching.js";
+import { jwkThumbprint } from "./crypto.js";
 import { DiscoveryError, IdentityError, ProtocolValidationError } from "./errors.js";
 import { readBoundedBody, withinDeadline, type CacheBounds } from "./limits.js";
 import { parseJsonStrict } from "./json.js";
+import { OPERATOR_DIRECTORY_MEDIA_TYPE } from "./operator-signatures.js";
 import {
   parseClientMetadata,
   parseJsonWebKeySet,
@@ -40,6 +44,10 @@ export interface AgentIdentityClientOptions extends PapCoreOptions {
   readonly unfetchableSeconds?: number;
 }
 
+/** What a metadata document, a JWK Set or an operator's directory is served as. */
+const JSON_TYPES = new Set(["application/json", "application/jwk-set+json", OPERATOR_DIRECTORY_MEDIA_TYPE]);
+/** A directory with more keys is refused (Web Bot Auth §6.7). */
+const MAX_OPERATOR_KEYS = 32;
 /** The most entries a per-URL table keeps (refetch times, unfetchable client IDs). */
 const REMEMBERED = 1024;
 
@@ -168,6 +176,44 @@ export class AgentIdentityClient {
     return parseKeys(await this.#jwks(metadata, key, options.signal));
   }
 
+  /**
+   * The Ed25519 keys published at a `Signature-Agent` URL (§5.3, Web Bot Auth §5.5).
+   *
+   * Never a redirect, and only a bounded JWK Set of public keys, as any URL a request names is
+   * fetched through `pap.urlSafetyPolicy`. A `keyid` the cached set lacks fetches it again, at
+   * most once per `jwksRefetchIntervalSeconds`; a fetch that fails then keeps the cached set, as
+   * an outage says nothing of the keys. A URL that can't be read isn't fetched again for
+   * `unfetchableSeconds`.
+   */
+  async fetchOperatorKeys(
+    url: string,
+    options: { readonly keyid: string; readonly signal?: AbortSignal },
+  ): Promise<readonly JWK[]> {
+    const requested = this.#clientIdUrl(url);
+    const key = `pap.operator-keys:${requested.href}`;
+    const now = this.#cache.now().getTime();
+    const remembered = this.#unfetchable.get(requested.href);
+    if (remembered !== undefined && now < remembered.at) throw remembered.error;
+    let document: unknown;
+    try {
+      document = await this.#cachedJson(key, requested, 0, undefined, options.signal);
+    } catch (error) {
+      if (error instanceof IdentityError || error instanceof DiscoveryError) {
+        remember(this.#unfetchable, requested.href, { at: now + this.#unfetchableMs, error }, now);
+      }
+      throw error;
+    }
+    const keys = operatorKeys(document);
+    for (const item of keys) if ((await jwkThumbprint(item)) === options.keyid) return keys;
+    const last = this.#refetched.get(requested.href)?.at;
+    if (last !== undefined && now - last < this.#refetchIntervalMs) return keys;
+    remember(this.#refetched, requested.href, { at: now }, now - this.#refetchIntervalMs);
+    const fetched = await this.#readJson(requested, 0, undefined, options.signal);
+    const refreshed = operatorKeys(fetched.value);
+    await this.#cache.put(key, fetched.value, fetched.finalUrl, fetched.headers);
+    return refreshed;
+  }
+
   #jwks(metadata: ClientMetadata, key: string, signal: AbortSignal | undefined): Promise<unknown> {
     return this.#cachedJson(
       key,
@@ -275,7 +321,7 @@ export class AgentIdentityClient {
         );
       }
       const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
-      if (contentType !== "application/json" && contentType !== "application/jwk-set+json") {
+      if (contentType === undefined || !JSON_TYPES.has(contentType)) {
         throw new IdentityError("invalid_content_type", "Agent identity response must be JSON");
       }
       const body = await readBoundedBody(response, {
@@ -289,6 +335,26 @@ export class AgentIdentityClient {
     }
     throw new IdentityError("too_many_redirects", "Agent identity endpoint exceeded redirect policy");
   }
+}
+
+/** The usable keys of a directory: public Ed25519, the rest ignored. */
+function operatorKeys(document: unknown): readonly JWK[] {
+  const keys = (document as { readonly keys?: unknown } | null | undefined)?.keys;
+  if (!Array.isArray(keys) || keys.length > MAX_OPERATOR_KEYS) {
+    throw new ProtocolValidationError(
+      "invalid_operator_directory",
+      "An operator directory is a bounded JWK Set",
+    );
+  }
+  return keys.filter(
+    (item): item is JWK =>
+      typeof item === "object" &&
+      item !== null &&
+      item.kty === "OKP" &&
+      item.crv === "Ed25519" &&
+      typeof item.x === "string" &&
+      !("d" in item),
+  );
 }
 
 function parseKeys(value: unknown): JsonWebKeySet {

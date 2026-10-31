@@ -37,6 +37,8 @@ import { createHash } from "node:crypto";
 
 import { defineContributionPoint } from "@datalayer/reactor";
 
+import type { JWK } from "jose";
+
 import type { ClientMetadata, JsonWebKeySet, Operation } from "../models.js";
 import type { SecretValue } from "../secret.js";
 import { RecordKinds, type CompanyStore } from "./store.js";
@@ -208,6 +210,15 @@ export interface ClientResolver {
   ): Promise<readonly [ClientMetadata, JsonWebKeySet]>;
 }
 
+/**
+ * The keys an operator publishes at a `Signature-Agent` URL (§5.3). `keyid` is the key a signature
+ * names: a directory that caches keys fetches them again when the cached set lacks it (Web Bot
+ * Auth §5.5.2).
+ */
+export interface OperatorDirectory {
+  keys(url: string, keyid: string): Promise<readonly JWK[]>;
+}
+
 /** Remember an assertion or Session JWT ID once. */
 export interface ReplayCache {
   markOnce(key: string, options: { readonly expiresAt: Date }): Promise<boolean>;
@@ -352,6 +363,9 @@ export const OperationExecutors = defineContributionPoint<OperationExecutor>(
 export const ClientPolicies = defineContributionPoint<ClientPolicy>("pap.company.clientPolicy");
 export const ClientResolvers = defineContributionPoint<ClientResolver>(
   "pap.company.clientResolver",
+);
+export const OperatorDirectories = defineContributionPoint<OperatorDirectory>(
+  "pap.company.operatorDirectory",
 );
 export const ReplayCaches = defineContributionPoint<ReplayCache>("pap.company.replayCache");
 export const CompanyApis = defineContributionPoint<CompanyApi>("pap.company.api");

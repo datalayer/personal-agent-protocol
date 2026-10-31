@@ -67,6 +67,7 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { IDEMPOTENCY_KEY, WRITE_METHODS } from "../apis.js";
 import { DPOP_ALGORITHM } from "../crypto.js";
+import { OPERATOR_SIGNATURE_REFUSED, acceptSignature, verifyOperatorSignature } from "../operator-signatures.js";
 import { ProofError, ProtocolValidationError, SessionError } from "../errors.js";
 import { parseJsonStrict } from "../json.js";
 import { MEDIATED_EXTENSION, MEDIATED_GRANT, MEDIATED_VERSION } from "../mediated.js";
@@ -101,6 +102,7 @@ import { emit, telemetrySink, type TelemetryInterface } from "../telemetry.js";
 import {
   ClientPolicies,
   ClientResolvers,
+  OperatorDirectories,
   CompanyAccounts,
   CompanyAgents,
   CompanyApis,
@@ -198,6 +200,8 @@ export type MediatedFieldSpec = readonly [name: string, label: string, secret: b
 
 /** Whether a company binds its access tokens with DPoP (§4.5). */
 export type DpopBinding = "off" | "optional" | "required";
+/** Whether a company checks operator signatures (§5.3). */
+export type OperatorSignatures = "off" | "optional" | "required";
 
 export interface CompanyConfigOptions {
   readonly name: string;
@@ -295,6 +299,14 @@ export interface CompanyConfigOptions {
   readonly dpopNonceLifetimeSeconds?: number;
   /** The acceptance window of a proof's `iat`, in seconds (default a minute). */
   readonly dpopProofWindowSeconds?: number;
+  /**
+   * Whether requests' operator signatures are checked, the Company's choice (§5.3). `off` (the
+   * default) ignores them. `optional` refuses an invalid one and accepts a request with none, or
+   * with one it has no key to decide. `required` asks every request for a verified one.
+   */
+  readonly operatorSignatures?: OperatorSignatures;
+  /** How far in the future an operator signature's `created` may be, in seconds (default a minute). */
+  readonly operatorSignatureWindowSeconds?: number;
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -349,6 +361,8 @@ export class CompanyConfig {
   readonly oauth: boolean;
   readonly dpopNonceLifetimeSeconds: number;
   readonly dpopProofWindowSeconds: number;
+  readonly operatorSignatures: OperatorSignatures;
+  readonly operatorSignatureWindowSeconds: number;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -387,6 +401,8 @@ export class CompanyConfig {
     this.oauth = options.oauth ?? true;
     this.dpopNonceLifetimeSeconds = options.dpopNonceLifetimeSeconds ?? 5 * 60;
     this.dpopProofWindowSeconds = options.dpopProofWindowSeconds ?? 60;
+    this.operatorSignatures = options.operatorSignatures ?? "off";
+    this.operatorSignatureWindowSeconds = options.operatorSignatureWindowSeconds ?? 60;
     for (const [name, lifetime] of Object.entries({
       idempotencyLifetimeSeconds: this.idempotencyLifetimeSeconds,
       sessionLifetimeSeconds: this.sessionLifetimeSeconds,
@@ -395,6 +411,7 @@ export class CompanyConfig {
       sessionJwtWindowSeconds: this.sessionJwtWindowSeconds,
       dpopNonceLifetimeSeconds: this.dpopNonceLifetimeSeconds,
       dpopProofWindowSeconds: this.dpopProofWindowSeconds,
+      operatorSignatureWindowSeconds: this.operatorSignatureWindowSeconds,
     })) {
       if (!(lifetime > 0)) throw new RangeError(`${name} must be positive`);
     }
@@ -409,6 +426,9 @@ export class CompanyConfig {
       throw new RangeError("dpopBinding is off, optional or required");
     }
     if (this.dpopNonces && this.dpopBinding === "off") throw new RangeError("dpopNonces need dpopBinding");
+    if (!["off", "optional", "required"].includes(this.operatorSignatures)) {
+      throw new RangeError("operatorSignatures is off, optional or required");
+    }
     for (const alias of this.aliases) {
       if (!alias || alias !== alias.toLowerCase().replace(/\.$/, "") || alias.includes("/") || alias.includes(":")) {
         throw new RangeError("an alias is a DNS domain name, in small letters");
@@ -2333,7 +2353,8 @@ export class CompanyService {
     try {
       [, session] = await this.#caller(request, this.config.mcpUrl);
     } catch (error) {
-      if (error instanceof Refused && !(error instanceof RateLimitedRefusal)) {
+      // An operator signature's refusal is no token error: no challenge names it.
+      if (error instanceof Refused && !(error instanceof RateLimitedRefusal) && error.error !== OPERATOR_SIGNATURE_REFUSED) {
         return this.#mcpRefusal(error.status, error.error, undefined, error.headers);
       }
       throw error;
@@ -2517,6 +2538,7 @@ export class CompanyService {
     // A request can be the agent's first: a Session needs no OAuth endpoint (§4). Only now is
     // its identity verified, so a forged JWT is never reported as a check, or remembered.
     if (metadata !== undefined) await this.#rememberClient(verified.clientId, metadata);
+    await this.#operatorSignature(request);
     let issued: IssuedAccessToken | undefined;
     if (presented !== undefined) {
       issued = await this.#accessToken(presented);
@@ -2553,6 +2575,33 @@ export class CompanyService {
   }
 
   /** The protected resource metadata URL of the service a request was for (RFC 9728). */
+  /**
+   * Check the request's operator signature, after its Session JWT (§5.3).
+   *
+   * The Session JWT is verified first, whatever a signature says, and so only a verified client
+   * makes the company read a directory. A refusal is the Company's decision, 403 with
+   * `Accept-Signature` (Web Bot Auth §5.3), and never `invalid_session`: without a good signature
+   * the Session JWT is as valid as it was.
+   */
+  async #operatorSignature(request: CompanyRequest): Promise<void> {
+    if (this.config.operatorSignatures === "off") return;
+    const directory = firstContribution(this.reactor, OperatorDirectories, "operator directory");
+    const verdict = await verifyOperatorSignature({
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      keys: (url, keyid) => directory.keys(url, keyid),
+      now: this.#now(),
+      windowSeconds: this.config.operatorSignatureWindowSeconds,
+    });
+    const refused =
+      verdict.outcome === "invalid" ||
+      (verdict.outcome !== "verified" && this.config.operatorSignatures === "required");
+    if (refused) {
+      throw new Refused(403, OPERATOR_SIGNATURE_REFUSED, {}, { "Accept-Signature": acceptSignature(request.headers) });
+    }
+  }
+
   #resourceMetadataUrl(resource: string | undefined): string {
     if (resource === this.config.mcpUrl) return this.config.mcpResourceMetadata;
     return `${this.config.base}/.well-known/oauth-protected-resource`;

@@ -22,6 +22,8 @@ import {
   type ReactorPlatformView,
 } from "@datalayer/reactor";
 
+import type { JWK } from "jose";
+
 import { AgentIdentityClient } from "../identity.js";
 import { createResolvingFetch } from "../node-network.js";
 import type { ClientMetadata, JsonWebKeySet } from "../models.js";
@@ -36,6 +38,7 @@ import {
   AllowEveryAgent,
   ClientPolicies,
   ClientResolvers,
+  OperatorDirectories,
   CompanyAccounts,
   CompanyAgents,
   CompanyApis,
@@ -47,6 +50,7 @@ import {
   ReplayCaches,
   StoreReplayCache,
   type ClientResolver,
+  type OperatorDirectory,
   type CompanyStore,
 } from "./points.js";
 import { CompanyService, type CompanyConfig } from "./service.js";
@@ -78,6 +82,22 @@ export class IdentityClientResolver implements ClientResolver {
   }
 }
 
+/** Read an operator's published keys over HTTPS (§5.3, Web Bot Auth §5.5). */
+export class IdentityOperatorDirectory implements OperatorDirectory {
+  #identity: AgentIdentityClient | undefined;
+
+  /** Give the directory its client once the company's Reactor exists. */
+  bind(identity: AgentIdentityClient): void {
+    this.#identity = identity;
+  }
+
+  /** Cached keys, fetched again for an unknown `keyid`. */
+  async keys(url: string, keyid: string): Promise<readonly JWK[]> {
+    if (this.#identity === undefined) throw new Error("IdentityOperatorDirectory is not bound");
+    return this.#identity.fetchOperatorKeys(url, { keyid });
+  }
+}
+
 /** The clock a reactor's `pap.clock` contribution keeps, read at each call once bound. */
 export class ReactorClock implements Clock {
   #reactor: ReactorPlatformView | undefined;
@@ -102,6 +122,7 @@ export function createCompanyDefaultsPlugin(
   resolver: ClientResolver,
   clock: Clock | undefined,
   store: () => CompanyStore,
+  directory?: OperatorDirectory,
 ) {
   return definePlugin({
     name: "personal-agent-protocol.company",
@@ -116,6 +137,7 @@ export function createCompanyDefaultsPlugin(
       OperationExecutors,
       ClientPolicies,
       ClientResolvers,
+      OperatorDirectories,
       ReplayCaches,
     ],
     contributes: [
@@ -128,6 +150,7 @@ export function createCompanyDefaultsPlugin(
       contribution(ReplayCaches, new StoreReplayCache(store), { id: "store", order: 100 }),
       contribution(ClientPolicies, new AllowEveryAgent(), { id: "allow", order: 100 }),
       contribution(ClientResolvers, resolver, { id: "https", order: 100 }),
+      ...(directory === undefined ? [] : [contribution(OperatorDirectories, directory, { id: "https", order: 100 })]),
     ],
   });
 }
@@ -160,9 +183,12 @@ export function buildCompany(
     if (built === undefined) throw new Error("the company's Reactor is not built yet");
     return firstContribution(built, CompanyStores, "company store");
   };
-  const reactor = buildPapReactor(core, [createCompanyDefaultsPlugin(resolver, clock, store), ...plugins]);
+  const directory = new IdentityOperatorDirectory();
+  const reactor = buildPapReactor(core, [createCompanyDefaultsPlugin(resolver, clock, store, directory), ...plugins]);
   built = reactor;
-  resolver.bind(new AgentIdentityClient({ reactor }));
+  const identity = new AgentIdentityClient({ reactor });
+  resolver.bind(identity);
+  directory.bind(identity);
   clock.bind(reactor);
   return new CompanyService({ config, reactor });
 }

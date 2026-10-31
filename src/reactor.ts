@@ -148,6 +148,38 @@ export interface DpopProver {
   prove(request: DpopProofRequest): Promise<SecretValue>;
 }
 
+/**
+ * What one operator signature is signed for (§5.3, RFC 9421).
+ *
+ * `method` and `url` are the request's, `sessionJwt` the value of its `Poppy-Session` header and
+ * `authorization` of its `Authorization` header, when it has one. A signature covers both.
+ * `tenantId` says for whom, for a host with a key per tenant.
+ */
+export interface OperatorSignatureRequest {
+  readonly method: string;
+  readonly url: string;
+  readonly tenantId: string;
+  readonly sessionJwt: SecretValue;
+  readonly authorization?: SecretValue;
+}
+
+/** The values of the three headers of a signed request (Web Bot Auth §5.2.5). */
+export interface OperatorSignature {
+  readonly signatureAgent: string;
+  readonly signatureInput: string;
+  readonly signature: string;
+}
+
+/**
+ * Sign one request that carries the Session header, as its operator (§5.3).
+ *
+ * Never with a delegated key, a DPoP key or a key from `jwks_uri`: an operator signature is a
+ * fourth signature, by a key the operator publishes in its directory.
+ */
+export interface OperatorSigner {
+  sign(request: OperatorSignatureRequest): Promise<OperatorSignature>;
+}
+
 /** Serialize every use of one refresh token: rotation invalidates the one replaced (§4.4). */
 export interface RefreshTokenLock {
   hold<T>(reference: string, work: () => Promise<T>): Promise<T>;
@@ -262,6 +294,11 @@ export const BrowserJoins = defineContributionPoint<BrowserJoin>("pap.browserJoi
 export const SessionSigners = defineContributionPoint<SessionSigner>("pap.sessionSigner");
 /** `DpopProver`: the DPoP proof of a request, when the Company lists ES256 or bound a token. */
 export const DpopProvers = defineContributionPoint<DpopProver>("pap.dpopProver");
+/**
+ * `OperatorSigner`: the operator signature of a request with the Session header; none, and
+ * requests go unsigned.
+ */
+export const OperatorSigners = defineContributionPoint<OperatorSigner>("pap.operatorSigner");
 export const RefreshTokenLocks = defineContributionPoint<RefreshTokenLock>(
   "pap.refreshTokenLock",
 );
@@ -340,6 +377,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
       BrowserJoins,
       SessionSigners,
       DpopProvers,
+      OperatorSigners,
       RefreshTokenLocks,
       ProtectedInputs,
       RetryPolicies,

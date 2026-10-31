@@ -222,6 +222,42 @@ class DpopProver(Protocol):
     async def prove(self, request: DpopProofRequest) -> SecretStr: ...
 
 
+@dataclass(frozen=True)
+class OperatorSignatureRequest:
+    """What one operator signature is signed for (§5.3, RFC 9421).
+
+    `method` and `url` are the request's, `session_jwt` the value of its `Poppy-Session`
+    header and `authorization` of its `Authorization` header, when it has one. A
+    signature covers both. `tenant_id` says for whom, for a host with a key per tenant.
+    """
+
+    method: str
+    url: str
+    tenant_id: str
+    session_jwt: SecretStr
+    authorization: SecretStr | None = None
+
+
+@dataclass(frozen=True)
+class OperatorSignature:
+    """The values of the three headers of a signed request (Web Bot Auth §5.2.5)."""
+
+    signature_agent: str
+    signature_input: str
+    signature: str
+
+
+@runtime_checkable
+class OperatorSigner(Protocol):
+    """Sign one request that carries the Session header, as its operator (§5.3).
+
+    Never with a delegated key, a DPoP key or a key from `jwks_uri`: an operator
+    signature is a fourth signature, by a key the operator publishes in its directory.
+    """
+
+    async def sign(self, request: OperatorSignatureRequest) -> OperatorSignature: ...
+
+
 @runtime_checkable
 class RefreshTokenLock(Protocol):
     """Serialize every use of one refresh token (§4.4 rotation).
@@ -552,6 +588,9 @@ BROWSER_JOINS = define_contribution_point("pap.browserJoin")
 SESSION_SIGNERS = define_contribution_point("pap.sessionSigner")
 #: `DpopProver`: the DPoP proof of a request, when the Company lists ES256 or bound a token.
 DPOP_PROVERS = define_contribution_point("pap.dpopProver")
+#: `OperatorSigner`: the operator signature of a request with the Session header; none,
+#: and requests go unsigned.
+OPERATOR_SIGNERS = define_contribution_point("pap.operatorSigner")
 REFRESH_TOKEN_LOCKS = define_contribution_point("pap.refreshTokenLock")
 PROTECTED_INPUTS = define_contribution_point("pap.protectedInput")
 RETRY_POLICIES = define_contribution_point("pap.retryPolicy")
@@ -1056,6 +1095,7 @@ def build_pap_reactor(
                 BROWSER_JOINS.id,
                 SESSION_SIGNERS.id,
                 DPOP_PROVERS.id,
+                OPERATOR_SIGNERS.id,
                 REFRESH_TOKEN_LOCKS.id,
                 PROTECTED_INPUTS.id,
                 RETRY_POLICIES.id,

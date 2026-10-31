@@ -12,6 +12,7 @@ run by the conformance runner against a company (`test_conformance.py`).
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
@@ -20,6 +21,7 @@ import httpcore
 import httpx
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from pydantic import SecretStr
 
 from personal_agent_protocol import (
@@ -63,7 +65,16 @@ from personal_agent_protocol.models import (
     Operation,
     ProtectedResourceMetadata,
 )
-from personal_agent_protocol.reactor import PublicUrlSafetyPolicy, SessionJwtRequest
+from personal_agent_protocol.operator_signatures import (
+    operator_key_from,
+    operator_signature_base,
+    sign_operator_request,
+)
+from personal_agent_protocol.reactor import (
+    OperatorSignatureRequest,
+    PublicUrlSafetyPolicy,
+    SessionJwtRequest,
+)
 
 LOCAL = [case for case in load_fixture_cases() if case.check is not None]
 
@@ -315,6 +326,10 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         await _dpop_mcp_tokens(case)
     elif case.check == "dpop_proof_shape":
         await _dpop_proof_shape(case)
+    elif case.check == "operator_signature_base":
+        _operator_signature_base(case)
+    elif case.check == "operator_signature_sign":
+        await _operator_signature_sign(case)
     else:  # pragma: no cover - a fixture with a check this test does not know
         raise AssertionError(f"unknown fixture check {case.check!r}")
 
@@ -325,6 +340,45 @@ def _recording(sent: list[httpx.Request], answer: dict[str, Any]) -> Any:
         return httpx.Response(200, json=answer)
 
     return respond
+
+
+def _operator_signature_base(case: Any) -> None:
+    """The draft's vector: its base, and its signature over that base (Web Bot Auth E.2.1)."""
+
+    given = case.input
+    base = operator_signature_base(given["method"], given["url"], given["headers"])
+    assert base.decode() == case.expect["base"]
+    value = given["headers"]["signature"].split("=:", 1)[1].rstrip(":")
+    public = base64.urlsafe_b64decode(given["x"] + "=" * (-len(given["x"]) % 4))
+    Ed25519PublicKey.from_public_bytes(public).verify(base64.b64decode(value), base)
+
+
+async def _operator_signature_sign(case: Any) -> None:
+    """Both SDKs write these headers, and the base they sign covers §5.3's fields."""
+
+    for given, expect in zip(case.input, case.expect, strict=True):
+        secret = base64.urlsafe_b64decode(given["d"] + "=" * (-len(given["d"]) % 4))
+        key = operator_key_from(Ed25519PrivateKey.from_private_bytes(secret))
+        authorization = given["authorization"]
+        signed = await sign_operator_request(
+            OperatorSignatureRequest(
+                method=given["method"],
+                url=given["url"],
+                tenant_id="vector",
+                session_jwt=SecretStr(given["session_jwt"]),
+                authorization=None if authorization is None else SecretStr(authorization),
+            ),
+            key,
+            signature_agent=given["signature_agent"],
+            created=given["created"],
+            expires=given["expires"],
+            nonce=given["nonce"],
+        )
+        assert {
+            "signature_agent": signed.signature_agent,
+            "signature_input": signed.signature_input,
+            "signature": signed.signature,
+        } == expect
 
 
 async def _dpop_token_requests(case: Any) -> None:

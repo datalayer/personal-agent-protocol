@@ -22,6 +22,9 @@ Both SDKs implement the asymmetric cryptographic operations of draft 0.3:
   delegations blindly (RFC 9474), so each is an ordinary PS384 signature.
 - `JoseDpopProver` is a `pap.dpopProver` that signs each request's DPoP proof with
   a key of its own (Python).
+- `WebBotAuthSigner` is a `pap.operatorSigner` that signs each request's operator
+  signature with an Ed25519 key the operator publishes (see
+  [Operator signatures](#operator-signatures)).
 - `verify_session_jwt` / `verifySessionJwt` verify the delegation, then the
   signature, the method, URL, issuance window, access-token hash and replay
   state.
@@ -148,6 +151,47 @@ Both reference companies bind their tokens when configured to, with `dpop_bindin
 no DPoP algorithm. A Session JWT's `ath` already makes a copied access token useless
 without the agent's delegated key, except at an MCP server that ignores the Session
 header.
+
+## Operator signatures
+
+A personal agent SHOULD also sign requests that carry the Session header with an
+HTTP Message Signature ([RFC 9421](https://www.rfc-editor.org/rfc/rfc9421)), using
+[Web Bot Auth](https://datatracker.ietf.org/doc/draft-ietf-webbotauth-httpsig-protocol/)
+(spec 5.3), so a company's bot defenses can recognize the operator before its
+application sees the request. It is compatibility support, not a credential. Both
+SDKs sign when the host asks; a host that contributes nothing sends what it always
+sent, and its Session JWTs are as valid as ever.
+
+```python
+from personal_agent_protocol import WebBotAuthSigner, new_operator_key, operator_directory
+
+key = new_operator_key()  # or your own: a KMS key is any OperatorSigningKey
+signer = WebBotAuthSigner(key, signature_agent="https://agent.example/operator-keys.json")
+# Contribute `signer` to OPERATOR_SIGNERS, and serve operator_directory([key]) at that URL.
+```
+
+- **Keys.** `pap.operatorSigner` has no default: the key is the operator's, and it
+  means nothing until the operator publishes it. `operator_directory`
+  (`operatorDirectory`) is the JWK Set to serve at the `Signature-Agent` URL: any
+  HTTPS URL, or `/.well-known/http-message-signatures-directory` with its media
+  type to name a domain. Keep operator keys apart from delegated keys, DPoP keys and
+  keys in `jwks_uri`. Rotate by publishing the new key beside the old one.
+- **Where it runs.** A centralized agent signs where its requests already pass. Don't
+  give devices a shared operator key: for an on-device agent, a signing service
+  sees which company each User visits, and this profile has no blind signing. That is
+  why the `pap` CLI signs nothing.
+- **What is signed.** Last, over the finished headers, on every request and retry:
+  `@authority`, the `Signature-Agent` member, `@method`, `@path`, `@query`,
+  `poppy-session`, and `authorization` when present, tagged `web-bot-auth`, with
+  `created`, `expires` (a minute later), `keyid`, `alg="ed25519"` and a `nonce`. The
+  body isn't covered: `Content-Digest` is for a verifier that relies on it.
+- **Other drafts.** `Signature-Agent` is the dictionary form of draft 01. Check what
+  the receiving edge supports: products don't all implement one revision.
+
+A reference company checks signatures with `operator_signatures`
+(`operatorSignatures`), [its choice](/guides/company/#the-reference-company). A
+verified signature authenticates its key source and nothing else: it says nothing of
+`client_id`, and the Session JWT is verified first, whatever a signature says.
 
 ## Replay cache contract
 

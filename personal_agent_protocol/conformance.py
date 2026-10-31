@@ -88,6 +88,17 @@ from .operations import (
     approval_header,
     operations_negotiated,
 )
+from .operator_signatures import (
+    OPERATOR_SIGNATURE_REFUSED,
+    SIGNATURE_AGENT_HEADER,
+    SIGNATURE_HEADER,
+    SIGNATURE_INPUT_HEADER,
+    WEB_BOT_AUTH_TAG,
+    Ed25519OperatorKey,
+    WebBotAuthSigner,
+    new_operator_key,
+    sign_operator_request,
+)
 from .profile import PROTOCOL_PROFILE
 from .reactor import (
     CLOCKS,
@@ -95,6 +106,7 @@ from .reactor import (
     AddressResolver,
     Clock,
     DpopProofRequest,
+    OperatorSignatureRequest,
     SessionJwtRequest,
     SystemClock,
     build_pap_reactor,
@@ -110,7 +122,7 @@ from .sessions import (
     PapSession,
     SessionClient,
 )
-from .transport import SessionHttpClient, session_headers
+from .transport import SESSION_HEADER, SessionHttpClient, session_headers
 
 Kind = Literal["positive", "negative", "recovery"]
 Outcome = Literal["passed", "failed", "skipped"]
@@ -122,6 +134,7 @@ SUITES = (
     "conversations",
     "operations",
     "dpop",
+    "operator",
     "no-issuer",
 )
 
@@ -304,6 +317,9 @@ class Agent:
             vault=self.vault,
             controlled_browser=self.browser,
             browser=cast(Any, self.user_browser),
+            operator_signer=WebBotAuthSigner(
+                identity.operator_key, signature_agent=identity.operator_url, now=clock.now
+            ),
         )
         self.reactor: PluginPlatform
         self.reactor, _ = build_pap_reactor(
@@ -2631,6 +2647,252 @@ async def _browser_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
     check((await authorize(code)).status_code == 204, "the agent authorizes a new code")
     valid = await submit(browser, code)
     check(valid.status_code == 303 and joined(valid), "a valid join sets the Session's cookie")
+
+
+# Operator signatures (§5.3, RFC 9421, Web Bot Auth) -----------------------------------
+
+
+def _operator_request(
+    method: str, url: str, headers: dict[str, str], session_jwt: str
+) -> OperatorSignatureRequest:
+    authorization = headers.get("Authorization")
+    return OperatorSignatureRequest(
+        method=method,
+        url=url,
+        tenant_id="pap-conformance",
+        session_jwt=SecretStr(session_jwt),
+        authorization=None if authorization is None else SecretStr(authorization),
+    )
+
+
+async def _forged_signature(
+    ctx: ConformanceContext,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    *,
+    key: Ed25519OperatorKey | None = None,
+    signature_agent: str | None = None,
+    mutation: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """`headers` under a signature the SDK would never send: one thing wrong."""
+
+    mutation = mutation or {}
+    identity = ctx.agent.identity
+    created = int(ctx.now().timestamp()) + mutation.get("created_offset", 0)
+    signed = await sign_operator_request(
+        _operator_request(method, url, headers, headers[SESSION_HEADER]),
+        key or identity.operator_key,
+        signature_agent=signature_agent or identity.operator_url,
+        created=created,
+        expires=created + 60,
+        nonce="conformance",
+        tag=mutation.get("tag", WEB_BOT_AUTH_TAG),
+        components=mutation.get("components"),
+    )
+    out = {
+        **headers,
+        SIGNATURE_AGENT_HEADER: signed.signature_agent,
+        SIGNATURE_INPUT_HEADER: signed.signature_input,
+        SIGNATURE_HEADER: signed.signature,
+    }
+    if mutation.get("tamper"):
+        label, _, value = signed.signature.partition("=:")
+        out[SIGNATURE_HEADER] = f"{label}=:{'A' if value[0] != 'A' else 'B'}{value[1:]}"
+    if mutation.get("drop_agent"):
+        del out[SIGNATURE_AGENT_HEADER]
+    return out
+
+
+def _unsigned(headers: dict[str, str]) -> dict[str, str]:
+    dropped = {SIGNATURE_AGENT_HEADER, SIGNATURE_INPUT_HEADER, SIGNATURE_HEADER}
+    return {name: value for name, value in headers.items() if name not in dropped}
+
+
+async def _operator_read(ctx: ConformanceContext) -> tuple[SignedIn, str, dict[str, str]]:
+    """A signed-in user, the API URL they read, and the headers the SDK sends it."""
+
+    _user, signed = await _signed_in_user(ctx)
+    url = ctx.url(ctx.scenario.read_path)
+    return signed, url, await ctx.auth(signed.session, "GET", url, signed.token)
+
+
+def _operator_refused(response: httpx.Response, what: str) -> None:
+    expect_refusal(response, 403, OPERATOR_SIGNATURE_REFUSED, what)
+    asked = response.headers.get("accept-signature", "")
+    check('"poppy-session"' in asked, f"{what}: Accept-Signature asks for poppy-session")
+    check('tag="web-bot-auth"' in asked, f"{what}: Accept-Signature names the tag")
+
+
+def _served(response: httpx.Response, what: str) -> None:
+    check(response.status_code == 200, f"{what}: expected HTTP 200, got {response.status_code}")
+
+
+@case("operator.signed-read")
+async def _operator_signed_read(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url, headers = await _operator_read(ctx)
+    given = headers[SIGNATURE_INPUT_HEADER]
+    check('tag="web-bot-auth"' in given, "the signature is tagged web-bot-auth")
+    check(f'keyid="{ctx.agent.identity.operator_key.keyid}"' in given, "it names the operator key")
+    for name in ('"poppy-session"', '"authorization"', '"signature-agent";key='):
+        check(name in given, f"it covers {name}")
+    _served(await ctx.send("GET", url, headers=headers), "a verified request")
+    answer = await ctx.agent.transport.request(
+        "GET", url, session=signed.session, token=signed.token
+    )
+    _served(answer, "the transport's request")
+
+
+@case("operator.signed-conversation-and-stream")
+async def _operator_conversation(ctx: ConformanceContext, _: FixtureCase) -> None:
+    session = await ctx.session(ctx.new_user())
+    endpoint = await ctx.conversations_endpoint()
+    url = ctx.url("/")
+    headers = await ctx.auth(session, "GET", url, None)
+    given = headers[SIGNATURE_INPUT_HEADER]
+    check('"poppy-session"' in given, "a signed-out request covers poppy-session")
+    check('"authorization"' not in given, "and no authorization, as it has none")
+    receipt = await ctx.agent.conversations.start(
+        endpoint, _message(ctx.scenario.greeting), session=session
+    )
+    items = []
+    async for item in ctx.agent.conversations.stream(
+        endpoint, receipt.conversation_id, session=session
+    ):
+        items.append(item)
+        break
+    check(items, "the stream answers a signed request")
+
+
+@case("operator.signed-mcp")
+async def _operator_mcp(ctx: ConformanceContext, _: FixtureCase) -> None:
+    read_tool = _tool(ctx.scenario.mcp_read_tool)
+    _user, signed, token, url = await _signed_in_mcp(ctx)
+    answer = await (await _mcp_client(ctx, signed.session, token, url)).call_tool(read_tool)
+    check(not answer.is_error, "the MCP server accepts signed requests")
+
+
+@case("operator.signed-feedback")
+async def _operator_feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _user, signed = await _signed_in_user(ctx)
+    endpoint = feedback_endpoint((await ctx.company()).document)
+    if endpoint is None:
+        raise SkipCase("the company lists no feedback endpoint")
+    await FeedbackClient(transport=ctx.agent.transport).report(
+        endpoint,
+        FeedbackReport(task="operator conformance", description="A signed report."),
+        session=signed.session,
+        token=signed.token,
+    )
+
+
+@case("operator.required-unsigned-refused")
+async def _operator_unsigned_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _signed, url, headers = await _operator_read(ctx)
+    answer = await ctx.send("GET", url, headers=_unsigned(headers))
+    _operator_refused(answer, "an unsigned request")
+    check('"authorization"' in answer.headers["accept-signature"], "it asks to cover the token")
+
+
+@case("operator.required-mcp-refused")
+async def _operator_mcp_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _user, signed, token, url = await _signed_in_mcp(ctx)
+    headers = {
+        **_unsigned(await ctx.auth(signed.session, "POST", url, token)),
+        "Content-Type": "application/json",
+    }
+    answer = await ctx.send(
+        "POST", url, headers=headers, content=b'{"jsonrpc":"2.0","id":1,"method":"ping"}'
+    )
+    _operator_refused(answer, "an unsigned MCP request")
+    check("www-authenticate" not in answer.headers, "no token challenge")
+
+
+@case("operator.required-key-not-published")
+async def _operator_unknown_key_refused(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _signed, url, headers = await _operator_read(ctx)
+    forged = await _forged_signature(ctx, "GET", url, headers, key=new_operator_key())
+    _operator_refused(await ctx.send("GET", url, headers=forged), "a key not published")
+
+
+@case("operator.off-ignored", "operator.other-tag-ignored")
+async def _operator_ignored(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    _signed, url, headers = await _operator_read(ctx)
+    forged = await _forged_signature(ctx, "GET", url, headers, mutation=fixture.mutation)
+    _served(await ctx.send("GET", url, headers=forged), fixture.id)
+
+
+@case("operator.unsigned-accepted")
+async def _operator_unsigned(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _signed, url, headers = await _operator_read(ctx)
+    _served(await ctx.send("GET", url, headers=_unsigned(headers)), "an unsigned request")
+
+
+@case("operator.key-not-published")
+async def _operator_unknown_key(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _signed, url, headers = await _operator_read(ctx)
+    forged = await _forged_signature(ctx, "GET", url, headers, key=new_operator_key())
+    _served(await ctx.send("GET", url, headers=forged), "a key not published")
+
+
+@case("operator.directory-unreadable")
+async def _operator_no_directory(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _signed, url, headers = await _operator_read(ctx)
+    gone = f"https://{ctx.agent.identity.domain}/no-such-directory.json"
+    forged = await _forged_signature(ctx, "GET", url, headers, signature_agent=gone)
+    _served(await ctx.send("GET", url, headers=forged), "a directory that can't be read")
+
+
+@case(
+    "operator.required-other-tag",
+    "operator.wrong-signature",
+    "operator.session-header-not-covered",
+    "operator.token-not-covered",
+    "operator.authority-not-covered",
+    "operator.agent-member-not-covered",
+    "operator.no-signature-agent",
+    "operator.expired",
+    "operator.created-in-the-future",
+)
+async def _operator_bad(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    _signed, url, headers = await _operator_read(ctx)
+    forged = await _forged_signature(ctx, "GET", url, headers, mutation=fixture.mutation)
+    _operator_refused(await ctx.send("GET", url, headers=forged), fixture.id)
+
+
+@case("operator.session-header-swapped")
+async def _operator_swapped(ctx: ConformanceContext, _: FixtureCase) -> None:
+    signed, url, headers = await _operator_read(ctx)
+    fresh = await ctx.auth(signed.session, "GET", url, signed.token)
+    swapped = {**headers, SESSION_HEADER: fresh[SESSION_HEADER]}
+    _operator_refused(await ctx.send("GET", url, headers=swapped), "another Session JWT")
+
+
+@case("operator.refusal-keeps-the-session")
+async def _operator_refusal_keeps(ctx: ConformanceContext, fixture: FixtureCase) -> None:
+    signed, url, headers = await _operator_read(ctx)
+    forged = await _forged_signature(ctx, "GET", url, headers, mutation=fixture.mutation)
+    _operator_refused(await ctx.send("GET", url, headers=forged), "a wrong signature")
+    sid = signed.session.sid
+    answer = await ctx.agent.transport.request(
+        "GET", url, session=signed.session, token=signed.token
+    )
+    _served(answer, "the same Session, signed")
+    check(signed.session.sid == sid, "the Session did not restart")
+
+
+@case("operator.signature-never-vouches-for-the-session")
+async def _operator_no_vouching(ctx: ConformanceContext, _: FixtureCase) -> None:
+    _signed, url, headers = await _operator_read(ctx)
+    session_jwt = headers[SESSION_HEADER]
+    bad = {**headers, SESSION_HEADER: ".".join([*session_jwt.split(".")[:2], _flip(session_jwt)])}
+    forged = await _forged_signature(ctx, "GET", url, bad)
+    expect_refusal(
+        await ctx.send("GET", url, headers=forged),
+        400,
+        "invalid_session",
+        "a signed request whose Session JWT fails",
+    )
 
 
 # DPoP (§4.5, RFC 9449) ---------------------------------------------------------------

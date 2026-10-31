@@ -67,6 +67,7 @@ COMPANY_AGENTS = define_contribution_point("pap.company.agent")
 OPERATION_EXECUTORS = define_contribution_point("pap.company.operationExecutor")
 CLIENT_POLICIES = define_contribution_point("pap.company.clientPolicy")
 CLIENT_RESOLVERS = define_contribution_point("pap.company.clientResolver")
+OPERATOR_DIRECTORIES = define_contribution_point("pap.company.operatorDirectory")
 REPLAY_CACHES = define_contribution_point("pap.company.replayCache")
 COMPANY_APIS = define_contribution_point("pap.company.api")
 COMPANY_MCP = define_contribution_point("pap.company.mcp")
@@ -264,6 +265,17 @@ class ClientResolver(Protocol):
 
 
 @runtime_checkable
+class OperatorDirectory(Protocol):
+    """The keys an operator publishes at a `Signature-Agent` URL (§5.3).
+
+    `keyid` is the key a signature names: a directory that caches keys fetches
+    them again when the cached set lacks it (Web Bot Auth §5.5.2).
+    """
+
+    async def keys(self, url: str, keyid: str) -> Sequence[Mapping[str, Any]]: ...
+
+
+@runtime_checkable
 class ReplayCache(Protocol):
     async def mark_once(self, key: str, *, expires_at: datetime) -> bool: ...
 
@@ -413,6 +425,7 @@ __all__ = [
     "COMPANY_MCP",
     "COMPANY_STORES",
     "OPERATION_EXECUTORS",
+    "OPERATOR_DIRECTORIES",
     "REPLAY_CACHES",
     "AccountDirectory",
     "AccountGrant",

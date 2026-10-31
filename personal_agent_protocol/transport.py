@@ -7,9 +7,10 @@ Each request carries a fresh Session JWT (`Poppy-Session`) from the host's
 `pap.sessionSigner`, and, signed in, the account's access token in `Authorization`,
 with the scheme its `token_type` names. A `DPoP` token goes with a fresh proof from
 `pap.dpopProver` on every request and retry, and a `use_dpop_nonce` challenge is
-retried once; the latest nonce is kept per origin for later requests (§4.5). An
-`invalid_session` answer starts a new Session once, and the request is sent again in
-it; a second one is returned to the caller, who stops (§5.5, §7).
+retried once; the latest nonce is kept per origin for later requests (§4.5). A host
+that contributes `pap.operatorSigner` signs each of them too, last, over the Session
+JWT and the token (§5.3). An `invalid_session` answer starts a new Session once, and
+the request is sent again in it; a second one is returned to the caller, who stops (§5.5, §7).
 """
 
 from __future__ import annotations
@@ -22,13 +23,20 @@ from typing import cast
 from urllib.parse import urlsplit
 
 import httpx
+from pydantic import SecretStr
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import TransportError
 from .json import loads_strict
+from .operator_signatures import (
+    SIGNATURE_AGENT_HEADER,
+    SIGNATURE_HEADER,
+    SIGNATURE_INPUT_HEADER,
+)
 from .reactor import (
     CLOCKS,
     DPOP_PROVERS,
+    OPERATOR_SIGNERS,
     RANDOM_SOURCES,
     RATE_LIMIT_BUDGETS,
     RETRY_POLICIES,
@@ -36,6 +44,8 @@ from .reactor import (
     Clock,
     DpopProofRequest,
     DpopProver,
+    OperatorSignatureRequest,
+    OperatorSigner,
     RandomSource,
     RateLimitBudget,
     RetryPolicy,
@@ -57,7 +67,16 @@ _LATER = frozenset({429, 503})
 #: Methods retried on their own: they change nothing at the company.
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 #: Headers the host owns: a caller never sets them.
-_HOST_OWNED = frozenset({"authorization", "dpop", "poppy-session"})
+_HOST_OWNED = frozenset(
+    {
+        "authorization",
+        "dpop",
+        "poppy-session",
+        SIGNATURE_HEADER.lower(),
+        SIGNATURE_INPUT_HEADER.lower(),
+        SIGNATURE_AGENT_HEADER.lower(),
+    }
+)
 
 
 def _https_url(value: str) -> str:
@@ -104,7 +123,8 @@ async def session_headers(
 
     `Poppy-Session` always; with an access token, `Authorization`; with a `DPoP` token,
     a `DPoP` proof too, whose `ath` covers the same token as the Session JWT's.
-    `dpop_nonce` is the server's latest for this origin.
+    `dpop_nonce` is the server's latest for this origin. Last, with a `pap.operatorSigner`
+    contributed, the operator signature over them (§5.3).
     """
 
     signer = cast(SessionSigner, first_contribution(reactor, SESSION_SIGNERS, "session signer"))
@@ -122,10 +142,9 @@ async def session_headers(
         )
     )
     headers = {SESSION_HEADER: jwt.get_secret_value()}
-    if token is None:
-        return headers
-    headers["Authorization"] = f"{token.token_type} {token.access_token.get_secret_value()}"
-    if token.token_type == "DPoP":  # noqa: S105 - an OAuth token type
+    if token is not None:
+        headers["Authorization"] = f"{token.token_type} {token.access_token.get_secret_value()}"
+    if token is not None and token.token_type == "DPoP":  # noqa: S105 - an OAuth token type
         prover = cast(DpopProver, first_contribution(reactor, DPOP_PROVERS, "DPoP prover"))
         proof = await prover.prove(
             DpopProofRequest(
@@ -138,6 +157,21 @@ async def session_headers(
             )
         )
         headers[DPOP_HEADER] = proof.get_secret_value()
+    operator = optional_contribution(reactor, OPERATOR_SIGNERS, "operator signer")
+    if operator is not None:
+        authorization = headers.get("Authorization")
+        signed = await cast(OperatorSigner, operator).sign(
+            OperatorSignatureRequest(
+                method=method.upper(),
+                url=url,
+                tenant_id=session.tenant_id,
+                session_jwt=jwt,
+                authorization=None if authorization is None else SecretStr(authorization),
+            )
+        )
+        headers[SIGNATURE_AGENT_HEADER] = signed.signature_agent
+        headers[SIGNATURE_INPUT_HEADER] = signed.signature_input
+        headers[SIGNATURE_HEADER] = signed.signature
     return headers
 
 
@@ -253,7 +287,8 @@ class SessionHttpClient:
         values = dict(supplied or {})
         if any(name.lower() in _HOST_OWNED for name in values):
             raise TransportError(
-                "protected_header", "Authorization, DPoP and Poppy-Session headers are host-owned"
+                "protected_header",
+                "Authorization, DPoP, Poppy-Session and signature headers are host-owned",
             )
         return values
 

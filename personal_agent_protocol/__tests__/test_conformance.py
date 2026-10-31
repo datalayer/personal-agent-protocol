@@ -23,6 +23,7 @@ from personal_agent_protocol.demo.conformance import ManzanitaConformance
 
 DPOP_WORLD = "dpop-binding"
 NO_ISSUER_WORLD = "no-issuer"
+OPERATOR_WORLDS = ("operator-signatures", "operator-signatures-required")
 
 
 def save_world_report(report: ConformanceReport, pairing: str, world: str) -> None:
@@ -99,8 +100,27 @@ async def test_python_agent_python_company_with_no_issuer_over_tls() -> None:
     assert len(cases) >= 11
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", OPERATOR_WORLDS)
+async def test_python_agent_python_company_with_operator_signatures_over_tls(name: str) -> None:
+    """The operator worlds' cases: Manzanita checks the agent's signatures (§5.3)."""
+
+    pytest.importorskip("uvicorn")
+    from personal_agent_protocol.demo.sockets import served_over_tls
+
+    world = ManzanitaConformance(name)
+    cases = select_cases(world=name)
+    async with served_over_tls(world.network) as network:
+        assert network.socket_transport is not None
+        report = await run_conformance(world.context(), cases=cases)
+    save_world_report(report, "python-agent-python-company", name)
+    assert _failures(report) == []
+    assert {r.id for r in report.results} == {case.id for case in cases}
+    assert len(cases) >= 7
+
+
 def test_every_runner_case_belongs_to_one_world() -> None:
-    worlds = (None, DPOP_WORLD, NO_ISSUER_WORLD)
+    worlds = (None, DPOP_WORLD, NO_ISSUER_WORLD, *OPERATOR_WORLDS)
     selected = [case.id for world in worlds for case in select_cases(world=world)]
     assert sorted(selected) == sorted(CASES)
 

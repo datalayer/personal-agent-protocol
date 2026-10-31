@@ -1,0 +1,389 @@
+{
+  "suite": "operator",
+  "profile": "0.3",
+  "description": "Operator signatures (spec 5.3, RFC 9421, Web Bot Auth draft 01): a personal agent that signs requests carrying the Session header, and a company that checks them. A SHOULD on the agent, and each company's choice, so the default world leaves checking off; in operator-signatures a company checks what it is offered, and in operator-signatures-required it serves verified requests alone, which is what proves a pairing verifies. Cases with a check are decided by the SDK alone.",
+  "worlds": {
+    "operator-signatures": {
+      "operator_signatures": "optional"
+    },
+    "operator-signatures-required": {
+      "operator_signatures": "required"
+    }
+  },
+  "cases": [
+    {
+      "id": "operator.draft-vector",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "The Web Bot Auth draft's own Ed25519 vector (appendix E.2.1): the signature base built from its headers is the draft's, byte for byte, and its signature verifies.",
+      "check": "operator_signature_base",
+      "input": {
+        "method": "GET",
+        "url": "https://example.com/",
+        "headers": {
+          "signature-agent": "sig2=\"https://signature-agent.test\"",
+          "signature-input": "sig2=(\"@authority\" \"signature-agent\";key=\"sig2\");created=1735689600;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";expires=4889289600;nonce=\"n9p433xm+NJ3ph3upfBIGmsuwHw387YV7Q/F+6BSpGCVjYCqQw6rznNA8PVVLySrAWsv0hQtFioQb6E1YsauiA==\";tag=\"web-bot-auth\"",
+          "signature": "sig2=:CGokAoY/FrPpyuzTe1Fb2kLTAH9Idw6qSFd1+D77r1firsMRCxeuLu5e6O+ek3zQgDMAzjiXtLVfqE00xnABCQ==:"
+        },
+        "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs"
+      },
+      "expect": {
+        "base": "\"@authority\": example.com\n\"signature-agent\";key=\"sig2\": \"https://signature-agent.test\"\n\"@signature-params\": (\"@authority\" \"signature-agent\";key=\"sig2\");created=1735689600;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";expires=4889289600;nonce=\"n9p433xm+NJ3ph3upfBIGmsuwHw387YV7Q/F+6BSpGCVjYCqQw6rznNA8PVVLySrAWsv0hQtFioQb6E1YsauiA==\";tag=\"web-bot-auth\""
+      }
+    },
+    {
+      "id": "operator.signed-vector",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-5.3-12",
+        "PAP-5.3-13"
+      ],
+      "description": "One request, one key, one signature: both SDKs write these exact three headers, covering poppy-session, and authorization when present. The key is RFC 9421's test key, B.1.4.",
+      "check": "operator_signature_sign",
+      "input": [
+        {
+          "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU",
+          "method": "GET",
+          "url": "https://manzanita.example:8443/api/orders?limit=2",
+          "session_jwt": "session.jwt.value",
+          "authorization": "Bearer an-access-token",
+          "signature_agent": "https://atlas.example/operator-keys.json",
+          "created": 1735689600,
+          "expires": 1735689660,
+          "nonce": "bm9uY2U"
+        },
+        {
+          "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU",
+          "method": "post",
+          "url": "https://manzanita.example/poppy/conversations",
+          "session_jwt": "session.jwt.value",
+          "authorization": null,
+          "signature_agent": "https://atlas.example/operator-keys.json",
+          "created": 1735689600,
+          "expires": 1735689660,
+          "nonce": "bm9uY2U"
+        }
+      ],
+      "expect": [
+        {
+          "signature_agent": "sig1=\"https://atlas.example/operator-keys.json\"",
+          "signature_input": "sig1=(\"@authority\" \"signature-agent\";key=\"sig1\" \"@method\" \"@path\" \"@query\" \"poppy-session\" \"authorization\");created=1735689600;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";expires=1735689660;nonce=\"bm9uY2U\";tag=\"web-bot-auth\"",
+          "signature": "sig1=:/CXmIa31iUXwxszMtNR6beudg74LHz8w1MoCbL/7OfVK1dMijFMOuxGZj0S48xUBW29f9/x7nDUQZL7OurNuCQ==:"
+        },
+        {
+          "signature_agent": "sig1=\"https://atlas.example/operator-keys.json\"",
+          "signature_input": "sig1=(\"@authority\" \"signature-agent\";key=\"sig1\" \"@method\" \"@path\" \"@query\" \"poppy-session\");created=1735689600;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";expires=1735689660;nonce=\"bm9uY2U\";tag=\"web-bot-auth\"",
+          "signature": "sig1=:Gn2ByrzpESco7o57nsHp/NeO5hQ1ysKUTN377UQDXB5rd0mLUFPLJH0Ta+CGEUMyWXxZ0DjLNTphPWmGcSZGCA==:"
+        }
+      ]
+    },
+    {
+      "id": "operator.signed-read",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12",
+        "PAP-5.3-13"
+      ],
+      "description": "A company that requires a verified signature serves a signed-in read: the signature is tagged web-bot-auth, names the operator key, and covers poppy-session and authorization.",
+      "world": "operator-signatures-required"
+    },
+    {
+      "id": "operator.signed-conversation-and-stream",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12",
+        "PAP-5.3-13"
+      ],
+      "description": "Signed out, a conversation and its stream are served: the signature covers poppy-session alone, and every request of the conversation carries a fresh one.",
+      "world": "operator-signatures-required"
+    },
+    {
+      "id": "operator.signed-mcp",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12",
+        "PAP-5.3-13"
+      ],
+      "description": "The MCP server takes the same signature, from the MCP client, on each of its requests.",
+      "world": "operator-signatures-required"
+    },
+    {
+      "id": "operator.signed-feedback",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12",
+        "PAP-5.3-13"
+      ],
+      "description": "A feedback report goes the same way.",
+      "world": "operator-signatures-required"
+    },
+    {
+      "id": "operator.required-unsigned-refused",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A company that requires a signature refuses a request with none: 403 with Accept-Signature, the Company's decision, and never invalid_session, as its absence does not make a Session JWT invalid.",
+      "world": "operator-signatures-required"
+    },
+    {
+      "id": "operator.required-mcp-refused",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "The MCP server refuses an unsigned request the same way: 403 with Accept-Signature, and no WWW-Authenticate, as it is no token error.",
+      "world": "operator-signatures-required"
+    },
+    {
+      "id": "operator.required-key-not-published",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "With a signature no key at its Signature-Agent verifies, the request is unverified, and a company that requires one refuses it with 403.",
+      "world": "operator-signatures-required"
+    },
+    {
+      "id": "operator.required-other-tag",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A signature tagged otherwise is not an operator signature: a company that requires one refuses the request.",
+      "world": "operator-signatures-required",
+      "mutation": {
+        "tag": "another-profile"
+      }
+    },
+    {
+      "id": "operator.off-ignored",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A company that doesn't check operator signatures ignores one, even a wrong one: the request is served on its Session JWT and token.",
+      "mutation": {
+        "tamper": true
+      }
+    },
+    {
+      "id": "operator.unsigned-accepted",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "Where a signature is optional, a request with none is served: its absence does not make a Session JWT invalid.",
+      "world": "operator-signatures"
+    },
+    {
+      "id": "operator.other-tag-ignored",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "Where a signature is optional, one tagged otherwise is discarded and the request is treated as unsigned.",
+      "world": "operator-signatures",
+      "mutation": {
+        "tag": "another-profile"
+      }
+    },
+    {
+      "id": "operator.key-not-published",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "Where a signature is optional, one by a key its directory doesn't list is unverified, not invalid, and the request is served.",
+      "world": "operator-signatures"
+    },
+    {
+      "id": "operator.directory-unreadable",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "Where a signature is optional, a Signature-Agent that can't be read leaves the request unverified, and it is served: an outage says nothing of the signer.",
+      "world": "operator-signatures"
+    },
+    {
+      "id": "operator.wrong-signature",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A signature that doesn't verify is refused with 403 and Accept-Signature.",
+      "world": "operator-signatures",
+      "mutation": {
+        "tamper": true
+      }
+    },
+    {
+      "id": "operator.session-header-not-covered",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-13"
+      ],
+      "description": "A signature that doesn't cover poppy-session is refused.",
+      "world": "operator-signatures",
+      "mutation": {
+        "components": [
+          "@authority",
+          "signature-agent",
+          "@method",
+          "@path",
+          "@query",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "operator.token-not-covered",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-13"
+      ],
+      "description": "A request with an access token whose signature doesn't cover authorization is refused.",
+      "world": "operator-signatures",
+      "mutation": {
+        "components": [
+          "@authority",
+          "signature-agent",
+          "@method",
+          "@path",
+          "@query",
+          "poppy-session"
+        ]
+      }
+    },
+    {
+      "id": "operator.authority-not-covered",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A signature that covers neither @authority nor @target-uri is refused (Web Bot Auth 5.2).",
+      "world": "operator-signatures",
+      "mutation": {
+        "components": [
+          "signature-agent",
+          "poppy-session",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "operator.agent-member-not-covered",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A signature that doesn't cover its Signature-Agent member is refused (Web Bot Auth 5.2.1).",
+      "world": "operator-signatures",
+      "mutation": {
+        "components": [
+          "@authority",
+          "poppy-session",
+          "authorization"
+        ]
+      }
+    },
+    {
+      "id": "operator.no-signature-agent",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A signature with no Signature-Agent header is refused: nothing says whose key it is.",
+      "world": "operator-signatures",
+      "mutation": {
+        "drop_agent": true
+      }
+    },
+    {
+      "id": "operator.session-header-swapped",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-13"
+      ],
+      "description": "A signature does not outlive the Session JWT it covers: the same signature over another JWT is refused.",
+      "world": "operator-signatures",
+      "mutation": {
+        "swap_session": true
+      }
+    },
+    {
+      "id": "operator.expired",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A signature past its expires is refused.",
+      "world": "operator-signatures",
+      "mutation": {
+        "created_offset": -300
+      }
+    },
+    {
+      "id": "operator.created-in-the-future",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A signature created beyond the company's window is refused.",
+      "world": "operator-signatures",
+      "mutation": {
+        "created_offset": 300
+      }
+    },
+    {
+      "id": "operator.refusal-keeps-the-session",
+      "kind": "recovery",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-12"
+      ],
+      "description": "A refused signature says nothing of the Session: the same Session and token go on working, signed properly.",
+      "world": "operator-signatures",
+      "mutation": {
+        "tamper": true
+      }
+    },
+    {
+      "id": "operator.signature-never-vouches-for-the-session",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-5.3-14"
+      ],
+      "description": "A signature that verifies does not stand in for the Session JWT: a Session JWT that fails is invalid_session, however well signed the request.",
+      "world": "operator-signatures"
+    }
+  ]
+}

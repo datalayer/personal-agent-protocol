@@ -109,6 +109,11 @@ from ..operations import (
     approval_from_meta,
     parse_approval_header,
 )
+from ..operator_signatures import (
+    OPERATOR_SIGNATURE_REFUSED,
+    accept_signature,
+    verify_operator_signature,
+)
 from ..profile import PROTOCOL_PROFILE
 from ..reactor import (
     CLOCKS,
@@ -130,6 +135,7 @@ from .points import (
     COMPANY_RATE_LIMITS,
     COMPANY_STORES,
     OPERATION_EXECUTORS,
+    OPERATOR_DIRECTORIES,
     REPLAY_CACHES,
     AccountDirectory,
     AccountSignOuts,
@@ -144,6 +150,7 @@ from .points import (
     OperationExecutor,
     OperationFailed,
     OperationOutcomeUnknown,
+    OperatorDirectory,
     ProposedOperation,
     RateLimit,
     ReplayCache,
@@ -389,6 +396,12 @@ class CompanyConfig:
     dpop_nonce_lifetime: timedelta = timedelta(minutes=5)
     #: The acceptance window of a proof's `iat`.
     dpop_proof_window: timedelta = timedelta(seconds=60)
+    #: Whether requests' operator signatures are checked, the Company's choice (§5.3). `off`
+    #: ignores them. `optional` refuses an invalid one and accepts a request with none,
+    #: or with one it has no key to decide. `required` asks every request for a verified one.
+    operator_signatures: Literal["off", "optional", "required"] = "off"
+    #: How far in the future an operator signature's `created` may be.
+    operator_signature_window: timedelta = timedelta(seconds=60)
 
     def __post_init__(self) -> None:  # noqa: C901 - one branch per protocol rule
         _check_aliases(self.domain, self.aliases)
@@ -400,6 +413,7 @@ class CompanyConfig:
             session_jwt_window=self.session_jwt_window,
             dpop_nonce_lifetime=self.dpop_nonce_lifetime,
             dpop_proof_window=self.dpop_proof_window,
+            operator_signature_window=self.operator_signature_window,
         )
         if not self.oauth and (
             self.mediated_fields or self.operations or self.aliases or self.dpop_binding != "off"
@@ -412,6 +426,8 @@ class CompanyConfig:
             raise ValueError("dpop_binding is off, optional or required")
         if self.dpop_nonces and self.dpop_binding == "off":
             raise ValueError("dpop_nonces need dpop_binding")
+        if self.operator_signatures not in ("off", "optional", "required"):
+            raise ValueError("operator_signatures is off, optional or required")
         for name, value in (("device_page", self.device_page), ("consent_page", self.consent_page)):
             if value is None:
                 continue
@@ -2248,6 +2264,7 @@ class CompanyService:
         # is its identity verified, so a forged JWT is never reported as a check, or remembered.
         if declared is not None:
             await self._remember_client(verified.client_id, declared)
+        await self._operator_signature(request)
         issued: IssuedAccessToken | None = None
         if presented is not None:
             issued = await self._access_token(presented)
@@ -2283,6 +2300,38 @@ class CompanyService:
         if wait is not None:
             raise _RateLimitedError(wait)
         return ("" if presented is None else _digest(presented)), session
+
+    async def _operator_signature(self, request: CompanyRequest) -> None:
+        """Check the request's operator signature, after its Session JWT (§5.3).
+
+        The Session JWT is verified first, whatever a signature says, and so only a
+        verified client makes the company read a directory. A refusal is the Company's
+        decision, 403 with `Accept-Signature` (Web Bot Auth §5.3), and never
+        `invalid_session`: without a good signature the Session JWT is as valid as it was.
+        """
+
+        if self.config.operator_signatures == "off":
+            return
+        directory = cast(
+            OperatorDirectory,
+            first_contribution(self.reactor, OPERATOR_DIRECTORIES, "operator directory"),
+        )
+        verdict = await verify_operator_signature(
+            method=request.method,
+            url=request.url,
+            headers=request.headers,
+            keys=directory.keys,
+            now=self._now(),
+            window=self.config.operator_signature_window,
+        )
+        if verdict.outcome == "invalid" or (
+            verdict.outcome != "verified" and self.config.operator_signatures == "required"
+        ):
+            raise _RefusedError(
+                403,
+                OPERATOR_SIGNATURE_REFUSED,
+                headers={"Accept-Signature": accept_signature(request.headers)},
+            )
 
     def _resource_metadata_url(self, resource: str | None) -> str:
         """The protected resource metadata URL of the service a request was for (RFC 9728)."""
@@ -3555,6 +3604,9 @@ class CompanyService:
         except _RateLimitedError:
             raise
         except _RefusedError as refused:
+            if refused.error == OPERATOR_SIGNATURE_REFUSED:
+                # No token error: no challenge names it.
+                raise
             return self._mcp_refusal(refused.status, refused.error, headers=refused.headers)
         if session.account_id is not None:
             self._report_session(signed_in=True, interface="mcp")

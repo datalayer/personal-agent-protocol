@@ -1184,7 +1184,9 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
         requirement: list[str] | None = REQUIREMENT,
         suite: list[str] | None = SUITE,
         world: str | None = typer.Option(
-            None, "--world", help="With --demo: a world of the fixtures: dpop-binding or no-issuer."
+            None,
+            "--world",
+            help="With --demo: a world of the fixtures, such as dpop-binding.",
         ),
         output_format: str = typer.Option("text", "--format", help="text, json, or junit."),
         output: Path | None = OUTPUT,

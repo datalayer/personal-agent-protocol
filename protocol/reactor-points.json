@@ -203,6 +203,20 @@
       "note": "Signs the DPoP proof of one request (§4.5, RFC 9449 §4.2) from a DpopProofRequest: method, url, tenant_id, issuer, access_token, nonce. JoseDpopProver keeps one P-256 key per (tenant_id, issuer) in a DpopKeyCustody, InMemoryDpopKeys by default: never a delegated key and never a key from jwks_uri (§5.2). A host that keeps tokens past one process contributes a durable custody, as the CLI's FileDpopKeys does."
     },
     {
+      "id": "pap.operatorSigner",
+      "role": "personal-agent",
+      "python": "OPERATOR_SIGNERS",
+      "typescript": "OperatorSigners",
+      "contract": "OperatorSigner",
+      "members": [
+        "sign"
+      ],
+      "default": null,
+      "resolution": "optional",
+      "tenant": "OperatorSignatureRequest.tenant_id",
+      "note": "Signs one request that carries the Session header as its operator (§5.3, RFC 9421, Web Bot Auth) from an OperatorSignatureRequest: method, url, tenant_id, session_jwt, authorization. Answers the OperatorSignature of its Signature-Agent, Signature-Input and Signature headers. None contributed, and requests go unsigned: the key is the operator's, published at the Signature-Agent URL, so the SDK makes none up. WebBotAuthSigner signs with one OperatorSigningKey, Ed25519OperatorKey or a key in a KMS, for every tenant: never a delegated key, a DPoP key or a key from jwks_uri. A host with a key per tenant contributes its own over sign_operator_request."
+    },
+    {
       "id": "pap.refreshTokenLock",
       "role": "personal-agent",
       "python": "REFRESH_TOKEN_LOCKS",
@@ -386,6 +400,23 @@
       },
       "resolution": "single",
       "tenant": null
+    },
+    {
+      "id": "pap.company.operatorDirectory",
+      "role": "company",
+      "python": "OPERATOR_DIRECTORIES",
+      "typescript": "OperatorDirectories",
+      "contract": "OperatorDirectory",
+      "members": [
+        "keys"
+      ],
+      "default": {
+        "python": "https",
+        "typescript": "https"
+      },
+      "resolution": "single",
+      "tenant": null,
+      "note": "The Ed25519 keys an operator publishes at a Signature-Agent URL, for a company with operator_signatures on (§5.3). The default reads them through pap.urlSafetyPolicy with no redirect, cached, and fetches again for an unknown keyid, rate-limited. A company with a list of operators it recognises contributes its own."
     },
     {
       "id": "pap.company.replayCache",

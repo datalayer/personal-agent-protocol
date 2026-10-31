@@ -289,6 +289,14 @@ async def _discover_example_com(docs: Docs) -> tuple[dict[str, Any], Check]:
     return {}, check
 
 
+@case("docs/docs/guides/cryptography.mdx#0")
+async def _operator_signer(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["signer"].key is namespace["key"]
+
+    return {}, check
+
+
 @case("docs/docs/guides/personal-agent.mdx#0")
 async def _discover_top_level(docs: Docs) -> tuple[dict[str, Any], Check]:
     async def check(namespace: dict[str, Any], out: str) -> None:

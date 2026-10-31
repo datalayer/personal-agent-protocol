@@ -104,6 +104,8 @@ def jwk_thumbprint(jwk_value: dict[str, Any]) -> str:
 
     if jwk_value["kty"] == "EC":
         members = {name: jwk_value[name] for name in ("crv", "kty", "x", "y")}
+    elif jwk_value["kty"] == "OKP":
+        members = {name: jwk_value[name] for name in ("crv", "kty", "x")}
     else:
         members = {name: jwk_value[name] for name in ("e", "kty", "n")}
     canonical = json.dumps(members, separators=(",", ":"), sort_keys=True).encode()

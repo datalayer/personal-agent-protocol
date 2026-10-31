@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .caching import CacheBounds, MetadataCache
+from .crypto import jwk_thumbprint
 from .errors import (
     DiscoveryError,
     IdentityError,
@@ -23,6 +24,7 @@ from .errors import (
 )
 from .json import loads_strict
 from .models import ClientMetadata, JsonWebKeySet
+from .operator_signatures import OPERATOR_DIRECTORY_MEDIA_TYPE
 from .reactor import (
     DISCOVERY_TRANSPORTS,
     URL_SAFETY_POLICIES,
@@ -38,6 +40,12 @@ from .reactor import (
 
 #: The most entries a per-URL table keeps (refetch times, unfetchable client IDs).
 _REMEMBERED = 1024
+#: What a metadata document, a JWK Set or an operator's directory is served as.
+_JSON_TYPES = frozenset(
+    {"application/json", "application/jwk-set+json", OPERATOR_DIRECTORY_MEDIA_TYPE}
+)
+#: A directory with more keys is refused (Web Bot Auth §6.7).
+MAX_OPERATOR_KEYS = 32
 
 
 def _remember(table: dict[str, Any], key: str, value: Any, stale: datetime) -> None:
@@ -59,6 +67,25 @@ def _remember(table: dict[str, Any], key: str, value: Any, stale: datetime) -> N
 
 def _when(entry: Any) -> datetime:
     return entry[0] if isinstance(entry, tuple) else entry
+
+
+def _operator_keys(document: object) -> list[dict[str, Any]]:
+    """The usable keys of a directory: public Ed25519, the rest ignored."""
+
+    keys = document.get("keys") if isinstance(document, dict) else None
+    if not isinstance(keys, list) or len(keys) > MAX_OPERATOR_KEYS:
+        raise ProtocolValidationError(
+            "invalid_operator_directory", "An operator directory is a bounded JWK Set"
+        )
+    return [
+        item
+        for item in keys
+        if isinstance(item, dict)
+        and item.get("kty") == "OKP"
+        and item.get("crv") == "Ed25519"
+        and isinstance(item.get("x"), str)
+        and "d" not in item
+    ]
 
 
 class AgentIdentityClient:
@@ -162,6 +189,41 @@ class AgentIdentityClient:
         await self._cache.delete(key)
         return self._key_set(await self._jwks(metadata, key))
 
+    async def fetch_operator_keys(self, url: str, *, keyid: str) -> list[dict[str, Any]]:
+        """The Ed25519 keys published at a `Signature-Agent` URL (§5.3, Web Bot Auth §5.5).
+
+        Never a redirect, and only a bounded JWK Set of public keys, as any URL a
+        request names is fetched through `pap.urlSafetyPolicy`. A `keyid` the cached set
+        lacks fetches it again, at most once per `jwks_refetch_interval`; a fetch that
+        fails then keeps the cached set, as an outage says nothing of the keys. A URL
+        that can't be read isn't fetched again for `unfetchable_for`.
+        """
+
+        requested = self._fetchable_url(url)
+        key = f"pap.operator-keys:{requested}"
+        now = self._cache.now()
+        remembered = self._unfetchable.get(requested)
+        if remembered is not None and now < remembered[0]:
+            raise type(remembered[1])(remembered[1].code, "A directory could not be fetched")
+        try:
+            document = await self._cached_json(key, requested, max_redirects=0, required_host=None)
+        except (DiscoveryError, IdentityError) as error:
+            _remember(self._unfetchable, requested, (now + self._unfetchable_for, error), now)
+            raise
+        keys = _operator_keys(document)
+        if any(jwk_thumbprint(item) == keyid for item in keys):
+            return keys
+        last = self._refetched.get(requested)
+        if last is not None and now - last < self._refetch_interval:
+            return keys
+        _remember(self._refetched, requested, now, now - self._refetch_interval)
+        value, final_url, headers = await self._get_json(
+            requested, max_redirects=0, required_host=None
+        )
+        keys = _operator_keys(value)
+        await self._cache.put(key, value, final_url=final_url, headers=headers)
+        return keys
+
     async def _jwks(self, metadata: ClientMetadata, key: str) -> object:
         return await self._cached_json(
             key,
@@ -193,12 +255,11 @@ class AgentIdentityClient:
 
     @staticmethod
     def _fetchable_url(value: str) -> str:
-        parsed = urlsplit(value)
-        if parsed.fragment:
-            raise IdentityError("invalid_client_id", "client_id must not contain a fragment")
         try:
+            if urlsplit(value).fragment:
+                raise IdentityError("invalid_client_id", "client_id must not contain a fragment")
             return str(httpx.URL(value))
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, httpx.InvalidURL) as exc:
             raise IdentityError("invalid_client_id", "client_id must be a valid HTTPS URL") from exc
 
     async def _get_json(  # noqa: C901 - explicit trust-boundary branches
@@ -246,7 +307,7 @@ class AgentIdentityClient:
                     status_code=response.status_code,
                 )
             content_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
-            if content_type not in {"application/json", "application/jwk-set+json"}:
+            if content_type not in _JSON_TYPES:
                 raise IdentityError("invalid_content_type", "Agent identity response must be JSON")
             if len(response.content) > self._max_bytes:
                 raise IdentityError(

@@ -40,6 +40,7 @@ from ..crypto import (
 )
 from ..errors import BrowserSessionError, DiscoveryError
 from ..extensions import SUPPORTED_EXTENSIONS
+from ..operator_signatures import Ed25519OperatorKey, new_operator_key, operator_directory
 from ..reactor import (
     APPROVAL_SURFACES,
     AUTHORIZATION_STATE_STORES,
@@ -47,11 +48,13 @@ from ..reactor import (
     BROWSER_JOINS,
     CLOCKS,
     DPOP_PROVERS,
+    OPERATOR_SIGNERS,
     PROTECTED_INPUTS,
     SESSION_SIGNERS,
     SIGNERS,
     TOKEN_STORES,
     ApprovalRequest,
+    OperatorSigner,
     ProtectedInputRequest,
     build_pap_reactor,
 )
@@ -109,6 +112,8 @@ class AgentIdentity:
         default_factory=lambda: ec.generate_private_key(ec.SECP256R1())
     )
     kid: str = "key-1"
+    #: The operator's key, published at `operator_url`: no key of `jwks_uri` (§5.3).
+    operator_key: Ed25519OperatorKey = field(default_factory=new_operator_key)
 
     @property
     def client_id(self) -> str:
@@ -132,8 +137,24 @@ class AgentIdentity:
             },
         }
 
+    @property
+    def operator_url(self) -> str:
+        """Its `Signature-Agent`: a JWK Set any HTTPS URL can serve (Web Bot Auth §5.5)."""
+
+        return f"https://{self.domain}/operator-keys.json"
+
+    @property
+    def documents(self) -> dict[str, Any]:
+        """What its website serves, by path."""
+
+        return {
+            self.path: self.metadata,
+            "/jwks.json": self.jwks,
+            "/operator-keys.json": operator_directory([self.operator_key]),
+        }
+
     def website(self) -> Asgi:
-        return json_site({self.path: self.metadata, "/jwks.json": self.jwks})
+        return json_site(self.documents)
 
     def signer(self) -> JoseSigner:
         return JoseSigner(self.private_key, algorithm="ES256", key_id=self.kid)
@@ -309,12 +330,16 @@ class PersonalAgentHost:
     delegated_keys: InMemoryDelegatedKeys = field(default_factory=InMemoryDelegatedKeys)
     #: The DPoP keys, one per Company: the host's too.
     dpop_keys: InMemoryDpopKeys = field(default_factory=InMemoryDpopKeys)
+    #: Signs as the operator, when given; a host signs nothing otherwise (§5.3).
+    operator_signer: OperatorSigner | None = None
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
         contribute(CLOCKS, self.clock, contribution_id="demo-clock")
         signer = self.identity.signer()
         contribute(SIGNERS, signer, contribution_id="agent-key")
+        if self.operator_signer is not None:
+            contribute(OPERATOR_SIGNERS, self.operator_signer, contribution_id="operator-key")
         contribute(
             SESSION_SIGNERS,
             DelegatedSessionSigner(self.delegated_keys, signer=signer, now=self.clock.now),

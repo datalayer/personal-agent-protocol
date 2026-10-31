@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
 import httpx
 from reactor import PluginManifest, PluginPlatform, hookimpl  # type: ignore[import-untyped]
@@ -40,6 +40,7 @@ from .points import (
     COMPANY_RATE_LIMITS,
     COMPANY_STORES,
     OPERATION_EXECUTORS,
+    OPERATOR_DIRECTORIES,
     REPLAY_CACHES,
     AccountDirectory,
     AccountSignOuts,
@@ -59,6 +60,7 @@ from .points import (
     OperationExecutor,
     OperationFailed,
     OperationOutcomeUnknown,
+    OperatorDirectory,
     ProposedOperation,
     RateLimit,
     Reply,
@@ -97,6 +99,18 @@ class IdentityClientResolver:
         )
 
 
+class IdentityOperatorDirectory:
+    """Read an operator's published keys over HTTPS (§5.3, Web Bot Auth §5.5)."""
+
+    def __init__(self, identity: AgentIdentityClient) -> None:
+        self.identity = identity
+
+    async def keys(self, url: str, keyid: str) -> list[dict[str, Any]]:
+        """Cached keys, fetched again for an unknown `keyid`."""
+
+        return await self.identity.fetch_operator_keys(url, keyid=keyid)
+
+
 class ReactorClock:
     """The clock a reactor's `pap.clock` contribution keeps, read at each call."""
 
@@ -120,8 +134,10 @@ class CompanyDefaultsPlugin:
         clock: Clock | None = None,
         *,
         store: Callable[[], CompanyStore],
+        operator_directory: OperatorDirectory | None = None,
     ) -> None:
         self.resolver = resolver
+        self.operator_directory = operator_directory
         self.clock = clock
         self.store = store
 
@@ -135,6 +151,10 @@ class CompanyDefaultsPlugin:
         contribute(REPLAY_CACHES, replay, contribution_id="store", order=100)
         contribute(CLIENT_POLICIES, AllowEveryAgent(), contribution_id="allow", order=100)
         contribute(CLIENT_RESOLVERS, self.resolver, contribution_id="https", order=100)
+        if self.operator_directory is not None:
+            contribute(
+                OPERATOR_DIRECTORIES, self.operator_directory, contribution_id="https", order=100
+            )
 
 
 def build_company(
@@ -167,6 +187,7 @@ def build_company(
                 OPERATION_EXECUTORS.id,
                 CLIENT_POLICIES.id,
                 CLIENT_RESOLVERS.id,
+                OPERATOR_DIRECTORIES.id,
                 REPLAY_CACHES.id,
             ],
         ),
@@ -176,6 +197,7 @@ def build_company(
             store=lambda: cast(
                 CompanyStore, first_contribution(reactor, COMPANY_STORES, "company store")
             ),
+            operator_directory=IdentityOperatorDirectory(identity),
         ),
     )
     for manifest, implementation in plugins:
@@ -193,6 +215,7 @@ __all__ = [
     "COMPANY_RATE_LIMITS",
     "COMPANY_STORES",
     "OPERATION_EXECUTORS",
+    "OPERATOR_DIRECTORIES",
     "RECORD_KINDS",
     "REPLAY_CACHES",
     "AccountDirectory",
@@ -215,12 +238,14 @@ __all__ = [
     "CompanyStore",
     "ConsentDecision",
     "IdentityClientResolver",
+    "IdentityOperatorDirectory",
     "MemoryCompanyStore",
     "MemoryReplayCache",
     "OpenWork",
     "OperationExecutor",
     "OperationFailed",
     "OperationOutcomeUnknown",
+    "OperatorDirectory",
     "ProposedOperation",
     "RateLimit",
     "ReactorClock",

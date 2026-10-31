@@ -10,6 +10,20 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.29 → 0.30
+
+0.30.0 adds operator signatures (spec 5.3, RFC 9421, Web Bot Auth) to both SDKs and
+both reference companies, on the same upstream target, `ec16efa`. A host that
+contributes nothing sends what it sent, and a company that sets nothing checks nothing.
+
+| Change | What to do |
+| --- | --- |
+| A new contribution point, `pap.operatorSigner`, optional | To sign: contribute a `WebBotAuthSigner` with your `OperatorSigningKey` and `signature_agent`, and serve `operator_directory` at that URL. See [Operator signatures](/guides/cryptography/#operator-signatures) |
+| `Signature`, `Signature-Input` and `Signature-Agent` are host-owned | A caller that passes them to `SessionHttpClient` or `SessionFetchClient` gets `protected_header`: contribute a signer instead |
+| Reference company: `operator_signatures`, off by default | `CompanyConfig.operator_signatures` (`off`, `optional`, `required`) and `operator_signature_window`. See [the table](/guides/company/#the-reference-company) |
+| A new company point, `pap.company.operatorDirectory` | Nothing: the default reads the `Signature-Agent` URL over HTTPS. A company that recognizes a list of operators contributes its own |
+| `createCompanyDefaultsPlugin` (TypeScript) | Takes the directory as a fourth argument, for a company assembled by hand |
+
 ## 0.28 → 0.29
 
 0.29.0 implements DPoP (spec 4.5, RFC 9449) in both SDKs and both reference

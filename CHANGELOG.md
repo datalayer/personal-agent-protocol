@@ -6,7 +6,36 @@
 
 # Changelog
 
-## 0.29.0 (unreleased)
+## 0.30.0 (unreleased)
+
+Operator signatures (spec 5.3, RFC 9421, Web Bot Auth draft 01) in both SDKs and both
+reference companies, on the same upstream target, `ec16efa`. Off until a host asks:
+see the
+[0.29 → 0.30 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#029--030).
+
+- **Personal agents:** a new contribution point, `pap.operatorSigner`
+  (`OPERATOR_SIGNERS`, `OperatorSigners`), with no default: none contributed, and
+  requests go as before. `WebBotAuthSigner` signs every request and retry that carries
+  the Session header, last, over `@authority`, its `Signature-Agent` member, `@method`,
+  `@path`, `@query`, `poppy-session`, and `authorization` when present, with an Ed25519
+  `OperatorSigningKey` (`Ed25519OperatorKey`, or a key in a KMS). `operator_directory`
+  (`operatorDirectory`) is the JWK Set a host serves at its `Signature-Agent` URL.
+  `Signature`, `Signature-Input` and `Signature-Agent` are host-owned headers now.
+- **Reference companies:** `CompanyConfig.operator_signatures`
+  (`operatorSignatures`), `off` by default, `optional` or `required`, with
+  `operator_signature_window`, and a new point, `pap.company.operatorDirectory`,
+  whose default reads a `Signature-Agent` URL through the URL safety policy, with no
+  redirect. A signature is checked after the Session JWT. An invalid one is refused,
+  and with `required` an absent or unverifiable one too: 403,
+  `operator_signature_refused`, with `Accept-Signature`, never `invalid_session`.
+- **Conformance:** an `operator` suite: a case in the default world, 15 where a
+  signature is optional, 8 where one is required, in all four pairings, and two the
+  SDKs decide alone, one of them the draft's own vector.
+- **Ledger:** `PAP-5.3-12` and `PAP-5.3-13` are implemented.
+- **Fixed:** a `client_id` that isn't a URL (`https://[x`) is `invalid_client_id`,
+  where Python raised a `ValueError`.
+
+## 0.29.0 (2026-10-30)
 
 DPoP (spec 4.5, RFC 9449) in both SDKs and both reference companies, and the
 target moved to upstream `ec16efa` (revision 2026-10-30, the commit's date: the

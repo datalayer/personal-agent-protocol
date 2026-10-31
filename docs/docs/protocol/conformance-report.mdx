@@ -6,16 +6,16 @@ title: Compatibility and conformance report
 
 # Compatibility and conformance report
 
-SDK version **0.29.0**, PAP profile **0.3** (draft updated 2026-10-30), Operations extension **v2**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
+SDK version **0.30.0**, PAP profile **0.3** (draft updated 2026-10-30), Operations extension **v2**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
 
 ## Pairings
 
 | Personal agent | Company | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: |
-| Python | Python | 138 | 0 | 0 |
-| Python | TypeScript | 138 | 0 | 0 |
-| TypeScript | Python | 138 | 0 | 0 |
-| TypeScript | TypeScript | 138 | 0 | 0 |
+| Python | Python | 162 | 0 | 0 |
+| Python | TypeScript | 162 | 0 | 0 |
+| TypeScript | Python | 162 | 0 | 0 |
+| TypeScript | TypeScript | 162 | 0 | 0 |
 
 ## Protocol
 
@@ -174,9 +174,38 @@ SDK version **0.29.0**, PAP profile **0.3** (draft updated 2026-10-30), Operatio
 | `dpop.mcp-bearer-without-a-proof` | positive | GUIDE-mcp-01 | pass | pass | pass | pass |
 | `dpop.mcp-server-decides-the-proof` | positive | GUIDE-mcp-01 | pass | pass | pass | pass |
 
+## Operator signatures
+
+| Case | Kind | Requirements | Python → Python | Python → TypeScript | TypeScript → Python | TypeScript → TypeScript |
+| --- | --- | --- | --- | --- | --- | --- |
+| `operator.signed-read` | positive | PAP-5.3-12, PAP-5.3-13 | pass | pass | pass | pass |
+| `operator.signed-conversation-and-stream` | positive | PAP-5.3-12, PAP-5.3-13 | pass | pass | pass | pass |
+| `operator.signed-mcp` | positive | PAP-5.3-12, PAP-5.3-13 | pass | pass | pass | pass |
+| `operator.signed-feedback` | positive | PAP-5.3-12, PAP-5.3-13 | pass | pass | pass | pass |
+| `operator.required-unsigned-refused` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.required-mcp-refused` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.required-key-not-published` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.required-other-tag` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.off-ignored` | positive | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.unsigned-accepted` | positive | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.other-tag-ignored` | positive | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.key-not-published` | recovery | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.directory-unreadable` | recovery | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.wrong-signature` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.session-header-not-covered` | negative | PAP-5.3-13 | pass | pass | pass | pass |
+| `operator.token-not-covered` | negative | PAP-5.3-13 | pass | pass | pass | pass |
+| `operator.authority-not-covered` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.agent-member-not-covered` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.no-signature-agent` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.session-header-swapped` | negative | PAP-5.3-13 | pass | pass | pass | pass |
+| `operator.expired` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.created-in-the-future` | negative | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.refusal-keeps-the-session` | recovery | PAP-5.3-12 | pass | pass | pass | pass |
+| `operator.signature-never-vouches-for-the-session` | negative | PAP-5.3-14 | pass | pass | pass | pass |
+
 ## Decided by each SDK alone
 
-64 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
+66 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
 
 | Case | Kind | Check | SDKs |
 | --- | --- | --- | --- |
@@ -244,5 +273,7 @@ SDK version **0.29.0**, PAP profile **0.3** (draft updated 2026-10-30), Operatio
 | `dpop.dpop-answer-needs-a-proof` | negative | dpop_token_request | python, typescript |
 | `dpop.proof-shape` | positive | dpop_proof_shape | python, typescript |
 | `dpop.mcp-proof-from-the-servers-metadata` | positive | dpop_mcp_token | python, typescript |
+| `operator.draft-vector` | positive | operator_signature_base | python, typescript |
+| `operator.signed-vector` | positive | operator_signature_sign | python, typescript |
 
 The runners' JSON reports (schema 1) carry each case's requirements and messages; see the [conformance guide](/guides/conformance/).

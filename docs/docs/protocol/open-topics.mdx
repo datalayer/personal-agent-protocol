@@ -34,8 +34,8 @@ Current examples include:
   after a wider sign-in;
 - rate limits and `RateLimit` headers in the reference companies;
 - in Node, socket pinning for metadata fetches; and
-- operator signatures (spec 5.3, Web Bot Auth, RFC 9421), a SHOULD neither SDK sends yet,
-  whose absence never makes a Session JWT invalid.
+- in operator signatures, `Content-Digest` over the body, and algorithms other than
+  Ed25519, neither of which a reference company relies on.
 
 The [implementation status](./status) and
 [requirements ledger](https://github.com/datalayer/personal-agent-protocol/blob/main/protocol/requirements.yaml)

@@ -46,12 +46,15 @@ a token for each MCP server's own URL (a refresh with `resource` set to it,
 TypeScript `browserFetch`, each with its own cookie jar) to the Session on both
 reference companies. A runner given no browser skips the website cases, saying so.
 
-Each pairing runs the default world, and two worlds with the reference company
-configured as they say: `dpop-binding` (`dpop_binding` required, with nonces) and
+Each pairing runs the default world, and four worlds with the reference company
+configured as they say: `dpop-binding` (`dpop_binding` required, with nonces),
 `no-issuer` (no OAuth server: discovery, the Session audience, a sign-in refused
 locally, and discovery stopping at a 500, a timeout, invalid metadata, or an issuer
-that fails to verify). Their reports sit beside the pairing's, as
-`{pairing}.{world}.json`.
+that fails to verify), `operator-signatures` (`operator_signatures` optional: a
+wrong signature refused, a missing or unverifiable one served) and
+`operator-signatures-required` (only verified requests served, which is what proves
+each pairing verifies the other's signatures). Their reports sit beside the
+pairing's, as `{pairing}.{world}.json`.
 
 With `PAP_CONFORMANCE_REPORTS=<dir>`, each writes its JSON report (schema 1),
 and `scripts/conformance_report.py <dir>` turns them into the

@@ -79,6 +79,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`DpopKeyCustody`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Where DPoP keys live: one per Company for a tenant, made on first use.
 - [`DpopProofRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. What one DPoP proof is signed for (§4.5, RFC 9449 §4.2).
 - [`DpopProver`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign the DPoP proof of one request (§4.5).
+- [`Ed25519OperatorKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. An operator's Ed25519 key in this process's memory.
 - [`ExcludedTask`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A task the company chose not to offer through the protocol (§8.1).
 - [`ExcludedTasks`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The document at `excluded_tasks.url` (§8.1): the same for every user.
 - [`ExcludedTasksDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where the tasks the Company chose not to offer through the protocol are listed (§8.1).
@@ -113,6 +114,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`MetadataFetch`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The bounds of one public metadata fetch: size, total time, approved addresses.
 - [`new_dpop_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Function. A new P-256 key, used for nothing but DPoP proofs (§5.2).
 - [`new_idempotency_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. A fresh key for a write: a random UUID (version 4).
+- [`new_operator_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. A new Ed25519 key, used for nothing but operator signatures (§5.3).
 - [`new_session_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. A new `sid`: 128 random bits, 22 URL-safe characters, never used again (§5.2).
 - [`OAuthServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The issuer's RFC 8414 metadata, with the fields this protocol requires (§3.2).
 - [`openapi_url`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. The company's OpenAPI description, when it advertises one.
@@ -124,6 +126,14 @@ Unknown or internal symbols are deliberately excluded.
 - [`operations_negotiated`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Whether both sides list `operations` with this version (another major doesn't count).
 - [`OPERATIONS_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `OPERATIONS_VERSION` constant.
 - [`OperationsClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. Get the user's approval of an operation, and send it at most once.
+- [`operator_directory`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. The JWK Set a host serves at its `Signature-Agent` URL (Web Bot Auth §5.5.1).
+- [`operator_key_from`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. The `Ed25519OperatorKey` of a private key.
+- [`OPERATOR_SIGNERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `OPERATOR_SIGNERS` constant.
+- [`OperatorSignature`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The values of the three headers of a signed request (Web Bot Auth §5.2.5).
+- [`OperatorSignatureRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. What one operator signature is signed for (§5.3, RFC 9421).
+- [`OperatorSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign one request that carries the Session header, as its operator (§5.3).
+- [`OperatorSigningKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. An operator's key: `keyid` is its RFC 8037 thumbprint, and it signs with Ed25519.
+- [`OperatorVerdict`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. What one request's operator signature came to (Web Bot Auth, appendix C.1).
 - [`Organization`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `Organization` class.
 - [`PAIRWISE_USER_ID_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `PAIRWISE_USER_ID_STORES` constant.
 - [`PairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist stable random identities by tenant, local user, and issuer.
@@ -170,6 +180,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`SessionJwtRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. What one Session JWT is signed for (§5.2): a request, its Session, its User.
 - [`SessionSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign the Session JWT of one request with a delegated key (§5.2).
 - [`SharedRateLimitBudget`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default `pap.rateLimitBudget`: per-company budgets in one process.
+- [`sign_operator_request`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. The signature of one request, its `created`, `expires` and `nonce` given.
 - [`Signer`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign a compact assertion without exposing private key material.
 - [`SIGNERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `SIGNERS` constant.
 - [`SignInResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. A completed sign-in (§4.7): the access token, and the refresh token's reference.
@@ -195,3 +206,5 @@ Unknown or internal symbols are deliberately excluded.
 - [`URL_SAFETY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `URL_SAFETY_POLICIES` constant.
 - [`validate_direct_sign_in_callback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Validate redirect location, state, and issuer before exposing the code.
 - [`verification_host_allowed`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/device.py) — Function. Whether a device sign-in link may be shown for this company (§4.6).
+- [`verify_operator_signature`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. What the request's operator signature comes to; `headers` are lower-case.
+- [`WebBotAuthSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. `pap.operatorSigner`: a fresh Web Bot Auth signature for each request (§5.3).

@@ -36,6 +36,7 @@ python -m pytest -p no:cacheprovider
 | `JoseSigner`, `BlindJoseSigner`, `RsaBlindSigningKey`   | Implemented           | Sign ES256/PS384 client assertions and delegations, blindly (RFC 9474) when needed.             |
 | `DelegatedSessionSigner`, `DelegatedKeyCustody`, `InMemoryDelegatedKeys`, `jwk_thumbprint` | Implemented           | Sign each request's Session JWT with a delegated key per User ID; the RFC 7638 thumbprint in its `kid`. |
 | `JoseDpopProver`, `DpopKeyCustody`, `InMemoryDpopKeys`, `DpopProofRequest` | Implemented           | Sign each request's DPoP proof with a key of its own per company, for a tenant. |
+| `WebBotAuthSigner`, `OperatorSigningKey`, `Ed25519OperatorKey`, `operator_directory`, `verify_operator_signature` | Implemented           | Sign each request with the operator's key (spec 5.3, RFC 9421, Web Bot Auth), publish it, and check a signature. |
 | `personal_agent_protocol.company.verify`                | Implemented           | Verify a Session JWT and its delegation: request and token binding, freshness, and replay state. |
 | `build_direct_sign_in_request`                          | Implemented primitive | Generate state, S256 PKCE, and a redacted authorization URL.                                    |
 | `validate_direct_sign_in_callback`                      | Implemented primitive | Verify callback redirect, state, issuer, denial, and code.                                      |
@@ -182,6 +183,10 @@ With a list that doesn't include ES256, or none, no proof goes. The default
 contributes `JoseDpopProver` with a durable `DpopKeyCustody` (`key_for`, `forget`),
 below the default's order of 100, as the `pap` CLI's file-backed keys do. A lost key
 means refreshing: refresh tokens aren't bound. See [DPoP](/guides/cryptography/#dpop).
+
+`pap.operatorSigner` (`OPERATOR_SIGNERS`) has no default: contribute a
+`WebBotAuthSigner`, and every request with the Session header carries an operator
+signature. See [Operator signatures](/guides/cryptography/#operator-signatures).
 
 ## Conversation and Operations models
 

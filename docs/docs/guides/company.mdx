@@ -239,6 +239,24 @@ A Session header is verified on every request that carries it. The draft require
 only before relying on Session claims, so a stateless endpoint may skip it; the
 reference companies don't.
 
+- Operator signatures (spec 5.3, RFC 9421, Web Bot Auth), the company's choice, with
+  `operator_signatures` (in TypeScript `operatorSignatures`). Each request's Session JWT
+  is verified first, and a signature is checked after it:
+
+  | | `off` (default) | `optional` | `required` |
+  | --- | --- | --- | --- |
+  | None, or another tag | served | served | 403 |
+  | Verified | served | served | served |
+  | Unverified: the directory can't be read, doesn't list the key, or it isn't Ed25519 | served | served | 403 |
+  | Invalid: it doesn't verify, is out of date, or doesn't cover `poppy-session`, `authorization` when present, the authority and its `Signature-Agent` member | served | 403 | 403 |
+
+  A refusal is `403` with `{"error": "operator_signature_refused"}` and
+  `Accept-Signature`, and never `invalid_session`: its absence doesn't make a Session
+  JWT invalid, so the agent has no Session to start again. The spec names no code for
+  it; this one is the SDKs'. A verified signature authenticates its key source, not
+  the `client_id`. A real deployment usually verifies at its edge instead: see the
+  [guides](https://personalagentprotocol.org/docs/0.3/guides#both-operator-signatures).
+
 ### Reactor points
 
 Every part a company replaces is a Reactor contribution. The company's own
@@ -252,6 +270,7 @@ plugins contribute with a lower `order` to replace a default.
 | `pap.company.operationExecutor` | `OperationExecutor.perform(operation, account_id)`, one per `action`; `operation_id` is the idempotency key | None: an unperformable operation stays `performing` |
 | `pap.company.clientPolicy` | `ClientPolicy.allows(client_id)` | `AllowEveryAgent` |
 | `pap.company.clientResolver` | Verified client metadata and JWKS for a `client_id` | `IdentityClientResolver` over HTTPS |
+| `pap.company.operatorDirectory` | `OperatorDirectory.keys(url, keyid)`: the Ed25519 keys published at a `Signature-Agent` URL | `IdentityOperatorDirectory` over HTTPS, with no redirect |
 | `pap.company.replayCache` | `mark_once(key)` for assertion and Session JWT IDs | `StoreReplayCache`: an atomic `create` in `pap.company.store`, so a shared store is a shared cache |
 
 The PAP core points (`pap.clock`, `pap.randomSource`, and the rest) apply on

@@ -29,7 +29,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "docs" / "docs" / "protocol" / "conformance-report.mdx"
-SUITES = ("protocol", "security", "lifecycle", "conversations", "operations", "dpop")
+SUITES = ("protocol", "security", "lifecycle", "conversations", "operations", "dpop", "operator")
+#: A suite's heading, when it isn't its name capitalized.
+TITLES = {"dpop": "DPoP", "operator": "Operator signatures"}
 
 #: Every pairing, in the order of the page's columns: (file stem, agent, company).
 PAIRINGS = (
@@ -159,7 +161,7 @@ def render(reports: dict[str, dict[str, Any]]) -> str:
             continue
         lines += [
             "",
-            f"## {'DPoP' if suite == 'dpop' else suite.capitalize()}",
+            f"## {TITLES.get(suite, suite.capitalize())}",
             "",
             f"| Case | Kind | Requirements | {header} |",
             "| --- | --- | --- | " + " | ".join("---" for _ in columns) + " |",

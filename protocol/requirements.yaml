@@ -1409,22 +1409,28 @@ requirements:
   text: A Personal Agent SHOULD also sign requests carrying the Session header with an HTTP Message Signature
     (RFC 9421), using Web Bot Auth, so traffic-management infrastructure can authenticate the operator before
     the request reaches the Company's application.
-  status: open
-  reason: 'Not built: it needs an operator key, its directory and a signing path of their own, separate from
-    delegated keys, and its absence does not make a Session JWT invalid. Recorded here until a host needs
-    it.'
-  implementation: []
-  tests: []
+  status: implemented
+  implementation:
+  - personal_agent_protocol.transport:session_headers
+  - personal_agent_protocol.operator_signatures:WebBotAuthSigner
+  - personal_agent_protocol.operator_signatures:verify_operator_signature
+  - personal_agent_protocol.company.service:CompanyService._operator_signature
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_operator_signatures_over_tls
+  - personal_agent_protocol/__tests__/test_operator_signatures.py::test_every_attempt_is_signed_anew_and_covers_the_session_jwt_it_carries
 - id: PAP-5.3-13
   section: '5.3'
   level: MUST
   role: personal-agent
   text: The Personal Agent's operator signature MUST cover poppy-session, and authorization when present,
     so it binds to the Session JWT and access token.
-  status: open
-  reason: 'Not built: this SDK sends no operator signature yet (PAP-5.3-12).'
-  implementation: []
-  tests: []
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operator_signatures:sign_operator_request
+  - personal_agent_protocol.operator_signatures:verify_operator_signature
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_operator_signatures_over_tls
+  - personal_agent_protocol/__tests__/test_operator_signatures.py::test_a_request_with_a_token_needs_it_covered_but_one_without_does_not
 - id: PAP-5.3-14
   section: '5.3'
   level: MUST
@@ -1436,6 +1442,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._caller
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_operator_signatures_over_tls
 - id: PAP-5.4-01
   section: '5.4'
   level: MUST NOT

@@ -48,7 +48,7 @@
       "icon": "check",
       "items": [
         "HTTPS resource URLs only, with no embedded credentials",
-        "`Authorization` and `Poppy-Session` are host-owned: callers cannot set them",
+        "`Authorization`, `Poppy-Session` and the signature headers are host-owned: callers cannot set them",
         "A fresh Session JWT for every attempt, including the resend",
         "One restart on `invalid_session`, never more",
         "Redirects are never followed",

@@ -73,6 +73,8 @@ jobs:
           test "$(ls conformance-reports/*-company.json | wc -l)" = 4
           test "$(ls conformance-reports/*.dpop-binding.json | wc -l)" = 4
           test "$(ls conformance-reports/*.no-issuer.json | wc -l)" = 4
+          test "$(ls conformance-reports/*.operator-signatures.json | wc -l)" = 4
+          test "$(ls conformance-reports/*.operator-signatures-required.json | wc -l)" = 4
       - name: Compatibility and conformance report
         run: |
           python scripts/conformance_report.py conformance-reports \

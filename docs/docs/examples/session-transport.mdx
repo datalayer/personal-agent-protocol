@@ -41,7 +41,7 @@ sequenceDiagram
 ## Enforced boundaries
 
 - Only HTTPS resource URLs without embedded credentials are accepted.
-- `Authorization` and `Poppy-Session` are host-owned; callers cannot supply or
+- `Authorization`, `Poppy-Session` and the signature headers are host-owned; callers cannot supply or
   replace them.
 - Every attempt receives a fresh Session JWT bound to its method, normalized
   target, and access token hash.

@@ -138,7 +138,11 @@ For each attempt, the transport (`SessionHttpClient`, `SessionFetchClient`):
   refuses every redirect;
 - with a `DPoP` token, asks `pap.dpopProver` for a fresh proof, whose `ath` covers
   the same token, and sends it in `DPoP`;
-- rejects a caller-supplied `Authorization`, `DPoP`, or `Poppy-Session` header;
+- with a `pap.operatorSigner` contributed, last, asks it for an
+  [operator signature](/guides/cryptography/#operator-signatures) over the Session JWT
+  and any token, and sends `Signature-Agent`, `Signature-Input` and `Signature`;
+- rejects a caller-supplied `Authorization`, `DPoP`, `Poppy-Session`, or signature
+  header;
 - on `invalid_session`, starts a new Session once and sends the request again; and
 - on a `use_dpop_nonce` challenge, sends the request again once with the nonce, and
   keeps the latest `DPoP-Nonce` per origin for later requests.

@@ -63,6 +63,9 @@ delegated key that `pap.signer` vouches for. Those host services must keep
 private keys outside model context and tool arguments. See [Signed-out
 sessions](/guides/sessions/) for the complete implemented boundary.
 
+A host can also sign each of those requests as its operator, for companies whose bot
+defenses look for it: see [Operator signatures](/guides/cryptography/#operator-signatures).
+
 ## A Company with no issuer
 
 A Company offers sign-in only with an OAuth issuer (§3.2). A 404 from the domain's

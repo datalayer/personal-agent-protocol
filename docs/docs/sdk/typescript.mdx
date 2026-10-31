@@ -193,6 +193,10 @@ host whose tokens outlive a process contributes `JoseDpopProver` with a durable
 means refreshing: refresh tokens aren't bound. See
 [DPoP](/guides/cryptography/#dpop).
 
+`pap.operatorSigner` (`OperatorSigners`) has no default: contribute a
+`WebBotAuthSigner`, and every request with the Session header carries an operator
+signature. See [Operator signatures](/guides/cryptography/#operator-signatures).
+
 A company built with `CompanyConfig` binds its tokens with `dpopBinding` (`off`,
 `optional` or `required`) and asks for nonces with `dpopNonces`; `verifyDpopProof`
 comes from `@datalayer/personal-agent-protocol/server`.

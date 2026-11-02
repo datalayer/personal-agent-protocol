@@ -24,7 +24,7 @@
     "@docusaurus/preset-classic": "^3.10.2",
     "@docusaurus/theme-mermaid": "^3.10.2",
     "@mdx-js/react": "^3.0.1",
-    "@primer/octicons-react": "^19.35.0",
+    "@primer/octicons-react": "^19.42.0",
     "@primer/react": "^37.31.0",
     "docusaurus-lunr-search": "^3.5.0",
     "mermaid": "^11.3.0",

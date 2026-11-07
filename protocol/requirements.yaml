@@ -1,4 +1,4 @@
-# Personal Agent Protocol draft 0.3, Operations and Mediated Sign-In: the normative requirement ledger.
+# Personal Agent Protocol 0.3 as published (upstream 2289293), Operations and Mediated Sign-In: the normative requirement ledger.
 #
 # requirements: every MUST, MUST NOT, SHOULD, and SHOULD NOT of the specification
 # (source: spec, the default), the Operations extension (source: operations) and the
@@ -15,8 +15,8 @@
 
 protocol: personal-agent-protocol
 profile: '0.3'
-upstream_revision: '2026-10-30'
-reviewed: '2026-10-30'
+upstream_revision: '2026-11-04'
+reviewed: '2026-11-07'
 sources:
   spec: https://personalagentprotocol.org/docs/0.3/spec
   operations: https://personalagentprotocol.org/docs/0.3/extensions/operations
@@ -524,6 +524,38 @@ requirements:
   - personal_agent_protocol.pairwise:SqlitePairwiseUserIdStore
   tests:
   - personal_agent_protocol/__tests__/test_issuerless.py::test_user_ids_are_scoped_by_the_identifier
+- id: PAP-3.2-34
+  section: '3.2'
+  level: MUST NOT
+  role: personal-agent
+  text: A Personal Agent MUST NOT start Direct, Device, or Mediated Sign-In with a Company that sets
+    auth.disabled.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveryDocument.sign_in_disabled
+  - personal_agent_protocol.models:DiscoveredCompany.require_oauth
+  tests:
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_company_that_turned_sign_in_off_is_used_signed_out
+- id: PAP-3.2-35
+  section: '3.2'
+  level: MUST NOT
+  role: company
+  text: A Company that sets auth.disabled MUST NOT list the Mediated Sign-In extension or signed_in access.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.sign_in_disabled
+  tests:
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_company_that_turned_sign_in_off_is_used_signed_out
+- id: PAP-3.2-36
+  section: '3.2'
+  level: MUST NOT
+  role: company
+  text: A Company that lists signed_in MUST NOT set auth.disabled.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.sign_in_disabled
+  tests:
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_a_company_that_turned_sign_in_off_is_used_signed_out
 - id: PAP-3.3-01
   section: '3.3'
   level: MUST
@@ -1009,7 +1041,9 @@ requirements:
   level: MUST
   role: personal-agent
   text: The Personal Agent MUST send a Poppy-Session header on every request to a Company's APIs, conversations,
-    and other endpoints this protocol or an extension defines.
+    and other resource endpoints this protocol or an extension defines. The destinations come from the
+    Company's poppy.json. Sharing a hostname with one of these URLs doesn't make another URL a Session
+    destination.
   status: implemented
   implementation:
   - personal_agent_protocol.transport:SessionHttpClient.request
@@ -1023,6 +1057,19 @@ requirements:
   conformance:
   - conversations.start-and-reply
   - security.session-header-missing
+- id: PAP-5.2-18
+  section: '5.2'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent MUST NOT send a Company's Session JWT to any other destination. Discovery and
+    description documents, OAuth endpoints, and website pages don't carry this header.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.transport:SessionHttpClient
+  - personal_agent_protocol.discovery:DiscoveryClient
+  tests:
+  - personal_agent_protocol/__tests__/test_transport.py::test_session_ended_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_canaries.py::test_no_credential_reaches_logs_errors_urls_or_model_text
 - id: PAP-5.2-02
   section: '5.2'
   level: MUST
@@ -1870,7 +1917,9 @@ requirements:
   section: '8.2'
   level: MUST
   role: company
-  text: The Company MUST reject requests from any other client_id, User, or account.
+  text: A conversation belongs to the Personal Agent's client_id and the User ID that started it, and, once
+    it uses the User's account, to that account too. The Company MUST reject any other request, as the table
+    shows.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._owned
@@ -1910,7 +1959,7 @@ requirements:
   section: '8.4'
   level: MUST
   role: both
-  text: A message MUST have at least one of text, data, or context.
+  text: A message MUST have at least one of text, data, context, or extensions.
   status: implemented
   implementation:
   - personal_agent_protocol.models:Message.validate_content
@@ -1931,6 +1980,20 @@ requirements:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   conformance:
   - protocol.message-context-fields
+- id: PAP-8.4-03
+  section: '8.4'
+  level: MUST NOT
+  role: both
+  text: A side MUST NOT send an extension's content unless the other side lists that extension with the
+    same version; the Company checks the Personal Agent's client metadata document (4.1), and the Personal
+    Agent checks the Company's poppy.json (3.1).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._reply
+  - personal_agent_protocol.models:operations_content
+  tests:
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_extension_content_goes_only_to_an_agent_that_lists_the_extension
+  - personal_agent_protocol/__tests__/test_operations.py::test_a_session_without_the_operations_scopes_is_refused
 - id: PAP-8.5-01
   section: '8.5'
   level: MUST
@@ -2024,17 +2087,38 @@ requirements:
   section: '8.10'
   level: MUST
   role: company
-  text: The parent conversation MUST be open, belong to the same owner (7.2), and not be a Direct Conversation
+  text: The parent conversation MUST be open, belong to the same owner (8.2), and not be a Direct Conversation
     itself.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._start_conversation
   tests:
   - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_direct_conversation_locks_its_parent_until_it_closes
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_each_parent_problem_has_its_own_error
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - conversations.direct-conversation
   - conversations.direct-of-direct-refused
+- id: PAP-8.10-02
+  section: '8.10'
+  level: MUST
+  role: company
+  text: The Company MUST reject a user_requested_event_id that doesn't name a user_requested event in that
+    parent with invalid_request.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._accept_user_request
+  tests:
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_the_company_speaks_first_in_a_direct_conversation_the_user_accepted
+- id: PAP-8.10-03
+  section: '8.10'
+  level: MUST NOT
+  role: company
+  text: The Personal Agent may observe every message in a Direct Conversation. The Company MUST NOT send
+    information there that it cannot share with the Personal Agent.
+  status: not-applicable
+  reason: What a Company may say to the User but not to the Personal Agent is the Company's policy; the
+    reference companies' agents say nothing in a Direct Conversation they would not say to the agent.
 - id: PAP-8.11-01
   section: '8.11'
   level: MUST NOT
@@ -2204,6 +2288,73 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_the_excluded_tasks_are_read_and_their_alternatives_filtered
   reason: The SDK gives the host the excluded tasks; matching a user's task to one is the host's.
+- id: PAP-9.4-01
+  section: '9.4'
+  level: MUST
+  role: company
+  text: Companies that publish skill_index MUST follow that revision's index format, artifact distribution,
+    integrity, and HTTP requirements, with the index embedded here instead of fetched separately.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  - personal_agent_protocol.company.service:CompanyConfig.skills
+  tests:
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_the_company_publishes_its_logo_its_skills_and_a_conversation_resource
+- id: PAP-9.4-02
+  section: '9.4'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents that use the index MUST follow its verification and archive safety requirements before
+    using a skill.
+  status: partial
+  reason: fetch_skill verifies each artifact's SHA-256 digest before handing its bytes over; an archive's
+    extraction, with the proposal's archive safety checks, is the host's.
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient.fetch_skill
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_a_skill_is_fetched_and_its_digest_verified
+- id: PAP-9.4-03
+  section: '9.4'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents MUST resolve an entry's url against the final poppy.json URL after redirects, using RFC
+    3986 §5.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveryDocument.usable_skills
+  - personal_agent_protocol.models:DiscoveredCompany.skills
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved
+- id: PAP-9.4-04
+  section: '9.4'
+  level: SHOULD
+  role: personal-agent
+  text: Personal Agents SHOULD ignore unknown index fields, and SHOULD skip entries with an unknown type.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveryDocument.usable_skills
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved
+- id: PAP-9.4-05
+  section: '9.4'
+  level: SHOULD
+  role: personal-agent
+  text: Personal Agents SHOULD ignore the index when $schema is absent or unknown; the rest of poppy.json remains
+    usable.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveryDocument.usable_skills
+  tests:
+  - personal_agent_protocol/__tests__/test_discovery.py::test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved
+- id: PAP-9.4-06
+  section: '9.4'
+  level: MUST NOT
+  role: personal-agent
+  text: Personal Agents MUST NOT execute scripts from a skill unless the User or the Personal Agent's
+    configuration explicitly allows it.
+  status: not-applicable
+  reason: The SDK fetches and verifies a skill's bytes and executes nothing of it; running a skill's scripts is
+    the host's decision.
 - id: PAP-10.1-01
   section: '10.1'
   level: MUST
@@ -2673,10 +2824,11 @@ requirements:
   section: '6'
   level: MUST
   role: company
-  text: 'Before performing the action, the Company MUST make these checks: the Session can approve the operation,
-    else it handles the request as if it had no approval; the operation hasn''t been performed already; the
-    revision is one the Company returned for this operation, it hasn''t expired, and the request asks for
-    exactly what it describes.'
+  text: 'After the Session header checks and the token checks, the Company MUST make the following checks
+    before performing the action, and respond as the first one that fails says, whatever order it makes them
+    in internally: the Session can approve the operation, else it handles the request as if it had no
+    approval; the operation hasn''t been performed already; the revision is one the Company returned for this
+    operation, it hasn''t expired, and the request asks for exactly what it describes.'
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._approval_target
@@ -2694,33 +2846,6 @@ requirements:
   - operations.another-user-cannot-approve
   - operations.mcp-approval
   - operations.conversation-approval
-- id: OPS-6-04
-  source: operations
-  section: '6'
-  level: SHOULD
-  role: company
-  text: It SHOULD make them in this order.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService._approval_target
-  tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_any_session_of_the_account_approves_and_a_signed_out_one_gets_a_challenge
-  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_returned_signed_out_is_approved_only_in_that_session
-  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_is_the_conversations_own
-- id: OPS-6-05
-  source: operations
-  section: '6'
-  level: MUST NOT
-  role: company
-  text: The Company MUST NOT let a different internal check order change which Session can approve, the response
-    for a request without valid approval, or the retry and at-most-once behavior in section 7.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.company.service:CompanyService._approval_target
-  tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_any_session_of_the_account_approves_and_a_signed_out_one_gets_a_challenge
-  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_returned_signed_out_is_approved_only_in_that_session
-  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_is_the_conversations_own
 - id: OPS-6-02
   source: operations
   section: '6'
@@ -2873,8 +2998,7 @@ guide:
   role: both
   text: 'Personal agents: sign Session JWTs with ES256 (MUST, 5.2). Sign client assertions and delegations
     with ES256, or with PS384 if you sign them blindly (10.7). Companies: accept ES256 (MUST) and PS384 (SHOULD)
-    in client assertions and delegations (4.1, 5.2), and RS256 in client assertions. Use RSA keys of at least
-    2048 bits.'
+    in client assertions and delegations (4.1, 5.2). Use RSA keys of at least 2048 bits.'
   status: partial
   implementation:
   - personal_agent_protocol.crypto:JoseSigner
@@ -2884,7 +3008,7 @@ guide:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - security.client-assertion-ps384-header-on-ec-key
-  reason: Companies accept ES256 and PS384 alone, not RS256; RSA key size is checked for blind keys only.
+  reason: RSA key size is checked for blind keys only.
 - id: GUIDE-jwt-02
   source: guide
   section: Signing and verifying JWTs
@@ -3103,8 +3227,10 @@ guide:
   section: Retries
   level: SHOULD
   role: company
-  text: Companies keep idempotency records for a set time, such as a day, scoped to the session. They
-    return the original response for a repeated key, and reject a repeated key with a different body.
+  text: Companies keep idempotency records for a set time, such as a day, scoped to the personal agent's
+    client_id and the user ID, and to the account when there is one, not to the session, so a retry in a new
+    session still matches. They return the original response for a repeated key, and reject a repeated key
+    with a different body.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._api_call
@@ -3977,6 +4103,20 @@ guide:
   - dpop.mcp-token-bound
   - dpop.mcp-challenge-keeps-resource-metadata
   - dpop.mcp-challenges-bearer-then-dpop
+- id: GUIDE-co-session-07
+  source: guide
+  section: Verifying the Session header
+  level: SHOULD
+  role: company
+  text: Session records need not be durable; conversations are separate records that can outlast the session
+    that started them. Behind a load balancer, share session state across the servers that handle it, as with
+    server-side cookie sessions, so requests reach the same state whichever server handles them.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.store:CompanyStore
+  tests:
+  - personal_agent_protocol/__tests__/test_company_store.py::test_a_company_restarted_over_its_store_continues_every_flow
+  - personal_agent_protocol/__tests__/test_security_review.py::test_finding_4_a_session_jwt_replayed_at_another_replica_is_refused
 - id: GUIDE-mcp-01
   source: guide
   section: MCP and UCP interoperability

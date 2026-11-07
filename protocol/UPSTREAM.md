@@ -9,6 +9,7 @@
 - Guides: https://personalagentprotocol.org/docs/guides
 - Operations extension: version 2
 - Mediated Sign-In extension: version 1
+- UCP extension: version 1
 - Mediated Sign-In extension page: https://personalagentprotocol.org/docs/extensions/mediated-sign-in
 - Operations extension page: https://personalagentprotocol.org/docs/extensions/operations
 
@@ -75,7 +76,7 @@ removed, the Operations check order as listed, Session header destinations from
 `skill_index` at a pinned Agent Skills revision, at least one of `agent`,
 `apis`, `web`, and a conversation endpoint at another provider; the guides on
 explicit replies, idempotency scoped to agent, User and account, no RS256, and
-Session storage. The UCP extension (version 1, `b2b10da`) is not implemented.
+Session storage. The UCP extension (version 1, `b2b10da`) is implemented in 0.32 on the draft 0.4 shape (P3-59 of the SDK's plan was a decision for the user): the profile, the connection and identity linking, not UCP's commerce.
 
 Upstream is a draft. Changes are reviewed and released as explicit protocol
 profiles; generated code must never change from an unattended documentation

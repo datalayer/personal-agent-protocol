@@ -99,6 +99,11 @@ import {
   staleResourceMetadata,
   messageOperation,
   operationsContent,
+  parseUcpProfile,
+  signInDisabled,
+  speaksUcp,
+  ucpIdentityLinkingScopes,
+  ucpProfileUrl,
 } from "../../../lib/index.js";
 import { JoseSigner } from "../../../lib/server.js";
 import { ControlledBrowser } from "./controlled-browser.mjs";
@@ -1896,6 +1901,29 @@ caseFor("protocol.supported-versions-published")(async (ctx) => {
     check(document.organization?.domain === preferred.organization.domain, `${version}: the same organization.domain`);
     check(document.auth?.issuer === preferred.auth?.issuer, `${version}: the same issuer`);
   }
+});
+
+caseFor("protocol.ucp-profile")(async (ctx) => {
+  // The UCP profile on the validated domain, no redirect; identity linking's scopes in
+  // scopes_supported, and with sign-in Direct Sign-In and private_key_jwt (UCP extension 2 to 4).
+  const company = await ctx.company();
+  if (!speaksUcp(company.document)) throw new SkipCase("the company doesn't list the UCP extension");
+  const answer = await ctx.send("GET", ucpProfileUrl(company));
+  check(answer.status === 200, `the UCP profile is served, no redirect: ${answer.status}`);
+  let profile;
+  try {
+    profile = parseUcpProfile(await answer.json());
+  } catch {
+    throw new ConformanceFailure("the UCP profile has a ucp version");
+  }
+  const scopes = ucpIdentityLinkingScopes(profile);
+  if (!scopes.length || company.oauthMetadata === undefined || signInDisabled(company.document)) return;
+  const issuer = new URL(company.oauthMetadata.issuer);
+  const path = issuer.pathname === "/" ? "" : issuer.pathname;
+  const metadata = await (await ctx.send("GET", `${issuer.origin}/.well-known/oauth-authorization-server${path}`)).json();
+  for (const scope of scopes) check((metadata.scopes_supported ?? []).includes(scope), `${scope} is in scopes_supported`);
+  check(offersDirect(company.oauthMetadata), "identity linking is Direct Sign-In");
+  check((metadata.token_endpoint_auth_methods_supported ?? []).includes("private_key_jwt"), "the issuer lists private_key_jwt");
 });
 
 caseFor("protocol.feedback-report")(async (ctx) => {

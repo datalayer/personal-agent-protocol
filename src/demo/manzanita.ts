@@ -106,6 +106,13 @@ export const ORDER = {
   status: "delivered",
 } as const;
 
+/** The jackets Manzanita's UCP catalog search answers from. */
+export const UCP_PRODUCTS = [
+  { id: "stormline-insulated-m", title: "Stormline insulated jacket, M", price: { amount: 12900, currency: "USD" } },
+  { id: "stormline-insulated-l", title: "Stormline insulated jacket, L", price: { amount: 12900, currency: "USD" } },
+  { id: "trailhead-shell-m", title: "Trailhead shell jacket, M", price: { amount: 8900, currency: "USD" } },
+] as const;
+
 export const CONFIG_OPTIONS: CompanyConfigOptions = {
   name: "Manzanita Outfitters",
   domain: DOMAIN,
@@ -130,6 +137,9 @@ export const CONFIG_OPTIONS: CompanyConfigOptions = {
     },
   },
   web: true,
+  // The UCP test shop (the UCP extension, version 1): its catalog, searched through UCP.
+  ucp: true,
+  ucpProducts: UCP_PRODUCTS,
 };
 export const CONFIG = new CompanyConfig(CONFIG_OPTIONS);
 

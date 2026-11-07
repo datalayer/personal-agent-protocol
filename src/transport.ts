@@ -99,8 +99,8 @@ export async function versionUnsupported(response: Response): Promise<boolean> {
 
 /**
  * The Session error a company answered with, `invalid_session` (§5.3), `session_ended`
- * (§5.5) or `version_unsupported` (§3.4): HTTP 400 and a JSON body naming it. Undefined for
- * any other response.
+ * (§5.5) or `version_unsupported` (§3.4): HTTP 400 and a JSON body naming it in `error`, or in
+ * `code` from a UCP endpoint (UCP extension 9). Undefined for any other response.
  */
 export async function sessionError(
   response: Response,
@@ -108,7 +108,8 @@ export async function sessionError(
   if (response.status !== 400) return undefined;
   try {
     const payload = parseJsonStrict(await response.clone().text());
-    const error = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).error : undefined;
+    const body = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+    const error = body.error ?? body.code;
     return error === "invalid_session" || error === "session_ended" || error === "version_unsupported"
       ? error
       : undefined;

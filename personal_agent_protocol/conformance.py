@@ -76,7 +76,7 @@ from .crypto import (
 )
 from .demo.kit import AgentIdentity, ControlledBrowser, MemoryVault, MutableClock, PersonalAgentHost
 from .device import DeviceSignInClient
-from .discovery import DiscoveryClient
+from .discovery import DiscoveryClient, _metadata_url
 from .errors import AuthorizationError, PersonalAgentProtocolError, TransportError
 from .extensions import negotiate_extensions
 from .feedback import FeedbackClient, FeedbackReport, feedback_endpoint
@@ -132,6 +132,7 @@ from .sessions import (
     SessionClient,
 )
 from .transport import SESSION_HEADER, SessionHttpClient, session_headers
+from .ucp import UcpProfile, speaks_ucp, ucp_profile_url
 
 Kind = Literal["positive", "negative", "recovery"]
 Outcome = Literal["passed", "failed", "skipped"]
@@ -2649,6 +2650,35 @@ async def _supported_versions_published(ctx: ConformanceContext, _: FixtureCase)
             == (preferred.get("auth") or {}).get("issuer"),
             f"{version}: the same issuer",
         )
+
+
+@case("protocol.ucp-profile")
+async def _ucp_profile(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """The UCP profile on the validated domain, no redirect; identity linking's scopes in
+    `scopes_supported`, and with sign-in Direct Sign-In and `private_key_jwt` (UCP 2 to 4)."""
+
+    company = await ctx.company()
+    if not speaks_ucp(company.document):
+        raise SkipCase("the company doesn't list the UCP extension")
+    answer = await ctx.send("GET", ucp_profile_url(company))
+    check(
+        answer.status_code == 200, f"the UCP profile is served, no redirect: {answer.status_code}"
+    )
+    try:
+        profile = UcpProfile.model_validate(answer.json().get("ucp"))
+    except (ValueError, AttributeError) as exc:
+        raise ConformanceFailure("the UCP profile has a ucp version") from exc
+    scopes = profile.identity_linking_scopes
+    if not scopes or company.oauth_metadata is None or company.document.sign_in_disabled:
+        return
+    metadata = (await ctx.send("GET", _metadata_url(company.oauth_metadata.issuer))).json()
+    for scope in scopes:
+        check(scope in metadata.get("scopes_supported", []), f"{scope} is in scopes_supported")
+    check(company.oauth_metadata.offers_direct, "identity linking is Direct Sign-In")
+    check(
+        "private_key_jwt" in metadata.get("token_endpoint_auth_methods_supported", []),
+        "the issuer lists private_key_jwt",
+    )
 
 
 @case("protocol.feedback-report")

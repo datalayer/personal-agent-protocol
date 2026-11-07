@@ -31,6 +31,13 @@ companies, with no compatibility with 0.3 as published: see the
 - **Messages:** `as_of_request` and `as_of_cursor`; `PapReplies` version 5.
 - **Operations:** `approved_at` and `input_type`; any Session of the agent and User
   approves; revisions by terms; requests compared by meaning.
+- **UCP extension, version 1:** `fetch_ucp_profile` (the profile at the validated
+  domain's `/.well-known/ucp`, no redirect), `UcpClient` (UCP's REST binding with
+  `UCP-Agent`, the Session header and a Bearer token from PAP's sign-in; UCP's
+  challenges as `UcpError`), `session_ended` read from UCP's `code`; the reference
+  companies' `ucp` and `ucp_products`, a UCP profile with identity linking, catalog
+  search and orders, Manzanita the test shop; the ledger's `UCP-*` entries and the
+  `protocol.ucp-profile` conformance case.
 - **Guides:** `revoke_client` and `refresh_reuse_revokes` in the reference
   companies; key rotation, refresh token custody, operations without storage, and
   feedback at `feedback.endpoint`.

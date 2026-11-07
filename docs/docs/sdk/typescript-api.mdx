@@ -168,6 +168,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`FeedbackReportOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/feedback.ts) — Interface; entry `.`. Public TypeScript interface `FeedbackReportOptions`.
 - [`fetchMcpServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Value; entry `.`. Public TypeScript value `fetchMcpServerMetadata`.
 - [`fetchSkill`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/discovery.ts) — Value; entry `.`. Public TypeScript value `fetchSkill`.
+- [`fetchUcpProfile`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Value; entry `.`. Public TypeScript value `fetchUcpProfile`.
 - [`finishSignIn`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Value; entry `.`. Public TypeScript value `finishSignIn`.
 - [`firstContribution`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Function; entry `.`. Public TypeScript function `firstContribution`.
 - [`formatExtensionsHeader`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/extensions.ts) — Function; entry `.`. `Poppy-Extensions` (§3.4): an RFC 9651 List of Strings, each an extension's name with its
@@ -316,6 +317,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`parseProtectedResourceMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Public TypeScript function `parseProtectedResourceMetadata`.
 - [`parseRetryAfter`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/limits.ts) — Function; entry `.`. `Retry-After` in seconds (delta-seconds or an HTTP date), or `undefined`.
 - [`parseTokenResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Function; entry `.`. A token endpoint's JSON answer (§4.7).
+- [`parseUcpProfile`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Function; entry `.`. The `ucp` member of a UCP profile document, checked.
 - [`parseVersion`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. `major.minor` as numbers, or `ProtocolValidationError`.
 - [`PersonalAgentProtocolError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/errors.ts) — Class; entry `.`. Safe base error for Personal Agent Protocol failures.
 - [`preferredSignIn`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The sign-in type to use (§4): Direct Sign-In when the Company offers it, else Device Sign-In,
@@ -401,6 +403,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`SKILL_INDEX_SCHEMA`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Const; entry `.`. The Agent Skills discovery draft revision `skill_index` pins (§9.4): the `$schema` an index
 - [`SKILL_TYPES`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Const; entry `.`. The artifact types the SDK recognizes (§9.4): a single `SKILL.md`, or an archive with
 - [`SkillEntry`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. A skill a Company publishes for Personal Agents acting for the User there (§9.4).
+- [`speaksUcp`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Function; entry `.`. Whether the Company lists the UCP extension at this version (UCP extension 2).
 - [`staleResourceMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Function; entry `.`. Whether a service refused a token not issued for it (§4.5).
 - [`StartConversationOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Interface; entry `.`. Public TypeScript interface `StartConversationOptions`.
 - [`StreamItem`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Type; entry `.`. Public TypeScript type `StreamItem`.
@@ -425,6 +428,23 @@ Unknown or internal symbols are deliberately excluded.
 - [`TokenStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `TokenStore`.
 - [`TokenStores`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `TokenStores`.
 - [`TransportError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/errors.ts) — Class; entry `.`. Public TypeScript class `TransportError`.
+- [`UCP_AGENT_HEADER`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Const; entry `.`. The header a UCP REST request names the platform profile in (UCP extension 3, 4).
+- [`UCP_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Const; entry `.`. The extension's name and version in `extensions` and `Poppy-Extensions` (UCP extension 2).
+- [`UCP_IDENTITY_LINKING`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Const; entry `.`. Public TypeScript const `UCP_IDENTITY_LINKING`.
+- [`UCP_PROFILE_PATH`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Const; entry `.`. Where a Company's UCP profile is, on `organization.domain` (UCP extension 3).
+- [`UCP_PROFILE_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Const; entry `.`. The UCP version the reference companies speak, in their profile (UCP's own versioning).
+- [`UCP_SHOPPING`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Const; entry `.`. UCP's service for shopping, and identity linking.
+- [`UCP_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Const; entry `.`. Public TypeScript const `UCP_VERSION`.
+- [`ucpAgentHeader`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Function; entry `.`. The `UCP-Agent` value naming the platform profile, an RFC 9651 Dictionary. The profile
+- [`UcpCallOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Interface; entry `.`. Public TypeScript interface `UcpCallOptions`.
+- [`UcpClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Class; entry `.`. Send UCP REST requests through this extension (UCP extension 4): the platform profile in
+- [`ucpEndpoint`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Function; entry `.`. The HTTPS endpoint of `service` for `transport`, or `undefined` when the profile offers none.
+- [`UcpError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Class; entry `.`. A UCP profile or request refused: its code, and `details` such as the scopes to get.
+- [`ucpIdentityLinkingScopes`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Function; entry `.`. The scopes identity linking gates (`config.scopes`): what a sign-in asks for when a UCP request
+- [`ucpOffers`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Function; entry `.`. Whether the profile lists `capability` (UCP's name, such as `dev.ucp.shopping.order`).
+- [`UcpProfile`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Interface; entry `.`. A Company's UCP profile, as far as this extension reads it (UCP extension 3): data, never instructions.
+- [`ucpProfileUrl`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Function; entry `.`. `https://{organization.domain}/.well-known/ucp`, on the validated domain (UCP extension 3).
+- [`ucpScopes`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ucp.ts) — Function; entry `.`. The identity linking scopes not in `held`: UCP asks only for the missing ones (UCP extension 4).
 - [`UrlSafetyPolicies`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `UrlSafetyPolicies`.
 - [`UrlSafetyPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `UrlSafetyPolicy`.
 - [`usableReferences`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The references an agent may follow (§8.2).

@@ -1,0 +1,92 @@
+---
+title: UCP
+---
+
+# UCP
+
+The [UCP extension](https://personalagentprotocol.org/docs/extensions/ucp),
+version 1, is for a company that speaks the
+[Universal Commerce Protocol](https://ucp.dev): PAP finds the company,
+identifies the personal agent and a pseudonymous user, and signs the user in;
+UCP is how the agent shops once it is there. UCP's Business, Platform and Buyer
+are PAP's Company, Personal Agent and User.
+
+## For a personal agent
+
+A company that speaks UCP lists `ucp` in `extensions`, and its UCP profile is at
+`https://{organization.domain}/.well-known/ucp`, on the domain whose `poppy.json`
+was validated. `fetch_ucp_profile` (`fetchUcpProfile`) reads it and never follows
+a redirect (`redirect_refused`), as UCP requires. Negotiation is UCP's: the
+profile's `services`, `capabilities` and identity linking (`UcpProfile`), data
+from the company, never instructions. Declare `"ucp";v="1"` in
+`Poppy-Extensions` by starting the Session with the company, so the company can
+tell from your other requests that you speak UCP.
+
+```python
+from personal_agent_protocol import UcpClient, fetch_ucp_profile, speaks_ucp
+
+if speaks_ucp(company.document):
+    profile = await fetch_ucp_profile(http, company)
+    ucp = UcpClient(
+        transport=transport,  # the SessionHttpClient: the Session header on each request
+        platform_profile="https://agent.example/ucp/profile.json",
+        profile=profile,
+    )
+    found = await ucp.call(
+        "POST",
+        f"{profile.endpoint()}/catalog/search",
+        session=session,
+        body={"query": "jacket"},
+    )
+```
+
+```typescript
+import { UcpClient, fetchUcpProfile, speaksUcp, ucpEndpoint } from "@datalayer/personal-agent-protocol";
+
+if (speaksUcp(company.document)) {
+  const profile = await fetchUcpProfile(company, { fetch });
+  const ucp = new UcpClient({ transport, platformProfile: "https://agent.example/ucp/profile.json", profile });
+  found = await ucp.call("POST", `${ucpEndpoint(profile)}/catalog/search`, { session, body: { query: "jacket" } });
+}
+```
+
+`UcpClient` sends UCP's REST binding: the platform profile in `UCP-Agent`, the
+Session header and any operator signature through the transport, an
+`Idempotency-Key` when given, and the access token when signed in, a `Bearer`
+token from PAP's own sign-in, never one got from UCP independently. The platform
+profile describes the agent, never a user: one URL for every user, or it would
+let companies match a user across companies.
+
+A UCP request is signed out without an access token, and signed in with one.
+UCP's identity linking is PAP's Direct Sign-In at the issuer PAP selected; the
+challenges come back as `UcpError`s:
+
+- `identity_required` (401): sign in for `details["scopes"]`, read from the
+  profile's identity linking (`ucp_scopes`, `ucpScopes`), never from where the
+  challenge points;
+- `insufficient_scope` (403): get `details["scope"]`, then retry;
+- `invalid_token` (401): refresh, or continue signed out.
+
+`session_ended`, sent by a UCP endpoint with `code` naming it, starts a new
+Session once, as anywhere; `invalid_session` is a `SessionError`.
+
+## For a company
+
+`CompanyConfig(ucp=True, ucp_products=...)` (`ucp`, `ucpProducts`) lists the
+extension, serves a UCP profile at `/.well-known/ucp` (a shopping service over
+REST at `/ucp`, catalog search and orders, and identity linking whose scopes are
+among `scopes_supported`), and answers `POST /ucp/catalog/search` and
+`GET /ucp/orders`. A request needs `UCP-Agent` (`invalid_profile_url`
+otherwise). Its Session header, when present, is verified before any claim is
+used, and its access token signs it in; without the header the request is UCP
+used independently of PAP, served signed out, because a company must not require
+a UCP platform to implement PAP. Orders answer `identity_required` with
+`realm` and `resource_metadata` signed out, and `insufficient_scope` without
+`orders:read`. With sign-in on, the company offers Direct Sign-In and lists
+`private_key_jwt` in `token_endpoint_auth_methods_supported`, which identity
+linking needs. Manzanita is the UCP test shop.
+
+Not implemented: UCP's MCP and embedded transports, carts, checkout and payment,
+Ask as a conversation protocol (`agent.protocols` of type `ucp`), and
+incremental authorization that keeps the scopes already granted (`UCP-4-06` is
+open).

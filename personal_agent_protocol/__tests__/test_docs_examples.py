@@ -77,7 +77,7 @@ from personal_agent_protocol.demo.kit import (
     _Routing,
     personal_agent_reactor,
 )
-from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, ManzanitaPlugin
+from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, UCP_PRODUCTS, ManzanitaPlugin
 from personal_agent_protocol.models import Author, DiscoveryDocument, Message
 from personal_agent_protocol.reactor import first_contribution, resolve_addresses
 
@@ -202,6 +202,8 @@ class Docs:
             scope_descriptions={scope: f"The {scope} scope" for scope in SCOPES},
             write_scopes=("orders:write",),
             mediated_fields=(("email", "Email", False), ("password", "Password", True)),
+            ucp=True,
+            ucp_products=UCP_PRODUCTS,
         )
         service = build_company(
             config,
@@ -728,6 +730,24 @@ async def _telemetry(docs: Docs) -> tuple[dict[str, Any], Check]:
         }
 
     return {}, check
+
+
+@case("docs/docs/guides/ucp.mdx#0")
+async def _ucp(docs: Docs) -> tuple[dict[str, Any], Check]:
+    company = await docs.discovered("shop.example")
+    session = await docs.signed_out("shop.example")
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert [product["id"] for product in namespace["found"]["products"]][:1] == [
+            "stormline-insulated-m"
+        ]
+
+    return {
+        "company": company,
+        "session": session,
+        "transport": docs.transport,
+        "http": docs.http,
+    }, check
 
 
 @case("docs/docs/guides/extensions.mdx#0")

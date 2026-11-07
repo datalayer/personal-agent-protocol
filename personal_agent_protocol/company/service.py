@@ -140,6 +140,15 @@ from ..reactor import (
 )
 from ..sessions import JWT_CLIENT_ASSERTION, _opaque_id
 from ..telemetry import emit, telemetry_sink
+from ..ucp import (
+    UCP_AGENT_HEADER,
+    UCP_EXTENSION,
+    UCP_IDENTITY_LINKING,
+    UCP_PROFILE_PATH,
+    UCP_PROFILE_VERSION,
+    UCP_SHOPPING,
+    UCP_VERSION,
+)
 from .points import (
     CLIENT_POLICIES,
     CLIENT_RESOLVERS,
@@ -432,6 +441,12 @@ class CompanyConfig:
     #: `poppy:browser-sign-in` gives the account's full access there, is described as such,
     #: and is asked of the User like any other scope.
     web_unscoped: bool = False
+    #: The company speaks UCP (the UCP extension, version 1): `ucp` in `extensions`, its UCP
+    #: profile at `/.well-known/ucp`, and UCP REST endpoints under `/ucp/` that take the
+    #: Session header and serve UCP to any client UCP admits. `ucp_products` is the catalog
+    #: its UCP catalog search answers from.
+    ucp: bool = False
+    ucp_products: tuple[Mapping[str, Any], ...] = ()
     #: A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it.
     device_page: str | None = None
     #: A hosted consent page with `{request_id}`: `GET /oauth/authorize` answers 303 to it.
@@ -543,6 +558,9 @@ class CompanyConfig:
             raise ValueError("poppy:browser-sign-in is the protocol's: web and oauth offer it")
         if self.web_disabled and self.web:
             raise ValueError("web_disabled lists no browser-session endpoint: web is off")
+        if self.ucp and self.oauth and not self.sign_in_disabled and not self.direct:
+            # Sign-in and identity linking are one: Direct Sign-In (UCP extension 4).
+            raise ValueError("ucp with sign-in offers Direct Sign-In: direct is on")
         if self.web_unscoped and not self.web:
             raise ValueError("web_unscoped needs the browser-session endpoint: web is on")
         if set(self.scope_descriptions) != set(self.scopes) or not all(
@@ -1263,6 +1281,10 @@ class CompanyService:
                 return await self._conversation_route(request, method, path)
             if method == "POST" and path == "/poppy/feedback" and self.config.feedback:
                 return await self._feedback(request)
+            if self.config.ucp and method == "GET" and path == UCP_PROFILE_PATH:
+                return CompanyResponse(200, self.ucp_profile())
+            if self.config.ucp and path.startswith("/ucp/"):
+                return await self._ucp(request, method, path)
         except _RateLimitedError as limited:
             return self._rate_limited(limited.retry_after)
         except _RefusedError as refused:
@@ -1285,6 +1307,123 @@ class CompanyService:
             # caller's mistake, never the company's (no 500).
             return _json_error(400, "invalid_request")
         return _json_error(404, "not_found")
+
+    # UCP (the UCP extension, version 1) -----------------------------------------------
+
+    def ucp_profile(self) -> dict[str, Any]:
+        """The company's UCP profile (UCP extension 2, 3): its shopping service over REST at
+        `/ucp`, catalog search and orders, and, with sign-in offered, identity linking whose
+        scopes are among `scopes_supported` (UCP extension 4)."""
+
+        def entry(path: str, **more: Any) -> dict[str, Any]:
+            return {
+                "version": UCP_PROFILE_VERSION,
+                "spec": f"https://ucp.dev/{UCP_PROFILE_VERSION}/specification/{path}/",
+                "schema": f"https://ucp.dev/{UCP_PROFILE_VERSION}/schemas/{path}.json",
+                **more,
+            }
+
+        capabilities: dict[str, Any] = {
+            "dev.ucp.shopping.catalog.search": [entry("shopping/catalog")],
+            "dev.ucp.shopping.order": [entry("shopping/order")],
+        }
+        if self.config.oauth and not self.config.sign_in_disabled:
+            capabilities[UCP_IDENTITY_LINKING] = [
+                entry("common/identity_linking", config={"scopes": {"orders:read": {}}})
+            ]
+        return {
+            "ucp": {
+                "version": UCP_PROFILE_VERSION,
+                "services": {
+                    UCP_SHOPPING: [
+                        {
+                            "version": UCP_PROFILE_VERSION,
+                            "spec": f"https://ucp.dev/{UCP_PROFILE_VERSION}/specification/overview/",
+                            "transport": "rest",
+                            "endpoint": f"{self.config.base}/ucp",
+                            "schema": f"https://ucp.dev/{UCP_PROFILE_VERSION}/services/shopping/rest.openapi.json",
+                        }
+                    ]
+                },
+                "capabilities": capabilities,
+            }
+        }
+
+    async def _ucp(  # noqa: C901 - the checks, then one branch per endpoint
+        self, request: CompanyRequest, method: str, path: str
+    ) -> CompanyResponse:
+        """A UCP REST request (UCP extension 4, 8, 9).
+
+        `UCP-Agent` names the platform profile, as UCP requires of every request. The
+        Session header, when present, is verified before any of its claims is used, and its
+        access token signs the request in; without it the request is UCP used independently
+        of this extension, served signed out (a token without the Session header is not one
+        this protocol's sign-in gave for UCP). Errors are UCP's: a Session error is HTTP 400
+        with `code` naming it.
+        """
+
+        if _ucp_platform_profile(request.headers.get(UCP_AGENT_HEADER.lower())) is None:
+            return _ucp_error(400, "invalid_profile_url")
+        session: CallerSession | None = None
+        try:
+            if request.headers.get(SESSION_HEADER.lower()):
+                _, session = await self._caller(request)
+            elif request.headers.get("authorization"):
+                raise _RefusedError(401, "invalid_token")
+        except (SessionError, ProofError) as error:
+            return _ucp_error(400, error.code)
+        except _RefusedError as refused:
+            if refused.status == 400:
+                return _ucp_error(400, refused.error)
+            return _ucp_error(
+                refused.status, refused.error, self._ucp_challenge(error=refused.error)
+            )
+        if method == "POST" and path == "/ucp/catalog/search":
+            query = str(_json_object(request.body).get("query", "")).casefold()
+            products = [
+                dict(product)
+                for product in self.config.ucp_products
+                if query in str(product.get("title", "")).casefold()
+            ]
+            return CompanyResponse(
+                200, {"ucp": {"version": UCP_PROFILE_VERSION}, "products": products}
+            )
+        if method == "GET" and path == "/ucp/orders":
+            if session is None or session.account_id is None:
+                # Identity linking gates orders: the scopes are in the profile (UCP extension 4).
+                return _ucp_error(401, "identity_required", self._ucp_challenge())
+            result: ApiResult = await cast(CompanyApi, self._api()).handle(
+                ApiCall(
+                    method="GET",
+                    path="/orders",
+                    query={},
+                    body=None,
+                    account_id=session.account_id,
+                    scopes=session.scopes,
+                    client_id=session.client_id,
+                    carries_approval=False,
+                )
+            )
+            if result.status == 403:
+                return _ucp_error(
+                    403,
+                    "insufficient_scope",
+                    self._ucp_challenge(error="insufficient_scope", scope="orders:read"),
+                )
+            body = result.body if isinstance(result.body, dict) else {}
+            return CompanyResponse(200, {"ucp": {"version": UCP_PROFILE_VERSION}, **body})
+        return _ucp_error(404, "not_found")
+
+    def _ucp_challenge(self, **parameters: str) -> dict[str, str]:
+        """A UCP challenge: the issuer as `realm`, and where its resource metadata is."""
+
+        fields = {
+            "realm": self.config.identifier,
+            **parameters,
+            "resource_metadata": f"{self.config.base}/.well-known/oauth-protected-resource",
+        }
+        rendered = ", ".join(f'{name}="{value}"' for name, value in fields.items())
+        return {"WWW-Authenticate": f"Bearer {rendered}"}
 
     # Discovery ---------------------------------------------------------------------
 
@@ -1358,6 +1497,8 @@ class CompanyService:
             extensions[LINKS_EXTENSION] = [{"version": LINKS_VERSION}]
         if config.disclosures:
             extensions[DISCLOSURES_EXTENSION] = [{"version": DISCLOSURES_VERSION}]
+        if config.ucp:
+            extensions[UCP_EXTENSION] = [{"version": UCP_VERSION}]
         if config.mediated_fields:
             extensions[MEDIATED_EXTENSION] = [
                 {
@@ -1441,6 +1582,9 @@ class CompanyService:
             "token_endpoint": config.token_endpoint,
             "revocation_endpoint": config.revocation_endpoint,
             "grant_types_supported": grants,
+            # Every client authenticates with an assertion (§4.1): UCP's identity linking
+            # needs it said (UCP extension 4).
+            "token_endpoint_auth_methods_supported": ["private_key_jwt"],
             "scopes_supported": list(config.offered_scopes),
             # `https://{domain}` for each domain whose poppy.json names the issuer, then
             # the MCP server: exact strings (§3.2, RFC 9728 §4).
@@ -4590,6 +4734,20 @@ class CompanyService:
             family=joined.family if account_id is not None else None,
             protocol_version=joined.protocol_version or self.config.preferred_version,
         )
+
+
+def _ucp_platform_profile(value: str | None) -> str | None:
+    """The platform profile URL a `UCP-Agent` value names, or `None` (UCP extension 3)."""
+
+    found = re.fullmatch(r'\s*profile="(https://[^"\\\s]+)"\s*', value or "")
+    return None if found is None else found.group(1)
+
+
+def _ucp_error(status: int, code: str, headers: Mapping[str, str] | None = None) -> CompanyResponse:
+    """A UCP error: the code in the body, as UCP's messages carry it (UCP extension 9)."""
+
+    body = {"code": code, "messages": [{"type": "error", "code": code, "severity": "recoverable"}]}
+    return CompanyResponse(status, body, {"Cache-Control": "no-store", **(headers or {})})
 
 
 def _fingerprint(*parts: object) -> str:

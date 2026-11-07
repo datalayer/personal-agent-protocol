@@ -137,6 +137,13 @@ AREAS = (
         lambda entry: entry["source"] == "mediated",
     ),
     Area(
+        "ucp",
+        "UCP",
+        "The UCP extension, version 1.",
+        f"{UPSTREAM}/extensions/ucp",
+        lambda entry: entry["source"] == "ucp",
+    ),
+    Area(
         "operational-guidance",
         "Operational guidance",
         "The Guides' recommendations (SHOULD), kept apart from the specification.",
@@ -191,7 +198,8 @@ def _list(items: Iterable[str]) -> str:
 def _section(entry: dict[str, Any]) -> str:
     if entry["source"] == "guide":
         return _text(entry["section"])
-    prefix = {"operations": "Ops §", "mediated": "Mediated §"}.get(entry["source"], "§")
+    prefixes = {"operations": "Ops §", "mediated": "Mediated §", "ucp": "UCP §"}
+    prefix = prefixes.get(entry["source"], "§")
     return f"{prefix}{entry['section']}"
 
 

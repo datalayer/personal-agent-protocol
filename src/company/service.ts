@@ -71,6 +71,15 @@ import { DPOP_ALGORITHM } from "../crypto.js";
 import { OPERATOR_SIGNATURE_REFUSED, acceptSignature, verifyOperatorSignature } from "../operator-signatures.js";
 import { ProofError, ProtocolValidationError, SessionError } from "../errors.js";
 import { parseExtensionsHeader } from "../extensions.js";
+import {
+  UCP_AGENT_HEADER,
+  UCP_EXTENSION,
+  UCP_IDENTITY_LINKING,
+  UCP_PROFILE_PATH,
+  UCP_PROFILE_VERSION,
+  UCP_SHOPPING,
+  UCP_VERSION,
+} from "../ucp.js";
 import { parseJsonStrict } from "../json.js";
 import { MEDIATED_EXTENSION, MEDIATED_VERSION } from "../mediated.js";
 import {
@@ -368,6 +377,14 @@ export interface CompanyConfigOptions {
    */
   readonly webUnscoped?: boolean;
   /**
+   * The company speaks UCP (the UCP extension, version 1): `ucp` in `extensions`, its UCP profile
+   * at `/.well-known/ucp`, and UCP REST endpoints under `/ucp/` that take the Session header and
+   * serve UCP to any client UCP admits. `ucpProducts` is the catalog its UCP catalog search
+   * answers from.
+   */
+  readonly ucp?: boolean;
+  readonly ucpProducts?: readonly Readonly<Record<string, unknown>>[];
+  /**
    * Other domains that are this company (§3): each publishes its discovery document, naming
    * itself as the organization's domain, and the issuer's metadata lists it in
    * `protected_resources`. Everything else stays on `domain`, the issuer's: an alias is never a
@@ -469,6 +486,8 @@ export class CompanyConfig {
   readonly web: boolean;
   readonly webDisabled: boolean;
   readonly webUnscoped: boolean;
+  readonly ucp: boolean;
+  readonly ucpProducts: readonly Readonly<Record<string, unknown>>[];
   readonly aliases: readonly string[];
   readonly feedback: boolean;
   readonly endedSessionMemorySeconds: number;
@@ -545,6 +564,12 @@ export class CompanyConfig {
     }
     if (this.webDisabled && this.web) throw new RangeError("webDisabled lists no browser-session endpoint: web is off");
     if (this.webUnscoped && !this.web) throw new RangeError("webUnscoped needs the browser-session endpoint: web is on");
+    this.ucp = options.ucp ?? false;
+    this.ucpProducts = [...(options.ucpProducts ?? [])];
+    if (this.ucp && (options.oauth ?? true) && !this.signInDisabled && !this.direct) {
+      // Sign-in and identity linking are one: Direct Sign-In (UCP extension 4).
+      throw new RangeError("ucp with sign-in offers Direct Sign-In: direct is on");
+    }
     this.aliases = [...(options.aliases ?? [])];
     this.feedback = options.feedback ?? true;
     this.endedSessionMemorySeconds = options.endedSessionMemorySeconds ?? 30 * 24 * 60 * 60;
@@ -1129,6 +1154,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** A request body that must be one JSON object: anything else is `invalid_request`. */
+/** The platform profile URL a `UCP-Agent` value names, or `undefined` (UCP extension 3). */
+function ucpPlatformProfile(value: string | undefined): string | undefined {
+  return /^\s*profile="(https:\/\/[^"\\\s]+)"\s*$/.exec(value ?? "")?.[1];
+}
+
+/** A UCP error: the code in the body, as UCP's messages carry it (UCP extension 9). */
+function ucpError(status: number, code: string, headers: Readonly<Record<string, string>> = {}): CompanyResponse {
+  return {
+    status,
+    body: { code, messages: [{ type: "error", code, severity: "recoverable" }] },
+    headers: { "Cache-Control": "no-store", ...headers },
+  };
+}
+
 function jsonObject(body: Uint8Array | string | undefined): Record<string, unknown> {
   const value = parseJsonStrict(text(body));
   if (!isObject(value)) throw new Refused(400, "invalid_request");
@@ -1429,6 +1468,10 @@ export class CompanyService {
       if (method === "POST" && path === "/poppy/feedback" && this.config.feedback) {
         return await this.#feedback(request);
       }
+      if (this.config.ucp && method === "GET" && path === UCP_PROFILE_PATH) {
+        return { status: 200, body: this.ucpProfile(), headers: {} };
+      }
+      if (this.config.ucp && path.startsWith("/ucp/")) return await this.#ucp(request, method, path);
     } catch (error) {
       if (error instanceof RateLimitedRefusal) return rateLimited(error.retryAfter);
       if (error instanceof Refused) {
@@ -1448,6 +1491,114 @@ export class CompanyService {
       throw error;
     }
     return jsonError(404, "not_found");
+  }
+
+  // UCP (the UCP extension, version 1) -------------------------------------------------
+
+  /**
+   * The company's UCP profile (UCP extension 2, 3): its shopping service over REST at `/ucp`,
+   * catalog search and orders, and, with sign-in offered, identity linking whose scopes are among
+   * `scopes_supported` (UCP extension 4).
+   */
+  ucpProfile(): Record<string, unknown> {
+    const entry = (path: string, more: Record<string, unknown> = {}) => ({
+      version: UCP_PROFILE_VERSION,
+      spec: `https://ucp.dev/${UCP_PROFILE_VERSION}/specification/${path}/`,
+      schema: `https://ucp.dev/${UCP_PROFILE_VERSION}/schemas/${path}.json`,
+      ...more,
+    });
+    const capabilities: Record<string, unknown> = {
+      "dev.ucp.shopping.catalog.search": [entry("shopping/catalog")],
+      "dev.ucp.shopping.order": [entry("shopping/order")],
+    };
+    if (this.config.oauth && !this.config.signInDisabled) {
+      capabilities[UCP_IDENTITY_LINKING] = [entry("common/identity_linking", { config: { scopes: { "orders:read": {} } } })];
+    }
+    return {
+      ucp: {
+        version: UCP_PROFILE_VERSION,
+        services: {
+          [UCP_SHOPPING]: [
+            {
+              version: UCP_PROFILE_VERSION,
+              spec: `https://ucp.dev/${UCP_PROFILE_VERSION}/specification/overview/`,
+              transport: "rest",
+              endpoint: `${this.config.base}/ucp`,
+              schema: `https://ucp.dev/${UCP_PROFILE_VERSION}/services/shopping/rest.openapi.json`,
+            },
+          ],
+        },
+        capabilities,
+      },
+    };
+  }
+
+  /**
+   * A UCP REST request (UCP extension 4, 8, 9). `UCP-Agent` names the platform profile, as UCP
+   * requires of every request. The Session header, when present, is verified before any of its
+   * claims is used, and its access token signs the request in; without it the request is UCP used
+   * independently of this extension, served signed out. Errors are UCP's: a Session error is HTTP
+   * 400 with `code` naming it.
+   */
+  async #ucp(request: CompanyRequest, method: string, path: string): Promise<CompanyResponse> {
+    if (ucpPlatformProfile(request.headers[UCP_AGENT_HEADER.toLowerCase()]) === undefined) {
+      return ucpError(400, "invalid_profile_url");
+    }
+    let session: CallerSession | undefined;
+    try {
+      if (request.headers[SESSION_HEADER.toLowerCase()]) [, session] = await this.#caller(request);
+      else if (request.headers.authorization) throw new Refused(401, "invalid_token");
+    } catch (error) {
+      if (error instanceof SessionError || error instanceof ProofError) return ucpError(400, error.code);
+      if (error instanceof Refused) {
+        return error.status === 400
+          ? ucpError(400, error.error)
+          : ucpError(error.status, error.error, this.#ucpChallenge({ error: error.error }));
+      }
+      throw error;
+    }
+    if (method === "POST" && path === "/ucp/catalog/search") {
+      const query = String(jsonObject(request.body).query ?? "").toLowerCase();
+      const products = this.config.ucpProducts.filter((product) =>
+        String(product.title ?? "").toLowerCase().includes(query),
+      );
+      return { status: 200, body: { ucp: { version: UCP_PROFILE_VERSION }, products }, headers: {} };
+    }
+    if (method === "GET" && path === "/ucp/orders") {
+      if (session?.accountId === undefined) {
+        // Identity linking gates orders: the scopes are in the profile (UCP extension 4).
+        return ucpError(401, "identity_required", this.#ucpChallenge());
+      }
+      const result = await (this.#api() as CompanyApi).handle({
+        method: "GET",
+        path: "/orders",
+        query: {},
+        body: undefined,
+        accountId: session.accountId,
+        scopes: session.scopes,
+        clientId: session.clientId,
+        carriesApproval: false,
+      });
+      if (result.status === 403) {
+        return ucpError(403, "insufficient_scope", this.#ucpChallenge({ error: "insufficient_scope", scope: "orders:read" }));
+      }
+      const body = isObject(result.body) ? result.body : {};
+      return { status: 200, body: { ucp: { version: UCP_PROFILE_VERSION }, ...body }, headers: {} };
+    }
+    return ucpError(404, "not_found");
+  }
+
+  /** A UCP challenge: the issuer as `realm`, and where its resource metadata is. */
+  #ucpChallenge(parameters: Readonly<Record<string, string>> = {}): Record<string, string> {
+    const fields = {
+      realm: this.config.identifier,
+      ...parameters,
+      resource_metadata: `${this.config.base}/.well-known/oauth-protected-resource`,
+    };
+    const rendered = Object.entries(fields)
+      .map(([name, value]) => `${name}="${value}"`)
+      .join(", ");
+    return { "WWW-Authenticate": `Bearer ${rendered}` };
   }
 
   // Discovery -----------------------------------------------------------------------
@@ -1523,6 +1674,7 @@ export class CompanyService {
     if (config.operations) extensions[OPERATIONS_EXTENSION] = [{ version: OPERATIONS_VERSION }];
     if (config.links) extensions[LINKS_EXTENSION] = [{ version: LINKS_VERSION }];
     if (config.disclosures) extensions[DISCLOSURES_EXTENSION] = [{ version: DISCLOSURES_VERSION }];
+    if (config.ucp) extensions[UCP_EXTENSION] = [{ version: UCP_VERSION }];
     if (config.mediatedFields.length) {
       extensions[MEDIATED_EXTENSION] = [
         {
@@ -1610,6 +1762,9 @@ export class CompanyService {
       token_endpoint: config.tokenEndpoint,
       revocation_endpoint: config.revocationEndpoint,
       grant_types_supported: grants,
+      // Every client authenticates with an assertion (§4.1): UCP's identity linking needs it
+      // said (UCP extension 4).
+      token_endpoint_auth_methods_supported: ["private_key_jwt"],
       scopes_supported: [...config.offeredScopes],
       protected_resources: resources,
     };

@@ -2334,6 +2334,16 @@
       "expect": {
         "header": "\"links\";v=\"1\", \"operations\";v=\"2\""
       }
+    },
+    {
+      "id": "protocol.ucp-profile",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "UCP-4-03",
+        "UCP-4-04"
+      ],
+      "description": "A Company that lists the UCP extension serves its UCP profile at https://{organization.domain}/.well-known/ucp with no redirect; identity linking's scopes are in scopes_supported, and with sign-in it offers Direct Sign-In and private_key_jwt (UCP extension 2 to 4); skipped when it doesn't list the extension."
     }
   ]
 }

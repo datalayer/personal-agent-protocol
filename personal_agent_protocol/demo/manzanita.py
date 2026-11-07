@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hmac
 from collections.abc import Sequence
+from typing import Any
 
 from pydantic import SecretStr
 from reactor import PluginManifest  # type: ignore[import-untyped]
@@ -82,6 +83,25 @@ def acknowledgement_only(text: str | None) -> bool:
     return (text or "").strip().rstrip(".!").lower() in ACKNOWLEDGEMENTS
 
 
+#: The jackets Manzanita's UCP catalog search answers from.
+UCP_PRODUCTS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "stormline-insulated-m",
+        "title": "Stormline insulated jacket, M",
+        "price": {"amount": 12900, "currency": "USD"},
+    },
+    {
+        "id": "stormline-insulated-l",
+        "title": "Stormline insulated jacket, L",
+        "price": {"amount": 12900, "currency": "USD"},
+    },
+    {
+        "id": "trailhead-shell-m",
+        "title": "Trailhead shell jacket, M",
+        "price": {"amount": 8900, "currency": "USD"},
+    },
+)
+
 CONFIG = CompanyConfig(
     name="Manzanita Outfitters",
     domain=DOMAIN,
@@ -103,6 +123,9 @@ CONFIG = CompanyConfig(
         }
     },
     web=True,
+    # The UCP test shop (the UCP extension, version 1): its catalog, searched through UCP.
+    ucp=True,
+    ucp_products=UCP_PRODUCTS,
 )
 
 

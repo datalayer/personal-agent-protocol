@@ -3318,6 +3318,173 @@ requirements:
   - personal_agent_protocol/__tests__/test_operations.py::test_still_unknown_after_every_attempt
   conformance:
   - operations.lost-answer-same-approval
+- id: UCP-2-01
+  source: ucp
+  section: '2'
+  level: SHOULD
+  role: company
+  text: 'For this extension, the Personal Agent selects the issuer as spec 3.2 describes, and the Company''s
+    UCP services SHOULD support account access through that issuer.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.ucp_profile
+  - personal_agent_protocol.company.service:CompanyService._ucp
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_orders_need_identity_linking_through_this_protocols_sign_in
+- id: UCP-2-02
+  source: ucp
+  section: '2'
+  level: MUST NOT
+  role: personal-agent
+  text: If a UCP service requires a different issuer, the Personal Agent MUST NOT use that issuer through
+    this extension.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.ucp:UcpClient
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_orders_need_identity_linking_through_this_protocols_sign_in
+- id: UCP-2-03
+  source: ucp
+  section: '2'
+  level: SHOULD
+  role: personal-agent
+  text: A Personal Agent that supports this extension SHOULD declare "ucp";v="1" in Poppy-Extensions, so a
+    Company can tell from its other requests that the Personal Agent speaks UCP.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.extensions:negotiate_extensions
+  - personal_agent_protocol.transport:session_headers
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_a_personal_agent_declares_ucp_in_poppy_extensions
+- id: UCP-2-04
+  source: ucp
+  section: '2'
+  level: MUST NOT
+  role: company
+  text: A Company MUST NOT require a UCP platform to implement this protocol as a condition of access UCP
+    otherwise permits.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._ucp
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_ucp_without_this_extension_and_its_refusals
+- id: UCP-3-01
+  source: ucp
+  section: '3'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent MUST NOT follow a redirect from this URL, and MUST NOT use a UCP profile from
+    another host for this Company, as UCP requires.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.ucp:fetch_ucp_profile
+  - personal_agent_protocol.ucp:ucp_profile_url
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_a_ucp_profile_is_never_fetched_through_a_redirect_or_used_malformed
+  - personal_agent_protocol/__tests__/test_ucp.py::test_a_company_that_speaks_ucp_lists_it_and_serves_its_profile_on_its_domain
+- id: UCP-3-02
+  source: ucp
+  section: '3'
+  level: MUST NOT
+  role: personal-agent
+  text: A platform profile MUST NOT be specific to a User or say anything about a User or the Companies they
+    use.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.ucp:ucp_agent_header
+  - personal_agent_protocol.ucp:UcpClient
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_the_ucp_agent_header_names_one_https_platform_profile
+- id: UCP-4-01
+  source: ucp
+  section: '4'
+  level: MUST
+  role: both
+  text: Where a transport carries the profile in more than one place, the Personal Agent MUST send the same
+    URL in each, and the Company MUST reject a request where they differ.
+  status: not-applicable
+  implementation:
+  - personal_agent_protocol.ucp:UcpClient
+  reason: 'Both SDKs and the reference companies use UCP''s REST binding, which carries the platform profile
+    in UCP-Agent alone.'
+- id: UCP-4-02
+  source: ucp
+  section: '4'
+  level: MUST
+  role: company
+  text: A Company MAY verify the Session header on UCP requests and use it; it MUST verify the header before
+    relying on any Session claim.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._ucp
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_a_signed_out_ucp_request_carries_the_session_header_and_the_platform_profile
+  - personal_agent_protocol/__tests__/test_ucp.py::test_session_errors_at_ucp_endpoints_are_ucp_responses
+- id: UCP-4-03
+  source: ucp
+  section: '4'
+  level: MUST
+  role: company
+  text: 'A Company that offers both this protocol''s sign-in and identity linking makes them one: it MUST
+    offer Direct Sign-In, and MUST list private_key_jwt in its issuer''s
+    token_endpoint_auth_methods_supported.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.company.service:CompanyService.oauth_metadata
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_a_company_that_speaks_ucp_lists_it_and_serves_its_profile_on_its_domain
+  conformance:
+  - protocol.ucp-profile
+- id: UCP-4-04
+  source: ucp
+  section: '4'
+  level: MUST
+  role: company
+  text: The Company MUST list each scope in its identity linking config.scopes in scopes_supported, as UCP
+    requires.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.ucp_profile
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_a_company_that_speaks_ucp_lists_it_and_serves_its_profile_on_its_domain
+  conformance:
+  - protocol.ucp-profile
+- id: UCP-4-05
+  source: ucp
+  section: '4'
+  level: MUST NOT
+  role: personal-agent
+  text: A Personal Agent MUST NOT send a token it got independently of this extension on a request that
+    carries the Session header.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.ucp:UcpClient.call
+  tests:
+  - personal_agent_protocol/__tests__/test_ucp.py::test_orders_need_identity_linking_through_this_protocols_sign_in
+- id: UCP-4-06
+  source: ucp
+  section: '4'
+  level: MUST
+  role: company
+  text: A Company that offers identity linking MUST keep the scopes the User already granted when it grants
+    the missing ones, so the new token covers both.
+  status: open
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._sign_in
+  reason: The reference companies grant the scopes a sign-in asks for; incremental authorization that keeps
+    earlier grants is not implemented, so a Personal Agent asks again for every scope it still needs.
+- id: UCP-8-01
+  source: ucp
+  section: '8'
+  level: MUST NOT
+  role: personal-agent
+  text: 'It MUST NOT reuse one User''s UCP workflow identifier for another User.'
+  status: not-applicable
+  implementation:
+  - personal_agent_protocol.ucp:UcpClient
+  reason: 'UcpClient keeps no UCP workflow identifier: the host keeps carts, checkouts and orders by Company
+    and User.'
 guide:
 - id: GUIDE-secrets-01
   source: guide

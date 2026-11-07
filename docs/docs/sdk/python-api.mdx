@@ -91,6 +91,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`FeedbackDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where personal agents report a task the protocol can't do at this company (§8).
 - [`FeedbackError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. The company refused a feedback report: `invalid_request`, `rate_limited`, a token error.
 - [`FeedbackReport`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. One report of a task the company offers no way to do through the protocol (§8).
+- [`fetch_ucp_profile`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. The Company's UCP profile, from its validated domain, with no redirect followed.
 - [`generate_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. Generate a non-PII user ID to persist for one user/company issuer pair.
 - [`generate_request_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Function. A request ID with at least 128 random bits, unique for the User (§8.3, guides).
 - [`IdentityError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Personal-agent metadata or public keys could not be verified safely.
@@ -195,6 +196,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`SignOutResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Class. Sign-out (§5.5): how many refresh tokens were revoked, and whether all were.
 - [`SKILL_INDEX_SCHEMA`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `SKILL_INDEX_SCHEMA` constant.
 - [`SkillEntry`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A skill a Company publishes for Personal Agents acting for the User there (§9.4).
+- [`speaks_ucp`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. Whether the Company lists the UCP extension at this version (UCP extension 2).
 - [`SqlitePairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pairwise.py) — Class. Atomically persist random pairwise IDs in a local SQLite database.
 - [`stale_resource_metadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Function. Whether a service refused a token not issued for it (§4.5).
 - [`StreamItem`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `StreamItem` constant.
@@ -213,6 +215,19 @@ Unknown or internal symbols are deliberately excluded.
 - [`TokenResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. A token endpoint's answer, as on the wire (§4.7): plain OAuth.
 - [`TokenStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Keep credentials behind opaque references and explicit deletion.
 - [`TransportError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. An authenticated PAP resource request failed safely.
+- [`UCP_AGENT_HEADER`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_AGENT_HEADER` constant.
+- [`ucp_agent_header`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. The `UCP-Agent` value naming the platform profile, an RFC 9651 Dictionary.
+- [`UCP_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_EXTENSION` constant.
+- [`UCP_IDENTITY_LINKING`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_IDENTITY_LINKING` constant.
+- [`UCP_PROFILE_PATH`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_PROFILE_PATH` constant.
+- [`ucp_profile_url`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. `https://{organization.domain}/.well-known/ucp`: on the validated domain, so the
+- [`UCP_PROFILE_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_PROFILE_VERSION` constant.
+- [`ucp_scopes`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. The identity linking scopes not in `held`: for `insufficient_scope`, UCP asks only
+- [`UCP_SHOPPING`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_SHOPPING` constant.
+- [`UCP_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_VERSION` constant.
+- [`UcpClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Class. Send UCP REST requests through this extension (UCP extension 4).
+- [`UcpError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Class. A UCP profile or request refused: its code, and `details` such as the scopes to get.
+- [`UcpProfile`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Class. A Company's UCP profile, as far as this extension reads it (UCP extension 3).
 - [`URL_SAFETY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `URL_SAFETY_POLICIES` constant.
 - [`validate_direct_sign_in_callback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Validate redirect location, state, and issuer before exposing the code.
 - [`verification_host_allowed`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/device.py) — Function. Whether a device sign-in link may be shown for this company (§4.6).

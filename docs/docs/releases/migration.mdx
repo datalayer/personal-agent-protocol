@@ -34,6 +34,7 @@ refuse each other (`version_unsupported`). Python spells the names below in
 | Sign-in's other changes (spec 3.2, 4.5, 4.7, 5.2) | Resource metadata whose `resource` isn't the URL it was derived from is treated as absent; `document.scope_descriptions(openapi)` / `scopeDescriptions` lets `auth.scopes` win; a company with `auth.disabled` that never issued a refresh token answers refresh and revocation unverified; the reference companies refuse a delegated key that signed for another User ID (`invalid_session`, a new `delegated_key` record kind) |
 | Operations (Operations 3, 5, 6) | `Approval.approved_at` and `input_type` (`ask_user(input_type=...)`, `inputType`), in `Poppy-Approval` and `_meta`; any Session of the same agent and User approves, an operation returned signed out only while signed out; a revision is the terms (else the `summary`) and `expires_at`; the approving request is compared by meaning |
 | The guides | `CompanyService.revoke_client` / `revokeClient`; `CompanyConfig.refresh_reuse_revokes` / `refreshReuseRevokes` (off by default) |
+| The UCP extension, version 1 (new) | `fetch_ucp_profile(http, company)` / `fetchUcpProfile(company)`, `UcpClient`, `speaks_ucp` / `speaksUcp`; a company sets `CompanyConfig.ucp` and `ucp_products` (`ucpProducts`). The issuer's metadata now lists `token_endpoint_auth_methods_supported: ["private_key_jwt"]` |
 
 The ledger (`protocol/requirements.yaml`) is at `46beb21`. Withdrawn: `PAP-8.7-01` (the
 conversation `status` it described is gone); `PAP-3.4-06` and `PAP-3.4-10` are not used:

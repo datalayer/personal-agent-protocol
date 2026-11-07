@@ -133,7 +133,8 @@ def version_unsupported(response: httpx.Response) -> bool:
 def session_error(response: httpx.Response) -> str | None:
     """The Session error the company answered with, `invalid_session` (§5.3),
     `session_ended` (§5.5) or `version_unsupported` (§3.4): HTTP 400 and a JSON body
-    naming it. None for any other response.
+    naming it in `error`, or in `code` from a UCP endpoint (UCP extension 9). None for any
+    other response.
     """
 
     if response.status_code != 400:
@@ -142,7 +143,9 @@ def session_error(response: httpx.Response) -> str | None:
         payload = loads_strict(response.content)
     except Exception:
         return None
-    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error", payload.get("code"))
     return error if error in {"invalid_session", "session_ended", "version_unsupported"} else None
 
 

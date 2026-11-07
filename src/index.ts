@@ -283,6 +283,28 @@ export {
   EXTENSIONS_HEADER,
 } from "./extensions.js";
 export {
+  UCP_AGENT_HEADER,
+  UCP_EXTENSION,
+  UCP_IDENTITY_LINKING,
+  UCP_PROFILE_PATH,
+  UCP_PROFILE_VERSION,
+  UCP_SHOPPING,
+  UCP_VERSION,
+  UcpClient,
+  UcpError,
+  fetchUcpProfile,
+  parseUcpProfile,
+  speaksUcp,
+  ucpAgentHeader,
+  ucpEndpoint,
+  ucpIdentityLinkingScopes,
+  ucpOffers,
+  ucpProfileUrl,
+  ucpScopes,
+  type UcpCallOptions,
+  type UcpProfile,
+} from "./ucp.js";
+export {
   ApiClient,
   ApiError,
   KNOWN_API_TYPES,

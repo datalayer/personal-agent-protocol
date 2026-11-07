@@ -23,7 +23,7 @@ import test from "node:test";
 
 import * as portable from "../../lib/index.js";
 import * as server from "../../lib/server.js";
-import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
+import { ADA, ADA_CODE, UCP_PRODUCTS, manzanita } from "../../lib/demo/manzanita.js";
 import { ControlledBrowser } from "./support/controlled-browser.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
@@ -73,7 +73,7 @@ async function docsWorld() {
   sites["agent.example"] = identity.documents;
   const companies = {};
   for (const [domain, name] of Object.entries(COMPANIES)) {
-    const { service } = manzanita({ fetch, clock, config: { name, domain, scopes: SCOPES, scopeDescriptions: SCOPE_DESCRIPTIONS, writeScopes: ["orders:write"] } });
+    const { service } = manzanita({ fetch, clock, config: { name, domain, scopes: SCOPES, scopeDescriptions: SCOPE_DESCRIPTIONS, writeScopes: ["orders:write"], ucp: true, ucpProducts: UCP_PRODUCTS } });
     sites[domain] = companies[domain] = service;
   }
   const host = await agentHost({ identity, fetch, clock, answers: [{ ...ADA }, { code: ADA_CODE }] });
@@ -469,6 +469,16 @@ example("docs/docs/guides/telemetry.mdx#0", async () => {
     }]);
     values.reactor.stop();
   }];
+});
+
+example("docs/docs/guides/ucp.mdx#0", async (w) => {
+  const company = await w.discovered("shop.example");
+  const session = await w.signedOut("shop.example");
+  return [
+    { company, session, transport: w.transport, fetch: w.fetch, found: undefined },
+    // `found` is assigned in the example's scope, not declared there.
+    async () => assert.equal(w.scope.found.products[0].id, "stormline-insulated-m"),
+  ];
 });
 
 example("docs/docs/guides/extensions.mdx#0", async () => [

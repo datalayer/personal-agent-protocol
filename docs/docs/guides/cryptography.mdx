@@ -59,6 +59,13 @@ default, at most 24 hours), and is replaced by a new key and delegation
 `rotate_before` (`rotateBefore`, five minutes by default) the delegation's
 expiry. A Session JWT is never signed after its delegation's `exp`.
 
+Rotate delegated keys as often as you like: each Session JWT carries its own
+delegation, so companies don't depend on a delegated key lasting. Rotate DPoP keys
+as often as you like too, one per User ID (`DpopKeyCustody.forget`, then refresh):
+the next refresh sends a proof with the new key, and the new access token is bound
+to it. Rotating either doesn't affect refresh tokens, which are tied to the
+`client_id`, not to a key.
+
 Each delegated key signs for one User ID only, so its thumbprint and its
 delegation's `jti` name one User at one Company. A delegation names no User and
 no Company. `InMemoryDelegatedKeys` is for tests and examples; a host contributes

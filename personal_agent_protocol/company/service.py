@@ -385,6 +385,10 @@ class CompanyConfig:
     access_token_lifetime: timedelta = timedelta(hours=1)
     #: How long a sign-in's refresh tokens work (§4.4).
     refresh_token_lifetime: timedelta = timedelta(days=90)
+    #: A refresh token used again after it was rotated ends its whole sign-in, as RFC 9700
+    #: §4.14.2 describes (guides, *Token lifetimes*): if a refresh token was copied, the grant
+    #: ends as soon as both copies have been used. Off by default.
+    refresh_reuse_revokes: bool = False
     operation_lifetime: timedelta = timedelta(minutes=15)
     device_interval: int = 5
     max_code_attempts: int = 3
@@ -1695,6 +1699,9 @@ class CompanyService:
         entry = await self.store.get(REFRESH_TOKEN, presented)
         grant = None if entry is None else AccountGrant.from_json(entry.value)
         now = self._now()
+        if grant is not None and grant.revoked and self.config.refresh_reuse_revokes:
+            # A rotated-away token used again: whoever holds the other copy loses it too.
+            await self._sign_out((grant.family,))
         if (
             entry is None
             or grant is None
@@ -2002,6 +2009,27 @@ class CompanyService:
             ),
         )
         return changed is not None and not changed[1].revoked
+
+    async def revoke_client(self, client_id: str) -> int:
+        """Revoke every refresh token issued to `client_id`, whatever the account (guides,
+        *Token lifetimes*): for an agent whose signing key may have leaked, since its refresh
+        tokens are tied to the `client_id`, not to a DPoP key (RFC 9449 §5).
+
+        Returns how many refresh tokens were revoked; the Sessions continue signed out.
+        """
+
+        families = [
+            AccountFamily.from_json(record.value)
+            for record in await self.store.records(ACCOUNT_FAMILY)
+        ]
+        # A sign-in is kept by its first refresh token's digest, its `tokens[0]`.
+        return await self._sign_out(
+            tuple(
+                family.tokens[0]
+                for family in families
+                if family.client_id == client_id and family.tokens and not family.revoked
+            )
+        )
 
     async def disconnect(self, client_id: str, account_id: str) -> int:
         """The user disconnects an agent in account settings: its tokens go (§5.5).

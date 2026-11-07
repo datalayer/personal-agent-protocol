@@ -194,7 +194,9 @@ authorizes sending no Session JWT or access token to its target (§9.2).
 A task neither offered nor listed can be reported with
 `FeedbackClient.report`. The company answers `202` (the
 client returns `None`) or, when the task can be done after all, `200` with an
-`Alternative`. Don't report a task the company lists as excluded.
+`Alternative`. Don't report a task the company lists as excluded. Send reports to
+`feedback.endpoint` only: a company's APIs may also have feedback operations, meant
+for clients that don't read `poppy.json`.
 
 ## Skills a company publishes (§9.4)
 

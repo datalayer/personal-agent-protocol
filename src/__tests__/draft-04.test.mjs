@@ -11,7 +11,8 @@
 // declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
 // browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into account
 // (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09); the Operations
-// extension's minor changes (Operations 3, 5, 6, 8.1, P4-10).
+// extension's minor changes (Operations 3, 5, 6, 8.1, P4-10); what the guides add for the
+// reference companies (P4-11).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -23,6 +24,7 @@ import {
   BrowserSessionClient,
   ConversationClient,
   DeviceSignInClient,
+  RefreshTokenClient,
   DEVICE_CODE_GRANT,
   MEDIATED_GRANT,
   PROTOCOL_PROFILE,
@@ -634,4 +636,60 @@ test("an approval of earlier terms the user prefers is still accepted", async ()
   });
   assert.equal(done.status, 200);
   assert.deepEqual(w.notes.performed, [[first.operation_id, first.revision]]);
+});
+
+// The guides (P4-11) -----------------------------------------------------------------------------
+
+/** Ada signs Atlas in with Device Sign-In: the refresh token's reference and its context. */
+async function signedInWithReference(w) {
+  const metadata = w.company.oauthMetadata;
+  const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const started = await device.begin({
+    deviceAuthorizationEndpoint: metadata.device_authorization_endpoint,
+    tokenEndpoint: metadata.token_endpoint,
+    issuer: metadata.issuer,
+    clientId: w.identity.clientId,
+    scopes: ["orders:read"],
+    tenantId: TENANT,
+    organization: w.company.document.organization,
+    protectedResources: metadata.protected_resources,
+  });
+  await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
+  w.clock.advance(started.pollInterval);
+  const done = await device.poll(started.reference);
+  const context = { tokenEndpoint: metadata.token_endpoint, issuer: metadata.issuer, clientId: w.identity.clientId, tenantId: TENANT };
+  return { reference: done.refreshTokenReference, context, accounts: new RefreshTokenClient({ reactor: w.host.reactor, fetch: w.fetch }) };
+}
+
+test("a leaked client_id loses every refresh token", async () => {
+  // If a personal agent's signing key may have leaked, revoke every refresh token issued to its
+  // client_id: they are tied to the client_id, not to a DPoP key (guides, Token lifetimes).
+  const w = await world();
+  const { reference, context, accounts } = await signedInWithReference(w);
+  assert.equal(await w.shop.revokeClient("https://other.example/agent.json"), 0);
+  assert.equal(await w.shop.revokeClient(w.identity.clientId), 1);
+  assert.equal((await accounts.refresh(reference, { context })).status, "signed_out");
+});
+
+test("a reused refresh token ends its sign-in when the company detects reuse", async () => {
+  // Rotate refresh tokens and revoke the grant when an old one is used again (RFC 9700 §4.14.2):
+  // a copied refresh token's grant ends as soon as both copies have been used.
+  const w = await world(new CompanyConfig({ ...CONFIG_OPTIONS, refreshReuseRevokes: true }));
+  const { reference, context, accounts } = await signedInWithReference(w);
+  const copied = w.host.tokens.get(reference);
+  const rotated = await accounts.refresh(reference, { context });
+  assert.ok(rotated.status === "signed_in" && rotated.rotated);
+  const sessions = new SessionClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const form = {
+    grant_type: "refresh_token",
+    refresh_token: copied.reveal(),
+    ...(await sessions.clientAuthentication({ clientId: w.identity.clientId, issuer: "https://manzanita.example" })),
+  };
+  const reused = await w.fetch("https://manzanita.example/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(form).toString(),
+  });
+  assert.deepEqual([reused.status, (await reused.json()).error], [400, "invalid_grant"]);
+  assert.equal((await accounts.refresh(reference, { context })).status, "signed_out");
 });

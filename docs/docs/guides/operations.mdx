@@ -162,6 +162,21 @@ or `OperationOutcomeUnknown` while it isn't known whether it took effect, which
 retries answer with `503` until `settle`. `revise` replaces the terms, withdrawing
 the earlier revisions. The record keeps the approval: the revision and the time.
 
+The reference companies store operations: each revision keeps its terms with a
+fingerprint of the request that returned it, so a request with an approval is
+checked to ask for exactly what was approved, and the terms are computed again
+from the action's current answer, such as today's price, so changed terms get a
+new revision. A company that doesn't store operations computes them from the
+request instead: a new random `operation_id` for a request without an approval (so
+a user can repeat an action on purpose), the approval's `operation_id` for a new
+revision when a request with an approval no longer matches, and a `revision` made
+of the expiry as a Unix time and an HMAC-SHA256 over the `operation_id`, the
+expiry, the terms in a canonical form (RFC 8785) whether or not it returns `terms`,
+and who can approve it (the `client_id`, the User ID, and the account when signed
+in), with the method, URL and the parts of the content that affect the action, but
+never the `summary`, so it can be reworded. Such a company holds no price: an
+approval that arrives after the price changed gets a new revision.
+
 ## Show what is asked: `PapConfirm`
 
 A host that asks the person in a page, not only in its own interface, sends

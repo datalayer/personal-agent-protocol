@@ -271,6 +271,12 @@ export interface CompanyConfigOptions {
   readonly accessTokenLifetimeSeconds?: number;
   /** How long a sign-in's refresh tokens work (§4.4; default 90 days). */
   readonly refreshTokenLifetimeSeconds?: number;
+  /**
+   * A refresh token used again after it was rotated ends its whole sign-in, as RFC 9700 §4.14.2
+   * describes (guides, *Token lifetimes*): a copied refresh token's grant ends as soon as both
+   * copies have been used. Off by default.
+   */
+  readonly refreshReuseRevokes?: boolean;
   readonly operationLifetimeSeconds?: number;
   readonly deviceInterval?: number;
   readonly maxCodeAttempts?: number;
@@ -441,6 +447,7 @@ export class CompanyConfig {
   readonly sessionLifetimeSeconds: number;
   readonly accessTokenLifetimeSeconds: number;
   readonly refreshTokenLifetimeSeconds: number;
+  readonly refreshReuseRevokes: boolean;
   readonly operationLifetimeSeconds: number;
   readonly deviceInterval: number;
   readonly maxCodeAttempts: number;
@@ -504,6 +511,7 @@ export class CompanyConfig {
     this.sessionLifetimeSeconds = options.sessionLifetimeSeconds ?? 24 * 60 * 60;
     this.accessTokenLifetimeSeconds = options.accessTokenLifetimeSeconds ?? 60 * 60;
     this.refreshTokenLifetimeSeconds = options.refreshTokenLifetimeSeconds ?? 90 * 24 * 60 * 60;
+    this.refreshReuseRevokes = options.refreshReuseRevokes ?? false;
     this.operationLifetimeSeconds = options.operationLifetimeSeconds ?? 15 * 60;
     this.deviceInterval = options.deviceInterval ?? 5;
     this.maxCodeAttempts = options.maxCodeAttempts ?? 3;
@@ -1845,6 +1853,10 @@ export class CompanyService {
     const presented = digest(form.refresh_token ?? "");
     const entry = await this.store.get(RecordKinds.refreshToken, presented);
     const grant = entry?.value as unknown as AccountGrant | undefined;
+    if (grant?.revoked === true && this.config.refreshReuseRevokes) {
+      // A rotated-away token used again: whoever holds the other copy loses it too.
+      await this.#signOut([grant.family]);
+    }
     if (
       entry === undefined ||
       grant === undefined ||
@@ -2113,6 +2125,25 @@ export class CompanyService {
    *
    * Resolves to how many refresh tokens were revoked (upstream guides, account settings).
    */
+  /**
+   * Revoke every refresh token issued to `clientId`, whatever the account (guides, *Token
+   * lifetimes*): for an agent whose signing key may have leaked, since its refresh tokens are tied
+   * to the `client_id`, not to a DPoP key (RFC 9449 §5).
+   *
+   * Returns how many refresh tokens were revoked; the Sessions continue signed out.
+   */
+  async revokeClient(clientId: string): Promise<number> {
+    const families = (await this.store.records(RecordKinds.accountFamily)).map(
+      (record) => record.value as unknown as AccountFamily,
+    );
+    // A sign-in is kept by its first refresh token's digest, its `tokens[0]`.
+    return this.#signOut(
+      families
+        .filter((family) => family.clientId === clientId && family.tokens.length > 0 && !family.revoked)
+        .map((family) => family.tokens[0] as string),
+    );
+  }
+
   async disconnect(clientId: string, accountId: string): Promise<number> {
     const agent = await this.#read<AccountAgent>(
       RecordKinds.accountAgent,

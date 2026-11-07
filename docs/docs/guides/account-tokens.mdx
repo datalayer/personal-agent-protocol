@@ -124,6 +124,11 @@ play this provider with `conversation_resource` (`conversationResource`).
   error: errors carry the company's error code, never a response body.
 - Store tokens encrypted and tenant-isolated; the SDK ships no default
   `pap.tokenStore`.
+- A refresh token is tied to the `client_id`, not to a DPoP key (RFC 9449 §5), so
+  whoever holds it and the agent's client private key can use it. Keep the client
+  private key in a key service or hardware security module that signs without
+  exporting it (contribute it as `pap.signer`, `Signers`), and the refresh tokens
+  in a `pap.tokenStore` apart from it.
 - Sign-out in the product revokes, then deletes.
 
 See the runnable [refresh tokens example](/examples/account-tokens/) and the

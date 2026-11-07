@@ -9,7 +9,8 @@ Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02);
 declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
 browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into
 account (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09); the
-Operations extension's minor changes (Operations 3, 5, 6, 8.1, P4-10).
+Operations extension's minor changes (Operations 3, 5, 6, 8.1, P4-10); what the guides add for
+the reference companies (P4-11).
 """
 
 from __future__ import annotations
@@ -28,7 +29,9 @@ from personal_agent_protocol import (
     BrowserSessionClient,
     BrowserSessionError,
     PapSession,
+    SessionClient,
 )
+from personal_agent_protocol.accounts import RefreshTokenClient
 from personal_agent_protocol.actions import discover_company
 from personal_agent_protocol.apis import ApiClient
 from personal_agent_protocol.company import CompanyConfig
@@ -835,3 +838,56 @@ async def test_an_approval_of_earlier_terms_the_user_prefers_is_still_accepted()
     approval = Approval(operation_id=first.operation_id, revision=first.revision)
     done = await api.call("POST", NOTES, session=session, body={"note": "gift"}, approval=approval)
     assert done.status == 200 and notes.performed == [(first.operation_id, first.revision)]
+
+
+# The guides (P4-11) -------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_leaked_client_id_loses_every_refresh_token() -> None:
+    """If a personal agent's signing key may have leaked, revoke every refresh token issued to
+    its client_id: they are tied to the client_id, not to a DPoP key (guides, Token
+    lifetimes; RFC 9449 section 5)."""
+
+    world = World()
+    await signed_in(world)
+    reference = world.refresh_reference
+    assert reference is not None
+    assert await world.shop.revoke_client("https://other.example/agent.json") == 0
+    assert await world.shop.revoke_client(world.atlas.client_id) == 1
+    refreshed = await RefreshTokenClient(reactor=world.reactor, http_client=world.http).refresh(
+        reference, context=world.account_context()
+    )
+    assert refreshed.status == "signed_out"
+
+
+@pytest.mark.asyncio
+async def test_a_reused_refresh_token_ends_its_sign_in_when_the_company_detects_reuse() -> None:
+    """A company may issue a new refresh token on each refresh and revoke the grant when an
+    old one is used again, as RFC 9700 section 4.14.2 describes: if a refresh token is copied,
+    the grant ends as soon as both copies have been used (guides, Token lifetimes)."""
+
+    world = World()
+    world.shop, world.plugin = manzanita(
+        world.network, world.clock, config=replace(CONFIG, refresh_reuse_revokes=True)
+    )
+    await signed_in(world)
+    reference = world.refresh_reference
+    assert reference is not None
+    copied = await world.host.vault.get(reference)
+    assert copied is not None
+    accounts = RefreshTokenClient(reactor=world.reactor, http_client=world.http)
+    rotated = await accounts.refresh(reference, context=world.account_context())
+    assert rotated.status == "signed_in" and rotated.rotated
+    # The copy, used again: refused, and the whole sign-in with it.
+    form = {
+        "grant_type": "refresh_token",
+        "refresh_token": copied.get_secret_value(),
+        **await SessionClient(reactor=world.reactor, http_client=world.http).client_authentication(
+            client_id=world.atlas.client_id, issuer="https://manzanita.example"
+        ),
+    }
+    reused = await world.http.post("https://manzanita.example/oauth/token", data=form)
+    assert (reused.status_code, reused.json()["error"]) == (400, "invalid_grant")
+    after = await accounts.refresh(reference, context=world.account_context())
+    assert after.status == "signed_out"

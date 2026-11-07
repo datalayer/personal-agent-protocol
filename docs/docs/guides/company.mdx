@@ -259,7 +259,10 @@ implements, of draft 0.3 and Operations v2:
   `invalid_token` with `resource_metadata`;
 - excluded tasks (`/poppy/excluded-tasks.json`) and feedback, answering a
   report about a task that can be done after all with its alternative
-  (`feedback_answers`);
+  (`feedback_answers`); personal agents send feedback to `feedback.endpoint`
+  only, so an API that keeps a feedback operation for clients that don't read
+  `poppy.json` says in its description that personal agents use
+  `feedback.endpoint`, ideally feeding the same place;
 - conversations with idempotent messages, cursor events, waited replies, SSE,
   handoff, Direct Conversations, `authorization` events, and closing; a
   conversation that is not yours is `conversation_not_found`;
@@ -416,9 +419,18 @@ that whatever it changed until then stands, followed by the reason; and
 already performed are left as they are. In TypeScript: `openWork`,
 `settleOpenOperations`, `endSignIns`.
 
+Refresh tokens rotate on every refresh. With `refresh_reuse_revokes`
+(`refreshReuseRevokes`), a refresh token used again after it was rotated ends its
+whole sign-in, as RFC 9700 §4.14.2 describes: if a refresh token was copied, the
+grant ends as soon as both copies have been used. It is off by default, so an
+agent whose refresh response was lost and retries with the old token keeps its
+sign-in. When an agent's signing key may have leaked, `revoke_client(client_id)`
+(`revokeClient`) revokes every refresh token issued to it, whatever the account:
+its refresh tokens are tied to the `client_id`, not to a DPoP key.
+
 `approve_device`, `deny_device`, `approve_authorization`,
 `deny_authorization`, `authorization_request`, `revise`, `settle`,
-`forget_events`, `disconnect`, `operation_record`, `open_work`,
+`forget_events`, `disconnect`, `revoke_client`, `operation_record`, `open_work`,
 `settle_open_operations` and `end_sign_ins` read and write the store, so they
 are coroutines (promises in TypeScript).
 

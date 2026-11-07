@@ -3867,6 +3867,20 @@ guide:
   - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_refresh_token
   reason: Account Tokens sit behind opaque references kept with their Session's record and its issuer;
     the TokenStore contract itself is not keyed by issuer.
+- id: GUIDE-pa-tokens-04
+  source: guide
+  section: Storing tokens
+  level: SHOULD
+  role: personal-agent
+  text: A refresh token is tied to your client_id, not to a DPoP key (RFC 9449 §5), so whoever holds it and
+    your client private key can use it. Keep the client private key in a key service or hardware security
+    module that signs without exporting it, and store refresh tokens apart from it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.reactor:SIGNERS
+  - personal_agent_protocol.reactor:TOKEN_STORES
+  tests:
+  - personal_agent_protocol/__tests__/test_accounts.py::test_no_error_carries_the_refresh_token
 - id: GUIDE-pa-device-01
   source: guide
   section: Direct and device sign-in
@@ -4376,8 +4390,9 @@ guide:
   section: 'Operations: personal agents'
   level: SHOULD
   role: personal-agent
-  text: When a new revision of an operation arrives, with the same operation_id, drop the earlier one
-    and show the user what changed before asking them to approve the new one.
+  text: When a new revision of an operation arrives, with the same operation_id, show the user what changed
+    before asking them to approve the new one. If they'd rather have the earlier terms, you can send that
+    approval. If the company has replaced it, you get a new revision to show them.
   status: implemented
   implementation:
   - personal_agent_protocol.operations:OperationsClient.ask_user
@@ -4667,6 +4682,32 @@ guide:
   - lifecycle.sign-out-session-continues
   - lifecycle.sign-out-revokes-every-refresh-token
   - lifecycle.mcp-sign-out-takes-effect
+- id: GUIDE-co-lifetimes-03
+  source: guide
+  section: Token lifetimes and sign-out
+  level: SHOULD
+  role: company
+  text: Consider issuing a new refresh token on each refresh and revoking the grant when an old one is used
+    again, as RFC 9700 §4.14.2 describes. If a refresh token is copied, the grant ends as soon as both copies
+    have been used.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._refresh_grant
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_reused_refresh_token_ends_its_sign_in_when_the_company_detects_reuse
+- id: GUIDE-co-lifetimes-04
+  source: guide
+  section: Token lifetimes and sign-out
+  level: SHOULD
+  role: company
+  text: If a personal agent's signing key may have leaked, revoke every refresh token issued to its client_id.
+    Its refresh tokens are tied to the client_id, not to a DPoP key (RFC 9449 §5).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.revoke_client
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_leaked_client_id_loses_every_refresh_token
 - id: GUIDE-co-apis-01
   source: guide
   section: Describing APIs

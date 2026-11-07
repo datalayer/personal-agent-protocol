@@ -20,8 +20,7 @@ from personal_agent_protocol import OPERATIONS_VERSION, PROTOCOL_PROFILE, PROTOC
 
 ROOT = Path(__file__).parents[2]
 STATEMENT = (
-    f"draft {PROTOCOL_PROFILE} ({PROTOCOL_REVISION}) "
-    f"and its Operations extension v{OPERATIONS_VERSION}"
+    f"{PROTOCOL_PROFILE} ({PROTOCOL_REVISION}) and its Operations extension v{OPERATIONS_VERSION}"
 )
 
 
@@ -41,7 +40,7 @@ def test_the_requirement_ledger_and_the_upstream_snapshot_say_the_same() -> None
     ledger = yaml.safe_load((ROOT / "protocol" / "requirements.yaml").read_text())
     assert (ledger["profile"], ledger["upstream_revision"]) == (PROTOCOL_PROFILE, PROTOCOL_REVISION)
     upstream = (ROOT / "protocol" / "UPSTREAM.md").read_text()
-    assert f"- Profile implemented: draft {PROTOCOL_PROFILE}\n" in upstream
+    assert f"- Profile implemented: {PROTOCOL_PROFILE} as published\n" in upstream
     assert f"- Upstream page revision: {PROTOCOL_REVISION}\n" in upstream
     assert f"- Operations extension: version {OPERATIONS_VERSION}\n" in upstream
 
@@ -53,7 +52,7 @@ def test_the_packages_and_the_docs_state_it() -> None:
     assert package["description"] == f"TypeScript SDK for Personal Agent Protocol {STATEMENT}"
     readme = " ".join((ROOT / "README.md").read_text().split())
     spec = f"https://personalagentprotocol.org/docs/{PROTOCOL_PROFILE}/spec"
-    assert f"draft {PROTOCOL_PROFILE}]({spec}) ({PROTOCOL_REVISION})" in readme
+    assert f"version {PROTOCOL_PROFILE}]({spec}) ({PROTOCOL_REVISION})" in readme
     assert f"Operations extension v{OPERATIONS_VERSION}" in readme
     docs = ROOT / "docs" / "docs"
     compatibility = (docs / "releases" / "compatibility.mdx").read_text()
@@ -74,7 +73,7 @@ def test_the_packages_and_the_docs_state_it() -> None:
         assert python in compatibility and typescript in compatibility
     report = (docs / "protocol" / "conformance-report.mdx").read_text()
     assert (
-        f"PAP profile **{PROTOCOL_PROFILE}** (draft updated {PROTOCOL_REVISION}), "
+        f"PAP profile **{PROTOCOL_PROFILE}** (as published {PROTOCOL_REVISION}), "
         f"Operations extension **v{OPERATIONS_VERSION}**"
     ) in report
 

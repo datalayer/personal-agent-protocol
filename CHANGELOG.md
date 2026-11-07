@@ -6,7 +6,42 @@
 
 # Changelog
 
-## 0.30.0 (unreleased)
+## 0.31.0 (unreleased)
+
+Version 0.3 as published (upstream `2289293`, 2026-11-04) in both SDKs and both
+reference companies, with no compatibility with draft 0.3 as of `ec16efa`: see the
+[0.30 → 0.31 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#030--031).
+
+- **Breaking on the wire:** delegations are typed `poppy-delegation+jwt` in the
+  `poppy_dlg` header; a Session the Company ended is `session_ended` (400), the
+  SDKs starting a new Session once; a message's extension content is in
+  `extensions`, Operations' under `extensions.operations`, and a message needs
+  `text`, `data`, `context` or `extensions`.
+- **Extensions:** Links and Disclosures, version 1, typed in both SDKs, listed and
+  sent by the reference companies (`links`, `disclosures`) only to an agent that
+  lists the same version; `pap.ui`'s replies display at version 4 carries them.
+- **Sign-in:** a Company may grant fewer scopes (`agent_scopes`), only missing or
+  unknown ones are `invalid_scope`, and `scopes_to_request` names what a sign-in
+  that adds access asks for; `auth.disabled` (`sign_in_disabled`) and
+  `unauthorized_client` by client policy (`allows_sign_in`).
+- **Conversations:** Company-first Direct Conversations (`accept_user_request`,
+  `acceptUserRequest`; an opening `Turn`; `direct_conversation_inactivity`);
+  ownership as spec 8.2's table; each parent problem its own error.
+- **Checks and destinations:** no delegation `iat` check; the Operations checks
+  answer as the first failing one in the listed order; idempotency records scoped
+  to the agent, the User and any account; the Session header's destinations said
+  in the guides; Agent IDs only for the operator's agents.
+- **Discovery:** `organization.logo_uri` (`logo_uri`, `organization_logo` on the
+  device sign-in start); `skill_index` at the pinned Agent Skills revision
+  (`company.skills`, `fetch_skill`; `CompanyConfig.skills`); at least one of
+  `agent`, `apis`, `web`; a conversation endpoint at another provider
+  (`conversation_resource`).
+- **Guides:** explicit replies, the demo company agents asking which is meant.
+- **Ledger and reports:** `protocol/requirements.yaml` at `2289293`, the coverage
+  pages and the conformance report regenerated.
+- **Not implemented:** the UCP extension, version 1.
+
+## 0.30.0 (2026-10-31)
 
 Operator signatures (spec 5.3, RFC 9421, Web Bot Auth draft 01) in both SDKs and both
 reference companies, on the same upstream target, `ec16efa`. Off until a host asks:

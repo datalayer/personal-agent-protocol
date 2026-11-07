@@ -32,6 +32,6 @@ test("the npm package states the profile and the Operations version", () => {
   const { description } = JSON.parse(readFileSync(new URL("package.json", ROOT), "utf8"));
   assert.equal(
     description,
-    `TypeScript SDK for Personal Agent Protocol draft ${PROTOCOL_PROFILE} (${PROTOCOL_REVISION}) and its Operations extension v${OPERATIONS_VERSION}`,
+    `TypeScript SDK for Personal Agent Protocol ${PROTOCOL_PROFILE} (${PROTOCOL_REVISION}) and its Operations extension v${OPERATIONS_VERSION}`,
   );
 });

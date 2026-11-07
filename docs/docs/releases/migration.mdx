@@ -10,6 +10,37 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.30 → 0.31
+
+0.31.0 moves both SDKs and both reference companies from draft 0.3 as of `ec16efa` to
+**version 0.3 as published** (upstream `2289293`, 2026-11-04; the specification is
+frozen at `/docs/0.3/spec`). Three changes are breaking on the wire, with no
+compatibility: an SDK or company at 0.30 and one at 0.31 refuse each other's
+Session JWTs. Python spells the names below in `snake_case`, TypeScript in
+`camelCase`.
+
+| Change | What to do |
+| --- | --- |
+| Delegations are typed `poppy-delegation+jwt` and travel in the `poppy_dlg` header (spec 5.2); `pap-delegation+jwt` and `pap_dlg` are refused | Nothing in code: both SDKs and companies send and check the new names. Upgrade agent and company together |
+| A Session the Company ended answers `session_ended` (400, JSON body; spec 5.3, 5.5); `invalid_session` means only a failing header or a refused `client_id` | `SessionHttpClient` / `SessionFetchClient` and the MCP clients start a new Session once on `session_ended` and send the request again; `invalid_session` reaches the caller as it is. A company built on the reference service answers the new code itself |
+| A message's extension content is in `extensions`, keyed by the extension's name; Operations' `operation` and `approval` are under `extensions.operations` (spec 8.4, Operations 2, 4, 6); a message needs `text`, `data`, `context` or `extensions` | Read `message.operation` / `messageOperation(message)` and `message.approval` / `messageApproval(message)`; build an approving message with `operations_content(approval=...)` / `operationsContent({ approval })`. A company agent's `Reply.operation` is placed by the service |
+| The Links and Disclosures extensions, version 1 | A Company lists them with `CompanyConfig.links` and `.disclosures` and gives a reply `links=` / `disclosures=`; they go only to an agent that lists the same version, the notice in `text` otherwise. The agent reads `message.links` / `messageLinks(message)` and `message.disclosures` / `messageDisclosures(message)`; `pap.ui`'s replies display is version 4 and carries them |
+| A Company may grant fewer scopes than requested and rejects only missing or unknown ones with `invalid_scope` (spec 4.7) | Read the token response's `scope`, as before. `CompanyConfig.agent_scopes` (`agentScopes`) grants fewer. When a task needs more access, `scopes_to_request(held, needed)` / `scopesToRequest` names every scope the new sign-in asks for |
+| `auth.disabled` and `unauthorized_client` (spec 3.1, 3.2, 4.1) | `DiscoveryDocument.sign_in_disabled` / `signInDisabled(document)`: the SDKs start no sign-in with such a Company and `require_oauth` raises `sign_in_disabled`. `CompanyConfig.sign_in_disabled` publishes it; a client policy's `allows_sign_in(client_id, grant_type)` / `allowsSignIn` answers `unauthorized_client` from the grant's endpoint |
+| Company-first Direct Conversations (spec 8.10) | `ConversationClient.accept_user_request(endpoint, parent_id, event_id)` / `acceptUserRequest` accepts a `user_requested` event: both IDs, no message, the company speaking first; sent again, the same conversation comes back, even once closed. A company agent answers an opening `Turn` (`turn.opening`); `CompanyConfig.direct_conversation_inactivity` (`directConversationInactivitySeconds`) closes a Direct Conversation left alone. Each parent problem has its own error: a parent that is a Direct Conversation itself is `invalid_request`, no longer `conversation_not_found` |
+| The delegation `iat` check is gone (spec 5.2); the Operations checks answer as the first failing one in the listed order (Operations 6) | Nothing: a Session JWT whose `iat` is past its delegation's `exp` but inside the window is accepted; the reference companies already checked in the listed order |
+| Idempotency records are scoped to the agent, the User and any account, not the Session (guides) | A retry in a new Session matches; a company store sees the same record kind with a different key |
+| `organization.logo_uri` and `skill_index` (spec 3.1, 9.4) | `Organization.logo_uri`, shown next to the name and domain (`DeviceSignInStart.organization_logo` / `organizationLogo`); `company.skills` / `companySkills(company)` and `DiscoveryClient.fetch_skill(entry)` / `fetchSkill(entry)`, the digest verified. `CompanyConfig.logo_uri` and `.skills` publish them |
+| A conversation endpoint at another provider (spec 4.5) | `ServiceTokens.token_for(endpoint)` / `tokenFor` already asks for a token by `resource` when the endpoint's metadata names one; `CompanyConfig.conversation_resource` (`conversationResource`) plays such a provider |
+| Explicit replies (guides) | No wire change: the demo company agents answer a bare "yes" or "done" with a question (`acknowledgement_only`, `WHICH_ONE`); the Operations example's agent is instructed the same way |
+| `PROTOCOL_REVISION` | `2026-11-04` |
+
+Not implemented: the UCP extension, version 1 (`extensions.ucp`), a decision for the
+host. The conformance case `conversations.direct-of-direct-refused` now expects
+`invalid_request`. The ledger (`protocol/requirements.yaml`) is at `2289293`: `OPS-6-04`
+and `OPS-6-05` are withdrawn, and `PAP-3.2-34` to `-36`, `PAP-5.2-18`, `PAP-8.4-03`,
+`PAP-8.10-02` and `-03`, `PAP-9.4-01` to `-06` and `GUIDE-co-session-07` are new.
+
 ## 0.29 → 0.30
 
 0.30.0 adds operator signatures (spec 5.3, RFC 9421, Web Bot Auth) to both SDKs and

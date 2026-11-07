@@ -15,7 +15,7 @@
  * the Python `personal_agent_protocol.company.service` and answers the same
  * requests with the same responses.
  *
- * What it implements of draft 0.3 (upstream ec16efa) and Operations v2:
+ * What it implements of 0.3 as published (upstream 2289293) and Operations v2:
  *
  * - Discovery (`/.well-known/poppy.json`), the domain's protected resource
  *   metadata naming the issuer (`/.well-known/oauth-protected-resource`), and

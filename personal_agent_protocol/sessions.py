@@ -215,7 +215,7 @@ class PapSession:
         self.sid = new_session_id(random_bytes)
         return self.sid
 
-    def to_json(self) -> dict[str, str | None]:
+    def to_json(self) -> dict[str, object]:
         return {
             "sid": self.sid,
             "sub": self.sub,
@@ -228,14 +228,14 @@ class PapSession:
         }
 
     @classmethod
-    def from_json(cls, value: dict[str, str | None]) -> PapSession:
+    def from_json(cls, value: Mapping[str, object]) -> PapSession:
         return cls(
             sid=str(value["sid"]),
             sub=str(value["sub"]),
             issuer=str(value["issuer"]),
             client_id=str(value["client_id"]),
             tenant_id=str(value["tenant_id"]),
-            agent_id=value.get("agent_id"),
+            agent_id=cast("str | None", value.get("agent_id")),
             protocol_version=str(value.get("protocol_version") or PROTOCOL_PROFILE),
             extensions=dict(cast(dict[str, str], value.get("extensions") or {})),
         )

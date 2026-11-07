@@ -2045,6 +2045,150 @@
       "description": "Each version poppy.json lists in supported_versions has its document at an HTTPS URL on the same host, with that protocol_version, no supported_versions, the same organization.domain and issuer (§3.4); nothing to check when none is listed."
     },
     {
+      "id": "protocol.web-disabled",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "GUIDE-pa-browser-02",
+        "PAP-6-17",
+        "PAP-6-19"
+      ],
+      "check": "discovery_document",
+      "description": "web.disabled asks Personal Agents not to browse: the Company lists its agent or APIs and no browser_session_endpoint (§6).",
+      "input": {
+        "protocol_version": "0.3",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "web": {
+          "disabled": true
+        },
+        "agent": {
+          "protocols": [
+            {
+              "type": "poppy",
+              "endpoint": "https://api.example.com/poppy/conversations"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "valid": true,
+        "browsing_disabled": true,
+        "browser_sign_in_scopes": []
+      }
+    },
+    {
+      "id": "protocol.web-disabled-with-endpoint",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-6-17",
+        "PAP-6-19"
+      ],
+      "check": "discovery_document",
+      "description": "A Company that sets web.disabled MUST NOT list browser_session_endpoint (§6).",
+      "input": {
+        "protocol_version": "0.3",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "web": {
+          "disabled": true,
+          "browser_session_endpoint": "https://example.com/poppy/browser-session"
+        },
+        "apis": [
+          {
+            "type": "openapi",
+            "url": "https://api.example.com/openapi.json",
+            "description": "Orders"
+          }
+        ]
+      },
+      "expect": {
+        "valid": false
+      }
+    },
+    {
+      "id": "protocol.web-disabled-without-interfaces",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-6-17",
+        "PAP-6-19"
+      ],
+      "check": "discovery_document",
+      "description": "A Company that sets web.disabled MUST list agent or apis (§6).",
+      "input": {
+        "protocol_version": "0.3",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "web": {
+          "disabled": true
+        }
+      },
+      "expect": {
+        "valid": false
+      }
+    },
+    {
+      "id": "protocol.web-unscoped",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "GUIDE-pa-browser-03",
+        "PAP-6-18",
+        "PAP-6-19"
+      ],
+      "check": "discovery_document",
+      "description": "web.unscoped says poppy:browser-sign-in gives the account's full access on the website; the scope is requested only from a Company that lists browser_session_endpoint (§6).",
+      "input": {
+        "protocol_version": "0.3",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "web": {
+          "browser_session_endpoint": "https://example.com/poppy/browser-session",
+          "unscoped": true
+        }
+      },
+      "expect": {
+        "valid": true,
+        "browser_sign_in_unscoped": true,
+        "browser_sign_in_scopes": [
+          "poppy:browser-sign-in"
+        ]
+      }
+    },
+    {
+      "id": "protocol.web-unscoped-without-endpoint",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-6-19"
+      ],
+      "check": "discovery_document",
+      "description": "A Company that sets web.unscoped MUST list browser_session_endpoint (§6).",
+      "input": {
+        "protocol_version": "0.3",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "web": {
+          "unscoped": true
+        }
+      },
+      "expect": {
+        "valid": false
+      }
+    },
+    {
       "id": "protocol.extension-required-company",
       "kind": "negative",
       "role": "company",

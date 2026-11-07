@@ -19,6 +19,7 @@ import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair } from "jos
 import {
   ApiClient,
   ApiError,
+  BROWSER_SIGN_IN_SCOPE,
   AuthorizationError,
   BrowserSessionClient,
   ConversationClient,
@@ -148,14 +149,14 @@ async function probe(w, session, token) {
 }
 
 /** Device Sign-In, Ada approving: the access token and its refresh token's reference. */
-async function deviceSignIn(w) {
+async function deviceSignIn(w, scopes = ["orders:read", "orders:write"]) {
   const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
   const started = await device.begin({
     deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
     tokenEndpoint: w.metadata.token_endpoint,
     issuer: w.metadata.issuer,
     clientId: w.identity.clientId,
-    scopes: ["orders:read", "orders:write"],
+    scopes,
     tenantId: TENANT,
     organization: w.company.document.organization,
     protectedResources: w.metadata.protected_resources,
@@ -490,7 +491,7 @@ test("§10.6: a code from someone else's browser is never authorized, only one f
   // The victim's browser would join the User's Session, so the SDK has no way to take one.
   const w = await world();
   const session = await w.start();
-  const { token } = await deviceSignIn(w);
+  const { token } = await deviceSignIn(w, ["orders:read", "orders:write", BROWSER_SIGN_IN_SCOPE]);
   const phisher = new ControlledBrowser(w.network);
   const phished = codeOf(await phisher.get(BROWSER_SESSION));
   const join = new BrowserSessionClient({ reactor: w.host.reactor, transport: w.transport });

@@ -37,6 +37,9 @@ import {
   extensionRequired,
   knownApis,
   negotiateExtensions,
+  browsingDisabled,
+  browserSignInScopes,
+  browserSignInUnscoped,
   formatExtensionsHeader,
   parseExtensionsHeader,
   parseConversationEventPage,
@@ -110,6 +113,9 @@ const CHECKS = {
     if ("known_api_types" in expect) assert.deepEqual(knownApis(document).map((api) => api.type), expect.known_api_types);
     if ("conversation_endpoint" in expect) assert.equal(conversationEndpoint(document), expect.conversation_endpoint);
     if ("account_access" in expect) assert.deepEqual(document.agent.protocols.map(accountAccess), expect.account_access);
+    if ("browsing_disabled" in expect) assert.equal(browsingDisabled(document), expect.browsing_disabled);
+    if ("browser_sign_in_unscoped" in expect) assert.equal(browserSignInUnscoped(document), expect.browser_sign_in_unscoped);
+    if ("browser_sign_in_scopes" in expect) assert.deepEqual([...browserSignInScopes(document)], expect.browser_sign_in_scopes);
   },
 
   extension_negotiation(given, expect) {

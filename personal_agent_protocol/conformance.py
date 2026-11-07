@@ -82,6 +82,7 @@ from .extensions import negotiate_extensions
 from .feedback import FeedbackClient, FeedbackReport, feedback_endpoint
 from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
 from .models import (
+    BROWSER_SIGN_IN_SCOPE,
     Approval,
     Author,
     ConversationEvent,
@@ -2772,7 +2773,11 @@ async def _browser_joins(ctx: ConformanceContext, _: FixtureCase) -> None:
     join_cookie = loaded.headers.get("set-cookie", "")
     for flag in ("__Host-", "Secure", "HttpOnly", "SameSite=Strict"):
         check(flag.lower() in join_cookie.lower(), f"the join cookie has {flag}")
-    _user, signed = await _signed_in_user(ctx)
+    # A signed-in join needs `poppy:browser-sign-in` with the task's other scopes (§6).
+    user = ctx.new_user()
+    signed = await ctx.sign_in(
+        user, await ctx.session(user), scopes=(*ctx.scenario.scopes, BROWSER_SIGN_IN_SCOPE)
+    )
     joined = await _join(ctx, signed, ctx.url("/"))
     cookies = [
         value
@@ -2784,6 +2789,49 @@ async def _browser_joins(ctx: ConformanceContext, _: FixtureCase) -> None:
     for flag in ("Secure", "HttpOnly"):
         check(flag.lower() in session_cookie.lower(), f"the Session's cookie is {flag}")
     check("max-age" not in session_cookie.lower(), "the cookie has no lifetime of its own")
+
+
+@case("lifecycle.browser-sign-in-scope")
+async def _browser_sign_in_scope(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A signed-in join without `poppy:browser-sign-in` is `insufficient_scope` naming it, as
+    at an API; the same code is then authorized signed out (§6)."""
+
+    _browser_unused, endpoint = await _browser(ctx)
+    user = ctx.new_user()
+    session = await ctx.session(user)
+    signed = await ctx.sign_in(user, session)
+    check(BROWSER_SIGN_IN_SCOPE not in (signed.token.scope or ""), "signed in without the scope")
+    browser = ctx.new_browser()
+    page = await browser.get(endpoint)
+    found = re.search(r'name="code" value="([^"]+)"', page.text)
+    check(found is not None, "the join page holds a code")
+    code = cast(re.Match[str], found).group(1)
+    authorize_url = f"{endpoint.rstrip('/')}/authorize"
+    refused = await ctx.send(
+        "POST",
+        authorize_url,
+        headers={
+            **await ctx.auth(session, "POST", authorize_url, signed.token),
+            "Content-Type": "application/json",
+        },
+        content=json.dumps({"code": code}).encode(),
+    )
+    expect_refusal(refused, 403, "insufficient_scope", "a signed-in join without the scope")
+    challenge = refused.headers.get("www-authenticate", "")
+    check(BROWSER_SIGN_IN_SCOPE in challenge, f"the challenge names the scope: {challenge}")
+    accepted = await ctx.send(
+        "POST",
+        authorize_url,
+        headers={
+            **await ctx.auth(session, "POST", authorize_url),
+            "Content-Type": "application/json",
+        },
+        content=json.dumps({"code": code}).encode(),
+    )
+    check(
+        accepted.status_code == 204,
+        f"the same code, signed out, is authorized: {accepted.status_code}",
+    )
 
 
 @case("lifecycle.browser-join-refused")
@@ -3398,7 +3446,14 @@ async def _dpop_feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
 
 @case("dpop.browser-join")
 async def _dpop_browser(ctx: ConformanceContext, _: FixtureCase) -> None:
-    signed, _url = await _bound(ctx)
+    if not (await ctx.metadata()).dpop_signing_alg_values_supported:
+        raise SkipCase("the company lists no DPoP algorithm")
+    # A signed-in join needs `poppy:browser-sign-in` with the task's other scopes (§6).
+    user = ctx.new_user()
+    signed = await ctx.sign_in(
+        user, await ctx.session(user), scopes=(*ctx.scenario.scopes, BROWSER_SIGN_IN_SCOPE)
+    )
+    check(signed.token.token_type == "DPoP", "the token is bound")  # noqa: S105
     joined = await _join(ctx, signed, ctx.url("/"))
     check(joined, "the bound token authorized the join")
 

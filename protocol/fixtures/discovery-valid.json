@@ -10,7 +10,8 @@
     "scopes": {
       "orders:read": "See your orders, returns, and bookings",
       "orders:write": "Exchange or return items, and change bookings",
-      "addresses": "See and change your saved shipping addresses"
+      "addresses": "See and change your saved shipping addresses",
+      "poppy:browser-sign-in": "Use the website signed in, with the other access you approve"
     },
     "scope_hints": {
       "orders:read": {

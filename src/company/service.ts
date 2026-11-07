@@ -75,6 +75,7 @@ import { parseJsonStrict } from "../json.js";
 import { MEDIATED_EXTENSION, MEDIATED_VERSION } from "../mediated.js";
 import {
   AUTHORIZATION_CODE_GRANT,
+  BROWSER_SIGN_IN_SCOPE,
   MEDIATED_GRANT,
   parseAuthor,
   DEVICE_CODE_GRANT,
@@ -348,6 +349,18 @@ export interface CompanyConfigOptions {
   /** Web browsing (§6): a browser-session endpoint. */
   readonly web?: boolean;
   /**
+   * The website asks Personal Agents not to browse it (`web.disabled`, §6): the company lists no
+   * browser-session endpoint and offers its agent and APIs instead. A preference the protocol
+   * can't enforce.
+   */
+  readonly webDisabled?: boolean;
+  /**
+   * The website doesn't apply the company's other scopes (`web.unscoped`, §6):
+   * `poppy:browser-sign-in` gives the account's full access there, is described as such, and is
+   * asked of the User like any other scope.
+   */
+  readonly webUnscoped?: boolean;
+  /**
    * Other domains that are this company (§3): each publishes its discovery document, naming
    * itself as the organization's domain, and the issuer's metadata lists it in
    * `protected_resources`. Everything else stays on `domain`, the issuer's: an alias is never a
@@ -446,6 +459,8 @@ export class CompanyConfig {
   readonly devicePage: string | undefined;
   readonly consentPage: string | undefined;
   readonly web: boolean;
+  readonly webDisabled: boolean;
+  readonly webUnscoped: boolean;
   readonly aliases: readonly string[];
   readonly feedback: boolean;
   readonly endedSessionMemorySeconds: number;
@@ -514,6 +529,13 @@ export class CompanyConfig {
     this.devicePage = hostedPage("devicePage", options.devicePage);
     this.consentPage = hostedPage("consentPage", options.consentPage);
     this.web = options.web ?? false;
+    this.webDisabled = options.webDisabled ?? false;
+    this.webUnscoped = options.webUnscoped ?? false;
+    if (this.scopes.includes(BROWSER_SIGN_IN_SCOPE)) {
+      throw new RangeError("poppy:browser-sign-in is the protocol's: web and oauth offer it");
+    }
+    if (this.webDisabled && this.web) throw new RangeError("webDisabled lists no browser-session endpoint: web is off");
+    if (this.webUnscoped && !this.web) throw new RangeError("webUnscoped needs the browser-session endpoint: web is on");
     this.aliases = [...(options.aliases ?? [])];
     this.feedback = options.feedback ?? true;
     this.endedSessionMemorySeconds = options.endedSessionMemorySeconds ?? 30 * 24 * 60 * 60;
@@ -647,6 +669,27 @@ export class CompanyConfig {
   get mediatedGrantScopes(): readonly string[] {
     return this.mediatedScopes.length ? this.mediatedScopes : this.scopes;
   }
+  /**
+   * Every scope the company offers Personal Agents: its own and, with a website agents sign in
+   * to, the protocol's `poppy:browser-sign-in` (§4.7, §6).
+   */
+  get offeredScopes(): readonly string[] {
+    return this.web && this.oauth ? [...this.scopes, BROWSER_SIGN_IN_SCOPE] : this.scopes;
+  }
+
+  /**
+   * What a scope allows, in words for the User (§4.7): the company's description, or the
+   * protocol's for `poppy:browser-sign-in`, saying full access when `webUnscoped`.
+   */
+  describe(scope: string): string {
+    if (scope === BROWSER_SIGN_IN_SCOPE) {
+      return this.webUnscoped
+        ? "Use the website as you, with full access to your account"
+        : "Use the website signed in, with the other access you approve";
+    }
+    return this.scopeDescriptions[scope] ?? scope;
+  }
+
   /** The version `poppy.json` is the document of (§3.4). */
   get preferredVersion(): string {
     return this.protocolVersions[0] as string;
@@ -1438,15 +1481,16 @@ export class CompanyService {
       // Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
       const auth: Record<string, unknown> = { issuer: config.base };
       if (config.signInDisabled) auth.disabled = true;
-      auth.scopes = Object.fromEntries(config.scopes.map((scope) => [scope, config.scopeDescriptions[scope]]));
-      if (Object.keys(config.scopeHints).length) {
-        auth.scope_hints = Object.fromEntries(
-          Object.entries(config.scopeHints).map(([scope, [changes, personal]]) => [
-            scope,
-            { changes, personal_data: personal },
-          ]),
-        );
-      }
+      auth.scopes = Object.fromEntries(config.offeredScopes.map((scope) => [scope, config.describe(scope)]));
+      const hints: Record<string, unknown> = Object.fromEntries(
+        Object.entries(config.scopeHints).map(([scope, [changes, personal]]) => [
+          scope,
+          { changes, personal_data: personal },
+        ]),
+      );
+      // Full access on the website: its most consequential action (guides).
+      if (config.webUnscoped) hints[BROWSER_SIGN_IN_SCOPE] = { changes: "irreversible", personal_data: true };
+      if (Object.keys(hints).length) auth.scope_hints = hints;
       document.auth = auth;
     }
     const apis: Record<string, string>[] = [];
@@ -1459,7 +1503,11 @@ export class CompanyService {
       apis.push({ type: "mcp", url: config.mcpUrl, description: mcp.description });
     }
     if (apis.length) document.apis = apis;
-    if (config.web) document.web = { browser_session_endpoint: config.browserSessionEndpoint };
+    if (config.web) {
+      document.web = { browser_session_endpoint: config.browserSessionEndpoint, ...(config.webUnscoped ? { unscoped: true } : {}) };
+    } else if (config.webDisabled) {
+      document.web = { disabled: true };
+    }
     if (config.feedback) document.feedback = { endpoint: config.feedbackEndpoint };
     if (config.excludedTasks.length) document.excluded_tasks = { url: config.excludedTasksUrl };
     const extensions: Record<string, unknown> = {};
@@ -1503,7 +1551,7 @@ export class CompanyService {
     return {
       resource: this.config.conversationsEndpoint,
       authorization_servers: [this.config.base],
-      scopes_supported: [...this.config.scopes],
+      scopes_supported: [...this.config.offeredScopes],
       bearer_methods_supported: ["header"],
     };
   }
@@ -1517,7 +1565,7 @@ export class CompanyService {
     return {
       resource: this.config.mcpUrl,
       authorization_servers: [this.config.base],
-      scopes_supported: [...this.config.scopes],
+      scopes_supported: [...this.config.offeredScopes],
       bearer_methods_supported: ["header"],
       ...(this.config.dpopBinding === "off" ? {} : { dpop_signing_alg_values_supported: [DPOP_ALGORITHM] }),
     };
@@ -1537,7 +1585,7 @@ export class CompanyService {
     return {
       resource: `https://${domain ?? config.domain}`,
       authorization_servers: [config.base],
-      scopes_supported: [...config.scopes],
+      scopes_supported: [...config.offeredScopes],
       bearer_methods_supported: ["header"],
     };
   }
@@ -1553,7 +1601,7 @@ export class CompanyService {
       token_endpoint: config.tokenEndpoint,
       revocation_endpoint: config.revocationEndpoint,
       grant_types_supported: grants,
-      scopes_supported: [...config.scopes],
+      scopes_supported: [...config.offeredScopes],
       protected_resources: resources,
     };
     if (this.#mcp() !== undefined) resources.push(config.mcpUrl);
@@ -1858,7 +1906,7 @@ export class CompanyService {
     const clientId = await this.#client(form);
     if (!(await this.#signInAllowed(clientId, DEVICE_CODE_GRANT))) throw new Refused(400, "unauthorized_client");
     const asked = words(form.scope);
-    if (!asked.length || asked.some((scope) => !this.config.scopes.includes(scope))) {
+    if (!asked.length || asked.some((scope) => !this.config.offeredScopes.includes(scope))) {
       throw new Refused(400, "invalid_scope");
     }
     const scopes = this.#grantedToAgents(asked);
@@ -2269,7 +2317,7 @@ export class CompanyService {
     if (query.code_challenge_method !== "S256" || !query.code_challenge) {
       return this.#redirect(redirectUri, { error: "invalid_request", state });
     }
-    if (!scopes.length || scopes.some((scope) => !this.config.scopes.includes(scope))) {
+    if (!scopes.length || scopes.some((scope) => !this.config.offeredScopes.includes(scope))) {
       return this.#redirect(redirectUri, { error: "invalid_scope", state });
     }
     if (!(await this.#signInAllowed(clientId, AUTHORIZATION_CODE_GRANT))) {
@@ -2313,7 +2361,7 @@ export class CompanyService {
     const agent = escapeHtml(metadata.client_name);
     const agentDomain = escapeHtml(new URL(clientId).hostname);
     const described = scopes
-      .map((scope) => `<li>${escapeHtml(this.config.scopeDescriptions[scope] ?? scope)}</li>`)
+      .map((scope) => `<li>${escapeHtml(this.config.describe(scope))}</li>`)
       .join("");
     return page(
       200,
@@ -2381,7 +2429,7 @@ export class CompanyService {
       request_id: requestId,
       client_name: pending.clientName ?? "",
       client_domain: new URL(pending.clientId).hostname,
-      scopes: pending.scopes.map((scope) => ({ scope, description: this.config.scopeDescriptions[scope] ?? scope })),
+      scopes: pending.scopes.map((scope) => ({ scope, description: this.config.describe(scope) })),
       expires_at: isoZ(new Date(pending.expiresAt)),
     };
   }
@@ -2678,7 +2726,7 @@ export class CompanyService {
    * again when asked within what is offered.
    */
   #offers(scopes: readonly string[]): boolean {
-    return scopes.every((scope) => this.config.scopes.includes(scope));
+    return scopes.every((scope) => this.config.offeredScopes.includes(scope));
   }
 
   async #mcpRoute(request: CompanyRequest, mcp: CompanyMcp): Promise<CompanyResponse> {
@@ -4016,7 +4064,7 @@ export class CompanyService {
   /** What a request asks for: one action of one account, or of one signed-out Session. */
   #asked(session: CallerSession, proposal: ProposedOperation, request: string): Asked {
     const scopes = proposal.scopes?.length ? [...proposal.scopes] : [...this.config.writeScopes];
-    if (scopes.some((scope) => !this.config.scopes.includes(scope))) {
+    if (scopes.some((scope) => !this.config.offeredScopes.includes(scope))) {
       throw new RangeError("an operation's scopes must be among the company's scopes");
     }
     return {
@@ -4472,6 +4520,11 @@ export class CompanyService {
    */
   async #authorizeJoin(request: CompanyRequest): Promise<CompanyResponse> {
     const [, session] = await this.#caller(request);
+    if (session.accountId !== undefined && !session.scopes.includes(BROWSER_SIGN_IN_SCOPE)) {
+      // Signing in needs `poppy:browser-sign-in` (§6): as at an API, the agent then authorizes
+      // the code without a token, or gets the scope and starts again.
+      throw new Refused(403, "insufficient_scope", { scope: BROWSER_SIGN_IN_SCOPE });
+    }
     const code = jsonObject(request.body).code;
     if (typeof code !== "string" || !code) throw new Refused(400, "invalid_request");
     const stored = await this.#read<StoredSession>(

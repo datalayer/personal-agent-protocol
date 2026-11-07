@@ -11,6 +11,7 @@ import test from "node:test";
 
 import {
   ApiClient,
+  BROWSER_SIGN_IN_SCOPE,
   BrowserSessionClient,
   DeviceSignInClient,
   McpClient,
@@ -77,8 +78,11 @@ async function world({ extensions } = {}) {
   return { clock, fetch, identity, shop, plugin, host, reactor, browser, transport, company, metadata, start, context, accounts };
 }
 
-/** A Session, signed in by Device Sign-In with Ada approving, and its refresh token's reference. */
-async function signedIn(w) {
+/** The scopes for a signed-in browser join: poppy:browser-sign-in with the task's (§6). */
+const BROWSE = ["orders:read", "orders:write", BROWSER_SIGN_IN_SCOPE];
+
+/** A Session, signed in for `scopes` by Device Sign-In with Ada approving, and its refresh token's reference. */
+async function signedIn(w, scopes = ["orders:read", "orders:write"]) {
   const session = await w.start();
   const device = new DeviceSignInClient({ reactor: w.reactor, fetch: w.fetch });
   const started = await device.begin({
@@ -86,7 +90,7 @@ async function signedIn(w) {
     tokenEndpoint: w.metadata.token_endpoint,
     issuer: w.metadata.issuer,
     clientId: w.identity.clientId,
-    scopes: ["orders:read", "orders:write"],
+    scopes,
     tenantId: TENANT,
     organization: w.company.document.organization,
     protectedResources: w.metadata.protected_resources,
@@ -492,14 +496,15 @@ const noSessionCookie = (response) => !setCookies(response.headers).some((cookie
 
 test("the company lists its browser-session endpoint", async () => {
   const w = await world();
-  assert.deepEqual(w.company.document.web, { browser_session_endpoint: BROWSER_SESSION });
+  // Neither flag is set: browsing is welcome, and the website applies the other scopes (§3.1).
+  assert.deepEqual(w.company.document.web, { browser_session_endpoint: BROWSER_SESSION, disabled: false, unscoped: false });
 });
 
 test("joining again without a token replaces the cookie and ends the sign-in", async () => {
   // Step 3 replaces the cookie, and the new step 2 decides the sign-in (§6's table). Manzanita
   // has no website login beyond this cookie, so nothing else is left.
   const w = await world();
-  const { session, token } = await signedIn(w);
+  const { session, token } = await signedIn(w, BROWSE);
   await join(w, session, token, "https://manzanita.example/");
   const signedInCookie = w.browser.cookies.get("manzanita.example").get("__Host-poppy_session");
   assert.equal((await w.shop.webSession(signedInCookie)).accountId, "acct_ada");
@@ -516,7 +521,7 @@ test("joining again without a token replaces the cookie and ends the sign-in", a
 
 test("a joined browser follows the Session", async () => {
   const w = await world();
-  const { session, token, reference } = await signedIn(w);
+  const { session, token, reference } = await signedIn(w, BROWSE);
   await join(w, session, token, "https://manzanita.example/");
   const cookie = w.browser.cookies.get("manzanita.example").get("__Host-poppy_session");
   assert.ok(cookie);

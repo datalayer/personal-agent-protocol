@@ -92,6 +92,7 @@ from ..json import loads_strict
 from ..mediated import MEDIATED_EXTENSION, MEDIATED_GRANT, MEDIATED_VERSION
 from ..models import (
     AUTHORIZATION_CODE_GRANT,
+    BROWSER_SIGN_IN_SCOPE,
     DEVICE_CODE_GRANT,
     DISCLOSURES_EXTENSION,
     DISCLOSURES_VERSION,
@@ -416,6 +417,14 @@ class CompanyConfig:
     #: it in `protected_resources` and issues tokens for it, and it takes only those.
     conversation_resource: bool = False
     web: bool = False
+    #: The website asks Personal Agents not to browse it (`web.disabled`, §6): the company
+    #: lists no browser-session endpoint and offers its agent and APIs instead. A
+    #: preference the protocol can't enforce.
+    web_disabled: bool = False
+    #: The website doesn't apply the company's other scopes (`web.unscoped`, §6):
+    #: `poppy:browser-sign-in` gives the account's full access there, is described as such,
+    #: and is asked of the User like any other scope.
+    web_unscoped: bool = False
     #: A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it.
     device_page: str | None = None
     #: A hosted consent page with `{request_id}`: `GET /oauth/authorize` answers 303 to it.
@@ -523,6 +532,12 @@ class CompanyConfig:
                 raise ValueError("device_page must be on the company's domain or a subdomain")
         if any(scope not in self.scopes for scope in self.write_scopes):
             raise ValueError("write_scopes must be among scopes")
+        if BROWSER_SIGN_IN_SCOPE in self.scopes:
+            raise ValueError("poppy:browser-sign-in is the protocol's: web and oauth offer it")
+        if self.web_disabled and self.web:
+            raise ValueError("web_disabled lists no browser-session endpoint: web is off")
+        if self.web_unscoped and not self.web:
+            raise ValueError("web_unscoped needs the browser-session endpoint: web is on")
         if set(self.scope_descriptions) != set(self.scopes) or not all(
             self.scope_descriptions.values()
         ):
@@ -605,6 +620,25 @@ class CompanyConfig:
     def mediated_grant_scopes(self) -> tuple[str, ...]:
         """The extension's `scopes`: what Mediated Sign-In can grant."""
         return self.mediated_scopes or self.scopes
+
+    @property
+    def offered_scopes(self) -> tuple[str, ...]:
+        """Every scope the company offers Personal Agents: its own and, with a website agents
+        sign in to, the protocol's `poppy:browser-sign-in` (§4.7, §6)."""
+
+        if self.web and self.oauth:
+            return (*self.scopes, BROWSER_SIGN_IN_SCOPE)
+        return self.scopes
+
+    def describe(self, scope: str) -> str:
+        """What a scope allows, in words for the User (§4.7): the company's description, or
+        the protocol's for `poppy:browser-sign-in`, saying full access when `web_unscoped`."""
+
+        if scope == BROWSER_SIGN_IN_SCOPE:
+            if self.web_unscoped:
+                return "Use the website as you, with full access to your account"
+            return "Use the website signed in, with the other access you approve"
+        return self.scope_descriptions.get(scope, scope)
 
     @property
     def preferred_version(self) -> str:
@@ -1276,12 +1310,16 @@ class CompanyService:
             auth: dict[str, Any] = {"issuer": config.base}
             if config.sign_in_disabled:
                 auth["disabled"] = True
-            auth["scopes"] = {scope: config.scope_descriptions[scope] for scope in config.scopes}
-            if config.scope_hints:
-                auth["scope_hints"] = {
-                    scope: {"changes": changes, "personal_data": personal}
-                    for scope, (changes, personal) in config.scope_hints.items()
-                }
+            auth["scopes"] = {scope: config.describe(scope) for scope in config.offered_scopes}
+            hints = {
+                scope: {"changes": changes, "personal_data": personal}
+                for scope, (changes, personal) in config.scope_hints.items()
+            }
+            if config.web_unscoped:
+                # Full access on the website: its most consequential action (guides).
+                hints[BROWSER_SIGN_IN_SCOPE] = {"changes": "irreversible", "personal_data": True}
+            if hints:
+                auth["scope_hints"] = hints
             document["auth"] = auth
         apis: list[dict[str, str]] = []
         api = self._api()
@@ -1295,7 +1333,12 @@ class CompanyService:
         if apis:
             document["apis"] = apis
         if config.web:
-            document["web"] = {"browser_session_endpoint": config.browser_session_endpoint}
+            web: dict[str, Any] = {"browser_session_endpoint": config.browser_session_endpoint}
+            if config.web_unscoped:
+                web["unscoped"] = True
+            document["web"] = web
+        elif config.web_disabled:
+            document["web"] = {"disabled": True}
         if config.feedback:
             document["feedback"] = {"endpoint": config.feedback_endpoint}
         if config.excluded_tasks:
@@ -1350,7 +1393,7 @@ class CompanyService:
         return {
             "resource": f"https://{organization}",
             "authorization_servers": [self.config.base],
-            "scopes_supported": list(self.config.scopes),
+            "scopes_supported": list(self.config.offered_scopes),
             "bearer_methods_supported": ["header"],
         }
 
@@ -1362,7 +1405,7 @@ class CompanyService:
         return {
             "resource": self.config.conversations_endpoint,
             "authorization_servers": [self.config.base],
-            "scopes_supported": list(self.config.scopes),
+            "scopes_supported": list(self.config.offered_scopes),
             "bearer_methods_supported": ["header"],
         }
 
@@ -1376,7 +1419,7 @@ class CompanyService:
         metadata: dict[str, Any] = {
             "resource": self.config.mcp_url,
             "authorization_servers": [self.config.base],
-            "scopes_supported": list(self.config.scopes),
+            "scopes_supported": list(self.config.offered_scopes),
             "bearer_methods_supported": ["header"],
         }
         if self.config.dpop_binding != "off":
@@ -1391,7 +1434,7 @@ class CompanyService:
             "token_endpoint": config.token_endpoint,
             "revocation_endpoint": config.revocation_endpoint,
             "grant_types_supported": grants,
-            "scopes_supported": list(config.scopes),
+            "scopes_supported": list(config.offered_scopes),
             # `https://{domain}` for each domain whose poppy.json names the issuer, then
             # the MCP server: exact strings (§3.2, RFC 9728 §4).
             "protected_resources": [
@@ -1705,7 +1748,7 @@ class CompanyService:
         if not await self._sign_in_allowed(client_id, DEVICE_CODE_GRANT):
             raise _RefusedError(400, "unauthorized_client")
         asked = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
-        if not asked or any(scope not in self.config.scopes for scope in asked):
+        if not asked or any(scope not in self.config.offered_scopes for scope in asked):
             raise _RefusedError(400, "invalid_scope")
         scopes = self._granted_to_agents(asked)
         device_code = self._id("dev")
@@ -2111,7 +2154,7 @@ class CompanyService:
             return self._redirect(redirect_uri, error="unsupported_response_type", state=state)
         if query.get("code_challenge_method") != "S256" or not query.get("code_challenge"):
             return self._redirect(redirect_uri, error="invalid_request", state=state)
-        if not scopes or any(scope not in self.config.scopes for scope in scopes):
+        if not scopes or any(scope not in self.config.offered_scopes for scope in scopes):
             return self._redirect(redirect_uri, error="invalid_scope", state=state)
         if not await self._sign_in_allowed(client_id, AUTHORIZATION_CODE_GRANT):
             # Refused sign-in, or this type of it: served signed out (§4.1).
@@ -2156,8 +2199,7 @@ class CompanyService:
         agent = html.escape(metadata.client_name)
         agent_domain = html.escape(urlsplit(client_id).hostname or "")
         described = "".join(
-            f"<li>{html.escape(self.config.scope_descriptions.get(scope, scope))}</li>"
-            for scope in scopes
+            f"<li>{html.escape(self.config.describe(scope))}</li>" for scope in scopes
         )
         return self._page(
             200,
@@ -2221,7 +2263,7 @@ class CompanyService:
             "client_name": pending.client_name,
             "client_domain": urlsplit(pending.client_id).hostname or "",
             "scopes": [
-                {"scope": scope, "description": self.config.scope_descriptions.get(scope, scope)}
+                {"scope": scope, "description": self.config.describe(scope)}
                 for scope in pending.scopes
             ],
             "expires_at": pending.expires_at.isoformat().replace("+00:00", "Z"),
@@ -3699,7 +3741,7 @@ class CompanyService:
         """What a request asks for: one action of one account, or of one signed-out Session."""
 
         scopes = tuple(proposal.scopes) or self.config.write_scopes
-        if any(scope not in self.config.scopes for scope in scopes):
+        if any(scope not in self.config.offered_scopes for scope in scopes):
             raise ValueError("an operation's scopes must be among the company's scopes")
         return _Asked(
             action=proposal.action,
@@ -4171,7 +4213,7 @@ class CompanyService:
         token refreshed for such a scope is `invalid_scope`, and serves again
         when asked within what is offered.
         """
-        return all(scope in self.config.scopes for scope in scopes)
+        return all(scope in self.config.offered_scopes for scope in scopes)
 
     async def _mcp_route(  # noqa: C901 - the JSON-RPC methods
         self, request: CompanyRequest
@@ -4348,6 +4390,10 @@ class CompanyService:
         """
 
         _, session = await self._caller(request)
+        if session.signed_in and BROWSER_SIGN_IN_SCOPE not in session.scopes:
+            # Signing in needs `poppy:browser-sign-in` (§6): as at an API, the agent then
+            # authorizes the code without a token, or gets the scope and starts again.
+            raise _RefusedError(403, "insufficient_scope", scope=BROWSER_SIGN_IN_SCOPE)
         body = _json_object(request.body)
         code = body.get("code")
         if not isinstance(code, str) or not code:

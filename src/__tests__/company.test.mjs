@@ -196,6 +196,8 @@ test("discovery and OAuth metadata publish one issuer, plain OAuth, and the two 
   assert.deepEqual(w.company.document.auth.scopes, {
     "orders:read": "See your orders, returns and exchanges",
     "orders:write": "Exchange or return items in your orders",
+    // The protocol's scope, offered with the browser-session endpoint (§4.7, §6).
+    "poppy:browser-sign-in": "Use the website signed in, with the other access you approve",
   });
   assert.equal(w.company.document.apis[0].url, "https://manzanita.example/api/openapi.json");
   assert.deepEqual(w.company.document.extensions.operations, [{ version: "2" }]);

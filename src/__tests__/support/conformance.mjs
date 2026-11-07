@@ -82,6 +82,7 @@ import {
   operatorDirectory,
   operatorKeyFrom,
   signOperatorRequest,
+  BROWSER_SIGN_IN_SCOPE,
   negotiateExtensions,
   offersDevice,
   offersDirect,
@@ -1981,12 +1982,40 @@ caseFor("lifecycle.browser-joins-session")(async (ctx) => {
   for (const flag of ["__Host-", "Secure", "HttpOnly", "SameSite=Strict"]) {
     check(joinCookie.includes(flag.toLowerCase()), `the join cookie has ${flag}`);
   }
-  const [, signed] = await signedInUser(ctx);
+  // A signed-in join needs `poppy:browser-sign-in` with the task's other scopes (§6).
+  const user = ctx.newUser();
+  const signed = await ctx.signIn(user, await ctx.session(user), { scopes: [...ctx.scenario.scopes, BROWSER_SIGN_IN_SCOPE] });
   const responses = await join(ctx, signed, ctx.url("/"));
   const cookies = responses.flatMap((response) => setCookies(response.headers)).filter((value) => !value.toLowerCase().includes("max-age=0"));
   const sessionCookie = (cookies.find((value) => value.toLowerCase().includes("secure")) ?? "").toLowerCase();
   for (const flag of ["Secure", "HttpOnly"]) check(sessionCookie.includes(flag.toLowerCase()), `the Session's cookie is ${flag}`);
   check(!sessionCookie.includes("max-age"), "the cookie has no lifetime of its own");
+});
+
+caseFor("lifecycle.browser-sign-in-scope")(async (ctx) => {
+  const [, endpoint] = await browserOf(ctx);
+  const user = ctx.newUser();
+  const session = await ctx.session(user);
+  const signed = await ctx.signIn(user, session);
+  check(!(signed.token.scope ?? "").includes(BROWSER_SIGN_IN_SCOPE), "signed in without the scope");
+  const browser = ctx.newBrowser();
+  const page = await browser.get(endpoint);
+  const found = /name="code" value="([^"]+)"/.exec(page.text);
+  check(found !== null, "the join page holds a code");
+  const code = found[1];
+  const authorizeUrl = `${endpoint.replace(/\/+$/, "")}/authorize`;
+  const refused = await ctx.send("POST", authorizeUrl, {
+    headers: { ...(await ctx.auth(session, "POST", authorizeUrl, signed.token)), "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  await expectRefusal(refused, 403, "insufficient_scope", "a signed-in join without the scope");
+  const challenge = refused.headers.get("www-authenticate") ?? "";
+  check(challenge.includes(BROWSER_SIGN_IN_SCOPE), `the challenge names the scope: ${challenge}`);
+  const accepted = await ctx.send("POST", authorizeUrl, {
+    headers: { ...(await ctx.auth(session, "POST", authorizeUrl)), "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  check(accepted.status === 204, `the same code, signed out, is authorized: ${accepted.status}`);
 });
 
 caseFor("lifecycle.browser-join-refused")(async (ctx) => {
@@ -2448,7 +2477,15 @@ caseFor("dpop.feedback")(async (ctx) => {
 });
 
 caseFor("dpop.browser-join")(async (ctx) => {
-  const [signed] = await boundUser(ctx);
+  if (!(await ctx.metadata()).dpop_signing_alg_values_supported?.length) {
+    throw new SkipCase("the company lists no DPoP algorithm");
+  }
+  // A signed-in join needs `poppy:browser-sign-in` with the task's other scopes (§6).
+  const user = ctx.newUser();
+  const signed = await ctx.signIn(user, await ctx.session(user), {
+    scopes: [...ctx.scenario.scopes, BROWSER_SIGN_IN_SCOPE],
+  });
+  check(signed.token.tokenType === "DPoP", "the token is bound");
   await join(ctx, signed, ctx.url("/"));
 });
 

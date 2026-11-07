@@ -17,6 +17,7 @@ import test from "node:test";
 import {
   ApiClient,
   ApiError,
+  BROWSER_SIGN_IN_SCOPE,
   BrowserSessionClient,
   ConversationClient,
   ConversationError,
@@ -108,14 +109,14 @@ async function world({ answers = [], extensions, config, plugins, controlled = f
 }
 
 /** Device Sign-In, the user approving as `accountId`: it names no Session (§5.4). */
-async function deviceSignIn(w, accountId) {
+async function deviceSignIn(w, accountId, scopes = ["orders:read", "orders:write"]) {
   const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
   const started = await device.begin({
     deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
     tokenEndpoint: w.metadata.token_endpoint,
     issuer: w.metadata.issuer,
     clientId: w.identity.clientId,
-    scopes: ["orders:read", "orders:write"],
+    scopes,
     tenantId: TENANT,
     organization: w.company.document.organization,
     protectedResources: w.metadata.protected_resources,
@@ -558,7 +559,7 @@ test("the join page: a form with a code, a __Host- cookie, and no way to frame o
 test("a browser joins: the cookie acts for the Session, its account and scopes, while they last", async () => {
   const w = await world({ controlled: true });
   const session = await w.start();
-  const [token, reference] = await deviceSignIn(w, "acct_ada");
+  const [token, reference] = await deviceSignIn(w, "acct_ada", ["orders:read", "orders:write", BROWSER_SIGN_IN_SCOPE]);
   const joined = await new BrowserSessionClient({ reactor: w.host.reactor, transport: w.transport }).join({
     browserSessionEndpoint: JOIN,
     session,
@@ -572,7 +573,7 @@ test("a browser joins: the cookie acts for the Session, its account and scopes, 
   const acting = await w.shop.webSession(web);
   assert.deepEqual(
     [acting.sid, acting.accountId, [...acting.scopes], acting.clientId],
-    [session.sid, "acct_ada", ["orders:read", "orders:write"], w.identity.clientId],
+    [session.sid, "acct_ada", ["orders:read", "orders:write", BROWSER_SIGN_IN_SCOPE], w.identity.clientId],
   );
   // Signed out once its sign-in ends; gone once its Session has.
   await w.tokens.revoke(reference, { context: w.context });

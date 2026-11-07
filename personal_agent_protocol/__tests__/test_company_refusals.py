@@ -31,8 +31,11 @@ from personal_agent_protocol.transport import session_headers
 from .test_company_end_to_end import TENANT, World
 
 
-async def signed_in(world: World):  # type: ignore[no-untyped-def]
-    """Sign Ada in through Device Sign-In, the company page approving: her access token.
+async def signed_in(  # type: ignore[no-untyped-def]
+    world: World, scopes: tuple[str, ...] = ("orders:read", "orders:write")
+):
+    """Sign Ada in through Device Sign-In for `scopes`, the company page approving: her
+    access token.
 
     `world.session` is a Session to use it in, and `world.refresh_reference` where
     its refresh token is kept.
@@ -46,7 +49,7 @@ async def signed_in(world: World):  # type: ignore[no-untyped-def]
         token_endpoint=metadata.token_endpoint,  # type: ignore[union-attr]
         issuer=metadata.issuer,  # type: ignore[union-attr]
         client_id=world.atlas.client_id,
-        scopes=("orders:read", "orders:write"),
+        scopes=scopes,
         tenant_id=TENANT,
         organization=world.company.document.organization,
         protected_resources=metadata.protected_resources,

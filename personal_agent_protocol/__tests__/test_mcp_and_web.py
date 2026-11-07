@@ -26,7 +26,11 @@ from personal_agent_protocol.mcp import (
     fetch_mcp_server_metadata,
     mcp_api,
 )
-from personal_agent_protocol.models import Approval, ProtectedResourceMetadata
+from personal_agent_protocol.models import (
+    BROWSER_SIGN_IN_SCOPE,
+    Approval,
+    ProtectedResourceMetadata,
+)
 from personal_agent_protocol.sessions import AccessToken
 from personal_agent_protocol.transport import (
     SessionHttpClient,
@@ -39,6 +43,10 @@ from .test_company_refusals import signed_in
 MCP = "https://manzanita.example/mcp"
 BROWSER_SESSION = "https://manzanita.example/poppy/browser-session"
 LIST_TOOLS = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+
+#: The scopes for a signed-in browser join: poppy:browser-sign-in with the task's (§6).
+BROWSE = ("orders:read", "orders:write", BROWSER_SIGN_IN_SCOPE)
 
 
 def web_world() -> tuple[World, ControlledBrowser]:
@@ -63,8 +71,10 @@ def context(world: World) -> RefreshTokenContext:
     )
 
 
-async def signed_in_with_reference(world: World):  # type: ignore[no-untyped-def]
-    token = await signed_in(world)
+async def signed_in_with_reference(  # type: ignore[no-untyped-def]
+    world: World, scopes: tuple[str, ...] = ("orders:read", "orders:write")
+):
+    token = await signed_in(world, scopes)
     assert world.refresh_reference is not None
     return token, world.refresh_reference
 
@@ -413,7 +423,7 @@ async def join(
 @pytest.mark.asyncio
 async def test_a_joined_browser_follows_the_session() -> None:
     world, browser = web_world()
-    token, reference = await signed_in_with_reference(world)
+    token, reference = await signed_in_with_reference(world, BROWSE)
     session = world.session
     assert session is not None
     await join(world, browser, session, token, "https://manzanita.example/")
@@ -443,7 +453,7 @@ async def test_joining_again_without_a_token_replaces_the_cookie_and_ends_the_si
     """
 
     world, browser = web_world()
-    token, _ = await signed_in_with_reference(world)
+    token, _ = await signed_in_with_reference(world, BROWSE)
     session = world.session
     assert session is not None
     await join(world, browser, session, token, "https://manzanita.example/")

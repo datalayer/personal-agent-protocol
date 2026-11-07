@@ -30,8 +30,9 @@ from urllib.parse import urlsplit
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import BrowserSessionError, TransportError
-from .models import ProtocolModel
+from .models import BROWSER_SIGN_IN_SCOPE, ProtocolModel
 from .reactor import BROWSER_JOINS, CLOCKS, BrowserJoin, Clock, first_contribution
+from .refusals import challenge_parameters
 from .sessions import AccessToken, PapSession
 from .transport import SessionHttpClient
 
@@ -93,6 +94,17 @@ class BrowserSessionClient:
             )
         except TransportError as exc:
             raise BrowserSessionError(exc.code, "Authorizing the join code failed") from exc
+        if response.status_code == 403 and token is not None:
+            # Signing in needs `poppy:browser-sign-in` (§6): the agent authorizes the same
+            # code again without a token, or gets the scope and starts again at step 1.
+            challenge = challenge_parameters(response.headers.get("www-authenticate", ""))
+            if challenge.get("error") == "insufficient_scope":
+                raise BrowserSessionError(
+                    "insufficient_scope",
+                    "A signed-in join needs the poppy:browser-sign-in scope",
+                    status_code=403,
+                    details={"scope": challenge.get("scope") or BROWSER_SIGN_IN_SCOPE},
+                )
         if response.status_code != 204:
             raise BrowserSessionError(
                 "join_not_authorized",

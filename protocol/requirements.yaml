@@ -1783,6 +1783,79 @@ requirements:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   conformance:
   - lifecycle.rate-limit-retry-after
+- id: PAP-6-16
+  section: '6'
+  level: MUST
+  role: company
+  text: The Company MUST reject an access token in step 2 that doesn't have the poppy:browser-sign-in scope,
+    with insufficient_scope as at an API (section 7).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._authorize_join
+  - personal_agent_protocol.browser:BrowserSessionClient.join
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_signed_in_browser_join_needs_the_browser_sign_in_scope
+  conformance:
+  - lifecycle.browser-sign-in-scope
+  - lifecycle.browser-joins-session
+- id: PAP-6-17
+  section: '6'
+  level: MUST
+  role: company
+  text: A Company that lists browser_session_endpoint and offers sign-in MUST support poppy:browser-sign-in
+    (4.7), though it MAY grant it to fewer clients or Users, as for any scope. A Personal Agent requests
+    poppy:browser-sign-in only from a Company that lists browser_session_endpoint.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.offered_scopes
+  - personal_agent_protocol.models:DiscoveryDocument.browser_sign_in_scopes
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_signed_in_browser_join_needs_the_browser_sign_in_scope
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - lifecycle.browser-sign-in-scope
+  - protocol.web-disabled
+  - protocol.web-disabled-with-endpoint
+  - protocol.web-disabled-without-interfaces
+- id: PAP-6-18
+  section: '6'
+  level: MUST
+  role: company
+  text: After a signed-in join, the Company's website MUST either apply the cookie's scopes, as the
+    Company's APIs apply an access token's, or treat poppy:browser-sign-in as access to everything the
+    account can do on the website. When poppy:browser-sign-in gives the account's full access on the
+    website, the Company MUST describe it that way (4.7), and in Direct and Device Sign-In MUST ask the User
+    to approve it like any other scope.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.describe
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_web_unscoped_and_web_disabled_are_published_and_read
+  conformance:
+  - protocol.web-unscoped
+- id: PAP-6-19
+  section: '6'
+  level: MUST
+  role: company
+  text: A Company whose website treats poppy:browser-sign-in as the account's full access MUST set
+    web.unscoped to true in poppy.json, so the Personal Agent knows what the scope allows before requesting
+    it. A Company that sets web.unscoped MUST list browser_session_endpoint. A Company that sets
+    web.disabled MUST NOT list browser_session_endpoint, and MUST list agent or apis.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:WebDescriptor
+  - personal_agent_protocol.models:DiscoveryDocument.validate_interfaces
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_web_unscoped_and_web_disabled_are_published_and_read
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.web-disabled
+  - protocol.web-disabled-with-endpoint
+  - protocol.web-disabled-without-interfaces
+  - protocol.web-unscoped-without-endpoint
+  - protocol.web-unscoped
 - id: PAP-6-01
   section: '6'
   level: MUST
@@ -3784,6 +3857,38 @@ guide:
   - personal_agent_protocol.models:DiscoveredCompany.preferred_sign_in
   tests:
   - personal_agent_protocol/__tests__/test_draft_04.py::test_direct_sign_in_is_preferred_when_offered
+- id: GUIDE-pa-browser-02
+  source: guide
+  section: Web browsing
+  level: SHOULD NOT
+  role: personal-agent
+  text: Don't browse the website of a company that sets web.disabled. Use its company agent and APIs
+    (SHOULD NOT, section 6).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveryDocument.browsing_disabled
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.web-disabled
+- id: GUIDE-pa-browser-03
+  source: guide
+  section: Web browsing
+  level: SHOULD
+  role: personal-agent
+  text: To browse signed in, request poppy:browser-sign-in with the other scopes the task needs, from a
+    company that lists browser_session_endpoint (section 6). Where web.unscoped is true, it gives the
+    account's full access on the website, so treat it like a scope that allows changes that can't be
+    undone, and ask the user when you would for one. Otherwise it adds nothing to the other scopes.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveryDocument.browser_sign_in_scopes
+  - personal_agent_protocol.models:DiscoveryDocument.browser_sign_in_unscoped
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_signed_in_browser_join_needs_the_browser_sign_in_scope
+  conformance:
+  - protocol.web-unscoped
 - id: GUIDE-pa-browser-01
   source: guide
   section: Web browsing
@@ -3865,6 +3970,36 @@ guide:
   - personal_agent_protocol.company.store:StoredConversation
   tests:
   - personal_agent_protocol/__tests__/test_draft_04.py::test_a_conversation_not_carried_over_to_other_versions_is_version_mismatch
+- id: GUIDE-co-browsing-00
+  source: guide
+  section: Browser sessions
+  level: SHOULD
+  role: company
+  text: 'Choose how much of your website personal agents can use, from least to most: no browsing
+    (web.disabled, cover the tasks in your company agent or APIs); signed-out browsing (web without a
+    browser_session_endpoint); signed-in browsing with the account''s full access (browser_session_endpoint,
+    web.unscoped, poppy:browser-sign-in described that way with hints that match the website''s most
+    consequential action and shown on your consent page as its own choice); signed-in browsing with your
+    scopes (poppy:browser-sign-in adds nothing, and you can grant it without asking the user).'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_web_unscoped_and_web_disabled_are_published_and_read
+- id: GUIDE-co-consent-00
+  source: guide
+  section: The consent page
+  level: SHOULD
+  role: company
+  text: When poppy:browser-sign-in allows everything the account can do on your website, say so in plain
+    language, such as "Use the website as you, with full access to your account", and let the user leave it
+    out while approving the rest (section 6).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.describe
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_web_unscoped_and_web_disabled_are_published_and_read
 - id: GUIDE-co-consent-01
   source: guide
   section: Consent pages

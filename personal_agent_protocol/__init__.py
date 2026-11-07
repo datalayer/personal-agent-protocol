@@ -95,6 +95,7 @@ from .mediated import (
 )
 from .models import (
     AUTHORIZATION_CODE_GRANT,
+    BROWSER_SIGN_IN_SCOPE,
     SKILL_INDEX_SCHEMA,
     SUPPORTED_PROTOCOL_VERSIONS,
     Alternative,
@@ -246,6 +247,7 @@ __all__ = [
     "AUTHORIZATION_STATE_STORES",
     "BROWSER_HANDOFFS",
     "BROWSER_JOINS",
+    "BROWSER_SIGN_IN_SCOPE",
     "CACHES",
     "CLOCKS",
     "DEVICE_CODE_GRANT",

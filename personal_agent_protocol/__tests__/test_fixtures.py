@@ -164,6 +164,12 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             assert [item.account_access for item in protocols] == expect["account_access"]
         if "feedback_endpoint" in expect:
             assert feedback_endpoint(document) == expect["feedback_endpoint"]
+        if "browsing_disabled" in expect:
+            assert document.browsing_disabled is expect["browsing_disabled"]
+        if "browser_sign_in_unscoped" in expect:
+            assert document.browser_sign_in_unscoped is expect["browser_sign_in_unscoped"]
+        if "browser_sign_in_scopes" in expect:
+            assert list(document.browser_sign_in_scopes) == expect["browser_sign_in_scopes"]
     elif case.check == "extension_negotiation":
         negotiated = negotiate_extensions(_descriptors(given["company"]))
         assert negotiated == expect["negotiated"]

@@ -404,7 +404,8 @@ example("docs/docs/sdk/typescript.mdx#6", async (w) => {
 
 example("docs/docs/examples/browser-session.mdx#0", async (w) => {
   const company = await w.discovered("shop.example");
-  const { session, token } = await w.signedIn("shop.example", ["orders:read", "orders:write"]);
+  // A signed-in join needs poppy:browser-sign-in with the task's scopes (§6).
+  const { session, token } = await w.signedIn("shop.example", ["orders:read", "orders:write", "poppy:browser-sign-in"]);
   const browser = new ControlledBrowser(w.fetch);
   await w.reactor.install({
     name: "docs-controlled-browser",

@@ -97,10 +97,28 @@ The page (step 1):
 - loading it starts, ends, or changes no Session and no other cookie.
 
 The authorization (step 2) checks the Session header as at any resource, which
-starts the Session if its `sid` is new, and the access token, if any. The code
-must have been issued, be unexpired, and not be authorized before. The company
-records it for that Session and, if signed in, for the token's account and
-scopes, and answers `204`; otherwise `400` with `invalid_request`.
+starts the Session if its `sid` is new, and the access token, if any. A
+signed-in join needs the one scope the protocol defines, `poppy:browser-sign-in`
+(§6): a token without it is refused with `insufficient_scope` naming the scope,
+as at an API, and the agent authorizes the same code again without a token
+(`BrowserSessionError` `insufficient_scope`, `details["scope"]`), or gets the
+scope and starts again at step 1; the agent requests it only from a company that
+lists `browser_session_endpoint` (`document.browser_sign_in_scopes`,
+`browserSignInScopes`). The code must have been issued, be unexpired, and not be
+authorized before. The company records it for that Session and, if signed in,
+for the token's account and scopes, and answers `204`; otherwise `400` with
+`invalid_request`.
+
+The website then either applies the cookie's scopes, or treats
+`poppy:browser-sign-in` as everything the account can do there: a company whose
+website does the latter sets `web.unscoped` (`CompanyConfig(web_unscoped=True)`,
+`webUnscoped`), describes the scope as full access and asks the User to approve it
+in Direct and Device Sign-In; the agent reads it as `browser_sign_in_unscoped`
+(`browserSignInUnscoped`) and treats the scope like one that allows changes that
+can't be undone. A company that wants no browsing at all sets `web.disabled`
+(`web_disabled=True`, `webDisabled`): no `browser_session_endpoint`, its agent
+or APIs listed instead, and a personal agent that follows the protocol doesn't
+browse (`browsing_disabled`, `browsingDisabled`).
 
 The submission (step 3) is accepted only when the cookie matches the code and the
 code was authorized, is unexpired and has not been submitted before (a code is

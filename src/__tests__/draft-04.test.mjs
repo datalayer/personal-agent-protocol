@@ -8,14 +8,18 @@
 // personal_agent_protocol/__tests__/test_draft_04.py.
 //
 // Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
-// declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); what a
-// message took into account (§8.4, P4-08).
+// declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
+// browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into account
+// (§8.4, P4-08).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  BROWSER_SIGN_IN_SCOPE,
+  BrowserSessionClient,
   ConversationClient,
+  DeviceSignInClient,
   DEVICE_CODE_GRANT,
   MEDIATED_GRANT,
   PROTOCOL_PROFILE,
@@ -29,6 +33,9 @@ import {
   negotiateExtensions,
   parseExtensionsHeader,
   discoverCompany,
+  browserSignInScopes,
+  browserSignInUnscoped,
+  browsingDisabled,
   parseDiscoveryDocument,
   parseMessage,
   parseOAuthServerMetadata,
@@ -39,6 +46,7 @@ import {
 } from "../../lib/index.js";
 import { CompanyConfig } from "../../lib/server.js";
 import { CONFIG, CONFIG_OPTIONS, manzanita } from "../../lib/demo/manzanita.js";
+import { ControlledBrowser } from "./support/controlled-browser.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
 const TENANT = "atlas-demo";
@@ -53,7 +61,8 @@ async function world(config) {
   sites["atlas.example"] = identity.documents;
   const { service: shop } = manzanita({ fetch, clock, ...(config ? { config } : {}) });
   sites["manzanita.example"] = shop;
-  const host = await agentHost({ identity, fetch, clock });
+  const browser = new ControlledBrowser(fetch);
+  const host = await agentHost({ identity, fetch, clock, controlledBrowser: browser });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const session = await sessions.start({
@@ -63,7 +72,7 @@ async function world(config) {
     tenantId: TENANT,
     company,
   });
-  return { clock, fetch, identity, shop, host, sites, company, session };
+  return { clock, fetch, identity, shop, host, sites, company, session, browser };
 }
 
 let requests = 0;
@@ -315,4 +324,95 @@ test("a conversation not carried over to other versions is version_mismatch", as
     body: JSON.stringify({ id: "req_close_in_0_0_000000" }),
   });
   assert.equal(again.status, 202);
+});
+
+// Browser join scope and website flags (§3.1, §4.7, §6) ------------------------------------------
+
+/** Ada signs Atlas in with Device Sign-In for `scopes`: the access token. */
+async function deviceToken(w, scopes) {
+  const metadata = w.company.oauthMetadata;
+  const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const started = await device.begin({
+    deviceAuthorizationEndpoint: metadata.device_authorization_endpoint,
+    tokenEndpoint: metadata.token_endpoint,
+    issuer: metadata.issuer,
+    clientId: w.identity.clientId,
+    scopes,
+    tenantId: TENANT,
+    organization: w.company.document.organization,
+    protectedResources: metadata.protected_resources,
+  });
+  await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
+  w.clock.advance(started.pollInterval);
+  const done = await device.poll(started.reference);
+  assert.equal(done.status, "complete");
+  return done.token;
+}
+
+test("a signed-in browser join needs the poppy:browser-sign-in scope", async () => {
+  // A Company listing browser_session_endpoint with sign-in offers the scope and refuses a
+  // signed-in join without it with insufficient_scope naming it; the agent then joins signed out,
+  // or gets the scope and joins signed in (§4.7, §6).
+  const w = await world();
+  const { document, oauthMetadata: metadata } = w.company;
+  assert.ok(metadata.scopes_supported.includes(BROWSER_SIGN_IN_SCOPE));
+  assert.ok(BROWSER_SIGN_IN_SCOPE in document.auth.scopes);
+  assert.deepEqual(browserSignInScopes(document), [BROWSER_SIGN_IN_SCOPE]);
+  assert.ok(!browserSignInUnscoped(document) && !browsingDisabled(document));
+  const endpoint = document.web.browser_session_endpoint;
+  const client = new BrowserSessionClient({ reactor: w.host.reactor, transport: new SessionFetchClient({ reactor: w.host.reactor, fetch: w.fetch }) });
+  const cookie = () => w.browser.cookies.get("manzanita.example")?.get("__Host-poppy_session");
+
+  const without = await deviceToken(w, ["orders:read"]);
+  await assert.rejects(
+    client.join({ browserSessionEndpoint: endpoint, session: w.session, token: without }),
+    (error) => error.code === "insufficient_scope" && error.statusCode === 403 && error.details.scope === BROWSER_SIGN_IN_SCOPE,
+  );
+  // The refusal names the scope in its challenge.
+  const page = await w.fetch(endpoint, { method: "GET" });
+  const code = /name="code" value="([^"]+)"/.exec(await page.text())[1];
+  const url = `${endpoint}/authorize`;
+  const refused = await w.fetch(url, {
+    method: "POST",
+    headers: { ...(await sessionHeaders(w.host.reactor, "POST", url, { session: w.session, token: without })), "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  assert.equal(refused.status, 403);
+  assert.ok(refused.headers.get("www-authenticate").includes(`scope="${BROWSER_SIGN_IN_SCOPE}"`));
+  // The agent can join signed out instead.
+  await client.join({ browserSessionEndpoint: endpoint, session: w.session });
+  assert.equal((await w.shop.webSession(cookie())).accountId, undefined);
+  // With the scope, the join is signed in.
+  const withScope = await deviceToken(w, ["orders:read", BROWSER_SIGN_IN_SCOPE]);
+  await client.join({ browserSessionEndpoint: endpoint, session: w.session, token: withScope });
+  assert.equal((await w.shop.webSession(cookie())).accountId, "acct_ada");
+  // The protocol's scope is never one of the company's own.
+  assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, scopes: [...CONFIG.scopes, BROWSER_SIGN_IN_SCOPE] }), RangeError);
+});
+
+test("web.unscoped and web.disabled are published and read", async () => {
+  // web.unscoped describes poppy:browser-sign-in as full access, hints it as irreversible and
+  // needs the endpoint; web.disabled lists no endpoint and asks agents not to browse; a document
+  // breaking either rule is refused (§3.1, §6).
+  const clock = new MutableClock();
+  let { service } = manzanita({ fetch: inProcessFetch({}), clock, config: new CompanyConfig({ ...CONFIG_OPTIONS, web: true, webUnscoped: true }) });
+  let document = service.discoveryDocument();
+  assert.deepEqual(document.web, { browser_session_endpoint: "https://manzanita.example/poppy/browser-session", unscoped: true });
+  assert.equal(document.auth.scopes[BROWSER_SIGN_IN_SCOPE], "Use the website as you, with full access to your account");
+  assert.deepEqual(document.auth.scope_hints[BROWSER_SIGN_IN_SCOPE], { changes: "irreversible", personal_data: true });
+  let parsed = parseDiscoveryDocument(document);
+  assert.ok(browserSignInUnscoped(parsed));
+  assert.deepEqual(browserSignInScopes(parsed), [BROWSER_SIGN_IN_SCOPE]);
+  ({ service } = manzanita({ fetch: inProcessFetch({}), clock, config: new CompanyConfig({ ...CONFIG_OPTIONS, web: false, webDisabled: true }) }));
+  document = service.discoveryDocument();
+  assert.deepEqual(document.web, { disabled: true });
+  assert.ok(!(BROWSER_SIGN_IN_SCOPE in document.auth.scopes));
+  parsed = parseDiscoveryDocument(document);
+  assert.ok(browsingDisabled(parsed));
+  assert.deepEqual(browserSignInScopes(parsed), []);
+  for (const web of [{ disabled: true, browser_session_endpoint: "https://example.com/j" }, { unscoped: true }]) {
+    assert.throws(() => parseDiscoveryDocument({ ...document, web }));
+  }
+  assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, web: true, webDisabled: true }), RangeError);
+  assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, web: false, webUnscoped: true }), RangeError);
 });

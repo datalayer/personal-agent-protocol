@@ -228,16 +228,27 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
+        "GUIDE-co-browser-01",
+        "GUIDE-co-browser-02",
         "PAP-6-01",
         "PAP-6-03",
-        "GUIDE-co-browser-01",
+        "PAP-6-05",
+        "PAP-6-06",
         "PAP-6-11",
         "PAP-6-12",
-        "GUIDE-co-browser-02",
-        "PAP-6-05",
-        "PAP-6-06"
+        "PAP-6-16"
       ],
       "description": "The agent's own browser posts a browser assertion and gets a Secure, HttpOnly, SameSite=Lax cookie with no lifetime of its own; the website follows the Session's sign-out on the next request."
+    },
+    {
+      "id": "lifecycle.browser-sign-in-scope",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP-6-16",
+        "PAP-6-17"
+      ],
+      "description": "A signed-in join whose access token lacks poppy:browser-sign-in is insufficient_scope (403) naming it, as at an API; the same code is then authorized signed out (§6)."
     },
     {
       "id": "lifecycle.browser-join-refused",

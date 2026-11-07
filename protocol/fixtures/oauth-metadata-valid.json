@@ -12,7 +12,8 @@
   "scopes_supported": [
     "orders:read",
     "orders:write",
-    "addresses"
+    "addresses",
+    "poppy:browser-sign-in"
   ],
   "protected_resources": [
     "https://example.com",

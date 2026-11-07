@@ -229,7 +229,9 @@ The lifecycle, in Python and TypeScript:
    [refresh token](/guides/account-tokens/);
 1. **Implemented:** join the agent's own browser, one it controls and never the
    User's (§6), to the Session (the
-   [browser join form](/examples/browser-session/)), open a
+   [browser join form](/examples/browser-session/); signed in, with the
+   `poppy:browser-sign-in` scope, full access where `web.unscoped` says so, and
+   not at all where `web.disabled` asks), open a
    [conversation](/guides/conversations/), or call OpenAPI and MCP APIs (an
    access token, issued for the MCP server's own URL there);
 1. **Implemented:** ask the user about each [operation](/guides/operations/) revision

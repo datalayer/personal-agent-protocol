@@ -285,7 +285,16 @@ implements, of draft 0.3 and Operations v2:
   through `Poppy-Approval`, `_meta` or a message's `extensions.operations.approval`, checked in the
   extension's order and performed at most once, a new revision answering a failed
   check, and `revise()` for new terms;
-- with `web` (`web=True`, `web: true` in TypeScript), the website (§6). A GET
+- with `web` (`web=True`, `web: true` in TypeScript), the website (§6), and
+  with it the protocol's one scope, `poppy:browser-sign-in`, offered beside the
+  company's own (`offered_scopes`, `offeredScopes`), described by `describe()`,
+  listed in `scopes_supported` and `auth.scopes`, and required of a signed-in join
+  (`insufficient_scope` otherwise); `web_unscoped` (`webUnscoped`) says the website
+  gives the account's full access to that scope, describing it so and hinting it
+  as irreversible, and `web_disabled` (`webDisabled`), with `web` off, publishes
+  `web.disabled` to ask personal agents not to browse at all. The guides' four
+  levels of website access, none to signed in with the company's scopes, are
+  these settings. A GET
   of the browser-session endpoint answers a form with a one-time `code` (at
   least 128 random bits, at most 60 seconds), tied
   to that browser by a `__Host-poppy_join` cookie (`SameSite=Strict`,

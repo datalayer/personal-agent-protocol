@@ -6,20 +6,27 @@
 ports it.
 
 Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
-declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); what
-a message took into account (§8.4, P4-08).
+declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
+browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into
+account (§8.4, P4-08).
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from personal_agent_protocol import PROTOCOL_PROFILE, PapSession
+from personal_agent_protocol import (
+    PROTOCOL_PROFILE,
+    BrowserSessionClient,
+    BrowserSessionError,
+    PapSession,
+)
 from personal_agent_protocol.actions import discover_company
 from personal_agent_protocol.company import CompanyConfig
 from personal_agent_protocol.demo.kit import InProcessNetwork, MutableClock
@@ -31,6 +38,7 @@ from personal_agent_protocol.extensions import (
     parse_extensions_header,
 )
 from personal_agent_protocol.models import (
+    BROWSER_SIGN_IN_SCOPE,
     DEVICE_CODE_GRANT,
     MEDIATED_GRANT,
     Author,
@@ -47,6 +55,8 @@ from personal_agent_protocol.transport import session_headers, version_unsupport
 from personal_agent_protocol.ui import PapReplies
 
 from .test_company_end_to_end import World
+from .test_company_refusals import signed_in
+from .test_mcp_and_web import web_world
 
 FIXTURES = Path(__file__).parents[2] / "protocol" / "fixtures"
 
@@ -414,3 +424,104 @@ async def test_a_conversation_not_carried_over_to_other_versions_is_version_mism
         json={"id": "req_close_in_0_0_000000"},
     )
     assert again.status_code == 202
+
+
+# Browser join scope and website flags (§3.1, §4.7, §6) -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_signed_in_browser_join_needs_the_browser_sign_in_scope() -> None:
+    """A Company listing browser_session_endpoint with sign-in offers poppy:browser-sign-in
+    and refuses a signed-in join without it with insufficient_scope naming the scope; the
+    agent then joins signed out, or gets the scope and joins signed in (§4.7, §6)."""
+
+    world, browser = web_world()
+    without = await signed_in(world, ("orders:read",))
+    document = world.company.document
+    metadata = world.company.oauth_metadata
+    assert metadata is not None and BROWSER_SIGN_IN_SCOPE in (metadata.scopes_supported or [])
+    assert document.auth is not None and BROWSER_SIGN_IN_SCOPE in document.auth.scopes
+    assert document.browser_sign_in_scopes == (BROWSER_SIGN_IN_SCOPE,)
+    assert not document.browser_sign_in_unscoped and not document.browsing_disabled
+    assert document.web is not None and document.web.browser_session_endpoint is not None
+    endpoint = document.web.browser_session_endpoint
+    client = BrowserSessionClient(reactor=world.reactor, transport=world.transport)
+
+    session = world.session
+    assert session is not None
+    with pytest.raises(BrowserSessionError) as raised:
+        await client.join(browser_session_endpoint=endpoint, session=session, token=without)
+    assert raised.value.code == "insufficient_scope"
+    assert raised.value.details == {"scope": BROWSER_SIGN_IN_SCOPE}
+    # The refusal names the scope in its challenge.
+    page = await world.http.get(endpoint)
+    code = re.search(r'name="code" value="([^"]+)"', page.text)
+    assert code is not None
+    url = f"{endpoint}/authorize"
+    headers = await session_headers(world.reactor, "POST", url, session=session, token=without)
+    refused = await world.http.post(url, headers=headers, json={"code": code.group(1)})
+    assert refused.status_code == 403
+    assert f'scope="{BROWSER_SIGN_IN_SCOPE}"' in refused.headers["www-authenticate"]
+    # The agent can join signed out instead.
+    await client.join(browser_session_endpoint=endpoint, session=session, token=None)
+    cookie = browser.http.cookies.get("__Host-poppy_session")
+    assert cookie is not None
+    joined = await world.shop.web_session(cookie)
+    assert joined is not None and joined.account_id is None
+    # With the scope, the join is signed in.
+    with_scope = await signed_in(world, ("orders:read", BROWSER_SIGN_IN_SCOPE))
+    session = world.session
+    assert session is not None
+    await client.join(browser_session_endpoint=endpoint, session=session, token=with_scope)
+    cookie = browser.http.cookies.get("__Host-poppy_session")
+    assert cookie is not None
+    joined = await world.shop.web_session(cookie)
+    assert joined is not None and joined.account_id == "acct_ada"
+    # The protocol's scope is never one of the company's own.
+    with pytest.raises(ValueError):
+        replace(CONFIG, scopes=(*CONFIG.scopes, BROWSER_SIGN_IN_SCOPE))
+
+
+@pytest.mark.asyncio
+async def test_web_unscoped_and_web_disabled_are_published_and_read() -> None:
+    """`web.unscoped` describes poppy:browser-sign-in as full access, hints it as
+    irreversible and needs the endpoint; `web.disabled` lists no endpoint and asks agents not
+    to browse; a document breaking either rule is refused (§3.1, §6)."""
+
+    world = World()
+    world.shop, world.plugin = manzanita(
+        world.network, world.clock, config=replace(CONFIG, web=True, web_unscoped=True)
+    )
+    document = world.shop.discovery_document()
+    assert document["web"] == {
+        "browser_session_endpoint": "https://manzanita.example/poppy/browser-session",
+        "unscoped": True,
+    }
+    assert document["auth"]["scopes"][BROWSER_SIGN_IN_SCOPE] == (
+        "Use the website as you, with full access to your account"
+    )
+    assert document["auth"]["scope_hints"][BROWSER_SIGN_IN_SCOPE] == {
+        "changes": "irreversible",
+        "personal_data": True,
+    }
+    parsed = DiscoveryDocument.model_validate(document)
+    assert parsed.browser_sign_in_unscoped
+    assert parsed.browser_sign_in_scopes == (BROWSER_SIGN_IN_SCOPE,)
+    world.shop, world.plugin = manzanita(
+        world.network, world.clock, config=replace(CONFIG, web=False, web_disabled=True)
+    )
+    document = world.shop.discovery_document()
+    assert document["web"] == {"disabled": True}
+    assert BROWSER_SIGN_IN_SCOPE not in document["auth"]["scopes"]
+    parsed = DiscoveryDocument.model_validate(document)
+    assert parsed.browsing_disabled and parsed.browser_sign_in_scopes == ()
+    for broken in (
+        {"web": {"disabled": True, "browser_session_endpoint": "https://example.com/j"}},
+        {"web": {"unscoped": True}},
+    ):
+        with pytest.raises(ValueError):
+            DiscoveryDocument.model_validate({**document, **broken})
+    with pytest.raises(ValueError):
+        replace(CONFIG, web=True, web_disabled=True)
+    with pytest.raises(ValueError):
+        replace(CONFIG, web=False, web_unscoped=True)

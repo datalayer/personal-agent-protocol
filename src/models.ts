@@ -255,8 +255,47 @@ export interface ApiDescriptor extends UnknownFields {
   readonly description: string;
 }
 
+/**
+ * The Company's website (§3.1, §6): where the agent's browser joins a Session, whether the
+ * Company asks Personal Agents not to browse (`disabled`), and whether `poppy:browser-sign-in`
+ * gives the account's full access there (`unscoped`).
+ */
 export interface WebDescriptor extends UnknownFields {
   readonly browser_session_endpoint?: string;
+  readonly disabled: boolean;
+  readonly unscoped: boolean;
+}
+
+/**
+ * The one scope the protocol defines (§4.7, §6): a signed-in browser join needs an access token
+ * with it; the website applies the cookie's other scopes, or treats it as everything the account
+ * can do there and says so with `web.unscoped`.
+ */
+export const BROWSER_SIGN_IN_SCOPE = "poppy:browser-sign-in";
+
+/**
+ * Whether the Company asks Personal Agents not to browse its website (`web.disabled`, §6): use
+ * its Company Agent and APIs instead. Not enforceable, a preference.
+ */
+export function browsingDisabled(document: DiscoveryDocument): boolean {
+  return document.web?.disabled === true;
+}
+
+/**
+ * The scope a signed-in browser join needs (§6): `poppy:browser-sign-in`, requested only from a
+ * Company that lists `browser_session_endpoint`; nothing otherwise.
+ */
+export function browserSignInScopes(document: DiscoveryDocument): readonly string[] {
+  return document.web?.browser_session_endpoint === undefined ? [] : [BROWSER_SIGN_IN_SCOPE];
+}
+
+/**
+ * Whether `poppy:browser-sign-in` gives the account's full access on the website (`web.unscoped`,
+ * §6): treat it like a scope that allows changes that can't be undone, and ask the User when you
+ * would for one.
+ */
+export function browserSignInUnscoped(document: DiscoveryDocument): boolean {
+  return document.web?.unscoped === true;
 }
 
 export interface ExtensionDescriptor extends UnknownFields {
@@ -1039,6 +1078,8 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
   let web: WebDescriptor | undefined;
   if (source.web !== undefined) {
     const webSource = record(source.web, "web");
+    const disabled = webSource.disabled === undefined ? false : boolean(webSource.disabled, "web.disabled");
+    const unscoped = webSource.unscoped === undefined ? false : boolean(webSource.unscoped, "web.unscoped");
     web = {
       ...webSource,
       ...(webSource.browser_session_endpoint === undefined
@@ -1049,7 +1090,17 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
               "web.browser_session_endpoint",
             ),
           }),
+      disabled,
+      unscoped,
     };
+    if (disabled && web.browser_session_endpoint !== undefined) {
+      // A Company that asks agents not to browse lists no join endpoint (§6).
+      throw new ProtocolValidationError("invalid_web", "web.disabled lists no browser_session_endpoint");
+    }
+    if (unscoped && web.browser_session_endpoint === undefined) {
+      // The scope's meaning is said for a website agents can sign in to (§6).
+      throw new ProtocolValidationError("invalid_web", "web.unscoped needs a browser_session_endpoint");
+    }
   }
 
   let feedback: FeedbackDescriptor | undefined;
@@ -1073,6 +1124,10 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
       "missing_interface",
       "at least one of agent, apis, or web is required",
     );
+  }
+  if (web?.disabled && agent === undefined && !apis.length) {
+    // Asking agents not to browse means offering them the Company Agent or APIs (§6).
+    throw new ProtocolValidationError("invalid_web", "web.disabled needs agent or apis");
   }
   const parsedExtensions = extensions(source.extensions, "extensions");
 

@@ -83,6 +83,10 @@ DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 #: The sign-in extension, listed in `extensions` (Mediated Sign-In 2), and its grant type.
 MEDIATED_EXTENSION = "mediated-sign-in"
 MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in"
+#: The one scope the protocol defines (§4.7, §6): a signed-in browser join needs an access
+#: token with it; the website applies the cookie's other scopes, or treats it as everything
+#: the account can do there and says so with `web.unscoped`.
+BROWSER_SIGN_IN_SCOPE = "poppy:browser-sign-in"
 #: The sign-in types, in the order a Personal Agent prefers them (§4): Direct Sign-In is
 #: the preferred type, Device Sign-In stays, and Mediated Sign-In is transitional.
 SIGN_IN_TYPES = ("direct", "device", "mediated")
@@ -355,12 +359,28 @@ class ApiDescriptor(ProtocolModel):
 
 
 class WebDescriptor(ProtocolModel):
+    """The Company's website (§3.1, §6): where the agent's browser joins a Session, whether
+    the Company asks Personal Agents not to browse (`disabled`), and whether
+    `poppy:browser-sign-in` gives the account's full access there (`unscoped`)."""
+
     browser_session_endpoint: str | None = None
+    disabled: bool = False
+    unscoped: bool = False
 
     @field_validator("browser_session_endpoint")
     @classmethod
     def validate_endpoint(cls, value: str | None) -> str | None:
         return _https_url(value, "browser session endpoint") if value is not None else None
+
+    @model_validator(mode="after")
+    def validate_flags(self) -> WebDescriptor:
+        if self.disabled and self.browser_session_endpoint is not None:
+            # A Company that asks agents not to browse lists no join endpoint (§6).
+            raise ValueError("web.disabled lists no browser_session_endpoint")
+        if self.unscoped and self.browser_session_endpoint is None:
+            # The scope's meaning is said for a website agents can sign in to (§6).
+            raise ValueError("web.unscoped needs a browser_session_endpoint")
+        return self
 
 
 class FeedbackDescriptor(ProtocolModel):
@@ -454,6 +474,9 @@ class DiscoveryDocument(ProtocolModel):
         if self.agent is None and not self.apis and self.web is None:
             # At least one of the three, not exactly one (§3.1).
             raise ValueError("at least one of agent, apis, or web is required")
+        if self.web is not None and self.web.disabled and self.agent is None and not self.apis:
+            # Asking agents not to browse means offering them the Company Agent or APIs (§6).
+            raise ValueError("web.disabled needs agent or apis")
         if self.chosen_version is None:
             # A document is used only at a version compatible with one this SDK
             # implements, its own or one it links to (§3.1, §3.4).
@@ -467,6 +490,30 @@ class DiscoveryDocument(ProtocolModel):
         When it is not `protocol_version`, the version's own document is fetched and used."""
 
         return choose_protocol_version(self.protocol_version, self.supported_versions)
+
+    @property
+    def browsing_disabled(self) -> bool:
+        """Whether the Company asks Personal Agents not to browse its website (`web.disabled`,
+        §6): use its Company Agent and APIs instead. Not enforceable, a preference."""
+
+        return self.web is not None and self.web.disabled
+
+    @property
+    def browser_sign_in_scopes(self) -> tuple[str, ...]:
+        """The scope a signed-in browser join needs (§6): `poppy:browser-sign-in`, requested
+        only from a Company that lists `browser_session_endpoint`; nothing otherwise."""
+
+        if self.web is None or self.web.browser_session_endpoint is None:
+            return ()
+        return (BROWSER_SIGN_IN_SCOPE,)
+
+    @property
+    def browser_sign_in_unscoped(self) -> bool:
+        """Whether `poppy:browser-sign-in` gives the account's full access on the website
+        (`web.unscoped`, §6): treat it like a scope that allows changes that can't be undone,
+        and ask the User when you would for one."""
+
+        return self.web is not None and self.web.unscoped
 
     def usable_skills(self, base_url: str) -> list[SkillEntry]:
         """The skills of `skill_index` this SDK can use (§9.4), each `url` resolved.

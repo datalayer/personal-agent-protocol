@@ -26,6 +26,8 @@
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { BrowserSessionError, TransportError } from "./errors.js";
+import { BROWSER_SIGN_IN_SCOPE } from "./models.js";
+import { challengeParameters } from "./refusals.js";
 import { BrowserJoins, Clocks, firstContribution } from "./reactor.js";
 import type { AccessToken, PapSession } from "./sessions.js";
 import type { SessionFetchClient } from "./transport.js";
@@ -108,6 +110,17 @@ export class BrowserSessionClient {
       throw new BrowserSessionError(cause.code, "Authorizing the join code failed", { cause });
     }
     await response.body?.cancel().catch(() => undefined);
+    if (response.status === 403 && options.token !== undefined) {
+      // Signing in needs `poppy:browser-sign-in` (§6): the agent authorizes the same code again
+      // without a token, or gets the scope and starts again at step 1.
+      const challenge = challengeParameters(response.headers.get("www-authenticate"));
+      if (challenge.error === "insufficient_scope") {
+        throw new BrowserSessionError("insufficient_scope", "A signed-in join needs the poppy:browser-sign-in scope", {
+          statusCode: 403,
+          details: { scope: typeof challenge.scope === "string" && challenge.scope ? challenge.scope : BROWSER_SIGN_IN_SCOPE },
+        });
+      }
+    }
     if (response.status !== 204) {
       throw new BrowserSessionError(
         "join_not_authorized",

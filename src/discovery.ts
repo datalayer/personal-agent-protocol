@@ -201,7 +201,11 @@ export async function fetchSkill(skill: SkillEntry, options: DiscoveryOptions = 
     accept: "*/*",
     maxBytes: read.maxSkillBytes,
   });
-  const hashed = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", bytes));
+  // A copy backed by its own ArrayBuffer: the digest input is a BufferSource, never a view
+  // of a shared buffer.
+  const content = new Uint8Array(new ArrayBuffer(bytes.byteLength));
+  content.set(bytes);
+  const hashed = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", content));
   const digest = `sha256:${Array.from(hashed, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
   if (digest !== skill.digest) {
     throw new DiscoveryError("skill_digest_mismatch", "The skill's content is not what its digest names");

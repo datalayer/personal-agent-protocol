@@ -115,7 +115,7 @@ async def session_jwt(
         headers={
             "typ": SESSION_JWT_TYPE,
             "kid": delegated.thumbprint,
-            "pap_dlg": delegated.delegation.get_secret_value(),
+            "poppy_dlg": delegated.delegation.get_secret_value(),
             **(headers or {}),
         },
     )
@@ -1066,7 +1066,7 @@ async def test_a_copied_access_token_is_worth_nothing_without_the_agents_session
         "no jti": await session_jwt(world, session, "GET", url, token=token, without=("jti",)),
         "another key": await session_jwt(world, session, "GET", url, token=token, key=someone),
         "no delegation": await session_jwt(
-            world, session, "GET", url, token=token, headers={"pap_dlg": None}
+            world, session, "GET", url, token=token, headers={"poppy_dlg": None}
         ),
         "signed by the agent's own key": await session_jwt(
             world,
@@ -1074,7 +1074,7 @@ async def test_a_copied_access_token_is_worth_nothing_without_the_agents_session
             "GET",
             url,
             token=token,
-            headers={"pap_dlg": None},
+            headers={"poppy_dlg": None},
             key=world.atlas.private_key,
         ),
     }

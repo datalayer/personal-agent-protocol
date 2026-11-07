@@ -14,10 +14,10 @@ Both SDKs implement the asymmetric cryptographic operations of draft 0.3:
 
 - `JoseSigner` signs client assertions and delegations with a key from
   `jwks_uri`, with ES256 or PS384. Its `purpose` sets the header's `typ`: `JWT`
-  for a client assertion, `pap-delegation+jwt` for a delegation.
+  for a client assertion, `poppy-delegation+jwt` for a delegation.
 - `DelegatedSessionSigner` (`pap.sessionSigner`) keeps one delegated P-256 key
   per tenant, issuer and User ID, and signs a fresh Session JWT with it for each
-  request. The JWT is ES256 and carries its delegation in `pap_dlg`.
+  request. The JWT is ES256 and carries its delegation in `poppy_dlg`.
 - `BlindJoseSigner` is a `pap.signer` that signs client assertions and
   delegations blindly (RFC 9474), so each is an ordinary PS384 signature.
 - `JoseDpopProver` is a `pap.dpopProver` that signs each request's DPoP proof with

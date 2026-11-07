@@ -891,9 +891,9 @@ async function header(w, session, url, { method = "GET", token, claims = {}, pro
   const signer = firstContribution(w.host.reactor, SessionSigners, "signer");
   const genuine = (await sessionHeaders(w.host.reactor, method, url, { session, ...(token ? { token } : {}) }))["Poppy-Session"];
   const held = key ?? (await signer.keyFor({ tenantId: session.tenantId, issuer: session.issuer, clientId: session.clientId, sub: session.sub }, w.clock.now())).privateKey;
-  const { pap_dlg: delegation, kid, typ, alg } = decodeProtectedHeader(genuine);
+  const { poppy_dlg: delegation, kid, typ, alg } = decodeProtectedHeader(genuine);
   return new SignJWT({ ...decodeJwt(genuine), jti: crypto.randomUUID().replaceAll("-", ""), ...claims })
-    .setProtectedHeader({ alg, typ, kid, pap_dlg: delegation, ...protect })
+    .setProtectedHeader({ alg, typ, kid, poppy_dlg: delegation, ...protect })
     .sign(held);
 }
 
@@ -1007,7 +1007,7 @@ async function delegated(w, session, url, makeDelegation, { iat } = {}) {
     .setProtectedHeader({
       alg: "ES256", typ: "poppy-session+jwt",
       kid: await calculateJwkThumbprint(jwk, "sha256"),
-      pap_dlg: await makeDelegation(jwk),
+      poppy_dlg: await makeDelegation(jwk),
     })
     .sign(privateKey);
 }
@@ -1067,7 +1067,7 @@ test("a JWT signed after its delegation's exp is refused; verified delegations a
   const sign = (iat) =>
     calculateJwkThumbprint(jwk, "sha256").then((kid) =>
       new SignJWT({ iss: w.identity.clientId, aud: w.metadata.issuer, sid: session.sid, sub: session.sub, htm: "GET", htu: ORDERS, iat, jti: crypto.randomUUID().replaceAll("-", "") })
-        .setProtectedHeader({ alg: "ES256", typ: "poppy-session+jwt", kid, pap_dlg: compact })
+        .setProtectedHeader({ alg: "ES256", typ: "poppy-session+jwt", kid, poppy_dlg: compact })
         .sign(privateKey));
   const answer = async (value) => (await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": value } })).status;
   assert.equal(await answer(await sign(now)), 401);
@@ -1083,7 +1083,7 @@ test("PS384 client assertions and delegations", async () => {
   const session = await w.start();
   const { result } = await directSignIn(w);
   const headers = await sessionHeaders(w.host.reactor, "GET", ORDERS, { session, token: result.token });
-  assert.equal(decodeProtectedHeader(decodeProtectedHeader(headers["Poppy-Session"]).pap_dlg).alg, "PS384");
+  assert.equal(decodeProtectedHeader(decodeProtectedHeader(headers["Poppy-Session"]).poppy_dlg).alg, "PS384");
   assert.equal((await w.api.call("GET", ORDERS, { session, token: result.token })).status, 200);
 });
 

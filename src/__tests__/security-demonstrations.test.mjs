@@ -520,7 +520,7 @@ async function delegatedJwt(w, session, change = {}) {
       alg: SESSION_JWT_ALGORITHM,
       typ: SESSION_JWT_TYPE,
       kid: await calculateJwkThumbprint(publicKey, "sha256"),
-      pap_dlg: delegation.reveal(),
+      poppy_dlg: delegation.reveal(),
     })
     .sign(delegated.privateKey);
 }
@@ -588,7 +588,7 @@ test("a delegated key is never shared across User IDs, and one that is opens no 
   };
   const [adas, strangers] = [await headersOf(ada), await headersOf(stranger)];
   assert.notEqual(adas.kid, strangers.kid);
-  assert.notEqual(adas.pap_dlg, strangers.pap_dlg);
+  assert.notEqual(adas.poppy_dlg, strangers.poppy_dlg);
   assert.equal((await headersOf(ada)).kid, adas.kid); // one User ID keeps its key
   assert.equal(w.host.delegatedKeys.size, 2);
 
@@ -597,7 +597,7 @@ test("a delegated key is never shared across User IDs, and one that is opens no 
   const key = await w.host.delegatedKeys.current({ tenantId: TENANT, issuer: ada.issuer, sub: ada.sub });
   const stolen = async (session) =>
     new SignJWT(await sessionJwtClaims(jwtRequest(session), { issuedAt: w.clock.now() }))
-      .setProtectedHeader({ alg: SESSION_JWT_ALGORITHM, typ: SESSION_JWT_TYPE, kid: key.thumbprint, pap_dlg: key.delegation.reveal() })
+      .setProtectedHeader({ alg: SESSION_JWT_ALGORITHM, typ: SESSION_JWT_TYPE, kid: key.thumbprint, poppy_dlg: key.delegation.reveal() })
       .sign(key.privateKey);
   assert.equal((await read(w, await stolen(stranger))).status, 401);
   // The access token still works only where it was: it is what opens the account.

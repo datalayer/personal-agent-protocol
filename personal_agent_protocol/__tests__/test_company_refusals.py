@@ -95,7 +95,7 @@ async def test_a_session_jwt_signed_with_another_key_is_refused() -> None:
         claims,
         ec.generate_private_key(ec.SECP256R1()),
         algorithm="ES256",
-        headers={name: header[name] for name in ("typ", "kid", "pap_dlg")},
+        headers={name: header[name] for name in ("typ", "kid", "poppy_dlg")},
     )
     refused = await world.http.post(endpoint, json={}, headers={"Poppy-Session": forged})
     assert (refused.status_code, refused.json()) == (400, {"error": "invalid_session"})

@@ -6,7 +6,7 @@
 
 - `JoseSigner` is the `pap.signer` default: a key from the agent's `jwks_uri`
   signs client assertions (`purpose="client_assertion"`, `typ: JWT`) and
-  delegations (`purpose="delegation"`, `typ: pap-delegation+jwt`), with
+  delegations (`purpose="delegation"`, `typ: poppy-delegation+jwt`), with
   `ES256` or `PS384`.
 - `DelegatedSessionSigner` is the `pap.sessionSigner` default: one delegated
   P-256 key per User ID (tenant, issuer, `sub`), vouched for by a delegation
@@ -50,7 +50,7 @@ JOSE_ALGORITHMS: tuple[JoseAlgorithm, ...] = ("ES256", "PS384")
 SESSION_JWT_TYPE = "poppy-session+jwt"
 SESSION_JWT_ALGORITHM = "ES256"
 #: A delegation's `typ` (§5.2).
-DELEGATION_TYPE = "pap-delegation+jwt"
+DELEGATION_TYPE = "poppy-delegation+jwt"
 #: A delegation expires at most this long after it is issued (§5.2).
 DELEGATION_MAX_LIFETIME = timedelta(hours=24)
 #: A DPoP proof's `typ` and `alg` (§4.5, RFC 9449 §4.2).
@@ -116,7 +116,7 @@ class JoseSigner:
     """Sign client assertions and delegations with a key from the agent's `jwks_uri`.
 
     `purpose` sets the header's `typ`: `client_assertion` signs a `JWT`, and
-    `delegation` a `pap-delegation+jwt` (§4.1, §5.2). `ES256` or `PS384`.
+    `delegation` a `poppy-delegation+jwt` (§4.1, §5.2). `ES256` or `PS384`.
     """
 
     def __init__(
@@ -166,7 +166,7 @@ class DelegatedKey:
     """One delegated key, its delegation, and when the delegation expires (§5.2).
 
     `thumbprint` is the public key's RFC 7638 thumbprint, the `kid` of every
-    Session JWT it signs; `delegation` is the compact JWT carried in `pap_dlg`.
+    Session JWT it signs; `delegation` is the compact JWT carried in `poppy_dlg`.
     """
 
     private_key: EllipticCurvePrivateKey
@@ -323,7 +323,7 @@ class DelegatedSessionSigner:
                 headers={
                     "typ": SESSION_JWT_TYPE,
                     "kid": key.thumbprint,
-                    "pap_dlg": key.delegation.get_secret_value(),
+                    "poppy_dlg": key.delegation.get_secret_value(),
                 },
             )
         except (TypeError, ValueError, jwt.PyJWTError) as exc:

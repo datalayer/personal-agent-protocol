@@ -167,7 +167,7 @@ async def test_what_the_sdk_signs_is_valid_by_the_upstream_schemas() -> None:
     claims = jwt.decode(value, options={"verify_signature": False})
     assert errors("session-jwt", {"header": header, "payload": claims}) == []
     delegation = {
-        "header": jwt.get_unverified_header(header["pap_dlg"]),
-        "payload": jwt.decode(header["pap_dlg"], options={"verify_signature": False}),
+        "header": jwt.get_unverified_header(header["poppy_dlg"]),
+        "payload": jwt.decode(header["poppy_dlg"], options={"verify_signature": False}),
     }
     assert errors("delegation", delegation) == []

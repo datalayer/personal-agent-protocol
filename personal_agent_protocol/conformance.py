@@ -695,11 +695,11 @@ class ConformanceContext:
         header: dict[str, Any] = {
             "typ": mutation.get("typ", SESSION_JWT_TYPE),
             "kid": mutation.get("kid", jwk_thumbprint(public)),
-            "pap_dlg": delegation,
+            "poppy_dlg": delegation,
         }
         if mutation.get("no_delegation"):
             # Signed directly with a key from `jwks_uri`, which never signs a Session JWT.
-            del header["pap_dlg"]
+            del header["poppy_dlg"]
             header["kid"] = identity.kid
             return jwt.encode(claims, identity.private_key, algorithm="ES256", headers=header)
         if mutation.get("alg") == "none":

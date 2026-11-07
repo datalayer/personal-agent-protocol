@@ -81,7 +81,7 @@
       "default": null,
       "resolution": "single",
       "tenant": null,
-      "note": "A key from the agent's jwks_uri. sign(claims, purpose): client_assertion signs a JWT (typ JWT), delegation a pap-delegation+jwt (§4.1, §5.2), ES256 or PS384. A signer that signs blindly signs both (§10.7)."
+      "note": "A key from the agent's jwks_uri. sign(claims, purpose): client_assertion signs a JWT (typ JWT), delegation a poppy-delegation+jwt (§4.1, §5.2), ES256 or PS384. A signer that signs blindly signs both (§10.7)."
     },
     {
       "id": "pap.tokenStore",

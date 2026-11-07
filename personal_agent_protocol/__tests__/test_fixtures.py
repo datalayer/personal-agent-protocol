@@ -316,7 +316,7 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             header = jwt.get_unverified_header((await signer.sign(request)).get_secret_value())
             keys.add(header["kid"])
             delegations.add(
-                jwt.decode(header["pap_dlg"], options={"verify_signature": False})["jti"]
+                jwt.decode(header["poppy_dlg"], options={"verify_signature": False})["jti"]
             )
         assert len(keys) == expect["keys"]
         assert len(delegations) == expect["delegations"]

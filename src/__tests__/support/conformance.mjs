@@ -536,11 +536,11 @@ export class Context {
     const header = {
       typ: mutation.typ ?? SESSION_JWT_TYPE,
       kid: mutation.kid ?? (await calculateJwkThumbprint(publicKey, "sha256")),
-      pap_dlg: delegation,
+      poppy_dlg: delegation,
     };
     if (mutation.no_delegation) {
       // Signed directly with a key from `jwks_uri`, which never signs a Session JWT.
-      const { pap_dlg: _gone, ...direct } = header;
+      const { poppy_dlg: _gone, ...direct } = header;
       return new SignJWT(claims).setProtectedHeader({ ...direct, kid: identity.kid, alg: "ES256" }).sign(identity.privateKey);
     }
     if (mutation.alg === "none") return `${segment({ ...header, alg: "none" })}.${segment(claims)}.`;

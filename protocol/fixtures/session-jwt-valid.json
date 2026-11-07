@@ -3,7 +3,7 @@
     "typ": "poppy-session+jwt",
     "alg": "ES256",
     "kid": "9E421cSqd5UfAq5slDKYxXQd8Zmm8B3CIsT9cDxRHx8",
-    "pap_dlg": "eyJhbGciOiJFUzI1NiIsInR5cCI6InBhcC1kZWxlZ2F0aW9uK2p3dCJ9.e30.c2ln"
+    "poppy_dlg": "eyJhbGciOiJFUzI1NiIsInR5cCI6InBvcHB5LWRlbGVnYXRpb24rand0In0.e30.c2ln"
   },
   "payload": {
     "iss": "https://agent.example/agent.json",

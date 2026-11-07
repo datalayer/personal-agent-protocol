@@ -285,7 +285,7 @@ export async function verifyDelegation(
   if (typeof algorithm !== "string" || !ALGORITHMS.has(algorithm) || typeof kid !== "string" || !kid) {
     throw refused("The delegation's algorithm or key ID is not allowed");
   }
-  if (header.typ !== DELEGATION_TYPE) throw refused("A delegation's typ is pap-delegation+jwt");
+  if (header.typ !== DELEGATION_TYPE) throw refused("A delegation's typ is poppy-delegation+jwt");
   let keys: JsonWebKeySet;
   try {
     [, keys] = await resolve(clientId, kid);
@@ -382,7 +382,7 @@ export async function verifySessionJwt(
   if (header.typ !== SESSION_JWT_TYPE || header.alg !== SESSION_JWT_ALGORITHM) {
     throw refused("A Session JWT's typ is poppy-session+jwt and its alg ES256");
   }
-  const delegationCompact = header.pap_dlg;
+  const delegationCompact = header.poppy_dlg;
   if (typeof delegationCompact !== "string" || !delegationCompact) {
     // Signed with a key from jwks_uri itself, or by anyone: never accepted (§5.2).
     throw refused("A Session JWT carries its delegation");

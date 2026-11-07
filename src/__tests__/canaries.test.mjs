@@ -100,7 +100,7 @@ function cookies(header) {
 /** The delegation in a Session JWT's header; a probe's malformed one holds none. */
 function delegationOf(sessionJwt) {
   try {
-    return decodeProtectedHeader(sessionJwt).pap_dlg;
+    return decodeProtectedHeader(sessionJwt).poppy_dlg;
   } catch {
     return undefined;
   }

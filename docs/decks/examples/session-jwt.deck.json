@@ -23,7 +23,7 @@
       "title": "Who takes part",
       "diagram": "flowchart LR\n  M[\"Model\"]\n  subgraph HOST[\"Your host, trusted\"]\n    direction TB\n    H[\"PAP host\"] -- \"sign this request\" --> K[\"Reactor Session signer<br/>holds the delegated keys\"]\n  end\n  subgraph CO[\"Company\"]\n    direction TB\n    A[\"Company API<br/>verifies the Session header\"] -- \"record jti\" --> X[(\"Replay cache\")]\n  end\n  HOST -- \"request, Poppy-Session, Bearer token\" --> CO\n  HOST -. \"policy booleans only\" .-> M",
       "caption": "The key never leaves the Session signer; the model gets yes-or-no evidence, nothing more.",
-      "notes": "The host asks for a Session JWT covering one request. The Reactor Session signer signs it with a delegated key, without ever giving the key out, and puts the delegation that vouches for the key in the JWT's header as pap_dlg. The company verifies the delegation against the agent's jwks_uri, then the JWT against the delegated key. A company may also reject a reused jti, as the reference companies do. Off to the side, the model: all it ever receives from this exchange is yes-or-no evidence about the policy."
+      "notes": "The host asks for a Session JWT covering one request. The Reactor Session signer signs it with a delegated key, without ever giving the key out, and puts the delegation that vouches for the key in the JWT's header as poppy_dlg. The company verifies the delegation against the agent's jwks_uri, then the JWT against the delegated key. A company may also reject a reused jti, as the reference companies do. Off to the side, the model: all it ever receives from this exchange is yes-or-no evidence about the policy."
     },
     {
       "type": "comparison",

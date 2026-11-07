@@ -614,7 +614,7 @@
         "PAP-5.2-09",
         "PAP-5.2-14"
       ],
-      "description": "A delegation's typ is pap-delegation+jwt (§5.2).",
+      "description": "A delegation's typ is poppy-delegation+jwt (§5.2).",
       "target": "session_jwt",
       "mutation": {
         "delegation_typ": "JWT"

@@ -242,7 +242,7 @@ const CHECKS = {
       });
       const header = decodeProtectedHeader(compact.reveal());
       keys.add(header.kid);
-      delegations.add(decodeJwt(header.pap_dlg).jti);
+      delegations.add(decodeJwt(header.poppy_dlg).jti);
     }
     assert.equal(keys.size, expect.keys);
     assert.equal(delegations.size, expect.delegations);

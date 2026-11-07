@@ -1,7 +1,7 @@
 {
   "header": {
     "alg": "ES256",
-    "typ": "pap-delegation+jwt",
+    "typ": "poppy-delegation+jwt",
     "kid": "qijAJ9BUDC4h-e0ACwvoePoD599MZschC3kfU5kvQPE"
   },
   "payload": {

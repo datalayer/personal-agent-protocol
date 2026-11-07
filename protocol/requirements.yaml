@@ -1126,7 +1126,7 @@ requirements:
   section: '5.2'
   level: MUST
   role: both
-  text: typ MUST be pap-delegation+jwt, so a delegation can't be used as a Session JWT.
+  text: typ MUST be poppy-delegation+jwt, so a delegation can't be used as a Session JWT.
   status: implemented
   implementation:
   - personal_agent_protocol.company.verify:verify_delegation

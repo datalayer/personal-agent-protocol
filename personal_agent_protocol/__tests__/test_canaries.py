@@ -143,7 +143,7 @@ class Harvest:
         if session_jwt is not None:
             # A probe sends the header twice, which httpx joins: each JWT is read.
             for one in session_jwt.split(", "):
-                self.secret("delegation", jwt.get_unverified_header(one).get("pap_dlg"))
+                self.secret("delegation", jwt.get_unverified_header(one).get("poppy_dlg"))
         for name, value in _cookies(request.headers.get("cookie", "")):
             self.secret(f"cookie {name}", value)
         body = request.content

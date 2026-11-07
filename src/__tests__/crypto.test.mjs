@@ -67,8 +67,8 @@ for (const algorithm of ["ES256", "PS384"]) {
     const { privateKey, publicKey } = await keys();
     const signer = new JoseSigner({ privateKey, algorithm });
     const delegation = (await signer.sign({ iss: "agent" }, { purpose: "delegation" })).reveal();
-    assert.equal(decodeProtectedHeader(delegation).typ, "pap-delegation+jwt");
-    await jwtVerify(delegation, publicKey, { algorithms: [algorithm], typ: "pap-delegation+jwt" });
+    assert.equal(decodeProtectedHeader(delegation).typ, "poppy-delegation+jwt");
+    await jwtVerify(delegation, publicKey, { algorithms: [algorithm], typ: "poppy-delegation+jwt" });
     await assert.rejects(
       signer.sign({ sub: "user" }, { purpose: "session_assertion" }),
       (error) => error instanceof ProofError && error.code === "unknown_purpose",
@@ -130,8 +130,8 @@ const request = (sub = "usr_1", issuer = ISSUER, changes = {}) => ({
 async function verified(compact) {
   const header = decodeProtectedHeader(compact);
   const agentKey = await importJWK(identity.jwks.keys[0], "ES256");
-  const delegation = await jwtVerify(header.pap_dlg, agentKey, {
-    typ: "pap-delegation+jwt",
+  const delegation = await jwtVerify(header.poppy_dlg, agentKey, {
+    typ: "poppy-delegation+jwt",
     currentDate: new Date(decodeJwt(compact).iat * 1000),
   });
   const key = await importJWK(delegation.payload.cnf.jwk, "ES256");
@@ -148,7 +148,7 @@ test("a Session JWT has the spec's header and claims", async () => {
   const { signer } = fixture();
   const compact = (await signer.sign(request("usr_1", ISSUER, { agentId: "agt_1" }))).reveal();
   const { header, claims } = await verified(compact);
-  assert.deepEqual(Object.keys(header).sort(), ["alg", "kid", "pap_dlg", "typ"]);
+  assert.deepEqual(Object.keys(header).sort(), ["alg", "kid", "poppy_dlg", "typ"]);
   assert.deepEqual([header.typ, header.alg], ["poppy-session+jwt", "ES256"]);
   assert.deepEqual(
     Object.keys(claims).sort(),
@@ -197,7 +197,7 @@ test("a delegation names no User and no Company", async () => {
   const key = await keys.current({ tenantId: "t", issuer: ISSUER, sub: "usr_1" });
   const compact = key.delegation.reveal();
   const header = decodeProtectedHeader(compact);
-  assert.equal(header.typ, "pap-delegation+jwt");
+  assert.equal(header.typ, "poppy-delegation+jwt");
   assert.equal(header.kid, "key-1");
   const claims = decodeJwt(compact);
   assert.deepEqual(Object.keys(claims).sort(), ["cnf", "exp", "iat", "iss", "jti"]);
@@ -239,7 +239,7 @@ test("each User ID has its own key and delegation", async () => {
   const seen = [];
   for (const [sub, issuer] of [["usr_1", ISSUER], ["usr_2", ISSUER], ["usr_1", "https://other.example"]]) {
     const header = decodeProtectedHeader((await signer.sign(request(sub, issuer))).reveal());
-    seen.push([header.kid, decodeJwt(header.pap_dlg).jti]);
+    seen.push([header.kid, decodeJwt(header.poppy_dlg).jti]);
   }
   assert.equal(new Set(seen.map(([kid]) => kid)).size, 3);
   assert.equal(new Set(seen.map(([, jti]) => jti)).size, 3);
@@ -259,14 +259,14 @@ test("a delegation is rotated before it expires and never signed past", async ()
   const compact = (await signer.sign(request())).reveal();
   const rotated = decodeProtectedHeader(compact);
   assert.notEqual(rotated.kid, first.kid);
-  const delegation = decodeJwt(rotated.pap_dlg);
+  const delegation = decodeJwt(rotated.poppy_dlg);
   assert.ok(decodeJwt(compact).iat < delegation.exp);
   // Long past the expiry: a new key again, never the old delegation.
   clock.advance(7200);
   const late = (await signer.sign(request())).reveal();
   const lateHeader = decodeProtectedHeader(late);
   assert.notEqual(lateHeader.kid, rotated.kid);
-  assert.ok(decodeJwt(late).iat < decodeJwt(lateHeader.pap_dlg).exp);
+  assert.ok(decodeJwt(late).iat < decodeJwt(lateHeader.poppy_dlg).exp);
   await verified(late);
 });
 
@@ -329,8 +329,8 @@ test("a delegation is signed blindly too, with its own type", async () => {
   assert.equal(key.seen.length, 1);
   const stored = await custody.current({ tenantId: "t", issuer: ISSUER, sub: "usr_1" });
   const compact = stored.delegation.reveal();
-  assert.deepEqual(decodeProtectedHeader(compact), { alg: "PS384", typ: "pap-delegation+jwt", kid: "blind-1" });
-  await jwtVerify(compact, blind.publicKey, { algorithms: ["PS384"], typ: "pap-delegation+jwt" });
+  assert.deepEqual(decodeProtectedHeader(compact), { alg: "PS384", typ: "poppy-delegation+jwt", kid: "blind-1" });
+  await jwtVerify(compact, blind.publicKey, { algorithms: ["PS384"], typ: "poppy-delegation+jwt" });
   const assertion = (await signer.sign(assertionClaims(), { purpose: "client_assertion" })).reveal();
   assert.equal(decodeProtectedHeader(assertion).typ, "JWT");
   assert.equal(key.seen.length, 2);

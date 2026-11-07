@@ -92,7 +92,7 @@ class Fixture:
             headers={
                 "typ": "poppy-session+jwt",
                 "kid": jwk_thumbprint(public),
-                "pap_dlg": delegation,
+                "poppy_dlg": delegation,
             },
         )
 
@@ -116,7 +116,7 @@ async def test_a_session_jwt_has_the_specs_header_and_claims() -> None:
     world = Fixture()
     compact = (await world.signer.sign(request(agent_id="agt_1"))).get_secret_value()
     header = jwt.get_unverified_header(compact)
-    assert set(header) == {"typ", "alg", "kid", "pap_dlg"}
+    assert set(header) == {"typ", "alg", "kid", "poppy_dlg"}
     assert (header["typ"], header["alg"]) == ("poppy-session+jwt", "ES256")
     claims = jwt.decode(compact, options={"verify_signature": False})
     assert set(claims) == {"iss", "aud", "sid", "sub", "agent_id", "htm", "htu", "iat", "jti"}
@@ -138,7 +138,7 @@ async def test_a_delegation_names_no_user_and_no_company() -> None:
     assert key is not None
     compact = key.delegation.get_secret_value()
     header = jwt.get_unverified_header(compact)
-    assert header["typ"] == "pap-delegation+jwt" and header["kid"] == IDENTITY.kid
+    assert header["typ"] == "poppy-delegation+jwt" and header["kid"] == IDENTITY.kid
     claims = jwt.decode(compact, options={"verify_signature": False})
     assert set(claims) == {"iss", "cnf", "iat", "exp", "jti"}
     assert claims["iss"] == CLIENT_ID and set(claims["cnf"]) == {"jwk"}
@@ -156,7 +156,7 @@ async def test_each_user_id_has_its_own_key_and_delegation() -> None:
     for sub, issuer in (("usr_1", ISSUER), ("usr_2", ISSUER), ("usr_1", "https://other.example")):
         compact = (await world.signer.sign(request(sub, issuer))).get_secret_value()
         header = jwt.get_unverified_header(compact)
-        delegation = jwt.decode(header["pap_dlg"], options={"verify_signature": False})
+        delegation = jwt.decode(header["poppy_dlg"], options={"verify_signature": False})
         seen.append((header["kid"], delegation["jti"]))
     assert len({kid for kid, _ in seen}) == 3
     assert len({jti for _, jti in seen}) == 3
@@ -177,7 +177,7 @@ async def test_a_delegation_is_rotated_before_it_expires_and_never_signed_past()
     compact = (await world.signer.sign(request())).get_secret_value()
     rotated = jwt.get_unverified_header(compact)
     assert rotated["kid"] != first["kid"]
-    delegation = jwt.decode(rotated["pap_dlg"], options={"verify_signature": False})
+    delegation = jwt.decode(rotated["poppy_dlg"], options={"verify_signature": False})
     claims = jwt.decode(compact, options={"verify_signature": False})
     assert claims["iat"] < delegation["exp"]
     await world.verify(compact)

@@ -256,7 +256,7 @@ async def verify_delegation(  # noqa: C901 - the four steps of §5.2, in order
     if algorithm not in _ALGORITHMS or not isinstance(kid, str) or not kid:
         raise _refused("The delegation's algorithm or key ID is not allowed")
     if header.get("typ") != DELEGATION_TYPE:
-        raise _refused("A delegation's typ is pap-delegation+jwt")
+        raise _refused("A delegation's typ is poppy-delegation+jwt")
     try:
         _, keys = await resolve(client_id, kid)
     except Exception as exc:
@@ -349,7 +349,7 @@ async def verify_session_jwt(  # noqa: C901 - one check per claim, in the spec's
         raise _refused("The Session header is not a JWT") from exc
     if header.get("typ") != SESSION_JWT_TYPE or header.get("alg") != SESSION_JWT_ALGORITHM:
         raise _refused("A Session JWT's typ is poppy-session+jwt and its alg ES256")
-    delegation_compact = header.get("pap_dlg")
+    delegation_compact = header.get("poppy_dlg")
     kid = header.get("kid")
     if not isinstance(delegation_compact, str) or not delegation_compact:
         # Signed with a key from jwks_uri itself, or by anyone: never accepted (§5.2).

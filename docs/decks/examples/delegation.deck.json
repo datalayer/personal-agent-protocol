@@ -32,10 +32,10 @@
         { "label": "1", "title": "Resolve", "detail": "The pairwise User ID for this company" },
         { "label": "2", "title": "Make a key", "detail": "One delegated P-256 key for that User ID" },
         { "label": "3", "title": "Sign", "detail": "`iss`, `cnf`, `iat`, `exp`, `jti`, through the Reactor signer" },
-        { "label": "4", "title": "Carry", "detail": "In `pap_dlg`, in each Session JWT's header" },
+        { "label": "4", "title": "Carry", "detail": "In `poppy_dlg`, in each Session JWT's header" },
         { "label": "5", "title": "Verify", "detail": "The delegation, then the Session JWT", "current": true }
       ],
-      "notes": "The host resolves the User ID and makes a delegated key for it; a key is never shared by two User IDs. The Reactor signer signs a delegation for the key, with the purpose delegation. Each Session JWT carries it in its pap_dlg header. Before the delegation expires, the signer rotates: a new key and a new delegation. It never signs after expiry."
+      "notes": "The host resolves the User ID and makes a delegated key for it; a key is never shared by two User IDs. The Reactor signer signs a delegation for the key, with the purpose delegation. Each Session JWT carries it in its poppy_dlg header. Before the delegation expires, the signer rotates: a new key and a new delegation. It never signs after expiry."
     },
     {
       "type": "comparison",
@@ -54,7 +54,7 @@
       "title": "How the company checks it",
       "diagram": "flowchart LR\n  S[\"Signed by the jwks key<br/>its kid names?\"] -- \"yes\" --> U[\"typ, iss,<br/>at most 24 hours?\"]\n  U -- \"yes\" --> T[\"Unexpired?\"]\n  T -- \"yes\" --> J[\"Session JWT signed<br/>by cnf.jwk?\"]\n  J -- \"yes\" --> OK[\"Check the Session JWT's claims\"]\n  S -- \"no\" --> R[\"400 invalid_session\"]\n  U -- \"no\" --> R\n  T -- \"no\" --> R\n  J -- \"no\" --> R",
       "caption": "Every check must pass; one failure is invalid_session.",
-      "notes": "Read it left to right, as the company does. It fetches the agent's client metadata and jwks_uri, and the delegation must verify with the key its kid names. Its typ must be pap-delegation+jwt, its iss the JWT's client_id, and its lifetime 24 hours at most. It must not have expired. Then the Session JWT must verify with the key in cnf.jwk. A Session JWT signed directly by a jwks key, with no delegation, is refused. A company may cache a verified delegation until it expires. Any failure is 400 with invalid_session."
+      "notes": "Read it left to right, as the company does. It fetches the agent's client metadata and jwks_uri, and the delegation must verify with the key its kid names. Its typ must be poppy-delegation+jwt, its iss the JWT's client_id, and its lifetime 24 hours at most. It must not have expired. Then the Session JWT must verify with the key in cnf.jwk. A Session JWT signed directly by a jwks key, with no delegation, is refused. A company may cache a verified delegation until it expires. Any failure is 400 with invalid_session."
     },
     {
       "type": "closing",

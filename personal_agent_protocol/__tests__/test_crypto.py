@@ -58,7 +58,7 @@ async def test_each_purpose_signs_with_its_own_type(algorithm: str) -> None:
 
     delegation = (await signer.sign({"iss": "agent"}, purpose="delegation")).get_secret_value()
 
-    assert jwt.get_unverified_header(delegation)["typ"] == "pap-delegation+jwt"
+    assert jwt.get_unverified_header(delegation)["typ"] == "poppy-delegation+jwt"
     with pytest.raises(ProofError) as refused:
         await signer.sign({"sub": "user"}, purpose="session_assertion")
     assert refused.value.code == "unknown_purpose"

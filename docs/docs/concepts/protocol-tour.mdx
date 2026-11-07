@@ -46,7 +46,7 @@ the request's method and URL, and to the access token when there is one (`ath`).
 The company learns of a Session from its first request.
 
 Each JWT is signed with a **delegated key**, a short-lived key the agent keeps for
-one User ID. A **delegation** in the JWT's `pap_dlg` header vouches for it: a JWT
+one User ID. A **delegation** in the JWT's `poppy_dlg` header vouches for it: a JWT
 of at most 24 hours, signed by a key in the agent's `jwks_uri`, that says nothing
 about the user or the company. The company checks the delegation, then the Session
 JWT. Any failure is `invalid_session`, and the agent starts a new Session.

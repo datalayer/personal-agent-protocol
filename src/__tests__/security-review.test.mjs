@@ -165,7 +165,7 @@ async function sessionJwt(w, session, method, url, { token, claims = {}, without
     alg: SESSION_JWT_ALGORITHM,
     typ: SESSION_JWT_TYPE,
     kid: delegated.thumbprint,
-    pap_dlg: delegated.delegation.reveal(),
+    poppy_dlg: delegated.delegation.reveal(),
     ...headers,
   };
   for (const [name, value] of Object.entries(protectedHeader)) if (value === undefined) delete protectedHeader[name];
@@ -776,8 +776,8 @@ test("a copied access token is worth nothing without the agent's Session JWT", a
     "an old iat": await sessionJwt(w, session, "GET", ORDERS, { token, claims: { iat: now - 61 } }),
     "no jti": await sessionJwt(w, session, "GET", ORDERS, { token, without: ["jti"] }),
     "another key": await sessionJwt(w, session, "GET", ORDERS, { token, key: someone }),
-    "no delegation": await sessionJwt(w, session, "GET", ORDERS, { token, headers: { pap_dlg: undefined } }),
-    "signed by the agent's own key": await sessionJwt(w, session, "GET", ORDERS, { token, headers: { pap_dlg: undefined }, key: w.identity.privateKey }),
+    "no delegation": await sessionJwt(w, session, "GET", ORDERS, { token, headers: { poppy_dlg: undefined } }),
+    "signed by the agent's own key": await sessionJwt(w, session, "GET", ORDERS, { token, headers: { poppy_dlg: undefined }, key: w.identity.privateKey }),
   };
   for (const [what, value] of Object.entries(forged)) {
     const answer = await w.fetch(ORDERS, { method: "GET", headers: { ...bearer, [SESSION_HEADER]: value } });

@@ -51,7 +51,7 @@ def _who(world: World) -> dict[str, str]:
 
 
 async def _report(world: World, session: PapSession, **headers: str) -> httpx.Response:
-    """One request straight to the company, so `invalid_session` starts no new Session."""
+    """One request straight to the company, so `session_ended` starts no new Session."""
 
     signed = await session_headers(world.reactor, "POST", FEEDBACK, session=session, token=None)
     report = FeedbackReport(task="Track a parcel", description="No tracking anywhere.")
@@ -90,7 +90,7 @@ async def test_an_ended_sessions_sid_is_refused_not_a_new_session() -> None:
     assert await world.shop.end_session(session.client_id, session.sid)
     assert not await world.shop.end_session(session.client_id, session.sid)
     ended = await _report(world, session)
-    assert (ended.status_code, ended.json()) == (400, {"error": "invalid_session"})
+    assert (ended.status_code, ended.json()) == (400, {"error": "session_ended"})
 
     # A Session past the lifetime the company gives it has ended the same way.
     lapsing = await sessions.start(**_who(world))
@@ -98,7 +98,7 @@ async def test_an_ended_sessions_sid_is_refused_not_a_new_session() -> None:
     config = world.shop.config
     world.clock.advance(config.session_lifetime.total_seconds())
     lapsed = await _report(world, lapsing)
-    assert (lapsed.status_code, lapsed.json()) == (400, {"error": "invalid_session"})
+    assert (lapsed.status_code, lapsed.json()) == (400, {"error": "session_ended"})
 
     # Once forgotten, the same `sid` starts a new Session (§5.5: a Company can forget).
     world.clock.advance(config.ended_session_memory.total_seconds() + 1)

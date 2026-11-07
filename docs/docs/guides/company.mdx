@@ -171,7 +171,8 @@ implements, of draft 0.3 and Operations v2:
   verified in the specification's order (delegation, delegated key, claims,
   access token). An unknown `sid` starts a signed-out Session, a known one must
   keep its User ID and Agent ID, and an ended one is remembered
-  (`ended_session_memory`). Any failure is `invalid_session` (HTTP 400), and so is
+  (`ended_session_memory`) and answered `session_ended` (HTTP 400). Any failed
+  check is `invalid_session` (HTTP 400), and so is
   a JWT signed directly by a `jwks_uri` key, with no delegation. An access token
   without the Session header is refused;
 - Direct Sign-In, with loopback redirect URIs matched whatever their port;

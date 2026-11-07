@@ -1118,7 +1118,7 @@ test("Sessions are kept by client_id and sid: unknown starts one, a known one ke
   assert.equal(await w.shop.endSession(session.clientId, ended), false);
   const stale = await sessionHeaders(w.host.reactor, "GET", ORDERS, { session });
   const refused = await w.fetch(ORDERS, { method: "GET", headers: stale });
-  assert.deepEqual([refused.status, await refused.json()], [400, { error: "invalid_session" }]);
+  assert.deepEqual([refused.status, await refused.json()], [400, { error: "session_ended" }]);
   await w.conversations.start(w.endpoint, w.message("Hello"), { session, wait: 0 });
   assert.notEqual(session.sid, ended);
 
@@ -1128,7 +1128,7 @@ test("Sessions are kept by client_id and sid: unknown starts one, a known one ke
   w.clock.advance(24 * 60 * 60 + 1);
   const headers = await sessionHeaders(w.host.reactor, "GET", ORDERS, { session: later });
   const expired = await w.fetch(ORDERS, { method: "GET", headers });
-  assert.deepEqual([expired.status, await expired.json()], [400, { error: "invalid_session" }]);
+  assert.deepEqual([expired.status, await expired.json()], [400, { error: "session_ended" }]);
 });
 
 test("a token of another agent in a Session is refused", async () => {

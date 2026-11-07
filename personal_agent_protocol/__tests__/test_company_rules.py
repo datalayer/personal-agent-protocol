@@ -586,10 +586,10 @@ async def test_a_company_ending_a_session_and_the_personal_agent_starting_a_new_
     assert await world.shop.end_session(session.client_id, ended)
     captured.clear()
 
-    # `invalid_session`, HTTP 400, JSON; the request sent once more with a new `sid`.
+    # `session_ended`, HTTP 400, JSON; the request sent once more with a new `sid` (§5.5).
     await world.conversations.start(endpoint, world.message("Hello"), session=session, wait=0)
     assert [r.status_code for r in captured] == [400, 201]
-    assert captured[0].json() == {"error": "invalid_session"}
+    assert captured[0].json() == {"error": "session_ended"}
     assert session.sid != ended
 
 

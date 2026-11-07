@@ -21,6 +21,7 @@ from personal_agent_protocol import (
 
 ORDERS = "https://api.example/orders"
 INVALID_SESSION = {"error": "invalid_session"}
+SESSION_ENDED = {"error": "session_ended"}
 
 
 class Jwts:
@@ -57,7 +58,7 @@ def token() -> AccessToken:
 
 
 @pytest.mark.asyncio
-async def test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing() -> None:
+async def test_session_ended_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing() -> None:
     calls = 0
 
     def company(request: httpx.Request) -> httpx.Response:
@@ -67,7 +68,7 @@ async def test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_get
         assert request.headers["poppy-session"] == f"jwt-{calls}"
         assert "dpop" not in request.headers
         if calls == 1:
-            return httpx.Response(400, json=INVALID_SESSION)
+            return httpx.Response(400, json=SESSION_ENDED)
         if calls == 2:
             return httpx.Response(200, json={"ok": True})
         # Even on the company's own origin, a redirect is never followed with the token,
@@ -101,13 +102,13 @@ async def test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_get
 
 
 @pytest.mark.asyncio
-async def test_a_second_invalid_session_goes_back_to_the_caller() -> None:
+async def test_a_second_session_ended_goes_back_to_the_caller() -> None:
     calls = 0
 
     def company(_: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(400, json=INVALID_SESSION)
+        return httpx.Response(400, json=SESSION_ENDED)
 
     jwts = Jwts()
     async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
@@ -117,8 +118,35 @@ async def test_a_second_invalid_session_goes_back_to_the_caller() -> None:
         response = await client.request("POST", ORDERS, session=session(), content=b"{}")
         reactor.stop()
 
-    # The Personal Agent stops sending the request (§7).
+    # The Personal Agent stops sending the request (§5.5, §7).
     assert response.status_code == 400 and calls == 2
+
+
+@pytest.mark.asyncio
+async def test_invalid_session_goes_back_to_the_caller_without_a_new_session() -> None:
+    """A new Session would fail the same way, so the request is sent once (§5.3, §7)."""
+
+    calls = 0
+
+    def company(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, json=INVALID_SESSION)
+
+    jwts = Jwts()
+    pap_session = session()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
+        reactor, _ = build_pap_reactor(http_client=http)
+        reactor.register_plugin(PluginManifest(name="transport-test", version="1"), Plugin(jwts))
+        client = SessionHttpClient(reactor=reactor, http_client=http)
+        response = await client.request("GET", ORDERS, session=pap_session, token=token())
+        async with client.stream("GET", ORDERS, session=pap_session) as streamed:
+            assert streamed.status_code == 400
+        reactor.stop()
+
+    assert response.status_code == 400 and response.json() == INVALID_SESSION and calls == 2
+    assert pap_session.sid == "S" * 22
+    assert [request.sid for request in jwts.requests] == ["S" * 22] * 2
 
 
 @pytest.mark.asyncio
@@ -143,13 +171,13 @@ async def test_another_400_is_not_invalid_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_stream_restarts_once_on_invalid_session() -> None:
+async def test_a_stream_restarts_once_on_session_ended() -> None:
     sent: list[httpx.Request] = []
 
     def company(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         if len(sent) == 1:
-            return httpx.Response(400, json=INVALID_SESSION)
+            return httpx.Response(400, json=SESSION_ENDED)
         return httpx.Response(200, text="data: ok\n\n")
 
     jwts = Jwts()

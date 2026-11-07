@@ -1,7 +1,7 @@
 # Session HTTP transport
 
 This example sends a PAP API request with the `Poppy-Session` header and a Bearer
-access token, starts a new Session once after `invalid_session` and resends the
+access token, starts a new Session once after `session_ended` and resends the
 request in it, refuses a redirect (draft 0.3 §3: no token or Session JWT goes to
 the URL a protocol endpoint redirects to), and rejects caller-supplied
 authorization headers.

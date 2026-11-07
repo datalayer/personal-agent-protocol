@@ -9,8 +9,10 @@ with the scheme its `token_type` names. A `DPoP` token goes with a fresh proof f
 `pap.dpopProver` on every request and retry, and a `use_dpop_nonce` challenge is
 retried once; the latest nonce is kept per origin for later requests (§4.5). A host
 that contributes `pap.operatorSigner` signs each of them too, last, over the Session
-JWT and the token (§5.3). An `invalid_session` answer starts a new Session once, and
-the request is sent again in it; a second one is returned to the caller, who stops (§5.5, §7).
+JWT and the token (§5.3). A `session_ended` answer starts a new Session once, and
+the request is sent again in it; a second one is returned to the caller, who stops.
+An `invalid_session` answer goes straight back to the caller: a new Session would not
+fix it, so the request is not sent again until its cause is fixed (§5.3, §5.5, §7).
 """
 
 from __future__ import annotations
@@ -98,16 +100,31 @@ def budget_key(url: str) -> str:
     return f"{scheme}://{host}:{port}"
 
 
-def invalid_session(response: httpx.Response) -> bool:
-    """Whether the company answered `invalid_session` (§5.3): HTTP 400 and its JSON body."""
+def session_ended(response: httpx.Response) -> bool:
+    """Whether the company answered `session_ended` (§5.5): HTTP 400 and its JSON body.
+
+    The Session has ended, or the company refused an account change in it (§5.4): the
+    personal agent starts a new Session and sends the request again, once. The other
+    Session error, `invalid_session` (§5.3), is never retried: a new Session would fail
+    the same way.
+    """
+
+    return session_error(response) == "session_ended"
+
+
+def session_error(response: httpx.Response) -> str | None:
+    """The Session error the company answered with, `invalid_session` (§5.3) or
+    `session_ended` (§5.5): HTTP 400 and a JSON body naming it. None for any other response.
+    """
 
     if response.status_code != 400:
-        return False
+        return None
     try:
         payload = loads_strict(response.content)
     except Exception:
-        return False
-    return isinstance(payload, dict) and payload.get("error") == "invalid_session"
+        return None
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return error if error in {"invalid_session", "session_ended"} else None
 
 
 async def session_headers(
@@ -212,9 +229,10 @@ class SessionHttpClient:
         budget; a safe method (GET, HEAD, OPTIONS) is then retried by
         `pap.retryPolicy` — never sooner than `Retry-After`, with exponential
         backoff and jitter otherwise. A write, or a pause longer than the policy
-        allows, returns the refusal to the caller. `invalid_session` starts a new
+        allows, returns the refusal to the caller. `session_ended` starts a new
         Session once (`session.restart()`) and sends the request again in it, and a
-        `use_dpop_nonce` challenge sends it again once with the nonce.
+        `use_dpop_nonce` challenge sends it again once with the nonce. `invalid_session`
+        is returned to the caller as it is (§5.3): no new Session is started.
         """
 
         policy = optional_contribution(self.reactor, RETRY_POLICIES, "retry policy")
@@ -230,8 +248,8 @@ class SessionHttpClient:
                 method, url, session=session, token=token, headers=headers, content=content
             )
             attempts += 1
-            if invalid_session(response) and not restarted:
-                # The Session failed a check or has ended: a new one, once (§5.5, §7).
+            if session_ended(response) and not restarted:
+                # The Session has ended: a new one, once (§5.5, §7).
                 restarted = True
                 session.restart(self._random_bytes)
                 continue
@@ -341,8 +359,8 @@ class SessionHttpClient:
     ) -> AsyncIterator[httpx.Response]:
         """Open a streamed response (SSE) in `session`; no redirect followed.
 
-        `invalid_session` starts a new Session once, and `use_dpop_nonce` sends it again
-        once, as `request` does.
+        `session_ended` starts a new Session once, and `use_dpop_nonce` sends it again
+        once, as `request` does; `invalid_session` is yielded as it is.
         """
 
         target = _https_url(url)
@@ -367,7 +385,7 @@ class SessionHttpClient:
             try:
                 if response.status_code == 400 and not restarted:
                     await response.aread()
-                    if invalid_session(response):
+                    if session_ended(response):
                         restarted = True
                         session.restart(self._random_bytes)
                         continue

@@ -54,7 +54,7 @@ async function world() {
   return { clock, fetch, identity, shop, host, sites, company, metadata: company.oauthMetadata, sessions, who };
 }
 
-/** One request straight to the company, so `invalid_session` starts no new Session. */
+/** One request straight to the company, so `session_ended` starts no new Session. */
 async function report(w, session) {
   const signed = await sessionHeaders(w.host.reactor, "POST", FEEDBACK, { session });
   return w.fetch(FEEDBACK, {
@@ -124,14 +124,14 @@ test("an ended Session's sid is refused, not a new Session", async () => {
   assert.equal((await report(w, session)).status, 202);
   assert.equal(await w.shop.endSession(session.clientId, session.sid), true);
   assert.equal(await w.shop.endSession(session.clientId, session.sid), false);
-  await refusedWith(await report(w, session), 400, { error: "invalid_session" });
+  await refusedWith(await report(w, session), 400, { error: "session_ended" });
 
   // A Session past the lifetime the company gives it has ended the same way.
   const lapsing = await w.sessions.start(w.who);
   assert.equal((await report(w, lapsing)).status, 202);
   const { config } = w.shop;
   w.clock.advance(config.sessionLifetimeSeconds);
-  await refusedWith(await report(w, lapsing), 400, { error: "invalid_session" });
+  await refusedWith(await report(w, lapsing), 400, { error: "session_ended" });
 
   // Once forgotten, the same `sid` starts a new Session (§5.5: a Company can forget).
   w.clock.advance(config.endedSessionMemorySeconds + 1);

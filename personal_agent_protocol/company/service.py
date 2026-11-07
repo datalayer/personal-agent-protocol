@@ -19,7 +19,8 @@ What it implements of draft 0.3 (upstream ec16efa) and Operations v2:
 - Sessions (§5): the Session header on every request, verified in the spec's
   order (delegation, delegated key, claims, access token), Sessions kept by
   `client_id` and `sid`, ended ones remembered; any failure is
-  `invalid_session` (HTTP 400). Its own access token without the header is refused.
+  `invalid_session` (HTTP 400); one for a Session that has ended `session_ended` (§5.5).
+  Its own access token without the header is refused.
 - OAuth (§4): access tokens, Bearer or, with `dpop_binding`, bound with DPoP (§4.5),
   and refresh tokens, never bound; Direct Sign-In, Device
   Sign-In with `authorization_pending` and `slow_down`, refresh with rotation,
@@ -715,7 +716,7 @@ def _json_error(
     """A JSON error; a token error at 401 or 403 in `WWW-Authenticate` too (§7).
 
     A signed-out request for the account gets the challenge alone: no error code,
-    no body. `invalid_session` is a JSON body, HTTP 400 (§5.3).
+    no body. `invalid_session` and `session_ended` are a JSON body, HTTP 400 (§5.3, §5.5).
     """
 
     out = {"Cache-Control": "no-store", **(headers or {})}
@@ -1065,9 +1066,10 @@ class CompanyService:
             )
         except (SessionError, ProofError) as error:
             status = error.status_code or (401 if error.code == "invalid_client" else 400)
-            if error.code == "invalid_session":
-                # A JSON body, HTTP 400, whichever check failed (§5.3).
-                return _json_error(400, "invalid_session")
+            if error.code in {"invalid_session", "session_ended"}:
+                # A JSON body, HTTP 400: `invalid_session` whichever check failed (§5.3),
+                # `session_ended` for a Session that has ended (§5.5).
+                return _json_error(400, error.code)
             return _json_error(status, error.code)
         except (ProtocolValidationError, ValidationError):
             # A body that is not JSON, or not the shape the protocol defines: the
@@ -2343,8 +2345,9 @@ class CompanyService:
     async def _session(self, verified: Any) -> str:
         """The Session by `client_id` and `sid`: started when unknown, checked when known (§5.3).
 
-        A known Session keeps its User ID and Agent ID; one that has ended, and is
-        still remembered, is `invalid_session` (§5.5).
+        A known Session keeps its User ID and Agent ID, or it is `invalid_session`
+        (§5.2, §5.3); one that has ended, and is still remembered, is `session_ended`
+        (§5.5), so the agent starts a new Session and sends the request again.
         """
 
         key = _composite(verified.client_id, verified.sid)
@@ -2369,7 +2372,7 @@ class CompanyService:
                     return key
                 continue
             if known.ended or now >= known.ends_at:
-                raise SessionError("invalid_session", "The Session has ended", status_code=400)
+                raise SessionError("session_ended", "The Session has ended", status_code=400)
             if (known.pairwise_user_id, known.agent_id) != (verified.sub, verified.agent_id):
                 # A Session keeps its User ID and Agent ID, or none, for its life (§5.2).
                 raise SessionError("invalid_session", "Another User's Session", status_code=400)
@@ -2377,7 +2380,7 @@ class CompanyService:
         raise _RefusedError(503, "temporarily_unavailable")
 
     async def end_session(self, client_id: str, sid: str) -> bool:
-        """The company ends a Session: requests naming its `sid` get `invalid_session` (§5.5).
+        """The company ends a Session: requests naming its `sid` get `session_ended` (§5.5).
 
         Remembered for `ended_session_memory`. Returns whether a Session was ended.
         """

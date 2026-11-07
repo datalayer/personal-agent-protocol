@@ -47,7 +47,7 @@ from .operations import APPROVAL_META_KEY, operation_from
 from .reactor import SystemClock, parse_retry_after, send_bounded
 from .refusals import challenge_parameters, dpop_nonce_asked, refuse_redirect
 from .sessions import DPOP_NONCE_HEADER, AccessToken, PapSession
-from .transport import invalid_session, session_headers
+from .transport import session_ended, session_error, session_headers
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 
@@ -329,19 +329,23 @@ class McpClient:
             except httpx.HTTPError as exc:
                 raise TransportError("request_failed", "MCP request failed") from exc
             refuse_redirect(response, McpError)
-            if not invalid_session(response):
+            if not session_ended(response):
                 break
             if restarted:
                 raise McpError(
-                    "invalid_session", "MCP refused the Session", status_code=response.status_code
+                    "session_ended", "MCP ended the Session again", status_code=response.status_code
                 )
-            # The Session failed a check or has ended: a new one, once (§5.5, §7).
+            # The Session has ended: a new one, once (§5.5, §7). `invalid_session` is
+            # not retried: a new Session would fail the same way (§5.3).
             self.session.restart()
         session_id = response.headers.get("mcp-session-id")
         if session_id:
             self._session_id = session_id
         if response.status_code in {401, 403}:
             raise _refusal(response)
+        if response.status_code == 400 and (code := session_error(response)) is not None:
+            # `invalid_session`: not retried, the caller fixes its cause (§5.3, §7).
+            raise McpError(code, "MCP refused the Session", status_code=400)
         if response.status_code == 202 or "id" not in message:
             return None
         if response.status_code == 429:

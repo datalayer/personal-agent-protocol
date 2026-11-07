@@ -188,7 +188,7 @@ export interface PapSessionJson {
  *
  * Local: `sid` names it, chosen at random; `sub` is the User ID for the Company's `issuer`,
  * `agentId` the optional Agent ID, both the same for its whole life. When the company answers
- * `invalid_session`, `restart` gives it a new `sid` once (§5.5, §7); its handle for a person
+ * `session_ended`, `restart` gives it a new `sid` once (§5.5, §7); its handle for a person
  * is `ses_` and the `sid`.
  */
 export class PapSession {

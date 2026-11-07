@@ -302,7 +302,7 @@ async def test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url() ->
 
 @pytest.mark.asyncio
 async def test_an_mcp_server_that_ends_the_session_gets_a_new_one_once() -> None:
-    """`invalid_session` starts a new Session once, then stops, wherever it comes from (§7)."""
+    """`session_ended` starts a new Session once, then stops, wherever it comes from (§7)."""
 
     world = World()
     session = await world.signed_out_session()
@@ -312,6 +312,45 @@ async def test_an_mcp_server_that_ends_the_session_gets_a_new_one_once() -> None
     assert await world.shop.end_session(session.client_id, ended)
     assert [tool["name"] for tool in await mcp.list_tools()] == ["list_orders", "exchange_jacket"]
     assert session.sid != ended
+
+
+@pytest.mark.asyncio
+async def test_a_second_session_ended_from_an_mcp_server_stops() -> None:
+    world = World()
+    session = await world.signed_out_session()
+    calls = 0
+
+    def server(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, json={"error": "session_ended"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(server)) as http:
+        mcp = McpClient(url=MCP, session=session, reactor=world.reactor, http_client=http)
+        with pytest.raises(McpError) as refused:
+            await mcp.list_tools()
+    assert (refused.value.code, refused.value.status_code, calls) == ("session_ended", 400, 2)
+
+
+@pytest.mark.asyncio
+async def test_invalid_session_from_an_mcp_server_is_not_retried_in_a_new_session() -> None:
+    """A new Session would fail the same way (§5.3, §7)."""
+
+    world = World()
+    session = await world.signed_out_session()
+    sid = session.sid
+    calls = 0
+
+    def server(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, json={"error": "invalid_session"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(server)) as http:
+        mcp = McpClient(url=MCP, session=session, reactor=world.reactor, http_client=http)
+        with pytest.raises(McpError) as refused:
+            await mcp.list_tools()
+    assert (refused.value.code, calls, session.sid) == ("invalid_session", 1, sid)
 
 
 @pytest.mark.asyncio
@@ -502,7 +541,7 @@ async def test_a_join_needs_its_own_browser_its_code_once_and_a_live_session() -
     assert (await _authorize(world, ended, "bc_" + "y" * 22)).status_code == 400
     assert await world.shop.end_session(ended.client_id, ended.sid)
     refused = await _authorize(world, ended, code)
-    assert (refused.status_code, refused.json()["error"]) == (400, "invalid_session")
+    assert (refused.status_code, refused.json()["error"]) == (400, "session_ended")
 
     assert (await _authorize(world, session, code)).status_code == 204
     joined = await browser.post(BROWSER_SESSION, data={"code": code})

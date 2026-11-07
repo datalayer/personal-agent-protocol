@@ -83,8 +83,8 @@ async def explain_session_lifecycle() -> dict[str, Any]:
         kids.append(jwt.get_unverified_header(session_jwt)["kid"])
         authorization.append(request.headers.get("authorization"))
         if calls in (2, 4, 5):
-            # The company no longer knows this Session, or refuses it (§5.3).
-            return httpx.Response(400, json={"error": "invalid_session"})
+            # The company ended this Session (§5.5).
+            return httpx.Response(400, json={"error": "session_ended"})
         return httpx.Response(200, json={"orders": []})
 
     signer = RecordingSigner()
@@ -105,10 +105,10 @@ async def explain_session_lifecycle() -> dict[str, Any]:
         started = session.sid
         transport = SessionHttpClient(reactor=reactor, http_client=http)
         first = await transport.request("GET", ORDERS, session=session)
-        # `invalid_session` starts a new Session once, and the request is sent again in it.
+        # `session_ended` starts a new Session once, and the request is sent again in it.
         restarted = await transport.request("GET", ORDERS, session=session)
         after_restart = session.sid
-        # A second `invalid_session` in a row is the caller's to handle: the client stops.
+        # A second `session_ended` in a row is the caller's to handle: the client stops.
         refused = await transport.request("GET", ORDERS, session=session)
         reactor.stop()
 
@@ -119,7 +119,7 @@ async def explain_session_lifecycle() -> dict[str, Any]:
         "first_request_status": first.status_code,
         "same_session_until_refused": jwts[0]["sid"] == jwts[1]["sid"] == started,
         "fresh_session_jwt_per_request": len({claims["jti"] for claims in jwts}) == len(jwts),
-        "restarted_after_invalid_session": after_restart != started,
+        "restarted_after_session_ended": after_restart != started,
         "request_resent_in_the_new_session": jwts[2]["sid"] == after_restart,
         "resent_request_status": restarted.status_code,
         "same_user_after_restart": len({claims["sub"] for claims in jwts}) == 1,
@@ -138,7 +138,7 @@ async def main() -> None:
 
     result = await agent.run(
         "Explain how a signed-out PAP Session starts, what each request carries, "
-        "and what happens when a company answers invalid_session, without exposing "
+        "and what happens when a company answers session_ended, without exposing "
         "credentials.",
         model=os.getenv("PAP_EXAMPLE_MODEL", "openai:gpt-4o-mini"),
     )

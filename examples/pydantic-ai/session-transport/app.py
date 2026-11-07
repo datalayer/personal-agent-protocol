@@ -55,7 +55,7 @@ agent = Agent(
 
 @agent.tool_plain
 async def explain_session_transport() -> dict[str, Any]:
-    """Exercise a restart after `invalid_session`, a refused redirect, and protected headers."""
+    """Exercise a restart after `session_ended`, a refused redirect, and protected headers."""
 
     calls = 0
     sent: list[httpx.Headers] = []
@@ -65,7 +65,7 @@ async def explain_session_transport() -> dict[str, Any]:
         calls += 1
         sent.append(request.headers)
         if calls == 1:
-            return httpx.Response(400, json={"error": "invalid_session"})
+            return httpx.Response(400, json={"error": "session_ended"})
         if calls == 2:
             return httpx.Response(200, json={"order_count": 2})
         # A redirect never gets the token, a Session JWT, or a body (§3): it is refused.

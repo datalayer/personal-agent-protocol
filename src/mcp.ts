@@ -39,7 +39,7 @@ import { APPROVAL_META_KEY, operationFrom } from "./operations.js";
 import { challengeParameters, dpopNonceAsked, refuseRedirect } from "./refusals.js";
 import { DPOP_NONCE_HEADER, type AccessToken, type PapSession } from "./sessions.js";
 import { parseRetryAfter, readLimited, readLimitedText } from "./limits.js";
-import { invalidSession, sessionHeaders } from "./transport.js";
+import { sessionEnded, sessionError, sessionHeaders } from "./transport.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -376,17 +376,24 @@ export class McpClient {
         throw new TransportError("request_failed", "MCP request failed", { cause });
       }
       await refuseRedirect(response, McpError);
-      if (!(await invalidSession(response))) break;
+      if (!(await sessionEnded(response))) break;
       await response.body?.cancel().catch(() => undefined);
       if (restarted) {
-        throw new McpError("invalid_session", "MCP refused the Session", { statusCode: response.status });
+        throw new McpError("session_ended", "MCP ended the Session again", { statusCode: response.status });
       }
-      // The Session failed a check or has ended: a new one, once (§5.5, §7).
+      // The Session has ended: a new one, once (§5.5, §7). `invalid_session` is not
+      // retried: a new Session would fail the same way (§5.3).
       this.session.restart();
     }
     const sessionId = response.headers.get("mcp-session-id");
     if (sessionId) this.#sessionId = sessionId;
     if (response.status === 401 || response.status === 403) throw await refusal(response);
+    const code = response.status === 400 ? await sessionError(response) : undefined;
+    if (code !== undefined) {
+      // `invalid_session`: not retried, the caller fixes its cause (§5.3, §7).
+      await response.body?.cancel().catch(() => undefined);
+      throw new McpError(code, "MCP refused the Session", { statusCode: 400 });
+    }
     if (response.status === 202 || !("id" in message)) {
       await response.body?.cancel().catch(() => undefined);
       return undefined;

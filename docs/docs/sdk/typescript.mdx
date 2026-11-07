@@ -79,7 +79,7 @@ thumbprint in a Session JWT's `kid`.
 
 `SessionFetchClient` owns the `Poppy-Session`, `Authorization` and `DPoP` headers
 for API and conversation requests. Each request carries a fresh Session JWT, and
-with a `DPoP` token a fresh proof; an `invalid_session` answer starts a new Session
+with a `DPoP` token a fresh proof; a `session_ended` answer starts a new Session
 once, and a `use_dpop_nonce` challenge sends the request again once, the latest
 nonce kept per origin. It refuses every redirect
 (`redirect_refused`): no token or body goes to the URL a protocol endpoint

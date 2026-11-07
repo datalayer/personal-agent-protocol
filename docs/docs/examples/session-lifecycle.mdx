@@ -1,6 +1,6 @@
 ---
 title: Signed-out Session lifecycle
-description: Start a Session with no network call, sign every request, and restart once on invalid_session.
+description: Start a Session with no network call, sign every request, and restart once on session_ended.
 ---
 
 import Deck from '@theme/Deck';
@@ -32,12 +32,12 @@ sequenceDiagram
   Note over H,C: Each later request: a fresh Session JWT, the same sid
   H->>S: Session JWT for the next request
   H->>C: Request + Poppy-Session
-  C-->>H: 400 invalid_session
+  C-->>H: 400 session_ended
   H->>H: session.restart(): a new sid, the same User ID
   H->>S: Session JWT for the same request
   H->>C: The same request, in the new Session
   C-->>H: Answer
-  Note over H,C: invalid_session again right after a restart
+  Note over H,C: session_ended again right after a restart
   H->>H: Stop: the refusal goes to the caller
 ```
 
@@ -46,9 +46,11 @@ sequenceDiagram
 - Starting a Session sends no request. The Session is signed out until a request
   carries an access token.
 - Every request carries a new Session JWT, with a new `jti`, for the same `sid`.
-- `invalid_session` means the Session failed a check or has ended. The client
-  starts a new Session once, with a new `sid`, and sends the request again in it.
-- A second `invalid_session` stops there: the refusal goes to the caller.
+- `session_ended` means the company ended the Session (§5.5). The client starts a
+  new Session once, with a new `sid`, and sends the request again in it.
+- A second `session_ended` stops there: the refusal goes to the caller.
+- `invalid_session` means the header failed a check (§5.3): a new Session would fail
+  the same way, so the refusal goes to the caller at once, to fix its cause.
 - The User ID and the delegated key stay the same across a restart.
 - Session IDs, pairwise subjects, Session JWTs, delegations, and keys stay inside
   host-owned code and protected storage.
@@ -57,7 +59,7 @@ sequenceDiagram
 To end a Session without signing out, the agent stops using its `sid`. Its refresh
 tokens are unaffected.
 
-The deterministic company transport answers `invalid_session` on chosen requests,
+The deterministic company transport answers `session_ended` on chosen requests,
 so the restart path is always exercised. Production code uses the same
 `SessionClient` and `SessionHttpClient` with real HTTPS and managed Reactor
 contributions.

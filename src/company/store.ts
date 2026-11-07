@@ -265,7 +265,7 @@ export interface IssuedAccessToken {
  *
  * A request whose `sid` is unknown starts one; one that names a known `sid` keeps its `sub`
  * and `agent_id`. Once `endsAt` passes, or the company ends it (`ended`), the record is kept
- * for `endedSessionMemorySeconds`, so a request naming it gets `invalid_session` instead of
+ * for `endedSessionMemorySeconds`, so a request naming it gets `session_ended` instead of
  * silently starting it again (§5.5).
  */
 export interface StoredSession {

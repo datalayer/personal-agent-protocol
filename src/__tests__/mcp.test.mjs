@@ -305,7 +305,7 @@ test("a refresh for a resource needs an HTTPS URL: nothing is sent for another",
 });
 
 test("an MCP server that ends the Session gets a new one, once", async () => {
-  // `invalid_session` starts a new Session once, then stops, wherever it comes from (§7).
+  // `session_ended` starts a new Session once, then stops, wherever it comes from (§7).
   const w = await world();
   const session = await w.start();
   const mcp = mcpClient(w, session);
@@ -316,9 +316,25 @@ test("an MCP server that ends the Session gets a new one, once", async () => {
   assert.notEqual(session.sid, ended);
 });
 
-test("a second invalid_session from an MCP server stops", async () => {
+test("a second session_ended from an MCP server stops", async () => {
   const w = await world();
   const session = await w.start();
+  let calls = 0;
+  const fetch = async () => {
+    calls += 1;
+    return Response.json({ error: "session_ended" }, { status: 400 });
+  };
+  const refused = await refusal(new McpClient({ url: MCP, session, reactor: w.reactor, fetch }).listTools());
+  assert.ok(refused instanceof McpError);
+  assert.deepEqual([refused.code, refused.statusCode], ["session_ended", 400]);
+  assert.equal(calls, 2);
+});
+
+test("invalid_session from an MCP server is not retried in a new Session", async () => {
+  // A new Session would fail the same way (§5.3, §7).
+  const w = await world();
+  const session = await w.start();
+  const sid = session.sid;
   let calls = 0;
   const fetch = async () => {
     calls += 1;
@@ -326,8 +342,9 @@ test("a second invalid_session from an MCP server stops", async () => {
   };
   const refused = await refusal(new McpClient({ url: MCP, session, reactor: w.reactor, fetch }).listTools());
   assert.ok(refused instanceof McpError);
-  assert.deepEqual([refused.code, refused.statusCode], ["invalid_session", 400]);
-  assert.equal(calls, 2);
+  assert.equal(refused.code, "invalid_session");
+  assert.equal(calls, 1);
+  assert.equal(session.sid, sid);
 });
 
 test("signing out reaches the MCP server at once", async () => {
@@ -586,7 +603,7 @@ test("a join needs its own browser, its code once, and a live Session", async ()
   assert.ok(await w.shop.endSession(ended.clientId, ended.sid));
   const refused = await authorize(w, ended, code);
   assert.equal(refused.status, 400);
-  assert.equal(await errorOf(refused), "invalid_session");
+  assert.equal(await errorOf(refused), "session_ended");
 
   assert.equal((await authorize(w, session, code)).status, 204);
   const joined = await browser.postForm(BROWSER_SESSION, { code });

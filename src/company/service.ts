@@ -24,7 +24,8 @@
  * - Sessions (§5): the Session header on every request, verified in the spec's
  *   order (delegation, delegated key, claims, access token), Sessions kept by
  *   `client_id` and `sid`, ended ones remembered; any failure is
- *   `invalid_session` (HTTP 400). Its own access token without the header is refused.
+ *   `invalid_session` (HTTP 400); one for a Session that has ended `session_ended` (§5.5).
+ *   Its own access token without the header is refused.
  * - OAuth (§4): access tokens, Bearer or, with `dpopBinding`, bound with DPoP (§4.5), and
  *   refresh tokens, never bound; Direct Sign-In, Device
  *   Sign-In with `authorization_pending` and `slow_down`, refresh with rotation,
@@ -698,7 +699,7 @@ const CHALLENGED = new Set(["invalid_token", "insufficient_scope", SIGNED_OUT, .
  * A JSON error; a token error at 401 or 403 in `WWW-Authenticate` too (§7).
  *
  * A signed-out request for the account gets the challenge alone: no error code, no body.
- * `invalid_session` is a JSON body, HTTP 400 (§5.3).
+ * `invalid_session` and `session_ended` are a JSON body, HTTP 400 (§5.3, §5.5).
  */
 function jsonError(
   status: number,
@@ -1179,7 +1180,9 @@ export class CompanyService {
       }
       if (error instanceof SessionError || error instanceof ProofError) {
         // A JSON body, HTTP 400, whichever check failed (§5.3).
-        if (error.code === "invalid_session") return jsonError(400, "invalid_session");
+        // `invalid_session` whichever check failed (§5.3), `session_ended` for a Session
+        // that has ended (§5.5): a JSON body, HTTP 400.
+        if (error.code === "invalid_session" || error.code === "session_ended") return jsonError(400, error.code);
         const status = error.statusCode ?? (error.code === "invalid_client" ? 401 : 400);
         return jsonError(status, error.code);
       }
@@ -2610,8 +2613,9 @@ export class CompanyService {
   /**
    * The Session by `client_id` and `sid`: started when unknown, checked when known (§5.3).
    *
-   * A known Session keeps its User ID and Agent ID; one that has ended, and is still
-   * remembered, is `invalid_session` (§5.5).
+   * A known Session keeps its User ID and Agent ID, or it is `invalid_session` (§5.2, §5.3);
+   * one that has ended, and is still remembered, is `session_ended` (§5.5), so the agent
+   * starts a new Session and sends the request again.
    */
   async #session(verified: VerifiedSessionJwt): Promise<string> {
     const key = composite(verified.clientId, verified.sid);
@@ -2635,7 +2639,7 @@ export class CompanyService {
         continue;
       }
       if (known.ended || this.#passed(known.endsAt)) {
-        throw new SessionError("invalid_session", "The Session has ended", { statusCode: 400 });
+        throw new SessionError("session_ended", "The Session has ended", { statusCode: 400 });
       }
       if (known.pairwiseUserId !== verified.sub || known.agentId !== verified.agentId) {
         // A Session keeps its User ID and Agent ID, or none, for its life (§5.2).
@@ -2647,7 +2651,7 @@ export class CompanyService {
   }
 
   /**
-   * The company ends a Session: requests naming its `sid` get `invalid_session` (§5.5).
+   * The company ends a Session: requests naming its `sid` get `session_ended` (§5.5).
    *
    * Remembered for `endedSessionMemorySeconds`. Resolves to whether a Session was ended.
    */

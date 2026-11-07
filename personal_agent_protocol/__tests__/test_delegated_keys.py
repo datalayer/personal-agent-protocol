@@ -260,7 +260,7 @@ async def test_a_company_caches_a_verified_delegation_until_it_expires() -> None
 
 @pytest.mark.asyncio
 async def test_the_company_remembers_an_ended_sid_and_the_agent_starts_again_once() -> None:
-    """`invalid_session`: a new `sid`, once; the same one is never started again (§5.5)."""
+    """`session_ended`: a new `sid`, once; the same one is never started again (§5.5)."""
 
     world = World()
     session = await world.signed_out_session()
@@ -272,7 +272,7 @@ async def test_the_company_remembers_an_ended_sid_and_the_agent_starts_again_onc
     assert session.sid != ended
     headers = await _headers(world, ended, endpoint)
     refused = await world.http.post(endpoint, headers=headers, json={})
-    assert refused.status_code == 400 and refused.json() == {"error": "invalid_session"}
+    assert refused.status_code == 400 and refused.json() == {"error": "session_ended"}
 
 
 async def _headers(world: World, sid: str, url: str) -> dict[str, str]:
@@ -299,7 +299,7 @@ async def test_a_session_that_ended_on_its_own_is_remembered() -> None:
     session = await world.signed_out_session()
     url = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     first = await world.http.post(url, headers=await _headers(world, session.sid, url), json={})
-    assert first.status_code != 400 or first.json() != {"error": "invalid_session"}
+    assert first.status_code != 400 or first.json() != {"error": "session_ended"}
     world.clock.advance(world.shop.config.session_lifetime.total_seconds() + 1)
     late = await world.http.post(url, headers=await _headers(world, session.sid, url), json={})
-    assert late.status_code == 400 and late.json() == {"error": "invalid_session"}
+    assert late.status_code == 400 and late.json() == {"error": "session_ended"}

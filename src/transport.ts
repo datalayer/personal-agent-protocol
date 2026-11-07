@@ -11,7 +11,7 @@
  * `pap.sessionSigner`, and, signed in, the account's access token in `Authorization`, with the
  * scheme its `tokenType` names. A `DPoP` token goes with a fresh proof from `pap.dpopProver` on
  * every request and retry, and a `use_dpop_nonce` challenge is retried once; the latest nonce
- * is kept per origin for later requests (§4.5). An `invalid_session` answer starts a new
+ * is kept per origin for later requests (§4.5). A `session_ended` answer starts a new
  * Session once, and the request is sent again in it; a second one is returned to the caller,
  * who stops (§5.5, §7).
  */
@@ -68,18 +68,29 @@ function httpsUrl(value: string): URL {
   return url;
 }
 
-/** Whether the company answered `invalid_session` (§5.3): HTTP 400 and its JSON body. */
-export async function invalidSession(response: Response): Promise<boolean> {
-  if (response.status !== 400) return false;
+/**
+ * Whether the company answered `session_ended` (§5.5): HTTP 400 and its JSON body.
+ *
+ * The Session has ended, or the company refused an account change in it (§5.4): the
+ * personal agent starts a new Session and sends the request again, once. The other Session
+ * error, `invalid_session` (§5.3), is never retried: a new Session would fail the same way.
+ */
+export async function sessionEnded(response: Response): Promise<boolean> {
+  return (await sessionError(response)) === "session_ended";
+}
+
+/**
+ * The Session error a company answered with, `invalid_session` (§5.3) or `session_ended`
+ * (§5.5): HTTP 400 and a JSON body naming it. Undefined for any other response.
+ */
+export async function sessionError(response: Response): Promise<"invalid_session" | "session_ended" | undefined> {
+  if (response.status !== 400) return undefined;
   try {
     const payload = parseJsonStrict(await response.clone().text());
-    return (
-      typeof payload === "object" &&
-      payload !== null &&
-      (payload as Record<string, unknown>).error === "invalid_session"
-    );
+    const error = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).error : undefined;
+    return error === "invalid_session" || error === "session_ended" ? error : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -184,9 +195,10 @@ export class SessionFetchClient {
    * `Retry-After` with every task through the budget; a safe method (GET, HEAD, OPTIONS) is
    * then retried by `pap.retryPolicy` — never sooner than `Retry-After`, with exponential
    * backoff and jitter otherwise. A write, or a pause longer than the policy allows, returns
-   * the refusal to the caller. `invalid_session` starts a new Session once
+   * the refusal to the caller. `session_ended` starts a new Session once
    * (`session.restart()`) and sends the request again in it, and a `use_dpop_nonce` challenge
-   * sends it again once with the nonce.
+   * sends it again once with the nonce. `invalid_session` is returned to the caller as it is
+   * (§5.3): no new Session is started.
    */
   async request(
     method: string,
@@ -205,8 +217,8 @@ export class SessionFetchClient {
       await budget?.acquire(key);
       const response = await this.#requestOnce(method, url, options);
       attempts += 1;
-      if (!restarted && (await invalidSession(response))) {
-        // The Session failed a check or has ended: a new one, once (§5.5, §7).
+      if (!restarted && (await sessionEnded(response))) {
+        // The Session has ended: a new one, once (§5.5, §7).
         restarted = true;
         await response.body?.cancel().catch(() => undefined);
         options.session.restart((length) => this.#randomBytes(length));

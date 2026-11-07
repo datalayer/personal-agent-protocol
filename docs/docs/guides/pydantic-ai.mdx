@@ -20,7 +20,7 @@ lists every one. Among them:
 | [Direct Sign-In boundary](/examples/direct-sign-in-boundary/)   | Random state, S256 PKCE and browser handoff                  | Scopes and security properties only      |
 | [Direct Sign-In lifecycle](/examples/direct-sign-in-lifecycle/) | Callback, exchange, partial consent, refresh token custody   | Lifecycle evidence; all secrets withheld |
 | [Session JWT](/examples/session-jwt/)                           | Method, URL, token, company and replay binding               | Verification policy; secrets withheld    |
-| [Session transport](/examples/session-transport/)               | `invalid_session` restart, refused redirects, protected headers | Transport policy; secrets withheld    |
+| [Session transport](/examples/session-transport/)               | `session_ended` restart, refused redirects, protected headers | Transport policy; secrets withheld    |
 | [Session lifecycle](/examples/session-lifecycle/)               | Start, a Session JWT per request, and restart over HTTP      | Lifecycle evidence; secrets withheld     |
 | [Browser Session](/examples/browser-session/)                   | One-time code, Session header, form POST, replay rejection   | Browser policy; secrets withheld         |
 | [Company APIs](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis) | OpenAPI with a Bearer token and the Session header, MCP with a Bearer for its URL alone | Orders, statuses, and summaries |

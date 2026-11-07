@@ -507,10 +507,10 @@ test("a company ending a Session, and the personal agent starting a new one", as
   assert.equal(await w.shop.endSession(session.clientId, ended), true);
   captured.length = 0;
 
-  // `invalid_session`, HTTP 400, JSON; the request sent once more with a new `sid`.
+  // `session_ended`, HTTP 400, JSON; the request sent once more with a new `sid` (§5.5).
   await w.conversations.start(w.endpoint, w.message("Hello"), { session, wait: 0 });
   assert.deepEqual(captured.map((answer) => answer.status), [400, 201]);
-  assert.deepEqual(captured[0].body, { error: "invalid_session" });
+  assert.deepEqual(captured[0].body, { error: "session_ended" });
   assert.notEqual(session.sid, ended);
 });
 

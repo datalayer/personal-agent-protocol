@@ -43,7 +43,7 @@ python -m pytest -p no:cacheprovider
 | `DirectSignInClient`                                    | Implemented           | Perform one-use browser handoff and code exchange with partial-scope reporting.                 |
 | `RefreshTokenClient`, `RefreshTokenContext`             | Implemented           | Refresh, narrow, revoke, and sign out, never handing the refresh token to a caller.             |
 | `BrowserSessionClient`                                  | Implemented           | Join the agent's own browser: the agent authorizes the join form's one-time code.               |
-| `SessionHttpClient`                                     | Implemented           | Send the Session header, access token and any DPoP proof; restart once on `invalid_session`; retry `use_dpop_nonce` once; refuse every redirect. |
+| `SessionHttpClient`                                     | Implemented           | Send the Session header, access token and any DPoP proof; restart once on `session_ended`, never on `invalid_session`; retry `use_dpop_nonce` once; refuse every redirect. |
 | `ConversationClient`, `generate_message_id`             | Implemented           | Start and continue conversations with user-global idempotent message IDs.                       |
 | Reactor infrastructure points                           | Implemented contract  | Supply clock, randomness, signing, Session JWTs, stores, browser handoff, and browser join.     |
 

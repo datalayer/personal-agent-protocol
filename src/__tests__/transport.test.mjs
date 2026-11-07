@@ -20,12 +20,13 @@ import {
   TransportError,
   accessTokenFromResponse,
   buildPapReactor,
-  invalidSession,
   parseTokenResponse,
+  sessionEnded,
 } from "../../lib/index.js";
 
 const ORDERS = "https://api.example/orders";
 const INVALID_SESSION = JSON.stringify({ error: "invalid_session" });
+const SESSION_ENDED = JSON.stringify({ error: "session_ended" });
 const json = { "content-type": "application/json" };
 
 const session = () =>
@@ -69,14 +70,14 @@ test("the header is the spec's", () => {
   assert.equal(SESSION_HEADER, "Poppy-Session");
 });
 
-test("invalid_session restarts once with a fresh JWT, and a redirect gets nothing", async () => {
+test("session_ended restarts once with a fresh JWT, and a redirect gets nothing", async () => {
   let calls = 0;
   const fetch = async (_input, init) => {
     calls += 1;
     assert.equal(init.headers.Authorization, "Bearer access-secret");
     assert.equal(init.headers["Poppy-Session"], `jwt-${calls}`);
     assert.ok(!("DPoP" in init.headers));
-    if (calls === 1) return new Response(INVALID_SESSION, { status: 400, headers: json });
+    if (calls === 1) return new Response(SESSION_ENDED, { status: 400, headers: json });
     if (calls === 2) return new Response('{"ok":true}', { status: 200, headers: json });
     // Even on the company's own origin, a redirect is never followed with the token, a
     // Session JWT, or the body (§3): the caller sees `redirect_refused`.
@@ -104,19 +105,38 @@ test("invalid_session restarts once with a fresh JWT, and a redirect gets nothin
   assert.ok(requests.every((request) => request.accessToken.reveal() === "access-secret"));
 });
 
-test("a second invalid_session goes back to the caller", async () => {
+test("a second session_ended goes back to the caller", async () => {
+  let calls = 0;
+  const fetch = async () => {
+    calls += 1;
+    return new Response(SESSION_ENDED, { status: 400, headers: json });
+  };
+  const { reactor, client } = setup(fetch);
+  const response = await client.request("POST", ORDERS, { session: session(), body: "{}" });
+  reactor.stop();
+  // The Personal Agent stops sending the request (§5.5, §7).
+  assert.equal(response.status, 400);
+  assert.equal(calls, 2);
+  assert.equal(await sessionEnded(response), true);
+});
+
+test("invalid_session goes back to the caller without a new Session", async () => {
+  // A new Session would fail the same way, so the request is sent once (§5.3, §7).
   let calls = 0;
   const fetch = async () => {
     calls += 1;
     return new Response(INVALID_SESSION, { status: 400, headers: json });
   };
-  const { reactor, client } = setup(fetch);
-  const response = await client.request("POST", ORDERS, { session: session(), body: "{}" });
+  const { requests, reactor, client } = setup(fetch);
+  const papSession = session();
+  const response = await client.request("GET", ORDERS, { session: papSession, token: token() });
   reactor.stop();
-  // The Personal Agent stops sending the request (§7).
   assert.equal(response.status, 400);
-  assert.equal(calls, 2);
-  assert.equal(await invalidSession(response), true);
+  assert.deepEqual(await response.json(), { error: "invalid_session" });
+  assert.equal(calls, 1);
+  assert.equal(papSession.sid, "S".repeat(22));
+  assert.deepEqual(requests.map((request) => request.sid), ["S".repeat(22)]);
+  assert.equal(await sessionEnded(response), false);
 });
 
 test("another 400 is not invalid_session", async () => {
@@ -132,7 +152,7 @@ test("another 400 is not invalid_session", async () => {
   assert.equal(response.status, 400);
   assert.equal(calls, 1);
   assert.equal(papSession.sid, "S".repeat(22));
-  assert.equal(await invalidSession(response), false);
+  assert.equal(await sessionEnded(response), false);
 });
 
 test("signed-out requests carry the Session header alone", async () => {

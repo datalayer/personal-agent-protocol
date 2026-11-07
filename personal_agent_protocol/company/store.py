@@ -312,7 +312,7 @@ class StoredSession:
     A request whose `sid` is unknown starts one; one that names a known `sid`
     keeps its `sub` and `agent_id`. Once `ends_at` passes, or the company ends it
     (`ended`), the record is kept for `ended_session_memory`, so a request naming
-    it gets `invalid_session` instead of silently starting it again (§5.5).
+    it gets `session_ended` instead of silently starting it again (§5.5).
     """
 
     client_id: str

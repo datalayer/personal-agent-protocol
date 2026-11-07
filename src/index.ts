@@ -33,7 +33,7 @@ export {
 export {
   SESSION_HEADER,
   SessionFetchClient,
-  invalidSession,
+  sessionEnded,
   sessionHeaders,
   type SessionFetchClientOptions,
   type SessionFetchRequestOptions,

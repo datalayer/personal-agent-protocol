@@ -538,7 +538,7 @@ class CliRuntime:
     tenant_id: str = "pap-cli"
     #: How a command waits (Device Sign-In polling); a test or demo may move a clock.
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
-    #: The Sessions this command used: a new `sid` after `invalid_session` is kept.
+    #: The Sessions this command used: a new `sid` after `session_ended` is kept.
     live: dict[str, PapSession] = field(default_factory=dict)
 
     def expires_at(self, expires_in: int) -> str:
@@ -558,7 +558,7 @@ class CliRuntime:
         return [r for r in self.state.sessions.values() if r.tenant_id == self.tenant_id]
 
     def session_of(self, record: SessionRecord) -> PapSession:
-        """The record's Session; a new `sid` from `invalid_session` (§5.5) is saved at the end."""
+        """The record's Session; a new `sid` from `session_ended` (§5.5) is saved at the end."""
 
         session = self.live.get(record.id)
         if session is None:

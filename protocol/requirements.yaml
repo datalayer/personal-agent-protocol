@@ -126,7 +126,7 @@ requirements:
   - personal_agent_protocol.auth:DirectSignInClient
   - personal_agent_protocol.mcp:McpClient
   tests:
-  - personal_agent_protocol/__tests__/test_transport.py::test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_transport.py::test_session_ended_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
   - personal_agent_protocol/__tests__/test_transport.py::test_refuses_cross_origin_redirect_and_protected_headers
   - personal_agent_protocol/__tests__/test_sessions.py::test_a_redirect_at_the_token_endpoint_gets_nothing
   - personal_agent_protocol/__tests__/test_mediated.py::test_a_redirect_never_carries_the_credentials_elsewhere
@@ -1017,7 +1017,7 @@ requirements:
   - personal_agent_protocol.apis:ApiClient.call
   tests:
   - personal_agent_protocol/__tests__/test_transport.py::test_signed_out_requests_carry_the_session_header_alone
-  - personal_agent_protocol/__tests__/test_transport.py::test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_transport.py::test_session_ended_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   - personal_agent_protocol/__tests__/test_conversations.py::test_start_and_continue_preserve_message_ids_and_parse_waited_events
   conformance:
@@ -1480,11 +1480,14 @@ requirements:
   section: '5.5'
   level: MUST
   role: personal-agent
-  text: A request for a remembered ended Session gets invalid_session (5.3), and the Personal Agent MUST
-    then start a new Session with a new sid.
+  text: A request for a remembered ended Session gets session_ended (HTTP 400, JSON body), and the
+    Personal Agent MUST then start a new Session with a new sid and send the request again in it.
   status: implemented
   implementation:
   - personal_agent_protocol.sessions:SessionClient.start
+  - personal_agent_protocol.transport:session_ended
+  - personal_agent_protocol.transport:SessionHttpClient.request
+  - personal_agent_protocol.company.service:CompanyService.end_session
   tests:
   - personal_agent_protocol/__tests__/test_delegated_keys.py::test_the_company_remembers_an_ended_sid_and_the_agent_starts_again_once
   - personal_agent_protocol/__tests__/test_sessions.py::test_a_new_session_replaces_an_ended_one_for_the_same_user
@@ -1536,7 +1539,7 @@ requirements:
   - personal_agent_protocol.transport:SessionHttpClient.request
   - personal_agent_protocol.conversations:ConversationClient._query
   tests:
-  - personal_agent_protocol/__tests__/test_transport.py::test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_transport.py::test_session_ended_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - security.token-in-url-refused
@@ -3075,7 +3078,7 @@ guide:
   - personal_agent_protocol.transport:SessionHttpClient.request
   - personal_agent_protocol.sessions:SessionClient.token_request
   tests:
-  - personal_agent_protocol/__tests__/test_transport.py::test_invalid_session_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
+  - personal_agent_protocol/__tests__/test_transport.py::test_session_ended_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
   - personal_agent_protocol/__tests__/test_dpop.py::test_a_resource_nonce_is_retried_once_and_the_latest_kept_for_the_origin
   - personal_agent_protocol/__tests__/test_dpop.py::test_use_dpop_nonce_is_retried_once_with_a_fresh_proof_and_assertion
   - personal_agent_protocol/__tests__/test_dpop.py::test_a_restarted_session_sends_a_fresh_proof_and_a_redirect_is_refused

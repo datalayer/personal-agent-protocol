@@ -45,8 +45,9 @@ sequenceDiagram
   replace them.
 - Every attempt receives a fresh Session JWT bound to its method, normalized
   target, and access token hash.
-- An `invalid_session` answer starts a new Session once, and the request is sent
-  again in it; a second one is returned to the caller.
+- A `session_ended` answer starts a new Session once, and the request is sent
+  again in it; a second one is returned to the caller. An `invalid_session` answer
+  is returned at once: a new Session would fail the same way (§5.3).
 - A redirect is refused (`redirect_refused`): under draft 0.3 §3 no token,
   Session JWT, assertion or body goes to the URL a protocol endpoint redirects to.
   The underlying HTTP client never follows redirects.

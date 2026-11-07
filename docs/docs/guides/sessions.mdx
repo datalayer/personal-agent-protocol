@@ -7,7 +7,7 @@ title: Signed-out sessions
 The runnable
 [`session-lifecycle` Pydantic AI example](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/session-lifecycle)
 drives the real `SessionClient` through start, a Session JWT on each request, and
-one restart after `invalid_session` over a deterministic local HTTP transport. It
+one restart after `session_ended` over a deterministic local HTTP transport. It
 returns only lifecycle evidence to the model; identifiers and credentials remain
 inside the host.
 
@@ -34,8 +34,9 @@ a new one from the first request that names it.
 - **Signed in**: sign-in names no Session. A request is signed in when it carries
   an access token beside the Session header, with that token's account and
   scopes, so one sign-in can serve several Sessions (§5.4).
-- **Ended**: a company answers `invalid_session` (HTTP 400) when a Session header
-  fails a check or names a Session it ended. `SessionHttpClient` and
+- **Ended**: a company answers `session_ended` (HTTP 400) when a Session header
+  names a Session it ended, or changes accounts in one when it refuses that (§5.4,
+  §5.5). `SessionHttpClient` and
   `SessionFetchClient` then start a new Session once (`session.restart()`: a new
   `sid`, the same User ID and Agent ID) and send the request again; a second
   refusal goes to the caller. To end a Session yourself, stop using its `sid`. Its
@@ -143,7 +144,9 @@ For each attempt, the transport (`SessionHttpClient`, `SessionFetchClient`):
   and any token, and sends `Signature-Agent`, `Signature-Input` and `Signature`;
 - rejects a caller-supplied `Authorization`, `DPoP`, `Poppy-Session`, or signature
   header;
-- on `invalid_session`, starts a new Session once and sends the request again; and
+- on `session_ended`, starts a new Session once and sends the request again, and on
+  `invalid_session` returns the refusal at once, since a new Session would fail the same
+  way (§5.3); and
 - on a `use_dpop_nonce` challenge, sends the request again once with the nonce, and
   keeps the latest `DPoP-Nonce` per origin for later requests.
 

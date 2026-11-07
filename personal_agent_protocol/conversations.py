@@ -586,6 +586,12 @@ class ConversationClient:
             open_id = payload.get("conversation_id")
             if isinstance(open_id, str) and _IDENTIFIER.fullmatch(open_id):
                 details["conversation_id"] = open_id
+        if code == "version_mismatch" and isinstance(payload, dict):
+            # The conversation started in other versions (§8.2): the protocol version named,
+            # to finish it in a Session with those versions while the company serves them.
+            started_in = payload.get("protocol_version")
+            if isinstance(started_in, str) and re.fullmatch(r"[0-9]+\.[0-9]+", started_in):
+                details["protocol_version"] = started_in
         return ConversationError(
             code if isinstance(code, str) else "conversation_request_failed",
             "conversation request was rejected",

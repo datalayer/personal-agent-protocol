@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from ..models import Operation
+from ..profile import PROTOCOL_PROFILE
 from ..reactor import Clock, SystemClock
 
 #: A record as stored: a JSON object (strings, numbers, booleans, null, lists, objects).
@@ -683,6 +684,11 @@ class StoredConversation:
     handoff: Literal["none", "pending"] = "none"
     responder: Literal["agent", "human"] = "agent"
     closed: bool = False
+    #: The versions the conversation started in (§8.2): the Session's protocol version and
+    #: the extensions it declared. A request from other versions may be refused with
+    #: `version_mismatch` when the company can't carry the conversation over.
+    protocol_version: str = PROTOCOL_PROFILE
+    extensions: Mapping[str, str] = field(default_factory=dict)
     parent_id: str | None = None
     direct_child: str | None = None
     #: The account the conversation used; from then on it belongs to that account.
@@ -699,6 +705,8 @@ class StoredConversation:
             "handoff": self.handoff,
             "responder": self.responder,
             "closed": self.closed,
+            "protocol_version": self.protocol_version,
+            "extensions": dict(self.extensions),
             "parent_id": self.parent_id,
             "direct_child": self.direct_child,
             "account_id": self.account_id,
@@ -716,6 +724,8 @@ class StoredConversation:
             handoff=value["handoff"],
             responder=value["responder"],
             closed=bool(value["closed"]),
+            protocol_version=str(value.get("protocol_version") or PROTOCOL_PROFILE),
+            extensions=dict(value.get("extensions") or {}),
             parent_id=value["parent_id"],
             direct_child=value["direct_child"],
             account_id=value["account_id"],

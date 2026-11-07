@@ -182,6 +182,8 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       handoff: "pending",
       responder: "human",
       closed: false,
+      protocolVersion: "0.4",
+      extensions: { operations: "2" },
       parentId: "cnv_0",
       directChild: "cnv_2",
       accountId: "acct_1",

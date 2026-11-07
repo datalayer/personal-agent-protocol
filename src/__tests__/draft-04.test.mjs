@@ -8,7 +8,8 @@
 // personal_agent_protocol/__tests__/test_draft_04.py.
 //
 // Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
-// declared per request (§3.3, §3.4, P4-03); what a message took into account (§8.4, P4-08).
+// declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); what a
+// message took into account (§8.4, P4-08).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -60,6 +61,7 @@ async function world(config) {
     pairwiseUserId: PAIRWISE,
     issuer: company.oauthMetadata.issuer,
     tenantId: TENANT,
+    company,
   });
   return { clock, fetch, identity, shop, host, sites, company, session };
 }
@@ -269,4 +271,48 @@ test("a Session declares the extensions it uses with the company", async () => {
   assert.equal(formatExtensionsHeader({}), undefined);
   assert.deepEqual(parseExtensionsHeader('"operations";v="2", "links";v="1"'), { operations: "2", links: "1" });
   assert.deepEqual(parseExtensionsHeader('"operations"'), {});
+});
+
+
+// Conversations across versions (§8.2) ---------------------------------------------
+
+test("a conversation not carried over to other versions is version_mismatch", async () => {
+  const w = await world(new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: [PROTOCOL_PROFILE, "0.0"] }));
+  const conversations = new ConversationClient({ reactor: w.host.reactor, transport: new SessionFetchClient({ reactor: w.host.reactor, fetch: w.fetch }) });
+  // Started in "0.0", by hand; the client's Session is in this SDK's version.
+  const headers = await sessionHeaders(w.host.reactor, "POST", CONVERSATIONS, { session: w.session });
+  const started = await w.fetch(CONVERSATIONS, {
+    method: "POST",
+    headers: { ...headers, "Poppy-Version": "0.0", "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "req_started_in_0_0_0000", message: { author: { type: "human" }, text: "Hi" } }),
+  });
+  assert.equal(started.status, 201);
+  const { conversation_id: conversationId } = await started.json();
+  const record = await w.shop.conversationRecord(conversationId);
+  // What the request declared (§3.4): the Session's extensions, Mediated Sign-In never declared.
+  assert.deepEqual([record.protocolVersion, record.extensions], ["0.0", parseExtensionsHeader(headers["Poppy-Extensions"])]);
+  // Carried over by default: a message from this SDK's version is accepted.
+  const accepted = await conversations.send(CONVERSATIONS, conversationId, { id: "req_carried_000000000000", author: { type: "human" }, text: "Still there?" }, { session: w.session });
+  assert.equal(accepted.conversation_id, conversationId);
+  // Not carried over: messages, handoffs and cancels are version_mismatch; reads are not.
+  w.sites["manzanita.example"] = manzanita({
+    fetch: w.fetch,
+    clock: w.clock,
+    config: new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: [PROTOCOL_PROFILE, "0.0"], conversationCarryOver: false }),
+    store: w.shop.store,
+  }).service;
+  await assert.rejects(
+    conversations.send(CONVERSATIONS, conversationId, { id: "req_refused_000000000000", author: { type: "human" }, text: "And now?" }, { session: w.session }),
+    (error) => error.code === "version_mismatch" && error.statusCode === 409 && error.details.protocol_version === "0.0",
+  );
+  await assert.rejects(conversations.handoff(CONVERSATIONS, conversationId, { session: w.session }), (error) => error.code === "version_mismatch");
+  const page = await conversations.readEvents(CONVERSATIONS, conversationId, { session: w.session });
+  assert.ok(page.conversation_id === conversationId && page.events.length > 0);
+  // A Session in the versions it started in finishes it.
+  const again = await w.fetch(`${CONVERSATIONS}/${conversationId}/close`, {
+    method: "POST",
+    headers: { ...(await sessionHeaders(w.host.reactor, "POST", `${CONVERSATIONS}/${conversationId}/close`, { session: w.session })), "Poppy-Version": "0.0", "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "req_close_in_0_0_000000" }),
+  });
+  assert.equal(again.status, 202);
 });

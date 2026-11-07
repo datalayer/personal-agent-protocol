@@ -317,6 +317,13 @@ export interface CompanyConfigOptions {
    */
   readonly deprecatedVersions?: Readonly<Record<string, readonly [since: string, until: string]>>;
   /**
+   * Whether a conversation continues in a Session on other protocol or extension versions than
+   * it started in (§8.2). Off, the company can't carry it over: a message, handoff or cancel on
+   * it from other versions is `version_mismatch` (409), naming the protocol version it started
+   * in, and reads stay allowed so the user can see what happened.
+   */
+  readonly conversationCarryOver?: boolean;
+  /**
    * Skills for personal agents acting for the user here (§9.4): each a name, a description and
    * the text of its `SKILL.md`, served at `/poppy/skills/{name}/SKILL.md` and listed in the
    * document's `skill_index` with its SHA-256 digest.
@@ -432,6 +439,7 @@ export class CompanyConfig {
   readonly logoUri: string | undefined;
   readonly protocolVersions: readonly string[];
   readonly deprecatedVersions: Readonly<Record<string, readonly [since: string, until: string]>>;
+  readonly conversationCarryOver: boolean;
   readonly skills: readonly (readonly [name: string, description: string, text: string])[];
   readonly conversationResource: boolean;
   readonly feedbackAnswers: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
@@ -496,6 +504,7 @@ export class CompanyConfig {
     }
     for (const version of this.protocolVersions) parseVersion(version);
     this.deprecatedVersions = { ...(options.deprecatedVersions ?? {}) };
+    this.conversationCarryOver = options.conversationCarryOver ?? true;
     if (Object.keys(this.deprecatedVersions).some((version) => !this.protocolVersions.includes(version))) {
       throw new RangeError("deprecatedVersions are served versions");
     }
@@ -3357,6 +3366,8 @@ export class CompanyService {
       handoff: "none",
       responder: "agent",
       closed: false,
+      protocolVersion: session.protocolVersion,
+      extensions: { ...session.extensions },
       ...(parent === undefined ? {} : { parentId: parent.conversationId }),
       events: [],
       forgotten: [],
@@ -3427,6 +3438,8 @@ export class CompanyService {
       handoff: "none",
       responder: "agent",
       closed: false,
+      protocolVersion: session.protocolVersion,
+      extensions: { ...session.extensions },
       parentId: parent.conversationId,
       events: [],
       forgotten: [],
@@ -3531,6 +3544,17 @@ export class CompanyService {
     }
     if (method !== "POST") throw new Refused(405, "method_not_allowed");
     if (!["messages", "handoff", "handoff/cancel", "close"].includes(action)) throw new Refused(404, "not_found");
+    if (
+      !this.config.conversationCarryOver &&
+      ((conversation.protocolVersion ?? this.config.preferredVersion) !== session.protocolVersion ||
+        canonical(conversation.extensions ?? {}) !== canonical(session.extensions))
+    ) {
+      // Not carried over to other versions: the version it started in says where to finish
+      // it; reads stay allowed (§8.2).
+      throw new Refused(409, "version_mismatch", {
+        protocol_version: conversation.protocolVersion ?? this.config.preferredVersion,
+      });
+    }
     // Every POST has a request `id` (§8.3): a retry gets the original answer and is not acted
     // on again; a reuse with another path or body is `request_id_conflict`.
     const body = jsonObject(request.body);

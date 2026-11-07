@@ -427,6 +427,11 @@ class CompanyConfig:
     #: company speaks this SDK's version; another entry lets a personal agent's choice
     #: among versions be exercised, and is answered the same way.
     protocol_versions: tuple[str, ...] = (PROTOCOL_PROFILE,)
+    #: Whether a conversation continues in a Session on other protocol or extension versions
+    #: than it started in (§8.2). Off, the company can't carry it over: a message, handoff
+    #: or cancel on it from other versions is `version_mismatch` (409), naming the protocol
+    #: version it started in, and reads stay allowed so the user can see what happened.
+    conversation_carry_over: bool = True
     #: Versions the company plans to stop serving, each with when it was deprecated and
     #: when it goes away: responses to requests in that version carry `Deprecation`
     #: (RFC 9745) and `Sunset` (RFC 8594) (§3.4, a MAY).
@@ -3045,6 +3050,8 @@ class CompanyService:
         conversation = StoredConversation(
             conversation_id=self._id("cnv"),
             owner=owner,
+            protocol_version=session.protocol_version,
+            extensions=dict(session.extensions),
             parent_id=parent.conversation_id if parent else None,
         )
         conversation_id = conversation.conversation_id
@@ -3109,7 +3116,11 @@ class CompanyService:
         parent = await self._direct_parent(parent_id, session)
         conversation_id = self._id("cnv")
         conversation = StoredConversation(
-            conversation_id=conversation_id, owner=owner, parent_id=parent.conversation_id
+            conversation_id=conversation_id,
+            owner=owner,
+            protocol_version=session.protocol_version,
+            extensions=dict(session.extensions),
+            parent_id=parent.conversation_id,
         )
         if not await self.store.create(ACCEPTANCE, key, Acceptance(conversation_id).to_json()):
             accepted = await self._read(ACCEPTANCE, key, Acceptance.from_json)
@@ -3217,6 +3228,15 @@ class CompanyService:
             raise _RefusedError(405, "method_not_allowed")
         if action not in {"messages", "handoff", "handoff/cancel", "close"}:
             raise _RefusedError(404, "not_found")
+        if not self.config.conversation_carry_over and (
+            conversation.protocol_version != session.protocol_version
+            or dict(conversation.extensions) != dict(session.extensions)
+        ):
+            # Not carried over to other versions: the version it started in says where to
+            # finish it; reads stay allowed (§8.2).
+            raise _RefusedError(
+                409, "version_mismatch", protocol_version=conversation.protocol_version
+            )
         # Every POST has a request `id` (§8.3): a retry gets the original answer and is not
         # acted on again; a reuse with another path or body is `request_id_conflict`.
         body = _json_object(request.body)

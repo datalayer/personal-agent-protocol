@@ -3634,11 +3634,17 @@ guide:
   level: SHOULD
   role: personal-agent
   text: Record the versions each conversation started in. A company can refuse to continue a conversation
-    in a session with other versions, with version_mismatch (8.2).
-  status: open
-  reason: Conversations across versions are the next box (version_mismatch).
-  implementation: []
-  tests: []
+    in a session with other versions, with version_mismatch (8.2). To finish it, open a session with
+    those versions while the company still lists them. Otherwise start a new conversation, and tell the
+    user if they were waiting on something in the old one.
+  status: partial
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient._rejected
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_conversation_not_carried_over_to_other_versions_is_version_mismatch
+  reason: version_mismatch reaches the host as a ConversationError whose details name the protocol
+    version the conversation started in; recording each conversation's versions and reopening a
+    Session with them is the host's, as the Session itself is.
 - id: GUIDE-pa-ids-01
   source: guide
   section: User IDs
@@ -3843,6 +3849,22 @@ guide:
   - personal_agent_protocol/__tests__/test_draft_04.py::test_a_request_without_poppy_version_or_in_an_unserved_one_is_refused
   conformance:
   - protocol.version-header-required
+- id: GUIDE-co-versions-04
+  source: guide
+  section: Serving several versions
+  level: SHOULD
+  role: company
+  text: Conversations can outlast a version. Record the versions each conversation started in, and decide
+    what you can carry over to a newer one. Where you can't, reject requests on that conversation from
+    sessions with other versions with version_mismatch (8.2). You can still allow reads, so the user can
+    see what happened.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.company.service:CompanyService._conversation_route
+  - personal_agent_protocol.company.store:StoredConversation
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_conversation_not_carried_over_to_other_versions_is_version_mismatch
 - id: GUIDE-co-consent-01
   source: guide
   section: Consent pages

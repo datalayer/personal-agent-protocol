@@ -790,9 +790,15 @@ export class ConversationClient {
           : undefined;
       // `extension` of `extension_required` (§3.3), `scope`, and on a 429 `retry_after`,
       // never retried here: the caller waits at least this long (§4.3).
+      // The conversation started in other versions (§8.2): the protocol version named, to
+      // finish it in a Session with those versions while the company serves them.
+      const startedIn = (payload as Record<string, unknown> | undefined)?.protocol_version;
       const details = {
         ...refusalDetails(response, payload),
         ...(openId === undefined ? {} : { conversation_id: openId }),
+        ...(error === "version_mismatch" && typeof startedIn === "string" && /^[0-9]+\.[0-9]+$/.test(startedIn)
+          ? { protocol_version: startedIn }
+          : {}),
       };
       throw new ConversationError(
         error,

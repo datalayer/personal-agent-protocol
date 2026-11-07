@@ -6,7 +6,8 @@
 ports it.
 
 Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
-declared per request (§3.3, §3.4, P4-03); what a message took into account (§8.4, P4-08).
+declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); what
+a message took into account (§8.4, P4-08).
 """
 
 from __future__ import annotations
@@ -359,3 +360,57 @@ async def test_a_session_declares_the_extensions_it_uses_with_the_company() -> N
         "links": "1",
     }
     assert parse_extensions_header('"operations"') == {}
+
+
+# Conversations across versions (§8.2) -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_not_carried_over_to_other_versions_is_version_mismatch() -> None:
+    """The reference company records the versions a conversation started in and carries it
+    over by default; told not to, it refuses a POST from other versions with
+    `version_mismatch` (409) naming the protocol version it started in, reads allowed; the
+    client surfaces that version in the error's details (§8.2)."""
+
+    world = World()
+    config = replace(CONFIG, protocol_versions=(PROTOCOL_PROFILE, "0.0"))
+    world.shop, world.plugin = manzanita(world.network, world.clock, config=config)
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    # Started in "0.0", by hand; the client's Session is in this SDK's version.
+    headers = await session_headers(world.reactor, "POST", endpoint, session=session, token=None)
+    body = {"id": "req_started_in_0_0_0000", "message": {"author": {"type": "human"}, "text": "Hi"}}
+    started = await world.http.post(
+        endpoint, headers={**headers, "Poppy-Version": "0.0"}, json=body
+    )
+    assert started.status_code == 201
+    conversation_id = started.json()["conversation_id"]
+    record = await world.shop.conversation_record(conversation_id)
+    assert (record.protocol_version, record.extensions) == ("0.0", {"operations": "2"})
+    # Carried over by default: a message from this SDK's version is accepted.
+    accepted = await world.conversations.send(
+        endpoint, conversation_id, world.message("Still there?"), session=session
+    )
+    assert accepted.conversation_id == conversation_id
+    # Not carried over: messages, handoffs and cancels are version_mismatch; reads are not.
+    world.shop.config = replace(config, conversation_carry_over=False)
+    with pytest.raises(ConversationError) as raised:
+        await world.conversations.send(
+            endpoint, conversation_id, world.message("And now?"), session=session
+        )
+    assert (raised.value.code, raised.value.status_code) == ("version_mismatch", 409)
+    assert raised.value.details == {"protocol_version": "0.0"}
+    with pytest.raises(ConversationError) as raised:
+        await world.conversations.handoff(endpoint, conversation_id, session=session)
+    assert raised.value.code == "version_mismatch"
+    page = await world.conversations.read_events(endpoint, conversation_id, session=session)
+    assert page.conversation_id == conversation_id and page.events
+    # A Session in the versions it started in finishes it.
+    close_url = f"{endpoint}/{conversation_id}/close"
+    headers = await session_headers(world.reactor, "POST", close_url, session=session, token=None)
+    again = await world.http.post(
+        close_url,
+        headers={**headers, "Poppy-Version": "0.0"},
+        json={"id": "req_close_in_0_0_000000"},
+    )
+    assert again.status_code == 202

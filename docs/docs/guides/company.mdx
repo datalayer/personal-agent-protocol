@@ -123,7 +123,12 @@ version then carry `Deprecation` (RFC 9745) and `Sunset` (RFC 8594). Remove it f
 `protocol_versions` afterwards; a personal agent with a cached document gets
 `version_unsupported`, reads `poppy.json` again and moves. A company that serves
 one version checks `Poppy-Version` where it verifies the Session header, and that
-is all.
+is all. Conversations can outlast a version: the reference company records the
+protocol and extension versions each conversation started in, carries it over to
+other versions by default, and with `conversation_carry_over=False`
+(`conversationCarryOver`) refuses messages, handoffs and cancels on it from other
+versions with `version_mismatch` (409), naming the version it started in, while
+reads stay allowed (§8.2).
 
 ## Implement in this order
 

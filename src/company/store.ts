@@ -477,6 +477,13 @@ export interface StoredConversation {
   readonly handoff: "none" | "pending";
   readonly responder: "agent" | "human";
   readonly closed: boolean;
+  /**
+   * The versions the conversation started in (§8.2): the Session's protocol version and the
+   * extensions it declared. A request from other versions may be refused with
+   * `version_mismatch` when the company can't carry the conversation over.
+   */
+  readonly protocolVersion?: string;
+  readonly extensions?: Readonly<Record<string, string>>;
   readonly parentId?: string;
   readonly directChild?: string;
   /** The account the conversation used; from then on it belongs to that account. */

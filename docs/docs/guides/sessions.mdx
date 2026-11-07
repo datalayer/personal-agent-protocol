@@ -26,9 +26,19 @@ without one), `client_id`, and `tenant_id`; its `handle`, `ses_` and the
 
 Every request to a company's APIs, conversations, feedback, browser-session
 `/authorize`, MCP, and extension endpoints carries a Session JWT in the
-`Poppy-Session` header, signed for that one request. OAuth endpoints and web
-pages get none. The company keeps Sessions by `client_id` and `sid`, and learns of
-a new one from the first request that names it.
+`Poppy-Session` header, signed for that one request. The destinations come
+from the company's `poppy.json`: the request URLs its listed APIs describe and
+the protocol endpoints listed there or derived from them (§5.2); sharing a
+hostname with one of them makes no other URL a destination, and a web
+alternative's page, which may be any HTTPS site, gets no Session JWT or token
+either. Discovery and description documents, OAuth endpoints and web pages
+get none: the SDKs' discovery and OAuth clients send no Session header, and
+`SessionHttpClient` is used only for the endpoints above. The company keeps
+Sessions by `client_id` and `sid`, and learns of a new one from the first
+request that names it. Its Session records need not be durable: conversations
+are stored apart and outlast their Sessions, and servers behind a load balancer
+share whatever Session state they keep, as with server-side cookie sessions
+(the reference companies keep it in the company store).
 
 - **Start** (`start`): a new `sid`, and no request.
 - **Signed in**: sign-in names no Session. A request is signed in when it carries
@@ -54,7 +64,10 @@ A personal agent that acts for a user through several agents MAY name which one
 a Session is for with an Agent ID (`agent_id`, `agentId`). It follows the same
 rules as the User ID: stable, opaque, different for each company, never derived
 from personal information. A Session keeps the Agent ID it started with, and a
-restart keeps it too.
+restart keeps it too. Agent IDs cover only agents the personal agent's operator
+runs; an agent another company runs connects under its own `client_id`, and
+the user signs it in separately (§5.1). Agent IDs are not part of a
+conversation's ownership (§8.2).
 
 The client is intentionally not a key-management system. Before sending requests,
 the host must register exactly one active `pap.signer` and `pap.sessionSigner`

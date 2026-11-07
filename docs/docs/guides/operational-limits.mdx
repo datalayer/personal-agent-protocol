@@ -135,10 +135,11 @@ network failure, where no response or refusal came back, choose the key before
 the first attempt and pass it each time. `pap api openapi` prints the key and
 takes `--idempotency-key`.
 
-The reference companies keep a record per Session for
-`idempotency_lifetime` / `idempotencyLifetimeSeconds` (default a day) in the
-company store (record kind `idempotency`), holding a digest of the method,
-path, query and body and the response, never the credentials:
+The reference companies keep a record per personal agent, User and any
+account, not per Session, so a retry in a new Session still matches (guides,
+*Retries*), for `idempotency_lifetime` / `idempotencyLifetimeSeconds` (default
+a day) in the company store (record kind `idempotency`), holding a digest of
+the method, path, query and body and the response, never the credentials:
 
 | A request with a key that is | Answer |
 | --- | --- |

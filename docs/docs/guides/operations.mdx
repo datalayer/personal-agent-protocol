@@ -8,7 +8,8 @@ The Operations extension (version 2) gives actions an exact, durable approval,
 and adds no endpoints. A company that wants the user's approval refuses the
 request for the action and returns the operation: the terms, in plain language
 and as JSON. The personal agent gets the user's approval and makes the same
-request again with it. The company checks it, performs the action at most once,
+request again with it. The company checks it, in the extension's listed order
+and answering as the first failing check says, performs the action at most once,
 and responds as it would have without operations.
 
 | Interface | The operation arrives as | The approval goes back as |

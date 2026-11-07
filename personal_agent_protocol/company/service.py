@@ -2168,11 +2168,14 @@ class CompanyService:
         key = request.headers.get("idempotency-key")
         if key is None or method not in WRITE_METHODS:
             return await self._api_answer(request, method, path, session, body)
-        # A write with an Idempotency-Key (guides, *Retries*): remembered per Session for
+        # A write with an Idempotency-Key (guides, *Retries*): remembered for the agent, the
+        # User and any account, not the Session, so a retry in a new Session matches; kept
         # `idempotency_lifetime`, a repeat answered with the original response.
         if not IDEMPOTENCY_KEY.fullmatch(key):
             raise _RefusedError(400, "invalid_request")
-        record = _composite(session.session_key, key)
+        record = _composite(
+            session.client_id, session.pairwise_user_id, session.account_id or "", key
+        )
         request_digest = _composite(
             method,
             path,

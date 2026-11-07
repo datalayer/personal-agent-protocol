@@ -1136,11 +1136,12 @@ test("a delegation is checked: typ, iss, lifetime, the key, cnf.jwk; a JWT signe
   assert.deepEqual(await send(direct), refused);
 });
 
-test("a JWT signed after its delegation's exp is refused; verified delegations are cached until then", async () => {
+test("a JWT's iat past its delegation's exp is not refused on its own; verified delegations are cached until they expire", async () => {
   const w = await world();
   const session = await w.start();
   const now = Math.floor(w.clock.now().getTime() / 1000);
-  // Its delegation expired before the JWT's iat, though the clock still allows the iat.
+  // Its delegation's exp is before one JWT's iat, though the clock still allows the iat: the
+  // delegation hasn't expired and the iat is in its window, so nothing refuses it (§5.2).
   const { publicKey, privateKey } = await generateKeyPair("ES256", { extractable: true });
   const { kty, crv, x, y } = await exportJWK(publicKey);
   const jwk = { kty, crv, x, y };
@@ -1153,7 +1154,7 @@ test("a JWT signed after its delegation's exp is refused; verified delegations a
   const answer = async (value) => (await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": value } })).status;
   assert.equal(await answer(await sign(now)), 401);
   assert.equal(w.shop.delegations.size, 1);
-  assert.equal(await answer(await sign(now + 11)), 400); // iat past the delegation's exp
+  assert.equal(await answer(await sign(now + 11)), 401); // iat past the delegation's exp: no check
   assert.equal(await answer(await sign(now)), 401); // the same delegation, cached
   w.clock.advance(11);
   assert.equal(await answer(await sign(now + 5)), 400); // the delegation has expired

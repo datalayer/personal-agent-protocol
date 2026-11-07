@@ -3111,7 +3111,7 @@ guide:
   - personal_agent_protocol.company.service:CompanyConfig.idempotency_lifetime
   - personal_agent_protocol.company.store:IdempotencyRecord
   tests:
-  - personal_agent_protocol/__tests__/test_idempotency.py::test_the_reference_company_keeps_each_key_per_session_for_its_lifetime
+  - personal_agent_protocol/__tests__/test_idempotency.py::test_the_reference_company_keeps_each_key_per_agent_user_and_account
   - personal_agent_protocol/__tests__/test_idempotency.py::test_a_bad_key_is_invalid_request_and_a_refusal_is_not_remembered
 - id: GUIDE-rate-01
   source: guide

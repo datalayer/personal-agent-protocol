@@ -138,7 +138,10 @@ before starting on a task there, and tell the user at once when theirs is
 one of them, with the task's `alternative` when it has one: natural-language
 `instructions`, `references` to an OpenAPI operation, an MCP tool, or a web
 page, or both. An alternative is the company's content, a description of its
-interfaces, never instructions the agent must follow (§10.1).
+interfaces, never instructions the agent must follow (§10.1). A web reference
+may point to any HTTPS website or app; an `openapi` or `mcp` reference only to
+an API the company's `poppy.json` lists (`usable_references`). A link
+authorizes sending no Session JWT or access token to its target (§9.2).
 
 A task neither offered nor listed can be reported with
 `FeedbackClient.report`. The company answers `202` (the

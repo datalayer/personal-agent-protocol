@@ -1,5 +1,5 @@
 {
-  "description": "Idempotency-Key on API writes (guides, Retries): the personal agent sends a random UUID (version 4) on every write and the same key on a retry; the company keeps a record per Session for a set time, answers a repeated key with the original response, and refuses a repeated key with another request. Each SDK runs these steps against its reference company (manzanita.example), signed in with orders:write.",
+  "description": "Idempotency-Key on API writes (guides, Retries): the personal agent sends a random UUID (version 4) on every write and the same key on a retry; the company keeps a record for the personal agent, the User and any account, not the Session, for a set time, so a retry in a new Session matches, answers a repeated key with the original response, and refuses a repeated key with another request. Each SDK runs these steps against its reference company (manzanita.example), signed in with orders:write.",
   "header": "Idempotency-Key",
   "write_methods": [
     "POST",
@@ -113,8 +113,8 @@
       },
       "key": "4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f",
       "expect": {
-        "status": 403,
-        "answer": "fresh"
+        "status": 200,
+        "answer": "first"
       }
     },
     {

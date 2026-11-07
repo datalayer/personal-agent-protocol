@@ -315,7 +315,7 @@ export interface CompanyConfigOptions {
   /** The acceptance window of a Session JWT's `iat` (§5.3: such as one minute). */
   readonly sessionJwtWindowSeconds?: number;
   /**
-   * How long an API write's `Idempotency-Key` is remembered in its Session, with the
+   * How long an API write's `Idempotency-Key` is remembered for the agent, the User and any account, with the
    * original response a repeated key gets again (guides, *Retries*: a set time; default a day).
    */
   readonly idempotencyLifetimeSeconds?: number;
@@ -2300,10 +2300,11 @@ export class CompanyService {
     if (key === undefined || !WRITE_METHODS.has(method)) {
       return await this.#apiAnswer(request, api, method, path, session, body);
     }
-    // A write with an Idempotency-Key (guides, *Retries*): remembered per Session for
+    // A write with an Idempotency-Key (guides, *Retries*): remembered for the agent, the User
+    // and any account, not the Session, so a retry in a new Session matches; kept
     // `idempotencyLifetimeSeconds`, a repeat answered with the original response.
     if (!IDEMPOTENCY_KEY.test(key)) throw new Refused(400, "invalid_request");
-    const record = composite(session.sessionKey, key);
+    const record = composite(session.clientId, session.pairwiseUserId, session.accountId ?? "", key);
     const requestDigest = composite(method, path, new URL(request.url).search, canonical(body ?? null));
     const earlier = await this.#holdIdempotencyKey(record, requestDigest);
     if (earlier !== undefined) return earlier;

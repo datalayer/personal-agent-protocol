@@ -141,7 +141,7 @@ async def test_a_bad_key_or_a_key_on_a_read_is_the_callers_mistake() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_reference_company_keeps_each_key_per_session_for_its_lifetime() -> None:
+async def test_the_reference_company_keeps_each_key_per_agent_user_and_account() -> None:
     world, browser = direct_world()
     lifetime = timedelta(seconds=FIXTURE["lifetime_seconds"])
     world.shop, world.plugin = manzanita(

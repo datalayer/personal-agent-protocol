@@ -30,6 +30,7 @@ import {
   accountAccess,
   buildPapReactor,
   companyIdentifier,
+  companyProtocolVersion,
   conversationEndpoint,
   discoverCompany,
   extensionNameKind,
@@ -160,6 +161,7 @@ const CHECKS = {
     if ("issuer" in expect) assert.equal(company.oauthMetadata?.issuer ?? null, expect.issuer);
     if ("identifier" in expect) assert.equal(companyIdentifier(company), expect.identifier);
     if ("organization_domain" in expect) assert.equal(company.document.organization.domain, expect.organization_domain);
+    if ("protocol_version" in expect) assert.equal(companyProtocolVersion(company), expect.protocol_version);
     if ("discovery_url" in expect) assert.equal(company.discoveryUrl, expect.discovery_url);
   },
 

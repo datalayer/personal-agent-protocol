@@ -64,6 +64,8 @@ from .sessions import DPOP_HEADER, DPOP_NONCE_HEADER, AccessToken, PapSession
 
 #: The header that carries the Session JWT (§5.2).
 SESSION_HEADER = "Poppy-Session"
+#: The protocol version the request is in (§3.4), on every request with the Session header.
+VERSION_HEADER = "Poppy-Version"
 #: Refusals that ask the caller to come back later (Guides, retries and rate limits).
 _LATER = frozenset({429, 503})
 #: Methods retried on their own: they change nothing at the company.
@@ -112,9 +114,23 @@ def session_ended(response: httpx.Response) -> bool:
     return session_error(response) == "session_ended"
 
 
+def version_unsupported(response: httpx.Response) -> bool:
+    """Whether the company answered `version_unsupported` (§3.4): HTTP 400 and its JSON body.
+
+    `Poppy-Version` was missing, or names a version the company doesn't serve. The
+    personal agent fetches `poppy.json` again (`DiscoveryClient.discover(fresh=True)`) and
+    chooses again: a new Session at another version, and the request again once, or,
+    when it chooses the same version or none, no more of this request. The transport
+    never retries it: the choice is discovery's.
+    """
+
+    return session_error(response) == "version_unsupported"
+
+
 def session_error(response: httpx.Response) -> str | None:
-    """The Session error the company answered with, `invalid_session` (§5.3) or
-    `session_ended` (§5.5): HTTP 400 and a JSON body naming it. None for any other response.
+    """The Session error the company answered with, `invalid_session` (§5.3),
+    `session_ended` (§5.5) or `version_unsupported` (§3.4): HTTP 400 and a JSON body
+    naming it. None for any other response.
     """
 
     if response.status_code != 400:
@@ -124,7 +140,7 @@ def session_error(response: httpx.Response) -> str | None:
     except Exception:
         return None
     error = payload.get("error") if isinstance(payload, dict) else None
-    return error if error in {"invalid_session", "session_ended"} else None
+    return error if error in {"invalid_session", "session_ended", "version_unsupported"} else None
 
 
 async def session_headers(
@@ -158,7 +174,8 @@ async def session_headers(
             access_token=None if token is None else token.access_token,
         )
     )
-    headers = {SESSION_HEADER: jwt.get_secret_value()}
+    # The Session header and, with it, the version the Session uses the Company at (§3.4).
+    headers = {SESSION_HEADER: jwt.get_secret_value(), VERSION_HEADER: session.protocol_version}
     if token is not None:
         headers["Authorization"] = f"{token.token_type} {token.access_token.get_secret_value()}"
     if token is not None and token.token_type == "DPoP":  # noqa: S105 - an OAuth token type

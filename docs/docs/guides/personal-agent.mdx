@@ -32,6 +32,33 @@ company gives an `organization.logo_uri`, show the logo next to its
 own copy rather than having the user's device load it from the company; the
 device sign-in start carries it as `organization_logo` (`organizationLogo`).
 
+## Versions
+
+A company can serve several protocol versions (§3.4). `poppy.json` is the
+document of the version it prefers; `supported_versions` maps each other version
+to that version's document. Discovery chooses the newest version compatible with
+the one this SDK implements (`PROTOCOL_PROFILE`; before 1.0 the same
+`major.minor`) and, when it is not `poppy.json`'s own, fetches that version's
+document: an HTTPS URL on the host that served `poppy.json`, no redirect
+followed, with the version it is listed under, no `supported_versions` of its
+own, and the company's domain and issuer; anything else is refused
+(`version_document_host`, `version_document_redirect`,
+`version_document_mismatch`), and a company with no compatible version at all is
+`unsupported_protocol_version`. `company.document` is the chosen version's
+document and `company.protocol_version` (`companyProtocolVersion(company)`) names
+it.
+
+Every request with the Session header carries `Poppy-Version`, the version the
+Session uses the company at (`PapSession.protocol_version`, `protocolVersion`),
+the same for the Session's life. A company that does not serve it answers
+`version_unsupported` (HTTP 400): the transport returns the refusal as it is
+(`version_unsupported(response)`), and the host reads `poppy.json` again with
+`discover(domain, fresh=True)` (`discoverCompany(domain, { fresh: true })`) and
+chooses again. Choosing another version means a new Session and the request
+again, once; choosing the same version, or none, ends the request. A
+`Deprecation` or `Sunset` header on a response is a sign to move that company to a
+newer version before the date it gives.
+
 ## Available now: start a signed-out session
 
 Resolve one pairwise identifier, the User ID, for each tenant, internal user,

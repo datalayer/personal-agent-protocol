@@ -94,6 +94,8 @@ import {
   type JsonWebKeySet,
   type Message,
   type Operation,
+  compatibleVersions,
+  parseVersion,
 } from "../models.js";
 import {
   APPROVAL_HEADER,
@@ -195,6 +197,8 @@ export const JOIN_COOKIE = "__Host-poppy_join";
 const JOIN_LIFETIME_SECONDS = 60;
 /** The header that carries the Session JWT (§5.2), as a neutral request names it. */
 const SESSION_HEADER = "poppy-session";
+/** The header that names the request's protocol version, with the Session header (§3.4). */
+const VERSION_HEADER = "poppy-version";
 /** The key prefix of a `client_id`'s Mediated Sign-In attempts: it has its own limit. */
 const CLIENT_ATTEMPTS = "client:";
 /** How long a Mediated Sign-In's one-time code can be sent, in seconds. */
@@ -294,6 +298,21 @@ export interface CompanyConfigOptions {
   readonly excludedTasks?: readonly Readonly<Record<string, unknown>>[];
   /** An HTTPS URL of the company's logo, published as `organization.logo_uri` (§3.1). */
   readonly logoUri?: string;
+  /**
+   * The protocol versions the company serves (§3.4), the first the one it prefers:
+   * `poppy.json` is that version's document, and each other version's document is served at
+   * `/poppy/{version}.json` and listed in `supported_versions`. A request whose `Poppy-Version`
+   * is none of them is `version_unsupported`. The reference company speaks this SDK's version;
+   * another entry lets a personal agent's choice among versions be exercised, and is answered
+   * the same way.
+   */
+  readonly protocolVersions?: readonly string[];
+  /**
+   * Versions the company plans to stop serving, each with when it was deprecated and when it
+   * goes away (ISO 8601): responses to requests in that version carry `Deprecation` (RFC 9745)
+   * and `Sunset` (RFC 8594) (§3.4, a MAY).
+   */
+  readonly deprecatedVersions?: Readonly<Record<string, readonly [since: string, until: string]>>;
   /**
    * Skills for personal agents acting for the user here (§9.4): each a name, a description and
    * the text of its `SKILL.md`, served at `/poppy/skills/{name}/SKILL.md` and listed in the
@@ -408,6 +427,8 @@ export class CompanyConfig {
   readonly scopeHints: Readonly<Record<string, readonly [string, boolean]>>;
   readonly excludedTasks: readonly Readonly<Record<string, unknown>>[];
   readonly logoUri: string | undefined;
+  readonly protocolVersions: readonly string[];
+  readonly deprecatedVersions: Readonly<Record<string, readonly [since: string, until: string]>>;
   readonly skills: readonly (readonly [name: string, description: string, text: string])[];
   readonly conversationResource: boolean;
   readonly feedbackAnswers: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
@@ -466,6 +487,15 @@ export class CompanyConfig {
     this.scopeHints = { ...(options.scopeHints ?? {}) };
     this.excludedTasks = [...(options.excludedTasks ?? [])];
     this.logoUri = options.logoUri;
+    this.protocolVersions = [...(options.protocolVersions ?? [PROTOCOL_PROFILE])];
+    if (!this.protocolVersions.length || new Set(this.protocolVersions).size !== this.protocolVersions.length) {
+      throw new RangeError("protocolVersions lists each version the company serves once");
+    }
+    for (const version of this.protocolVersions) parseVersion(version);
+    this.deprecatedVersions = { ...(options.deprecatedVersions ?? {}) };
+    if (Object.keys(this.deprecatedVersions).some((version) => !this.protocolVersions.includes(version))) {
+      throw new RangeError("deprecatedVersions are served versions");
+    }
     this.skills = [...(options.skills ?? [])];
     this.conversationResource = options.conversationResource ?? false;
     this.feedbackAnswers = { ...(options.feedbackAnswers ?? {}) };
@@ -605,6 +635,26 @@ export class CompanyConfig {
   get mediatedGrantScopes(): readonly string[] {
     return this.mediatedScopes.length ? this.mediatedScopes : this.scopes;
   }
+  /** The version `poppy.json` is the document of (§3.4). */
+  get preferredVersion(): string {
+    return this.protocolVersions[0] as string;
+  }
+
+  /** Where another served version's document is (§3.4): on the company's own host. */
+  versionDocumentUrl(version: string): string {
+    return `${this.base}/poppy/${version}.json`;
+  }
+
+  /** Whether a request's `Poppy-Version` is compatible with a version served (§3.4). */
+  servesVersion(version: string | undefined): boolean {
+    if (version === undefined) return false;
+    try {
+      return this.protocolVersions.some((served) => compatibleVersions(version, served));
+    } catch {
+      return false;
+    }
+  }
+
   get conversationsEndpoint(): string {
     return `${this.base}/poppy/conversations`;
   }
@@ -682,6 +732,8 @@ export interface CallerSession {
   readonly scopes: readonly string[];
   readonly family?: string;
   readonly resource?: string;
+  /** The protocol version the request is in, its `Poppy-Version` (§3.4). */
+  readonly protocolVersion: string;
 }
 
 class Refused extends Error {
@@ -748,6 +800,8 @@ interface Exchange {
   readonly route: string;
   clientId?: string;
   replayed: boolean;
+  /** The request's verified `Poppy-Version` (§3.4), once checked. */
+  protocolVersion?: string;
 }
 
 const exchanges = new AsyncLocalStorage<Exchange>();
@@ -1183,7 +1237,19 @@ export class CompanyService {
     return exchanges.run(exchange, async () => {
       const response = await this.#dispatch(request);
       if (response.status >= 400) this.#reportRefusal(response);
-      return response;
+      const deprecated = exchange.protocolVersion === undefined ? undefined : this.config.deprecatedVersions[exchange.protocolVersion];
+      if (deprecated === undefined) return response;
+      // A version the company plans to stop serving says so on its responses (§3.4):
+      // `Deprecation` (RFC 9745) and `Sunset` (RFC 8594).
+      const [since, until] = deprecated;
+      return {
+        ...response,
+        headers: {
+          ...response.headers,
+          Deprecation: `@${Math.floor(new Date(since).getTime() / 1000)}`,
+          Sunset: new Date(until).toUTCString(),
+        },
+      };
     });
   }
 
@@ -1215,6 +1281,13 @@ export class CompanyService {
       }
       if (method === "GET" && path === "/.well-known/poppy.json") {
         return { status: 200, body: this.discoveryDocument(), headers: {} };
+      }
+      if (method === "GET" && path.startsWith("/poppy/") && path.endsWith(".json")) {
+        // Another served version's document, where `supported_versions` lists it (§3.4).
+        const version = path.slice("/poppy/".length, -".json".length);
+        if (this.config.protocolVersions.slice(1).includes(version)) {
+          return { status: 200, body: this.discoveryDocument(undefined, version), headers: {} };
+        }
       }
       if (method === "GET" && path === "/.well-known/oauth-protected-resource") {
         return { status: 200, body: this.domainResourceMetadata(), headers: {} };
@@ -1302,13 +1375,27 @@ export class CompanyService {
    *
    * Every domain's document has the same `auth`, which describes the issuer (§3.2).
    */
-  discoveryDocument(domain?: string): Record<string, unknown> {
+  /**
+   * The discovery document published at `domain`: the company's own, or one of its aliases.
+   *
+   * `poppy.json` is the preferred version's document and maps each other served version to its
+   * document in `supported_versions`; `version` names one of those documents, which has that
+   * `protocol_version` and no `supported_versions` (§3.4).
+   */
+  discoveryDocument(domain?: string, version?: string): Record<string, unknown> {
     const config = this.config;
     if (domain !== undefined && domain !== config.domain && !config.aliases.includes(domain)) {
       throw new RangeError(`${domain} is not one of this company's domains`);
     }
     const document: Record<string, unknown> = {
-      protocol_version: PROTOCOL_PROFILE,
+      protocol_version: version ?? config.preferredVersion,
+      ...(version === undefined && config.protocolVersions.length > 1
+        ? {
+            supported_versions: Object.fromEntries(
+              config.protocolVersions.slice(1).map((other) => [other, config.versionDocumentUrl(other)]),
+            ),
+          }
+        : {}),
       organization: {
         name: config.name,
         domain: domain ?? config.domain,
@@ -2728,6 +2815,11 @@ export class CompanyService {
     // A request can be the agent's first: a Session needs no OAuth endpoint (§4). Only now is
     // its identity verified, so a forged JWT is never reported as a check, or remembered.
     if (metadata !== undefined) await this.#rememberClient(verified.clientId, metadata);
+    // With the Session header, the version the request is in (§3.4): missing, or none the
+    // company serves, is `version_unsupported`; never handled under another version.
+    const version = request.headers[VERSION_HEADER];
+    if (!this.config.servesVersion(version)) throw new Refused(400, "version_unsupported");
+    if (exchange !== undefined) exchange.protocolVersion = version;
     await this.#operatorSignature(request);
     let issued: IssuedAccessToken | undefined;
     if (presented !== undefined) {
@@ -2758,6 +2850,7 @@ export class CompanyService {
       ...(issued === undefined ? {} : { accountId: issued.accountId, family: issued.family }),
       scopes: issued === undefined ? [] : issued.scopes,
       ...(resource === undefined ? {} : { resource }),
+      protocolVersion: version as string,
     };
     const wait = await this.#admitted(session);
     if (wait !== undefined) throw new RateLimitedRefusal(wait);

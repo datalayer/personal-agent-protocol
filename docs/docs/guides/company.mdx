@@ -99,6 +99,32 @@ The reference companies do this with `oauth=False` (`oauth: false`): no OAuth se
 no `auth`, a 404 at the protected resource metadata, and no Mediated Sign-In,
 Operations, aliases or DPoP, which each need an issuer.
 
+## Serving several versions
+
+A company can serve several protocol versions at once (§3.4), so personal agents
+move at their own pace. `poppy.json` is the document of the version the company
+prefers, and `supported_versions` maps each other version it serves to that
+version's document, an HTTPS URL on the same host. Every document has the same
+`organization.domain` and selects the same issuer, so a new version never changes
+the company's identifier, User IDs or refresh tokens.
+
+`CompanyConfig.protocol_versions` (`protocolVersions`) lists the versions the
+reference company serves, the first the preferred one. Each other version's
+document is served at `/poppy/{version}.json`, with that `protocol_version` and no
+`supported_versions`. A request whose `Poppy-Version` is missing or names no served
+version is refused with `version_unsupported` (HTTP 400, JSON body) where the
+Session header is verified, and is never handled under another version. The
+reference company speaks this SDK's version only; another entry lets a personal
+agent's choice be exercised and is answered the same way.
+
+To retire a version, name it in `deprecated_versions` (`deprecatedVersions`) with
+when it was deprecated and when it goes away: responses to requests in that
+version then carry `Deprecation` (RFC 9745) and `Sunset` (RFC 8594). Remove it from
+`protocol_versions` afterwards; a personal agent with a cached document gets
+`version_unsupported`, reads `poppy.json` again and moves. A company that serves
+one version checks `Poppy-Version` where it verifies the Session header, and that
+is all.
+
 ## Implement in this order
 
 1. Publish discovery and OAuth metadata with ordinary signed-out access.

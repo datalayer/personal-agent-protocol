@@ -70,6 +70,7 @@ from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequen
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from email.utils import format_datetime
 from http.cookies import CookieError, SimpleCookie
 from typing import Any, Literal, NoReturn, Protocol, TypeVar, cast
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -108,7 +109,9 @@ from ..models import (
     LinksContent,
     Message,
     Operation,
+    compatible_versions,
     operations_content,
+    parse_version,
     redirect_uri_matches,
 )
 from ..operations import (
@@ -416,6 +419,17 @@ class CompanyConfig:
     device_page: str | None = None
     #: A hosted consent page with `{request_id}`: `GET /oauth/authorize` answers 303 to it.
     consent_page: str | None = None
+    #: The protocol versions the company serves (§3.4), the first the one it prefers:
+    #: `poppy.json` is that version's document, and each other version's document is
+    #: served at `/poppy/{version}.json` and listed in `supported_versions`. A request
+    #: whose `Poppy-Version` is none of them is `version_unsupported`. The reference
+    #: company speaks this SDK's version; another entry lets a personal agent's choice
+    #: among versions be exercised, and is answered the same way.
+    protocol_versions: tuple[str, ...] = (PROTOCOL_PROFILE,)
+    #: Versions the company plans to stop serving, each with when it was deprecated and
+    #: when it goes away: responses to requests in that version carry `Deprecation`
+    #: (RFC 9745) and `Sunset` (RFC 8594) (§3.4, a MAY).
+    deprecated_versions: Mapping[str, tuple[datetime, datetime]] = field(default_factory=dict)
     #: Other domains that are this company (§3): each publishes its discovery document,
     #: naming itself as the organization's domain, and the issuer's metadata lists it in
     #: `protected_resources`. Everything else stays on `domain`, the issuer's: an alias is never
@@ -449,6 +463,14 @@ class CompanyConfig:
 
     def __post_init__(self) -> None:  # noqa: C901 - one branch per protocol rule
         _check_aliases(self.domain, self.aliases)
+        if not self.protocol_versions or len(set(self.protocol_versions)) != len(
+            self.protocol_versions
+        ):
+            raise ValueError("protocol_versions lists each version the company serves once")
+        for version in self.protocol_versions:
+            parse_version(version)
+        if any(version not in self.protocol_versions for version in self.deprecated_versions):
+            raise ValueError("deprecated_versions are served versions")
         _check_positive(
             idempotency_lifetime=self.idempotency_lifetime,
             session_lifetime=self.session_lifetime,
@@ -579,6 +601,27 @@ class CompanyConfig:
         return self.mediated_scopes or self.scopes
 
     @property
+    def preferred_version(self) -> str:
+        """The version `poppy.json` is the document of (§3.4)."""
+
+        return self.protocol_versions[0]
+
+    def version_document_url(self, version: str) -> str:
+        """Where another served version's document is (§3.4): on the company's own host."""
+
+        return f"{self.base}/poppy/{version}.json"
+
+    def serves_version(self, version: str | None) -> bool:
+        """Whether a request's `Poppy-Version` is compatible with a version served (§3.4)."""
+
+        if version is None:
+            return False
+        try:
+            return any(compatible_versions(version, v) for v in self.protocol_versions)
+        except ValueError:
+            return False
+
+    @property
     def conversations_endpoint(self) -> str:
         return f"{self.base}/poppy/conversations"
 
@@ -649,6 +692,8 @@ class CallerSession:
     scopes: tuple[str, ...] = ()
     family: str | None = None
     resource: str | None = None
+    #: The protocol version the request is in, its `Poppy-Version` (§3.4).
+    protocol_version: str = PROTOCOL_PROFILE
 
     @property
     def signed_in(self) -> bool:
@@ -657,6 +702,8 @@ class CallerSession:
 
 #: The header that carries the Session JWT (§5.2).
 SESSION_HEADER = "poppy-session"
+#: The header that names the request's protocol version, with the Session header (§3.4).
+VERSION_HEADER = "poppy-version"
 
 
 @dataclass(frozen=True)
@@ -889,6 +936,8 @@ class _Exchange:
     route: str
     client_id: str | None = None
     replayed: bool = False
+    #: The request's verified `Poppy-Version` (§3.4), once checked.
+    protocol_version: str | None = None
 
 
 _EXCHANGE: ContextVar[_Exchange | None] = ContextVar("pap_company_exchange", default=None)
@@ -1039,11 +1088,23 @@ class CompanyService:
         """Answer one request; what it came to is reported to `pap.telemetry`."""
 
         path = urlsplit(request.url).path
-        token = _EXCHANGE.set(_Exchange(started=time.perf_counter(), route=_route_of(path)))
+        exchange = _Exchange(started=time.perf_counter(), route=_route_of(path))
+        token = _EXCHANGE.set(exchange)
         try:
             response = await self._dispatch(request)
             if response.status >= 400:
                 self._report_refusal(response)
+            deprecated = self.config.deprecated_versions.get(exchange.protocol_version or "")
+            if deprecated is not None:
+                # A version the company plans to stop serving says so on its responses
+                # (§3.4): `Deprecation` (RFC 9745) and `Sunset` (RFC 8594).
+                since, until = deprecated
+                headers = {
+                    **response.headers,
+                    "Deprecation": f"@{int(since.timestamp())}",
+                    "Sunset": format_datetime(until, usegmt=True),
+                }
+                response = replace(response, headers=headers)
             return response
         finally:
             _EXCHANGE.reset(token)
@@ -1074,6 +1135,11 @@ class CompanyService:
                 return _json_error(404, "not_found")
             if method == "GET" and path == "/.well-known/poppy.json":
                 return CompanyResponse(200, self.discovery_document())
+            if method == "GET" and path.startswith("/poppy/") and path.endswith(".json"):
+                # Another served version's document, where `supported_versions` lists it (§3.4).
+                version = path[len("/poppy/") : -len(".json")]
+                if version in self.config.protocol_versions[1:]:
+                    return CompanyResponse(200, self.discovery_document(version=version))
             if method == "GET" and path == "/.well-known/oauth-protected-resource":
                 return CompanyResponse(200, self.domain_resource_metadata())
             if method == "GET" and path == "/.well-known/oauth-authorization-server":
@@ -1152,20 +1218,27 @@ class CompanyService:
     # Discovery ---------------------------------------------------------------------
 
     def discovery_document(  # noqa: C901 - one branch per member
-        self, domain: str | None = None
+        self, domain: str | None = None, *, version: str | None = None
     ) -> dict[str, Any]:
         """The discovery document published at `domain`: the company's own, or one of its
         aliases, which it names as the organization's domain; its endpoints stay on `base`.
 
         Every domain's document has the same `auth`, which describes the issuer (§3.2).
+        `poppy.json` is the preferred version's document and maps each other served
+        version to its document in `supported_versions`; `version` names one of those
+        documents, which has that `protocol_version` and no `supported_versions` (§3.4).
         """
         config = self.config
         organization = config.organization_domain(domain)
         document: dict[str, Any] = {
-            "protocol_version": PROTOCOL_PROFILE,
+            "protocol_version": version or config.preferred_version,
             "organization": {"name": config.name, "domain": organization},
             "agent": {"protocols": [{"type": "poppy", "endpoint": config.conversations_endpoint}]},
         }
+        if version is None and len(config.protocol_versions) > 1:
+            document["supported_versions"] = {
+                other: config.version_document_url(other) for other in config.protocol_versions[1:]
+            }
         if config.logo_uri is not None:
             document["organization"]["logo_uri"] = config.logo_uri
         if config.oauth:
@@ -2428,6 +2501,13 @@ class CompanyService:
         # is its identity verified, so a forged JWT is never reported as a check, or remembered.
         if declared is not None:
             await self._remember_client(verified.client_id, declared)
+        # With the Session header, the version the request is in (§3.4): missing, or none
+        # the company serves, is `version_unsupported`; never handled under another version.
+        version = request.headers.get(VERSION_HEADER)
+        if not self.config.serves_version(version):
+            raise _RefusedError(400, "version_unsupported")
+        if exchange is not None:
+            exchange.protocol_version = version
         await self._operator_signature(request)
         issued: IssuedAccessToken | None = None
         if presented is not None:
@@ -2459,6 +2539,7 @@ class CompanyService:
             scopes=() if issued is None else issued.scopes,
             family=None if issued is None else issued.family,
             resource=resource,
+            protocol_version=cast(str, version),
         )
         wait = await self._admitted(session)
         if wait is not None:

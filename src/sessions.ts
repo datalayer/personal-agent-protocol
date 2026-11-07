@@ -20,6 +20,8 @@ import { DPOP_ALGORITHM, SESSION_ID } from "./crypto.js";
 import { PersonalAgentProtocolError, ProtocolValidationError, SessionError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { readLimitedText } from "./limits.js";
+import { SUPPORTED_PROTOCOL_VERSIONS, compatibleVersions } from "./models.js";
+import { PROTOCOL_PROFILE } from "./profile.js";
 import {
   Clocks,
   DpopProvers,
@@ -181,6 +183,7 @@ export interface PapSessionJson {
   readonly client_id: string;
   readonly tenant_id: string;
   readonly agent_id: string | null;
+  readonly protocol_version?: string;
 }
 
 /**
@@ -198,6 +201,12 @@ export class PapSession {
   readonly clientId: string;
   readonly tenantId: string;
   readonly agentId: string | undefined;
+  /**
+   * The protocol version the Session uses the Company at (§3.4), named in `Poppy-Version` on
+   * every request with the Session header, the same for its whole life: the version this SDK
+   * implements, compatible with the one chosen at discovery.
+   */
+  readonly protocolVersion: string;
 
   constructor(options: {
     readonly sid: string;
@@ -206,6 +215,7 @@ export class PapSession {
     readonly clientId: string;
     readonly tenantId: string;
     readonly agentId?: string | undefined;
+    readonly protocolVersion?: string | undefined;
   }) {
     if (!SESSION_ID.test(options.sid)) {
       throw new ProtocolValidationError(
@@ -231,6 +241,11 @@ export class PapSession {
     this.clientId = httpsUrl(options.clientId, "clientId");
     this.tenantId = options.tenantId;
     this.agentId = options.agentId;
+    const version = options.protocolVersion ?? PROTOCOL_PROFILE;
+    if (![...SUPPORTED_PROTOCOL_VERSIONS].some((mine) => compatibleVersions(version, mine))) {
+      throw new ProtocolValidationError("unsupported_protocol_version", "a Session uses a protocol version this SDK implements");
+    }
+    this.protocolVersion = version;
   }
 
   /** The Session's name for a person or a CLI: `ses_` and its `sid`. */
@@ -256,6 +271,7 @@ export class PapSession {
       client_id: this.clientId,
       tenant_id: this.tenantId,
       agent_id: this.agentId ?? null,
+      protocol_version: this.protocolVersion,
     };
   }
 
@@ -267,6 +283,7 @@ export class PapSession {
       clientId: value.client_id,
       tenantId: value.tenant_id,
       ...(value.agent_id === null ? {} : { agentId: value.agent_id }),
+      ...(value.protocol_version === undefined ? {} : { protocolVersion: value.protocol_version }),
     });
   }
 }

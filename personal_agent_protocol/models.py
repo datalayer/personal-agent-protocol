@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from datetime import datetime
 from ipaddress import ip_address
 from typing import Any, Literal, cast
@@ -25,11 +26,52 @@ from pydantic import (
 )
 
 from .errors import AuthorizationError
+from .profile import PROTOCOL_PROFILE
 
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
-#: The `protocol_version` values this SDK uses a document of (§3.1): before 1.0 every
-#: version can break the one before, so only its own `major.minor`.
-SUPPORTED_PROTOCOL_VERSIONS = frozenset({"0.3"})
+#: The protocol versions this SDK implements (§3.4): a Company's document is used at a
+#: version compatible with one of them, the same major and, before 1.0, the same minor.
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({PROTOCOL_PROFILE})
+
+
+def parse_version(value: str) -> tuple[int, int]:
+    """`major.minor` as numbers, or `ValueError`."""
+
+    match = _VERSION.fullmatch(value)
+    if match is None:
+        raise ValueError("a protocol version is major.minor")
+    return int(match["major"]), int(match["minor"])
+
+
+def compatible_versions(one: str, other: str) -> bool:
+    """Whether two protocol versions are compatible (§3.4): the same major version and,
+    before 1.0, the same minor version."""
+
+    first, second = parse_version(one), parse_version(other)
+    if first[0] != second[0]:
+        return False
+    return first[0] >= 1 or first[1] == second[1]
+
+
+def choose_protocol_version(
+    protocol_version: str,
+    supported_versions: Iterable[str] = (),
+    *,
+    implemented: Iterable[str] = SUPPORTED_PROTOCOL_VERSIONS,
+) -> str | None:
+    """The newest version, among `protocol_version` and `supported_versions`, that is
+    compatible with one this SDK implements (§3.4); `None` when none is, and the Personal
+    Agent then uses none of the documents."""
+
+    mine = tuple(implemented)
+    usable = [
+        version
+        for version in (protocol_version, *supported_versions)
+        if _VERSION.fullmatch(version) and any(compatible_versions(version, v) for v in mine)
+    ]
+    return max(usable, key=parse_version) if usable else None
+
+
 _EXTENSION_VERSION = re.compile(r"^(0|[1-9][0-9]*)$")
 #: OAuth scope syntax (RFC 6749 §3.3): one scope token.
 _SCOPE = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]+$")
@@ -356,6 +398,10 @@ class ExtensionDescriptor(ProtocolModel):
 
 class DiscoveryDocument(ProtocolModel):
     protocol_version: str
+    #: The other protocol versions the Company serves, each mapped to the HTTPS URL of
+    #: that version's document, on the host that served `poppy.json` (§3.4). A version's
+    #: own document lists none.
+    supported_versions: dict[str, str] = Field(default_factory=dict)
     organization: Organization
     auth: AuthCapabilities | None = None
     agent: AgentDescriptor | None = None
@@ -373,9 +419,15 @@ class DiscoveryDocument(ProtocolModel):
     def validate_protocol_version(cls, value: str) -> str:
         if not _VERSION.fullmatch(value):
             raise ValueError("protocol_version must use major.minor")
-        if value not in SUPPORTED_PROTOCOL_VERSIONS:
-            # Before 1.0 a document is used only at a major.minor this SDK supports (§3.1).
-            raise ValueError("unsupported Personal Agent Protocol version")
+        return value
+
+    @field_validator("supported_versions")
+    @classmethod
+    def validate_supported_versions(cls, value: dict[str, str]) -> dict[str, str]:
+        for version, url in value.items():
+            if not _VERSION.fullmatch(version):
+                raise ValueError("supported_versions are keyed by major.minor")
+            _https_url(url, f"supported_versions[{version}]")
         return value
 
     @model_validator(mode="after")
@@ -383,7 +435,19 @@ class DiscoveryDocument(ProtocolModel):
         if self.agent is None and not self.apis and self.web is None:
             # At least one of the three, not exactly one (§3.1).
             raise ValueError("at least one of agent, apis, or web is required")
+        if self.chosen_version is None:
+            # A document is used only at a version compatible with one this SDK
+            # implements, its own or one it links to (§3.1, §3.4).
+            raise ValueError("unsupported Personal Agent Protocol version")
         return self
+
+    @property
+    def chosen_version(self) -> str | None:
+        """The version the Personal Agent uses this Company at (§3.4): the newest, among
+        `protocol_version` and `supported_versions`, compatible with one it implements.
+        When it is not `protocol_version`, the version's own document is fetched and used."""
+
+        return choose_protocol_version(self.protocol_version, self.supported_versions)
 
     def usable_skills(self, base_url: str) -> list[SkillEntry]:
         """The skills of `skill_index` this SDK can use (§9.4), each `url` resolved.
@@ -1102,6 +1166,13 @@ class DiscoveredCompany(ProtocolModel):
         """Whether the Company turned sign-in off with `auth.disabled` (§3.2)."""
 
         return self.document.sign_in_disabled
+
+    @property
+    def protocol_version(self) -> str:
+        """The protocol version the Company is used at (§3.4): `document` is that
+        version's document, and every Session with the Company names it in `Poppy-Version`."""
+
+        return self.document.protocol_version
 
     @property
     def sign_in_types(self) -> tuple[str, ...]:

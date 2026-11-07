@@ -39,6 +39,8 @@ import { DPOP_HEADER, DPOP_NONCE_HEADER, type AccessToken, type PapSession } fro
 
 /** The header that carries the Session JWT (§5.2). */
 export const SESSION_HEADER = "Poppy-Session";
+/** The protocol version the request is in (§3.4), on every request with the Session header. */
+export const VERSION_HEADER = "Poppy-Version";
 /** Refusals that ask the caller to come back later (Guides, retries and rate limits). */
 const later = new Set([429, 503]);
 /** Methods retried on their own: they change nothing at the company. */
@@ -80,15 +82,33 @@ export async function sessionEnded(response: Response): Promise<boolean> {
 }
 
 /**
- * The Session error a company answered with, `invalid_session` (§5.3) or `session_ended`
- * (§5.5): HTTP 400 and a JSON body naming it. Undefined for any other response.
+ * Whether the company answered `version_unsupported` (§3.4): HTTP 400 and its JSON body.
+ *
+ * `Poppy-Version` was missing, or names a version the company doesn't serve. The personal
+ * agent fetches `poppy.json` again (`discoverCompany(domain, { fresh: true })`) and chooses
+ * again: a new Session at another version, and the request again once, or, when it chooses
+ * the same version or none, no more of this request. The transport never retries it: the
+ * choice is discovery's.
  */
-export async function sessionError(response: Response): Promise<"invalid_session" | "session_ended" | undefined> {
+export async function versionUnsupported(response: Response): Promise<boolean> {
+  return (await sessionError(response)) === "version_unsupported";
+}
+
+/**
+ * The Session error a company answered with, `invalid_session` (§5.3), `session_ended`
+ * (§5.5) or `version_unsupported` (§3.4): HTTP 400 and a JSON body naming it. Undefined for
+ * any other response.
+ */
+export async function sessionError(
+  response: Response,
+): Promise<"invalid_session" | "session_ended" | "version_unsupported" | undefined> {
   if (response.status !== 400) return undefined;
   try {
     const payload = parseJsonStrict(await response.clone().text());
     const error = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).error : undefined;
-    return error === "invalid_session" || error === "session_ended" ? error : undefined;
+    return error === "invalid_session" || error === "session_ended" || error === "version_unsupported"
+      ? error
+      : undefined;
   } catch {
     return undefined;
   }
@@ -125,7 +145,11 @@ export async function sessionHeaders(
     ...(session.agentId === undefined ? {} : { agentId: session.agentId }),
     ...(token === undefined ? {} : { accessToken: token.accessToken }),
   });
-  const headers: Record<string, string> = { [SESSION_HEADER]: jwt.reveal() };
+  // The Session header and, with it, the version the Session uses the Company at (§3.4).
+  const headers: Record<string, string> = {
+    [SESSION_HEADER]: jwt.reveal(),
+    [VERSION_HEADER]: session.protocolVersion,
+  };
   if (token !== undefined) headers.Authorization = `${token.tokenType} ${token.accessToken.reveal()}`;
   if (token?.tokenType === "DPoP") {
     const proof = await firstContribution(reactor, DpopProvers, "DPoP prover").prove({

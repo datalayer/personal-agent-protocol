@@ -5,14 +5,56 @@
  */
 
 import { AuthorizationError, ProtocolValidationError } from "./errors.js";
+import { PROTOCOL_PROFILE } from "./profile.js";
 
 export type UnknownFields = Readonly<Record<string, unknown>>;
 
 /**
- * The `protocol_version` values this SDK uses a document of (§3.1): before 1.0 every
- * version can break the one before, so only its own `major.minor`.
+ * The protocol versions this SDK implements (§3.4): a Company's document is used at a
+ * version compatible with one of them, the same major and, before 1.0, the same minor.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set(["0.3"]);
+export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([PROTOCOL_PROFILE]);
+const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+
+/** `major.minor` as numbers, or `ProtocolValidationError`. */
+export function parseVersion(value: string): readonly [major: number, minor: number] {
+  const match = VERSION.exec(value);
+  if (match === null) {
+    throw new ProtocolValidationError("unsupported_protocol_version", "a protocol version is major.minor");
+  }
+  return [Number(match[1]), Number(match[2])];
+}
+
+/**
+ * Whether two protocol versions are compatible (§3.4): the same major version and, before
+ * 1.0, the same minor version.
+ */
+export function compatibleVersions(one: string, other: string): boolean {
+  const [first, second] = [parseVersion(one), parseVersion(other)];
+  if (first[0] !== second[0]) return false;
+  return first[0] >= 1 || first[1] === second[1];
+}
+
+/**
+ * The newest version, among `protocolVersion` and `supportedVersions`, that is compatible with
+ * one this SDK implements (§3.4); `undefined` when none is, and the Personal Agent then uses
+ * none of the documents.
+ */
+export function chooseProtocolVersion(
+  protocolVersion: string,
+  supportedVersions: Iterable<string> = [],
+  implemented: Iterable<string> = SUPPORTED_PROTOCOL_VERSIONS,
+): string | undefined {
+  const mine = [...implemented];
+  const usable = [protocolVersion, ...supportedVersions].filter(
+    (version) => VERSION.test(version) && mine.some((v) => compatibleVersions(version, v)),
+  );
+  if (!usable.length) return undefined;
+  return usable.reduce((newest, version) => {
+    const [a, b] = [parseVersion(newest), parseVersion(version)];
+    return b[0] > a[0] || (b[0] === a[0] && b[1] > a[1]) ? version : newest;
+  });
+}
 /** OAuth scope syntax (RFC 6749 §3.3): one scope token. */
 const SCOPE = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 /** The grant a Company's token endpoint MUST accept (§3.2). */
@@ -233,6 +275,12 @@ export interface ExcludedTasksDescriptor extends UnknownFields {
 
 export interface DiscoveryDocument extends UnknownFields {
   readonly protocol_version: string;
+  /**
+   * The other protocol versions the Company serves, each mapped to the HTTPS URL of that
+   * version's document, on the host that served `poppy.json` (§3.4). A version's own document
+   * lists none.
+   */
+  readonly supported_versions: Readonly<Record<string, string>>;
   readonly organization: Organization;
   readonly auth?: AuthCapabilities;
   readonly agent?: AgentDescriptor;
@@ -506,6 +554,23 @@ export interface DiscoveredCompany {
   readonly document: DiscoveryDocument;
   readonly resourceMetadata?: ProtectedResourceMetadata;
   readonly oauthMetadata?: OAuthServerMetadata;
+}
+
+/**
+ * The version the Personal Agent uses this Company at (§3.4): the newest, among
+ * `protocol_version` and `supported_versions`, compatible with one it implements. When it is
+ * not `protocol_version`, the version's own document is fetched and used.
+ */
+export function chosenVersion(document: DiscoveryDocument): string | undefined {
+  return chooseProtocolVersion(document.protocol_version, Object.keys(document.supported_versions));
+}
+
+/**
+ * The protocol version the Company is used at (§3.4): `document` is that version's document,
+ * and every Session with the Company names it in `Poppy-Version`.
+ */
+export function companyProtocolVersion(company: DiscoveredCompany): string {
+  return company.document.protocol_version;
 }
 
 /** The Company's OAuth issuer, as found from its domain (§3.2). */
@@ -802,14 +867,22 @@ function stringMap(value: unknown, label: string): Readonly<Record<string, strin
 export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
   const source = record(value, "poppy.json");
   const version = string(source.protocol_version, "protocol_version");
-  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version)) {
+  if (!VERSION.test(version)) {
     throw new ProtocolValidationError("unsupported_protocol_version", "protocol_version must use major.minor");
   }
-  if (!SUPPORTED_PROTOCOL_VERSIONS.has(version)) {
-    // Before 1.0 a document is used only at a major.minor this SDK supports (§3.1).
+  const supportedVersions = stringMap(source.supported_versions ?? {}, "supported_versions");
+  for (const [other, url] of Object.entries(supportedVersions)) {
+    if (!VERSION.test(other)) {
+      throw new ProtocolValidationError("unsupported_protocol_version", "supported_versions are keyed by major.minor");
+    }
+    httpsUrl(url, `supported_versions[${other}]`);
+  }
+  if (chooseProtocolVersion(version, Object.keys(supportedVersions)) === undefined) {
+    // A document is used only at a version compatible with one this SDK implements, its
+    // own or one it links to (§3.1, §3.4).
     throw new ProtocolValidationError(
       "unsupported_protocol_version",
-      "protocol_version must be a supported major.minor version",
+      "protocol_version must be compatible with a version this SDK implements, or link to one",
     );
   }
 
@@ -935,6 +1008,7 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
   return {
     ...source,
     protocol_version: version,
+    supported_versions: supportedVersions,
     organization,
     ...(auth ? { auth } : {}),
     ...(agent ? { agent } : {}),

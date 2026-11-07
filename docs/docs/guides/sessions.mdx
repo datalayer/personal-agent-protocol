@@ -148,7 +148,8 @@ For each attempt, the transport (`SessionHttpClient`, `SessionFetchClient`):
 - asks `pap.sessionSigner` for a fresh Session JWT, bound to the request's method
   and URL, the Company's identifier, and the access token's hash (`ath`) when one is
   sent;
-- sends it in `Poppy-Session`, with any access token in `Authorization`, and
+- sends it in `Poppy-Session`, with the Session's protocol version in
+  `Poppy-Version` (§3.4) and any access token in `Authorization`, and
   refuses every redirect;
 - with a `DPoP` token, asks `pap.dpopProver` for a fresh proof, whose `ath` covers
   the same token, and sends it in `DPoP`;

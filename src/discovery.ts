@@ -9,7 +9,8 @@ import { DiscoveryError, ProtocolValidationError } from "./errors.js";
 import { readBoundedBytes, withinDeadline, type CacheBounds } from "./limits.js";
 import { parseJsonStrict } from "./json.js";
 import {
-  SUPPORTED_PROTOCOL_VERSIONS,
+  chooseProtocolVersion,
+  chosenVersion,
   companyIssuer,
   companyResource,
   listsResource,
@@ -49,6 +50,11 @@ export interface DiscoveryOptions {
   /** Cache-Control bounds for discovery and OAuth metadata (default: a minute to a day). */
   readonly cacheBounds?: CacheBounds;
   readonly signal?: AbortSignal;
+  /**
+   * Read `poppy.json` again, not a cached copy (§3.4): after `version_unsupported`, when the
+   * Personal Agent chooses a version again.
+   */
+  readonly fresh?: boolean;
 }
 
 function normalizeDomain(domain: string): string {
@@ -91,11 +97,15 @@ interface ReadOptions {
 }
 
 /** The document at `url`, from `pap.cache` while its `Cache-Control` allows (§3, §3.2). */
-async function readJson(initialUrl: URL, options: ReadOptions): Promise<Fetched> {
+async function readJson(
+  initialUrl: URL,
+  options: ReadOptions,
+  followRedirects = true,
+): Promise<Fetched> {
   const key = `pap.metadata:${initialUrl.toString()}`;
   const cached = await options.cache.get(key);
   if (cached !== undefined) return { value: cached.value, finalUrl: new URL(cached.finalUrl) };
-  const fetched = await fetchJson(initialUrl, options);
+  const fetched = await fetchJson(initialUrl, options, followRedirects);
   await options.cache.put(key, fetched.value, fetched.finalUrl.toString(), fetched.headers);
   return fetched;
 }
@@ -103,10 +113,12 @@ async function readJson(initialUrl: URL, options: ReadOptions): Promise<Fetched>
 async function fetchJson(
   initialUrl: URL,
   options: ReadOptions,
+  followRedirects = true,
 ): Promise<Fetched & { readonly headers: Headers }> {
   const { bytes, finalUrl, headers } = await fetchBytes(initialUrl, options, {
     accept: "application/json",
     maxBytes: options.maxResponseBytes,
+    followRedirects,
   });
   const contentType = headers.get("content-type")?.split(";", 1)[0]?.trim();
   if (contentType !== "application/json" && contentType !== "application/poppy+json") {
@@ -123,11 +135,14 @@ async function fetchJson(
   }
 }
 
-/** A public document at `url`, redirects followed within the address rules (§3). */
+/**
+ * A public document at `url`, redirects followed within the address rules (§3), or refused
+ * when `followRedirects` is off (a version's document, §3.4).
+ */
 async function fetchBytes(
   initialUrl: URL,
   options: ReadOptions,
-  bounds: { readonly accept: string; readonly maxBytes: number },
+  bounds: { readonly accept: string; readonly maxBytes: number; readonly followRedirects?: boolean },
 ): Promise<{ readonly bytes: Uint8Array; readonly finalUrl: URL; readonly headers: Headers }> {
   const { transport, urlPolicy, maxRedirects, timeoutMs, signal } = options;
   let current = initialUrl;
@@ -154,6 +169,9 @@ async function fetchBytes(
     if (response.status >= 300 && response.status < 400) {
       // A redirect's body is never read: cancelled, so its connection is released.
       await response.body?.cancel().catch(() => undefined);
+      if (bounds.followRedirects === false) {
+        throw new DiscoveryError("version_document_redirect", "A version's document is served where it is listed");
+      }
       if (redirects === maxRedirects) {
         throw new DiscoveryError("too_many_redirects", "Discovery exceeded redirect limit");
       }
@@ -253,13 +271,19 @@ function readOptions(options: DiscoveryOptions): { reactor: ReactorPlatformView;
   return { reactor, read };
 }
 
+/**
+ * The Company at `domain`, at the newest protocol version compatible with this SDK.
+ *
+ * `poppy.json` is the document of the version the Company prefers; when another of its
+ * `supported_versions` is the one chosen, that version's document is fetched and used instead
+ * (§3.4). `fresh` reads `poppy.json` again, not a cached copy.
+ */
 async function discover(domain: string, options: DiscoveryOptions): Promise<DiscoveredCompany> {
   const requestedDomain = normalizeDomain(domain);
   const { read } = readOptions(options);
-  const discovery = await readJson(
-    new URL(`https://${requestedDomain}/.well-known/poppy.json`),
-    read,
-  );
+  const poppyUrl = new URL(`https://${requestedDomain}/.well-known/poppy.json`);
+  if (options.fresh) await read.cache.delete(`pap.metadata:${poppyUrl.toString()}`);
+  const discovery = await readJson(poppyUrl, read);
   // A redirect may change host, but only a document at the well-known path itself, with
   // no query, speaks for a domain: not an upload elsewhere on it (§3, §9.3).
   if (discovery.finalUrl.pathname !== "/.well-known/poppy.json" || discovery.finalUrl.search) {
@@ -269,18 +293,15 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
     );
   }
   const raw = discovery.value;
-  const version =
-    typeof raw === "object" && raw !== null && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>).protocol_version
-      : undefined;
-  if (typeof version === "string" && !SUPPORTED_PROTOCOL_VERSIONS.has(version)) {
-    // Before 1.0 each version can break the last: only a supported major.minor (§3.1).
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && chosenOf(raw as Record<string, unknown>) === undefined) {
+    // Neither its own version nor one it links to is compatible with one this SDK
+    // implements: none of the documents is used (§3.1, §3.4).
     throw new DiscoveryError(
       "unsupported_protocol_version",
-      "poppy.json follows a protocol version this personal agent does not support",
+      "poppy.json follows no protocol version this personal agent supports",
     );
   }
-  const document = parseDiscoveryDocument(raw);
+  let document = parseDiscoveryDocument(raw);
   // The document speaks for the host that served it, after redirects, compared
   // ignoring case and nothing else (§3, §3.1).
   const servedBy = discovery.finalUrl.hostname.toLowerCase().replace(/\.$/, "");
@@ -289,6 +310,10 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
       "organization_domain_mismatch",
       "Discovery organization domain is not the host that served the document",
     );
+  }
+  const chosen = chosenVersion(document);
+  if (chosen !== undefined && chosen !== document.protocol_version) {
+    document = await versionDocument(document, chosen, discovery.finalUrl, read);
   }
   const resourceMetadata = await domainResourceMetadata(document, read);
   if (resourceMetadata === undefined || resourceMetadata.authorization_servers.length === 0) {
@@ -332,6 +357,62 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
     resourceMetadata,
     oauthMetadata,
   };
+}
+
+function chosenOf(raw: Record<string, unknown>): string | undefined {
+  const version = raw.protocol_version;
+  if (typeof version !== "string") return undefined;
+  const supported = raw.supported_versions;
+  const others =
+    typeof supported === "object" && supported !== null && !Array.isArray(supported)
+      ? Object.keys(supported)
+      : [];
+  return chooseProtocolVersion(version, others);
+}
+
+/**
+ * The document of `version`, one of the preferred document's `supported_versions` (§3.4): an
+ * HTTPS URL on the host that served `poppy.json`, fetched without following a redirect, with
+ * `version` as its `protocol_version`, no `supported_versions`, the same `organization.domain`
+ * and the same issuer.
+ */
+async function versionDocument(
+  preferred: DiscoveryDocument,
+  version: string,
+  poppyUrl: URL,
+  read: ReadOptions,
+): Promise<DiscoveryDocument> {
+  const url = preferred.supported_versions[version] as string;
+  const host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+  if (host !== poppyUrl.hostname.toLowerCase().replace(/\.$/, "")) {
+    throw new DiscoveryError("version_document_host", "A version's document is on the host that served poppy.json, never another");
+  }
+  const fetched = await readJson(new URL(url), read, false);
+  if (fetched.finalUrl.toString() !== new URL(url).toString()) {
+    throw new DiscoveryError("version_document_redirect", "A version's document is served where it is listed");
+  }
+  const mismatch = () =>
+    new DiscoveryError(
+      "version_document_mismatch",
+      "A version's document has the version it is listed under, no supported_versions, and the Company's domain and issuer",
+    );
+  const raw = fetched.value;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw mismatch();
+  if ((raw as Record<string, unknown>).protocol_version !== version) throw mismatch();
+  let document: DiscoveryDocument;
+  try {
+    document = parseDiscoveryDocument(raw);
+  } catch (cause) {
+    throw new ProtocolValidationError("invalid_discovery_document", "A version's document failed protocol validation", { cause });
+  }
+  if (
+    Object.keys(document.supported_versions).length ||
+    document.organization.domain !== preferred.organization.domain ||
+    document.auth?.issuer !== preferred.auth?.issuer
+  ) {
+    throw mismatch();
+  }
+  return document;
 }
 
 /**

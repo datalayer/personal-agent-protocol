@@ -42,6 +42,7 @@ import {
   parseProtectedResourceMetadata,
   messageOperation,
   operationsContent,
+  PROTOCOL_PROFILE,
 } from "../../lib/index.js";
 import { CompanyAccounts, CompanyApis, CompanyMcps, CompanyRateLimits, StaleConversationError } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita,
@@ -1031,12 +1032,12 @@ test("a Session JWT fails on each check of §5.3, and always as invalid_session"
   const { result } = await directSignIn(w);
   const token = result.token;
   const send = async (value, access = token.accessToken.reveal()) => {
-    const answer = await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": value, ...(access ? { Authorization: `Bearer ${access}` } : {}) } });
+    const answer = await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": value, "Poppy-Version": PROTOCOL_PROFILE, ...(access ? { Authorization: `Bearer ${access}` } : {}) } });
     return [answer.status, await answer.json()];
   };
   const refused = [400, { error: "invalid_session" }];
   const signed = (changes) => header(w, session, ORDERS, { token, ...changes });
-  assert.equal((await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": await signed({}), Authorization: `Bearer ${token.accessToken.reveal()}` } })).status, 200);
+  assert.equal((await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": await signed({}), "Poppy-Version": PROTOCOL_PROFILE, Authorization: `Bearer ${token.accessToken.reveal()}` } })).status, 200);
   // Signed with another key, but naming the delegated one.
   const { privateKey } = await generateKeyPair("ES256");
   assert.deepEqual(await send(await signed({ key: privateKey })), refused);
@@ -1102,7 +1103,7 @@ test("a delegation is checked: typ, iss, lifetime, the key, cnf.jwk; a JWT signe
   const w = await world();
   const session = await w.start();
   const send = async (value) => {
-    const answer = await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": value } });
+    const answer = await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": value, "Poppy-Version": PROTOCOL_PROFILE } });
     return [answer.status, await answer.text()];
   };
   const accepted = [401, ""]; // the Session header held: signed out, the challenge
@@ -1156,7 +1157,7 @@ test("a JWT's iat past its delegation's exp is not refused on its own; verified 
       new SignJWT({ iss: w.identity.clientId, aud: w.metadata.issuer, sid: session.sid, sub: session.sub, htm: "GET", htu: ORDERS, iat, jti: crypto.randomUUID().replaceAll("-", "") })
         .setProtectedHeader({ alg: "ES256", typ: "poppy-session+jwt", kid, poppy_dlg: compact })
         .sign(privateKey));
-  const answer = async (value) => (await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": value } })).status;
+  const answer = async (value) => (await w.fetch(ORDERS, { method: "GET", headers: { "Poppy-Session": value, "Poppy-Version": PROTOCOL_PROFILE } })).status;
   assert.equal(await answer(await sign(now)), 401);
   assert.equal(w.shop.delegations.size, 1);
   assert.equal(await answer(await sign(now + 11)), 401); // iat past the delegation's exp: no check

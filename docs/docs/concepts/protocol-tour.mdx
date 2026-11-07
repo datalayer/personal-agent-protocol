@@ -28,6 +28,14 @@ exact issuer and that its `protected_resources` lists
 the company offers, through `grant_types_supported`: Direct Sign-In with the
 authorization code grant, and Device Sign-In with the device code grant.
 
+A company can serve several protocol versions (§3.4): `poppy.json` is the
+preferred version's document and `supported_versions` maps each other version to
+its own document on the same host. The agent chooses the newest version compatible
+with the one it implements, fetches that document when it is not `poppy.json`'s
+own, and names the version in `Poppy-Version` on every request with the Session
+header, the same for the Session's life; a company that doesn't serve it answers
+`version_unsupported`, and the agent reads `poppy.json` again and chooses again.
+
 ## 2. Start a Session
 
 A Session ties together one user's activity at one company through one

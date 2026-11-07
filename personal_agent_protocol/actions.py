@@ -83,7 +83,9 @@ async def discover_company(
         "verified": True,
         "domain": document.organization.domain,
         "organization": document.organization.name,
-        "protocol_version": document.protocol_version,
+        # The version the Company is used at, and the others it serves (§3.4).
+        "protocol_version": company.protocol_version,
+        "supported_versions": sorted(document.supported_versions),
         "issuer": metadata.issuer if metadata else None,
         "identifier": company.identifier,
         # Direct, Device and Mediated from the issuer's grants, the last with its extension,

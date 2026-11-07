@@ -1142,6 +1142,7 @@ async def _no_disclosure(ctx: ConformanceContext, _: FixtureCase) -> None:
         headers={
             "Authorization": f"Bearer {secret}",
             "Poppy-Session": await ctx.forged_session_jwt(session, "GET", url, token=refresh_token),
+            "Poppy-Version": PROTOCOL_PROFILE,
         },
     )
     expect_refusal(used, 401, "invalid_token", "a refresh token at an API")
@@ -1340,6 +1341,7 @@ async def _refresh_token_at_api(ctx: ConformanceContext, _: FixtureCase) -> None
         headers={
             "Authorization": f"Bearer {secret.get_secret_value()}",
             "Poppy-Session": await ctx.forged_session_jwt(session, "GET", url, token=secret),
+            "Poppy-Version": PROTOCOL_PROFILE,
         },
     )
     expect_refusal(response, 401, "invalid_token", "a refresh token at an API")
@@ -2473,6 +2475,73 @@ async def _mcp_approval(ctx: ConformanceContext, _: FixtureCase) -> None:
 
 
 # Draft 0.2 company rules --------------------------------------------------------------
+
+
+@case("protocol.version-header-required")
+async def _version_header_required(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """With the Session header and no `Poppy-Version`: `version_unsupported` (§3.4)."""
+
+    user = ctx.new_user()
+    session = await ctx.session(user)
+    endpoint = await ctx.conversations_endpoint()
+    headers = await ctx.auth(session, "POST", endpoint)
+    del headers["Poppy-Version"]
+    body = _message(ctx.scenario.greeting).model_dump(mode="json", exclude_none=True)
+    response = await ctx.send(
+        "POST",
+        endpoint,
+        headers={**headers, "Content-Type": "application/json"},
+        content=json.dumps({"message": body}).encode(),
+    )
+    expect_refusal(response, 400, "version_unsupported", "no Poppy-Version")
+    check(response.headers.get("content-type", "").startswith("application/json"), "a JSON body")
+
+
+@case("protocol.version-unserved")
+async def _version_unserved(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A `Poppy-Version` the company doesn't serve: `version_unsupported`, and the request
+    is not handled under another version (§3.4)."""
+
+    user = ctx.new_user()
+    session = await ctx.session(user)
+    endpoint = await ctx.conversations_endpoint()
+    headers = {**await ctx.auth(session, "POST", endpoint), "Poppy-Version": "99.0"}
+    body = _message(ctx.scenario.greeting).model_dump(mode="json", exclude_none=True)
+    response = await ctx.send(
+        "POST",
+        endpoint,
+        headers={**headers, "Content-Type": "application/json"},
+        content=json.dumps({"message": body}).encode(),
+    )
+    expect_refusal(response, 400, "version_unsupported", "an unserved Poppy-Version")
+
+
+@case("protocol.supported-versions-published")
+async def _supported_versions_published(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """Each version `poppy.json` lists is served as §3.4 says; nothing to check when none is."""
+
+    company = await ctx.company()
+    raw = await ctx.send("GET", company.discovery_url)
+    preferred = raw.json()
+    listed = preferred.get("supported_versions") or {}
+    served_by = urlsplit(company.discovery_url).hostname
+    for version, url in listed.items():
+        parsed = urlsplit(url)
+        check(parsed.scheme == "https" and parsed.hostname == served_by, f"{version}: same host")
+        answer = await ctx.send("GET", url)
+        check(answer.status_code == 200, f"{version}: its document is served")
+        document = answer.json()
+        check(document.get("protocol_version") == version, f"{version}: its own version")
+        check("supported_versions" not in document, f"{version}: no supported_versions")
+        check(
+            document.get("organization", {}).get("domain") == preferred["organization"]["domain"],
+            f"{version}: the same organization.domain",
+        )
+        check(
+            (document.get("auth") or {}).get("issuer")
+            == (preferred.get("auth") or {}).get("issuer"),
+            f"{version}: the same issuer",
+        )
 
 
 @case("protocol.feedback-report")

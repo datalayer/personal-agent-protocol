@@ -853,6 +853,7 @@ caseFor("security.refusals-disclose-no-credential")(async (ctx) => {
     headers: {
       Authorization: `Bearer ${secret}`,
       "Poppy-Session": await ctx.forgedSessionJwt(session, "GET", url, { token: refresh }),
+      "Poppy-Version": PROTOCOL_PROFILE,
     },
   });
   await expectRefusal(used, 401, "invalid_token", "a refresh token at an API");
@@ -1002,6 +1003,7 @@ caseFor("lifecycle.refresh-token-at-api")(async (ctx) => {
     headers: {
       Authorization: `Bearer ${secret.reveal()}`,
       "Poppy-Session": await ctx.forgedSessionJwt(session, "GET", url, { token: secret }),
+      "Poppy-Version": PROTOCOL_PROFILE,
     },
   });
   await expectRefusal(response, 401, "invalid_token", "a refresh token at an API");
@@ -1800,6 +1802,45 @@ caseFor("operations.mcp-approval")(async (ctx) => {
 });
 
 // Company rules ---------------------------------------------------------------------------
+
+caseFor("protocol.version-header-required")(async (ctx) => {
+  const { session, endpoint } = await asUser(ctx);
+  const { "Poppy-Version": _version, ...headers } = await ctx.auth(session, "POST", endpoint);
+  const response = await ctx.send("POST", endpoint, {
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: message(ctx.scenario.greeting) }),
+  });
+  await expectRefusal(response, 400, "version_unsupported", "no Poppy-Version");
+  check((response.headers.get("content-type") ?? "").startsWith("application/json"), "a JSON body");
+});
+
+caseFor("protocol.version-unserved")(async (ctx) => {
+  const { session, endpoint } = await asUser(ctx);
+  const headers = { ...(await ctx.auth(session, "POST", endpoint)), "Poppy-Version": "99.0" };
+  const response = await ctx.send("POST", endpoint, {
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: message(ctx.scenario.greeting) }),
+  });
+  await expectRefusal(response, 400, "version_unsupported", "an unserved Poppy-Version");
+});
+
+caseFor("protocol.supported-versions-published")(async (ctx) => {
+  const company = await ctx.company();
+  const preferred = await (await ctx.send("GET", company.discoveryUrl)).json();
+  const listed = preferred.supported_versions ?? {};
+  const servedBy = new URL(company.discoveryUrl).hostname;
+  for (const [version, url] of Object.entries(listed)) {
+    const parsed = new URL(url);
+    check(parsed.protocol === "https:" && parsed.hostname === servedBy, `${version}: same host`);
+    const answer = await ctx.send("GET", url);
+    check(answer.status === 200, `${version}: its document is served`);
+    const document = await answer.json();
+    check(document.protocol_version === version, `${version}: its own version`);
+    check(!("supported_versions" in document), `${version}: no supported_versions`);
+    check(document.organization?.domain === preferred.organization.domain, `${version}: the same organization.domain`);
+    check(document.auth?.issuer === preferred.auth?.issuer, `${version}: the same issuer`);
+  }
+});
 
 caseFor("protocol.feedback-report")(async (ctx) => {
   // A report with the Session header, no scope: 202, or 200; malformed, 400 (§9.3).

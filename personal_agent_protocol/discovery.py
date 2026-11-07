@@ -17,13 +17,13 @@ from .caching import CacheBounds, MetadataCache
 from .errors import DiscoveryError, ProtocolValidationError
 from .json import loads_strict
 from .models import (
-    SUPPORTED_PROTOCOL_VERSIONS,
     DiscoveredCompany,
     DiscoveryDocument,
     ExcludedTasks,
     OAuthServerMetadata,
     ProtectedResourceMetadata,
     SkillEntry,
+    choose_protocol_version,
     protected_resource_metadata_url,
 )
 from .reactor import (
@@ -99,9 +99,21 @@ class DiscoveryClient:
             await self._owned_http.aclose()
 
     @traced("pap.discovery.discover", before=by_domain, after=company_result)
-    async def discover(self, domain: str) -> DiscoveredCompany:
+    async def discover(  # noqa: C901 - the checks of §3, §3.2 and §3.4, in order
+        self, domain: str, *, fresh: bool = False
+    ) -> DiscoveredCompany:
+        """The Company at `domain`, at the newest protocol version compatible with this SDK.
+
+        `poppy.json` is the document of the version the Company prefers; when another of
+        its `supported_versions` is the one chosen, that version's document is fetched
+        and used instead (§3.4). `fresh` reads `poppy.json` again, not a cached copy:
+        after `version_unsupported`, when the Personal Agent chooses again.
+        """
+
         requested_domain = self._normalize_domain(domain)
         discovery_url = f"https://{requested_domain}/.well-known/poppy.json"
+        if fresh:
+            await self._cache.delete(f"pap.metadata:{discovery_url}")
         document_data, final_url = await self._get_json(discovery_url)
         # A redirect may change host, but only a document at the well-known path itself,
         # with no query, speaks for a domain: not an upload elsewhere on it (§3, §9.3).
@@ -110,12 +122,12 @@ class DiscoveryClient:
                 "invalid_discovery_location",
                 "Discovery redirects must end at /.well-known/poppy.json with no query",
             )
-        version = document_data.get("protocol_version") if isinstance(document_data, dict) else None
-        if isinstance(version, str) and version not in SUPPORTED_PROTOCOL_VERSIONS:
-            # Before 1.0 each version can break the last: only a supported major.minor (§3.1).
+        if isinstance(document_data, dict) and self._chosen(document_data) is None:
+            # Neither its own version nor one it links to is compatible with one this
+            # SDK implements: none of the documents is used (§3.1, §3.4).
             raise DiscoveryError(
                 "unsupported_protocol_version",
-                "poppy.json follows a protocol version this personal agent does not support",
+                "poppy.json follows no protocol version this personal agent supports",
             )
         try:
             document = DiscoveryDocument.model_validate(document_data)
@@ -132,6 +144,9 @@ class DiscoveryClient:
                 "organization_domain_mismatch",
                 "Discovery organization domain is not the host that served the document",
             )
+        chosen = document.chosen_version
+        if chosen is not None and chosen != document.protocol_version:
+            document = await self._version_document(document, chosen, final_url)
 
         resource_metadata = await self._domain_resource_metadata(document)
         metadata: OAuthServerMetadata | None = None
@@ -169,6 +184,58 @@ class DiscoveryClient:
             oauth_metadata=metadata,
             resource_metadata=resource_metadata,
         )
+
+    @staticmethod
+    def _chosen(data: dict[str, object]) -> str | None:
+        version = data.get("protocol_version")
+        supported = data.get("supported_versions")
+        if not isinstance(version, str):
+            return None
+        others = [v for v in supported if isinstance(v, str)] if isinstance(supported, dict) else []
+        return choose_protocol_version(version, others)
+
+    async def _version_document(
+        self, preferred: DiscoveryDocument, version: str, poppy_url: httpx.URL
+    ) -> DiscoveryDocument:
+        """The document of `version`, one of the preferred document's `supported_versions`
+        (§3.4): an HTTPS URL on the host that served `poppy.json`, fetched without
+        following a redirect, with `version` as its `protocol_version`, no
+        `supported_versions`, the same `organization.domain` and the same issuer."""
+
+        url = preferred.supported_versions[version]
+        host = (urlsplit(url).hostname or "").lower().rstrip(".")
+        if host != (poppy_url.host or "").lower().rstrip("."):
+            raise DiscoveryError(
+                "version_document_host",
+                "A version's document is on the host that served poppy.json, never another",
+            )
+        data, final_url = await self._get_json(url, follow_redirects=False)
+        if str(final_url) != url:
+            raise DiscoveryError(
+                "version_document_redirect", "A version's document is served where it is listed"
+            )
+        mismatch = DiscoveryError(
+            "version_document_mismatch",
+            "A version's document has the version it is listed under, no supported_versions,"
+            " and the Company's domain and issuer",
+        )
+        if not isinstance(data, dict) or data.get("protocol_version") != version:
+            raise mismatch
+        try:
+            document = DiscoveryDocument.model_validate(data)
+        except ValidationError as exc:
+            raise ProtocolValidationError(
+                "invalid_discovery_document", "A version's document failed protocol validation"
+            ) from exc
+        named = preferred.auth.issuer if preferred.auth is not None else None
+        issuer = document.auth.issuer if document.auth is not None else None
+        if (
+            document.supported_versions
+            or document.organization.domain != preferred.organization.domain
+            or issuer != named
+        ):
+            raise mismatch
+        return document
 
     async def _domain_resource_metadata(
         self, document: DiscoveryDocument
@@ -306,19 +373,25 @@ class DiscoveryClient:
             raise DiscoveryError("invalid_domain", "Discovery requires a DNS domain name")
         return value
 
-    async def _get_json(self, url: str) -> tuple[object, httpx.URL]:
+    async def _get_json(
+        self, url: str, *, follow_redirects: bool = True
+    ) -> tuple[object, httpx.URL]:
         """The document at `url`, from `pap.cache` while its `Cache-Control` allows (§3, §3.2)."""
 
         key = f"pap.metadata:{url}"
         cached = await self._cache.get(key)
         if cached is not None:
             return cached.value, httpx.URL(cached.final_url)
-        value, final_url, headers = await self._fetch_json(url)
+        value, final_url, headers = await self._fetch_json(url, follow_redirects=follow_redirects)
         await self._cache.put(key, value, final_url=str(final_url), headers=headers)
         return value, final_url
 
-    async def _fetch_json(self, url: str) -> tuple[object, httpx.URL, dict[str, str]]:
-        content, final_url, headers = await self._fetch(url, max_bytes=self._max_bytes)
+    async def _fetch_json(
+        self, url: str, *, follow_redirects: bool = True
+    ) -> tuple[object, httpx.URL, dict[str, str]]:
+        content, final_url, headers = await self._fetch(
+            url, max_bytes=self._max_bytes, follow_redirects=follow_redirects
+        )
         content_type = headers.get("content-type", "").split(";", 1)[0].strip()
         if content_type not in {"application/json", "application/poppy+json"}:
             raise DiscoveryError("invalid_content_type", "Discovery response must be JSON")
@@ -343,8 +416,11 @@ class DiscoveryClient:
             )
         return content
 
-    async def _fetch(self, url: str, *, max_bytes: int) -> tuple[bytes, httpx.URL, dict[str, str]]:
-        """A public document at `url`, redirects followed within the address rules (§3)."""
+    async def _fetch(  # noqa: C901 - one branch per redirect rule
+        self, url: str, *, max_bytes: int, follow_redirects: bool = True
+    ) -> tuple[bytes, httpx.URL, dict[str, str]]:
+        """A public document at `url`, redirects followed within the address rules (§3),
+        or refused when `follow_redirects` is off (a version's document, §3.4)."""
 
         transport = first_contribution(self.reactor, DISCOVERY_TRANSPORTS, "discovery transport")
         policy = first_contribution(self.reactor, URL_SAFETY_POLICIES, "URL safety policy")
@@ -363,6 +439,11 @@ class DiscoveryClient:
             )
 
             if response.is_redirect:
+                if not follow_redirects:
+                    raise DiscoveryError(
+                        "version_document_redirect",
+                        "A version's document is served where it is listed",
+                    )
                 if redirect_count == self._max_redirects:
                     raise DiscoveryError("too_many_redirects", "Discovery exceeded redirect limit")
                 location = response.headers.get("location")

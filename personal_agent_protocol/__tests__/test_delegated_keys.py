@@ -13,7 +13,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from personal_agent_protocol import JoseSigner
+from personal_agent_protocol import PROTOCOL_PROFILE, JoseSigner
 from personal_agent_protocol.company.points import MemoryReplayCache
 from personal_agent_protocol.company.verify import (
     DelegationCache,
@@ -290,7 +290,7 @@ async def _headers(world: World, sid: str, url: str) -> dict[str, str]:
             sub="usr_ada_at_manzanita_000000",
         )
     )
-    return {"Poppy-Session": signed.get_secret_value()}
+    return {"Poppy-Session": signed.get_secret_value(), "Poppy-Version": PROTOCOL_PROFILE}
 
 
 @pytest.mark.asyncio

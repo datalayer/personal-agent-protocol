@@ -274,7 +274,7 @@ async def test_with_no_signer_contributed_requests_go_unsigned() -> None:
     headers = await session_headers(
         _reactor(None, http), "GET", URL, session=_session(), token=None
     )
-    assert list(headers) == ["Poppy-Session"]
+    assert list(headers) == ["Poppy-Session", "Poppy-Version"]
     await http.aclose()
 
 

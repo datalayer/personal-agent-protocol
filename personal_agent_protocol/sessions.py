@@ -30,7 +30,8 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 from .crypto import DPOP_ALGORITHM, SESSION_ID
 from .errors import PersonalAgentProtocolError, ProtocolValidationError, SessionError
 from .json import loads_strict
-from .models import ProtocolModel
+from .models import SUPPORTED_PROTOCOL_VERSIONS, ProtocolModel, compatible_versions
+from .profile import PROTOCOL_PROFILE
 from .reactor import (
     CLOCKS,
     DPOP_PROVERS,
@@ -167,10 +168,18 @@ class PapSession:
     client_id: str
     tenant_id: str
     agent_id: str | None = None
+    #: The protocol version the Session uses the Company at (§3.4), named in
+    #: `Poppy-Version` on every request with the Session header, the same for its whole
+    #: life: the version this SDK implements, compatible with the one chosen at discovery.
+    protocol_version: str = PROTOCOL_PROFILE
 
     def __post_init__(self) -> None:
         if not SESSION_ID.fullmatch(self.sid):
             raise ValueError("a Session ID is 22 to 256 URL-safe characters")
+        if not any(
+            compatible_versions(self.protocol_version, v) for v in SUPPORTED_PROTOCOL_VERSIONS
+        ):
+            raise ValueError("a Session uses a protocol version this SDK implements")
         if not self.sub:
             raise ValueError("a Session names its User ID")
         for name in ("issuer", "client_id"):
@@ -204,6 +213,7 @@ class PapSession:
             "client_id": self.client_id,
             "tenant_id": self.tenant_id,
             "agent_id": self.agent_id,
+            "protocol_version": self.protocol_version,
         }
 
     @classmethod
@@ -215,6 +225,7 @@ class PapSession:
             client_id=str(value["client_id"]),
             tenant_id=str(value["tenant_id"]),
             agent_id=value.get("agent_id"),
+            protocol_version=str(value.get("protocol_version") or PROTOCOL_PROFILE),
         )
 
 

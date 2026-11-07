@@ -177,20 +177,24 @@ requirements:
   section: '3.1'
   level: MUST NOT
   role: personal-agent
-  text: Before 1.0, each version can change the protocol in ways that aren't backward compatible, so a
-    Personal Agent MUST NOT use a document whose major.minor version it doesn't support.
+  text: A Personal Agent uses the document only if the version is compatible with one it implements (3.4),
+    and if none is, it MUST NOT use any of them.
   status: implemented
   implementation:
-  - personal_agent_protocol.models:DiscoveryDocument.validate_protocol_version
+  - personal_agent_protocol.models:DiscoveryDocument.validate_interfaces
+  - personal_agent_protocol.models:choose_protocol_version
   - personal_agent_protocol.models:SUPPORTED_PROTOCOL_VERSIONS
   - personal_agent_protocol.discovery:DiscoveryClient.discover
   tests:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_versions_are_compatible_by_major_and_before_1_0_by_minor
   conformance:
   - protocol.major-version-unsupported
   - protocol.minor-version-newer
   - protocol.older-version-unsupported
   - protocol.version-not-major-minor
+  - protocol.no-compatible-version
+  - protocol.supported-versions-newest-compatible
 - id: PAP-3.1-02
   section: '3.1'
   level: MUST
@@ -633,6 +637,128 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._token
   reason: The company parses requests with the same extra-tolerant models and ignores unknown form fields,
     but no test sends it unknown fields.
+- id: PAP-3.4-01
+  section: '3.4'
+  level: MUST
+  role: company
+  text: Each URL in supported_versions MUST be an HTTPS URL on the host that served poppy.json, after any
+    redirects.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.version_document_url
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_company_serves_its_other_versions_documents
+  conformance:
+  - protocol.supported-versions-published
+- id: PAP-3.4-02
+  section: '3.4'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent MUST NOT use a document whose URL is on another host, and MUST NOT follow a
+    redirect from it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient._version_document
+  - personal_agent_protocol.discovery:DiscoveryClient._fetch
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.supported-versions-other-host
+  - protocol.supported-versions-redirect
+- id: PAP-3.4-03
+  section: '3.4'
+  level: MUST NOT
+  role: personal-agent
+  text: The document there has the protocol_version it is listed under, and no supported_versions. The
+    Personal Agent MUST NOT use it if its protocol_version is another one.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.discovery:DiscoveryClient._version_document
+  tests:
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.supported-versions-version-mismatch
+  - protocol.supported-versions-lists-more
+- id: PAP-3.4-04
+  section: '3.4'
+  level: MUST
+  role: company
+  text: Every document a Company serves at the same time MUST have the same organization.domain and select
+    the same issuer (3.2), so that a new version doesn't change the Company's identifier, and with it User
+    IDs and refresh tokens.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  - personal_agent_protocol.discovery:DiscoveryClient._version_document
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_company_serves_its_other_versions_documents
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.supported-versions-published
+  - protocol.supported-versions-other-issuer
+- id: PAP-3.4-05
+  section: '3.4'
+  level: MUST NOT
+  role: personal-agent
+  text: Two versions are compatible when they have the same major version and, before 1.0, the same minor
+    version. The Personal Agent chooses the newest version, among protocol_version and the versions in
+    supported_versions, that is compatible with one it implements, and uses that version's document. If
+    none is, it MUST NOT use any of them.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:compatible_versions
+  - personal_agent_protocol.models:choose_protocol_version
+  - personal_agent_protocol.models:DiscoveryDocument.chosen_version
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_versions_are_compatible_by_major_and_before_1_0_by_minor
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.supported-versions-newest-compatible
+  - protocol.no-compatible-version
+- id: PAP-3.4-07
+  section: '3.4'
+  level: MUST
+  role: personal-agent
+  text: On every request with the Session header (5.2), the Personal Agent sends the protocol version it
+    implements, compatible with the chosen one, in Poppy-Version, as major.minor. The Personal Agent MUST
+    send the same values on every request in a Session, and starts a new Session to change them.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.sessions:PapSession
+  - personal_agent_protocol.transport:session_headers
+  - personal_agent_protocol.transport:VERSION_HEADER
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_every_request_with_the_session_header_names_the_sessions_version
+- id: PAP-3.4-08
+  section: '3.4'
+  level: MUST
+  role: company
+  text: An endpoint that verifies the Session header (5.3) MUST also check Poppy-Version.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  - personal_agent_protocol.company.service:CompanyConfig.serves_version
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_request_without_poppy_version_or_in_an_unserved_one_is_refused
+  conformance:
+  - protocol.version-header-required
+  - protocol.version-unserved
+- id: PAP-3.4-09
+  section: '3.4'
+  level: MUST NOT
+  role: company
+  text: It rejects a request without it, or with a version that isn't compatible with one the Company serves,
+    with version_unsupported (HTTP 400, JSON body), and MUST NOT handle the request under another version.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_request_without_poppy_version_or_in_an_unserved_one_is_refused
+  conformance:
+  - protocol.version-header-required
+  - protocol.version-unserved
 - id: PAP-4-01
   section: '4'
   level: SHOULD
@@ -3392,6 +3518,43 @@ guide:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   reason: Discovery returns the organization and the final discovery_url, so a host can tell the user;
     the SDK has no step of its own that tells them.
+- id: GUIDE-pa-versions-01
+  source: guide
+  section: Versions
+  level: SHOULD
+  role: personal-agent
+  text: You choose a protocol version and extension versions for each company, so you can move to a new
+    version one company at a time, or for some sessions first, and move back while the company still lists
+    the older version (3.4). Change versions only at a new session.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.sessions:PapSession
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_every_request_with_the_session_header_names_the_sessions_version
+- id: GUIDE-pa-versions-02
+  source: guide
+  section: Versions
+  level: SHOULD
+  role: personal-agent
+  text: A Deprecation or Sunset header on a response is a sign to move that company to a newer version before
+    the date it gives.
+  status: open
+  reason: The reference company sends both headers; the SDK's transport does not yet read them or tell the
+    host.
+  implementation: []
+  tests: []
+- id: GUIDE-pa-versions-03
+  source: guide
+  section: Versions
+  level: SHOULD
+  role: personal-agent
+  text: Record the versions each conversation started in. A company can refuse to continue a conversation
+    in a session with other versions, with version_mismatch (8.2).
+  status: open
+  reason: Conversations across versions are the next box (version_mismatch).
+  implementation: []
+  tests: []
 - id: GUIDE-pa-ids-01
   source: guide
   section: User IDs
@@ -3552,6 +3715,50 @@ guide:
   - personal_agent_protocol.conversations:ConversationClient.events
   tests:
   - personal_agent_protocol/__tests__/test_conversations.py::test_events_recover_cursor_drain_backlog_and_suppress_duplicates
+- id: GUIDE-co-versions-01
+  source: guide
+  section: Serving several versions
+  level: SHOULD
+  role: company
+  text: Publish the new version's document at a path of your own, such as /poppy/0.4.json, on the host
+    that serves poppy.json. Accept both versions at your endpoints, telling them apart by Poppy-Version.
+    Make it your preferred version in one deploy, serving it at /.well-known/poppy.json and adding the
+    older document's URL to supported_versions.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.protocol_versions
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_company_serves_its_other_versions_documents
+  conformance:
+  - protocol.supported-versions-published
+- id: GUIDE-co-versions-02
+  source: guide
+  section: Serving several versions
+  level: SHOULD
+  role: company
+  text: To retire a version, send Deprecation and Sunset on its responses for a while, then remove it from
+    supported_versions, then stop accepting it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.company.service:CompanyService.handle
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_company_serves_its_other_versions_documents
+- id: GUIDE-co-versions-03
+  source: guide
+  section: Serving several versions
+  level: SHOULD
+  role: company
+  text: If you serve one version, check Poppy-Version where you verify the Session header, and there is
+    nothing else to do.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._caller
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_request_without_poppy_version_or_in_an_unserved_one_is_refused
+  conformance:
+  - protocol.version-header-required
 - id: GUIDE-co-consent-01
   source: guide
   section: Consent pages

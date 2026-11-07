@@ -32,6 +32,8 @@ export {
 } from "./conversations.js";
 export {
   SESSION_HEADER,
+  VERSION_HEADER,
+  versionUnsupported,
   SessionFetchClient,
   sessionEnded,
   sessionHeaders,
@@ -304,6 +306,11 @@ export {
   SCOPE_CHANGES,
   SIGN_IN_TYPES,
   SUPPORTED_PROTOCOL_VERSIONS,
+  chooseProtocolVersion,
+  chosenVersion,
+  companyProtocolVersion,
+  compatibleVersions,
+  parseVersion,
   type SignInType,
   preferredSignIn,
   signInTypes,

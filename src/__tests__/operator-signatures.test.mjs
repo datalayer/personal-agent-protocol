@@ -199,7 +199,7 @@ const reactorWith = (operator, fetch) =>
 
 test("with no signer contributed, requests go unsigned", async () => {
   const headers = await sessionHeaders(reactorWith(undefined, fetch), "GET", URL_, { session: session() });
-  assert.deepEqual(Object.keys(headers), ["Poppy-Session"]);
+  assert.deepEqual(Object.keys(headers), ["Poppy-Session", "Poppy-Version"]);
 });
 
 test("every attempt is signed anew, and covers the Session JWT it carries", async () => {

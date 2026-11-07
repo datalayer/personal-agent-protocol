@@ -35,6 +35,7 @@ import {
   sessionJwtClaims,
   parseProtectedResourceMetadata,
   messageOperation,
+  PROTOCOL_PROFILE,
 } from "../../lib/index.js";
 import {
   ClientPolicies,
@@ -764,7 +765,7 @@ test("a copied access token is worth nothing without the agent's Session JWT", a
   const w = await world();
   const session = await w.start();
   const { token } = await deviceSignIn(w);
-  const bearer = { authorization: `Bearer ${token.accessToken.reveal()}` };
+  const bearer = { authorization: `Bearer ${token.accessToken.reveal()}`, "poppy-version": PROTOCOL_PROFILE };
   const other = { accessToken: new SecretValue("another-access-token") };
   const someone = (await generateKeyPair("ES256")).privateKey;
   const now = Math.floor(w.clock.now().getTime() / 1000);

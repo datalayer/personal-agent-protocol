@@ -41,6 +41,7 @@ import {
   sessionHeaders,
   sessionJwtClaims,
   staleResourceMetadata,
+  PROTOCOL_PROFILE,
 } from "../../lib/index.js";
 import { MemoryCompanyStore, RecordKinds } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
@@ -538,7 +539,7 @@ const jwtRequest = (session) => ({
 const read = (w, sessionJwt, token) =>
   w.fetch(ORDERS, {
     method: "GET",
-    headers: { "Poppy-Session": sessionJwt, ...(token === undefined ? {} : { Authorization: `Bearer ${token.accessToken.reveal()}` }) },
+    headers: { "Poppy-Session": sessionJwt, "Poppy-Version": PROTOCOL_PROFILE, ...(token === undefined ? {} : { Authorization: `Bearer ${token.accessToken.reveal()}` }) },
   });
 
 async function assertInvalidSession(response) {

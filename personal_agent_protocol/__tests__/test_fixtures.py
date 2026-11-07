@@ -223,6 +223,8 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             assert company.oauth_metadata.issuer == expect["issuer"]
         if "organization_domain" in expect:
             assert company.document.organization.domain == expect["organization_domain"]
+        if "protocol_version" in expect:
+            assert company.protocol_version == expect["protocol_version"]
         if "discovery_url" in expect:
             assert company.discovery_url == expect["discovery_url"]
     elif case.check == "url_safety":

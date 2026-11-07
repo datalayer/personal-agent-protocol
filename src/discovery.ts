@@ -209,6 +209,19 @@ export async function fetchSkill(skill: SkillEntry, options: DiscoveryOptions = 
   return bytes;
 }
 
+export function discoverCompany(
+  domain: string,
+  options: DiscoveryOptions = {},
+): Promise<DiscoveredCompany> {
+  return traced(
+    options.reactor,
+    "pap.discovery.discover",
+    { "pap.company.domain": domain.replace(/\.$/, "").toLowerCase() },
+    () => discover(domain, options),
+    (company) => ({ "pap.company.issuer": company.oauthMetadata?.issuer }),
+  );
+}
+
 function readOptions(options: DiscoveryOptions): { reactor: ReactorPlatformView; read: ReadOptions } {
   const reactor = options.reactor ?? buildPapReactor(options);
   const transport = firstContribution<DiscoveryTransport>(

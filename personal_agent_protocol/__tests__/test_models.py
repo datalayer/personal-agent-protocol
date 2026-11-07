@@ -118,7 +118,7 @@ def test_message_requires_content() -> None:
 
 
 def test_known_conversation_event_requires_its_fields() -> None:
-    with pytest.raises(ValidationError, match="state event requires status and responder"):
+    with pytest.raises(ValidationError, match="state event requires handoff, responder and closed"):
         ConversationEventPage.model_validate(
             {
                 "conversation_id": "cnv_one",
@@ -127,13 +127,15 @@ def test_known_conversation_event_requires_its_fields() -> None:
                         "id": "evt_one",
                         "type": "state",
                         "created_at": "2026-10-10T17:03:00Z",
-                        "status": "idle",
+                        "handoff": "none",
                     }
                 ],
                 "cursor": "evt_one",
                 "has_more": False,
-                "status": "idle",
+                "working": False,
+                "handoff": "none",
                 "responder": "agent",
+                "closed": False,
             }
         )
 

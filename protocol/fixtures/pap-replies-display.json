@@ -1,6 +1,6 @@
 {
   "type": "application/vnd.datalayer.pap.replies+json",
-  "version": 4,
+  "version": 5,
   "id": "conv_4Kp9-msg_1-replies",
   "text": "manzanita.example, its agent: Your Ridge Jacket shipped on Tuesday.\n  Link: Tracking for order ord_7Hk2 (manzanita.example)\nmanzanita.example, one of its people (Rosa): I can exchange it for you.\n  Notice: Exchanged items ship once the original jacket is received.",
   "data": {
@@ -29,8 +29,10 @@
         ]
       }
     ],
-    "status": "idle",
-    "responder": "human"
+    "working": false,
+    "handoff": "none",
+    "responder": "human",
+    "closed": false
   },
   "actions": []
 }

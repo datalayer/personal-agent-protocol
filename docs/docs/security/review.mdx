@@ -64,9 +64,11 @@ replaces them where it runs more than one:
 The SDKs take a position on each; another implementation may take another,
 and the conformance runner reports the difference.
 
-- **State events around every reply.** The SDKs frame each agent reply with
-  `working` and `idle` state events; the draft's wording ("every change to
-  either one adds a state event") does not say it explicitly.
+- **`working` while a request is acted on.** The reference companies set
+  `working` the moment they accept a request and clear it once they have
+  replied, within the same request; a company that acts later keeps it `true`
+  meanwhile (§8.7), and a personal agent that wants the whole reply reads until
+  it is `false`.
 
 ## Interoperability not yet exercised
 

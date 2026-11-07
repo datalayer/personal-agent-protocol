@@ -14,11 +14,10 @@ import {
   parseMessage,
   type ConversationEvent,
   type ConversationEventPage,
-  knownResponder,
-  knownStatus,
   type ConversationResponder,
-  type ConversationStatus,
   type Message,
+  type ConversationState,
+  parseConversationState,
 } from "./models.js";
 import { RandomSources, firstContribution } from "./reactor.js";
 import type { AccessToken, PapSession } from "./sessions.js";
@@ -29,13 +28,30 @@ import { refusalCode, refusalDetails } from "./refusals.js";
 
 const identifier = /^[A-Za-z0-9_-]{1,256}$/;
 
-export interface ConversationReceipt {
+/** What a `POST` without `wait` returns: the conversation and its state (§8.3, §8.7). */
+export interface ConversationReceipt extends ConversationState {
   readonly conversation_id: string;
-  readonly status: ConversationStatus;
-  readonly responder: ConversationResponder;
+}
+
+/**
+ * A stream's `working` event (§8.6): `working` is no recorded event, so the Company sends it
+ * with no SSE `id`, when the stream opens and each time it changes.
+ */
+export interface WorkingChanged {
+  readonly kind: "working";
+  readonly working: boolean;
 }
 
 export type ConversationResponse = ConversationReceipt | ConversationEventPage;
+
+export interface ReadUntilDoneOptions {
+  readonly session: PapSession;
+  readonly token?: AccessToken | undefined;
+  readonly cursor?: string | undefined;
+  readonly wait?: number | undefined;
+  readonly maxReads?: number | undefined;
+  readonly signal?: AbortSignal | undefined;
+}
 
 /**
  * A piece of a message still being written (SSE `text-delta`, §7.6): for
@@ -56,7 +72,7 @@ export interface StreamReconnected {
   readonly discardedMessageIds: readonly string[];
 }
 
-export type StreamItem = ConversationEvent | TextDelta | StreamReconnected;
+export type StreamItem = ConversationEvent | TextDelta | StreamReconnected | WorkingChanged;
 
 export interface ConversationStreamOptions extends ConversationRequestOptions {
   readonly lastEventId?: string;
@@ -361,7 +377,7 @@ export class ConversationClient {
         yield event;
       }
       cursor = page.cursor;
-      if (page.status === "closed" && !page.has_more) return;
+      if (page.closed && !page.has_more) return;
       drainBacklog = page.has_more;
     }
   }
@@ -392,6 +408,56 @@ export class ConversationClient {
   }
 
   /** Ask for a person at the company (§7.9): `queued` while one is found. */
+  /**
+   * Read until the Company has no work in progress: `working` false and no backlog (§8.7). A
+   * successful `POST` only means the Company accepted the request; this is how a Personal Agent
+   * gets the whole reply, or makes sure everything it sent was acted on before closing
+   * (§8.12). One page with every event read, in order, and the state when the last read
+   * answered; `maxReads` bounds a Company that never settles.
+   */
+  readUntilDone(
+    endpoint: string,
+    conversationId: string,
+    options: ReadUntilDoneOptions,
+  ): Promise<ConversationEventPage> {
+    return traced(
+      this.#reactor,
+      "pap.conversation.read_until_done",
+      byEndpoint(endpoint),
+      () => this.#readUntilDone(endpoint, conversationId, options),
+      conversationResult,
+    );
+  }
+
+  async #readUntilDone(
+    endpoint: string,
+    conversationId: string,
+    options: ReadUntilDoneOptions,
+  ): Promise<ConversationEventPage> {
+    const events: ConversationEvent[] = [];
+    const seen = new Set<string>();
+    let cursor = options.cursor;
+    const reads = options.maxReads ?? 100;
+    for (let read = 0; read < reads; read += 1) {
+      const page = await this.readEvents(endpoint, conversationId, {
+        session: options.session,
+        token: options.token,
+        cursor,
+        wait: options.wait ?? 30,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      for (const event of page.events) {
+        if (!seen.has(event.id)) {
+          seen.add(event.id);
+          events.push(event);
+        }
+      }
+      cursor = page.cursor;
+      if (!page.has_more && !page.working) return { ...page, events };
+    }
+    throw new ConversationError("still_working", "the company kept working past maxReads");
+  }
+
   handoff(
     endpoint: string,
     conversationId: string,
@@ -476,6 +542,11 @@ export class ConversationClient {
         throw new ConversationError("sse_unsupported", "the company does not stream this conversation");
       }
       for await (const frame of sseFrames(response.body, this.#maxResponseBytes)) {
+        if (frame.event === "working") {
+          // No recorded event: `working` as the company sends it (§8.6).
+          yield parseWorking(frame.data);
+          continue;
+        }
         if (frame.event === "text-delta") {
           const delta = parseDelta(frame.data);
           if (!partial.includes(delta.message_id)) partial.push(delta.message_id);
@@ -506,7 +577,7 @@ export class ConversationClient {
           partial.splice(partial.indexOf(messageId), 1);
         }
         yield event;
-        if (event.type === "state" && event.status === "closed") return;
+        if (event.type === "state" && event.closed) return;
       }
       idle = progressed ? 0 : idle + 1;
       if (idle > maxReconnects) {
@@ -697,17 +768,25 @@ function parseConversationResponse(value: unknown): ConversationResponse {
     );
   }
   assertIdentifier(source.conversation_id, "conversation ID");
-  if (typeof source.status !== "string" || typeof source.responder !== "string") {
-    throw new ConversationError(
-      "invalid_response",
-      "conversation response was malformed",
-    );
+  let state: ConversationState;
+  try {
+    state = parseConversationState(source, "conversation response");
+  } catch (cause) {
+    throw new ConversationError("invalid_response", "conversation response was malformed", { cause });
   }
-  return {
-    conversation_id: source.conversation_id,
-    status: knownStatus(source.status),
-    responder: knownResponder(source.responder),
-  };
+  return { conversation_id: source.conversation_id, ...state };
+}
+
+function parseWorking(data: string): WorkingChanged {
+  try {
+    const payload = parseJsonStrict(data);
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new TypeError("not an object");
+    const working = (payload as Record<string, unknown>).working;
+    if (typeof working !== "boolean") throw new TypeError("working is a boolean");
+    return { kind: "working", working };
+  } catch (cause) {
+    throw new ConversationError("invalid_response", "working event was malformed", { cause });
+  }
 }
 
 interface SseFrame {

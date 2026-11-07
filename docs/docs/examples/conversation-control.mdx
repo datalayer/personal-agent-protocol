@@ -36,7 +36,7 @@ sequenceDiagram
   Atlas->>Company: close(cnv_d)
   Company-->>Atlas: Parent: direct_closed
   Atlas->>Company: handoff(parent)
-  Company-->>Atlas: state queued, then idle with responder human
+  Company-->>Atlas: state handoff pending, then none with responder human
   Company-->>Atlas: Sam's reply, author human (id, name)
   Atlas->>Company: close(parent)
   Company-->>Atlas: closed, later messages are conversation_closed
@@ -51,15 +51,15 @@ sequenceDiagram
   open, the parent refuses messages and handoff with
   `direct_conversation_open`; the SDK puts the open conversation's ID in
   `error.details["conversation_id"]`.
-- **Handoff (§8.9).** `handoff()` asks for a person; the conversation is
-  `queued` until one takes it, then `responder` is `human`, and the person's
+- **Handoff (§8.9).** `handoff()` asks for a person; `handoff` is `pending`
+  until one takes it, then `responder` is `human`, and the person's
   messages name their `author`: `type` `human`, with the person's `id` and
   `name` when the company gives them. When no one is
   available the company says so and the agent continues.
 - **Closing (§8.12).** `close()` ends the conversation; it doesn't cancel
   anything the conversation started, such as an order or a return.
 
-The model sees event types, statuses, the company's answers, and error codes.
+The model sees event types, the state fields, the company's answers, and error codes.
 Tokens, the device code, and Session JWTs stay host-only; the user code is shown to
 the user by the host, not by the model.
 

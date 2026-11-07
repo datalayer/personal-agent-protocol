@@ -56,8 +56,10 @@ test("starts and continues with distinct user-global message IDs", async () => {
     return new Response(
       JSON.stringify({
         conversation_id: "cnv_one",
-        status: "working",
+        working: true,
+        handoff: "none",
         responder: "agent",
+        closed: false,
       }),
       { status: calls.length === 1 ? 201 : 202 },
     );
@@ -113,8 +115,10 @@ test("an authorization event with its challenge on an accepted message is one ne
         ],
         cursor: "evt_1",
         has_more: false,
-        status: "idle",
+        working: false,
+        handoff: "none",
         responder: "agent",
+        closed: false,
       }),
       {
         status: 201,
@@ -183,8 +187,10 @@ test("recovers an expired cursor, drains pages, and suppresses duplicates", asyn
           events: [event("evt_one", "one"), event("evt_two", "two")],
           cursor: "evt_two",
           has_more: true,
-          status: "working",
+          working: true,
+          handoff: "none",
           responder: "agent",
+          closed: false,
         }),
         { status: 200 },
       );
@@ -195,8 +201,10 @@ test("recovers an expired cursor, drains pages, and suppresses duplicates", asyn
         events: [event("evt_two", "two"), event("evt_three", "three")],
         cursor: "evt_three",
         has_more: false,
-        status: "closed",
+        working: false,
+        handoff: "none",
         responder: "agent",
+        closed: true,
       }),
       { status: 200 },
     );
@@ -237,8 +245,10 @@ test("rejects event pages for a different conversation", async () => {
         events: [],
         cursor: "evt_zero",
         has_more: false,
-        status: "idle",
+        working: false,
+        handoff: "none",
         responder: "agent",
+        closed: false,
       }),
       { status: 200 },
     );
@@ -276,26 +286,28 @@ test("a conversation refusal reads its code from the body or the challenge, and 
   reactor.stop();
 });
 
-test("an unknown status reads as working, and an unknown responder as human", async () => {
+test("an unknown handoff reads as pending, and an unknown responder as human", async () => {
   const fetch = async () =>
     new Response(
       JSON.stringify({
         conversation_id: "cnv_one",
         events: [
-          { id: "evt_one", type: "state", created_at: "2026-10-10T12:00:00Z", status: "paused", responder: "robot" },
+          { id: "evt_one", type: "state", created_at: "2026-10-10T12:00:00Z", handoff: "paused", responder: "robot", closed: false },
         ],
         cursor: "evt_one",
         has_more: false,
-        status: "paused",
+        working: false,
+        handoff: "paused",
         responder: "robot",
+        closed: false,
       }),
       { status: 200 },
     );
   const { reactor, client } = setup(fetch);
   const page = await client.readEvents("https://api.example/conversations", "cnv_one", request);
   reactor.stop();
-  assert.deepEqual([page.status, page.responder], ["working", "human"]);
-  assert.deepEqual([page.events[0].status, page.events[0].responder], ["working", "human"]);
+  assert.deepEqual([page.handoff, page.responder], ["pending", "human"]);
+  assert.deepEqual([page.events[0].handoff, page.events[0].responder], ["pending", "human"]);
 });
 
 test("a session_ended while sending starts a new Session once, and the message goes again", async () => {
@@ -304,7 +316,7 @@ test("a session_ended while sending starts a new Session once, and the message g
     bodies.push(JSON.parse(init.body));
     return bodies.length === 1
       ? new Response('{"error":"session_ended"}', { status: 400 })
-      : new Response('{"conversation_id":"cnv_one","status":"working","responder":"agent"}', { status: 202 });
+      : new Response('{"conversation_id":"cnv_one","working":true,"handoff":"none","responder":"agent","closed":false}', { status: 202 });
   };
   const { reactor, client } = setup(fetch);
   const mine = session();

@@ -24,11 +24,11 @@ sequenceDiagram
   A->>H: Ask to start a conversation
   H->>H: Generate msg_ ID (128 random bits)
   H->>C: POST first message + Session JWT
-  C-->>H: 201 conversation_id, status, responder
-  H-->>A: Conversation status only
+  C-->>H: 201 conversation_id and the state fields
+  H-->>A: Conversation state only
   A->>H: Continue with context update
   H->>C: POST new message ID + Session JWT
-  C-->>H: 202 status or waited event page
+  C-->>H: 202 state fields or waited event page
   Note over H,C: Retry keeps the exact ID and content
   H-->>A: Safe conversation result
 ```

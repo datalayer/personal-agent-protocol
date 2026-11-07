@@ -45,6 +45,7 @@ from .conversations import (
     StreamItem,
     StreamReconnected,
     TextDelta,
+    WorkingChanged,
     generate_message_id,
 )
 from .crypto import (
@@ -412,6 +413,7 @@ __all__ = [
     "TokenStore",
     "TransportError",
     "WebBotAuthSigner",
+    "WorkingChanged",
     "__version__",
     "approval_header",
     "build_client_assertion_claims",

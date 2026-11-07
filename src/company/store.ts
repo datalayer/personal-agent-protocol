@@ -462,14 +462,18 @@ export interface Acceptance {
   readonly conversationId: string;
 }
 
-export type StoredConversationStatus = "working" | "idle" | "queued" | "closed";
-
 export interface StoredConversation {
   readonly conversationId: string;
   /** `[client_id, pairwise user ID]`: only that pair sees the conversation. */
   readonly owner: readonly [string, string];
-  readonly status: StoredConversationStatus;
+  /**
+   * The four state fields (§8.7): `working` while a request is accepted and not yet acted
+   * on, `handoff` `pending` while a person is looked for, who responds, closed.
+   */
+  readonly working: boolean;
+  readonly handoff: "none" | "pending";
   readonly responder: "agent" | "human";
+  readonly closed: boolean;
   readonly parentId?: string;
   readonly directChild?: string;
   /** The account the conversation used; from then on it belongs to that account. */
@@ -578,6 +582,8 @@ export interface WebSession {
   readonly accountId?: string;
   readonly scopes: readonly string[];
   readonly family?: string;
+  /** The protocol version the joined Session uses the company at (§3.4). */
+  readonly protocolVersion?: string;
 }
 
 /**

@@ -2931,7 +2931,7 @@ class CompanyService:
         company allows (`direct_conversation_inactivity`, §8.10)."""
 
         limit = self.config.direct_conversation_inactivity
-        if limit is None or conversation.parent_id is None or conversation.status == "closed":
+        if limit is None or conversation.parent_id is None or conversation.closed:
             return False
         if not conversation.events:
             return False
@@ -2949,14 +2949,35 @@ class CompanyService:
         created = self._now().isoformat().replace("+00:00", "Z")
         return StoredEvent(event_id, {"id": event_id, "created_at": created, **payload})
 
-    def _state(self, status: str, responder: str) -> StoredEvent:
-        return self._event(type="state", status=status, responder=responder)
+    def _state(self, conversation: StoredConversation) -> StoredEvent:
+        """A `state` event (§8.7): `handoff`, `responder` and `closed` as they now are, after
+        any of them changed. `working` is never an event."""
+
+        return self._event(
+            type="state",
+            handoff=conversation.handoff,
+            responder=conversation.responder,
+            closed=conversation.closed,
+        )
+
+    def _changed(self, current: StoredConversation, **fields: Any) -> StoredConversation:
+        """`current` with `fields` changed and, when `handoff`, `responder` or `closed`
+        changed, the `state` event that says so (§8.7)."""
+
+        changed = replace(current, **fields)
+        if (changed.handoff, changed.responder, changed.closed) == (
+            current.handoff,
+            current.responder,
+            current.closed,
+        ):
+            return changed
+        return replace(changed, events=(*changed.events, self._state(changed)))
 
     @staticmethod
     def _open(conversation: StoredConversation) -> None:
         """A message or handoff goes only to an open conversation with no Direct one open."""
 
-        if conversation.status == "closed":
+        if conversation.closed:
             raise _RefusedError(409, "conversation_closed")
         if conversation.direct_child is not None:
             raise _RefusedError(
@@ -3014,7 +3035,7 @@ class CompanyService:
         """
 
         parent = await self._owned(parent_id, session)
-        if parent.status == "closed":
+        if parent.closed:
             raise _RefusedError(409, "conversation_closed")
         if parent.parent_id is not None:
             raise _RefusedError(400, "invalid_request")
@@ -3169,21 +3190,26 @@ class CompanyService:
 
             def handoff(current: StoredConversation) -> StoredConversation:
                 self._open(current)
-                if current.status == "queued" or current.responder == "human":
-                    # Already asked for, or with a person: 202, nothing changes (§7.9).
+                if current.handoff == "pending" or current.responder == "human":
+                    # Already asked for, or with a person: 202, nothing changes (§8.9).
                     return current
-                responder: Literal["agent", "human"] = (
-                    "human" if self.config.humans_available else current.responder
+                # Looking for a person: `handoff` pending; one of the company's people
+                # joins at once when there are any, else none is available and the
+                # company agent says why in a message (§8.9).
+                pending = self._changed(current, handoff="pending")
+                if self.config.humans_available:
+                    return self._changed(pending, handoff="none", responder="human")
+                sorry = self._event(
+                    type="message",
+                    message={
+                        "id": self._id("msg"),
+                        "author": {"type": "agent"},
+                        "role": "company",
+                        "text": "No one is available right now; I'll keep helping here.",
+                    },
                 )
-                return replace(
-                    current,
-                    status="idle",
-                    responder=responder,
-                    events=(
-                        *current.events,
-                        self._state("queued", current.responder),
-                        self._state("idle", responder),
-                    ),
+                return self._changed(
+                    replace(pending, events=(*pending.events, sorry)), handoff="none"
                 )
 
             changed = await self._change(
@@ -3247,12 +3273,13 @@ class CompanyService:
                     account_id=session.account_id or current.account_id,
                     events=(*current.events, received),
                 )
-            # The agent works on it: every change of status adds a state event (§7).
+            # Accepted, not yet acted on: `working` is true from this moment, and is no
+            # event (§8.3, §8.7).
             return replace(
                 current,
-                status="working",
+                working=True,
                 account_id=session.account_id or current.account_id,
-                events=(*current.events, received, self._state("working", current.responder)),
+                events=(*current.events, received),
             )
 
         negotiated = await self._supports_operations(session.client_id)
@@ -3300,10 +3327,8 @@ class CompanyService:
                     events.append(event)
 
         def answered(current: StoredConversation) -> StoredConversation:
-            if current.status != "working":
-                return replace(current, events=(*current.events, *events))
-            idle = self._state("idle", current.responder)
-            return replace(current, status="idle", events=(*current.events, *events, idle))
+            # Acted on and replied: no work in progress (§8.7).
+            return replace(current, working=False, events=(*current.events, *events))
 
         changed = await self._change(
             CONVERSATION, conversation_id, StoredConversation.from_json, answered
@@ -3403,21 +3428,21 @@ class CompanyService:
 
     async def _close(self, conversation_id: str) -> None:
         conversation = await self._read(CONVERSATION, conversation_id, StoredConversation.from_json)
-        if conversation is None or conversation.status == "closed":
+        if conversation is None or conversation.closed:
             return
         if conversation.direct_child is not None:
             await self._close(conversation.direct_child)
 
         def close(current: StoredConversation) -> StoredConversation:
-            if current.status == "closed":
+            if current.closed:
                 return current
-            closed = self._state("closed", current.responder)
-            return replace(current, status="closed", events=(*current.events, closed))
+            # Closed: no work in progress, no one looked for, one state event (§8.12).
+            return self._changed(current, working=False, handoff="none", closed=True)
 
         changed = await self._change(
             CONVERSATION, conversation_id, StoredConversation.from_json, close
         )
-        if changed is None or changed[0].status == "closed":
+        if changed is None or changed[0].closed:
             return
         if conversation.parent_id is not None:
             event = self._event(type="direct_closed", conversation_id=conversation_id)
@@ -3433,10 +3458,20 @@ class CompanyService:
             status,
             {
                 "conversation_id": conversation.conversation_id,
-                "status": conversation.status,
-                "responder": conversation.responder,
+                **self._state_fields(conversation),
             },
         )
+
+    @staticmethod
+    def _state_fields(conversation: StoredConversation) -> dict[str, Any]:
+        """The four state fields of a response (§8.7)."""
+
+        return {
+            "working": conversation.working,
+            "handoff": conversation.handoff,
+            "responder": conversation.responder,
+            "closed": conversation.closed,
+        }
 
     def _answer(
         self, request: CompanyRequest, conversation: StoredConversation, status: int
@@ -3460,8 +3495,7 @@ class CompanyService:
                 "events": [event.payload for event in page],
                 "cursor": last,
                 "has_more": more,
-                "status": conversation.status,
-                "responder": conversation.responder,
+                **self._state_fields(conversation),
             },
         )
 
@@ -3503,6 +3537,10 @@ class CompanyService:
 
         async def frames() -> AsyncIterator[bytes]:
             yield b": poppy\n\n"
+            # `working` is no event: sent as a `working` event with no `id` when the
+            # stream opens (§8.6).
+            working = json.dumps({"working": conversation.working})
+            yield f"event: working\ndata: {working}\n\n".encode()
             for event in events:
                 message = event.payload.get("message")
                 if (
@@ -3838,7 +3876,7 @@ class CompanyService:
     # One of the company's people -------------------------------------------------
 
     async def conversation_record(self, conversation_id: str) -> StoredConversation:
-        """A conversation as the company keeps it: its status, responder, and events."""
+        """A conversation as the company keeps it: its state and its events."""
 
         conversation = await self._read(CONVERSATION, conversation_id, StoredConversation.from_json)
         if conversation is None:
@@ -3882,7 +3920,7 @@ class CompanyService:
         )
 
         def reply(current: StoredConversation) -> StoredConversation:
-            if current.status == "closed":
+            if current.closed:
                 raise ValueError("the conversation is closed")
             if current.responder != "human":
                 raise ValueError("the conversation is not handed to the company's people")
@@ -4241,6 +4279,8 @@ class CompanyService:
             scopes=session.scopes,
             family=session.family,
             expires_at=stored.ends_at,
+            # The browser joins the Session at the version it uses the company at (§3.4).
+            protocol_version=session.protocol_version,
         )
 
         def authorize(current: JoinCode) -> JoinCode:
@@ -4339,6 +4379,7 @@ class CompanyService:
             account_id=account_id,
             scopes=scopes,
             family=joined.family if account_id is not None else None,
+            protocol_version=joined.protocol_version or self.config.preferred_version,
         )
 
 

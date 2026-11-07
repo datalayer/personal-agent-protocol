@@ -22,7 +22,7 @@ from personal_agent_protocol import (
     SessionHttpClient,
     generate_message_id,
 )
-from personal_agent_protocol.conversations import StreamReconnected, TextDelta
+from personal_agent_protocol.conversations import StreamReconnected, TextDelta, WorkingChanged
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
@@ -113,6 +113,7 @@ async def explain_conversation_streaming() -> dict[str, Any]:
     delivered: list[str] = []
     final_text: list[str] = []
     last_state = None
+    working: list[bool] = []
     async for item in conversations.stream(endpoint, receipt.conversation_id, session=session):
         if isinstance(item, TextDelta):
             deltas.append(item)  # display only: shown while typing, never acted on
@@ -121,9 +122,11 @@ async def explain_conversation_streaming() -> dict[str, Any]:
             if len(reconnects) == 2:
                 # Everything is delivered; the user is done, so the agent closes it.
                 await conversations.close(endpoint, receipt.conversation_id, session=session)
+        elif isinstance(item, WorkingChanged):
+            working.append(item.working)  # no event: the company's work in progress
         else:
             delivered.append(item.id)
-            last_state = item.status if item.type == "state" else last_state
+            last_state = (item.handoff, item.closed) if item.type == "state" else last_state
             if item.message is not None and item.message.role == "company":
                 final_text.append(item.message.text or "")
     await http.aclose()

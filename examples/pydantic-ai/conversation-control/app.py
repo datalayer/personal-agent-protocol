@@ -165,7 +165,8 @@ async def explain_conversation_control() -> dict[str, Any]:
         endpoint, parent, say("Thank you"), session=session, token=token, cursor=page.cursor, wait=0
     )
     after_handoff = [
-        f"{event.type}:{event.status}" if event.status else event.type for event in page.events
+        f"{event.type}:{event.handoff}:{event.responder}" if event.type == "state" else event.type
+        for event in page.events
     ]
     # A person at Manzanita answers; their message names its `author`: `human`, and who.
     await shop.staff_reply(
@@ -198,12 +199,12 @@ async def explain_conversation_control() -> dict[str, Any]:
         "signed_in_answer": answered.text if answered else None,
         "direct_conversation_opened": direct.conversation_id != parent,
         "parent_while_direct_is_open": refusals,
-        "direct_conversation_closed": direct_closed.status,
-        "handoff_status": handed.status,
+        "direct_conversation_closed": direct_closed.closed,
+        "handoff_state": handed.handoff,
         "handoff_responder": handed.responder,
         "events_after_handoff": after_handoff,
         "person_reply_author": person,
-        "closed": closed.status,
+        "closed": closed.closed,
         "message_after_close": after_close,
         "tokens_and_codes_withheld": True,
     }

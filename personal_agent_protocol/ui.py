@@ -49,7 +49,7 @@ from reactor.ui import (  # type: ignore[import-untyped]
     display_type,
 )
 
-from .models import _domain, known_responder, known_status
+from .models import _domain, known_handoff, known_responder
 
 #: The display type of a sign-in waiting for the person.
 PAP_SIGN_IN_TYPE = "application/vnd.datalayer.pap.sign-in+json"
@@ -341,8 +341,8 @@ class PapConfirm(Display):
         return {DISPLAY_META_KEY: self.wire().model_dump(mode="json")}
 
 
-#: Where a conversation stands (§7.8), apart from who answers in it.
-PapConversationStatus = Literal["working", "idle", "queued", "closed"]
+#: Whether the company is looking for a person (§8.7, §8.9), apart from who answers.
+PapHandoff = Literal["none", "pending"]
 
 _WROTE: dict[str, str] = {"agent": "its agent", "human": "one of its people"}
 
@@ -422,7 +422,7 @@ class PapReply(BaseModel):
         return value
 
 
-@display_type(PAP_REPLIES_TYPE, version=4)
+@display_type(PAP_REPLIES_TYPE, version=5)
 class PapReplies(Display):
     """What a company answered in a conversation, each reply with who wrote it (§7.8).
 
@@ -431,8 +431,9 @@ class PapReplies(Display):
     version 3), carries the pages it refers to and the notices it marks apart
     (``links`` and ``disclosures``, version 4), whoever answers the conversation
     now (``responder``) and
-    wherever it stands (``status``: ``working``, ``idle``, ``queued`` while a
-    person is found, ``closed``); the page tells them apart, as PAP-8.8-01
+    wherever it stands (version 5, §8.7: ``working`` while the company has work
+    in progress, ``handoff`` ``pending`` while a person is found, ``closed``);
+    the page tells them apart, as PAP-8.8-01
     asks of the personal agent's own words. Each reply is the company's text,
     verbatim; a message carrying only data is the model's to read, not the
     page's to draw. It names the conversation (``conversation``, version 2):
@@ -446,14 +447,16 @@ class PapReplies(Display):
     #: The conversation the replies are in, by the company's id for it.
     conversation: str = Field(pattern=r"^[A-Za-z0-9_-]{1,256}$")
     replies: list[PapReply] = Field(min_length=1)
-    status: PapConversationStatus | None = None
+    working: bool | None = None
+    handoff: PapHandoff | None = None
     responder: Literal["agent", "human"] | None = None
+    closed: bool | None = None
 
-    @field_validator("status", mode="before")
+    @field_validator("handoff", mode="before")
     @classmethod
-    def _status(cls, value: object) -> object:
-        # A status this version doesn't define reads as `working` (§8.7).
-        return known_status(value)
+    def _handoff(cls, value: object) -> object:
+        # A handoff this version doesn't define reads as `pending` (§8.7).
+        return known_handoff(value)
 
     @field_validator("responder", mode="before")
     @classmethod
@@ -475,8 +478,10 @@ class PapReplies(Display):
         conversation_id: str,
         messages: Any,
         *,
-        status: str | None = None,
+        working: bool | None = None,
+        handoff: str | None = None,
         responder: str | None = None,
+        closed: bool | None = None,
     ) -> PapReplies | None:
         """The company's :class:`~personal_agent_protocol.models.Message` s with text, or ``None``.
 
@@ -504,8 +509,10 @@ class PapReplies(Display):
                 )
                 for message in written
             ],
-            status=cast(Any, status),
+            working=working,
+            handoff=cast(Any, handoff),
             responder=cast(Any, responder),
+            closed=closed,
         )
 
     def text(self) -> str:
@@ -523,7 +530,7 @@ __all__ = [
     "WAITING_FOR_THE_PERSON",
     "PapActionClass",
     "PapConfirm",
-    "PapConversationStatus",
+    "PapHandoff",
     "PapLink",
     "PapReplies",
     "PapReply",

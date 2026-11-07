@@ -68,10 +68,11 @@ FIXTURE_SCHEMAS = {
     "invalid-session-valid.json": "oauth-error",
 }
 
-#: Fixtures of Operations version 2, as upstream's schemas describe it.
+#: Fixtures of Operations version 2, as upstream's schemas describe it. The events page
+#: fixture carries draft 0.4's state fields (§8.7, P4-06); it is checked against
+#: `events-response` again once the vendored schemas are replaced at 46beb21 (P4-03).
 OPERATIONS_V2 = {
     "operation-valid.json": "operation",
-    "conversation-events-valid.json": "events-response",
 }
 
 

@@ -498,19 +498,48 @@ export function operationsContent(content: {
 
 const OPERATIONS_CONTENT = "operations";
 
-export type ConversationStatus = "working" | "idle" | "queued" | "closed";
+/** Whether the Company is looking for a person (§8.7, §8.9). */
+export type ConversationHandoff = "none" | "pending";
 export type ConversationResponder = "agent" | "human";
 
-const CONVERSATION_STATUSES = ["working", "idle", "queued", "closed"] as const;
-
-/** A `status` this SDK doesn't recognize reads as `working` (§8.7). */
-export function knownStatus(value: unknown, label = "status"): ConversationStatus {
+/** A `handoff` this SDK doesn't recognize reads as `pending` (§8.7). */
+export function knownHandoff(value: unknown, label = "handoff"): ConversationHandoff {
   if (typeof value !== "string") {
     throw new ProtocolValidationError("invalid_value", `${label} must be a string`);
   }
-  return (CONVERSATION_STATUSES as readonly string[]).includes(value)
-    ? (value as ConversationStatus)
-    : "working";
+  return value === "none" ? "none" : "pending";
+}
+
+/**
+ * Where a conversation stands, in four fields each independent of the others (§8.7).
+ *
+ * `working` is true while the Company has work in progress: a request it accepted but hasn't
+ * acted on, a reply being written, or work it started on its own; a Personal Agent that wants
+ * the whole reply reads until it is false. `handoff` is `pending` while the Company looks for
+ * a person (§8.9). `responder` is who handles the Company side. `closed` means the conversation
+ * takes no more messages (§8.12). A new conversation starts with `handoff` `none`, `responder`
+ * `agent` and `closed` false.
+ */
+export interface ConversationState {
+  readonly working: boolean;
+  readonly handoff: ConversationHandoff;
+  readonly responder: ConversationResponder;
+  readonly closed: boolean;
+}
+
+/** The four state fields of a read or a receipt (§8.7). */
+export function conversationState(value: ConversationState): ConversationState {
+  const { working, handoff, responder, closed } = value;
+  return { working, handoff, responder, closed };
+}
+
+function stateFields(source: Record<string, unknown>, label: string): ConversationState {
+  return {
+    working: boolean(source.working, `${label}.working`),
+    handoff: knownHandoff(source.handoff, `${label}.handoff`),
+    responder: knownResponder(source.responder, `${label}.responder`),
+    closed: boolean(source.closed, `${label}.closed`),
+  };
 }
 
 /** A `responder` this SDK doesn't recognize reads as `human` (§8.7). */
@@ -526,21 +555,27 @@ export interface ConversationEvent extends UnknownFields {
   readonly type: string;
   readonly created_at: string;
   readonly message?: Message;
-  readonly status?: ConversationStatus;
+  /** A `state` event's fields (§8.7): after any of them changes; `working` is never an event. */
+  readonly handoff?: ConversationHandoff;
   readonly responder?: ConversationResponder;
+  readonly closed?: boolean;
   readonly error?: "insufficient_scope";
   readonly scope?: string;
   readonly reason?: string;
   readonly conversation_id?: string;
 }
 
-export interface ConversationEventPage extends UnknownFields {
+/**
+ * A cursor page returned by a read or a waited write, with the conversation's state when the
+ * Company responded (§8.5, §8.7). While `has_more` is true the state fields can be newer than
+ * the events returned: a reader applies the events in order and relies on the state once
+ * `has_more` is false.
+ */
+export interface ConversationEventPage extends UnknownFields, ConversationState {
   readonly conversation_id: string;
   readonly events: readonly ConversationEvent[];
   readonly cursor: string;
   readonly has_more: boolean;
-  readonly status: ConversationStatus;
-  readonly responder: ConversationResponder;
 }
 
 /**
@@ -1447,16 +1482,17 @@ export function parseConversationEvent(value: unknown): ConversationEvent {
     type,
     created_at: timestamp(source.created_at, "conversation event.created_at"),
     ...(source.message === undefined ? {} : { message: parseMessage(source.message) }),
-    ...(source.status === undefined
+    ...(source.handoff === undefined
       ? {}
       : {
-          status: knownStatus(source.status, "conversation event.status"),
+          handoff: knownHandoff(source.handoff, "conversation event.handoff"),
         }),
     ...(source.responder === undefined
       ? {}
       : {
           responder: knownResponder(source.responder, "conversation event.responder"),
         }),
+    ...(source.closed === undefined ? {} : { closed: boolean(source.closed, "conversation event.closed") }),
     ...(source.error === undefined
       ? {}
       : {
@@ -1482,11 +1518,11 @@ export function parseConversationEvent(value: unknown): ConversationEvent {
   if (type === "message" && parsed.message === undefined) {
     throw new ProtocolValidationError("invalid_event", "a message event requires message");
   }
-  if (type === "state" && (parsed.status === undefined || parsed.responder === undefined)) {
-    throw new ProtocolValidationError(
-      "invalid_event",
-      "a state event requires status and responder",
-    );
+  if (
+    type === "state" &&
+    (parsed.handoff === undefined || parsed.responder === undefined || parsed.closed === undefined)
+  ) {
+    throw new ProtocolValidationError("invalid_event", "a state event requires handoff, responder and closed");
   }
   // Always both: the error, and the scopes the request needs (§7.11).
   if (type === "authorization" && (parsed.error === undefined || !parsed.scope)) {
@@ -1521,9 +1557,13 @@ export function parseConversationEventPage(value: unknown): ConversationEventPag
     events: array(source.events, "events").map(parseConversationEvent),
     cursor: identifier(source.cursor, "cursor"),
     has_more: boolean(source.has_more, "has_more"),
-    status: knownStatus(source.status),
-    responder: knownResponder(source.responder),
+    ...stateFields(source, "conversation event page"),
   } as ConversationEventPage;
+}
+
+/** The four state fields of a response, read as §8.7 says (`parseConversationEventPage` uses it). */
+export function parseConversationState(value: unknown, label = "conversation state"): ConversationState {
+  return stateFields(record(value, label), label);
 }
 
 /** Where an alternative points (§8.2): an OpenAPI operation, an MCP tool, or a page. */

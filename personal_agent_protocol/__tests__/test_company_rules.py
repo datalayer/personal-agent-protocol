@@ -207,7 +207,7 @@ async def test_after_sign_out_what_used_the_account_stays_and_asks_for_sign_in()
     assert (revoked.value.code, revoked.value.status_code) == ("invalid_token", 401)
     # The conversation stays open, and a request on it without a token gets the challenge.
     record = await world.shop.conversation_record(page.conversation_id)
-    assert record.status != "closed"
+    assert not record.closed
     with pytest.raises(ConversationError) as read:
         await world.conversations.read_events(endpoint, page.conversation_id, session=session)
     assert (read.value.code, read.value.status_code) == ("insufficient_scope", 401)
@@ -668,12 +668,12 @@ async def test_repeated_handoff_and_close_change_nothing() -> None:
     assert first.responder == "human"
     count = len((await world.shop.conversation_record(page.conversation_id)).events)
     again = await world.conversations.handoff(endpoint, page.conversation_id, session=session)
-    assert (again.status, again.responder) == (first.status, first.responder)
+    assert (again.handoff, again.responder) == (first.handoff, first.responder)
     assert len((await world.shop.conversation_record(page.conversation_id)).events) == count
     closed = await world.conversations.close(endpoint, page.conversation_id, session=session)
     count = len((await world.shop.conversation_record(page.conversation_id)).events)
     closed_again = await world.conversations.close(endpoint, page.conversation_id, session=session)
-    assert closed_again == closed and closed.status == "closed"
+    assert closed_again == closed and closed.closed
     assert len((await world.shop.conversation_record(page.conversation_id)).events) == count
 
 
@@ -708,8 +708,10 @@ def test_a_read_without_its_fields_is_refused() -> None:
         "events": [],
         "cursor": "evt_1",
         "has_more": False,
-        "status": "idle",
+        "working": False,
+        "handoff": "none",
         "responder": "agent",
+        "closed": False,
     }
     assert ConversationEventPage.model_validate(base).events == []
     for missing in ("conversation_id", "events"):

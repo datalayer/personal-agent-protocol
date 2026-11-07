@@ -838,11 +838,12 @@ test("O4: a token in the query is refused even beside a valid header", async () 
   }
 });
 
-test("O8: a reply is framed by working and idle state events", async () => {
+test("O8: a reply is complete when working is false", async () => {
   const w = await world();
   const page = await w.conversations.start(w.endpoint, w.message("Hello"), { session: await w.start(), wait: 0 });
-  assert.deepEqual(page.events.map((event) => `${event.type}${event.status ? `:${event.status}` : ""}`), ["message", "state:working", "message", "state:idle"]);
-  assert.equal(page.status, "idle");
+  // `working` is no event (§8.7): the message and the reply, and `working` false once acted on.
+  assert.deepEqual(page.events.map((event) => event.type), ["message", "message"]);
+  assert.deepEqual([page.working, page.handoff, page.closed], [false, "none", false]);
 });
 
 test("O9: the demo promises no operation to an agent without Operations", async () => {

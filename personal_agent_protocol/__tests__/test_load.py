@@ -43,6 +43,7 @@ import pytest
 from personal_agent_protocol import (
     DeviceSignInClient,
     Message,
+    WorkingChanged,
     generate_message_id,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
@@ -479,7 +480,7 @@ async def test_one_conversation_fans_out_to_many_subscribers_from_their_cursors(
             if isinstance(item, StreamReconnected):
                 reconnects["reconnects"] += 1
                 await asyncio.sleep(0.001)  # the stream ended: reconnect from the last event
-            elif not isinstance(item, TextDelta):
+            elif not isinstance(item, TextDelta | WorkingChanged):
                 received.append(item.id)
         return cursor, received
 

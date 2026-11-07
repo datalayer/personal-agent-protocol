@@ -953,21 +953,45 @@ class Message(ProtocolModel):
         return self
 
 
-#: The conversation statuses and responders this version defines (§8.7).
-CONVERSATION_STATUSES = ("working", "idle", "queued", "closed")
+#: The `handoff` values and responders this version defines (§8.7).
+HANDOFF_STATES = ("none", "pending")
 RESPONDERS = ("agent", "human")
 
 
-def known_status(value: object) -> object:
-    """A `status` this SDK doesn't recognize reads as `working` (§8.7)."""
+def known_handoff(value: object) -> object:
+    """A `handoff` this SDK doesn't recognize reads as `pending` (§8.7)."""
 
-    return value if not isinstance(value, str) or value in CONVERSATION_STATUSES else "working"
+    return value if not isinstance(value, str) or value in HANDOFF_STATES else "pending"
 
 
 def known_responder(value: object) -> object:
     """A `responder` this SDK doesn't recognize reads as `human` (§8.7)."""
 
     return value if not isinstance(value, str) or value in RESPONDERS else "human"
+
+
+class ConversationState(ProtocolModel):
+    """Where a conversation stands, in four fields each independent of the others (§8.7).
+
+    `working` is true while the Company has work in progress: a request it accepted but
+    hasn't acted on, a reply being written, or work it started on its own; a Personal
+    Agent that wants the whole reply reads until it is false. `handoff` is `pending`
+    while the Company looks for a person (§8.9). `responder` is who handles the Company
+    side. `closed` means the conversation takes no more messages (§8.12). A new
+    conversation starts with `handoff` `none`, `responder` `agent` and `closed` false.
+    """
+
+    working: bool
+    handoff: Literal["none", "pending"]
+    responder: Literal["agent", "human"]
+    closed: bool
+
+    _handoff = field_validator("handoff", mode="before")(
+        classmethod(lambda cls, value: known_handoff(value))
+    )
+    _responder = field_validator("responder", mode="before")(
+        classmethod(lambda cls, value: known_responder(value))
+    )
 
 
 #: Event types draft 0.3 defines (§7.5); a personal agent skips any other type.
@@ -983,8 +1007,11 @@ class ConversationEvent(ProtocolModel):
     type: str = Field(min_length=1)
     created_at: datetime
     message: Message | None = None
-    status: Literal["working", "idle", "queued", "closed"] | None = None
+    #: A `state` event's fields (§8.7): `handoff`, `responder` and `closed`, after any
+    #: of them changes; `working` is never an event.
+    handoff: Literal["none", "pending"] | None = None
     responder: Literal["agent", "human"] | None = None
+    closed: bool | None = None
     error: Literal["insufficient_scope"] | None = None
     scope: str | None = None
     reason: str | None = None
@@ -997,8 +1024,8 @@ class ConversationEvent(ProtocolModel):
             raise ValueError("conversation event IDs must use the URL-safe base64 alphabet")
         return value
 
-    _status = field_validator("status", mode="before")(
-        classmethod(lambda cls, value: known_status(value))
+    _handoff = field_validator("handoff", mode="before")(
+        classmethod(lambda cls, value: known_handoff(value))
     )
     _responder = field_validator("responder", mode="before")(
         classmethod(lambda cls, value: known_responder(value))
@@ -1021,8 +1048,10 @@ class ConversationEvent(ProtocolModel):
     def validate_known_type(self) -> ConversationEvent:
         if self.type == "message" and self.message is None:
             raise ValueError("a message event requires message")
-        if self.type == "state" and (self.status is None or self.responder is None):
-            raise ValueError("a state event requires status and responder")
+        if self.type == "state" and (
+            self.handoff is None or self.responder is None or self.closed is None
+        ):
+            raise ValueError("a state event requires handoff, responder and closed")
         if self.type == "authorization":
             # Always both: the error, and the scopes the request needs (§7.11).
             if self.error is None or not self.scope:
@@ -1035,21 +1064,39 @@ class ConversationEvent(ProtocolModel):
 
 
 class ConversationEventPage(ProtocolModel):
-    """A cursor page returned by a PAP conversation read or waited write."""
+    """A cursor page returned by a PAP conversation read or waited write, with the
+    conversation's state when the Company responded (§8.5, §8.7).
+
+    While `has_more` is true the state fields can be newer than the events returned: a
+    reader applies the events in order and relies on the state once `has_more` is false.
+    """
 
     conversation_id: str
     events: list[ConversationEvent]
     cursor: str
     has_more: bool
-    status: Literal["working", "idle", "queued", "closed"]
+    working: bool
+    handoff: Literal["none", "pending"]
     responder: Literal["agent", "human"]
+    closed: bool
 
-    _status = field_validator("status", mode="before")(
-        classmethod(lambda cls, value: known_status(value))
+    _handoff = field_validator("handoff", mode="before")(
+        classmethod(lambda cls, value: known_handoff(value))
     )
     _responder = field_validator("responder", mode="before")(
         classmethod(lambda cls, value: known_responder(value))
     )
+
+    @property
+    def state(self) -> ConversationState:
+        """The four state fields together (§8.7)."""
+
+        return ConversationState(
+            working=self.working,
+            handoff=self.handoff,
+            responder=self.responder,
+            closed=self.closed,
+        )
 
     @field_validator("conversation_id", "cursor")
     @classmethod

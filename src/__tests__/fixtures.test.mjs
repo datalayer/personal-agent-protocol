@@ -106,12 +106,14 @@ test("a message requires content", () => {
 test("a known conversation event requires its fields", () => {
   assert.throws(() => parseConversationEventPage({
     conversation_id: "cnv_one",
-    events: [{ id: "evt_one", type: "state", created_at: "2026-10-10T17:03:00Z", status: "idle" }],
+    events: [{ id: "evt_one", type: "state", created_at: "2026-10-10T17:03:00Z", handoff: "none" }],
     cursor: "evt_one",
     has_more: false,
-    status: "idle",
+    working: false,
+    handoff: "none",
     responder: "agent",
-  }), /state event requires status and responder/);
+    closed: false,
+  }), /state event requires handoff, responder and closed/);
 });
 
 test("client metadata requires the same domain for security URLs", () => {

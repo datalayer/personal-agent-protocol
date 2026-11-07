@@ -359,8 +359,10 @@ def _replies() -> PapReplies:
                 extensions={"disclosures": {"items": [{"text": NOTICE}]}},
             ),
         ],
-        status="idle",
+        working=False,
+        handoff="none",
         responder="human",
+        closed=False,
     )
     assert replies is not None
     return replies
@@ -377,7 +379,7 @@ def test_replies_are_the_committed_display_each_with_who_wrote_it() -> None:
     # The TypeScript SDK reads the same file (src/__tests__/ui.test.mjs).
     wire = _replies().wire().model_dump(mode="json")
     assert wire == json.loads(REPLIES_FIXTURE.read_text())
-    assert wire["type"] == PAP_REPLIES_TYPE and wire["version"] == 4
+    assert wire["type"] == PAP_REPLIES_TYPE and wire["version"] == 5
     assert wire["id"] == "conv_4Kp9-msg_1-replies"
     # The conversation the replies are in: where the person's own words open a Direct Conversation.
     assert wire["data"]["conversation"] == "conv_4Kp9"
@@ -446,6 +448,9 @@ def test_only_the_companys_own_words_are_replies() -> None:
         },
         {"replies": [{"author": "agent", "text": "Hello", "disclosures": [" "]}]},
         {"token": "secret"},
+        {"working": "later"},
+        {"closed": "later"},
+        {"handoff": 3},
     ],
 )
 def test_replies_are_refused_when_they_say_less_or_other(overrides: dict[str, Any]) -> None:
@@ -455,27 +460,27 @@ def test_replies_are_refused_when_they_say_less_or_other(overrides: dict[str, An
         PapReplies.model_validate(fields)
 
 
-def test_an_unknown_status_reads_as_working_and_an_unknown_responder_as_human() -> None:
+def test_an_unknown_handoff_reads_as_pending_and_an_unknown_responder_as_human() -> None:
     """Later versions may add values (§8.7): read as the most careful known one."""
 
     fields = _replies().model_dump()
-    shown = PapReplies.model_validate({**fields, "status": "paused", "responder": "robot"})
-    assert (shown.status, shown.responder) == ("working", "human")
+    shown = PapReplies.model_validate({**fields, "handoff": "paused", "responder": "robot"})
+    assert (shown.handoff, shown.responder) == ("pending", "human")
     built = PapReplies.of(
         "manzanita.example",
         "conv_4Kp9",
         [_message("msg_1", "agent", "Hello", role="company")],
-        status="paused",
+        handoff="paused",
         responder="robot",
     )
-    assert built is not None and (built.status, built.responder) == ("working", "human")
+    assert built is not None and (built.handoff, built.responder) == ("pending", "human")
 
 
 async def test_the_core_plugin_declares_the_replies_type() -> None:
     platform, http = build_pap_reactor()
     try:
         registry = platform.display_types()
-        assert registry.get(PAP_REPLIES_TYPE, 4) is PapReplies
+        assert registry.get(PAP_REPLIES_TYPE, 5) is PapReplies
         shown = registry.parse(json.loads(REPLIES_FIXTURE.read_text()))
         assert shown.tool_meta()["reactor.ui/display"]["data"]["responder"] == "human"
     finally:

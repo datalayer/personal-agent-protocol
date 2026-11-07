@@ -2818,7 +2818,9 @@ export class CompanyService {
     // With the Session header, the version the request is in (§3.4): missing, or none the
     // company serves, is `version_unsupported`; never handled under another version.
     const version = request.headers[VERSION_HEADER];
-    if (!this.config.servesVersion(version)) throw new Refused(400, "version_unsupported");
+    if (version === undefined || !this.config.servesVersion(version)) {
+      throw new Refused(400, "version_unsupported");
+    }
     if (exchange !== undefined) exchange.protocolVersion = version;
     await this.#operatorSignature(request);
     let issued: IssuedAccessToken | undefined;
@@ -2850,7 +2852,7 @@ export class CompanyService {
       ...(issued === undefined ? {} : { accountId: issued.accountId, family: issued.family }),
       scopes: issued === undefined ? [] : issued.scopes,
       ...(resource === undefined ? {} : { resource }),
-      protocolVersion: version as string,
+      protocolVersion: version,
     };
     const wait = await this.#admitted(session);
     if (wait !== undefined) throw new RateLimitedRefusal(wait);
@@ -3234,7 +3236,7 @@ export class CompanyService {
    */
   #inactiveDirect(conversation: StoredConversation): boolean {
     const limit = this.config.directConversationInactivitySeconds;
-    if (limit === undefined || conversation.parentId === undefined || conversation.status === "closed") return false;
+    if (limit === undefined || conversation.parentId === undefined || conversation.closed) return false;
     const last = conversation.events.at(-1)?.payload.created_at;
     if (typeof last !== "string") return false;
     const at = Date.parse(last);
@@ -3246,13 +3248,43 @@ export class CompanyService {
     return { id, payload: { id, created_at: isoZ(this.#now()), ...payload } };
   }
 
-  #state(status: string, responder: string): StoredEvent {
-    return this.#event({ type: "state", status, responder });
+  /**
+   * A `state` event (§8.7): `handoff`, `responder` and `closed` as they now are, after any of
+   * them changed. `working` is never an event.
+   */
+  #state(conversation: StoredConversation): StoredEvent {
+    const { handoff, responder, closed } = conversation;
+    return this.#event({ type: "state", handoff, responder, closed });
+  }
+
+  /**
+   * `current` with `fields` changed and, when `handoff`, `responder` or `closed` changed, the
+   * `state` event that says so (§8.7).
+   */
+  #changed(
+    current: StoredConversation,
+    fields: Partial<Pick<StoredConversation, "working" | "handoff" | "responder" | "closed" | "events">>,
+  ): StoredConversation {
+    const changed = { ...current, ...fields };
+    if (
+      changed.handoff === current.handoff &&
+      changed.responder === current.responder &&
+      changed.closed === current.closed
+    ) {
+      return changed;
+    }
+    return { ...changed, events: [...changed.events, this.#state(changed)] };
+  }
+
+  /** The four state fields of a response (§8.7). */
+  #stateFields(conversation: StoredConversation): Record<string, unknown> {
+    const { working, handoff, responder, closed } = conversation;
+    return { working, handoff, responder, closed };
   }
 
   /** A message or handoff goes only to an open conversation with no Direct one open. */
   #open(conversation: StoredConversation): void {
-    if (conversation.status === "closed") throw new Refused(409, "conversation_closed");
+    if (conversation.closed) throw new Refused(409, "conversation_closed");
     if (conversation.directChild !== undefined) {
       throw new Refused(409, "direct_conversation_open", {
         conversation_id: conversation.directChild,
@@ -3294,8 +3326,10 @@ export class CompanyService {
     const conversation: StoredConversation = {
       conversationId,
       owner,
-      status: "idle",
+      working: false,
+      handoff: "none",
       responder: "agent",
+      closed: false,
       ...(parent === undefined ? {} : { parentId: parent.conversationId }),
       events: [],
       forgotten: [],
@@ -3321,7 +3355,7 @@ export class CompanyService {
    */
   async #directParent(parentId: string, session: CallerSession): Promise<StoredConversation> {
     const parent = await this.#owned(parentId, session);
-    if (parent.status === "closed") throw new Refused(409, "conversation_closed");
+    if (parent.closed) throw new Refused(409, "conversation_closed");
     if (parent.parentId !== undefined) throw new Refused(400, "invalid_request");
     this.#open(parent);
     return parent;
@@ -3360,8 +3394,10 @@ export class CompanyService {
     const conversation: StoredConversation = {
       conversationId,
       owner,
-      status: "idle",
+      working: false,
+      handoff: "none",
       responder: "agent",
+      closed: false,
       parentId: parent.conversationId,
       events: [],
       forgotten: [],
@@ -3478,21 +3514,27 @@ export class CompanyService {
         conversationId,
         (current) => {
           this.#open(current);
-          if (current.status === "queued" || current.responder === "human") {
-            // Already asked for, or with a person: 202, nothing changes (§7.9).
+          if (current.handoff === "pending" || current.responder === "human") {
+            // Already asked for, or with a person: 202, nothing changes (§8.9).
             return current;
           }
-          const responder = this.config.humansAvailable ? "human" : current.responder;
-          return {
-            ...current,
-            status: "idle",
-            responder,
-            events: [
-              ...current.events,
-              this.#state("queued", current.responder),
-              this.#state("idle", responder),
-            ],
-          };
+          // Looking for a person: `handoff` pending; one of the company's people joins at
+          // once when there are any, else none is available and the company agent says why
+          // in a message (§8.9).
+          const pending = this.#changed(current, { handoff: "pending" });
+          if (this.config.humansAvailable) {
+            return this.#changed(pending, { handoff: "none", responder: "human" });
+          }
+          const sorry = this.#event({
+            type: "message",
+            message: {
+              id: this.#id("msg"),
+              author: { type: "agent" },
+              role: "company",
+              text: "No one is available right now; I'll keep helping here.",
+            },
+          });
+          return this.#changed({ ...pending, events: [...pending.events, sorry] }, { handoff: "none" });
         },
       );
       if (changed === undefined) throw new Refused(404, "conversation_not_found");
@@ -3568,13 +3610,9 @@ export class CompanyService {
           if (current.responder === "human") {
             return { ...current, ...account, events: [...current.events, received] };
           }
-          // The agent works on it: every change of status adds a state event (§7).
-          return {
-            ...current,
-            ...account,
-            status: "working",
-            events: [...current.events, received, this.#state("working", current.responder)],
-          };
+          // Accepted, not yet acted on: `working` is true from this moment, and is no
+          // event (§8.3, §8.7).
+          return { ...current, ...account, working: true, events: [...current.events, received] };
         },
       );
       if (changed === undefined) throw new Refused(404, "conversation_not_found");
@@ -3614,14 +3652,8 @@ export class CompanyService {
     const answered = await this.#change<StoredConversation>(
       RecordKinds.conversation,
       conversationId,
-      (current) =>
-        current.status !== "working"
-          ? { ...current, events: [...current.events, ...events] }
-          : {
-              ...current,
-              status: "idle",
-              events: [...current.events, ...events, this.#state("idle", current.responder)],
-            },
+      // Acted on and replied: no work in progress (§8.7).
+      (current) => ({ ...current, working: false, events: [...current.events, ...events] }),
     );
     return answered === undefined ? conversation : answered[1];
   }
@@ -3725,21 +3757,15 @@ export class CompanyService {
       RecordKinds.conversation,
       conversationId,
     );
-    if (conversation === undefined || conversation.status === "closed") return;
+    if (conversation === undefined || conversation.closed) return;
     if (conversation.directChild !== undefined) await this.#close(conversation.directChild);
     const changed = await this.#change<StoredConversation>(
       RecordKinds.conversation,
       conversationId,
-      (current) =>
-        current.status === "closed"
-          ? current
-          : {
-              ...current,
-              status: "closed",
-              events: [...current.events, this.#state("closed", current.responder)],
-            },
+      // Closed: no work in progress, no one looked for, one state event (§8.12).
+      (current) => (current.closed ? current : this.#changed(current, { working: false, handoff: "none", closed: true })),
     );
-    if (changed === undefined || changed[0].status === "closed") return;
+    if (changed === undefined || changed[0].closed) return;
     if (conversation.parentId !== undefined) {
       const closed = this.#event({ type: "direct_closed", conversation_id: conversationId });
       await this.#change<StoredConversation>(
@@ -3758,8 +3784,7 @@ export class CompanyService {
       status,
       body: {
         conversation_id: conversation.conversationId,
-        status: conversation.status,
-        responder: conversation.responder,
+        ...this.#stateFields(conversation),
       },
       headers: {},
     };
@@ -3794,8 +3819,7 @@ export class CompanyService {
         events: pageEvents.map((event) => event.payload),
         cursor: last,
         has_more: more,
-        status: conversation.status,
-        responder: conversation.responder,
+        ...this.#stateFields(conversation),
       },
       headers: {},
     };
@@ -3836,6 +3860,9 @@ export class CompanyService {
     const encoder = new TextEncoder();
     async function* frames(): AsyncGenerator<Uint8Array> {
       yield encoder.encode(": poppy\n\n");
+      // `working` is no event: sent as a `working` event with no `id` when the stream
+      // opens (§8.6).
+      yield encoder.encode(`event: working\ndata: ${JSON.stringify({ working: conversation.working })}\n\n`);
       for (const event of events) {
         const message = event.payload.message;
         if (isObject(message) && message.role === "company" && message.text) {
@@ -4228,7 +4255,7 @@ export class CompanyService {
       RecordKinds.conversation,
       conversationId,
       (current) => {
-        if (current.status === "closed") throw new Error("the conversation is closed");
+        if (current.closed) throw new Error("the conversation is closed");
         if (current.responder !== "human") {
           throw new Error("the conversation is not handed to the company's people");
         }
@@ -4386,6 +4413,8 @@ export class CompanyService {
       scopes: session.scopes,
       ...(session.family === undefined ? {} : { family: session.family }),
       expiresAt: stored.endsAt,
+      // The browser joins the Session at the version it uses the company at (§3.4).
+      protocolVersion: session.protocolVersion,
     };
     const changed = await this.#change<JoinCode>(RecordKinds.joinCode, digest(code), (current) => {
       if (current.authorized !== undefined) throw new Refused(400, "invalid_request");
@@ -4478,6 +4507,7 @@ export class CompanyService {
       ...(joined.agentId === undefined ? {} : { agentId: joined.agentId }),
       ...(signedIn && joined.accountId !== undefined ? { accountId: joined.accountId } : {}),
       scopes: signedIn ? joined.scopes : [],
+      protocolVersion: joined.protocolVersion ?? this.config.preferredVersion,
       ...(signedIn && joined.family !== undefined ? { family: joined.family } : {}),
     };
   }

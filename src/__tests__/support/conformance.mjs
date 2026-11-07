@@ -1077,10 +1077,10 @@ async function conversationOf(ctx, session, token) {
 caseFor("conversations.start-and-reply")(async (ctx) => {
   const { session, endpoint } = await asUser(ctx);
   const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { session });
-  check(receipt.status && receipt.responder, "the answer has status and responder");
+  check(typeof receipt.working === "boolean" && receipt.handoff && receipt.responder && typeof receipt.closed === "boolean", "the answer has the four state fields");
   const url = `${endpoint}/${receipt.conversation_id}/events`;
   const body = await (await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) })).json();
-  for (const key of ["cursor", "has_more", "status", "responder"]) check(key in body, `a read includes ${key}`);
+  for (const key of ["cursor", "has_more", "working", "handoff", "responder", "closed"]) check(key in body, `a read includes ${key}`);
   const company = body.events.filter((e) => e.type === "message" && e.message.role === "company").map((e) => e.message);
   check(company.length, "the company replies");
   check(company.every((m) => ["agent", "human"].includes(m.author?.type)), "replies carry author");
@@ -1243,12 +1243,13 @@ caseFor("conversations.handoff")(async (ctx) => {
   const { session, endpoint } = await asUser(ctx);
   const conversation = await conversationOf(ctx, session);
   const receipt = await ctx.agent.conversations.handoff(endpoint, conversation, { session });
-  check(["queued", "idle", "working"].includes(receipt.status), "handoff answers a status");
-  const page = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
+  check(["none", "pending"].includes(receipt.handoff), "handoff answers a handoff state");
+  const page = await ctx.agent.conversations.readUntilDone(endpoint, conversation, { session, wait: 0 });
   const states = page.events.filter((event) => event.type === "state");
-  check(states.length, "each status change is a state event");
-  check(states.at(-1).status === page.status, "the last state event is the current status");
+  check(states.length, "each change of handoff, responder or closed is a state event");
+  check(states.at(-1).handoff === page.handoff, "the last state event is the current handoff");
   check(states.at(-1).responder === page.responder, "and the current responder");
+  check(states.at(-1).closed === page.closed, "and whether it is closed");
 });
 
 caseFor("conversations.direct-conversation")(async (ctx) => {
@@ -1296,12 +1297,12 @@ caseFor("conversations.closed")(async (ctx) => {
   const { session, endpoint } = await asUser(ctx);
   const conversation = await conversationOf(ctx, session);
   const closed = await ctx.agent.conversations.close(endpoint, conversation, { session });
-  check(closed.status === "closed", "closing answers status closed");
+  check(closed.closed === true, "closing answers closed");
   const error = await refused(ctx.agent.conversations.send(endpoint, conversation, message("Still there?"), { session }), "a message to a closed conversation");
   check(error.code === "conversation_closed", `got ${error.code}`);
   check(error.statusCode === 409, "conversation_closed is HTTP 409");
   const page = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
-  check(page.status === "closed" && page.events.length, "its events stay readable");
+  check(page.closed && page.events.length, "its events stay readable");
 });
 
 caseFor("conversations.not-found-indistinguishable")(async (ctx) => {
@@ -1871,7 +1872,7 @@ caseFor("conversations.read-fields")(async (ctx) => {
   const page = await (await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) })).json();
   const later = `${url}?cursor=${page.cursor}`;
   const empty = await (await ctx.send("GET", later, { headers: await ctx.auth(session, "GET", later) })).json();
-  const fields = ["conversation_id", "events", "cursor", "has_more", "status", "responder"];
+  const fields = ["conversation_id", "events", "cursor", "has_more", "working", "handoff", "responder", "closed"];
   for (const read of [page, empty]) {
     const missing = fields.filter((field) => !(field in read));
     check(missing.length === 0, `a read has ${missing} missing`);

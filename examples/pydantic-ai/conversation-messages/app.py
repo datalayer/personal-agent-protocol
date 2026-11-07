@@ -51,7 +51,13 @@ async def demonstrate_conversation() -> dict[str, object]:
         calls += 1
         return httpx.Response(
             201 if calls == 1 else 202,
-            json={"conversation_id": "cnv_demo", "status": "working", "responder": "agent"},
+            json={
+                "conversation_id": "cnv_demo",
+                "working": True,
+                "handoff": "none",
+                "responder": "agent",
+                "closed": False,
+            },
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:

@@ -182,7 +182,7 @@ test("after sign-out what used the account stays and asks for sign-in", async ()
   assert.ok(revoked instanceof ConversationError);
   assert.deepEqual([revoked.code, revoked.statusCode], ["invalid_token", 401]);
   // The conversation stays open, and a request on it without a token gets the challenge.
-  assert.notEqual((await w.shop.conversationRecord(page.conversation_id)).status, "closed");
+  assert.equal((await w.shop.conversationRecord(page.conversation_id)).closed, false);
   const read = await refusal(w.conversations.readEvents(w.endpoint, page.conversation_id, { session }));
   assert.ok(read instanceof ConversationError);
   assert.deepEqual([read.code, read.statusCode], ["insufficient_scope", 401]);
@@ -461,13 +461,13 @@ test("a repeated handoff and close change nothing", async () => {
   assert.equal(first.responder, "human");
   let count = (await w.shop.conversationRecord(page.conversation_id)).events.length;
   const again = await w.conversations.handoff(w.endpoint, page.conversation_id, { session });
-  assert.deepEqual([again.status, again.responder], [first.status, first.responder]);
+  assert.deepEqual([again.handoff, again.responder], [first.handoff, first.responder]);
   assert.equal((await w.shop.conversationRecord(page.conversation_id)).events.length, count);
   const closed = await w.conversations.close(w.endpoint, page.conversation_id, { session });
   count = (await w.shop.conversationRecord(page.conversation_id)).events.length;
   const closedAgain = await w.conversations.close(w.endpoint, page.conversation_id, { session });
   assert.deepEqual(closedAgain, closed);
-  assert.equal(closed.status, "closed");
+  assert.equal(closed.closed, true);
   assert.equal((await w.shop.conversationRecord(page.conversation_id)).events.length, count);
 });
 
@@ -492,7 +492,7 @@ test("Last-Event-ID wins over cursor on a stream", async () => {
 });
 
 test("a read without its fields is refused", () => {
-  const base = { conversation_id: "cnv_1", events: [], cursor: "evt_1", has_more: false, status: "idle", responder: "agent" };
+  const base = { conversation_id: "cnv_1", events: [], cursor: "evt_1", has_more: false, working: false, handoff: "none", responder: "agent", closed: false };
   assert.deepEqual(parseConversationEventPage(base).events, []);
   for (const missing of ["conversation_id", "events"]) {
     const { [missing]: _gone, ...rest } = base;

@@ -679,8 +679,12 @@ class StoredEvent:
 class StoredConversation:
     conversation_id: str
     owner: tuple[str, str]
-    status: Literal["working", "idle", "queued", "closed"] = "idle"
+    #: The four state fields (§8.7): `working` while a request is accepted and not yet
+    #: acted on, `handoff` `pending` while a person is looked for, who responds, closed.
+    working: bool = False
+    handoff: Literal["none", "pending"] = "none"
     responder: Literal["agent", "human"] = "agent"
+    closed: bool = False
     parent_id: str | None = None
     direct_child: str | None = None
     #: The account the conversation used; from then on it belongs to that account.
@@ -693,8 +697,10 @@ class StoredConversation:
         return {
             "conversation_id": self.conversation_id,
             "owner": list(self.owner),
-            "status": self.status,
+            "working": self.working,
+            "handoff": self.handoff,
             "responder": self.responder,
+            "closed": self.closed,
             "parent_id": self.parent_id,
             "direct_child": self.direct_child,
             "account_id": self.account_id,
@@ -708,8 +714,10 @@ class StoredConversation:
         return cls(
             conversation_id=value["conversation_id"],
             owner=(client_id, pairwise_user_id),
-            status=value["status"],
+            working=bool(value["working"]),
+            handoff=value["handoff"],
             responder=value["responder"],
+            closed=bool(value["closed"]),
             parent_id=value["parent_id"],
             direct_child=value["direct_child"],
             account_id=value["account_id"],
@@ -904,6 +912,8 @@ class WebSession:
     account_id: str | None = None
     scopes: tuple[str, ...] = ()
     family: str | None = None
+    #: The protocol version the joined Session uses the company at (§3.4).
+    protocol_version: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -915,6 +925,7 @@ class WebSession:
             "account_id": self.account_id,
             "scopes": list(self.scopes),
             "family": self.family,
+            "protocol_version": self.protocol_version,
         }
 
     @classmethod
@@ -928,6 +939,7 @@ class WebSession:
             account_id=value["account_id"],
             scopes=tuple(value["scopes"]),
             family=value["family"],
+            protocol_version=value.get("protocol_version"),
         )
 
 

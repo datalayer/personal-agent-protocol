@@ -49,6 +49,7 @@ from personal_agent_protocol import (
     SqlitePairwiseUserIdStore,
     StreamReconnected,
     TextDelta,
+    WorkingChanged,
     resolve_pairwise_user_id,
     terms_differences,
 )
@@ -493,6 +494,8 @@ async def _stream(docs: Docs) -> tuple[dict[str, Any], Check]:
 
         def drop_partial(self, message_ids: Any) -> None: ...
 
+        def show_working(self, working: bool) -> None: ...
+
     async def check(namespace: dict[str, Any], out: str) -> None:
         assert [event.type for event in handled][:1] == ["message"]
 
@@ -505,6 +508,7 @@ async def _stream(docs: Docs) -> tuple[dict[str, Any], Check]:
         "handle_event": handled.append,
         "TextDelta": TextDelta,
         "StreamReconnected": StreamReconnected,
+        "WorkingChanged": WorkingChanged,
     }, check
 
 

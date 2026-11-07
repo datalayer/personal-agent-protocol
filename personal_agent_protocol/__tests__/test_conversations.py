@@ -62,14 +62,22 @@ async def test_start_and_continue_preserve_message_ids_and_parse_waited_events()
                     "events": [],
                     "cursor": "evt_zero",
                     "has_more": False,
-                    "status": "working",
+                    "working": True,
+                    "handoff": "none",
                     "responder": "agent",
+                    "closed": False,
                 },
             )
         assert str(request.url).endswith("/cnv_one/messages?cursor=evt_zero&wait=10")
         return httpx.Response(
             202,
-            json={"conversation_id": "cnv_one", "status": "idle", "responder": "agent"},
+            json={
+                "conversation_id": "cnv_one",
+                "working": False,
+                "handoff": "none",
+                "responder": "agent",
+                "closed": False,
+            },
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
@@ -157,8 +165,10 @@ async def test_events_recover_cursor_drain_backlog_and_suppress_duplicates() -> 
                     "events": [event("evt_one", "one"), event("evt_two", "two")],
                     "cursor": "evt_two",
                     "has_more": True,
-                    "status": "working",
+                    "working": True,
+                    "handoff": "none",
                     "responder": "agent",
+                    "closed": False,
                 },
             )
         return httpx.Response(
@@ -168,8 +178,10 @@ async def test_events_recover_cursor_drain_backlog_and_suppress_duplicates() -> 
                 "events": [event("evt_two", "two"), event("evt_three", "three")],
                 "cursor": "evt_three",
                 "has_more": False,
-                "status": "closed",
+                "working": False,
+                "handoff": "none",
                 "responder": "agent",
+                "closed": True,
             },
         )
 
@@ -218,8 +230,10 @@ async def test_read_events_rejects_conversation_mismatch() -> None:
                 "events": [],
                 "cursor": "evt_zero",
                 "has_more": False,
-                "status": "idle",
+                "working": False,
+                "handoff": "none",
                 "responder": "agent",
+                "closed": False,
             },
         )
 
@@ -269,8 +283,10 @@ async def test_an_authorization_event_with_its_challenge_on_an_accepted_message_
                 ],
                 "cursor": "evt_1",
                 "has_more": False,
-                "status": "idle",
+                "working": False,
+                "handoff": "none",
                 "responder": "agent",
+                "closed": False,
             },
         )
 

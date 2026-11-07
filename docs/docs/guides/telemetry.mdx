@@ -32,7 +32,8 @@ is a programming error the SDK refuses:
 | `pap.sign_in.status` | the step's status, a lowercase identifier (`pending`, `complete`, `signed_out`, …) |
 | `pap.session.signed_in` | a flag |
 | `pap.scopes.granted`, `pap.scopes.missing` | counts |
-| `pap.conversation.status` | a lowercase identifier (`idle`, `closed`, …) |
+| `pap.conversation.working`, `pap.conversation.closed` | booleans (§8.7) |
+| `pap.conversation.handoff` | a lowercase identifier (`none`, `pending`) |
 | `pap.conversation.events` | a count |
 | `pap.operation.status` | lowercase identifiers (`approved`, `answered`, `new_revision`, `unknown`) |
 | `pap.client.id` | the personal agent's `client_id`, once the company verified it: an `https` URL with a plain path |

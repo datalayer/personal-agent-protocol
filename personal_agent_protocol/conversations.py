@@ -14,12 +14,20 @@ from typing import Literal, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
-from pydantic import Field
+from pydantic import Field, field_validator
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import ConversationError, ProtocolValidationError
 from .json import loads_strict
-from .models import ConversationEvent, ConversationEventPage, Message, ProtocolModel
+from .models import (
+    ConversationEvent,
+    ConversationEventPage,
+    ConversationState,
+    Message,
+    ProtocolModel,
+    known_handoff,
+    known_responder,
+)
 from .reactor import RANDOM_SOURCES, RandomSource, first_contribution
 from .refusals import refusal_code, refusal_details
 from .sessions import AccessToken, PapSession
@@ -28,11 +36,36 @@ from .transport import SessionHttpClient
 
 
 class ConversationReceipt(ProtocolModel):
-    """State returned after a message when the caller does not wait for events."""
+    """What a `POST` without `wait` returns: the conversation and its state (§8.3, §8.7)."""
 
     conversation_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,256}$")
-    status: Literal["working", "idle", "queued", "closed"]
+    working: bool
+    handoff: Literal["none", "pending"]
     responder: Literal["agent", "human"]
+    closed: bool
+
+    _handoff = field_validator("handoff", mode="before")(
+        classmethod(lambda cls, value: known_handoff(value))
+    )
+    _responder = field_validator("responder", mode="before")(
+        classmethod(lambda cls, value: known_responder(value))
+    )
+
+    @property
+    def state(self) -> ConversationState:
+        return ConversationState(
+            working=self.working,
+            handoff=self.handoff,
+            responder=self.responder,
+            closed=self.closed,
+        )
+
+
+class WorkingChanged(ProtocolModel):
+    """A stream's `working` event (§8.6): `working` is no recorded event, so the Company
+    sends it with no SSE `id`, when the stream opens and each time it changes."""
+
+    working: bool
 
 
 class TextDelta(ProtocolModel):
@@ -60,7 +93,7 @@ class StreamReconnected(ProtocolModel):
 
 
 ConversationResponse = ConversationReceipt | ConversationEventPage
-StreamItem = ConversationEvent | TextDelta | StreamReconnected
+StreamItem = ConversationEvent | TextDelta | StreamReconnected | WorkingChanged
 CursorExpiredHandler = Callable[[], Awaitable[None] | None]
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
@@ -247,11 +280,45 @@ class ConversationClient:
                 seen.add(event.id)
                 yield event
             current_cursor = page.cursor
-            if page.status == "closed" and not page.has_more:
+            if page.closed and not page.has_more:
                 return
             # A backlog must be drained immediately rather than held by a new
             # long poll. Once drained, return to the caller's requested wait.
             drain_backlog = page.has_more
+
+    @traced("pap.conversation.read_until_done", before=by_endpoint, after=conversation_result)
+    async def read_until_done(
+        self,
+        endpoint: str,
+        conversation_id: str,
+        *,
+        session: PapSession,
+        token: AccessToken | None = None,
+        cursor: str | None = None,
+        wait: int = 30,
+        max_reads: int = 100,
+    ) -> ConversationEventPage:
+        """Read until the Company has no work in progress: `working` false and no backlog
+        (§8.7). A successful `POST` only means the Company accepted the request; this is
+        how a Personal Agent gets the whole reply, or makes sure everything it sent was acted
+        on before closing (§8.12). One page with every event read, in order, and the state
+        when the last read answered; `max_reads` bounds a Company that never settles."""
+
+        events: list[ConversationEvent] = []
+        seen: set[str] = set()
+        current = cursor
+        for _ in range(max_reads):
+            page = await self.read_events(
+                endpoint, conversation_id, session=session, token=token, cursor=current, wait=wait
+            )
+            for event in page.events:
+                if event.id not in seen:
+                    seen.add(event.id)
+                    events.append(event)
+            current = page.cursor
+            if not page.has_more and not page.working:
+                return page.model_copy(update={"events": events})
+        raise ConversationError("still_working", "the company kept working past max_reads")
 
     @traced("pap.conversation.start_direct", before=by_endpoint, after=conversation_result)
     async def start_direct(
@@ -318,7 +385,8 @@ class ConversationClient:
         session: PapSession,
         token: AccessToken | None = None,
     ) -> ConversationReceipt:
-        """Ask for a person at the company (§7.9): `queued` while one is found."""
+        """Ask for a person at the company (§8.9): `handoff` is `pending` while one is
+        found, and `responder` becomes `human` when one joins."""
 
         return await self._control(endpoint, conversation_id, "handoff", 202, session, token)
 
@@ -391,6 +459,15 @@ class ConversationClient:
                 async for name, data, event_id in _sse_frames(
                     response.aiter_lines(), self.max_response_bytes
                 ):
+                    if name == "working":
+                        # No recorded event: `working` as the company sends it (§8.6).
+                        try:
+                            yield WorkingChanged.model_validate(loads_strict(data))
+                        except (ValueError, ProtocolValidationError) as exc:
+                            raise ConversationError(
+                                "invalid_response", "working event was malformed"
+                            ) from exc
+                        continue
                     if name == "text-delta":
                         try:
                             delta = TextDelta.model_validate(loads_strict(data))
@@ -423,7 +500,7 @@ class ConversationClient:
                     if event.message is not None and event.message.id in partial:
                         partial.remove(event.message.id)
                     yield event
-                    if event.type == "state" and event.status == "closed":
+                    if event.type == "state" and event.closed:
                         return
             idle_reconnects = 0 if progressed else idle_reconnects + 1
             if idle_reconnects > max_reconnects:

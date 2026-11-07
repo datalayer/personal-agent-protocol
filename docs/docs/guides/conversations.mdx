@@ -19,6 +19,8 @@ async for item in conversations.stream(endpoint, conversation_id, session=sessio
         ui.show_typing(item.message_id, item.text)   # display only
     elif isinstance(item, StreamReconnected):
         ui.drop_partial(item.discarded_message_ids)
+    elif isinstance(item, WorkingChanged):
+        ui.show_working(item.working)                # no event: the company's work in progress
     else:
         handle_event(item)                           # the ConversationEvent to act on
 ```
@@ -27,6 +29,7 @@ async for item in conversations.stream(endpoint, conversation_id, session=sessio
 for await (const item of conversations.stream(endpoint, conversationId, { session })) {
   if ('kind' in item && item.kind === 'text-delta') ui.showTyping(item.message_id, item.text);
   else if ('kind' in item && item.kind === 'reconnected') ui.dropPartial(item.discardedMessageIds);
+  else if ('kind' in item && item.kind === 'working') ui.showWorking(item.working);
   else handleEvent(item);
 }
 ```
@@ -107,11 +110,30 @@ Either party may close a Direct Conversation, the company after inactivity;
 closing the parent closes it too. The agent may observe every message in it,
 and the company sends nothing there that it cannot share with the agent.
 
+## Where a conversation stands (§8.7)
+
+Every read and every receipt reports the conversation's state in four fields,
+each independent of the others: `working` (the company has work in progress: a
+request it accepted but hasn't acted on, a reply being written), `handoff`
+(`pending` while it looks for a person), `responder` (`agent` or `human`), and
+`closed`. A successful `POST` only means the company accepted the request, so
+`working` is `true` from that moment; `ConversationClient.read_until_done`
+(`readUntilDone`) reads until it is `false` and no backlog is left, which is how
+an agent gets the whole reply, or makes sure everything it sent was acted on
+before closing. Changes to `handoff`, `responder` or `closed` arrive as `state`
+events carrying all three; `working` is never an event: a `wait` read also
+returns when it turns `false`, and a stream sends it as a `working` event with
+no SSE `id` (`WorkingChanged`). A `handoff` this SDK doesn't recognize reads as
+`pending`, a `responder` as `human`. While `has_more` is `true` the state fields
+can be newer than the events returned: apply the events in order and rely on
+the state once `has_more` is `false`.
+
 ## Handoff (§8.9) and closing (§8.12)
 
-`handoff()` asks for a person at the company: the conversation is `queued`,
-then `responder` becomes `human` when someone takes it, or the company says
-none is available and its agent continues. `close()` ends the conversation;
+`handoff()` asks for a person at the company: `handoff` is `pending` while
+one is looked for, then `responder` becomes `human` when someone takes it, or
+`handoff` goes back to `none` and the company agent says none is available.
+`close()` ends the conversation (`closed` is `true`);
 the company refuses later messages with `conversation_closed`. Closing does
 not cancel anything the conversation started, such as an order or a return.
 
@@ -156,11 +178,12 @@ or `extensions`.
 ## Who wrote each reply: `PapReplies`
 
 A company's message is written by its agent or by one of its people
-(`author`), apart from where the conversation stands (`status`) and who
-answers it now (`responder`). A host shows them apart with `PapReplies`
-(`personal_agent_protocol.ui`), of type
-`application/vnd.datalayer.pap.replies+json`, version 4, made with
-`PapReplies.of(company, conversation_id, messages, status=..., responder=...)`
+(`author`), apart from where the conversation stands (`working`, `handoff`,
+`closed`, §8.7) and who answers it now (`responder`). A host shows them apart
+with `PapReplies` (`personal_agent_protocol.ui`), of type
+`application/vnd.datalayer.pap.replies+json`, version 5, made with
+`PapReplies.of(company, conversation_id, messages, working=..., handoff=...,
+responder=..., closed=...)`
 from the messages a page of events carried.
 
 - It names the conversation the replies are in (`conversation`): where the

@@ -424,8 +424,11 @@ def _render_page(payload: dict) -> None:
                 )
         else:
             typer.echo(f"({event['type']})")
-    if "status" in payload:
-        typer.echo(f"status: {payload['status']} · responder: {payload['responder']}")
+    if "responder" in payload:
+        typer.echo(
+            f"working: {payload.get('working')} · handoff: {payload.get('handoff')} · "
+            f"responder: {payload['responder']} · closed: {payload.get('closed')}"
+        )
 
 
 def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa: C901
@@ -1327,8 +1330,9 @@ def _render_receipt_or_page(payload: dict) -> None:
         _render_page(payload)
         return
     typer.echo(
-        f"conversation {payload['conversation_id']}: {payload['status']} "
-        f"· responder: {payload['responder']}"
+        f"conversation {payload['conversation_id']}: working: {payload.get('working')} "
+        f"· handoff: {payload.get('handoff')} · responder: {payload['responder']} "
+        f"· closed: {payload.get('closed')}"
     )
 
 

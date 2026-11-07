@@ -225,7 +225,7 @@ async def test_the_company_speaks_first_in_a_direct_conversation_the_user_accept
     closed = await world.conversations.accept_user_request(
         endpoint, page.conversation_id, event_id, session=session, token=token, wait=0
     )
-    assert closed.conversation_id == direct.conversation_id and closed.status == "closed"
+    assert closed.conversation_id == direct.conversation_id and closed.closed
     await world.conversations.send(
         endpoint, page.conversation_id, world.message("Thanks"), session=session, token=token
     )
@@ -298,7 +298,7 @@ async def test_the_company_closes_a_direct_conversation_left_alone() -> None:
     )
     world.clock.advance(29 * 60)
     page = await world.conversations.read_events(endpoint, direct.conversation_id, session=session)
-    assert page.status != "closed"
+    assert not page.closed
     world.clock.advance(31 * 60)
     with pytest.raises(ConversationError) as raised:
         await world.conversations.send(

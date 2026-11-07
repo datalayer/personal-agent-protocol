@@ -138,7 +138,9 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
         endpoint, world.message("Where is my jacket order?"), session=session, wait=0
     )
     kinds = [event.type for event in page.events]
-    assert kinds == ["message", "state", "message", "authorization", "state"]
+    # `working` is no event (§8.7): the exchange, then the need for the account.
+    assert kinds == ["message", "message", "authorization"]
+    assert page.working is False
     assert [e for e in page.events if e.type != "state"][-1].error == "insufficient_scope"
 
     # Device Sign-In: the user approves on Manzanita's own page.
@@ -273,7 +275,7 @@ async def test_the_conversation_streams_and_a_stranger_cannot_read_it() -> None:
     deltas = [item for item in items if isinstance(item, TextDelta)]
     events = [item for item in items if not isinstance(item, TextDelta | StreamReconnected)]
     assert deltas and all(delta.actionable is False for delta in deltas)
-    assert events[-1].type == "state" and events[-1].status == "closed"
+    assert events[-1].type == "state" and events[-1].closed is True
 
     other = await SessionClient(reactor=world.reactor, http_client=world.http).start(
         client_id=world.atlas.client_id,
@@ -341,7 +343,7 @@ async def test_one_of_the_companys_people_answers_over_what_they_read() -> None:
         ("human", "company", "It is."),
     ]
     assert seen.events[-1].id == answered.id
-    assert (seen.status, seen.responder) == ("idle", "human")
+    assert (seen.working, seen.handoff, seen.responder) == (False, "none", "human")
 
     await world.conversations.close(endpoint, conversation_id, session=session)
     read = await world.shop.conversation_record(conversation_id)

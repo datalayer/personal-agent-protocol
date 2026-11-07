@@ -1155,16 +1155,20 @@ async def test_o4_a_token_in_the_query_is_refused_even_beside_a_valid_header() -
 
 
 @pytest.mark.asyncio
-async def test_o8_a_reply_is_framed_by_working_and_idle_state_events() -> None:
+async def test_o8_a_reply_is_complete_when_working_is_false() -> None:
+    """`working` is no event (§8.7): the message and the reply, and `working` false once
+    the company has acted on the request; a state event only when handoff, responder or
+    closed change."""
+
     world = World()
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     page = await world.conversations.start(
         endpoint, world.message("Hello"), session=session, wait=0
     )
-    kinds = [(e.type, e.status) for e in page.events]
-    assert kinds == [("message", None), ("state", "working"), ("message", None), ("state", "idle")]
-    assert page.status == "idle"
+    kinds = [(e.type, e.handoff) for e in page.events]
+    assert kinds == [("message", None), ("message", None)]
+    assert page.working is False and page.handoff == "none" and page.closed is False
 
 
 @pytest.mark.asyncio

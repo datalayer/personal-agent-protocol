@@ -66,14 +66,16 @@ async def read_conversation_events() -> dict[str, object]:
                                 }
                             }
                             if calls == 1
-                            else {"status": "closed", "responder": "agent"}
+                            else {"handoff": "none", "responder": "agent", "closed": True}
                         ),
                     }
                 ],
                 "cursor": event_id,
                 "has_more": calls == 1,
-                "status": "working" if calls == 1 else "closed",
+                "working": calls == 1,
+                "handoff": "none",
                 "responder": "agent",
+                "closed": calls != 1,
             },
         )
 
@@ -113,6 +115,6 @@ async def read_conversation_events() -> dict[str, object]:
             for event in events
             if event.message is not None and event.message.role == "company"
         ],
-        "closed": events[-1].status == "closed",
+        "closed": events[-1].closed is True,
         "credentials_withheld": True,
     }

@@ -38,8 +38,9 @@
       "id": "evt_c3",
       "type": "state",
       "created_at": "2026-10-10T17:03:01Z",
-      "status": "idle",
-      "responder": "agent"
+      "responder": "agent",
+      "handoff": "none",
+      "closed": false
     },
     {
       "id": "evt_future",
@@ -83,6 +84,8 @@
   ],
   "cursor": "evt_c5",
   "has_more": false,
-  "status": "idle",
-  "responder": "agent"
+  "responder": "agent",
+  "working": false,
+  "handoff": "none",
+  "closed": false
 }

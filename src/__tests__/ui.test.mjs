@@ -183,13 +183,14 @@ test("replies that say less or other are not one", () => {
   assert.throws(() => papRepliesDisplay("r1", { ...replies.data, replies: [] }), TypeError);
 });
 
-test("an unknown status reads as working and an unknown responder as human", () => {
+test("an unknown handoff reads as pending and an unknown responder as human", () => {
   // Later versions may add values (§8.7): read as the most careful known one.
-  const shown = papRepliesDisplay("r1", { ...replies.data, status: "paused", responder: "robot" });
-  assert.deepEqual([shown.data.status, shown.data.responder], ["working", "human"]);
+  const shown = papRepliesDisplay("r1", { ...replies.data, handoff: "paused", responder: "robot" });
+  assert.deepEqual([shown.data.handoff, shown.data.responder], ["pending", "human"]);
   assert.ok(isPapReplies(shown));
   assert.deepEqual(
-    [papRepliesDisplay("r1", { ...replies.data, status: null, responder: null }).data.status],
+    [papRepliesDisplay("r1", { ...replies.data, working: null, handoff: null, responder: null, closed: null }).data.handoff],
     [null],
   );
+  assert.throws(() => papRepliesDisplay("r1", { ...replies.data, working: "later" }), TypeError);
 });

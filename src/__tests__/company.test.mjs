@@ -803,7 +803,7 @@ test("conversations: SSE with text deltas, closing, and a stranger cannot read",
   const events = items.filter((item) => item.kind === undefined);
   assert.ok(deltas.length > 0 && deltas.every((delta) => delta.actionable === false));
   assert.equal(events.at(-1).type, "state");
-  assert.equal(events.at(-1).status, "closed");
+  assert.equal(events.at(-1).closed, true);
 
   const other = await w.start("usr_somebody_else_000000");
   await assert.rejects(
@@ -838,7 +838,7 @@ test("conversations: an idempotent retry, a reused ID, handoff, Direct Conversat
   assert.deepEqual(parent.events.slice(-2).map((event) => event.type), ["direct_opened", "direct_closed"]);
 
   const handed = await w.conversations.handoff(w.endpoint, page.conversation_id, { session });
-  assert.equal(handed.status, "idle");
+  assert.equal(handed.handoff, "none");
   assert.equal(handed.responder, "agent");
 
   const cursor = parent.events[0].id;
@@ -877,7 +877,7 @@ test("the company speaks first in a Direct Conversation the user accepted", asyn
   // Also once it closed, and the parent takes messages again.
   await w.conversations.close(w.endpoint, direct.conversation_id, { session, token });
   const closed = await w.conversations.acceptUserRequest(w.endpoint, page.conversation_id, eventId, { session, token, wait: 0 });
-  assert.deepEqual([closed.conversation_id, closed.status], [direct.conversation_id, "closed"]);
+  assert.deepEqual([closed.conversation_id, closed.closed], [direct.conversation_id, true]);
   await w.conversations.send(w.endpoint, page.conversation_id, w.message("Thanks"), { session, token });
 
   // An event that is no `user_requested` event of the parent is `invalid_request`.
@@ -915,7 +915,7 @@ test("the company closes a Direct Conversation left alone", async () => {
   const direct = await w.conversations.startDirect(w.endpoint, parent.conversation_id, w.message("Me"), { session });
   w.clock.advance(29 * 60);
   const page = await w.conversations.readEvents(w.endpoint, direct.conversation_id, { session });
-  assert.notEqual(page.status, "closed");
+  assert.equal(page.closed, false);
   w.clock.advance(31 * 60);
   const refused = await w.conversations.send(w.endpoint, direct.conversation_id, w.message("Still there?"), { session }).catch((error) => error);
   assert.equal(refused.code, "conversation_closed");
@@ -950,7 +950,7 @@ test("one of the company's people answers over what they read", async () => {
   const written = seen.events.filter((e) => e.type === "message").map((e) => [e.message.author.type, e.message.role, e.message.text]);
   assert.deepEqual(written.slice(-3), [["human", "company", "Rosa here too."], ["human", "user", "Is it shipped?"], ["human", "company", "It is."]]);
   assert.equal(seen.events.at(-1).id, answered.id);
-  assert.deepEqual([seen.status, seen.responder], ["idle", "human"]);
+  assert.deepEqual([seen.working, seen.handoff, seen.responder], [false, "none", "human"]);
 
   await w.conversations.close(w.endpoint, id, { session });
   read = await w.shop.conversationRecord(id);
@@ -963,7 +963,9 @@ test("an authorization event, then the signed-in Session continues the conversat
   const w = await world();
   const session = await w.start();
   const page = await w.conversations.start(w.endpoint, w.message("Where is my jacket order?"), { session, wait: 0 });
-  assert.deepEqual(page.events.map((event) => event.type), ["message", "state", "message", "authorization", "state"]);
+  // `working` is no event (§8.7): the exchange, then the need for the account.
+  assert.deepEqual(page.events.map((event) => event.type), ["message", "message", "authorization"]);
+  assert.equal(page.working, false);
   const { result } = await directSignIn(w, ["orders:read"]);
   const token = result.token;
   const narrow = await w.conversations.send(w.endpoint, page.conversation_id, w.message("Exchange it"), { session, token, cursor: page.cursor, wait: 0 });

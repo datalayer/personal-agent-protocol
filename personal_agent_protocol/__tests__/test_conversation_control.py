@@ -94,7 +94,7 @@ async def test_stream_yields_events_and_deltas_and_stops_at_closed() -> None:
             ": keep-alive\n\n",
             frame({"message_id": "msg_r1", "text": "Your order"}, name="text-delta", with_id=False),
             frame(event("evt_1", type="message", message=reply)),
-            frame(event("evt_2", type="state", status="closed", responder="agent")),
+            frame(event("evt_2", type="state", handoff="none", responder="agent", closed=True)),
         )
 
     client, http = client_for(company)
@@ -112,14 +112,16 @@ async def test_a_closed_stream_reopens_from_last_event_id_and_drops_partial_text
         calls.append(request.headers.get("last-event-id"))
         if len(calls) == 1:
             return sse(
-                frame(event("evt_1", type="state", status="working", responder="agent")),
+                frame(
+                    event("evt_1", type="state", handoff="none", responder="agent", closed=False)
+                ),
                 frame(
                     {"message_id": "msg_cut", "text": "Half a"}, name="text-delta", with_id=False
                 ),
             )
         return sse(
-            frame(event("evt_1", type="state", status="working", responder="agent")),
-            frame(event("evt_2", type="state", status="closed", responder="agent")),
+            frame(event("evt_1", type="state", handoff="none", responder="agent", closed=False)),
+            frame(event("evt_2", type="state", handoff="none", responder="agent", closed=True)),
         )
 
     client, http = client_for(company)
@@ -144,8 +146,10 @@ async def test_a_company_that_does_not_stream_says_so() -> None:
                 "events": [],
                 "cursor": "c_1",
                 "has_more": False,
-                "status": "idle",
+                "working": False,
+                "handoff": "none",
                 "responder": "agent",
+                "closed": False,
             },
         )
     )
@@ -177,18 +181,32 @@ async def test_handoff_and_close_post_empty_objects() -> None:
         seen.append((request.url.path, request.content))
         if request.url.path.endswith("/handoff"):
             return httpx.Response(
-                202, json={"conversation_id": "cnv_1", "status": "queued", "responder": "agent"}
+                202,
+                json={
+                    "conversation_id": "cnv_1",
+                    "working": False,
+                    "handoff": "pending",
+                    "responder": "agent",
+                    "closed": False,
+                },
             )
         return httpx.Response(
-            200, json={"conversation_id": "cnv_1", "status": "closed", "responder": "human"}
+            200,
+            json={
+                "conversation_id": "cnv_1",
+                "working": False,
+                "handoff": "none",
+                "responder": "human",
+                "closed": True,
+            },
         )
 
     client, http = client_for(company)
     async with http:
         queued = await client.handoff(ENDPOINT, "cnv_1", session=session())
         closed = await client.close(ENDPOINT, "cnv_1", session=session())
-    assert queued.status == "queued"
-    assert closed.status == "closed" and closed.responder == "human"
+    assert queued.handoff == "pending"
+    assert closed.closed and closed.responder == "human"
     assert seen == [("/conversations/cnv_1/handoff", b"{}"), ("/conversations/cnv_1/close", b"{}")]
 
 
@@ -203,7 +221,14 @@ async def test_a_direct_conversation_names_its_parent_and_the_parent_points_to_i
             )
         seen.append(json.loads(request.content))
         return httpx.Response(
-            201, json={"conversation_id": "cnv_direct", "status": "idle", "responder": "agent"}
+            201,
+            json={
+                "conversation_id": "cnv_direct",
+                "working": False,
+                "handoff": "none",
+                "responder": "agent",
+                "closed": False,
+            },
         )
 
     client, http = client_for(company)
@@ -236,7 +261,14 @@ async def test_accepting_an_invitation_sends_both_ids_and_no_message() -> None:
     def company(request: httpx.Request) -> httpx.Response:
         seen.append(json.loads(request.content))
         return httpx.Response(
-            201, json={"conversation_id": "cnv_direct", "status": "idle", "responder": "agent"}
+            201,
+            json={
+                "conversation_id": "cnv_direct",
+                "working": False,
+                "handoff": "none",
+                "responder": "agent",
+                "closed": False,
+            },
         )
 
     client, http = client_for(company)
@@ -259,7 +291,14 @@ async def test_signing_in_mid_conversation_keeps_its_id() -> None:
     def company(request: httpx.Request) -> httpx.Response:
         tokens.append(request.headers.get("authorization"))
         return httpx.Response(
-            202, json={"conversation_id": "cnv_1", "status": "working", "responder": "agent"}
+            202,
+            json={
+                "conversation_id": "cnv_1",
+                "working": True,
+                "handoff": "none",
+                "responder": "agent",
+                "closed": False,
+            },
         )
 
     client, http = client_for(company)

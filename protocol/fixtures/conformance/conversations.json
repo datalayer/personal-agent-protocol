@@ -8,12 +8,11 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-8.7-01",
         "PAP-8.7-02",
         "PAP-8.5-03",
         "PAP-5.2-01"
       ],
-      "description": "Starting a conversation returns 201 with status and responder; every read has cursor, has_more, status, responder; company messages have author."
+      "description": "Starting a conversation returns 201 with the four state fields; every read has cursor, has_more, working, handoff, responder, closed; company messages have author (§8.3, §8.7)."
     },
     {
       "id": "conversations.retry-replays",
@@ -67,7 +66,7 @@
       "requirements": [
         "PAP-8.5-03"
       ],
-      "description": "A read with nothing new returns no events, the request's cursor, has_more false, status, and responder."
+      "description": "A read with nothing new returns no events, the request's cursor, has_more false, and the state fields working, handoff, responder and closed."
     },
     {
       "id": "conversations.read-fields",
@@ -76,7 +75,7 @@
       "requirements": [
         "PAP-8.5-03"
       ],
-      "description": "Every successful read includes conversation_id, events (empty when there are none), cursor, has_more, status, and responder."
+      "description": "Every successful read includes conversation_id, events (empty when there are none), cursor, has_more, and the state fields working, handoff, responder and closed."
     },
     {
       "id": "conversations.sse-reconnect",
@@ -110,10 +109,8 @@
       "id": "conversations.handoff",
       "kind": "positive",
       "role": "company",
-      "requirements": [
-        "PAP-8.7-01"
-      ],
-      "description": "Handoff answers 202 with status and responder, and a state event records each change."
+      "requirements": [],
+      "description": "Handoff answers 202 with the state fields; handoff is pending while a person is looked for, and a state event records each change of handoff, responder or closed (§8.7, §8.9)."
     },
     {
       "id": "conversations.direct-conversation",
@@ -146,10 +143,8 @@
       "id": "conversations.closed",
       "kind": "negative",
       "role": "company",
-      "requirements": [
-        "PAP-8.7-01"
-      ],
-      "description": "Closing answers 200 with status closed; a later message is conversation_closed (409); the events stay readable."
+      "requirements": [],
+      "description": "Closing answers with closed true; a later message is conversation_closed (409); the events stay readable."
     },
     {
       "id": "conversations.not-found-indistinguishable",

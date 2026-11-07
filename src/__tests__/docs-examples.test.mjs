@@ -322,7 +322,7 @@ example("docs/docs/guides/conversations.mdx#0", async (w) => {
       endpoint,
       conversationId: page.conversation_id,
       session,
-      ui: { showTyping() {}, dropPartial() {} },
+      ui: { showTyping() {}, dropPartial() {}, showWorking() {} },
       handleEvent: (event) => handled.push(event),
     },
     async () => assert.equal(handled[0].type, "message"),

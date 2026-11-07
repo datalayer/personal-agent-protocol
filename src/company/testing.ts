@@ -178,8 +178,10 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
     [RecordKinds.conversation]: {
       conversationId: "cnv_1",
       owner: ["c", "u"],
-      status: "queued",
+      working: true,
+      handoff: "pending",
       responder: "human",
+      closed: false,
       parentId: "cnv_0",
       directChild: "cnv_2",
       accountId: "acct_1",

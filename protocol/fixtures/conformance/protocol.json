@@ -555,9 +555,11 @@
         ],
         "cursor": "evt_a2",
         "has_more": false,
-        "status": "idle",
         "responder": "agent",
-        "region": "eu"
+        "region": "eu",
+        "working": false,
+        "handoff": "none",
+        "closed": false
       },
       "expect": {
         "valid": true,

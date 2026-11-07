@@ -1435,7 +1435,13 @@ async def _start_and_reply(ctx: ConformanceContext, _: FixtureCase) -> None:
     receipt = await ctx.agent.conversations.start(
         endpoint, _message(ctx.scenario.greeting), session=session
     )
-    check(receipt.status and receipt.responder, "the answer has status and responder")
+    check(
+        isinstance(receipt.working, bool)
+        and receipt.handoff
+        and receipt.responder
+        and isinstance(receipt.closed, bool),
+        "the answer has the four state fields",
+    )
     url = f"{endpoint}/{receipt.conversation_id}/events"
     raw = await ctx.send(
         "GET",
@@ -1445,7 +1451,7 @@ async def _start_and_reply(ctx: ConformanceContext, _: FixtureCase) -> None:
         },
     )
     body = raw.json()
-    for key in ("cursor", "has_more", "status", "responder"):
+    for key in ("cursor", "has_more", "working", "handoff", "responder", "closed"):
         check(key in body, f"a read includes {key}")
     company = [
         e["message"]
@@ -1726,12 +1732,15 @@ async def _handoff(ctx: ConformanceContext, _: FixtureCase) -> None:
     endpoint = await ctx.conversations_endpoint()
     conversation = await _conversation(ctx, user, session)
     receipt = await ctx.agent.conversations.handoff(endpoint, conversation, session=session)
-    check(receipt.status in {"queued", "idle", "working"}, "handoff answers a status")
-    page = await ctx.agent.conversations.read_events(endpoint, conversation, session=session)
+    check(receipt.handoff in {"none", "pending"}, "handoff answers a handoff state")
+    page = await ctx.agent.conversations.read_until_done(
+        endpoint, conversation, session=session, wait=0
+    )
     states = [event for event in page.events if event.type == "state"]
-    check(states, "each status change is a state event")
-    check(states[-1].status == page.status, "the last state event is the current status")
+    check(states, "each change of handoff, responder or closed is a state event")
+    check(states[-1].handoff == page.handoff, "the last state event is the current handoff")
     check(states[-1].responder == page.responder, "and the current responder")
+    check(states[-1].closed == page.closed, "and whether it is closed")
 
 
 @case("conversations.direct-conversation")
@@ -1814,7 +1823,7 @@ async def _closed(ctx: ConformanceContext, _: FixtureCase) -> None:
     endpoint = await ctx.conversations_endpoint()
     conversation = await _conversation(ctx, user, session)
     closed = await ctx.agent.conversations.close(endpoint, conversation, session=session)
-    check(closed.status == "closed", "closing answers status closed")
+    check(closed.closed is True, "closing answers closed")
     with _raises(PersonalAgentProtocolError) as raised:
         await ctx.agent.conversations.send(
             endpoint, conversation, _message("Still there?"), session=session
@@ -1822,7 +1831,7 @@ async def _closed(ctx: ConformanceContext, _: FixtureCase) -> None:
     check(raised.value.code == "conversation_closed", f"got {raised.value.code}")
     check(raised.value.status_code == 409, "conversation_closed is HTTP 409")
     page = await ctx.agent.conversations.read_events(endpoint, conversation, session=session)
-    check(page.status == "closed" and page.events, "its events stay readable")
+    check(page.closed and page.events, "its events stay readable")
 
 
 @case("conversations.not-found-indistinguishable")
@@ -2608,7 +2617,16 @@ async def _read_fields(ctx: ConformanceContext, _: FixtureCase) -> None:
             },
         )
     ).json()
-    fields = {"conversation_id", "events", "cursor", "has_more", "status", "responder"}
+    fields = {
+        "conversation_id",
+        "events",
+        "cursor",
+        "has_more",
+        "working",
+        "handoff",
+        "responder",
+        "closed",
+    }
     for read in (page, empty):
         check(fields <= set(read), f"a read has {sorted(fields - set(read))} missing")
     check(empty["events"] == [], "events is an empty list when there are none")

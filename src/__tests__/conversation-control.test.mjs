@@ -60,7 +60,7 @@ test("stream yields deltas as non-actionable and stops at closed", async () => {
       ": keep-alive\n\n",
       frame({ message_id: "msg_r1", text: "Your order" }, "text-delta"),
       frame(event("evt_1", { type: "message", message: { id: "msg_r1", author: { type: "agent" }, role: "company", text: "Your order shipped." } })),
-      frame(event("evt_2", { type: "state", status: "closed", responder: "agent" })),
+      frame(event("evt_2", { type: "state", handoff: "none", responder: "agent", closed: true })),
     ),
   );
   const items = [];
@@ -74,12 +74,12 @@ test("a closed stream reopens from Last-Event-ID and drops partial text", async 
   const { client, seen } = arrange((_, __, call) =>
     call === 1
       ? sse(
-          frame(event("evt_1", { type: "state", status: "working", responder: "agent" })),
+          frame(event("evt_1", { type: "state", handoff: "none", responder: "agent", closed: false })),
           frame({ message_id: "msg_cut", text: "Half a" }, "text-delta"),
         )
       : sse(
-          frame(event("evt_1", { type: "state", status: "working", responder: "agent" })),
-          frame(event("evt_2", { type: "state", status: "closed", responder: "agent" })),
+          frame(event("evt_1", { type: "state", handoff: "none", responder: "agent", closed: false })),
+          frame(event("evt_2", { type: "state", handoff: "none", responder: "agent", closed: true })),
         ),
   );
   const items = [];
@@ -92,7 +92,7 @@ test("a closed stream reopens from Last-Event-ID and drops partial text", async 
 });
 
 test("a company that does not stream says so", async () => {
-  const { client } = arrange(() => json(200, { conversation_id: "cnv_1", events: [], cursor: "c_1", has_more: false, status: "idle", responder: "agent" }));
+  const { client } = arrange(() => json(200, { conversation_id: "cnv_1", events: [], cursor: "c_1", has_more: false, working: false, handoff: "none", responder: "agent", closed: false }));
   await assert.rejects(
     (async () => { for await (const _ of client.stream(endpoint, "cnv_1", { session: session() })); })(),
     (error) => error.code === "sse_unsupported",
@@ -102,10 +102,10 @@ test("a company that does not stream says so", async () => {
 test("handoff and close post empty objects", async () => {
   const { client, seen } = arrange((url) =>
     url.endsWith("/handoff")
-      ? json(202, { conversation_id: "cnv_1", status: "queued", responder: "agent" })
-      : json(200, { conversation_id: "cnv_1", status: "closed", responder: "human" }),
+      ? json(202, { conversation_id: "cnv_1", working: false, handoff: "pending", responder: "agent", closed: false })
+      : json(200, { conversation_id: "cnv_1", working: false, handoff: "none", responder: "human", closed: true }),
   );
-  assert.equal((await client.handoff(endpoint, "cnv_1", { session: session() })).status, "queued");
+  assert.equal((await client.handoff(endpoint, "cnv_1", { session: session() })).handoff, "pending");
   assert.equal((await client.close(endpoint, "cnv_1", { session: session() })).responder, "human");
   assert.deepEqual(seen.map((s) => [new URL(s.url).pathname, s.init.body]), [
     ["/conversations/cnv_1/handoff", "{}"],
@@ -117,7 +117,7 @@ test("a Direct Conversation names its parent; the parent points to it", async ()
   const { client, seen } = arrange((url) =>
     url.endsWith("/messages")
       ? json(409, { error: "direct_conversation_open", conversation_id: "cnv_direct" })
-      : json(201, { conversation_id: "cnv_direct", status: "idle", responder: "agent" }),
+      : json(201, { conversation_id: "cnv_direct", working: false, handoff: "none", responder: "agent", closed: false }),
   );
   const opened = await client.startDirect(endpoint, "cnv_1", { id: "msg_d1", author: { type: "human" }, text: "It's me" }, { session: session() });
   assert.equal(JSON.parse(seen[0].init.body).parent_conversation_id, "cnv_1");
@@ -130,7 +130,7 @@ test("a Direct Conversation names its parent; the parent points to it", async ()
 
 test("accepting an invitation names the parent and the event, and sends no message", async () => {
   // Company-first Direct Conversations (§8.10): both IDs, no `message`.
-  const { client, seen } = arrange(() => json(201, { conversation_id: "cnv_direct", status: "idle", responder: "agent" }));
+  const { client, seen } = arrange(() => json(201, { conversation_id: "cnv_direct", working: false, handoff: "none", responder: "agent", closed: false }));
   const opened = await client.acceptUserRequest(endpoint, "cnv_1", "evt_c6", { session: session() });
   assert.deepEqual(JSON.parse(seen[0].init.body), { parent_conversation_id: "cnv_1", user_requested_event_id: "evt_c6" });
   assert.equal(opened.conversation_id, "cnv_direct");
@@ -148,7 +148,7 @@ test("a stream that keeps closing empty gives up", async () => {
 });
 
 test("signing in mid-conversation keeps its ID", async () => {
-  const { client, seen } = arrange(() => json(202, { conversation_id: "cnv_1", status: "working", responder: "agent" }));
+  const { client, seen } = arrange(() => json(202, { conversation_id: "cnv_1", working: true, handoff: "none", responder: "agent", closed: false }));
   const mine = session();
   const first = await client.send(endpoint, "cnv_1", { id: "msg_1", author: { type: "agent" }, text: "Show my order" }, { session: mine });
   const second = await client.send(endpoint, "cnv_1", { id: "msg_2", author: { type: "agent" }, text: "Signed in" }, { session: mine, token: token("signed-in") });

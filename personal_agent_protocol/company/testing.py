@@ -178,8 +178,10 @@ def record_samples(now: datetime) -> dict[str, Any]:
         CONVERSATION: StoredConversation(
             conversation_id="cnv_1",
             owner=("c", "u"),
-            status="queued",
+            working=True,
+            handoff="pending",
             responder="human",
+            closed=False,
             parent_id="cnv_0",
             direct_child="cnv_2",
             account_id="acct_1",

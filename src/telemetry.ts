@@ -64,6 +64,7 @@ export const TELEMETRY_EVENTS: Readonly<Record<string, TelemetryStage>> = Object
   "pap.conversation.start": "conversation",
   "pap.conversation.send": "conversation",
   "pap.conversation.read_events": "conversation",
+  "pap.conversation.read_until_done": "conversation",
   "pap.conversation.start_direct": "conversation",
   "pap.conversation.accept_user_request": "conversation",
   "pap.conversation.handoff": "conversation",
@@ -130,7 +131,9 @@ export const TELEMETRY_ATTRIBUTES: Readonly<Record<string, (value: unknown) => b
     "pap.session.signed_in": flag,
     "pap.scopes.granted": count,
     "pap.scopes.missing": count,
-    "pap.conversation.status": identifier,
+    "pap.conversation.working": flag,
+    "pap.conversation.handoff": identifier,
+    "pap.conversation.closed": flag,
     "pap.conversation.events": count,
     "pap.operation.status": identifier,
     "pap.client.id": issuer,
@@ -348,10 +351,14 @@ export function signInResult(result: SignInLike): Record<string, unknown> {
 export const sessionResult = () => ({ "pap.session.signed_in": false });
 
 export const conversationResult = (result: {
-  readonly status?: string;
+  readonly working?: boolean;
+  readonly handoff?: string;
+  readonly closed?: boolean;
   readonly events?: readonly unknown[];
 }) => ({
-  "pap.conversation.status": result.status,
+  "pap.conversation.working": result.working,
+  "pap.conversation.handoff": result.handoff,
+  "pap.conversation.closed": result.closed,
   "pap.conversation.events": result.events?.length,
 });
 

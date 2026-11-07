@@ -16,7 +16,7 @@
  * narrows to a `PapConfirmDisplay`.
  */
 
-import { knownResponder, knownStatus } from "./models.js";
+import { knownHandoff, knownResponder } from "./models.js";
 
 /** The display type of an operation waiting for the person's approval. */
 export const PAP_CONFIRM_TYPE = "application/vnd.datalayer.pap.confirm+json";
@@ -194,13 +194,13 @@ export const PAP_REPLIES_TYPE = "application/vnd.datalayer.pap.replies+json";
  * The version of `PAP_REPLIES_TYPE` this module reads: 2 names the conversation, 3 gives
  * each reply its `author` and, when the company gives one, the writer's `name`.
  */
-export const PAP_REPLIES_VERSION = 4;
+export const PAP_REPLIES_VERSION = 5;
 
-/** Where a conversation stands (§7.8), apart from who answers in it. */
-export type PapConversationStatus = "working" | "idle" | "queued" | "closed";
+/** Whether the company is looking for a person (§8.7, §8.9), apart from who answers. */
+export type PapHandoff = "none" | "pending";
 
-/** Every `PapConversationStatus`. */
-export const PAP_CONVERSATION_STATUSES: readonly PapConversationStatus[] = ["working", "idle", "queued", "closed"];
+/** Every `PapHandoff`. */
+export const PAP_HANDOFFS: readonly PapHandoff[] = ["none", "pending"];
 
 /**
  * A web page a reply refers to (Links 3): its HTTPS `url` and its `title`, else `null`. The
@@ -244,9 +244,14 @@ export type PapRepliesData = {
   conversation: string;
   /** Its replies, each in its words, verbatim, with who wrote it. */
   replies: PapReply[];
-  status: PapConversationStatus | null;
+  /** Whether the company has work in progress (§8.7, version 5). */
+  working: boolean | null;
+  /** Whether the company is looking for a person (§8.7, §8.9). */
+  handoff: PapHandoff | null;
   /** Who answers the conversation now. */
   responder: "agent" | "human" | null;
+  /** Whether the conversation takes no more messages (§8.12). */
+  closed: boolean | null;
 };
 
 /** A display of what a company answered, as the page receives it. */
@@ -259,7 +264,7 @@ export type PapRepliesDisplay = {
   actions?: unknown[];
 };
 
-const REPLIES_KEYS = ["company", "conversation", "replies", "status", "responder"] as const;
+const REPLIES_KEYS = ["company", "conversation", "replies", "working", "handoff", "responder", "closed"] as const;
 
 const isConversationId = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(value);
@@ -294,10 +299,12 @@ const isReply = (value: unknown): value is PapReply =>
  */
 export function isPapRepliesData(value: unknown): value is PapRepliesData {
   if (!isObject(value) || !hasExactly(value, REPLIES_KEYS)) return false;
-  const { company, conversation, replies, status, responder } = value;
+  const { company, conversation, replies, working, handoff, responder, closed } = value;
   if (!isFilled(company) || !isConversationId(conversation)) return false;
   if (!Array.isArray(replies) || replies.length === 0 || !replies.every(isReply)) return false;
-  if (status !== null && !PAP_CONVERSATION_STATUSES.includes(status as PapConversationStatus)) return false;
+  if (working !== null && typeof working !== "boolean") return false;
+  if (closed !== null && typeof closed !== "boolean") return false;
+  if (handoff !== null && !PAP_HANDOFFS.includes(handoff as PapHandoff)) return false;
   return responder === null || isSender(responder);
 }
 
@@ -331,7 +338,7 @@ export function papRepliesText(data: PapRepliesData): string {
 /**
  * What a company answered as its display, `text` included; throws when `data` is not one.
  *
- * A `status` or `responder` of a later version reads as the most careful known one: `working`
+ * A `handoff` or `responder` of a later version reads as the most careful known one: `pending`
  * and `human` (§8.7), so a display only ever carries the values above.
  */
 export function papRepliesDisplay(id: string, data: PapRepliesData): PapRepliesDisplay {
@@ -339,7 +346,7 @@ export function papRepliesDisplay(id: string, data: PapRepliesData): PapRepliesD
     typeof data === "object" && data !== null
       ? {
           ...data,
-          status: typeof data.status === "string" ? knownStatus(data.status) : data.status,
+          handoff: typeof data.handoff === "string" ? knownHandoff(data.handoff) : data.handoff,
           responder: typeof data.responder === "string" ? knownResponder(data.responder) : data.responder,
         }
       : data;

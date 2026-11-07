@@ -72,6 +72,7 @@ TELEMETRY_EVENTS: dict[str, Stage] = {
     "pap.conversation.start": "conversation",
     "pap.conversation.send": "conversation",
     "pap.conversation.read_events": "conversation",
+    "pap.conversation.read_until_done": "conversation",
     "pap.conversation.start_direct": "conversation",
     "pap.conversation.accept_user_request": "conversation",
     "pap.conversation.handoff": "conversation",
@@ -146,7 +147,9 @@ TELEMETRY_ATTRIBUTES: dict[str, Callable[[object], bool]] = {
     "pap.session.signed_in": _flag,
     "pap.scopes.granted": _count,
     "pap.scopes.missing": _count,
-    "pap.conversation.status": _identifier,
+    "pap.conversation.working": _flag,
+    "pap.conversation.handoff": _identifier,
+    "pap.conversation.closed": _flag,
     "pap.conversation.events": _count,
     "pap.operation.status": _identifier,
     "pap.client.id": _issuer,
@@ -411,7 +414,9 @@ def sign_in_result(result: Any) -> dict[str, object]:
 def conversation_result(result: Any) -> dict[str, object]:
     events = getattr(result, "events", None)
     return {
-        "pap.conversation.status": getattr(result, "status", None),
+        "pap.conversation.working": getattr(result, "working", None),
+        "pap.conversation.handoff": getattr(result, "handoff", None),
+        "pap.conversation.closed": getattr(result, "closed", None),
         "pap.conversation.events": len(events) if events is not None else None,
     }
 

@@ -218,7 +218,9 @@ implements, of draft 0.3 and Operations v2:
 - Sign-in turned off with `sign_in_disabled` (`signInDisabled`): `auth.disabled` in
   `poppy.json`, the issuer kept as the identifier and its grants listed for its other
   clients, no Mediated Sign-In, and `unauthorized_client` from each grant's endpoint
-  (spec 3.2). Sign-in, or one type of it, refused to a particular agent by the client
+  (spec 3.2). Until it has issued a refresh token (it holds no sign-in), it answers
+  every refresh with `invalid_grant` and every revocation with success without
+  verifying the client assertion: it has no tokens to protect. Sign-in, or one type of it, refused to a particular agent by the client
   policy's `allows_sign_in(client_id, grant_type)` (`allowsSignIn`), the same error
   from the grant's endpoint, the agent served signed out (spec 4.1). Fewer scopes than
   asked with `agent_scopes` (`agentScopes`), the token response's `scope` saying which;

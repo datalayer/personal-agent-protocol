@@ -539,6 +539,7 @@ class ConformanceContext:
             organization=(await self.company()).document.organization,
             protected_resources=metadata.protected_resources,
             dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
+            pairwise_user_id=session.sub,
         )
         await self.driver.approve_device(
             started.user_code, account=account or self.driver.accounts[0], scopes=granted
@@ -575,6 +576,7 @@ class ConformanceContext:
             scopes=tuple(scopes or self.scenario.scopes),
             tenant_id=self.tenant_id,
             dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
+            pairwise_user_id=session.sub,
         )
         callback = await self.driver.approve_authorization(
             actor.user_browser.urls[-1],
@@ -595,6 +597,7 @@ class ConformanceContext:
             tenant_id=self.tenant_id,
             revocation_endpoint=metadata.revocation_endpoint,
             dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
+            pairwise_user_id=user,
         )
 
     async def refresh_token(self, reference: str) -> SecretStr:
@@ -3149,9 +3152,13 @@ def _prover(ctx: ConformanceContext) -> JoseDpopProver:
     return cast(JoseDpopProver, first_contribution(ctx.agent.reactor, DPOP_PROVERS, "DPoP prover"))
 
 
-async def _dpop_key(ctx: ConformanceContext) -> DpopKey:
+async def _dpop_key(ctx: ConformanceContext, signed: SignedIn) -> DpopKey:
+    """The DPoP key of the signed-in User ID: one per User ID (§4.5)."""
+
     metadata = await ctx.metadata()
-    return await _prover(ctx).keys.key_for(tenant_id=ctx.tenant_id, issuer=metadata.issuer)
+    return await _prover(ctx).keys.key_for(
+        tenant_id=ctx.tenant_id, issuer=metadata.issuer, sub=signed.session.sub
+    )
 
 
 def _forged_proof(
@@ -3173,6 +3180,7 @@ def _forged_proof(
             url=url,
             tenant_id=ctx.tenant_id,
             issuer=ctx.base_url,
+            sub="",  # the claims name no User ID: `key` is the one that signs
             access_token=None if token is None else token.access_token,
             nonce=nonce,
         ),
@@ -3237,7 +3245,7 @@ async def _token_nonce(ctx: ConformanceContext, signed: SignedIn) -> str | None:
     """The nonce the token endpoint gives a proof: `None` when it asks for none."""
 
     metadata = await ctx.metadata()
-    proof = _forged_proof(ctx, await _dpop_key(ctx), "POST", metadata.token_endpoint)
+    proof = _forged_proof(ctx, await _dpop_key(ctx, signed), "POST", metadata.token_endpoint)
     answer = await ctx.token_request(await _refresh_form(ctx, signed), dpop=proof)
     expect_refusal(answer, 400, "use_dpop_nonce", "a proof with no nonce")
     return answer.headers.get(DPOP_NONCE_HEADER)
@@ -3265,7 +3273,7 @@ async def _dpop_separate_keys(ctx: ConformanceContext, _: FixtureCase) -> None:
     delegated = jwt.get_unverified_header(headers["Poppy-Session"])["kid"]
     proof = jwt.get_unverified_header(headers[DPOP_HEADER])
     prover_key = jwk_thumbprint(proof["jwk"])
-    check(prover_key == (await _dpop_key(ctx)).thumbprint, "the proof is by the DPoP key")
+    check(prover_key == (await _dpop_key(ctx, signed)).thumbprint, "the proof is by the DPoP key")
     check(prover_key != delegated, "the proof's key is not the delegated key")
     agents = {jwk_thumbprint(key) for key in ctx.agent.identity.jwks["keys"]}
     check(prover_key not in agents, "the proof's key is not one of the agent's jwks_uri")
@@ -3293,7 +3301,7 @@ async def _dpop_token_bad_proof(ctx: ConformanceContext, fixture: FixtureCase) -
     nonce = await _token_nonce(ctx, signed)
     proof = _forged_proof(
         ctx,
-        await _dpop_key(ctx),
+        await _dpop_key(ctx, signed),
         "POST",
         metadata.token_endpoint,
         nonce=nonce,
@@ -3309,7 +3317,9 @@ async def _dpop_token_nonce(ctx: ConformanceContext, _: FixtureCase) -> None:
     metadata = await ctx.metadata()
     nonce = await _token_nonce(ctx, signed)
     check(nonce, "use_dpop_nonce gives a DPoP-Nonce")
-    proof = _forged_proof(ctx, await _dpop_key(ctx), "POST", metadata.token_endpoint, nonce=nonce)
+    proof = _forged_proof(
+        ctx, await _dpop_key(ctx, signed), "POST", metadata.token_endpoint, nonce=nonce
+    )
     answer = await ctx.token_request(await _refresh_form(ctx, signed), dpop=proof)
     check(answer.status_code == 200, f"served with the nonce, got {answer.status_code}")
     bound = answer.json()["token_type"] == "DPoP"  # noqa: S105 - an OAuth token type
@@ -3360,7 +3370,9 @@ async def _dpop_other_key(ctx: ConformanceContext, _: FixtureCase) -> None:
 async def _dpop_replayed(ctx: ConformanceContext, _: FixtureCase) -> None:
     signed, url = await _bound(ctx)
     nonce = await _resource_nonce(ctx, signed, url)
-    proof = _forged_proof(ctx, await _dpop_key(ctx), "GET", url, token=signed.token, nonce=nonce)
+    proof = _forged_proof(
+        ctx, await _dpop_key(ctx, signed), "GET", url, token=signed.token, nonce=nonce
+    )
     first = await _refused_proof(ctx, signed, url, proof)
     check(first.status_code == 200, f"the proof works once, got {first.status_code}")
     _proof_refused(await _refused_proof(ctx, signed, url, proof), "a replayed proof")
@@ -3377,7 +3389,7 @@ async def _dpop_bad_proof(ctx: ConformanceContext, fixture: FixtureCase) -> None
     nonce = await _resource_nonce(ctx, signed, url)
     proof = _forged_proof(
         ctx,
-        await _dpop_key(ctx),
+        await _dpop_key(ctx, signed),
         "GET",
         url,
         token=signed.token,
@@ -3401,7 +3413,9 @@ async def _dpop_no_session_header(ctx: ConformanceContext, _: FixtureCase) -> No
 async def _dpop_key_lost(ctx: ConformanceContext, _: FixtureCase) -> None:
     signed, url = await _bound(ctx)
     metadata = await ctx.metadata()
-    await _prover(ctx).keys.forget(tenant_id=ctx.tenant_id, issuer=metadata.issuer)
+    await _prover(ctx).keys.forget(
+        tenant_id=ctx.tenant_id, issuer=metadata.issuer, sub=signed.session.sub
+    )
     context = await ctx.account_context(signed.session.sub)
     refreshed = await ctx.agent.accounts.refresh(signed.reference, context=context)
     check(refreshed.status == "signed_in", "a refresh, not a new sign-in")

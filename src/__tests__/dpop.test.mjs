@@ -61,6 +61,7 @@ const proofRequest = (changes = {}) => ({
   url: "https://shop.example/api/orders?page=2#top",
   tenantId: "tenant",
   issuer: ISSUER,
+  sub: "usr_ada",
   ...changes,
 });
 
@@ -93,7 +94,8 @@ test("ath goes with an access token, and a nonce when given", async () => {
   assert.equal(claims.nonce, "n-1");
 });
 
-test("one key per Company for a tenant, and a new jti for each proof", async () => {
+test("one key per User ID, and a new jti for each proof", async () => {
+  // A DPoP key is used for one User ID only, as a delegated key is (§4.5, §5.2).
   const keys = new InMemoryDpopKeys();
   const prover = new JoseDpopProver(keys, { now: () => NOW });
   const keyOf = async (changes) => {
@@ -106,14 +108,15 @@ test("one key per Company for a tenant, and a new jti for each proof", async () 
   assert.notEqual(jti, otherJti);
   assert.notEqual(first, (await keyOf({ tenantId: "other" }))[0]);
   assert.notEqual(first, (await keyOf({ issuer: "https://other.example" }))[0]);
-  assert.equal(keys.size, 3);
-  await keys.forget({ tenantId: "tenant", issuer: ISSUER });
+  assert.notEqual(first, (await keyOf({ sub: "usr_ada_anonymous" }))[0]);
+  assert.equal(keys.size, 4);
+  await keys.forget({ tenantId: "tenant", issuer: ISSUER, sub: "usr_ada" });
   assert.notEqual(first, (await keyOf())[0]);
 });
 
 test("two callers never get two keys", async () => {
   const keys = new InMemoryDpopKeys();
-  const who = { tenantId: "tenant", issuer: ISSUER };
+  const who = { tenantId: "tenant", issuer: ISSUER, sub: "usr_ada" };
   const found = await Promise.all(Array.from({ length: 8 }, () => keys.keyFor(who)));
   assert.equal(new Set(found.map((key) => key.thumbprint)).size, 1);
   assert.equal(keys.size, 1);
@@ -158,6 +161,7 @@ async function tokenRequest(answers, dpopSigningAlgs) {
       error: SessionError,
       tenantId: "tenant",
       dpopSigningAlgs,
+      pairwiseUserId: "usr_ada",
     });
     return { response, sent };
   } catch (error) {
@@ -561,6 +565,7 @@ test("a refused proof spends no device code", async () => {
     url: metadata.token_endpoint,
     tenantId: ctx.tenantId,
     issuer: metadata.issuer,
+    sub: "usr_any",
   });
   await ctx.driver.wait(started.pollInterval);
   const issued = await ctx.tokenRequest(await form(), { dpop: proof.reveal() });
@@ -576,15 +581,48 @@ test("a Mediated Sign-In binds its token", async () => {
     contributes: [{ point: ProtectedInputs, value: input, options: { id: "typed" } }],
   });
   const client = new MediatedSignInClient({ reactor: ctx.agent.reactor, fetch });
+  // A DPoP key is for one User ID (§4.5): proving needs it, before any request.
+  await assert.rejects(
+    client.signIn({ company, clientId: ctx.agent.identity.clientId, scopes: ["orders:read"], tenantId: ctx.tenantId }),
+    RangeError,
+  );
   const started = await client.signIn({
     company,
     clientId: ctx.agent.identity.clientId,
     scopes: ["orders:read"],
     tenantId: ctx.tenantId,
+    pairwiseUserId: "usr_ada_at_manzanita",
   });
   assert.equal(started.status, "code_required");
   const done = await client.submitCode(started.reference);
   assert.equal(done.token.tokenType, "DPoP");
+});
+
+test("each User ID signs in with its own DPoP key", async () => {
+  // The Personal Agent uses each DPoP key for one User ID only, for the same reason as delegated
+  // keys (§4.5, §5.2): two User IDs get tokens bound to two keys, and each refresh proves with its own.
+  const { ctx } = await binding({ dpopBinding: "required" });
+  const first = await signedIn(ctx);
+  const second = await signedIn(ctx);
+  assert.notEqual(first.session.sub, second.session.sub);
+  const { keys } = firstContribution(ctx.agent.reactor, DpopProvers, "DPoP prover");
+  const metadata = await ctx.metadata();
+  const [one, other] = await Promise.all(
+    [first, second].map((signed) => keys.keyFor({ tenantId: ctx.tenantId, issuer: metadata.issuer, sub: signed.session.sub })),
+  );
+  assert.notEqual(one.thumbprint, other.thumbprint);
+  const url = ctx.url(scenario.read_path);
+  let context;
+  for (const [signed, key] of [[first, one], [second, other]]) {
+    const headers = await ctx.auth(signed.session, "GET", url, signed.token);
+    assert.equal(await jwkThumbprint(decodeProtectedHeader(headers.DPoP).jwk), key.thumbprint);
+    assert.equal((await ctx.send("GET", url, { headers })).status, 200);
+    context = await ctx.accountContext(signed.session.sub);
+    const refreshed = await ctx.agent.accounts.refresh(signed.reference, { context });
+    assert.equal(refreshed.status, "signed_in");
+    assert.equal(refreshed.token.tokenType, "DPoP");
+  }
+  await assert.rejects(ctx.agent.accounts.refresh(first.reference, { context: { ...context, pairwiseUserId: undefined } }), RangeError);
 });
 
 test("a repeated DPoP header is refused at the Node adapter", async () => {

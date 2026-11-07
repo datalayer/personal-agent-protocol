@@ -66,7 +66,8 @@ function httpsUrl(value: string, label: string): string {
  * Where a refresh token is used, and for whom (all non-secret).
  *
  * `dpopSigningAlgs` is the issuer's `dpop_signing_alg_values_supported`: a refresh sends a DPoP
- * proof when it includes ES256 (§4.5).
+ * proof when it includes ES256 (§4.5), by the DPoP key of `pairwiseUserId`, the User ID the
+ * refresh token is for, which proving needs.
  */
 export interface RefreshTokenContext {
   readonly tokenEndpoint: string;
@@ -75,6 +76,7 @@ export interface RefreshTokenContext {
   readonly tenantId: string;
   readonly revocationEndpoint?: string;
   readonly dpopSigningAlgs?: readonly string[] | undefined;
+  readonly pairwiseUserId?: string | undefined;
 }
 
 export interface RefreshOptions {
@@ -190,6 +192,7 @@ export class RefreshTokenClient {
           error: AuthorizationError,
           tenantId: context.tenantId,
           dpopSigningAlgs: context.dpopSigningAlgs,
+          pairwiseUserId: context.pairwiseUserId,
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         });
       } catch (error) {

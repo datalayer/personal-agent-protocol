@@ -8,7 +8,7 @@ ports it.
 Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
 declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
 browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into
-account (§8.4, P4-08).
+account (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09).
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,8 +30,10 @@ from personal_agent_protocol import (
 )
 from personal_agent_protocol.actions import discover_company
 from personal_agent_protocol.company import CompanyConfig
+from personal_agent_protocol.company.store import ACCOUNT_FAMILY, AccountFamily
 from personal_agent_protocol.demo.kit import InProcessNetwork, MutableClock
 from personal_agent_protocol.demo.manzanita import CONFIG, manzanita
+from personal_agent_protocol.discovery import DiscoveryClient
 from personal_agent_protocol.errors import ConversationError
 from personal_agent_protocol.extensions import (
     format_extensions_header,
@@ -525,3 +528,136 @@ async def test_web_unscoped_and_web_disabled_are_published_and_read() -> None:
         replace(CONFIG, web=True, web_disabled=True)
     with pytest.raises(ValueError):
         replace(CONFIG, web=False, web_unscoped=True)
+
+
+# Sign-in's minor changes (§3.2, §4.5, §4.7, §5.2) -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_company_that_never_issued_a_refresh_token_needs_no_assertion() -> None:
+    """A Company that sets auth.disabled and has never issued a refresh token answers every
+    refresh with invalid_grant and every revocation with success, without verifying the client
+    assertion; once it has issued one, it verifies them as usual (§3.2)."""
+
+    world = World()
+    config = replace(CONFIG, sign_in_disabled=True, mediated_fields=())
+    world.shop, world.plugin = manzanita(world.network, world.clock, config=config)
+    unverified = {
+        "client_id": world.atlas.client_id,
+        "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        "client_assertion": "not-a-jwt",
+    }
+    refresh = {"grant_type": "refresh_token", "refresh_token": "rt_unknown", **unverified}
+    refused = await world.http.post("https://manzanita.example/oauth/token", data=refresh)
+    assert (refused.status_code, refused.json()["error"]) == (400, "invalid_grant")
+    revoked = await world.http.post(
+        "https://manzanita.example/oauth/revoke", data={"token": "rt_unknown", **unverified}
+    )
+    assert revoked.status_code == 200
+    # Any sign-in it holds means a refresh token was issued: assertions are verified again.
+    await world.shop.store.put(
+        ACCOUNT_FAMILY,
+        "family",
+        AccountFamily(client_id=world.atlas.client_id, account_id="acct_ada", tokens=()).to_json(),
+    )
+    verified = await world.http.post("https://manzanita.example/oauth/token", data=refresh)
+    assert (verified.status_code, verified.json()["error"]) == (401, "invalid_client")
+    # Sign-in on: the assertion is verified whatever the store holds.
+    world.shop, world.plugin = manzanita(world.network, world.clock)
+    on = await world.http.post("https://manzanita.example/oauth/token", data=refresh)
+    assert (on.status_code, on.json()["error"]) == (401, "invalid_client")
+
+
+@pytest.mark.asyncio
+async def test_service_metadata_for_another_resource_is_treated_as_absent() -> None:
+    """The Personal Agent uses a service's protected resource metadata only if its `resource`
+    is the URL it derived the metadata URL from, as RFC 9728 §3.3 requires, and otherwise
+    treats it as absent: the default token works there (§4.5)."""
+
+    world = World()
+    company = await DiscoveryClient(reactor=world.reactor, http_client=world.http).discover(
+        "manzanita.example"
+    )
+    service = "https://orders.example/api"
+    metadata = {
+        "resource": "https://orders.example/other",
+        "authorization_servers": ["https://manzanita.example"],
+    }
+
+    async def published(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        # An ASGI app: the service's metadata, at the URL RFC 9728 §3.1 derives from `service`.
+        assert scope["path"] == "/.well-known/oauth-protected-resource/api"
+        body = json.dumps(metadata).encode()
+        headers = [(b"content-type", b"application/json"), (b"cache-control", b"no-store")]
+        await send({"type": "http.response.start", "status": 200, "headers": headers})
+        await send({"type": "http.response.body", "body": body})
+
+    world.network.add("orders.example", published)
+    discovery = DiscoveryClient(reactor=world.reactor, http_client=world.http)
+    assert await discovery.resource_metadata(service) is None
+    assert await discovery.service_resource(company, service) is None
+    metadata["resource"] = service
+    assert await discovery.service_resource(company, service, fresh=True) == service
+
+
+def test_auth_scopes_win_over_an_openapi_description() -> None:
+    """When an OpenAPI security scheme and auth.scopes both describe a scope, the Personal
+    Agent uses the description in auth.scopes (§4.7)."""
+
+    document = DiscoveryDocument.model_validate(
+        json.loads((FIXTURES / "discovery-valid.json").read_text())
+    )
+    assert document.auth is not None
+    openapi = {
+        "components": {
+            "securitySchemes": {
+                "oauth": {
+                    "type": "oauth2",
+                    "flows": {
+                        "authorizationCode": {
+                            "scopes": {"orders:read": "Read orders (OpenAPI)", "returns": "Returns"}
+                        }
+                    },
+                },
+                "key": {"type": "apiKey", "name": "k", "in": "header"},
+            }
+        }
+    }
+    described = document.scope_descriptions(openapi)
+    assert described["orders:read"] == document.auth.scopes["orders:read"]
+    assert described["returns"] == "Returns"
+    assert document.scope_descriptions() == document.auth.scopes
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_key_signs_for_one_user_id() -> None:
+    """A Company MAY reject, with invalid_session, a Session JWT whose delegated key has
+    already signed for a different User ID while a delegation for the key lasts (§5.2)."""
+
+    world = World()
+    session = await world.signed_out_session()
+    orders = "https://manzanita.example/api/orders"
+    headers = await session_headers(world.reactor, "GET", orders, session=session, token=None)
+    assert (await world.http.get(orders, headers=headers)).status_code in {200, 401}
+    key = await world.host.delegated_keys.current(
+        tenant_id=session.tenant_id, issuer=session.issuer, sub=session.sub
+    )
+    assert key is not None
+    other = PapSession(
+        sid="S" * 22,
+        sub="usr_another_user_id_0000",
+        issuer=session.issuer,
+        client_id=session.client_id,
+        tenant_id=session.tenant_id,
+        extensions=dict(session.extensions),
+    )
+    # An agent that breaks §5.2: the same delegated key for another User ID.
+    await world.host.delegated_keys.replace(
+        tenant_id=other.tenant_id, issuer=other.issuer, sub=other.sub, key=key
+    )
+    headers = await session_headers(world.reactor, "GET", orders, session=other, token=None)
+    refused = await world.http.get(orders, headers=headers)
+    assert (refused.status_code, refused.json()["error"]) == (400, "invalid_session")
+    # The first User ID goes on with it.
+    headers = await session_headers(world.reactor, "GET", orders, session=session, token=None)
+    assert (await world.http.get(orders, headers=headers)).status_code in {200, 401}

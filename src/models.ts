@@ -290,6 +290,29 @@ export function browserSignInScopes(document: DiscoveryDocument): readonly strin
 }
 
 /**
+ * What each scope allows, in the Company's words (§4.7).
+ *
+ * The scopes of the OAuth 2.0 security schemes in `openapi`, an OpenAPI description the Company
+ * lists (section 7), then `auth.scopes`: when both describe a scope, the description in
+ * `auth.scopes` is the one used.
+ */
+export function scopeDescriptions(document: DiscoveryDocument, openapi?: unknown): Record<string, string> {
+  const described: Record<string, string> = {};
+  const record = (value: unknown): Record<string, unknown> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  const schemes = record(record(record(openapi)?.components)?.securitySchemes) ?? {};
+  for (const scheme of Object.values(schemes).map(record)) {
+    if (scheme?.type !== "oauth2") continue;
+    for (const flow of Object.values(record(scheme.flows) ?? {}).map(record)) {
+      for (const [name, text] of Object.entries(record(flow?.scopes) ?? {})) {
+        if (typeof text === "string" && !(name in described)) described[name] = text;
+      }
+    }
+  }
+  return { ...described, ...(document.auth?.scopes ?? {}) };
+}
+
+/**
  * Whether `poppy:browser-sign-in` gives the account's full access on the website (`web.unscoped`,
  * §6): treat it like a scope that allows changes that can't be undone, and ask the User when you
  * would for one.

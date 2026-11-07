@@ -618,6 +618,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 scopes=_scopes(scope, company, "direct"),
                 tenant_id=record.tenant_id,
                 dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
+                pairwise_user_id=record.pairwise_user_id,
             )
             callback = runtime.input.read("Callback URL", secret=True)
             result = await client.complete(callback.get_secret_value())
@@ -662,6 +663,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 organization=company.document.organization,
                 protected_resources=metadata.protected_resources,
                 dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
+                pairwise_user_id=record.pairwise_user_id,
             )
             link = started.verification_uri_complete or started.verification_uri
             # The company that asks, by name and domain, with the link and code (§4.6).
@@ -713,6 +715,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 client_id=record.client_id,
                 scopes=_scopes(scope, company, "mediated"),
                 tenant_id=record.tenant_id,
+                pairwise_user_id=record.pairwise_user_id,
             )
             while result.status == "code_required" and result.reference is not None:
                 result = await client.submit_code(result.reference)

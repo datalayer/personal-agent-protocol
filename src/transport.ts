@@ -162,6 +162,7 @@ export async function sessionHeaders(
       url,
       tenantId: session.tenantId,
       issuer: session.issuer,
+      sub: session.sub,
       accessToken: token.accessToken,
       ...(dpopNonce === undefined ? {} : { nonce: dpopNonce }),
     });

@@ -41,6 +41,7 @@ from .sessions import (
     _opaque_id,
     build_client_assertion_claims,
     finish_sign_in,
+    proves_with_dpop,
 )
 from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
@@ -127,6 +128,7 @@ class _PendingDeviceSignIn:
     next_poll_at: datetime
     interval: int
     dpop_signing_algs: Sequence[str] | None = None
+    pairwise_user_id: str | None = None
 
 
 class DeviceSignInClient:
@@ -161,6 +163,7 @@ class DeviceSignInClient:
         organization: Organization,
         protected_resources: Sequence[str],
         dpop_signing_algs: Sequence[str] | None = None,
+        pairwise_user_id: str | None = None,
     ) -> DeviceSignInStart:
         """Request a device code and retain it behind an opaque state reference (§4.3).
 
@@ -170,7 +173,8 @@ class DeviceSignInClient:
         is refused (`unsafe_verification_uri`) unless its host is the issuer's or
         one of those resources', or a subdomain of either (§4.6). `dpop_signing_algs`
         is its `dpop_signing_alg_values_supported`: each poll sends a DPoP proof when it
-        includes ES256 (§4.5).
+        includes ES256 (§4.5), by the DPoP key of `pairwise_user_id`, the User ID the
+        sign-in is for, which proving needs.
         """
 
         clock, random_source, signer = self._proof_inputs()
@@ -181,6 +185,7 @@ class DeviceSignInClient:
         issuer_url = _https_url(issuer, "issuer")
         requested_scopes = _scopes(scopes)
         self._validate_context(tenant_id)
+        proves_with_dpop(dpop_signing_algs, pairwise_user_id)
         assertion = await signer.sign(
             build_client_assertion_claims(
                 client_id=client_url, issuer=issuer_url, now=now, random_bytes=random_source.bytes
@@ -246,6 +251,7 @@ class DeviceSignInClient:
             next_poll_at=now + timedelta(seconds=authorization.interval),
             interval=authorization.interval,
             dpop_signing_algs=dpop_signing_algs,
+            pairwise_user_id=pairwise_user_id,
         )
         store = self._state_store()
         await store.put(reference, pending, expires_at=expires_at)
@@ -293,6 +299,7 @@ class DeviceSignInClient:
                 error=AuthorizationError,
                 tenant_id=pending.tenant_id,
                 dpop_signing_algs=pending.dpop_signing_algs,
+                pairwise_user_id=pending.pairwise_user_id,
             )
         except AuthorizationError as exc:
             if exc.code in {"authorization_pending", "slow_down"}:

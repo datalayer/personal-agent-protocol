@@ -357,6 +357,23 @@ async def finish_sign_in(
     )
 
 
+def proves_with_dpop(dpop_signing_algs: Sequence[str] | None, pairwise_user_id: str | None) -> bool:
+    """Whether token requests send a DPoP proof: when the issuer lists ES256 (§4.5).
+
+    A DPoP key is used for one User ID only (§4.5), so a sign-in or refresh at such an
+    issuer names the User ID its tokens are for; without one it is refused here, before
+    any request (`ValueError`).
+    """
+
+    proves = dpop_signing_algs is not None and DPOP_ALGORITHM in dpop_signing_algs
+    if proves and not pairwise_user_id:
+        raise ValueError(
+            "The issuer binds tokens with DPoP: name the User ID (pairwise_user_id), whose "
+            "DPoP key proves the requests (§4.5)"
+        )
+    return proves
+
+
 class SessionClient:
     """Start Sessions, and send grants to the company's token endpoint (§4, §5)."""
 
@@ -418,6 +435,7 @@ class SessionClient:
         error: type[PersonalAgentProtocolError],
         tenant_id: str,
         dpop_signing_algs: Sequence[str] | None,
+        pairwise_user_id: str | None = None,
     ) -> TokenResponse:
         """POST one grant to the token endpoint with a fresh client assertion (§4.1, §4.4).
 
@@ -426,13 +444,15 @@ class SessionClient:
         `dpop_signing_alg_values_supported`: when it includes ES256 a DPoP proof goes
         with the request, so the Company can bind the tokens (§4.5), and a
         `use_dpop_nonce` refusal is retried once, with a fresh proof and client
-        assertion. Raises `error` with the company's OAuth error code.
+        assertion. The proof is by the DPoP key of `pairwise_user_id`, the User ID the
+        tokens are for: a DPoP key is for one User ID (§4.5), so proving needs it. Raises
+        `error` with the company's OAuth error code.
         """
 
         fields = form()
         if inspect.isawaitable(fields):
             fields = await fields
-        proves = dpop_signing_algs is not None and DPOP_ALGORITHM in dpop_signing_algs
+        proves = proves_with_dpop(dpop_signing_algs, pairwise_user_id)
         nonce: str | None = None
         while True:
             response, payload = await self._post_grant(
@@ -442,7 +462,11 @@ class SessionClient:
                 token_endpoint=token_endpoint,
                 error=error,
                 proof=(
-                    await self._proof(token_endpoint, tenant_id, issuer, nonce) if proves else None
+                    await self._proof(
+                        token_endpoint, tenant_id, issuer, cast(str, pairwise_user_id), nonce
+                    )
+                    if proves
+                    else None
                 ),
             )
             given = response.headers.get(DPOP_NONCE_HEADER)
@@ -480,7 +504,7 @@ class SessionClient:
         )
 
     async def _proof(
-        self, token_endpoint: str, tenant_id: str, issuer: str, nonce: str | None
+        self, token_endpoint: str, tenant_id: str, issuer: str, sub: str, nonce: str | None
     ) -> SecretStr:
         prover = cast(DpopProver, first_contribution(self.reactor, DPOP_PROVERS, "DPoP prover"))
         return await prover.prove(
@@ -489,6 +513,7 @@ class SessionClient:
                 url=token_endpoint,
                 tenant_id=tenant_id,
                 issuer=issuer,
+                sub=sub,
                 nonce=nonce,
             )
         )

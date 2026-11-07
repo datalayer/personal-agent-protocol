@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from ipaddress import ip_address
 from typing import Any, Literal, cast
@@ -514,6 +514,30 @@ class DiscoveryDocument(ProtocolModel):
         and ask the User when you would for one."""
 
         return self.web is not None and self.web.unscoped
+
+    def scope_descriptions(self, openapi: Mapping[str, Any] | None = None) -> dict[str, str]:
+        """What each scope allows, in the Company's words (§4.7).
+
+        The scopes of the OAuth 2.0 security schemes in `openapi`, an OpenAPI description
+        the Company lists (section 7), then `auth.scopes`: when both describe a scope, the
+        description in `auth.scopes` is the one used.
+        """
+
+        described: dict[str, str] = {}
+        components = (openapi or {}).get("components")
+        schemes = components.get("securitySchemes") if isinstance(components, Mapping) else None
+        for scheme in (schemes or {}).values() if isinstance(schemes, Mapping) else ():
+            if not isinstance(scheme, Mapping) or scheme.get("type") != "oauth2":
+                continue
+            flows = scheme.get("flows")
+            for flow in flows.values() if isinstance(flows, Mapping) else ():
+                scopes = flow.get("scopes") if isinstance(flow, Mapping) else None
+                for name, text in (scopes or {}).items() if isinstance(scopes, Mapping) else ():
+                    if isinstance(name, str) and isinstance(text, str):
+                        described.setdefault(name, text)
+        if self.auth is not None:
+            described.update(self.auth.scopes)
+        return described
 
     def usable_skills(self, base_url: str) -> list[SkillEntry]:
         """The skills of `skill_index` this SDK can use (§9.4), each `url` resolved.

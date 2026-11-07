@@ -66,6 +66,9 @@ FEEDBACK = "feedback"
 DPOP_NONCE = "dpop_nonce"
 #: An API write's `Idempotency-Key` in one Session, and its original response (guides, *Retries*).
 IDEMPOTENCY = "idempotency"
+#: The User ID a delegated key signed for, by agent and key thumbprint, while its delegation
+#: lasts: a key that signs for another User ID is refused (§5.2).
+DELEGATED_KEY = "delegated_key"
 
 RECORD_KINDS = (
     SESSION,
@@ -91,6 +94,7 @@ RECORD_KINDS = (
     FEEDBACK,
     DPOP_NONCE,
     IDEMPOTENCY,
+    DELEGATED_KEY,
 )
 
 
@@ -993,6 +997,20 @@ class ReplayMark:
 
 
 @dataclass(frozen=True)
+class DelegatedKeyUse:
+    """The User ID a delegated key signed for (§5.2): one, while a delegation for it lasts."""
+
+    sub: str
+
+    def to_json(self) -> JsonObject:
+        return {"sub": self.sub}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> DelegatedKeyUse:
+        return cls(sub=value["sub"])
+
+
+@dataclass(frozen=True)
 class SignInAttempts:
     """Failed sign-in attempts by one key (an account, a user, a Session, a code).
 
@@ -1107,4 +1125,5 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     FEEDBACK: StoredFeedback.from_json,
     DPOP_NONCE: IssuedNonce.from_json,
     IDEMPOTENCY: IdempotencyRecord.from_json,
+    DELEGATED_KEY: DelegatedKeyUse.from_json,
 }

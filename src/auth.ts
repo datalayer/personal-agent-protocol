@@ -9,7 +9,7 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 import { AuthorizationError } from "./errors.js";
 import { isLoopbackRedirect } from "./models.js";
 import { SecretValue } from "./secret.js";
-import { SessionClient, finishSignIn, type RandomBytes, type SignInResult } from "./sessions.js";
+import { SessionClient, finishSignIn, provesWithDpop, type RandomBytes, type SignInResult } from "./sessions.js";
 import {
   AuthorizationStateStores,
   BrowserHandoffs,
@@ -209,6 +209,7 @@ interface PendingDirectSignIn {
   readonly tenantId: string;
   readonly expiresAt: Date;
   readonly dpopSigningAlgs: readonly string[] | undefined;
+  readonly pairwiseUserId: string | undefined;
 }
 
 export interface DirectSignInStart {
@@ -226,9 +227,11 @@ export interface DirectSignInBeginOptions extends DirectSignInOptions {
   readonly lifetimeSeconds?: number;
   /**
    * The issuer's `dpop_signing_alg_values_supported`: the code exchange sends a DPoP proof
-   * when it includes ES256 (§4.5).
+   * when it includes ES256 (§4.5), by the DPoP key of `pairwiseUserId`, which proving needs.
    */
   readonly dpopSigningAlgs?: readonly string[] | undefined;
+  /** The User ID the sign-in is for: its DPoP key proves the code exchange (§4.5). */
+  readonly pairwiseUserId?: string | undefined;
 }
 
 export interface DirectSignInCompleteOptions {
@@ -325,6 +328,7 @@ export class DirectSignInClient {
     if (!options.tenantId || options.tenantId.length > 256) {
       throw new RangeError("tenantId must contain between 1 and 256 characters");
     }
+    provesWithDpop(options.dpopSigningAlgs, options.pairwiseUserId);
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     const random = firstContribution(this.#reactor, RandomSources, "random source");
     const store = firstContribution(
@@ -351,6 +355,7 @@ export class DirectSignInClient {
       tenantId: options.tenantId,
       expiresAt,
       dpopSigningAlgs: options.dpopSigningAlgs,
+      pairwiseUserId: options.pairwiseUserId,
     };
     await store.put(reference, pending, { expiresAt });
     try {
@@ -414,6 +419,7 @@ export class DirectSignInClient {
       error: AuthorizationError,
       tenantId: pending.tenantId,
       dpopSigningAlgs: pending.dpopSigningAlgs,
+      pairwiseUserId: pending.pairwiseUserId,
       ...(signal === undefined ? {} : { signal }),
     });
     return finishSignIn(this.#reactor, response, request.scopes, { error: AuthorizationError });

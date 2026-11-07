@@ -73,8 +73,10 @@ started = await client.begin(
     organization=company.document.organization,
     # The link must be on the issuer's host or one of its protected resources'.
     protected_resources=metadata.protected_resources,
-    # A DPoP proof goes with each poll when this includes ES256.
+    # A DPoP proof goes with each poll when this includes ES256, by the DPoP key of the
+    # User ID the sign-in is for: one key per User ID (spec 4.5).
     dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
+    pairwise_user_id="usr_2d7b4f0c9e8a51",
 )
 
 # Render only these human-facing values. A UI may turn the complete URI into a QR.
@@ -99,8 +101,10 @@ const started = await client.begin({
   tenantId: 'application-42',
   organization: company.document.organization,
   protectedResources: metadata.protected_resources,
-  // A DPoP proof goes with each poll when this includes ES256.
+  // A DPoP proof goes with each poll when this includes ES256, by the DPoP key of the
+  // User ID the sign-in is for: one key per User ID (spec 4.5).
   dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
+  pairwiseUserId: 'usr_2d7b4f0c9e8a51',
 });
 
 renderHumanHandoff(started.verificationUriComplete ?? started.verificationUri,

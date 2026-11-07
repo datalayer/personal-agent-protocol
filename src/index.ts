@@ -331,6 +331,7 @@ export {
   browsingDisabled,
   browserSignInScopes,
   browserSignInUnscoped,
+  scopeDescriptions,
   knownResponder,
   knownHandoff,
   conversationState,

@@ -391,34 +391,36 @@ def new_dpop_key() -> DpopKey:
 
 
 class DpopKeyCustody(Protocol):
-    """Where DPoP keys live: one per Company for a tenant, made on first use.
+    """Where DPoP keys live: one per User ID, made on first use.
 
-    `key_for` returns the key of `(tenant_id, issuer)`, and makes it if there is
-    none, at once: two callers never get two keys. `forget` loses it: refresh tokens
+    `key_for` returns the key of `(tenant_id, issuer, sub)`, and makes it if there is
+    none, at once: two callers never get two keys. A DPoP key is used for one User ID
+    only, for the same reason as a delegated key (§4.5, §5.2): otherwise its thumbprint
+    would match a User's User IDs, anonymous or not. `forget` loses it: refresh tokens
     aren't bound, so the next refresh gets a token for a new key (RFC 9449 §5). A host
     keeps them on the User's device or in its KMS; `InMemoryDpopKeys` is for one
     process.
     """
 
-    async def key_for(self, *, tenant_id: str, issuer: str) -> DpopKey: ...
+    async def key_for(self, *, tenant_id: str, issuer: str, sub: str) -> DpopKey: ...
 
-    async def forget(self, *, tenant_id: str, issuer: str) -> None: ...
+    async def forget(self, *, tenant_id: str, issuer: str, sub: str) -> None: ...
 
 
 class InMemoryDpopKeys:
-    """DPoP keys in this process's memory, one per Company for a tenant."""
+    """DPoP keys in this process's memory, one per User ID."""
 
     def __init__(self) -> None:
-        self._keys: dict[tuple[str, str], DpopKey] = {}
+        self._keys: dict[tuple[str, str, str], DpopKey] = {}
 
-    async def key_for(self, *, tenant_id: str, issuer: str) -> DpopKey:
-        key = self._keys.get((tenant_id, issuer))
-        return (
-            key if key is not None else self._keys.setdefault((tenant_id, issuer), new_dpop_key())
-        )
+    async def key_for(self, *, tenant_id: str, issuer: str, sub: str) -> DpopKey:
+        key = self._keys.get((tenant_id, issuer, sub))
+        if key is None:
+            key = self._keys.setdefault((tenant_id, issuer, sub), new_dpop_key())
+        return key
 
-    async def forget(self, *, tenant_id: str, issuer: str) -> None:
-        self._keys.pop((tenant_id, issuer), None)
+    async def forget(self, *, tenant_id: str, issuer: str, sub: str) -> None:
+        self._keys.pop((tenant_id, issuer, sub), None)
 
     def __len__(self) -> int:
         return len(self._keys)
@@ -453,7 +455,7 @@ def dpop_proof_claims(
 
 
 class JoseDpopProver:
-    """`pap.dpopProver`: a fresh proof for each request, by the Company's DPoP key (§4.5)."""
+    """`pap.dpopProver`: a fresh proof for each request, by the User ID's DPoP key (§4.5)."""
 
     def __init__(
         self,
@@ -471,7 +473,9 @@ class JoseDpopProver:
         if issued_at.tzinfo is None:
             raise ProofError("invalid_clock", "The DPoP clock must be timezone-aware")
         claims = dpop_proof_claims(request, issued_at=issued_at, random_bytes=self.random_bytes)
-        key = await self.keys.key_for(tenant_id=request.tenant_id, issuer=request.issuer)
+        key = await self.keys.key_for(
+            tenant_id=request.tenant_id, issuer=request.issuer, sub=request.sub
+        )
         try:
             encoded = jwt.encode(
                 claims,

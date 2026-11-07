@@ -59,7 +59,14 @@ from .reactor import (
     RandomSource,
     first_contribution,
 )
-from .sessions import AccessToken, SessionClient, TokenResponse, _opaque_id, finish_sign_in
+from .sessions import (
+    AccessToken,
+    SessionClient,
+    TokenResponse,
+    _opaque_id,
+    finish_sign_in,
+    proves_with_dpop,
+)
 from .telemetry import sign_in_result, signed_in_as, traced
 
 MEDIATED_VERSION = "1"
@@ -134,6 +141,7 @@ class _PendingCode:
     company_domain: str
     tenant_id: str
     dpop_signing_algs: Sequence[str] | None = None
+    pairwise_user_id: str | None = None
     sign_in_id: str = ""
     sent_to: str | None = None
     expires_at: datetime = datetime.max
@@ -164,14 +172,18 @@ class MediatedSignInClient:
         client_id: str,
         scopes: tuple[str, ...],
         tenant_id: str,
+        pairwise_user_id: str | None = None,
     ) -> MediatedSignInResult:
         """Collect the declared fields from the user and send them with the grant.
 
-        A DPoP proof goes with the grant when the issuer's metadata lists ES256 (§4.5).
+        A DPoP proof goes with the grant when the issuer's metadata lists ES256 (§4.5), by
+        the DPoP key of `pairwise_user_id`, the User ID the sign-in is for, which proving
+        needs.
         """
 
         mediated = self._offered(company)
         metadata = company.require_oauth()
+        proves_with_dpop(metadata.dpop_signing_alg_values_supported, pairwise_user_id)
         organization = company.document.organization
         requested = _scopes(scopes)
         credentials = await self._collect(
@@ -196,6 +208,7 @@ class MediatedSignInClient:
             company_domain=organization.domain,
             tenant_id=tenant_id,
             dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
+            pairwise_user_id=pairwise_user_id,
         )
         try:
             form = {
@@ -265,6 +278,7 @@ class MediatedSignInClient:
                 error=AuthorizationError,
                 tenant_id=pending.tenant_id,
                 dpop_signing_algs=pending.dpop_signing_algs,
+                pairwise_user_id=pending.pairwise_user_id,
             )
         except AuthorizationError as exc:
             if exc.code == "code_required":

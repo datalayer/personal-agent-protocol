@@ -339,20 +339,22 @@ test("ServiceTokens: a service naming another authorization server is refused", 
 });
 
 test("ServiceTokens: fresh reads the metadata again and asks for a new token", async () => {
-  const metadata = { [MCP_METADATA]: { resource: MCP, authorization_servers: [context.issuer] } };
+  // Metadata naming another resource than the URL it was derived from is treated as absent
+  // (RFC 9728 §3.3, §4.5): the default token works there.
+  const metadata = { [MCP_METADATA]: { resource: "https://mcp.shop.example/old", authorization_servers: [context.issuer] } };
   const { service, reads, forms } = arrangeServices(metadata);
   const first = await service.tokenFor(MCP);
   await service.tokenFor(MCP);
   assert.equal(reads.length, 1);
-  // The service moved to another resource, and said so with `invalid_token`.
-  const moved = "https://mcp.shop.example/v2";
-  metadata[MCP_METADATA] = { resource: moved, authorization_servers: [context.issuer] };
-  assert.equal(await service.resourceFor(MCP), MCP); // cached until told otherwise
+  assert.equal(first.resource, undefined);
+  // The service now accepts only its own tokens, and said so with `invalid_token`.
+  metadata[MCP_METADATA] = { resource: MCP, authorization_servers: [context.issuer] };
+  assert.equal(await service.resourceFor(MCP), undefined); // cached until told otherwise
   const second = await service.tokenFor(MCP, { fresh: true });
   assert.equal(reads.length, 2);
-  assert.equal(second.resource, moved);
+  assert.equal(second.resource, MCP);
   assert.notEqual(second, first);
-  assert.equal(forms.at(-1).resource, moved);
+  assert.equal(forms.at(-1).resource, MCP);
 });
 
 test("ServiceTokens: signed out, every token held goes", async () => {

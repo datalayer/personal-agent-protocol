@@ -197,16 +197,17 @@ class SessionSigner(Protocol):
 class DpopProofRequest:
     """What one DPoP proof is signed for (§4.5, RFC 9449 §4.2).
 
-    `method` and `url` are the request's (`htm`, `htu`). `tenant_id` and `issuer`
-    say whose key signs: one key per Company, for a tenant. `access_token`, when the
-    request carries one, is hashed into `ath`, and `nonce` is the latest the
-    server gave.
+    `method` and `url` are the request's (`htm`, `htu`). `tenant_id`, `issuer` and
+    `sub` say whose key signs: one key per User ID, as a delegated key is (§4.5,
+    §5.2). `access_token`, when the request carries one, is hashed into `ath`, and
+    `nonce` is the latest the server gave.
     """
 
     method: str
     url: str
     tenant_id: str
     issuer: str
+    sub: str
     access_token: SecretStr | None = None
     nonce: str | None = None
 

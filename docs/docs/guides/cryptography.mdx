@@ -21,7 +21,7 @@ Both SDKs implement the asymmetric cryptographic operations of draft 0.3:
 - `BlindJoseSigner` is a `pap.signer` that signs client assertions and
   delegations blindly (RFC 9474), so each is an ordinary PS384 signature.
 - `JoseDpopProver` is a `pap.dpopProver` that signs each request's DPoP proof with
-  a key of its own (Python).
+  a key of its own, one per User ID.
 - `WebBotAuthSigner` is a `pap.operatorSigner` that signs each request's operator
   signature with an Ed25519 key the operator publishes (see
   [Operator signatures](#operator-signatures)).
@@ -120,9 +120,12 @@ Whether a company binds its access tokens with DPoP
 the spec says a personal agent SHOULD support it. Both SDKs do.
 
 - **Keys.** `pap.dpopProver` signs each proof. Its default, `JoseDpopProver`, keeps
-  one P-256 key per company for a tenant in a `DpopKeyCustody`, never a delegated
-  key and never one from `jwks_uri`: a proof and a Session JWT are separate
-  signatures with separate keys (spec 5.2). The default custody, `InMemoryDpopKeys`,
+  one P-256 key per User ID (tenant, issuer and `sub`) in a `DpopKeyCustody`, as the
+  spec asks of DPoP keys for the same reason as delegated keys (spec 4.5, 5.2): a key
+  shared by two User IDs would let its thumbprint link them. So each sign-in and
+  refresh at an issuer that lists ES256 names its User ID (`pairwise_user_id`,
+  `pairwiseUserId`). Never a delegated key and never one from `jwks_uri`: a proof and
+  a Session JWT are separate signatures with separate keys (spec 5.2). The default custody, `InMemoryDpopKeys`,
   is for one process; the Python `pap` CLI keeps its keys in its key file.
 - **A proof** has `typ` `dpop+jwt`, `alg` ES256 and the public `jwk` in its header,
   and `jti` (128 random bits), `htm`, `htu` without query or fragment, and `iat` in
@@ -224,5 +227,8 @@ checks that the token was issued to the JWT's `iss`.
 
 Delegated keys bind nothing a company stores. Sessions are named by `client_id`
 and `sid`, and refresh tokens by `client_id`, so a company never expects a
-delegated key to stay the same between requests or Sessions. A browser join is
+delegated key to stay the same between requests or Sessions. It may remember which
+User ID a delegated key signed for while a delegation for it lasts, and refuse the
+key for another User ID with `invalid_session` (spec 5.2), which limits a leaked
+delegated key to one User; the reference company does. A browser join is
 authorized by a request carrying the Session header, not by a proof over its code.

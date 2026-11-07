@@ -289,6 +289,7 @@ const CHECKS = {
         error: SessionError,
         tenantId: "t",
         dpopSigningAlgs: algs ?? undefined,
+        pairwiseUserId: "usr_ada",
       });
       if ("error" in wanted) await assert.rejects(request, rejectsWith(wanted.error));
       else await request;
@@ -332,6 +333,7 @@ const CHECKS = {
           clientId: identity.clientId,
           tenantId: "t",
           dpopSigningAlgs: issuer ?? undefined,
+          pairwiseUserId: "usr_ada",
         },
         server: parseProtectedResourceMetadata({
           resource: "https://shop.example/mcp",
@@ -385,6 +387,7 @@ const CHECKS = {
       url: given.url,
       tenantId: "t",
       issuer: "https://shop.example",
+      sub: "usr_ada",
       accessToken: new SecretValue(given.access_token),
       nonce: given.nonce,
     });

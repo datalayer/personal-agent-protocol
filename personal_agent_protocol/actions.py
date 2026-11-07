@@ -150,6 +150,7 @@ def account_context(record: SessionRecord) -> RefreshTokenContext:
         tenant_id=record.tenant_id,
         revocation_endpoint=record.revocation_endpoint,
         dpop_signing_algs=record.dpop_signing_algs,
+        pairwise_user_id=record.pairwise_user_id,
     )
 
 

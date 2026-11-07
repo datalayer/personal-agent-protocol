@@ -1019,6 +1019,22 @@ requirements:
   - dpop.proof-shape
   - dpop.token-bound-and-used
   - dpop.refresh-after-the-key-is-lost
+- id: PAP-4.5-02
+  section: '4.5'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent MUST use each DPoP key for one User ID only, for the same reason as delegated
+    keys (5.2).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:InMemoryDpopKeys
+  - personal_agent_protocol.crypto:JoseDpopProver
+  - personal_agent_protocol.sessions:proves_with_dpop
+  - personal_agent_protocol.cli_host:FileDpopKeys
+  tests:
+  - personal_agent_protocol/__tests__/test_dpop.py::test_one_key_per_user_id_and_a_new_jti_for_each_proof
+  - personal_agent_protocol/__tests__/test_dpop.py::test_each_user_id_signs_in_with_its_own_dpop_key
+  - personal_agent_protocol/__tests__/test_dpop.py::test_a_mediated_sign_in_binds_its_token
 - id: PAP-4.7-01
   section: '4.7'
   level: SHOULD

@@ -425,6 +425,8 @@ export interface DpopKey {
 export interface DpopKeyWho {
   readonly tenantId: string;
   readonly issuer: string;
+  /** The User ID: a DPoP key is used for one User ID only (§4.5). */
+  readonly sub: string;
 }
 
 /** A new P-256 key, used for nothing but DPoP proofs (§5.2). */
@@ -441,10 +443,11 @@ export async function newDpopKey(): Promise<DpopKey> {
 }
 
 /**
- * Where DPoP keys live: one per Company for a tenant, made on first use.
+ * Where DPoP keys live: one per User ID, made on first use.
  *
- * `keyFor` returns the key of `(tenantId, issuer)`, and makes it if there is none, at once:
- * two callers never get two keys. `forget` loses it: refresh tokens aren't bound, so the next
+ * `keyFor` returns the key of `(tenantId, issuer, sub)`, and makes it if there is none, at once:
+ * two callers never get two keys. A DPoP key is used for one User ID only, for the same reason
+ * as a delegated key (§4.5, §5.2): otherwise its thumbprint would match a User's User IDs. `forget` loses it: refresh tokens aren't bound, so the next
  * refresh gets a token for a new key (RFC 9449 §5). A host keeps them on the User's device or
  * in its KMS; `InMemoryDpopKeys` is for one process.
  */
@@ -453,12 +456,12 @@ export interface DpopKeyCustody {
   forget(who: DpopKeyWho): Promise<void>;
 }
 
-/** DPoP keys in this process's memory, one per Company for a tenant. */
+/** DPoP keys in this process's memory, one per User ID. */
 export class InMemoryDpopKeys implements DpopKeyCustody {
   readonly #keys = new Map<string, Promise<DpopKey>>();
 
   static #name(who: DpopKeyWho): string {
-    return JSON.stringify([who.tenantId, who.issuer]);
+    return JSON.stringify([who.tenantId, who.issuer, who.sub]);
   }
 
   keyFor(who: DpopKeyWho): Promise<DpopKey> {
@@ -529,7 +532,7 @@ export class JoseDpopProver implements DpopProver {
 
   async prove(request: DpopProofRequest): Promise<SecretValue> {
     const claims = await dpopProofClaims(request, { issuedAt: this.#now(), randomBytes: this.#randomBytes });
-    const key = await this.keys.keyFor({ tenantId: request.tenantId, issuer: request.issuer });
+    const key = await this.keys.keyFor({ tenantId: request.tenantId, issuer: request.issuer, sub: request.sub });
     try {
       const proof = await new SignJWT(claims as JWTPayload)
         .setProtectedHeader({ alg: DPOP_ALGORITHM, typ: DPOP_PROOF_TYPE, jwk: key.publicJwk })

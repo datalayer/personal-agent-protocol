@@ -241,6 +241,11 @@ export const RecordKinds = {
   dpopNonce: "dpop_nonce",
   /** An API write's `Idempotency-Key` in one Session, and its original response (guides, *Retries*). */
   idempotency: "idempotency",
+  /**
+   * The User ID a delegated key signed for, by agent and key thumbprint, while its delegation
+   * lasts: a key that signs for another User ID is refused (§5.2).
+   */
+  delegatedKey: "delegated_key",
 } as const;
 
 export type RecordKind = (typeof RecordKinds)[keyof typeof RecordKinds];
@@ -425,6 +430,11 @@ export type IssuedNonce = Record<string, never>;
  * and JSON body it answered, returned again for a repeated key. The digest covers the
  * method, path, query and body, never the credentials.
  */
+/** The User ID a delegated key signed for (§5.2): one, while a delegation for it lasts. */
+export interface DelegatedKeyUse {
+  readonly sub: string;
+}
+
 export interface IdempotencyRecord {
   readonly digest: string;
   readonly status?: number;

@@ -424,6 +424,7 @@ export class Context {
       organization: (await this.company()).document.organization,
       protectedResources: metadata.protected_resources,
       dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
+      pairwiseUserId: session.sub,
     });
     await this.driver.approveDevice(started.userCode, { account: account ?? this.driver.accounts[0], scopes: granted });
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -450,6 +451,7 @@ export class Context {
       scopes: scopes ?? this.scenario.scopes,
       tenantId: this.tenantId,
       dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
+      pairwiseUserId: session.sub,
     });
     const callbackUrl = await this.driver.approveAuthorization(actor.userBrowser.urls.at(-1), {
       account: account ?? this.driver.accounts[0],
@@ -460,7 +462,7 @@ export class Context {
     return { session, token: done.token, reference: done.refreshTokenReference };
   }
 
-  async accountContext(_user, agent = this.agent) {
+  async accountContext(user, agent = this.agent) {
     const metadata = await this.metadata();
     return {
       tokenEndpoint: metadata.token_endpoint,
@@ -469,6 +471,7 @@ export class Context {
       tenantId: this.tenantId,
       ...(metadata.revocation_endpoint ? { revocationEndpoint: metadata.revocation_endpoint } : {}),
       dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
+      pairwiseUserId: user,
     };
   }
 
@@ -2255,9 +2258,10 @@ caseFor("operator.signature-never-vouches-for-the-session")(async (ctx) => {
 
 const prover = (ctx) => firstContribution(ctx.agent.reactor, DpopProvers, "DPoP prover");
 
-async function dpopKey(ctx) {
+/** The DPoP key of the signed-in User ID: one per User ID (§4.5). */
+async function dpopKey(ctx, signed) {
   const metadata = await ctx.metadata();
-  return prover(ctx).keys.keyFor({ tenantId: ctx.tenantId, issuer: metadata.issuer });
+  return prover(ctx).keys.keyFor({ tenantId: ctx.tenantId, issuer: metadata.issuer, sub: signed.session.sub });
 }
 
 /** A proof the SDK would never send: real keys, one thing wrong (RFC 9449 §4.2). */
@@ -2268,6 +2272,7 @@ async function forgedProof(ctx, key, method, url, { token, nonce, mutation = {} 
       url,
       tenantId: ctx.tenantId,
       issuer: ctx.baseUrl,
+      sub: "", // the claims name no User ID: `key` is the one that signs
       ...(token === undefined ? {} : { accessToken: token.accessToken }),
       ...(nonce === undefined || nonce === null ? {} : { nonce }),
     },
@@ -2312,7 +2317,7 @@ async function proofRefused(response, what) {
 /** The nonce the token endpoint gives a proof. */
 async function tokenNonce(ctx, signed) {
   const metadata = await ctx.metadata();
-  const proof = await forgedProof(ctx, await dpopKey(ctx), "POST", metadata.token_endpoint);
+  const proof = await forgedProof(ctx, await dpopKey(ctx, signed), "POST", metadata.token_endpoint);
   const answer = await ctx.tokenRequest(await refreshForm(ctx, signed.reference), { dpop: proof });
   await expectRefusal(answer, 400, "use_dpop_nonce", "a proof with no nonce");
   return answer.headers.get(DPOP_NONCE_HEADER);
@@ -2333,7 +2338,7 @@ caseFor("dpop.session-and-proof-different-keys")(async (ctx) => {
   const headers = await ctx.auth(signed.session, "GET", url, signed.token);
   const delegated = decodeProtectedHeader(headers["Poppy-Session"]).kid;
   const proved = await jwkThumbprint(decodeProtectedHeader(headers[DPOP_HEADER]).jwk);
-  check(proved === (await dpopKey(ctx)).thumbprint, "the proof is by the DPoP key");
+  check(proved === (await dpopKey(ctx, signed)).thumbprint, "the proof is by the DPoP key");
   check(proved !== delegated, "the proof's key is not the delegated key");
   const agents = await Promise.all(ctx.agent.identity.jwks.keys.map((key) => jwkThumbprint(key)));
   check(!agents.includes(proved), "the proof's key is not one of the agent's jwks_uri");
@@ -2356,7 +2361,7 @@ caseFor(
   const [signed] = await boundUser(ctx);
   const metadata = await ctx.metadata();
   const nonce = await tokenNonce(ctx, signed);
-  const proof = await forgedProof(ctx, await dpopKey(ctx), "POST", metadata.token_endpoint, { nonce, mutation: fixture.mutation });
+  const proof = await forgedProof(ctx, await dpopKey(ctx, signed), "POST", metadata.token_endpoint, { nonce, mutation: fixture.mutation });
   const answer = await ctx.tokenRequest(await refreshForm(ctx, signed.reference), { dpop: proof });
   await expectRefusal(answer, 400, "invalid_dpop_proof", fixture.id);
 });
@@ -2366,7 +2371,7 @@ caseFor("dpop.nonce-at-the-token-endpoint")(async (ctx) => {
   const metadata = await ctx.metadata();
   const nonce = await tokenNonce(ctx, signed);
   check(nonce, "use_dpop_nonce gives a DPoP-Nonce");
-  const proof = await forgedProof(ctx, await dpopKey(ctx), "POST", metadata.token_endpoint, { nonce });
+  const proof = await forgedProof(ctx, await dpopKey(ctx, signed), "POST", metadata.token_endpoint, { nonce });
   const answer = await ctx.tokenRequest(await refreshForm(ctx, signed.reference), { dpop: proof });
   check(answer.status === 200, `served with the nonce, got ${answer.status}`);
   check((await answer.json()).token_type === "DPoP", "the token is bound");
@@ -2411,7 +2416,7 @@ caseFor("dpop.proof-of-another-key")(async (ctx) => {
 caseFor("dpop.proof-replayed")(async (ctx) => {
   const [signed, url] = await boundUser(ctx);
   const nonce = await resourceNonce(ctx, signed, url);
-  const proof = await forgedProof(ctx, await dpopKey(ctx), "GET", url, { token: signed.token, nonce });
+  const proof = await forgedProof(ctx, await dpopKey(ctx, signed), "GET", url, { token: signed.token, nonce });
   const first = await withProof(ctx, signed, url, proof);
   check(first.status === 200, `the proof works once, got ${first.status}`);
   await proofRefused(await withProof(ctx, signed, url, proof), "a replayed proof");
@@ -2425,7 +2430,7 @@ caseFor(
 )(async (ctx, fixture) => {
   const [signed, url] = await boundUser(ctx);
   const nonce = await resourceNonce(ctx, signed, url);
-  const proof = await forgedProof(ctx, await dpopKey(ctx), "GET", url, { token: signed.token, nonce, mutation: fixture.mutation });
+  const proof = await forgedProof(ctx, await dpopKey(ctx, signed), "GET", url, { token: signed.token, nonce, mutation: fixture.mutation });
   await proofRefused(await withProof(ctx, signed, url, proof), fixture.id);
 });
 
@@ -2440,7 +2445,7 @@ caseFor("dpop.session-header-still-checked")(async (ctx) => {
 caseFor("dpop.refresh-after-the-key-is-lost")(async (ctx) => {
   const [signed, url] = await boundUser(ctx);
   const metadata = await ctx.metadata();
-  await prover(ctx).keys.forget({ tenantId: ctx.tenantId, issuer: metadata.issuer });
+  await prover(ctx).keys.forget({ tenantId: ctx.tenantId, issuer: metadata.issuer, sub: signed.session.sub });
   const context = await ctx.accountContext(signed.session.sub);
   const refreshed = await ctx.agent.accounts.refresh(signed.reference, { context });
   check(refreshed.status === "signed_in", "a refresh, not a new sign-in");

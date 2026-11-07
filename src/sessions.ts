@@ -491,7 +491,26 @@ export interface TokenRequestOptions {
   readonly tenantId: string;
   /** The issuer's `dpop_signing_alg_values_supported`, or `undefined` when it lists none. */
   readonly dpopSigningAlgs: readonly string[] | undefined;
+  /** The User ID the tokens are for: its DPoP key proves, so proving needs it (§4.5). */
+  readonly pairwiseUserId?: string | undefined;
   readonly signal?: AbortSignal;
+}
+
+/**
+ * Whether token requests send a DPoP proof: when the issuer lists ES256 (§4.5).
+ *
+ * A DPoP key is used for one User ID only (§4.5), so a sign-in or refresh at such an issuer
+ * names the User ID its tokens are for; without one it is refused here, before any request
+ * (`RangeError`).
+ */
+export function provesWithDpop(dpopSigningAlgs: readonly string[] | undefined, pairwiseUserId: string | undefined): boolean {
+  const proves = dpopSigningAlgs?.includes(DPOP_ALGORITHM) === true;
+  if (proves && !pairwiseUserId) {
+    throw new RangeError(
+      "The issuer binds tokens with DPoP: name the User ID (pairwiseUserId), whose DPoP key proves the requests (§4.5)",
+    );
+  }
+  return proves;
 }
 
 export interface SessionClientOptions {
@@ -561,7 +580,7 @@ export class SessionClient {
       throw new RangeError("tenantId must contain between 1 and 256 characters");
     }
     const fields = await options.form();
-    const proves = options.dpopSigningAlgs?.includes(DPOP_ALGORITHM) === true;
+    const proves = provesWithDpop(options.dpopSigningAlgs, options.pairwiseUserId);
     let nonce: string | undefined;
     while (true) {
       const proof = proves ? await this.#proof(tokenEndpoint, options, nonce) : undefined;
@@ -608,6 +627,7 @@ export class SessionClient {
       url: tokenEndpoint,
       tenantId: options.tenantId,
       issuer: options.issuer,
+      sub: options.pairwiseUserId as string,
       ...(nonce === undefined ? {} : { nonce }),
     });
   }

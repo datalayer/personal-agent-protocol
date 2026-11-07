@@ -236,17 +236,18 @@ test("a service must name the Company's issuer", async () => {
 });
 
 test("metadata stays cached until a service says it is stale, then is read fresh", async () => {
-  const metadata = { current: { resource: SERVICE, authorization_servers: ["https://auth.example.com"] } };
+  // Metadata whose `resource` isn't the URL it was derived from is treated as absent (RFC 9728
+  // §3.3, §4.5): the default token works there, until the service names its own resource.
+  const metadata = { current: { resource: "https://mcp.example.com/old", authorization_servers: ["https://auth.example.com"] } };
   const { company, reactor, reads } = await services(metadata);
-  await serviceResource(company, SERVICE, { reactor });
-  const moved = "https://mcp.example.com/v2";
-  metadata.current = { resource: moved, authorization_servers: ["https://auth.example.com"] };
-  assert.equal(await serviceResource(company, SERVICE, { reactor }), SERVICE);
+  assert.equal(await serviceResource(company, SERVICE, { reactor }), undefined);
+  metadata.current = { resource: SERVICE, authorization_servers: ["https://auth.example.com"] };
+  assert.equal(await serviceResource(company, SERVICE, { reactor }), undefined);
   assert.equal(reads.length, 1);
-  assert.equal(await serviceResource(company, SERVICE, { reactor, fresh: true }), moved);
+  assert.equal(await serviceResource(company, SERVICE, { reactor, fresh: true }), SERVICE);
   assert.equal(reads.length, 2);
   // The fresh answer is what stays cached.
-  assert.equal(await serviceResource(company, SERVICE, { reactor }), moved);
+  assert.equal(await serviceResource(company, SERVICE, { reactor }), SERVICE);
   assert.equal(reads.length, 2);
   reactor.stop();
 });

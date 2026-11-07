@@ -32,6 +32,7 @@ import {
   type AccountFamily,
   type AccountGrant,
   type CompanyStore,
+  type DelegatedKeyUse,
   type IdempotencyRecord,
   type IssuedAccessToken,
   type IssuedCode,
@@ -234,6 +235,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       status: 200,
       body: { summary: "Exchanged." },
     } satisfies IdempotencyRecord,
+    [RecordKinds.delegatedKey]: { sub: "usr_1" } satisfies DelegatedKeyUse,
   };
   return records as Readonly<Record<string, JsonObject>>;
 }

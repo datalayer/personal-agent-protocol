@@ -22,6 +22,7 @@ import {
   SessionClient,
   buildClientAssertionClaims,
   finishSignIn,
+  provesWithDpop,
   type AccessToken,
   type TokenResponse,
 } from "./sessions.js";
@@ -171,6 +172,7 @@ interface PendingDeviceSignIn {
   readonly nextPollAt: Date;
   readonly interval: number;
   readonly dpopSigningAlgs: readonly string[] | undefined;
+  readonly pairwiseUserId: string | undefined;
 }
 
 function isPending(value: unknown): value is PendingDeviceSignIn {
@@ -232,9 +234,11 @@ export interface DeviceSignInBeginOptions {
   readonly protectedResources: readonly string[];
   /**
    * The issuer's `dpop_signing_alg_values_supported`: each poll sends a DPoP proof when it
-   * includes ES256 (§4.5).
+   * includes ES256 (§4.5), by the DPoP key of `pairwiseUserId`, which proving needs.
    */
   readonly dpopSigningAlgs?: readonly string[] | undefined;
+  /** The User ID the sign-in is for: its DPoP key proves the polls (§4.5). */
+  readonly pairwiseUserId?: string | undefined;
   readonly signal?: AbortSignal;
 }
 
@@ -284,6 +288,7 @@ export class DeviceSignInClient {
     const issuer = options.issuer;
     const clientId = httpsUrl(options.clientId, "clientId");
     const requestedScopes = scopes(options.scopes);
+    provesWithDpop(options.dpopSigningAlgs, options.pairwiseUserId);
     const now = clock.now();
     const clientAssertion = await signer.sign(this.#claims(clientId, issuer, now, random.bytes(16)), {
       purpose: "client_assertion",
@@ -325,6 +330,7 @@ export class DeviceSignInClient {
       nextPollAt: new Date(now.getTime() + authorization.interval * 1000),
       interval: authorization.interval,
       dpopSigningAlgs: options.dpopSigningAlgs,
+      pairwiseUserId: options.pairwiseUserId,
     };
     const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
     await store.put(reference, pending, { expiresAt });
@@ -382,6 +388,7 @@ export class DeviceSignInClient {
         error: AuthorizationError,
         tenantId: pending.tenantId,
         dpopSigningAlgs: pending.dpopSigningAlgs,
+        pairwiseUserId: pending.pairwiseUserId,
         ...(signal === undefined ? {} : { signal }),
       });
     } catch (cause) {

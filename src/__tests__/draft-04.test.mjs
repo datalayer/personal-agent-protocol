@@ -10,7 +10,7 @@
 // Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
 // declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
 // browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into account
-// (§8.4, P4-08).
+// (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -40,11 +40,14 @@ import {
   parseMessage,
   parseOAuthServerMetadata,
   preferredSignIn,
+  resourceMetadata,
+  scopeDescriptions,
+  serviceResource,
   sessionHeaders,
   signInTypes,
   versionUnsupported,
 } from "../../lib/index.js";
-import { CompanyConfig } from "../../lib/server.js";
+import { CompanyConfig, RecordKinds } from "../../lib/server.js";
 import { CONFIG, CONFIG_OPTIONS, manzanita } from "../../lib/demo/manzanita.js";
 import { ControlledBrowser } from "./support/controlled-browser.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -415,4 +418,94 @@ test("web.unscoped and web.disabled are published and read", async () => {
   }
   assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, web: true, webDisabled: true }), RangeError);
   assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, web: false, webUnscoped: true }), RangeError);
+});
+
+// Sign-in's minor changes (§3.2, §4.5, §4.7, §5.2) ---------------------------------------------
+
+test("a company that never issued a refresh token needs no assertion", async () => {
+  // A Company that sets auth.disabled and has never issued a refresh token answers every refresh
+  // with invalid_grant and every revocation with success, without verifying the client assertion;
+  // once it has issued one, it verifies them as usual (§3.2).
+  const w = await world(new CompanyConfig({ ...CONFIG_OPTIONS, signInDisabled: true, mediatedFields: [] }));
+  const unverified = {
+    client_id: w.identity.clientId,
+    client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    client_assertion: "not-a-jwt",
+  };
+  const post = (path, form) =>
+    w.fetch(`https://manzanita.example${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(form).toString(),
+    });
+  const refresh = { grant_type: "refresh_token", refresh_token: "rt_unknown", ...unverified };
+  const refused = await post("/oauth/token", refresh);
+  assert.deepEqual([refused.status, (await refused.json()).error], [400, "invalid_grant"]);
+  assert.equal((await post("/oauth/revoke", { token: "rt_unknown", ...unverified })).status, 200);
+  // Any sign-in it holds means a refresh token was issued: assertions are verified again.
+  await w.shop.store.put(RecordKinds.accountFamily, "family", { clientId: w.identity.clientId, accountId: "acct_ada", tokens: [] });
+  const verified = await post("/oauth/token", refresh);
+  assert.deepEqual([verified.status, (await verified.json()).error], [401, "invalid_client"]);
+});
+
+test("service metadata for another resource is treated as absent", async () => {
+  // The Personal Agent uses a service's protected resource metadata only if its `resource` is the
+  // URL it derived the metadata URL from (RFC 9728 §3.3), else treats it as absent (§4.5).
+  const w = await world();
+  const service = "https://orders.example/api";
+  const metadata = { resource: "https://orders.example/other", authorization_servers: ["https://manzanita.example"] };
+  w.sites["orders.example"] = {
+    handle: async (request) => {
+      assert.equal(new URL(request.url).pathname, "/.well-known/oauth-protected-resource/api");
+      return { status: 200, body: metadata, headers: { "cache-control": "no-store" } };
+    },
+  };
+  assert.equal(await resourceMetadata(service, { reactor: w.host.reactor }), undefined);
+  assert.equal(await serviceResource(w.company, service, { reactor: w.host.reactor }), undefined);
+  metadata.resource = service;
+  assert.equal(await serviceResource(w.company, service, { reactor: w.host.reactor, fresh: true }), service);
+});
+
+test("auth.scopes win over an OpenAPI description", () => {
+  // When an OpenAPI security scheme and auth.scopes both describe a scope, the Personal Agent uses
+  // the description in auth.scopes (§4.7).
+  const document = parseDiscoveryDocument(fixture("discovery-valid.json"));
+  const openapi = {
+    components: {
+      securitySchemes: {
+        oauth: { type: "oauth2", flows: { authorizationCode: { scopes: { "orders:read": "Read orders (OpenAPI)", returns: "Returns" } } } },
+        key: { type: "apiKey", name: "k", in: "header" },
+      },
+    },
+  };
+  const described = scopeDescriptions(document, openapi);
+  assert.equal(described["orders:read"], document.auth.scopes["orders:read"]);
+  assert.equal(described.returns, "Returns");
+  assert.deepEqual(scopeDescriptions(document), { ...document.auth.scopes });
+});
+
+test("a delegated key signs for one User ID", async () => {
+  // A Company MAY reject, with invalid_session, a Session JWT whose delegated key has already
+  // signed for a different User ID while a delegation for the key lasts (§5.2).
+  const w = await world();
+  const orders = "https://manzanita.example/api/orders";
+  const get = async (session) =>
+    w.fetch(orders, { method: "GET", headers: await sessionHeaders(w.host.reactor, "GET", orders, { session }) });
+  assert.notEqual((await get(w.session)).status, 400);
+  const who = { tenantId: w.session.tenantId, issuer: w.session.issuer };
+  const key = await w.host.delegatedKeys.current({ ...who, sub: w.session.sub });
+  assert.ok(key);
+  const other = new PapSession({
+    sid: "S".repeat(22),
+    sub: "usr_another_user_id_0000",
+    issuer: w.session.issuer,
+    clientId: w.session.clientId,
+    tenantId: w.session.tenantId,
+    extensions: { ...w.session.extensions },
+  });
+  // An agent that breaks §5.2: the same delegated key for another User ID.
+  await w.host.delegatedKeys.replace({ ...who, sub: other.sub, key });
+  const refused = await get(other);
+  assert.deepEqual([refused.status, (await refused.json()).error], [400, "invalid_session"]);
+  assert.notEqual((await get(w.session)).status, 400);
 });

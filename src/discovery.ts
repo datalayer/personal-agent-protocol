@@ -491,8 +491,10 @@ function issuerNamed(document: DiscoveryDocument, metadata: ProtectedResourceMet
 /**
  * The protected resource metadata of the service at `url` (RFC 9728 §3.1), if any.
  *
- * `undefined` when the service publishes none (404). Cached as its headers allow; `fresh`
- * reads it again, after a service said the agent's view is stale (§4.5).
+ * `undefined` when the service publishes none (404), and when its `resource` isn't `url`, the
+ * URL the metadata URL was derived from: such metadata is treated as absent (RFC 9728 §3.3,
+ * §4.5). Cached as its headers allow; `fresh` reads it again, after a service said the agent's
+ * view is stale (§4.5).
  */
 export async function resourceMetadata(
   url: string,
@@ -502,7 +504,8 @@ export async function resourceMetadata(
   const metadataAddress = protectedResourceMetadataUrl(url);
   if (options.fresh === true) await read.cache.delete(`pap.metadata:${metadataAddress}`);
   try {
-    return parseResourceMetadata((await readJson(new URL(metadataAddress), read)).value);
+    const metadata = parseResourceMetadata((await readJson(new URL(metadataAddress), read)).value);
+    return metadata.resource === url ? metadata : undefined;
   } catch (cause) {
     if (cause instanceof DiscoveryError && cause.code === "http_error" && cause.statusCode === 404) {
       return undefined;

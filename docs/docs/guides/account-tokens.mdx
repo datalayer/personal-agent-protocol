@@ -24,6 +24,7 @@ context = RefreshTokenContext(
     client_id="https://agent.example/agent.json",
     tenant_id="application-42",
     dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
+    pairwise_user_id="usr_2d7b4f0c9e8a51",  # whose DPoP key proves the refresh
 )
 result = await accounts.refresh(refresh_token_reference, context=context)
 if result.status == "signed_in":
@@ -44,6 +45,7 @@ const result = await accounts.refresh(refreshTokenReference, {
     clientId,
     tenantId,
     dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
+    pairwiseUserId: 'usr_2d7b4f0c9e8a51', // whose DPoP key proves the refresh
   },
   scopes: ['orders:read'],
 });
@@ -59,9 +61,12 @@ if (result.status === 'signed_in') {
 A refresh is a `refresh_token` grant with a fresh client assertion. It names no
 Session: the access token it returns belongs to the account, and a Session is
 signed in by carrying that token. With `dpop_signing_algs` (`dpopSigningAlgs`) from
-the metadata, a refresh sends a DPoP proof when the issuer lists ES256; a `DPoP` token
-type with no proof sent is `unsupported_token_type`. Refresh tokens aren't bound, so a
-lost DPoP key means refreshing.
+the metadata, a refresh sends a DPoP proof when the issuer lists ES256, by the DPoP key
+of `pairwise_user_id` (`pairwiseUserId`), the User ID the refresh token is for: a DPoP
+key is used for one User ID only, as a delegated key is (spec 4.5), so proving without
+one is refused before any request. A `DPoP` token type with no proof sent is
+`unsupported_token_type`. Refresh tokens aren't bound, so a lost DPoP key means
+refreshing.
 
 ## Rotation is serialized
 
@@ -104,7 +109,10 @@ The rules for tokens for one service cover a conversation endpoint a provider
 runs on another host (spec 4.5): `ServiceTokens.token_for(endpoint)`
 (`tokenFor`) reads the endpoint's RFC 9728 metadata and, when its `resource` is
 not the company's domain, requests a token for it from the company's issuer
-with RFC 8707 `resource`, and `ConversationClient` sends that token there. The
+with RFC 8707 `resource`, and `ConversationClient` sends that token there.
+Metadata is used only when its `resource` is the URL its metadata URL was derived
+from (RFC 9728 §3.3); otherwise it is treated as absent, and the default token works
+there (`resource_metadata`, `resourceMetadata`, return nothing). The
 resource identifier is the endpoint URL with its tenant path, so tokens for
 different companies at the provider have different audiences; the Session JWT's
 audience and the User IDs stay the company's identifier. The reference companies

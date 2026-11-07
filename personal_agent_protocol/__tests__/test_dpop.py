@@ -69,6 +69,7 @@ def _proof_request(**changes: object) -> DpopProofRequest:
         "url": "https://shop.example/api/orders?page=2#top",
         "tenant_id": "tenant",
         "issuer": ISSUER,
+        "sub": "usr_ada",
     }
     return DpopProofRequest(**{**values, **changes})  # type: ignore[arg-type]
 
@@ -104,7 +105,9 @@ async def test_ath_goes_with_an_access_token_and_nonce_when_given() -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_key_per_company_for_a_tenant_and_a_new_jti_for_each_proof() -> None:
+async def test_one_key_per_user_id_and_a_new_jti_for_each_proof() -> None:
+    """A DPoP key is used for one User ID only, as a delegated key is (§4.5, §5.2)."""
+
     keys = InMemoryDpopKeys()
     prover = JoseDpopProver(keys, now=lambda: NOW)
 
@@ -117,8 +120,9 @@ async def test_one_key_per_company_for_a_tenant_and_a_new_jti_for_each_proof() -
     assert first == same and jti != other_jti
     assert first != (await key_of(tenant_id="other"))[0]
     assert first != (await key_of(issuer="https://other.example"))[0]
-    assert len(keys) == 3
-    await keys.forget(tenant_id="tenant", issuer=ISSUER)
+    assert first != (await key_of(sub="usr_ada_anonymous"))[0]
+    assert len(keys) == 4
+    await keys.forget(tenant_id="tenant", issuer=ISSUER, sub="usr_ada")
     assert first != (await key_of())[0]
 
 
@@ -161,15 +165,20 @@ async def test_the_default_prover_reads_the_hosts_clock_when_it_signs() -> None:
 async def test_the_cli_keeps_its_dpop_keys_in_the_key_file(tmp_path: Path) -> None:
     path = tmp_path / "keys.json"
     keys = FileDpopKeys(FileKeyStore(path))
-    first = await keys.key_for(tenant_id="t", issuer=ISSUER)
-    again = await FileDpopKeys(FileKeyStore(path)).key_for(tenant_id="t", issuer=ISSUER)
+    first = await keys.key_for(tenant_id="t", issuer=ISSUER, sub="usr_ada")
+    again = await FileDpopKeys(FileKeyStore(path)).key_for(
+        tenant_id="t", issuer=ISSUER, sub="usr_ada"
+    )
     assert first.thumbprint == again.thumbprint
     assert isinstance(again.private_key, ec.EllipticCurvePrivateKey)
     assert "d" not in first.public_jwk
     assert path.stat().st_mode & 0o077 == 0
-    assert json.loads(path.read_text())["dpop"].keys() == {f"t|{ISSUER}"}
-    await keys.forget(tenant_id="t", issuer=ISSUER)
-    assert (await keys.key_for(tenant_id="t", issuer=ISSUER)).thumbprint != first.thumbprint
+    assert json.loads(path.read_text())["dpop"].keys() == {f"t|{ISSUER}|usr_ada"}
+    other = await keys.key_for(tenant_id="t", issuer=ISSUER, sub="usr_bob")
+    assert other.thumbprint != first.thumbprint
+    await keys.forget(tenant_id="t", issuer=ISSUER, sub="usr_ada")
+    renewed = await keys.key_for(tenant_id="t", issuer=ISSUER, sub="usr_ada")
+    assert renewed.thumbprint != first.thumbprint
 
 
 # Token requests ---------------------------------------------------------------------
@@ -216,6 +225,7 @@ async def _token_request(
                 error=SessionError,
                 tenant_id="tenant",
                 dpop_signing_algs=algs,
+                pairwise_user_id="usr_ada",
             )
         finally:
             platform.stop()
@@ -673,6 +683,7 @@ async def test_a_refused_proof_spends_no_device_code(monkeypatch: pytest.MonkeyP
             url=metadata.token_endpoint,
             tenant_id=ctx.tenant_id,
             issuer=metadata.issuer,
+            sub="usr_any",
         )
     )
     await ctx.driver.wait(started.poll_interval)
@@ -688,16 +699,58 @@ async def test_a_mediated_sign_in_binds_its_token(monkeypatch: pytest.MonkeyPatc
     typed = first_contribution(ctx.agent.reactor, PROTECTED_INPUTS, "protected input")
     cast(ScriptedInput, typed).answers.extend([dict(ADA), {"code": ADA_CODE}])
     client = MediatedSignInClient(reactor=ctx.agent.reactor, http_client=ctx.http)
+    # A DPoP key is for one User ID (§4.5): proving needs it, before any request.
+    with pytest.raises(ValueError):
+        await client.sign_in(
+            company=company,
+            client_id=ctx.agent.identity.client_id,
+            scopes=("orders:read",),
+            tenant_id=ctx.tenant_id,
+        )
     started = await client.sign_in(
         company=company,
         client_id=ctx.agent.identity.client_id,
         scopes=("orders:read",),
         tenant_id=ctx.tenant_id,
+        pairwise_user_id="usr_ada_at_manzanita",
     )
     assert started.status == "code_required" and started.reference is not None
     done = await client.submit_code(started.reference)
     assert done.token is not None
     assert done.token.token_type == "DPoP"
+
+
+@pytest.mark.asyncio
+async def test_each_user_id_signs_in_with_its_own_dpop_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Personal Agent uses each DPoP key for one User ID only, for the same reason as
+    delegated keys (§4.5, §5.2): two User IDs at one Company get tokens bound to two keys,
+    and each refresh proves with its User ID's key."""
+
+    world = _binding(monkeypatch, dpop_binding="required")
+    ctx = world.context()
+    first = await _signed_in(ctx)
+    second = await _signed_in(ctx)
+    assert first.session.sub != second.session.sub
+    keys = cast(JoseDpopProver, first_contribution(ctx.agent.reactor, DPOP_PROVERS, "p")).keys
+    metadata = await ctx.metadata()
+    one, other = [
+        await keys.key_for(tenant_id=ctx.tenant_id, issuer=metadata.issuer, sub=signed.session.sub)
+        for signed in (first, second)
+    ]
+    assert one.thumbprint != other.thumbprint
+    url = ctx.url(MANZANITA_SCENARIO.read_path)
+    for signed, key in ((first, one), (second, other)):
+        headers = await ctx.auth(signed.session, "GET", url, signed.token)
+        assert jwk_thumbprint(jwt.get_unverified_header(headers["DPoP"])["jwk"]) == key.thumbprint
+        assert (await ctx.send("GET", url, headers=headers)).status_code == 200
+        context = await ctx.account_context(signed.session.sub)
+        refreshed = await ctx.agent.accounts.refresh(signed.reference, context=context)
+        assert refreshed.status == "signed_in" and refreshed.token is not None
+        assert refreshed.token.token_type == "DPoP"
+    with pytest.raises(ValueError):
+        await ctx.agent.accounts.refresh(
+            first.reference, context=replace(context, pairwise_user_id=None)
+        )
 
 
 @pytest.mark.asyncio

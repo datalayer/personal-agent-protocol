@@ -144,6 +144,7 @@ import {
   type AccountFamily,
   type AccountGrant,
   type CompanyStore,
+  type DelegatedKeyUse,
   type IdempotencyRecord,
   type IssuedAccessToken,
   type IssuedCode,
@@ -1725,6 +1726,8 @@ export class CompanyService {
   async #token(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
     const grant = form.grant_type;
+    // No tokens to protect: every refresh is `invalid_grant`, the client assertion unverified (§3.2).
+    if (grant === REFRESH_TOKEN_GRANT && (await this.#neverIssued())) throw new Refused(400, "invalid_grant");
     const clientId = await this.#client(form);
     // Before any grant is used: a proof refused spends no code.
     const jkt = await this.#tokenBinding(request, this.#resource(form));
@@ -2060,8 +2063,41 @@ export class CompanyService {
     await this.store.delete(RecordKinds.userCode, pending.userCode);
   }
 
+  /**
+   * Whether sign-in is off (`auth.disabled`) and no refresh token was ever issued (§3.2).
+   *
+   * Such a company has no tokens to protect: it answers every refresh with `invalid_grant` and
+   * every revocation with success, without verifying the client assertion. A sign-in it holds,
+   * live or revoked, means one was issued.
+   */
+  async #neverIssued(): Promise<boolean> {
+    return this.config.signInDisabled && (await this.store.records(RecordKinds.accountFamily)).length === 0;
+  }
+
+  /**
+   * Refuse a delegated key that already signed for another User ID (§5.2).
+   *
+   * A Personal Agent uses each delegated key for one User ID only; while a delegation for the key
+   * lasts, a Session JWT it signs for a different one is `invalid_session`, which limits a leaked
+   * delegated key to one User (§10.7).
+   */
+  async #oneUserPerKey(verified: VerifiedSessionJwt): Promise<void> {
+    const key = composite(verified.clientId, verified.delegation.thumbprint);
+    const use: DelegatedKeyUse = { sub: verified.sub };
+    const kept = { expiresAt: new Date(verified.delegation.expiresAt * 1000) };
+    if (await this.store.create(RecordKinds.delegatedKey, key, json(use), kept)) return;
+    const known = await this.#read<DelegatedKeyUse>(RecordKinds.delegatedKey, key);
+    if (known === undefined) {
+      // Expired in between: this User ID is the first again.
+      await this.store.put(RecordKinds.delegatedKey, key, json(use), kept);
+    } else if (known.sub !== verified.sub) {
+      throw new SessionError("invalid_session", "Delegated key of another User ID", { statusCode: 400 });
+    }
+  }
+
   async #revoke(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
+    if (await this.#neverIssued()) return { status: 200, body: {}, headers: { ...NO_STORE } };
     const clientId = await this.#client(form);
     const grant = await this.#read<AccountGrant>(RecordKinds.refreshToken, digest(form.token ?? ""));
     if (grant !== undefined && grant.clientId === clientId) {
@@ -2888,6 +2924,7 @@ export class CompanyService {
       delegations: this.delegations,
       windowSeconds: this.config.sessionJwtWindowSeconds,
     });
+    await this.#oneUserPerKey(verified);
     const exchange = exchanges.getStore();
     if (exchange !== undefined) exchange.clientId = verified.clientId;
     // A request can be the agent's first: a Session needs no OAuth endpoint (§4). Only now is

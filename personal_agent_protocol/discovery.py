@@ -298,8 +298,10 @@ class DiscoveryClient:
     ) -> ProtectedResourceMetadata | None:
         """The protected resource metadata of the service at `url` (RFC 9728 §3.1), if any.
 
-        `None` when the service publishes none (404). Cached as its headers allow;
-        `fresh` reads it again, after a service said the agent's view is stale (§4.5).
+        `None` when the service publishes none (404), and when its `resource` isn't `url`,
+        the URL the metadata URL was derived from: such metadata is treated as absent
+        (RFC 9728 §3.3, §4.5). Cached as its headers allow; `fresh` reads it again, after
+        a service said the agent's view is stale (§4.5).
         """
 
         metadata_url = protected_resource_metadata_url(url)
@@ -312,11 +314,12 @@ class DiscoveryClient:
                 return None
             raise
         try:
-            return ProtectedResourceMetadata.model_validate(data)
+            metadata = ProtectedResourceMetadata.model_validate(data)
         except ValidationError as exc:
             raise ProtocolValidationError(
                 "invalid_resource_metadata", "Protected resource metadata failed validation"
             ) from exc
+        return metadata if metadata.resource == url else None
 
     async def service_resource(
         self, company: DiscoveredCompany, url: str, *, fresh: bool = False

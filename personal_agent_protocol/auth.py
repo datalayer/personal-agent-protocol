@@ -34,7 +34,13 @@ from .reactor import (
     RandomSource,
     first_contribution,
 )
-from .sessions import SessionClient, SignInResult, TokenResponse, finish_sign_in
+from .sessions import (
+    SessionClient,
+    SignInResult,
+    TokenResponse,
+    finish_sign_in,
+    proves_with_dpop,
+)
 from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
 
 RandomBytes = Callable[[int], bytes]
@@ -220,6 +226,7 @@ class _PendingDirectSignIn:
     tenant_id: str
     expires_at: datetime
     dpop_signing_algs: Sequence[str] | None = None
+    pairwise_user_id: str | None = None
 
 
 def _state_reference(state: str) -> str:
@@ -275,17 +282,20 @@ class DirectSignInClient:
         tenant_id: str,
         lifetime_seconds: int = 600,
         dpop_signing_algs: Sequence[str] | None = None,
+        pairwise_user_id: str | None = None,
     ) -> DirectSignInStart:
         """Store one-use state, then open the authorization URL for the user (§4.2).
 
         `dpop_signing_algs` is the issuer's `dpop_signing_alg_values_supported`: the
-        code exchange sends a DPoP proof when it includes ES256 (§4.5).
+        code exchange sends a DPoP proof when it includes ES256 (§4.5), by the DPoP key
+        of `pairwise_user_id`, the User ID the sign-in is for, which proving needs.
         """
 
         if not 0 < lifetime_seconds <= 900:
             raise ValueError("Direct Sign-In state lifetime must be between 1 and 900 seconds")
         if not tenant_id or len(tenant_id) > 256:
             raise ValueError("tenant_id must contain between 1 and 256 characters")
+        proves_with_dpop(dpop_signing_algs, pairwise_user_id)
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
         random_source = cast(
             RandomSource,
@@ -319,6 +329,7 @@ class DirectSignInClient:
             tenant_id=tenant_id,
             expires_at=expires_at,
             dpop_signing_algs=dpop_signing_algs,
+            pairwise_user_id=pairwise_user_id,
         )
         await store.put(reference, pending, expires_at=expires_at)
         try:
@@ -376,6 +387,7 @@ class DirectSignInClient:
             error=AuthorizationError,
             tenant_id=pending.tenant_id,
             dpop_signing_algs=pending.dpop_signing_algs,
+            pairwise_user_id=pending.pairwise_user_id,
         )
         return await self._result(response, pending)
 

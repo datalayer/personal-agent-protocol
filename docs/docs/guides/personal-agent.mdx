@@ -155,7 +155,9 @@ Scopes are the company's own (`orders:read`, `payments:write`). Request only
 the scopes a task needs. `scopes_supported` may be incomplete: a scope documented by
 the company's APIs or sign-in extensions can be requested too, and a missing
 description or hint says nothing about whether it is safe to request. Descriptions
-are in `auth.scopes` or the company's OpenAPI description. `auth.scope_hints` says, per scope, what
+are in `auth.scopes` or the company's OpenAPI description; when both describe a scope,
+the one in `auth.scopes` is used (spec 4.7): `document.scope_descriptions(openapi)`
+(`scopeDescriptions(document, openapi)`) merges them so. `auth.scope_hints` says, per scope, what
 its most consequential operation `changes` (`none`, `reversible`,
 `irreversible`) and whether it touches `personal_data`, so a host can decide
 before sign-in which scopes need the user's go-ahead.

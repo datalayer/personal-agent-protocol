@@ -184,6 +184,7 @@ from .store import (
     CLIENT,
     CODE,
     CONVERSATION,
+    DELEGATED_KEY,
     DEVICE,
     DPOP_NONCE,
     FEEDBACK,
@@ -202,6 +203,7 @@ from .store import (
     AccountFamily,
     AccountGrant,
     CompanyStore,
+    DelegatedKeyUse,
     IdempotencyRecord,
     IssuedAccessToken,
     IssuedCode,
@@ -227,6 +229,7 @@ from .store import (
 )
 from .verify import (
     DelegationCache,
+    VerifiedSessionJwt,
     unverified_session_issuer,
     verify_assertion,
     verify_dpop_proof,
@@ -1565,6 +1568,10 @@ class CompanyService:
 
         form = dict(parse_qsl(request.body.decode()))
         grant = form.get("grant_type")
+        if grant == REFRESH_TOKEN_GRANT and await self._never_issued():
+            # No tokens to protect: every refresh is `invalid_grant`, the client assertion
+            # unverified (§3.2).
+            raise _RefusedError(400, "invalid_grant")
         client_id = await self._client(form)
         # Before any grant is used: a proof refused spends no code.
         jkt = await self._token_binding(request, self._resource(form))
@@ -1888,8 +1895,42 @@ class CompanyService:
         await self.store.delete(DEVICE, key)
         await self.store.delete(USER_CODE, pending.user_code)
 
+    async def _one_user_per_key(self, verified: VerifiedSessionJwt) -> None:
+        """Refuse a delegated key that already signed for another User ID (§5.2).
+
+        A Personal Agent uses each delegated key for one User ID only; while a delegation
+        for the key lasts, a Session JWT it signs for a different one is `invalid_session`,
+        which limits a leaked delegated key to one User (§10.7).
+        """
+
+        key = _composite(verified.client_id, verified.delegation.thumbprint)
+        use = DelegatedKeyUse(sub=verified.sub)
+        expires_at = verified.delegation.expires_at
+        if await self.store.create(DELEGATED_KEY, key, use.to_json(), expires_at=expires_at):
+            return
+        known = await self._read(DELEGATED_KEY, key, DelegatedKeyUse.from_json)
+        if known is None:
+            # Expired in between: this User ID is the first again.
+            await self.store.put(DELEGATED_KEY, key, use.to_json(), expires_at=expires_at)
+        elif known.sub != verified.sub:
+            raise SessionError(
+                "invalid_session", "Delegated key of another User ID", status_code=400
+            )
+
+    async def _never_issued(self) -> bool:
+        """Whether sign-in is off (`auth.disabled`) and no refresh token was ever issued (§3.2).
+
+        Such a company has no tokens to protect: it answers every refresh with
+        `invalid_grant` and every revocation with success, without verifying the client
+        assertion. A sign-in it holds, live or revoked, means one was issued.
+        """
+
+        return self.config.sign_in_disabled and not await self.store.records(ACCOUNT_FAMILY)
+
     async def _revoke(self, request: CompanyRequest) -> CompanyResponse:
         form = dict(parse_qsl(request.body.decode()))
+        if await self._never_issued():
+            return CompanyResponse(200, {}, {"Cache-Control": "no-store"})
         client_id = await self._client(form)
         grant = await self._read(
             REFRESH_TOKEN, _digest(form.get("token", "")), AccountGrant.from_json
@@ -2566,6 +2607,7 @@ class CompanyService:
             delegations=self.delegations,
             window=self.config.session_jwt_window,
         )
+        await self._one_user_per_key(verified)
         exchange = _EXCHANGE.get()
         if exchange is not None:
             exchange.client_id = verified.client_id

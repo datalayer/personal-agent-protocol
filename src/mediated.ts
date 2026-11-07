@@ -30,6 +30,7 @@ import {
   SessionClient,
   finishSignIn,
   opaqueId,
+  provesWithDpop,
   type AccessToken,
   type TokenResponse,
 } from "./sessions.js";
@@ -117,6 +118,8 @@ export interface MediatedSignInOptions {
   readonly scopes: readonly string[];
   /** Whose DPoP key proves, when the issuer lists ES256 (§4.5). */
   readonly tenantId: string;
+  /** The User ID the sign-in is for: its DPoP key proves the grant, so proving needs it (§4.5). */
+  readonly pairwiseUserId?: string | undefined;
   readonly signal?: AbortSignal;
 }
 
@@ -136,6 +139,7 @@ interface PendingCode {
   readonly companyDomain: string;
   readonly tenantId: string;
   readonly dpopSigningAlgs: readonly string[] | undefined;
+  readonly pairwiseUserId: string | undefined;
   readonly signInId: string;
   readonly sentTo?: string;
   readonly expiresAt: Date;
@@ -183,6 +187,7 @@ export class MediatedSignInClient {
   async #signIn(options: MediatedSignInOptions): Promise<MediatedSignInResult> {
     const mediated = this.#offered(options.company);
     const metadata = requireOauth(options.company);
+    provesWithDpop(metadata.dpop_signing_alg_values_supported, options.pairwiseUserId);
     const organization = options.company.document.organization;
     const requested = [...new Set(options.scopes)];
     if (requested.length === 0) {
@@ -218,6 +223,7 @@ export class MediatedSignInClient {
       companyDomain: organization.domain,
       tenantId: options.tenantId,
       dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
+      pairwiseUserId: options.pairwiseUserId,
       signInId: "",
       expiresAt: new Date(8.64e15),
     };
@@ -300,6 +306,7 @@ export class MediatedSignInClient {
         error: AuthorizationError,
         tenantId: pending.tenantId,
         dpopSigningAlgs: pending.dpopSigningAlgs,
+        pairwiseUserId: pending.pairwiseUserId,
         ...(signal === undefined ? {} : { signal }),
       });
     } catch (error) {

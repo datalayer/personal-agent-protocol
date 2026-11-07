@@ -301,7 +301,7 @@ class FileKeyStore:
 
 
 class FileDpopKeys:
-    """`DpopKeyCustody` in the key file: one DPoP key per Company for a tenant (§4.5).
+    """`DpopKeyCustody` in the key file: one DPoP key per User ID (§4.5).
 
     Kept there so a token stays bound across the CLI's runs.
     """
@@ -309,17 +309,17 @@ class FileDpopKeys:
     def __init__(self, keys: FileKeyStore) -> None:
         self.path = keys.path
 
-    async def key_for(self, *, tenant_id: str, issuer: str) -> DpopKey:
+    async def key_for(self, *, tenant_id: str, issuer: str, sub: str) -> DpopKey:
         with _locked(self.path):
             document = _read(self.path)
             kept = document.setdefault("dpop", {})
-            stored = kept.get(f"{tenant_id}|{issuer}")
+            stored = kept.get(f"{tenant_id}|{issuer}|{sub}")
             if stored is not None:
                 return dpop_key_from(
                     cast(ec.EllipticCurvePrivateKey, FileKeyStore._private(stored["pem"]))
                 )
             key = new_dpop_key()
-            kept[f"{tenant_id}|{issuer}"] = {
+            kept[f"{tenant_id}|{issuer}|{sub}"] = {
                 "pem": key.private_key.private_bytes(
                     serialization.Encoding.PEM,
                     serialization.PrivateFormat.PKCS8,
@@ -329,10 +329,10 @@ class FileDpopKeys:
             _write_private(self.path, document)
             return key
 
-    async def forget(self, *, tenant_id: str, issuer: str) -> None:
+    async def forget(self, *, tenant_id: str, issuer: str, sub: str) -> None:
         with _locked(self.path):
             document = _read(self.path)
-            if document.get("dpop", {}).pop(f"{tenant_id}|{issuer}", None) is not None:
+            if document.get("dpop", {}).pop(f"{tenant_id}|{issuer}|{sub}", None) is not None:
                 _write_private(self.path, document)
 
 

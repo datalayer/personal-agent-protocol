@@ -49,6 +49,7 @@ from .store import (
     CLIENT,
     CODE,
     CONVERSATION,
+    DELEGATED_KEY,
     DEVICE,
     DPOP_NONCE,
     FEEDBACK,
@@ -70,6 +71,7 @@ from .store import (
     AccountFamily,
     AccountGrant,
     CompanyStore,
+    DelegatedKeyUse,
     IdempotencyRecord,
     IssuedAccessToken,
     IssuedCode,
@@ -203,6 +205,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
             "fb_1", "Pay with a gift card", "No gift card field.", "c", "u", now
         ),
         IDEMPOTENCY: IdempotencyRecord("digest", 200, {"summary": "Exchanged."}),
+        DELEGATED_KEY: DelegatedKeyUse("usr_1"),
     }
 
 

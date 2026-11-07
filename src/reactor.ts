@@ -134,6 +134,8 @@ export interface DpopProofRequest {
   readonly url: string;
   readonly tenantId: string;
   readonly issuer: string;
+  /** With `tenantId` and `issuer`, whose key signs: one per User ID, as a delegated key is (§4.5, §5.2). */
+  readonly sub: string;
   readonly accessToken?: SecretValue;
   readonly nonce?: string;
 }

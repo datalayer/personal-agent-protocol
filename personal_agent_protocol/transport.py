@@ -192,6 +192,7 @@ async def session_headers(
                 url=url,
                 tenant_id=session.tenant_id,
                 issuer=session.issuer,
+                sub=session.sub,
                 access_token=token.access_token,
                 nonce=dpop_nonce,
             )

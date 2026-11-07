@@ -601,14 +601,17 @@ test("a delegated key is never shared across User IDs, and one that is opens no 
   assert.equal((await headersOf(ada)).kid, adas.kid); // one User ID keeps its key
   assert.equal(w.host.delegatedKeys.size, 2);
 
-  // Whoever does hold Ada's delegated key signs for any User ID it knows, and is signed out:
-  // a Session JWT never grants account access (§5.3, §10.7).
+  // Whoever does hold Ada's delegated key gets nothing for another User ID: the company refuses
+  // a key that already signed for Ada while its delegation lasts (§5.2), and a Session JWT never
+  // grants account access anyway (§5.3, §10.7).
+  assert.equal(await probe(w, ada, token), 200); // Ada's key has signed for her
   const key = await w.host.delegatedKeys.current({ tenantId: TENANT, issuer: ada.issuer, sub: ada.sub });
   const stolen = async (session) =>
     new SignJWT(await sessionJwtClaims(jwtRequest(session), { issuedAt: w.clock.now() }))
       .setProtectedHeader({ alg: SESSION_JWT_ALGORITHM, typ: SESSION_JWT_TYPE, kid: key.thumbprint, poppy_dlg: key.delegation.reveal() })
       .sign(key.privateKey);
-  assert.equal((await read(w, await stolen(stranger))).status, 401);
+  const refused = await read(w, await stolen(stranger));
+  assert.deepEqual([refused.status, (await refused.json()).error], [400, "invalid_session"]);
   // The access token still works only where it was: it is what opens the account.
   assert.equal(await probe(w, ada, token), 200);
 });

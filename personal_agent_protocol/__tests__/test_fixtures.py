@@ -416,6 +416,7 @@ async def _dpop_token_requests(case: Any) -> None:
             error=SessionError,
             tenant_id="t",
             dpop_signing_algs=given["algs"],
+            pairwise_user_id="usr_ada",
         )
         if "error" in expect:
             with pytest.raises(SessionError) as refused:
@@ -449,6 +450,7 @@ async def _dpop_mcp_tokens(case: Any) -> None:
             client_id=identity.client_id,
             tenant_id="t",
             dpop_signing_algs=given["issuer"],
+            pairwise_user_id="usr_ada",
         )
         server = ProtectedResourceMetadata(
             resource="https://shop.example/mcp",
@@ -471,6 +473,7 @@ async def _dpop_proof_shape(case: Any) -> None:
             url=given["url"],
             tenant_id="t",
             issuer="https://shop.example",
+            sub="usr_ada",
             access_token=SecretStr(given["access_token"]),
             nonce=given["nonce"],
         )

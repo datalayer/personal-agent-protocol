@@ -93,7 +93,8 @@ class RefreshTokenContext:
     """Where a refresh token is used, and for whom (all non-secret).
 
     `dpop_signing_algs` is the issuer's `dpop_signing_alg_values_supported`: a refresh
-    sends a DPoP proof when it includes ES256 (§4.5).
+    sends a DPoP proof when it includes ES256 (§4.5), by the DPoP key of
+    `pairwise_user_id`, the User ID the refresh token is for, which proving needs.
     """
 
     token_endpoint: str
@@ -102,6 +103,7 @@ class RefreshTokenContext:
     tenant_id: str
     revocation_endpoint: str | None = None
     dpop_signing_algs: Sequence[str] | None = None
+    pairwise_user_id: str | None = None
 
 
 class RefreshTokenClient:
@@ -170,6 +172,7 @@ class RefreshTokenClient:
                     error=AuthorizationError,
                     tenant_id=context.tenant_id,
                     dpop_signing_algs=context.dpop_signing_algs,
+                    pairwise_user_id=context.pairwise_user_id,
                 )
             except AuthorizationError as exc:
                 if exc.code == "invalid_scope":

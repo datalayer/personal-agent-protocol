@@ -181,15 +181,17 @@ A company that binds its access tokens lists ES256 in its metadata's
 `dpop_signing_alg_values_supported`. Pass what the metadata says to whatever sends a
 token request; a `DPoP` token then needs nothing more from the host:
 
-- `DeviceSignInClient.begin` and `DirectSignInClient.begin` take `dpopSigningAlgs`;
+- `DeviceSignInClient.begin` and `DirectSignInClient.begin` take `dpopSigningAlgs`,
+  with the `pairwiseUserId` whose key proves: one DPoP key per User ID (spec 4.5);
 - so does `RefreshTokenContext`, for refreshes and tokens for one service;
 - `MediatedSignInClient.signIn` reads it from `company`, and takes the `tenantId`
-  whose key proves.
+  and `pairwiseUserId` whose key proves.
 
 With a list that doesn't include ES256, or none, no proof goes. The default
 `pap.dpopProver` (`DpopProvers`, contribution `in-memory`) keeps its keys in memory: a
 host whose tokens outlive a process contributes `JoseDpopProver` with a durable
-`DpopKeyCustody` (`keyFor`, `forget`), below the default's order of 100. A lost key
+`DpopKeyCustody` (`keyFor`, `forget`, by tenant, issuer and `sub`), below the
+default's order of 100. A lost key
 means refreshing: refresh tokens aren't bound. See
 [DPoP](/guides/cryptography/#dpop).
 

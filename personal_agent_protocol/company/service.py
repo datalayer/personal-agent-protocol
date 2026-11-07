@@ -93,13 +93,21 @@ from ..models import (
     DEVICE_CODE_GRANT,
     MEDIATED_RESERVED_FIELDS,
     REFRESH_TOKEN_GRANT,
+    DISCLOSURES_EXTENSION,
+    DISCLOSURES_VERSION,
+    LINKS_EXTENSION,
+    LINKS_VERSION,
     Approval,
     Author,
     ClientMetadata,
     ConversationEvent,
+    Disclosure,
+    DisclosuresContent,
     JsonWebKeySet,
+    LinksContent,
     Message,
     Operation,
+    operations_content,
     redirect_uri_matches,
 )
 from ..operations import (
@@ -334,6 +342,13 @@ class CompanyConfig:
     device: bool = True
     direct: bool = True
     operations: bool = True
+    #: Whether the company lists the Links extension, version 1, and sends the pages a
+    #: reply refers to in `extensions.links` to an agent that lists it too (Links 2, 3).
+    links: bool = False
+    #: Whether the company lists the Disclosures extension, version 1, and sends notices in
+    #: `extensions.disclosures` to an agent that lists it too; any other agent gets them in
+    #: `text` (Disclosures 2, 3).
+    disclosures: bool = False
     #: Whether the company has an OAuth issuer (§3.2). Without one it runs no OAuth server:
     #: its protected resource metadata and OAuth endpoints are 404, it publishes no `auth`,
     #: `identifier` is its HTTPS domain, and every Session stays signed out.
@@ -1124,6 +1139,10 @@ class CompanyService:
         extensions: dict[str, Any] = {}
         if config.operations:
             extensions[OPERATIONS_EXTENSION] = {"version": OPERATIONS_VERSION}
+        if config.links:
+            extensions[LINKS_EXTENSION] = {"version": LINKS_VERSION}
+        if config.disclosures:
+            extensions[DISCLOSURES_EXTENSION] = {"version": DISCLOSURES_VERSION}
         if config.mediated_fields:
             extensions[MEDIATED_EXTENSION] = {
                 "version": MEDIATED_VERSION,
@@ -1260,10 +1279,17 @@ class CompanyService:
     async def _supports_operations(self, client_id: str) -> bool:
         """Whether the agent listed this version of Operations when it last authenticated."""
 
+        return await self._supports_extension(client_id, OPERATIONS_EXTENSION, OPERATIONS_VERSION)
+
+    async def _supports_extension(self, client_id: str, name: str, version: str) -> bool:
+        """Whether the agent's client metadata lists `name` at `version` (§3.3, §8.4).
+
+        Extension content goes only to a side that lists the extension with the same
+        version, read from the metadata the agent last authenticated with.
+        """
+
         known = await self._read(CLIENT, client_id, KnownClient.from_json)
-        return (
-            known is not None and known.extensions.get(OPERATIONS_EXTENSION) == OPERATIONS_VERSION
-        )
+        return known is not None and known.extensions.get(name) == version
 
     async def _token(self, request: CompanyRequest) -> CompanyResponse:
         """The token endpoint (§4): every grant carries a client assertion, and nothing else.
@@ -2945,7 +2971,7 @@ class CompanyService:
         reply: dict[str, object] = {"id": self._id("msg"), "author": author, "role": "company"}
         if decision.operation is not None:
             reply["text"] = "That approval doesn't cover these terms. Here they are to approve."
-            reply["operation"] = decision.operation.model_dump(mode="json")
+            reply["extensions"] = operations_content(operation=decision.operation)
         elif decision.outcome is None:
             reply["text"] = "This is still being done. I'll say how it went here."
         else:
@@ -2968,11 +2994,36 @@ class CompanyService:
             message["text"] = reply.text
         if reply.data is not None:
             message["data"] = reply.data
+        # Extension content goes only to an agent that lists the extension, at the same
+        # version (§8.4); the message says what it says in `text` and `data` without it.
+        extensions: dict[str, Any] = {}
         if reply.operation is not None and await self._supports_operations(session.client_id):
             fingerprint = _fingerprint("conversation", conversation_id)
             asked = self._asked(session, reply.operation, fingerprint)
             decision = await self._decide(session, asked, None, None)
-            message["operation"] = cast(Operation, decision.operation).model_dump(mode="json")
+            extensions.update(operations_content(operation=cast(Operation, decision.operation)))
+        if (
+            reply.links
+            and self.config.links
+            and await self._supports_extension(session.client_id, LINKS_EXTENSION, LINKS_VERSION)
+        ):
+            content = LinksContent(items=list(reply.links))
+            extensions[LINKS_EXTENSION] = content.model_dump(mode="json", exclude_none=True)
+        if reply.disclosures:
+            if self.config.disclosures and await self._supports_extension(
+                session.client_id, DISCLOSURES_EXTENSION, DISCLOSURES_VERSION
+            ):
+                content = DisclosuresContent(
+                    items=[Disclosure(text=text) for text in reply.disclosures]
+                )
+                extensions[DISCLOSURES_EXTENSION] = content.model_dump(mode="json")
+            else:
+                # Without the extension, the notice is in `text` (Disclosures 2).
+                notice = " ".join(reply.disclosures)
+                text = message.get("text")
+                message["text"] = f"{text} {notice}" if isinstance(text, str) and text else notice
+        if extensions:
+            message["extensions"] = extensions
         if len(message) > 3:
             return self._event(type="message", message=message)
         return None

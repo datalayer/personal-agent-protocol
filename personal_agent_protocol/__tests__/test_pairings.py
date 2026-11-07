@@ -56,7 +56,7 @@ from personal_agent_protocol.demo.sockets import (
     _DialLocal,
     served_over_tls,
 )
-from personal_agent_protocol.models import Author, ClientMetadata
+from personal_agent_protocol.models import Author, ClientMetadata, operations_content
 from personal_agent_protocol.operations import OperationsClient, operations_negotiated
 
 pytest.importorskip("uvicorn")
@@ -266,7 +266,7 @@ class _Journey:
                 Message(
                     id=generate_message_id(self.reactor),
                     author=Author(type="agent"),
-                    approval=approval,
+                    extensions=operations_content(approval=approval),
                 ),
                 session=self.session,
                 token=self.signed_in,

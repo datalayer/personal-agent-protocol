@@ -337,8 +337,50 @@ PapConversationStatus = Literal["working", "idle", "queued", "closed"]
 _WROTE: dict[str, str] = {"agent": "its agent", "human": "one of its people"}
 
 
+def _reply_text(company: str, reply: PapReply) -> str:
+    """A reply without a renderer: its words, then each notice and each link with its host."""
+
+    lines = [f"{company}, {_WROTE[reply.author]}{f' ({reply.name})' if reply.name else ''}: {reply.text}"]
+    lines.extend(f"  Notice: {item}" for item in reply.disclosures)
+    lines.extend(f"  Link: {link.title or link.url} ({link.host})" for link in reply.links)
+    return "\n".join(lines)
+
+
+class PapLink(BaseModel):
+    """A web page a reply refers to (Links 3): its HTTPS ``url`` and its ``title``.
+
+    Both are the company's content: the page shows the title with the URL's host
+    (``host``), never the title alone, since a title can name another page.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    title: str | None = Field(default=None, min_length=1)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, value: str) -> str:
+        parts = urlsplit(value)
+        if parts.scheme != "https" or not parts.hostname or "@" in parts.netloc:
+            raise ValueError("a link is an HTTPS URL without user information")
+        return value
+
+    @property
+    def host(self) -> str:
+        """Where the link goes, for the person to see (guides: show each link's domain)."""
+
+        return urlsplit(self.url).hostname or ""
+
+
 class PapReply(BaseModel):
-    """One message a company wrote, and who wrote it there: its agent or one of its people."""
+    """One message a company wrote, and who wrote it there: its agent or one of its people.
+
+    With the pages it refers to (``links``, the Links extension) and the notices
+    it marks apart (``disclosures``, the Disclosures extension), version 4: a
+    page shows a disclosure in full, apart from the text, and a link's title
+    with its host.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -348,6 +390,10 @@ class PapReply(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     #: The company's words, verbatim.
     text: str = Field(min_length=1)
+    #: The web pages the reply refers to (Links 3), in the order it refers to them.
+    links: list[PapLink] = Field(default_factory=list)
+    #: The notices the reply marks apart (Disclosures 3), verbatim.
+    disclosures: list[str] = Field(default_factory=list)
 
     @field_validator("text")
     @classmethod
@@ -356,14 +402,22 @@ class PapReply(BaseModel):
             raise ValueError("a reply says something, in the company's words")
         return value
 
+    @field_validator("disclosures")
+    @classmethod
+    def _disclosures(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise ValueError("a disclosure says something, in the company's words")
+        return value
 
-@display_type(PAP_REPLIES_TYPE, version=3)
+
+@display_type(PAP_REPLIES_TYPE, version=4)
 class PapReplies(Display):
     """What a company answered in a conversation, each reply with who wrote it (§7.8).
 
     A company's message is written by its agent or by one of its people
     (``author``, with the writer's ``name`` when the company gives one,
-    version 3), whoever answers the conversation now (``responder``) and
+    version 3), carries the pages it refers to and the notices it marks apart
+    (``links`` and ``disclosures``, version 4), whoever answers the conversation now (``responder``) and
     wherever it stands (``status``: ``working``, ``idle``, ``queued`` while a
     person is found, ``closed``); the page tells them apart, as PAP-8.8-01
     asks of the personal agent's own words. Each reply is the company's text,
@@ -428,7 +482,15 @@ class PapReplies(Display):
             company=company,
             conversation=conversation_id,
             replies=[
-                PapReply(author=message.author.type, name=message.author.name, text=message.text)
+                PapReply(
+                    author=message.author.type,
+                    name=message.author.name,
+                    text=message.text,
+                    links=[
+                        PapLink(url=link.url, title=link.title) for link in message.links
+                    ],
+                    disclosures=[item.text for item in message.disclosures],
+                )
                 for message in written
             ],
             status=cast(Any, status),
@@ -436,11 +498,7 @@ class PapReplies(Display):
         )
 
     def text(self) -> str:
-        return "\n".join(
-            f"{self.company}, {_WROTE[reply.author]}"
-            f"{f' ({reply.name})' if reply.name else ''}: {reply.text}"
-            for reply in self.replies
-        )
+        return "\n".join(_reply_text(self.company, reply) for reply in self.replies)
 
     def tool_meta(self) -> dict[str, Any]:
         """The ``_meta`` an MCP tool result carries this display in."""
@@ -456,6 +514,7 @@ __all__ = [
     "PapConfirm",
     "PapConversationStatus",
     "PapReplies",
+    "PapLink",
     "PapReply",
     "PapSessionShown",
     "PapSignIn",

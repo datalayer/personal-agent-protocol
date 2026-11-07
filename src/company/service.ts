@@ -80,6 +80,12 @@ import {
   REFRESH_TOKEN_GRANT,
   parseMessage,
   redirectUriMatches,
+  messageApproval,
+  operationsContent,
+  DISCLOSURES_EXTENSION,
+  DISCLOSURES_VERSION,
+  LINKS_EXTENSION,
+  LINKS_VERSION,
   type Approval,
   type ClientMetadata,
   type ConversationEvent,
@@ -216,6 +222,17 @@ export interface CompanyConfigOptions {
   readonly device?: boolean;
   readonly direct?: boolean;
   readonly operations?: boolean;
+  /**
+   * Whether the company lists the Links extension, version 1, and sends the pages a reply
+   * refers to in `extensions.links` to an agent that lists it too (Links 2, 3).
+   */
+  readonly links?: boolean;
+  /**
+   * Whether the company lists the Disclosures extension, version 1, and sends notices in
+   * `extensions.disclosures` to an agent that lists it too; any other agent gets them in
+   * `text` (Disclosures 2, 3).
+   */
+  readonly disclosures?: boolean;
   readonly humansAvailable?: boolean;
   /** How long a Session lasts (§5.5: the Company decides; default a day); then it has ended. */
   readonly sessionLifetimeSeconds?: number;
@@ -335,6 +352,8 @@ export class CompanyConfig {
   readonly device: boolean;
   readonly direct: boolean;
   readonly operations: boolean;
+  readonly links: boolean;
+  readonly disclosures: boolean;
   readonly humansAvailable: boolean;
   readonly sessionLifetimeSeconds: number;
   readonly accessTokenLifetimeSeconds: number;
@@ -375,6 +394,8 @@ export class CompanyConfig {
     this.device = options.device ?? true;
     this.direct = options.direct ?? true;
     this.operations = options.operations ?? true;
+    this.links = options.links ?? false;
+    this.disclosures = options.disclosures ?? false;
     this.humansAvailable = options.humansAvailable ?? false;
     this.sessionLifetimeSeconds = options.sessionLifetimeSeconds ?? 24 * 60 * 60;
     this.accessTokenLifetimeSeconds = options.accessTokenLifetimeSeconds ?? 60 * 60;
@@ -1241,6 +1262,8 @@ export class CompanyService {
     if (config.excludedTasks.length) document.excluded_tasks = { url: config.excludedTasksUrl };
     const extensions: Record<string, unknown> = {};
     if (config.operations) extensions[OPERATIONS_EXTENSION] = { version: OPERATIONS_VERSION };
+    if (config.links) extensions[LINKS_EXTENSION] = { version: LINKS_VERSION };
+    if (config.disclosures) extensions[DISCLOSURES_EXTENSION] = { version: DISCLOSURES_VERSION };
     if (config.mediatedFields.length) {
       extensions[MEDIATED_EXTENSION] = {
         version: MEDIATED_VERSION,
@@ -1375,8 +1398,18 @@ export class CompanyService {
 
   /** Whether the agent listed this version of Operations when it last authenticated. */
   async #supportsOperations(clientId: string): Promise<boolean> {
+    return this.#supportsExtension(clientId, OPERATIONS_EXTENSION, OPERATIONS_VERSION);
+  }
+
+  /**
+   * Whether the agent's client metadata lists `name` at `version` (§3.3, §8.4).
+   *
+   * Extension content goes only to a side that lists the extension with the same version,
+   * read from the metadata the agent last authenticated with.
+   */
+  async #supportsExtension(clientId: string, name: string, version: string): Promise<boolean> {
     const known = await this.#read<KnownClient>(RecordKinds.client, clientId);
-    return known !== undefined && known.extensions[OPERATIONS_EXTENSION] === OPERATIONS_VERSION;
+    return known !== undefined && known.extensions[name] === version;
   }
 
   /**
@@ -3130,7 +3163,7 @@ export class CompanyService {
     let target: StoredOperation | undefined;
     let changed: readonly [StoredConversation, StoredConversation] | undefined;
     try {
-      target = negotiated ? await this.#approvalTarget(session, message.approval) : undefined;
+      target = negotiated ? await this.#approvalTarget(session, messageApproval(message)) : undefined;
       changed = await this.#change<StoredConversation>(
         RecordKinds.conversation,
         conversationId,
@@ -3166,7 +3199,7 @@ export class CompanyService {
       if (event !== undefined) events.push(event);
     } else if (conversation.responder === "human") {
       return conversation;
-    } else if (message.text !== undefined || message.data !== undefined || message.approval === undefined) {
+    } else if (message.text !== undefined || message.data !== undefined || messageApproval(message) === undefined) {
       const agent = firstContribution(this.reactor, CompanyAgents, "company agent");
       const replies = await agent.respond({
         conversationId,
@@ -3212,7 +3245,7 @@ export class CompanyService {
     message: Message,
   ): Promise<StoredEvent | undefined> {
     if (settledDecision(target) !== undefined) return undefined;
-    const approval = message.approval as Approval;
+    const approval = messageApproval(message) as Approval;
     const latest = latestRevision(target);
     const named = target.revisions.find((item) => item.revision === approval.revision) ?? latest;
     const asked: Asked = {
@@ -3232,7 +3265,7 @@ export class CompanyService {
     };
     if (decision.operation !== undefined) {
       reply.text = "That approval doesn't cover these terms. Here they are to approve.";
-      reply.operation = decision.operation;
+      reply.extensions = operationsContent({ operation: decision.operation });
     } else if (decision.outcome === undefined) {
       reply.text = "This is still being done. I'll say how it went here.";
     } else {
@@ -3261,12 +3294,35 @@ export class CompanyService {
     };
     if (reply.text !== undefined) message.text = reply.text;
     if (reply.data !== undefined) message.data = reply.data;
+    // Extension content goes only to an agent that lists the extension, at the same version
+    // (§8.4); the message says what it says in `text` and `data` without it.
+    const extensions: Record<string, Record<string, unknown>> = {};
     if (reply.operation !== undefined && (await this.#supportsOperations(session.clientId))) {
       const request = fingerprint("conversation", conversationId);
       const asked = this.#asked(session, reply.operation, request);
       const decision = await this.#decide(session, asked, undefined, undefined);
-      message.operation = decision.operation;
+      Object.assign(extensions, operationsContent({ operation: decision.operation as Operation }));
     }
+    if (
+      reply.links?.length &&
+      this.config.links &&
+      (await this.#supportsExtension(session.clientId, LINKS_EXTENSION, LINKS_VERSION))
+    ) {
+      extensions[LINKS_EXTENSION] = { items: reply.links.map((link) => ({ ...link })) };
+    }
+    if (reply.disclosures?.length) {
+      if (
+        this.config.disclosures &&
+        (await this.#supportsExtension(session.clientId, DISCLOSURES_EXTENSION, DISCLOSURES_VERSION))
+      ) {
+        extensions[DISCLOSURES_EXTENSION] = { items: reply.disclosures.map((text) => ({ text })) };
+      } else {
+        // Without the extension, the notice is in `text` (Disclosures 2).
+        const notice = reply.disclosures.join(" ");
+        message.text = typeof message.text === "string" && message.text ? `${message.text} ${notice}` : notice;
+      }
+    }
+    if (Object.keys(extensions).length) message.extensions = extensions;
     return Object.keys(message).length > 3 ? this.#event({ type: "message", message }) : undefined;
   }
 

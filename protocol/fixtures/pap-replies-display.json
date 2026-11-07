@@ -1,8 +1,8 @@
 {
   "type": "application/vnd.datalayer.pap.replies+json",
-  "version": 3,
+  "version": 4,
   "id": "conv_4Kp9-msg_1-replies",
-  "text": "manzanita.example, its agent: Your Ridge Jacket shipped on Tuesday.\nmanzanita.example, one of its people (Rosa): I can exchange it for you.",
+  "text": "manzanita.example, its agent: Your Ridge Jacket shipped on Tuesday.\n  Link: Tracking for order ord_7Hk2 (manzanita.example)\nmanzanita.example, one of its people (Rosa): I can exchange it for you.\n  Notice: Exchanged items ship once the original jacket is received.",
   "data": {
     "company": "manzanita.example",
     "conversation": "conv_4Kp9",
@@ -10,12 +10,23 @@
       {
         "author": "agent",
         "name": null,
-        "text": "Your Ridge Jacket shipped on Tuesday."
+        "text": "Your Ridge Jacket shipped on Tuesday.",
+        "links": [
+          {
+            "url": "https://manzanita.example/orders/ord_7Hk2/tracking",
+            "title": "Tracking for order ord_7Hk2"
+          }
+        ],
+        "disclosures": []
       },
       {
         "author": "human",
         "name": "Rosa",
-        "text": "I can exchange it for you."
+        "text": "I can exchange it for you.",
+        "links": [],
+        "disclosures": [
+          "Exchanged items ship once the original jacket is received."
+        ]
       }
     ],
     "status": "idle",

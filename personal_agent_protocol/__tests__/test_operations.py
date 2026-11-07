@@ -44,7 +44,11 @@ from personal_agent_protocol.company import (
 from personal_agent_protocol.company.points import COMPANY_MCP, OPERATION_EXECUTORS
 from personal_agent_protocol.demo.kit import ScriptedApprovals
 from personal_agent_protocol.mcp import McpClient
-from personal_agent_protocol.models import Author, ProtectedResourceMetadata
+from personal_agent_protocol.models import (
+    Author,
+    ProtectedResourceMetadata,
+    operations_content,
+)
 from personal_agent_protocol.reactor import RATE_LIMIT_BUDGETS, first_contribution
 
 from .test_company_end_to_end import World
@@ -127,7 +131,12 @@ def test_fields_of_the_old_shape_mean_nothing() -> None:
 def test_operation_from_each_interface() -> None:
     operation = returned()
     wire = operation.model_dump(mode="json")
-    message = Message(id="msg_1", author=Author(type="agent"), role="company", operation=operation)
+    message = Message(
+        id="msg_1",
+        author=Author(type="agent"),
+        role="company",
+        extensions=operations_content(operation=operation),
+    )
     for payload in (
         {"error": "approval_required", "operation": wire},
         {"isError": True, "structuredContent": {"operation": wire}},
@@ -141,11 +150,14 @@ def test_operation_from_each_interface() -> None:
 
 def test_a_message_with_only_an_approval_is_a_message_and_a_text_alone_approves_nothing() -> None:
     approval = Approval(operation_id="exc_5Rt2", revision="r1")
-    message = Message(id="msg_1", author=Author(type="agent"), approval=approval)
-    assert message.model_dump(mode="json", exclude_none=True)["approval"] == {
-        "operation_id": "exc_5Rt2",
-        "revision": "r1",
+    message = Message(
+        id="msg_1", author=Author(type="agent"), extensions=operations_content(approval=approval)
+    )
+    # The approval travels in `extensions.operations` (spec 8.4, Operations 2, 6).
+    assert message.model_dump(mode="json", exclude_none=True)["extensions"] == {
+        "operations": {"approval": {"operation_id": "exc_5Rt2", "revision": "r1"}}
     }
+    assert message.approval == approval and message.operation is None
     with pytest.raises(ValidationError):
         Message(id="msg_2", author=Author(type="agent"))
 
@@ -1000,7 +1012,7 @@ def _approving(world: World, operation: Operation, **fields: Any) -> Message:
     return Message(
         id=world.message("x").id,
         author=Author(type="agent"),
-        approval=_approval(operation),
+        extensions=operations_content(approval=_approval(operation)),
         **fields,
     )
 
@@ -1067,7 +1079,7 @@ async def test_a_failed_check_in_a_conversation_is_a_message_with_a_new_revision
     forged = Message(
         id=world.message("x").id,
         author=Author(type="agent"),
-        approval=Approval(operation_id=operation.operation_id, revision="never_returned"),
+        extensions=operations_content(approval=Approval(operation_id=operation.operation_id, revision="never_returned")),
     )
     page = await world.conversations.send(
         endpoint, conversation, forged, session=session, token=token, wait=0

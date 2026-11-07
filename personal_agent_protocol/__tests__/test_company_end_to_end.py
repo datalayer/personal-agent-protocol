@@ -38,7 +38,7 @@ from personal_agent_protocol.demo.kit import (
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
 from personal_agent_protocol.mediated import MEDIATED_GRANT, MediatedSignInClient
-from personal_agent_protocol.models import Author, ClientMetadata
+from personal_agent_protocol.models import Author, ClientMetadata, operations_content
 from personal_agent_protocol.operations import OperationsClient, operations_negotiated
 
 SHOP = "https://manzanita.example"
@@ -191,7 +191,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
             Message(
                 id=generate_message_id(world.reactor),
                 author=Author(type="agent"),
-                approval=approval,
+                extensions=operations_content(approval=approval),
             ),
             session=session,
             token=signed_in,

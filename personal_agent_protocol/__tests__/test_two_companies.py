@@ -30,6 +30,7 @@ from personal_agent_protocol.demo.kit import (
 )
 from personal_agent_protocol.demo.ledgerly import ledgerly
 from personal_agent_protocol.demo.northwind import ACCOUNT, northwind
+from personal_agent_protocol.models import operations_content
 from personal_agent_protocol.operations import OperationsClient
 
 TENANT = "atlas-demo"
@@ -123,7 +124,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment
         Message(
             id=generate_message_id(reactor),
             author=Author(type="agent"),
-            approval=approval,
+            extensions=operations_content(approval=approval),
         ),
         session=session,
         token=token,

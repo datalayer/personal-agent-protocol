@@ -48,13 +48,20 @@ from ..company import (
     build_company,
     company_app,
 )
-from ..models import Operation
+from ..models import Link, Operation
 from .kit import ClockPlugin, InProcessNetwork, MutableClock, StorePlugin
 
 DOMAIN = "manzanita.example"
 ADA = {"email": "ada@example.com", "password": "correct horse battery staple"}
 ADA_CODE = "246810"
 ORDER = {"order_id": "ord_7Hk2", "item": "Ridge Jacket, size M", "status": "delivered"}
+#: The page an order reply refers to, sent as a link to an agent that lists Links (Links 3).
+TRACKING_LINK = Link(
+    url=f"https://{DOMAIN}/orders/ord_7Hk2/tracking", title="Tracking for order ord_7Hk2"
+)
+#: The notice an exchange reply carries, as a disclosure to an agent that lists Disclosures,
+#: in `text` to any other (Disclosures 2, 3).
+EXCHANGE_NOTICE = "Exchanged items ship once the original jacket is received."
 
 CONFIG = CompanyConfig(
     name="Manzanita Outfitters",
@@ -62,6 +69,8 @@ CONFIG = CompanyConfig(
     scopes=("orders:read", "orders:write"),
     write_scopes=("orders:write",),
     mediated_fields=(("email", "Email", False), ("password", "Password", True)),
+    links=True,
+    disclosures=True,
     scope_descriptions={
         "orders:read": "See your orders, returns and exchanges",
         "orders:write": "Exchange or return items in your orders",
@@ -130,12 +139,19 @@ class ManzanitaAgent:
                 Reply(
                     text="The insulated Ridge Jacket is in stock. Here is the exchange.",
                     operation=EXCHANGE,
+                    disclosures=(EXCHANGE_NOTICE,),
                 )
             ]
         if "orders:read" not in turn.scopes:
             # Signed in, but not allowed to read orders: ask for the scope, say nothing.
             return [Reply(authorization=("insufficient_scope", "orders:read"))]
-        return [Reply(text="Your order ord_7Hk2: Ridge Jacket, size M, delivered.", data=ORDER)]
+        return [
+            Reply(
+                text="Your order ord_7Hk2: Ridge Jacket, size M, delivered.",
+                data=ORDER,
+                links=(TRACKING_LINK,),
+            )
+        ]
 
 
 class ManzanitaApi:

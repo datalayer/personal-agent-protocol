@@ -462,7 +462,7 @@ async def test_a_stream_retries_a_nonce_with_a_fresh_proof() -> None:
 async def test_a_restarted_session_sends_a_fresh_proof_and_a_redirect_is_refused() -> None:
     answers = iter(
         [
-            httpx.Response(400, json={"error": "invalid_session"}),
+            httpx.Response(400, json={"error": "session_ended"}),
             httpx.Response(302, headers={"Location": "https://elsewhere.example/"}),
         ]
     )

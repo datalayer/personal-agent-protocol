@@ -34,6 +34,7 @@ import {
   sessionHeaders,
   sessionJwtClaims,
   parseProtectedResourceMetadata,
+  messageOperation,
 } from "../../lib/index.js";
 import {
   ClientPolicies,
@@ -225,7 +226,7 @@ test("finding 5: an operation records and requires its scopes", async () => {
   const session = await w.start();
   const done = await deviceSignIn(w);
   const page = await w.conversations.start(w.endpoint, w.message("Exchange my jacket for a warmer one"), { session, token: done.token, wait: 0 });
-  const proposal = page.events.find((event) => event.message?.operation).message.operation;
+  const proposal = messageOperation(page.events.find((event) => event.message && messageOperation(event.message)).message);
   assert.deepEqual([...(await w.shop.operationRecord(proposal.operation_id)).scopes], ["orders:write"]);
   const narrowed = await w.accounts.refresh(done.refreshTokenReference, { context: w.context, scopes: ["orders:read"] });
   const answer = await w.postJson(
@@ -235,7 +236,7 @@ test("finding 5: an operation records and requires its scopes", async () => {
       message: {
         id: w.message("x").id,
         author: { type: "agent" },
-        approval: { operation_id: proposal.operation_id, revision: proposal.revision },
+        extensions: { operations: { approval: { operation_id: proposal.operation_id, revision: proposal.revision } } },
       },
     },
     narrowed.token,
@@ -695,7 +696,7 @@ async function signedInWithProposal(w) {
   const session = await w.start();
   const done = await deviceSignIn(w);
   const page = await w.conversations.start(w.endpoint, w.message("Exchange my jacket for a warmer one"), { session, token: done.token, wait: 0 });
-  return { token: done.token, page, proposal: page.events.find((event) => event.message?.operation).message.operation };
+  return { token: done.token, page, proposal: messageOperation(page.events.find((event) => event.message && messageOperation(event.message)).message) };
 }
 
 test("O1: an operation has no null members", async () => {

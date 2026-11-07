@@ -285,7 +285,7 @@ async def test_every_attempt_is_signed_anew_and_covers_the_session_jwt_it_carrie
     def respond(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         if len(sent) == 1:
-            return httpx.Response(400, json={"error": "invalid_session"})
+            return httpx.Response(400, json={"error": "session_ended"})
         return httpx.Response(200, json={})
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(respond))

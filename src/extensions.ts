@@ -21,6 +21,8 @@ import { challengeParameters } from "./refusals.js";
 export const SUPPORTED_EXTENSIONS: Readonly<Record<string, string>> = Object.freeze({
   operations: "2",
   "mediated-sign-in": "1",
+  links: "1",
+  disclosures: "1",
 });
 
 /** Extensions a company recognizes from the request: the agent doesn't list them (§3.3). */

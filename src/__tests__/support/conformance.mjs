@@ -93,6 +93,8 @@ import {
   sessionHeaders,
   sessionJwtClaims,
   staleResourceMetadata,
+  messageOperation,
+  operationsContent,
 } from "../../../lib/index.js";
 import { JoseSigner } from "../../../lib/server.js";
 import { ControlledBrowser } from "./controlled-browser.mjs";
@@ -1539,7 +1541,7 @@ caseFor("operations.another-user-cannot-approve")(async (ctx) => {
   await performed(ctx, theirs, 0);
 });
 
-const operationsIn = (page) => (page.events ?? []).map((event) => event.message?.operation).filter((operation) => operation !== undefined);
+const operationsIn = (page) => (page.events ?? []).map((event) => (event.message ? messageOperation(event.message) : undefined)).filter((operation) => operation !== undefined);
 
 caseFor("operations.cross-channel-identity")(async (ctx) => {
   await ctx.operationsNegotiated();
@@ -1580,12 +1582,12 @@ caseFor("operations.conversation-approval")(async (ctx) => {
     ctx.agent.conversations.send(
       endpoint,
       page.conversation_id,
-      { id: messageId(), author: { type: "agent" }, approval: approved(operation) },
+      { id: messageId(), author: { type: "agent" }, extensions: operationsContent({ approval: approved(operation) }) },
       { session: signed.session, token: signed.token, wait: 0 },
     );
   const answered = await approveInIt();
   const told = (answered.events ?? []).filter((event) => event.message?.role === "company").map((event) => event.message);
-  check(told.length && told.at(-1).operation === undefined, "a later message says how it went");
+  check(told.length && messageOperation(told.at(-1)) === undefined, "a later message says how it went");
   await performed(ctx, operation, 1);
   await approveInIt(); // a new message with the same approval adds nothing
   await performed(ctx, operation, 1);

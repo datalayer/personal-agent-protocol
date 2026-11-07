@@ -294,9 +294,13 @@ async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
             "message": {
                 "id": world.message("x").id,
                 "author": {"type": "agent"},
-                "approval": {
-                    "operation_id": proposal.operation_id,
-                    "revision": proposal.revision,
+                "extensions": {
+                    "operations": {
+                        "approval": {
+                            "operation_id": proposal.operation_id,
+                            "revision": proposal.revision,
+                        }
+                    }
                 },
             }
         },

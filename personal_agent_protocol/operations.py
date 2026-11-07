@@ -100,7 +100,8 @@ def operation_from(payload: object) -> Operation:
 
     Accepts an API's `403` body (`{"operation": …}`), an MCP tool result
     (`{"structuredContent": {"operation": …}}`), a conversation message
-    (`{"operation": …}`, or a `Message`), or the operation itself.
+    (`{"extensions": {"operations": {"operation": …}}}`, or a `Message`), or the
+    operation itself.
     """
 
     candidate: object = payload
@@ -108,10 +109,14 @@ def operation_from(payload: object) -> Operation:
         candidate = payload.operation
     elif isinstance(payload, dict):
         structured = payload.get("structuredContent")
+        extensions = payload.get("extensions")
+        operations = extensions.get("operations") if isinstance(extensions, dict) else None
         if isinstance(structured, dict) and "operation" in structured:
             candidate = structured["operation"]
         elif "operation" in payload:
             candidate = payload["operation"]
+        elif isinstance(operations, dict):
+            candidate = operations.get("operation")
     if isinstance(candidate, Operation):
         return candidate
     if candidate is None:

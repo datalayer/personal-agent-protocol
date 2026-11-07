@@ -19,6 +19,8 @@ import {
   TokenStores,
   discoverCompany,
   firstContribution,
+  messageOperation,
+  operationsContent,
 } from "../../lib/index.js";
 import { MemoryCompanyStore, StoreConformanceError, checkStore } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
@@ -149,7 +151,7 @@ test("a company restarted over its store continues every flow", async () => {
   page = await conversations.send(endpoint, page.conversation_id, message("Exchange it for something warmer"), {
     session, token: refreshed.token, cursor: page.cursor, wait: 0,
   });
-  const proposal = page.events.filter((e) => e.type !== "state").at(-1).message.operation;
+  const proposal = messageOperation(page.events.filter((e) => e.type !== "state").at(-1).message);
   assert.ok(proposal);
   const cursor = page.cursor;
 
@@ -170,7 +172,7 @@ test("a company restarted over its store continues every flow", async () => {
     await conversations.send(
       endpoint,
       page.conversation_id,
-      { id: conversations.generateMessageId(), author: { type: "agent" }, approval },
+      { id: conversations.generateMessageId(), author: { type: "agent" }, extensions: operationsContent({ approval }) },
       { session, token: again.token, wait: 0 },
     );
   }

@@ -39,7 +39,7 @@ import { defineContributionPoint } from "@datalayer/reactor";
 
 import type { JWK } from "jose";
 
-import type { ClientMetadata, JsonWebKeySet, Operation } from "../models.js";
+import type { ClientMetadata, JsonWebKeySet, Link, Operation } from "../models.js";
 import type { SecretValue } from "../secret.js";
 import { RecordKinds, type CompanyStore } from "./store.js";
 
@@ -140,6 +140,17 @@ export interface Reply {
   readonly userRequested?: string;
   /** The AI persona writing, when the company names one: `id`, `name`, `image` (§7.4). */
   readonly persona?: Readonly<{ id?: string; name?: string; image?: string }>;
+  /**
+   * The web pages the reply refers to (Links 3): sent in `extensions.links` to an agent that
+   * lists the Links extension, and to no other.
+   */
+  readonly links?: readonly Link[];
+  /**
+   * Notices the user needs to see, such as an allergen warning (Disclosures 3): sent in
+   * `extensions.disclosures` to an agent that lists the Disclosures extension, and in `text`
+   * to any other.
+   */
+  readonly disclosures?: readonly string[];
 }
 
 /** Answer one turn of a conversation. */

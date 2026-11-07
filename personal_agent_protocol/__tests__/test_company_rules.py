@@ -614,6 +614,65 @@ async def test_extension_required_at_an_api_is_in_the_challenge() -> None:
     assert raised.value.details == {"extension": "operations"}
 
 
+async def _company_replies(world: World, extensions: tuple[str, ...]) -> tuple[Message, Message]:
+    """The order reply and the exchange reply, to an agent listing `extensions`."""
+
+    world.atlas.extensions = extensions
+    world.network.add(world.atlas.domain, world.atlas.website())
+    session = await world.signed_out_session()
+    ada, _, _ = await device_sign_in(world, "acct_ada")
+    assert ada is not None
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    page = await world.conversations.start(
+        endpoint, world.message("Where is my jacket order?"), session=session, token=ada, wait=0
+    )
+    order = [e.message for e in page.events if e.message is not None and e.message.role == "company"]
+    answered = await world.conversations.send(
+        endpoint,
+        page.conversation_id,
+        world.message("Exchange it for something warmer"),
+        session=session,
+        token=ada,
+        cursor=page.cursor,
+        wait=0,
+    )
+    exchange = [
+        e.message for e in answered.events if e.message is not None and e.message.role == "company"
+    ]
+    return order[-1], exchange[-1]
+
+
+@pytest.mark.asyncio
+async def test_extension_content_goes_only_to_an_agent_that_lists_the_extension() -> None:
+    """Links and Disclosures content in `extensions`, to an agent that lists the same
+    version, and to no other (§8.4, Links 2, 3, Disclosures 2, 3)."""
+
+    from personal_agent_protocol.demo.manzanita import EXCHANGE_NOTICE, TRACKING_LINK
+
+    order, exchange = await _company_replies(World(), ("operations", "links", "disclosures"))
+    assert [(link.url, link.title) for link in order.links] == [
+        (TRACKING_LINK.url, TRACKING_LINK.title)
+    ]
+    assert order.extensions == {
+        "links": {"items": [{"url": TRACKING_LINK.url, "title": TRACKING_LINK.title}]}
+    }
+    assert order.disclosures == [] and EXCHANGE_NOTICE not in (order.text or "")
+    assert [item.text for item in exchange.disclosures] == [EXCHANGE_NOTICE]
+    assert exchange.operation is not None and exchange.links == []
+    assert EXCHANGE_NOTICE not in (exchange.text or "")
+    assert exchange.extensions is not None and set(exchange.extensions) == {
+        "operations",
+        "disclosures",
+    }
+
+    # An agent that lists neither gets no link, and the notice in `text` (Disclosures 2).
+    order, exchange = await _company_replies(World(), ("operations",))
+    assert order.links == [] and order.extensions is None
+    assert exchange.disclosures == [] and exchange.operation is not None
+    assert exchange.extensions is not None and set(exchange.extensions) == {"operations"}
+    assert exchange.text is not None and exchange.text.endswith(EXCHANGE_NOTICE)
+
+
 @pytest.mark.asyncio
 async def test_the_company_never_fetches_an_agent_on_a_private_address() -> None:
     """A URL the other party gave never reaches a loopback, private, or link-local address (§3)."""

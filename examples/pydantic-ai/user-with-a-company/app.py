@@ -27,6 +27,7 @@ from personal_agent_protocol import (
     SessionClient,
     SessionHttpClient,
     generate_message_id,
+    operations_content,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.demo.kit import (
@@ -144,7 +145,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
             endpoint,
             page.conversation_id,
             Message(
-                id=generate_message_id(reactor), author=Author(type="agent"), approval=approval
+                id=generate_message_id(reactor), author=Author(type="agent"), extensions=operations_content(approval=approval)
             ),
             session=session,
             token=signed_in,

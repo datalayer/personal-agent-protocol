@@ -80,7 +80,15 @@ from .discovery import DiscoveryClient
 from .errors import AuthorizationError, PersonalAgentProtocolError, TransportError
 from .feedback import FeedbackClient, FeedbackReport, feedback_endpoint
 from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
-from .models import Approval, Author, ConversationEvent, DiscoveredCompany, Message, Operation
+from .models import (
+    Approval,
+    Author,
+    ConversationEvent,
+    DiscoveredCompany,
+    Message,
+    Operation,
+    operations_content,
+)
 from .operations import (
     APPROVAL_HEADER,
     OPERATIONS_VERSION,
@@ -2186,7 +2194,7 @@ async def _conversation_approval(ctx: ConformanceContext, _: FixtureCase) -> Non
             Message(
                 id=message_id,
                 author=Author(type="agent"),
-                approval=_approved(operation),
+                extensions=operations_content(approval=_approved(operation)),
             ),
             session=signed.session,
             token=signed.token,

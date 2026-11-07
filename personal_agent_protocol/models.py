@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from ipaddress import ip_address
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -18,6 +18,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
+    ValidationError,
     field_validator,
     model_serializer,
     model_validator,
@@ -604,6 +605,77 @@ class Approval(ProtocolModel):
     )
 
 
+class OperationsContent(ProtocolModel):
+    """The Operations extension's content of a message, `extensions.operations` (Operations 2).
+
+    `operation` in a Company message (Operations 4), `approval` in a Personal Agent
+    message (Operations 6): one of the two, never both.
+    """
+
+    operation: Operation | None = None
+    approval: Approval | None = None
+
+    @model_validator(mode="after")
+    def validate_one(self) -> OperationsContent:
+        if (self.operation is None) == (self.approval is None):
+            raise ValueError("extensions.operations carries an operation or an approval")
+        return self
+
+
+class Link(ProtocolModel):
+    """A web page a Company message refers to (Links 3): its HTTPS `url`, and its `title`
+    as the message refers to it. Both are content from the Company (§10.1)."""
+
+    url: str
+    title: str | None = Field(default=None, min_length=1)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        return _https_url(value, "a link")
+
+
+class LinksContent(ProtocolModel):
+    """The Links extension's content of a Company message, `extensions.links` (Links 3)."""
+
+    items: list[Link]
+
+
+class Disclosure(ProtocolModel):
+    """A notice a Company marks apart from the rest of a message (Disclosures 3), such as
+    an allergen warning. The Personal Agent decides whether to show it."""
+
+    text: str = Field(min_length=1)
+
+
+class DisclosuresContent(ProtocolModel):
+    """The Disclosures extension's content of a Company message, `extensions.disclosures`
+    (Disclosures 3)."""
+
+    items: list[Disclosure]
+
+
+#: The extensions that define message content (§8.4), each with its content model.
+LINKS_EXTENSION = "links"
+LINKS_VERSION = "1"
+DISCLOSURES_EXTENSION = "disclosures"
+DISCLOSURES_VERSION = "1"
+MESSAGE_CONTENT_MODELS: dict[str, type[ProtocolModel]] = {
+    "operations": OperationsContent,
+    LINKS_EXTENSION: LinksContent,
+    DISCLOSURES_EXTENSION: DisclosuresContent,
+}
+
+
+def operations_content(
+    *, operation: Operation | None = None, approval: Approval | None = None
+) -> dict[str, dict[str, Any]]:
+    """A message's `extensions` carrying the Operations extension's content (Operations 2)."""
+
+    content = OperationsContent(operation=operation, approval=approval)
+    return {"operations": content.model_dump(mode="json", exclude_none=True)}
+
+
 class Author(ProtocolModel):
     """Who wrote a message (§7.4): `agent` or `human`, and for a Company message, who.
 
@@ -638,10 +710,63 @@ class Message(ProtocolModel):
     text: str | None = None
     data: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
-    #: A Company message's operation, for the User's approval (Operations 4).
-    operation: Operation | None = None
-    #: A Personal Agent message's approval: only this approves, never `text` (Operations 6).
-    approval: Approval | None = None
+    #: Content extensions define, keyed by extension name (§8.4): `operations` carries an
+    #: operation or an approval, `links` and `disclosures` their items. A side sends an
+    #: extension's content only to a side that lists the same version; content of an
+    #: extension this SDK does not define is kept as the object it is.
+    extensions: dict[str, dict[str, Any]] | None = None
+
+    @property
+    def operation(self) -> Operation | None:
+        """A Company message's operation, for the User's approval (Operations 4)."""
+
+        content = self._content("operations", OperationsContent)
+        return None if content is None else cast(OperationsContent, content).operation
+
+    @property
+    def approval(self) -> Approval | None:
+        """A Personal Agent message's approval: only this approves, never `text` (Operations 6)."""
+
+        content = self._content("operations", OperationsContent)
+        return None if content is None else cast(OperationsContent, content).approval
+
+    @property
+    def links(self) -> list[Link]:
+        """The web pages a Company message refers to (Links 3); none without the extension."""
+
+        content = self._content(LINKS_EXTENSION, LinksContent)
+        return [] if content is None else list(cast(LinksContent, content).items)
+
+    @property
+    def disclosures(self) -> list[Disclosure]:
+        """The notices a Company message marks apart (Disclosures 3); none without the extension."""
+
+        content = self._content(DISCLOSURES_EXTENSION, DisclosuresContent)
+        return [] if content is None else list(cast(DisclosuresContent, content).items)
+
+    def _content(self, name: str, model: type[ProtocolModel]) -> ProtocolModel | None:
+        value = None if self.extensions is None else self.extensions.get(name)
+        return None if value is None else model.model_validate(value)
+
+    @field_validator("extensions")
+    @classmethod
+    def validate_extensions(
+        cls, value: dict[str, dict[str, Any]] | None
+    ) -> dict[str, dict[str, Any]] | None:
+        """Each extension's content is an object; the ones this SDK defines, in their shape."""
+
+        if value is None:
+            return value
+        for name, content in value.items():
+            if not isinstance(content, dict):
+                raise ValueError(f"extensions.{name} must be a JSON object")
+            model = MESSAGE_CONTENT_MODELS.get(name)
+            if model is not None:
+                try:
+                    model.model_validate(content)
+                except ValidationError as error:
+                    raise ValueError(f"extensions.{name}: {error.errors()[0]['msg']}") from error
+        return value
 
     @field_validator("id")
     @classmethod
@@ -670,9 +795,9 @@ class Message(ProtocolModel):
 
     @model_validator(mode="after")
     def validate_content(self) -> Message:
-        content = (self.text, self.data, self.context, self.operation, self.approval)
+        content = (self.text, self.data, self.context, self.extensions)
         if all(value is None for value in content):
-            raise ValueError("a message requires text, data, context, operation, or approval")
+            raise ValueError("a message requires text, data, context, or extensions")
         return self
 
 

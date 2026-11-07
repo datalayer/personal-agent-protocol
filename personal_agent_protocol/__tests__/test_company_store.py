@@ -17,7 +17,7 @@ from personal_agent_protocol.company import MemoryCompanyStore
 from personal_agent_protocol.company.store import REFRESH_TOKEN, AccountGrant, JsonObject
 from personal_agent_protocol.company.testing import StoreConformanceError, check_store
 from personal_agent_protocol.conversations import generate_message_id
-from personal_agent_protocol.models import Approval, Author, Message
+from personal_agent_protocol.models import Approval, Author, Message, operations_content
 from personal_agent_protocol.reactor import TOKEN_STORES, TokenStore, first_contribution
 
 from .test_company_end_to_end import TENANT, World
@@ -164,7 +164,7 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
             Message(
                 id=generate_message_id(world.reactor),
                 author=Author(type="agent"),
-                approval=approval,
+                extensions=operations_content(approval=approval),
             ),
             session=session,
             token=again.token,  # type: ignore[arg-type]

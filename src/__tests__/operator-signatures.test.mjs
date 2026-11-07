@@ -207,7 +207,7 @@ test("every attempt is signed anew, and covers the Session JWT it carries", asyn
   const answers = async (_url, init) => {
     sent.push(Object.fromEntries(Object.entries(init.headers).map(([name, value]) => [name.toLowerCase(), value])));
     return sent.length === 1
-      ? new Response('{"error":"invalid_session"}', { status: 400, headers: { "content-type": "application/json" } })
+      ? new Response('{"error":"session_ended"}', { status: 400, headers: { "content-type": "application/json" } })
       : new Response("{}", { status: 200 });
   };
   const key = await newOperatorKey();

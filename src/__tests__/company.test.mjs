@@ -37,6 +37,8 @@ import {
   sessionHeaders,
   tokenHash,
   parseProtectedResourceMetadata,
+  messageOperation,
+  operationsContent,
 } from "../../lib/index.js";
 import { CompanyAccounts, CompanyApis, CompanyMcps, CompanyRateLimits, StaleConversationError } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
@@ -475,7 +477,7 @@ test("an agent without the extension gets no operations in a conversation", asyn
   const session = await w.start();
   const { result } = await directSignIn(w);
   const page = await w.conversations.start(w.endpoint, w.message("Exchange it for something warmer"), { session, token: result.token, wait: 0 });
-  assert.ok(page.events.every((event) => event.message?.operation === undefined));
+  assert.ok(page.events.every((event) => event.message === undefined || event.message.extensions === undefined));
 });
 
 test("an operation's approval is performed once, repeats get the original response, and the revision is opaque", async () => {
@@ -645,7 +647,7 @@ test("an operation in a conversation: a message's approval, a new revision for o
   const { result } = await directSignIn(w);
   const token = result.token;
   const page = await w.conversations.start(w.endpoint, w.message("Exchange it for something warmer"), { session, token, wait: 0 });
-  const proposal = page.events.filter((e) => e.type !== "state").at(-1).message.operation;
+  const proposal = messageOperation(page.events.filter((e) => e.type !== "state").at(-1).message);
   assert.ok(proposal);
   const yes = await w.conversations.send(w.endpoint, page.conversation_id, w.message("yes, I approve"), { session, token, cursor: page.cursor, wait: 0 });
   assert.deepEqual(w.plugin.executor.performed, []);
@@ -657,26 +659,26 @@ test("an operation in a conversation: a message's approval, a new revision for o
     const answer = await w.conversations.send(
       w.endpoint,
       page.conversation_id,
-      { id: w.conversations.generateMessageId(), author: { type: "agent" }, approval: approvalOf(operation) },
+      { id: w.conversations.generateMessageId(), author: { type: "agent" }, extensions: operationsContent({ approval: approvalOf(operation) }) },
       { session, token, cursor: yes.cursor, wait: 0 },
     );
     return answer.events.filter((event) => event.message?.role === "company").at(-1)?.message;
   };
   const told = await approving(proposal);
-  const newer = told.operation;
+  const newer = messageOperation(told);
   assert.equal(newer.operation_id, proposal.operation_id);
   assert.notEqual(newer.revision, proposal.revision);
   assert.equal(newer.summary, "Exchange for USD 85.00 more.");
   assert.deepEqual(w.plugin.executor.performed, []);
   const done = await approving(newer);
-  assert.equal(done.operation, undefined);
+  assert.equal(messageOperation(done), undefined);
   assert.ok(done.text.startsWith("Exchanged"));
   assert.deepEqual(w.plugin.executor.performed, [proposal.operation_id]);
   // Again: already performed, a new message adds nothing.
   const again = await w.conversations.send(
     w.endpoint,
     page.conversation_id,
-    { id: w.conversations.generateMessageId(), author: { type: "agent" }, approval: approvalOf(newer) },
+    { id: w.conversations.generateMessageId(), author: { type: "agent" }, extensions: operationsContent({ approval: approvalOf(newer) }) },
     { session, token, wait: 0 },
   );
   assert.equal(again.events.filter((event) => event.message?.text?.startsWith("Exchanged")).length, 1);

@@ -20,6 +20,8 @@ import {
   discoverCompany,
   operationsNegotiated,
   parseClientMetadata,
+  messageOperation,
+  operationsContent,
 } from "../../../lib/index.js";
 
 export const scenario = JSON.parse(
@@ -97,7 +99,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
         cursor: page.cursor,
         wait: 0,
       });
-      proposal = page.events.filter((e) => e.type !== "state").at(-1).message.operation;
+      proposal = messageOperation(page.events.filter((e) => e.type !== "state").at(-1).message);
       assert.equal(proposal !== undefined, expect.operation);
     } else if (step.step === "approve") {
       assert.ok(operationsNegotiated(discovered.document, parseClientMetadata(identity.metadata)), "both sides list Operations v2");
@@ -110,7 +112,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
         const answer = await conversations.send(
           endpoint(),
           page.conversation_id,
-          { id: conversations.generateMessageId(), author: { type: "agent" }, approval },
+          { id: conversations.generateMessageId(), author: { type: "agent" }, extensions: operationsContent({ approval }) },
           { session, token: signedIn, wait: 0 },
         );
         const said = answer.events.filter((event) => event.message?.role === "company").map((event) => event.message);

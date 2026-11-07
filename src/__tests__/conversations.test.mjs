@@ -298,12 +298,12 @@ test("an unknown status reads as working, and an unknown responder as human", as
   assert.deepEqual([page.events[0].status, page.events[0].responder], ["working", "human"]);
 });
 
-test("an invalid_session while sending starts a new Session once, and the message goes again", async () => {
+test("a session_ended while sending starts a new Session once, and the message goes again", async () => {
   const bodies = [];
   const fetch = async (_input, init) => {
     bodies.push(JSON.parse(init.body));
     return bodies.length === 1
-      ? new Response('{"error":"invalid_session"}', { status: 400 })
+      ? new Response('{"error":"session_ended"}', { status: 400 })
       : new Response('{"conversation_id":"cnv_one","status":"working","responder":"agent"}', { status: 202 });
   };
   const { reactor, client } = setup(fetch);

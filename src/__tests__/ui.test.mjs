@@ -25,6 +25,8 @@ import {
   papConfirmText,
   papRepliesDisplay,
   papRepliesText,
+  papLinkHost,
+  PAP_REPLIES_VERSION,
 } from "../../lib/index.js";
 
 const example = JSON.parse(
@@ -130,8 +132,15 @@ const replies = JSON.parse(
 
 test("the Python SDK's replies are one, each with who wrote it, word for word", () => {
   assert.equal(replies.type, PAP_REPLIES_TYPE);
+  assert.equal(replies.version, PAP_REPLIES_VERSION);
   assert.ok(isPapReplies(replies));
   assert.equal(papRepliesText(replies.data), replies.text);
+  // The pages a reply refers to and the notices it marks apart (version 4).
+  assert.deepEqual(replies.data.replies[0].links, [{ url: "https://manzanita.example/orders/ord_7Hk2/tracking", title: "Tracking for order ord_7Hk2" }]);
+  assert.equal(papLinkHost(replies.data.replies[0].links[0]), "manzanita.example");
+  assert.deepEqual(replies.data.replies[1].disclosures, ["Exchanged items ship once the original jacket is received."]);
+  assert.ok(replies.text.includes("  Link: Tracking for order ord_7Hk2 (manzanita.example)"));
+  assert.ok(replies.text.includes("  Notice: Exchanged items ship once the original jacket is received."));
   assert.deepEqual(
     replies.data.replies.map((reply) => [reply.author, reply.name]),
     [["agent", null], ["human", "Rosa"]],
@@ -142,9 +151,11 @@ test("the Python SDK's replies are one, each with who wrote it, word for word", 
 test("replies that say less or other are not one", () => {
   const changed = (data) => ({ ...replies, data: { ...replies.data, ...data } });
   assert.equal(isPapReplies({ ...replies, type: PAP_CONFIRM_TYPE }), false);
-  // Version 1 named no conversation, 2 said `sender`: refused, not read as 3.
+  // Version 1 named no conversation, 2 said `sender`, 3 carried no links or disclosures:
+  // refused, not read as 4.
   assert.equal(isPapReplies({ ...replies, version: 1 }), false);
   assert.equal(isPapReplies({ ...replies, version: 2 }), false);
+  assert.equal(isPapReplies({ ...replies, version: 3 }), false);
   assert.equal(replies.data.conversation, "conv_4Kp9");
   for (const data of [
     { company: " " },
@@ -158,6 +169,11 @@ test("replies that say less or other are not one", () => {
     { replies: [{ author: "agent", name: " ", text: "Hello" }] },
     { replies: [{ author: "agent", name: null, text: " " }] },
     { replies: [{ author: "agent", name: null, text: "Hello", token: "secret" }] },
+    { replies: [{ author: "agent", name: null, text: "Hello" }] },
+    { replies: [{ author: "agent", name: null, text: "Hello", links: [], disclosures: [" "] }] },
+    { replies: [{ author: "agent", name: null, text: "Hello", links: [{ url: "http://x.example/", title: null }], disclosures: [] }] },
+    { replies: [{ author: "agent", name: null, text: "Hello", links: [{ url: "https://x.example/", title: "" }], disclosures: [] }] },
+    { replies: [{ author: "agent", name: null, text: "Hello", links: [{ url: "https://x.example/" }], disclosures: [] }] },
     { status: 1 },
     { responder: 1 },
     { token: "secret" },

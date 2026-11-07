@@ -92,14 +92,29 @@ def test_shared_client_conversation_and_operation_fixtures() -> None:
     assert client.extensions["example.org/preferences"].model_extra == {"mode": "compact"}
     assert operation.revision == "1791487200-k3Jd9Qx2mW8v"
     assert page.events[0].message is not None
+    # The operation is the Operations extension's content, `extensions.operations` (§8.4).
     assert page.events[0].message.operation == operation
+    assert page.events[0].message.extensions == {
+        "operations": {"operation": operation.model_dump(mode="json")}
+    }
     assert page.events[2].type == "example.org/future-event"
     assert page.events[2].model_extra == {"future": True}
+    # Links and Disclosures content, and an extension's content this SDK does not define.
+    linked = page.events[3].message
+    assert linked is not None and linked.operation is None and linked.approval is None
+    assert [(link.url, link.title) for link in linked.links] == [
+        ("https://example.com/help/returns", "Return policy")
+    ]
+    assert [item.text for item in linked.disclosures] == [
+        "Contains peanuts. Made in a facility that also processes tree nuts."
+    ]
+    assert linked.extensions is not None
+    assert linked.extensions["example.org/future-content"] == {"anything": True}
 
 
 def test_message_requires_content() -> None:
     with pytest.raises(
-        ValidationError, match="requires text, data, context, operation, or approval"
+        ValidationError, match="requires text, data, context, or extensions"
     ):
         Message.model_validate({"id": "msg_empty", "author": {"type": "agent"}})
 

@@ -194,7 +194,7 @@ export const PAP_REPLIES_TYPE = "application/vnd.datalayer.pap.replies+json";
  * The version of `PAP_REPLIES_TYPE` this module reads: 2 names the conversation, 3 gives
  * each reply its `author` and, when the company gives one, the writer's `name`.
  */
-export const PAP_REPLIES_VERSION = 3;
+export const PAP_REPLIES_VERSION = 4;
 
 /** Where a conversation stands (§7.8), apart from who answers in it. */
 export type PapConversationStatus = "working" | "idle" | "queued" | "closed";
@@ -203,11 +203,34 @@ export type PapConversationStatus = "working" | "idle" | "queued" | "closed";
 export const PAP_CONVERSATION_STATUSES: readonly PapConversationStatus[] = ["working", "idle", "queued", "closed"];
 
 /**
+ * A web page a reply refers to (Links 3): its HTTPS `url` and its `title`, else `null`. The
+ * page shows the title with the URL's host (`papLinkHost`), never the title alone, since a
+ * title can name another page.
+ */
+export type PapLink = { url: string; title: string | null };
+
+/** Where a link goes, for the person to see (guides: show each link's domain). */
+export function papLinkHost(link: PapLink): string {
+  try {
+    return new URL(link.url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+/**
  * One message a company wrote, and who wrote it there: its agent or one of its people
  * (`author.type`, §7.4, §7.8), with the writer's display name when the company gives one
- * (`author.name`), else `null`.
+ * (`author.name`), else `null`; the pages it refers to (`links`, the Links extension) and the
+ * notices it marks apart (`disclosures`, the Disclosures extension), version 4.
  */
-export type PapReply = { author: "agent" | "human"; name: string | null; text: string };
+export type PapReply = {
+  author: "agent" | "human";
+  name: string | null;
+  text: string;
+  links: PapLink[];
+  disclosures: string[];
+};
 
 /** What a company answered, as a display's `data` (`PapReplies`' fields). */
 export type PapRepliesData = {
@@ -243,12 +266,27 @@ const isConversationId = (value: unknown): value is string =>
 
 const isSender = (value: unknown): value is "agent" | "human" => value === "agent" || value === "human";
 
+const isLink = (value: unknown): value is PapLink => {
+  if (!isObject(value) || !hasExactly(value, ["url", "title"])) return false;
+  if (typeof value.url !== "string" || value.title !== null && !isFilled(value.title)) return false;
+  try {
+    const url = new URL(value.url);
+    return url.protocol === "https:" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+};
+
 const isReply = (value: unknown): value is PapReply =>
   isObject(value) &&
-  hasExactly(value, ["author", "name", "text"]) &&
+  hasExactly(value, ["author", "name", "text", "links", "disclosures"]) &&
   isSender(value.author) &&
   (value.name === null || isFilled(value.name)) &&
-  isFilled(value.text);
+  isFilled(value.text) &&
+  Array.isArray(value.links) &&
+  value.links.every(isLink) &&
+  Array.isArray(value.disclosures) &&
+  value.disclosures.every(isFilled);
 
 /**
  * Whether a value is the `data` of what a company answered, as `PapReplies`
@@ -276,11 +314,18 @@ export function isPapReplies<D extends DisplayLike>(display: D): display is D & 
 
 const WROTE: Record<PapReply["author"], string> = { agent: "its agent", human: "one of its people" };
 
+/** A reply without a renderer: its words, then each notice and each link with its host. */
+function papReplyText(company: string, reply: PapReply): string {
+  return [
+    `${company}, ${WROTE[reply.author]}${reply.name ? ` (${reply.name})` : ""}: ${reply.text}`,
+    ...reply.disclosures.map((item) => `  Notice: ${item}`),
+    ...reply.links.map((link) => `  Link: ${link.title ?? link.url} (${papLinkHost(link)})`),
+  ].join("\n");
+}
+
 /** What the replies read as without a renderer: `PapReplies.text()`, word for word. */
 export function papRepliesText(data: PapRepliesData): string {
-  return data.replies
-    .map((reply) => `${data.company}, ${WROTE[reply.author]}${reply.name ? ` (${reply.name})` : ""}: ${reply.text}`)
-    .join("\n");
+  return data.replies.map((reply) => papReplyText(data.company, reply)).join("\n");
 }
 
 /**

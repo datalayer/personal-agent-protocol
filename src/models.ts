@@ -286,6 +286,56 @@ export interface Approval {
 }
 
 /**
+ * The Operations extension's content of a message, `extensions.operations` (Operations 2):
+ * `operation` in a Company message (Operations 4), `approval` in a Personal Agent message
+ * (Operations 6), one of the two, never both.
+ */
+export interface OperationsContent extends UnknownFields {
+  readonly operation?: Operation;
+  readonly approval?: Approval;
+}
+
+/**
+ * A web page a Company message refers to (Links 3): its HTTPS `url`, and its `title` as the
+ * message refers to it. Both are content from the Company (§10.1).
+ */
+export interface Link extends UnknownFields {
+  readonly url: string;
+  readonly title?: string;
+}
+
+/** The Links extension's content of a Company message, `extensions.links` (Links 3). */
+export interface LinksContent extends UnknownFields {
+  readonly items: readonly Link[];
+}
+
+/**
+ * A notice a Company marks apart from the rest of a message (Disclosures 3), such as an
+ * allergen warning. The Personal Agent decides whether to show it.
+ */
+export interface Disclosure extends UnknownFields {
+  readonly text: string;
+}
+
+/** The Disclosures extension's content of a Company message, `extensions.disclosures`. */
+export interface DisclosuresContent extends UnknownFields {
+  readonly items: readonly Disclosure[];
+}
+
+export const LINKS_EXTENSION = "links";
+export const LINKS_VERSION = "1";
+export const DISCLOSURES_EXTENSION = "disclosures";
+export const DISCLOSURES_VERSION = "1";
+
+/**
+ * Content extensions define in a message, keyed by extension name (§8.4). Each value is the
+ * object its extension defines; the ones this SDK defines are checked by `parseMessage`,
+ * and read with `messageOperation`, `messageApproval`, `messageLinks` and
+ * `messageDisclosures`.
+ */
+export type MessageExtensions = Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+
+/**
  * Who wrote a message (§7.4): `agent` or `human`, and for a Company message, who.
  *
  * `id`, `name` and `image` name the Company's person or AI persona; each is optional, and
@@ -305,11 +355,48 @@ export interface Message extends UnknownFields {
   readonly text?: string;
   readonly data?: Readonly<Record<string, unknown>>;
   readonly context?: Readonly<Record<string, unknown>>;
-  /** A Company message's operation, for the User's approval (Operations 4). */
-  readonly operation?: Operation;
-  /** A Personal Agent message's approval: only this approves, never `text` (Operations 6). */
-  readonly approval?: Approval;
+  /**
+   * Content extensions define, keyed by extension name (§8.4): `operations` carries an
+   * operation or an approval, `links` and `disclosures` their items. A side sends an
+   * extension's content only to a side that lists the same version; content of an extension
+   * this SDK does not define is kept as the object it is.
+   */
+  readonly extensions?: MessageExtensions;
 }
+
+/** A Company message's operation, for the User's approval (Operations 4). */
+export function messageOperation(message: Message): Operation | undefined {
+  const content = message.extensions?.[OPERATIONS_CONTENT];
+  return content === undefined ? undefined : parseOperationsContent(content).operation;
+}
+
+/** A Personal Agent message's approval: only this approves, never `text` (Operations 6). */
+export function messageApproval(message: Message): Approval | undefined {
+  const content = message.extensions?.[OPERATIONS_CONTENT];
+  return content === undefined ? undefined : parseOperationsContent(content).approval;
+}
+
+/** The web pages a Company message refers to (Links 3); none without the extension. */
+export function messageLinks(message: Message): readonly Link[] {
+  const content = message.extensions?.[LINKS_EXTENSION];
+  return content === undefined ? [] : parseLinksContent(content).items;
+}
+
+/** The notices a Company message marks apart (Disclosures 3); none without the extension. */
+export function messageDisclosures(message: Message): readonly Disclosure[] {
+  const content = message.extensions?.[DISCLOSURES_EXTENSION];
+  return content === undefined ? [] : parseDisclosuresContent(content).items;
+}
+
+/** A message's `extensions` carrying the Operations extension's content (Operations 2). */
+export function operationsContent(content: {
+  readonly operation?: Operation;
+  readonly approval?: Approval;
+}): MessageExtensions {
+  return { [OPERATIONS_CONTENT]: parseOperationsContent(content) as Record<string, unknown> };
+}
+
+const OPERATIONS_CONTENT = "operations";
 
 export type ConversationStatus = "working" | "idle" | "queued" | "closed";
 export type ConversationResponder = "agent" | "human";
@@ -958,6 +1045,67 @@ export function parseOperation(value: unknown): Operation {
   } as Operation;
 }
 
+export function parseOperationsContent(value: unknown): OperationsContent {
+  const source = nullsAbsent(value, "extensions.operations", ["operation", "approval"]);
+  const operation = source.operation === undefined ? undefined : parseOperation(source.operation);
+  const approval = source.approval === undefined ? undefined : parseApproval(source.approval);
+  if ((operation === undefined) === (approval === undefined)) {
+    throw new ProtocolValidationError(
+      "invalid_message",
+      "extensions.operations carries an operation or an approval",
+    );
+  }
+  return {
+    ...source,
+    ...(operation === undefined ? {} : { operation }),
+    ...(approval === undefined ? {} : { approval }),
+  } as OperationsContent;
+}
+
+export function parseLinksContent(value: unknown): LinksContent {
+  const source = record(value, "extensions.links");
+  const items = array(source.items, "extensions.links.items").map((item, index) => {
+    const link = nullsAbsent(item, `extensions.links.items[${index}]`, ["title"]);
+    return {
+      ...link,
+      url: httpsUrl(link.url, `extensions.links.items[${index}].url`),
+      ...(link.title === undefined
+        ? {}
+        : { title: string(link.title, `extensions.links.items[${index}].title`) }),
+    } as Link;
+  });
+  return { ...source, items } as LinksContent;
+}
+
+export function parseDisclosuresContent(value: unknown): DisclosuresContent {
+  const source = record(value, "extensions.disclosures");
+  const items = array(source.items, "extensions.disclosures.items").map((item, index) => {
+    const disclosure = record(item, `extensions.disclosures.items[${index}]`);
+    return {
+      ...disclosure,
+      text: string(disclosure.text, `extensions.disclosures.items[${index}].text`),
+    } as Disclosure;
+  });
+  return { ...source, items } as DisclosuresContent;
+}
+
+/** The extensions that define message content (§8.4), each with its parser. */
+const MESSAGE_CONTENT_PARSERS: Readonly<Record<string, (value: unknown) => unknown>> = {
+  [OPERATIONS_CONTENT]: parseOperationsContent,
+  [LINKS_EXTENSION]: parseLinksContent,
+  [DISCLOSURES_EXTENSION]: parseDisclosuresContent,
+};
+
+/** Each extension's content is an object; the ones this SDK defines, in their shape. */
+function messageExtensions(value: unknown): MessageExtensions {
+  const source = record(value, "message.extensions");
+  for (const [name, content] of Object.entries(source)) {
+    record(content, `message.extensions.${name}`);
+    MESSAGE_CONTENT_PARSERS[name]?.(content);
+  }
+  return source as MessageExtensions;
+}
+
 export function parseApproval(value: unknown): Approval {
   const source = record(value, "approval");
   return {
@@ -1044,30 +1192,16 @@ export function parseAuthor(value: unknown): Author {
 }
 
 export function parseMessage(value: unknown): Message {
-  const source = nullsAbsent(value, "message", [
-    "role",
-    "text",
-    "data",
-    "context",
-    "operation",
-    "approval",
-  ]);
+  const source = nullsAbsent(value, "message", ["role", "text", "data", "context", "extensions"]);
   const text = source.text === undefined ? undefined : string(source.text, "message.text");
   const data = optionalRecord(source.data, "message.data");
   const context = messageContext(optionalRecord(source.context, "message.context"));
-  const operation =
-    source.operation === undefined ? undefined : parseOperation(source.operation);
-  const approval = source.approval === undefined ? undefined : parseApproval(source.approval);
-  if (
-    text === undefined &&
-    data === undefined &&
-    context === undefined &&
-    operation === undefined &&
-    approval === undefined
-  ) {
+  const extensions =
+    source.extensions === undefined ? undefined : messageExtensions(source.extensions);
+  if (text === undefined && data === undefined && context === undefined && extensions === undefined) {
     throw new ProtocolValidationError(
       "invalid_message",
-      "a message requires text, data, context, operation, or approval",
+      "a message requires text, data, context, or extensions",
     );
   }
   return {
@@ -1080,8 +1214,7 @@ export function parseMessage(value: unknown): Message {
     ...(text === undefined ? {} : { text }),
     ...(data === undefined ? {} : { data }),
     ...(context === undefined ? {} : { context }),
-    ...(operation === undefined ? {} : { operation }),
-    ...(approval === undefined ? {} : { approval }),
+    ...(extensions === undefined ? {} : { extensions }),
   } as Message;
 }
 

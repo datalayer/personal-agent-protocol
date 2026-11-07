@@ -15,18 +15,22 @@
         "data": {
           "replacement_sku": "stormline-insulated-m"
         },
-        "operation": {
-          "operation_id": "exc_5Rt2",
-          "revision": "1791487200-k3Jd9Qx2mW8v",
-          "summary": "Exchange the jacket for the insulated version for USD 70.00 more.",
-          "terms": {
-            "order_id": "ord_7Hk2",
-            "price_difference": {
-              "amount": "70.00",
-              "currency": "USD"
+        "extensions": {
+          "operations": {
+            "operation": {
+              "operation_id": "exc_5Rt2",
+              "revision": "1791487200-k3Jd9Qx2mW8v",
+              "summary": "Exchange the jacket for the insulated version for USD 70.00 more.",
+              "terms": {
+                "order_id": "ord_7Hk2",
+                "price_difference": {
+                  "amount": "70.00",
+                  "currency": "USD"
+                }
+              },
+              "expires_at": "2026-10-10T18:00:00Z"
             }
-          },
-          "expires_at": "2026-10-10T18:00:00Z"
+          }
         }
       }
     },
@@ -42,9 +46,42 @@
       "type": "example.org/future-event",
       "created_at": "2026-10-10T17:03:02Z",
       "future": true
+    },
+    {
+      "id": "evt_c5",
+      "type": "message",
+      "created_at": "2026-10-10T17:03:03Z",
+      "message": {
+        "id": "msg_r2Kr",
+        "role": "company",
+        "author": {
+          "type": "agent"
+        },
+        "text": "Unopened boxes can be returned within 30 days.",
+        "extensions": {
+          "links": {
+            "items": [
+              {
+                "url": "https://example.com/help/returns",
+                "title": "Return policy"
+              }
+            ]
+          },
+          "disclosures": {
+            "items": [
+              {
+                "text": "Contains peanuts. Made in a facility that also processes tree nuts."
+              }
+            ]
+          },
+          "example.org/future-content": {
+            "anything": true
+          }
+        }
+      }
     }
   ],
-  "cursor": "evt_future",
+  "cursor": "evt_c5",
   "has_more": false,
   "status": "idle",
   "responder": "agent"

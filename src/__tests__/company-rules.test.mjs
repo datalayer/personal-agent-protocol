@@ -29,9 +29,15 @@ import {
   discoverCompany,
   mediatedSignIn,
   parseConversationEventPage,
+  messageLinks,
+  messageDisclosures,
+  messageOperation,
 } from "../../lib/index.js";
 import { CompanyApis, CompanyConfig, JOIN_COOKIE, OperationExecutors, SignInRefused, WEB_COOKIE } from "../../lib/server.js";
-import { ADA, ADA_CODE, CONFIG_OPTIONS, manzanita } from "../../lib/demo/manzanita.js";
+import { ADA, ADA_CODE, CONFIG_OPTIONS, manzanita,
+  TRACKING_LINK,
+  EXCHANGE_NOTICE,
+} from "../../lib/demo/manzanita.js";
 import { ControlledBrowser } from "./support/controlled-browser.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
@@ -621,6 +627,47 @@ test("a join can't outlive the Session it was authorized for", async () => {
 });
 
 // extension_required at an API (§3.3) ----------------------------------------------------------
+
+/** The order reply and the exchange reply, to an agent listing `extensions`. */
+async function companyReplies(extensions) {
+  const w = await world({ extensions });
+  const session = await w.start();
+  const [ada] = await deviceSignIn(w, "acct_ada");
+  const page = await w.conversations.start(w.endpoint, w.message("Where is my jacket order?"), { session, token: ada, wait: 0 });
+  const order = page.events.filter((e) => e.message?.role === "company").at(-1).message;
+  const answered = await w.conversations.send(w.endpoint, page.conversation_id, w.message("Exchange it for something warmer"), {
+    session,
+    token: ada,
+    cursor: page.cursor,
+    wait: 0,
+  });
+  const exchange = answered.events.filter((e) => e.message?.role === "company").at(-1).message;
+  return [order, exchange];
+}
+
+test("extension content goes only to an agent that lists the extension", async () => {
+  // Links and Disclosures content in `extensions`, to an agent that lists the same version,
+  // and to no other (§8.4, Links 2, 3, Disclosures 2, 3).
+  const [order, exchange] = await companyReplies(["operations", "links", "disclosures"]);
+  assert.deepEqual(messageLinks(order), [TRACKING_LINK]);
+  assert.deepEqual(order.extensions, { links: { items: [TRACKING_LINK] } });
+  assert.deepEqual(messageDisclosures(order), []);
+  assert.ok(!order.text.includes(EXCHANGE_NOTICE));
+  assert.deepEqual(messageDisclosures(exchange), [{ text: EXCHANGE_NOTICE }]);
+  assert.ok(messageOperation(exchange) !== undefined);
+  assert.deepEqual(messageLinks(exchange), []);
+  assert.ok(!exchange.text.includes(EXCHANGE_NOTICE));
+  assert.deepEqual(Object.keys(exchange.extensions).sort(), ["disclosures", "operations"]);
+
+  // An agent that lists neither gets no link, and the notice in `text` (Disclosures 2).
+  const [plainOrder, plainExchange] = await companyReplies(["operations"]);
+  assert.deepEqual(messageLinks(plainOrder), []);
+  assert.equal(plainOrder.extensions, undefined);
+  assert.deepEqual(messageDisclosures(plainExchange), []);
+  assert.ok(messageOperation(plainExchange) !== undefined);
+  assert.deepEqual(Object.keys(plainExchange.extensions), ["operations"]);
+  assert.ok(plainExchange.text.endsWith(EXCHANGE_NOTICE));
+});
 
 test("extension_required at an API is in the challenge", async () => {
   const w = await world({ extensions: [] });

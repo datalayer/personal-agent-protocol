@@ -105,6 +105,13 @@ export function operationFrom(payload: unknown): Operation {
       candidate = (structured as Record<string, unknown>).operation;
     } else if ("operation" in source) {
       candidate = source.operation;
+    } else if (typeof source.extensions === "object" && source.extensions !== null) {
+      // A conversation message: `extensions.operations.operation` (Operations 4).
+      const operations = (source.extensions as Record<string, unknown>).operations;
+      candidate =
+        typeof operations === "object" && operations !== null
+          ? (operations as Record<string, unknown>).operation
+          : undefined;
     }
   }
   if (candidate === undefined || candidate === null) {

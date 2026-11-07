@@ -415,8 +415,9 @@ def _render_page(payload: dict) -> None:
         if message:
             who = f"{message.get('role', '?')}/{(message.get('author') or {}).get('type')}"
             typer.echo(f"[{who}] {message.get('text') or json.dumps(message.get('data'))}")
-            if message.get("operation"):
-                operation = message["operation"]
+            operations = (message.get("extensions") or {}).get("operations") or {}
+            if operations.get("operation"):
+                operation = operations["operation"]
                 typer.echo(
                     f"  operation {operation['operation_id']} revision {operation['revision']}: "
                     f"{operation['summary']}"

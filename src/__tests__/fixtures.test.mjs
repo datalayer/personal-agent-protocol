@@ -23,6 +23,10 @@ import {
   parseProtectedResourceMetadata,
   parseOperation,
   parseTokenResponse,
+  messageOperation,
+  messageApproval,
+  messageLinks,
+  messageDisclosures,
 } from "../../lib/index.js";
 
 const fixtures = new URL("../../protocol/fixtures/", import.meta.url);
@@ -63,9 +67,18 @@ test("shared client, conversation, and operation fixtures", () => {
   assert.equal(client.extensions["example.org/preferences"].mode, "compact");
   assert.equal(operation.revision, "1791487200-k3Jd9Qx2mW8v");
   assert.equal("user_approval_required" in operation, false);
-  assert.deepEqual(page.events[0].message.operation, operation);
+  // The operation is the Operations extension's content, `extensions.operations` (§8.4).
+  assert.deepEqual(messageOperation(page.events[0].message), operation);
+  assert.deepEqual(page.events[0].message.extensions, { operations: { operation: fixture("operation-valid.json") } });
   assert.equal(page.events[2].type, "example.org/future-event");
   assert.equal(page.events[2].future, true);
+  // Links and Disclosures content, and an extension's content this SDK does not define.
+  const linked = page.events[3].message;
+  assert.equal(messageOperation(linked), undefined);
+  assert.equal(messageApproval(linked), undefined);
+  assert.deepEqual(messageLinks(linked), [{ url: "https://example.com/help/returns", title: "Return policy" }]);
+  assert.deepEqual(messageDisclosures(linked), [{ text: "Contains peanuts. Made in a facility that also processes tree nuts." }]);
+  assert.deepEqual(linked.extensions["example.org/future-content"], { anything: true });
 });
 
 test("the JWKS, OAuth metadata, and token response fixtures parse", () => {
@@ -113,8 +126,8 @@ test("client metadata requires the same domain for security URLs", () => {
 test("optional members serialized as null read as absent, as Python's models do", () => {
   const operation = parseOperation({ ...fixture("operation-valid.json"), terms: null });
   assert.equal("terms" in operation, false);
-  // `approval` too: a company's message with `approval: null` is a message, not a refusal.
-  const message = parseMessage({ id: "msg_1", author: { type: "agent" }, role: null, text: "Hi", data: null, context: null, operation: null, approval: null });
+  // `extensions` too: a company's message with `extensions: null` is a message, not a refusal.
+  const message = parseMessage({ id: "msg_1", author: { type: "agent" }, role: null, text: "Hi", data: null, context: null, extensions: null });
   assert.deepEqual(message, { id: "msg_1", author: { type: "agent" }, text: "Hi" });
   // A null where a member is required is still refused.
   assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), summary: null }));

@@ -90,13 +90,41 @@ or `human` for the words a person typed themselves in a Direct Conversation. A
 company built with the SDK writes its people's replies with
 `staff_reply(..., author_id=..., author_name=..., author_image=...)`.
 
+## Extension content in messages
+
+Content an extension defines travels in a message's `extensions`, keyed by the
+extension's name (spec 8.4): the Operations extension's `operation` and
+`approval` in `extensions.operations`, the pages a company message refers to in
+`extensions.links` (the Links extension, version 1), and the notices it marks
+apart, such as an allergen warning, in `extensions.disclosures` (the
+Disclosures extension, version 1). A message needs `text`, `data`, `context`
+or `extensions`.
+
+- Python reads them as properties: `message.operation`, `message.approval`,
+  `message.links` (`Link`: `url`, `title`) and `message.disclosures`
+  (`Disclosure`: `text`); a personal agent approves with
+  `Message(..., extensions=operations_content(approval=approval))`. TypeScript
+  reads them with `messageOperation`, `messageApproval`, `messageLinks` and
+  `messageDisclosures`, and builds the approval with
+  `operationsContent({ approval })`.
+- Both SDKs check the three extensions' content by its shape (`OperationsContent`
+  carries one of `operation` and `approval`; a link's `url` is HTTPS) and keep any
+  other extension's content as the object it is.
+- A side sends an extension's content only to a side that lists the same
+  version. The reference companies send links and disclosures when
+  `CompanyConfig.links` and `CompanyConfig.disclosures` are set (Manzanita sets
+  both) and the agent's client metadata lists the extension; without the
+  Disclosures extension the notice goes in `text`, and without Links the page is
+  left out. A personal agent lists what its host can show
+  (`AgentIdentity(extensions=("operations", "links", "disclosures"))`).
+
 ## Who wrote each reply: `PapReplies`
 
 A company's message is written by its agent or by one of its people
 (`author`), apart from where the conversation stands (`status`) and who
 answers it now (`responder`). A host shows them apart with `PapReplies`
 (`personal_agent_protocol.ui`), of type
-`application/vnd.datalayer.pap.replies+json`, version 3, made with
+`application/vnd.datalayer.pap.replies+json`, version 4, made with
 `PapReplies.of(company, conversation_id, messages, status=..., responder=...)`
 from the messages a page of events carried.
 
@@ -107,12 +135,18 @@ from the messages a page of events carried.
 - Each reply says who wrote it (`author`: `agent` or `human`) and, when the
   company gave one, the writer's `name` (version 3), shown as *one of its
   people (Rosa)*.
+- Each reply carries the pages it refers to (`links`, each a `url` and a
+  `title`; a page shows the title with the URL's host, `PapLink.host` or
+  `papLinkHost`, never the title alone) and the notices it marks apart
+  (`disclosures`, shown in full, apart from the text), version 4. Without the
+  extensions both are empty.
 
 - Only the company's own messages with text are replies, each verbatim; a
   message carrying only data is the model's to read. With none, `of` returns
   `None` and nothing is drawn.
 - `text()` says each on its line: *shop.example, its agent: …* or
-  *shop.example, one of its people: …*.
+  *shop.example, one of its people: …*, then each notice (*Notice: …*) and each
+  link with its host (*Link: Return policy (shop.example)*).
 - The personal agent's own messages are `author.type: agent` (PAP-8.8-01): only
   what the person typed themselves, in a Direct Conversation, is `human`.
 

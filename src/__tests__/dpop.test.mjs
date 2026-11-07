@@ -331,7 +331,7 @@ test("a Bearer token ignores a nonce challenge", async () => {
 
 test("a restarted Session sends a fresh proof, and a redirect is refused", async () => {
   const answers = [
-    json({ error: "invalid_session" }, 400),
+    json({ error: "session_ended" }, 400),
     new Response(null, { status: 302, headers: { Location: "https://elsewhere.example/" } }),
   ];
   const { client, sent, reactor } = world(() => answers.shift());

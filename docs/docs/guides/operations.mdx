@@ -15,7 +15,7 @@ and responds as it would have without operations.
 | --- | --- | --- |
 | API | HTTP 403 with `error: approval_required` and `operation` | The same request with the `Poppy-Approval` header |
 | MCP | An error result with `structuredContent.operation` | The same call with `_meta["personalagentprotocol.org/approval"]` |
-| Conversation | A company message's `operation` | A message with `approval` |
+| Conversation | A company message's `extensions.operations.operation` (`message.operation`, `messageOperation`) | A message whose `extensions.operations.approval` is the approval (`operations_content(approval=...)`, `operationsContent({ approval })`) |
 
 An operation is `operation_id`, an opaque `revision`, `summary`, optional
 `terms`, and `expires_at`. It has no state, no URL, and no result: the answer to
@@ -67,7 +67,7 @@ const sent = await operations.send((approval) => api.call("POST", url, { session
   something like it. A company that lets users allow an action in advance doesn't
   return an operation for it.
 - Text from the company is never the user's approval, and in a conversation only
-  a message's `approval` approves, whatever its `text` says.
+  a message's `extensions.operations.approval` approves, whatever its `text` says.
 - Save the request that returned the operation, and send exactly that. Don't
   have the model write it again.
 

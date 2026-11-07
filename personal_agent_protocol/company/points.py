@@ -43,7 +43,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from pydantic import SecretStr
 from reactor import define_contribution_point  # type: ignore[import-untyped]
 
-from ..models import ClientMetadata, JsonWebKeySet, Operation
+from ..models import ClientMetadata, JsonWebKeySet, Link, Operation
 from ..reactor import Clock, SystemClock
 from .store import (
     REPLAY,
@@ -179,6 +179,13 @@ class Reply:
     user_requested: str | None = None
     #: The AI persona writing, when the company names one: `id`, `name`, `image` (§7.4).
     persona: Mapping[str, str] | None = None
+    #: The web pages the reply refers to (Links 3): sent in `extensions.links` to an agent
+    #: that lists the Links extension, and to no other.
+    links: Sequence[Link] | None = None
+    #: Notices the user needs to see, such as an allergen warning (Disclosures 3): sent in
+    #: `extensions.disclosures` to an agent that lists the Disclosures extension, and in
+    #: `text` to any other.
+    disclosures: Sequence[str] | None = None
 
 
 @runtime_checkable

@@ -34,6 +34,9 @@ import {
   parseMessage,
   parseOperation,
   termsDifferences,
+  operationsContent,
+  messageApproval,
+  messageOperation,
 } from "../../lib/index.js";
 
 const fixtures = new URL("../../protocol/fixtures/", import.meta.url);
@@ -110,7 +113,7 @@ test("fields of the old shape mean nothing: the user is asked all the same", asy
 
 test("the operation from each interface", () => {
   const operation = returned();
-  const message = parseMessage({ id: "msg_1", author: { type: "agent" }, role: "company", operation: wire() });
+  const message = parseMessage({ id: "msg_1", author: { type: "agent" }, role: "company", extensions: { operations: { operation: wire() } } });
   for (const payload of [
     { error: "approval_required", operation: wire() },
     { isError: true, structuredContent: { operation: wire() } },
@@ -126,9 +129,17 @@ test("the operation from each interface", () => {
 
 test("a message with only an approval is a message, and text alone approves nothing", () => {
   const approval = { operation_id: "exc_5Rt2", revision: "r1" };
-  assert.deepEqual(parseMessage({ id: "msg_1", author: { type: "agent" }, approval }).approval, approval);
+  // The approval travels in `extensions.operations` (spec 8.4, Operations 2, 6).
+  const message = parseMessage({ id: "msg_1", author: { type: "agent" }, extensions: operationsContent({ approval }) });
+  assert.deepEqual(message.extensions, { operations: { approval } });
+  assert.deepEqual(messageApproval(message), approval);
+  assert.equal(messageOperation(message), undefined);
   assert.throws(() => parseMessage({ id: "msg_2", author: { type: "agent" } }), ProtocolValidationError);
-  assert.equal("approval" in parseMessage({ id: "msg_3", author: { type: "human" }, text: "I approve" }), false);
+  // A top-level `approval` is no field of a message: it is ignored, and approves nothing.
+  assert.equal(messageApproval(parseMessage({ id: "msg_3", author: { type: "human" }, text: "I approve", approval })), undefined);
+  // `extensions.operations` carries an operation or an approval, never both or neither.
+  assert.throws(() => parseMessage({ id: "msg_4", author: { type: "agent" }, extensions: { operations: {} } }), ProtocolValidationError);
+  assert.throws(() => parseMessage({ id: "msg_5", author: { type: "agent" }, extensions: { operations: { approval, operation: wire() } } }), ProtocolValidationError);
 });
 
 test("operations are used only when both sides list version 2", () => {

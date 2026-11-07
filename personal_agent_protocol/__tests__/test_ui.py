@@ -320,12 +320,24 @@ REPLIES_FIXTURE = Path(__file__).parents[2] / "protocol" / "fixtures" / "pap-rep
 
 
 def _message(
-    id_: str, author: str, text: str | None, role: str = "company", name: str | None = None
+    id_: str,
+    author: str,
+    text: str | None,
+    role: str = "company",
+    name: str | None = None,
+    extensions: dict[str, Any] | None = None,
 ) -> Any:
     from personal_agent_protocol.models import Author, Message
 
     data = None if text else {"order": "1043"}
-    return Message(id=id_, author=Author(type=author, name=name), role=role, text=text, data=data)
+    return Message(
+        id=id_,
+        author=Author(type=author, name=name),
+        role=role,
+        text=text,
+        data=data,
+        extensions=extensions,
+    )
 
 
 def _replies() -> PapReplies:
@@ -333,8 +345,19 @@ def _replies() -> PapReplies:
         "manzanita.example",
         "conv_4Kp9",
         [
-            _message("msg_1", "agent", "Your Ridge Jacket shipped on Tuesday."),
-            _message("msg_2", "human", "I can exchange it for you.", name="Rosa"),
+            _message(
+                "msg_1",
+                "agent",
+                "Your Ridge Jacket shipped on Tuesday.",
+                extensions={"links": {"items": [TRACKING]}},
+            ),
+            _message(
+                "msg_2",
+                "human",
+                "I can exchange it for you.",
+                name="Rosa",
+                extensions={"disclosures": {"items": [{"text": NOTICE}]}},
+            ),
         ],
         status="idle",
         responder="human",
@@ -343,21 +366,43 @@ def _replies() -> PapReplies:
     return replies
 
 
+TRACKING = {
+    "url": "https://manzanita.example/orders/ord_7Hk2/tracking",
+    "title": "Tracking for order ord_7Hk2",
+}
+NOTICE = "Exchanged items ship once the original jacket is received."
+
+
 def test_replies_are_the_committed_display_each_with_who_wrote_it() -> None:
     # The TypeScript SDK reads the same file (src/__tests__/ui.test.mjs).
     wire = _replies().wire().model_dump(mode="json")
     assert wire == json.loads(REPLIES_FIXTURE.read_text())
-    assert wire["type"] == PAP_REPLIES_TYPE and wire["version"] == 3
+    assert wire["type"] == PAP_REPLIES_TYPE and wire["version"] == 4
     assert wire["id"] == "conv_4Kp9-msg_1-replies"
     # The conversation the replies are in: where the person's own words open a Direct Conversation.
     assert wire["data"]["conversation"] == "conv_4Kp9"
     assert [reply["author"] for reply in wire["data"]["replies"]] == ["agent", "human"]
     # A person the company names is named on the page (§7.4).
     assert wire["data"]["replies"][1]["name"] == "Rosa"
+    # The pages a reply refers to and the notices it marks apart (version 4): a link with
+    # its host, a disclosure in full, apart from the text.
+    assert wire["data"]["replies"][0]["links"] == [TRACKING]
+    assert wire["data"]["replies"][0]["disclosures"] == []
+    assert wire["data"]["replies"][1]["links"] == []
+    assert wire["data"]["replies"][1]["disclosures"] == [NOTICE]
     assert wire["text"] == (
         "manzanita.example, its agent: Your Ridge Jacket shipped on Tuesday.\n"
-        "manzanita.example, one of its people (Rosa): I can exchange it for you."
+        "  Link: Tracking for order ord_7Hk2 (manzanita.example)\n"
+        "manzanita.example, one of its people (Rosa): I can exchange it for you.\n"
+        f"  Notice: {NOTICE}"
     )
+
+
+def test_a_reply_without_the_extensions_has_no_links_and_no_disclosures() -> None:
+    shown = PapReplies.of("shop.example", "conv_1", [_message("msg_1", "agent", "Hello")])
+    assert shown is not None
+    assert (shown.replies[0].links, shown.replies[0].disclosures) == ([], [])
+    assert shown.text() == "shop.example, its agent: Hello"
 
 
 def test_only_the_companys_own_words_are_replies() -> None:
@@ -385,6 +430,9 @@ def test_only_the_companys_own_words_are_replies() -> None:
         {"replies": [{"author": "model", "text": "Hello"}]},
         {"replies": [{"author": {"type": "agent"}, "text": " "}]},
         {"replies": [{"author": {"type": "agent"}, "text": "Hello", "token": "secret"}]},
+        {"replies": [{"author": "agent", "text": "Hello", "links": [{"url": "http://x.example/"}]}]},
+        {"replies": [{"author": "agent", "text": "Hello", "links": [{"url": "https://x.example/", "title": ""}]}]},
+        {"replies": [{"author": "agent", "text": "Hello", "disclosures": [" "]}]},
         {"token": "secret"},
     ],
 )
@@ -415,7 +463,7 @@ async def test_the_core_plugin_declares_the_replies_type() -> None:
     platform, http = build_pap_reactor()
     try:
         registry = platform.display_types()
-        assert registry.get(PAP_REPLIES_TYPE, 3) is PapReplies
+        assert registry.get(PAP_REPLIES_TYPE, 4) is PapReplies
         shown = registry.parse(json.loads(REPLIES_FIXTURE.read_text()))
         assert shown.tool_meta()["reactor.ui/display"]["data"]["responder"] == "human"
     finally:

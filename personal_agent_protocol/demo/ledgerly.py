@@ -51,7 +51,7 @@ from ..company import (
 from ..conversations import ConversationClient, generate_message_id
 from ..device import DeviceSignInClient
 from ..discovery import DiscoveryClient
-from ..models import Approval, Author, DiscoveredCompany, Message, Operation
+from ..models import Approval, Author, DiscoveredCompany, Message, Operation, operations_content
 from ..sessions import AccessToken, PapSession, SessionClient, generate_pairwise_user_id
 from ..transport import SessionHttpClient
 from .kit import (
@@ -199,7 +199,7 @@ class LedgerlyAsPersonalAgent:
             Message(
                 id=generate_message_id(self.reactor),
                 author=Author(type="agent"),
-                approval=Approval(operation_id=proposal.operation_id, revision=proposal.revision),
+                extensions=operations_content(approval=Approval(operation_id=proposal.operation_id, revision=proposal.revision)),
             ),
             session=link.session,  # type: ignore[arg-type]
             token=link.token,

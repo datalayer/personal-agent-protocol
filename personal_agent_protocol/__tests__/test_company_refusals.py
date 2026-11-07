@@ -25,7 +25,7 @@ from personal_agent_protocol import (
 from personal_agent_protocol.company import CLIENT_POLICIES
 from personal_agent_protocol.company.store import DEVICE, PendingDevice
 from personal_agent_protocol.conversations import generate_message_id
-from personal_agent_protocol.models import Approval
+from personal_agent_protocol.models import Approval, operations_content
 from personal_agent_protocol.transport import session_headers
 
 from .test_company_end_to_end import TENANT, World
@@ -205,7 +205,7 @@ async def test_a_revised_operation_answers_a_new_revision_and_is_never_performed
         message = Message(
             id=generate_message_id(world.reactor),
             author=Author(type="agent"),
-            approval=Approval(operation_id=operation.operation_id, revision=operation.revision),
+            extensions=operations_content(approval=Approval(operation_id=operation.operation_id, revision=operation.revision)),
         )
         page_ = await send(
             endpoint, page.conversation_id, message, session=world.session, token=token, wait=0

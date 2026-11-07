@@ -63,13 +63,24 @@ import {
   type ToolResult,
   type Turn,
 } from "../company/index.js";
-import type { Operation } from "../models.js";
+import type { Link, Operation } from "../models.js";
 import { Clocks, type Clock, type PapCoreOptions } from "../reactor.js";
 import type { SecretValue } from "../secret.js";
 
 export const DOMAIN = "manzanita.example";
 export const ADA = { email: "ada@example.com", password: "correct horse battery staple" } as const;
 export const ADA_CODE = "246810";
+/** The page an order reply refers to, sent as a link to an agent that lists Links (Links 3). */
+export const TRACKING_LINK: Link = {
+  url: `https://${DOMAIN}/orders/ord_7Hk2/tracking`,
+  title: "Tracking for order ord_7Hk2",
+};
+/**
+ * The notice an exchange reply carries, as a disclosure to an agent that lists Disclosures,
+ * in `text` to any other (Disclosures 2, 3).
+ */
+export const EXCHANGE_NOTICE = "Exchanged items ship once the original jacket is received.";
+
 export const ORDER = {
   order_id: "ord_7Hk2",
   item: "Ridge Jacket, size M",
@@ -81,6 +92,8 @@ export const CONFIG_OPTIONS: CompanyConfigOptions = {
   domain: DOMAIN,
   scopes: ["orders:read", "orders:write"],
   writeScopes: ["orders:write"],
+  links: true,
+  disclosures: true,
   mediatedFields: [
     ["email", "Email", false],
     ["password", "Password", true],
@@ -197,6 +210,7 @@ export class ManzanitaAgent implements CompanyAgent {
         {
           text: "The insulated Ridge Jacket is in stock. Here is the exchange.",
           operation: EXCHANGE,
+          disclosures: [EXCHANGE_NOTICE],
         },
       ];
     }
@@ -204,7 +218,7 @@ export class ManzanitaAgent implements CompanyAgent {
       // Signed in, but not allowed to read orders: ask for the scope, say nothing.
       return [{ authorization: ["insufficient_scope", "orders:read"] }];
     }
-    return [{ text: "Your order ord_7Hk2: Ridge Jacket, size M, delivered.", data: { ...ORDER } }];
+    return [{ text: "Your order ord_7Hk2: Ridge Jacket, size M, delivered.", data: { ...ORDER }, links: [TRACKING_LINK] }];
   }
 }
 

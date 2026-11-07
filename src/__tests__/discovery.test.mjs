@@ -29,6 +29,7 @@ import {
   parseTokenResponse,
   resourceMetadata,
   serviceResource,
+  messageOperation,
 } from "../../lib/index.js";
 
 const RESOURCE_METADATA = "/.well-known/oauth-protected-resource";
@@ -408,7 +409,7 @@ test("parses shared client, conversation, and operation fixtures", async () => {
   assert.equal(client.extensions["example.org/preferences"].mode, "compact");
   assert.equal(operation.revision, "1791487200-k3Jd9Qx2mW8v");
   assert.equal("user_approval_required" in operation, false);
-  assert.deepEqual(page.events[0].message.operation, operation);
+  assert.deepEqual(messageOperation(page.events[0].message), operation);
   assert.equal(page.events[2].type, "example.org/future-event");
   assert.equal(page.events[2].future, true);
 });

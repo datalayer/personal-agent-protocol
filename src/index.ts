@@ -131,6 +131,7 @@ export {
 export {
   discoverCompany,
   excludedTasks,
+  fetchSkill,
   resourceMetadata,
   serviceMetadata,
   serviceResource,
@@ -307,6 +308,7 @@ export {
   companyIdentifier,
   companyIssuer,
   companyResource,
+  companySkills,
   knownResponder,
   knownStatus,
   listsResource,
@@ -322,6 +324,9 @@ export {
   parseExcludedTasks,
   redirectUriMatches,
   usableReferences,
+  usableSkills,
+  SKILL_INDEX_SCHEMA,
+  SKILL_TYPES,
   parseClientMetadata,
   parseConversationEvent,
   parseConversationEventPage,
@@ -377,6 +382,7 @@ export {
   type Approval,
   type Operation,
   type Organization,
+  type SkillEntry,
   type WebDescriptor,
 } from "./models.js";
 export {

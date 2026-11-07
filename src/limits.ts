@@ -313,12 +313,25 @@ export async function readBoundedBody(
     readonly tooLarge: () => Error;
   },
 ): Promise<string> {
+  return new TextDecoder("utf-8", { fatal: false }).decode(await readBoundedBytes(response, options));
+}
+
+/** The body's bytes, as `readBoundedBody` reads them: for an artifact whose digest is checked. */
+export async function readBoundedBytes(
+  response: Response,
+  options: {
+    readonly maxBytes: number;
+    readonly timeoutMs: number;
+    readonly startedAt: number;
+    readonly tooLarge: () => Error;
+  },
+): Promise<Uint8Array> {
   const declared = response.headers.get("content-length");
   if (declared !== null && /^\d+$/.test(declared) && Number(declared) > options.maxBytes) {
     throw options.tooLarge();
   }
   const reader = response.body?.getReader();
-  if (reader === undefined) return "";
+  if (reader === undefined) return new Uint8Array(0);
   const chunks: Uint8Array[] = [];
   let total = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -349,7 +362,7 @@ export async function readBoundedBody(
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder("utf-8", { fatal: false }).decode(body);
+  return body;
 }
 
 /**

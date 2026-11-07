@@ -94,6 +94,8 @@ class DeviceSignInStart(ProtocolModel):
     reference: str = Field(pattern=r"^device_[A-Za-z0-9_-]{22,}$")
     organization_name: str
     organization_domain: str
+    #: The company's `organization.logo_uri`, shown next to its name and domain (§3.1).
+    organization_logo: str | None = None
     user_code: str
     verification_uri: str
     verification_uri_complete: str | None = None
@@ -251,6 +253,7 @@ class DeviceSignInClient:
             reference=reference,
             organization_name=organization.name,
             organization_domain=organization.domain,
+            organization_logo=organization.logo_uri,
             user_code=authorization.user_code,
             verification_uri=authorization.verification_uri,
             verification_uri_complete=authorization.verification_uri_complete,

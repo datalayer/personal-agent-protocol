@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -22,6 +23,7 @@ from .models import (
     ExcludedTasks,
     OAuthServerMetadata,
     ProtectedResourceMetadata,
+    SkillEntry,
     protected_resource_metadata_url,
 )
 from .reactor import (
@@ -64,6 +66,7 @@ class DiscoveryClient:
         allow_private_networks: bool = False,
         max_redirects: int = 3,
         max_response_bytes: int = 100 * 1024,
+        max_skill_bytes: int = 4 * 1024 * 1024,
         timeout: float = 5.0,
         cache_bounds: CacheBounds | None = None,
     ) -> None:
@@ -81,6 +84,7 @@ class DiscoveryClient:
         self._owned_http = owned_http
         self._max_redirects = max_redirects
         self._max_bytes = max_response_bytes
+        self._max_skill_bytes = max_skill_bytes
         self._timeout = timeout
         self._cache = MetadataCache(reactor, cache_bounds)
 
@@ -313,9 +317,35 @@ class DiscoveryClient:
         await self._cache.put(key, value, final_url=str(final_url), headers=headers)
         return value, final_url
 
-    async def _fetch_json(  # noqa: C901 - explicit trust-boundary branches
-        self, url: str
-    ) -> tuple[object, httpx.URL, dict[str, str]]:
+    async def _fetch_json(self, url: str) -> tuple[object, httpx.URL, dict[str, str]]:
+        content, final_url, headers = await self._fetch(url, max_bytes=self._max_bytes)
+        content_type = headers.get("content-type", "").split(";", 1)[0].strip()
+        if content_type not in {"application/json", "application/poppy+json"}:
+            raise DiscoveryError("invalid_content_type", "Discovery response must be JSON")
+        return loads_strict(content), final_url, headers
+
+    async def fetch_skill(self, skill: SkillEntry) -> bytes:
+        """The artifact of one of a Company's skills, its `digest` verified (§9.4).
+
+        `skill` is one of `DiscoveredCompany.skills`: its `url` is resolved and HTTPS, and
+        it is fetched as other public metadata is, through the URL safety policy, redirects
+        included, with no credential and no Session header, at most `max_skill_bytes`. The
+        bytes are the artifact as published: the `SKILL.md` of a `skill-md` entry, or an
+        archive, whose extraction, with the proposal's archive safety checks, is the host's.
+        A digest that differs is `skill_digest_mismatch`. A skill is Company content
+        (§10.1): its scripts run only when the host's configuration allows.
+        """
+
+        content, _, _ = await self._fetch(skill.url, max_bytes=self._max_skill_bytes)
+        if f"sha256:{hashlib.sha256(content).hexdigest()}" != skill.digest:
+            raise DiscoveryError(
+                "skill_digest_mismatch", "The skill's content is not what its digest names"
+            )
+        return content
+
+    async def _fetch(self, url: str, *, max_bytes: int) -> tuple[bytes, httpx.URL, dict[str, str]]:
+        """A public document at `url`, redirects followed within the address rules (§3)."""
+
         transport = first_contribution(self.reactor, DISCOVERY_TRANSPORTS, "discovery transport")
         policy = first_contribution(self.reactor, URL_SAFETY_POLICIES, "URL safety policy")
         if not isinstance(transport, DiscoveryTransport):
@@ -329,9 +359,7 @@ class DiscoveryClient:
                 raise TypeError("PAP URL safety policy must return the ApprovedUrl it checked")
             response = await transport.get(
                 current,
-                fetch=MetadataFetch(
-                    approved=approved, max_bytes=self._max_bytes, timeout=self._timeout
-                ),
+                fetch=MetadataFetch(approved=approved, max_bytes=max_bytes, timeout=self._timeout),
             )
 
             if response.is_redirect:
@@ -349,11 +377,8 @@ class DiscoveryClient:
                     "Discovery endpoint returned an unsuccessful status",
                     status_code=response.status_code,
                 )
-            content_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
-            if content_type not in {"application/json", "application/poppy+json"}:
-                raise DiscoveryError("invalid_content_type", "Discovery response must be JSON")
-            if len(response.content) > self._max_bytes:
+            if len(response.content) > max_bytes:
                 raise DiscoveryError("response_too_large", "Discovery response exceeds size limit")
-            return loads_strict(response.content), httpx.URL(response.url), response.headers
+            return response.content, httpx.URL(response.url), response.headers
 
         raise AssertionError("redirect loop exited unexpectedly")

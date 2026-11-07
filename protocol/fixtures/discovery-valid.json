@@ -2,7 +2,8 @@
   "protocol_version": "0.3",
   "organization": {
     "name": "Example Company",
-    "domain": "example.com"
+    "domain": "example.com",
+    "logo_uri": "https://example.com/logo.png"
   },
   "auth": {
     "issuer": "https://auth.example.com",
@@ -77,5 +78,17 @@
         "orders:read"
       ]
     }
+  },
+  "skill_index": {
+    "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+    "skills": [
+      {
+        "name": "manage-bookings",
+        "description": "Manage the User's bookings with this Company.",
+        "type": "skill-md",
+        "url": "https://cdn.example.com/skills/manage-bookings/SKILL.md",
+        "digest": "sha256:1b2a8cde934e632f7e14fa080a627ad7191e29d412d2b8a7aa07d9c9ab2f475e"
+      }
+    ]
   }
 }

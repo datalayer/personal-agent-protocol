@@ -78,6 +78,40 @@ export function redirectUriMatches(registered: string, given: string): boolean {
 export interface Organization extends UnknownFields {
   readonly name: string;
   readonly domain: string;
+  /**
+   * An HTTPS URL of the Company's logo (§3.1), named as in client metadata (§4.1). An agent
+   * shows it next to the Company's name and domain, never in place of the domain, and serves
+   * its own copy (guides, *Finding a company*).
+   */
+  readonly logo_uri?: string;
+}
+
+/**
+ * The Agent Skills discovery draft revision `skill_index` pins (§9.4): the `$schema` an index
+ * names. An index with another, or none, is ignored; the rest of poppy.json is used.
+ */
+export const SKILL_INDEX_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json";
+/**
+ * The artifact types the SDK recognizes (§9.4): a single `SKILL.md`, or an archive with
+ * supporting files. An entry of another type is skipped.
+ */
+export const SKILL_TYPES: ReadonlySet<string> = new Set(["skill-md", "archive"]);
+const SKILL_DIGEST = /^sha256:[0-9a-f]{64}$/u;
+
+/**
+ * A skill a Company publishes for Personal Agents acting for the User there (§9.4).
+ *
+ * `url` is resolved against poppy.json's final URL (RFC 3986 §5) and is HTTPS; `digest` is the
+ * SHA-256 of the artifact's raw bytes, `sha256:` and 64 lowercase hex characters, which
+ * `fetchSkill` verifies. A skill is Company content (§10.1): it grants no account access,
+ * changes no scopes, and supplies no User approval.
+ */
+export interface SkillEntry extends UnknownFields {
+  readonly name: string;
+  readonly description: string;
+  readonly type: string;
+  readonly url: string;
+  readonly digest: string;
 }
 
 export interface ScopeOption extends UnknownFields {
@@ -199,6 +233,11 @@ export interface DiscoveryDocument extends UnknownFields {
   readonly feedback?: FeedbackDescriptor;
   readonly excluded_tasks?: ExcludedTasksDescriptor;
   readonly extensions: Readonly<Record<string, ExtensionDescriptor>>;
+  /**
+   * The Company's Agent Skills discovery index, as published (§3.1, §9.4); read it through
+   * `usableSkills`, which skips what this SDK does not recognize.
+   */
+  readonly skill_index?: Readonly<Record<string, unknown>>;
 }
 
 /** The issuer's RFC 8414 metadata, with the fields this protocol requires (§3.2). */
@@ -471,6 +510,42 @@ export function companyResource(company: DiscoveredCompany): string {
   return `https://${company.document.organization.domain}`;
 }
 
+/** The Company's skills this SDK can use (§9.4), resolved against `discoveryUrl`. */
+export function companySkills(company: DiscoveredCompany): SkillEntry[] {
+  return usableSkills(company.document, company.discoveryUrl);
+}
+
+/**
+ * The skills of `skill_index` this SDK can use (§9.4), each `url` resolved.
+ *
+ * Nothing when there is no index or its `$schema` is not `SKILL_INDEX_SCHEMA`; an entry whose
+ * `type` is unknown, which lacks a field, whose `digest` is malformed, or whose `url`, resolved
+ * against `baseUrl` (the final poppy.json URL), is not HTTPS is skipped. The guides suggest
+ * telling the User when that mattered for the task.
+ */
+export function usableSkills(document: DiscoveryDocument, baseUrl: string): SkillEntry[] {
+  const index = document.skill_index;
+  if (index === undefined || index === null || typeof index !== "object") return [];
+  if (index.$schema !== SKILL_INDEX_SCHEMA || !Array.isArray(index.skills)) return [];
+  const usable: SkillEntry[] = [];
+  for (const raw of index.skills as unknown[]) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const entry = raw as Record<string, unknown>;
+    const { name, description, type, url, digest } = entry;
+    if (typeof type !== "string" || !SKILL_TYPES.has(type)) continue;
+    if (typeof name !== "string" || !name || typeof description !== "string" || !description) continue;
+    if (typeof url !== "string" || !url || typeof digest !== "string" || !SKILL_DIGEST.test(digest)) continue;
+    let resolved: string;
+    try {
+      resolved = httpsUrl(new URL(url, baseUrl).toString(), "skill url");
+    } catch {
+      continue;
+    }
+    usable.push({ ...entry, name, description, type, url: resolved, digest });
+  }
+  return usable;
+}
+
 /**
  * Who the Company is (§3.2): its issuer, else `https://{organization.domain}`.
  *
@@ -708,6 +783,9 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     ...organizationSource,
     name: string(organizationSource.name, "organization.name"),
     domain: domain(organizationSource.domain, "organization.domain"),
+    ...(organizationSource.logo_uri === undefined || organizationSource.logo_uri === null
+      ? {}
+      : { logo_uri: httpsUrl(organizationSource.logo_uri, "organization.logo_uri") }),
   } as Organization;
 
   let auth: AuthCapabilities | undefined;
@@ -811,9 +889,10 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
   }
 
   if (!agent && apis.length === 0 && !web) {
+    // At least one of the three, not exactly one (§3.1).
     throw new ProtocolValidationError(
       "missing_interface",
-      "one of agent, apis, or web is required",
+      "at least one of agent, apis, or web is required",
     );
   }
   const parsedExtensions = extensions(source.extensions, "extensions");

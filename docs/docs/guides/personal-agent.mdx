@@ -26,6 +26,12 @@ Do not send credentials during discovery. Python rejects private, loopback,
 link-local, and otherwise non-public resolved addresses by default. Server-side
 TypeScript callers should contribute a DNS-aware URL safety policy.
 
+`poppy.json` needs at least one of `agent`, `apis` and `web` (§3.1). When the
+company gives an `organization.logo_uri`, show the logo next to its
+`organization.name` and `domain`, never in place of the domain, and serve your
+own copy rather than having the user's device load it from the company; the
+device sign-in start carries it as `organization_logo` (`organizationLogo`).
+
 ## Available now: start a signed-out session
 
 Resolve one pairwise identifier, the User ID, for each tenant, internal user,
@@ -147,6 +153,28 @@ A task neither offered nor listed can be reported with
 `FeedbackClient.report`. The company answers `202` (the
 client returns `None`) or, when the task can be done after all, `200` with an
 `Alternative`. Don't report a task the company lists as excluded.
+
+## Skills a company publishes (§9.4)
+
+A company may embed a `skill_index` in `poppy.json`: an Agent Skills discovery
+index, at the revision the specification pins (`SKILL_INDEX_SCHEMA`), of skills
+for personal agents acting for the user there, such as how to combine its APIs
+into a task. `company.skills` (`companySkills(company)`) lists the entries the
+SDK can use, each `url` resolved against the final `poppy.json` URL: an index
+with another `$schema`, an entry of a type other than `skill-md` or `archive`,
+one lacking a field or with a malformed digest, and one whose resolved URL is
+not HTTPS are skipped, and the rest of the document is used as before. Match
+the user's task against the names and descriptions, then
+`DiscoveryClient.fetch_skill(entry)` (`fetchSkill(entry)`) fetches the artifact
+as other public metadata is fetched, with no credential or Session header,
+through the URL safety policy, and verifies its SHA-256 `digest`
+(`skill_digest_mismatch` otherwise); an archive's extraction, with the
+proposal's safety checks, is the host's. A skill is the company's content
+(§10.1): use its workflow through the company's channels under the usual
+Session, account access and approval rules; it grants no access, changes no
+scopes, supplies no approval, and its scripts run only when your configuration
+allows. When you skipped the index, or a skill, because you did not recognize
+it and that mattered for the task, say so to the user.
 
 ## Lifecycle status
 

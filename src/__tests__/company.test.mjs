@@ -25,6 +25,7 @@ import {
   MediatedSignInClient,
   OperationsClient,
   RefreshTokenClient,
+  ServiceTokens,
   RsaBlindSigningKey,
   SecretValue,
   SessionClient,
@@ -32,6 +33,8 @@ import {
   SessionSigners,
   approvalHeader,
   discoverCompany,
+  companySkills,
+  fetchSkill,
   firstContribution,
   mcpApi,
   sessionHeaders,
@@ -1356,4 +1359,46 @@ test("the host's rate limit refuses with when to ask again, 429 and no body (pap
   const forged = await w.fetch(w.endpoint, { method: "POST", headers: { Authorization: "Bearer forged" } });
   assert.deepEqual([forged.status, await forged.json()], [400, { error: "invalid_session" }]);
   assert.equal(admitted.length, counted);
+});
+
+test("the company publishes its logo, its skills and a conversation resource of its own", async () => {
+  // Discovery additions (0.3 as published): `organization.logo_uri` and `skill_index`, the skill
+  // served and verified (§3.1, §9.4); the conversation endpoint as a service of its own (§4.5,
+  // guides, *A conversation endpoint at another provider*): its own resource metadata, a token
+  // for it from the company's issuer, and only that token accepted there.
+  const skill = "---\nname: exchange-a-jacket\n---\nAsk for the order, then POST an exchange.\n";
+  const w = await world({
+    config: {
+      logoUri: "https://manzanita.example/logo.png",
+      skills: [["exchange-a-jacket", "Exchange a jacket for another size.", skill]],
+      conversationResource: true,
+    },
+  });
+  const session = await w.start();
+  const { result } = await directSignIn(w);
+  assert.equal(w.company.document.organization.logo_uri, "https://manzanita.example/logo.png");
+  const [entry] = companySkills(w.company);
+  assert.deepEqual([entry.name, entry.type, entry.url], ["exchange-a-jacket", "skill-md", "https://manzanita.example/poppy/skills/exchange-a-jacket/SKILL.md"]);
+  assert.equal(new TextDecoder().decode(await fetchSkill(entry, { reactor: w.host.reactor })), skill);
+
+  // The endpoint names itself in its metadata; the issuer lists it and issues for it.
+  assert.ok(w.metadata.protected_resources.includes(w.endpoint));
+  const tokens = new ServiceTokens({
+    refresh: w.tokens,
+    company: w.company,
+    reference: result.refreshTokenReference,
+    context: w.context,
+    discovery: { reactor: w.host.reactor },
+  });
+  assert.equal(await tokens.resourceFor(w.endpoint), w.endpoint);
+  const forEndpoint = await tokens.tokenFor(w.endpoint);
+  assert.equal(forEndpoint.resource, w.endpoint);
+  // The default token is not for the endpoint: a challenge saying where to read which is.
+  const refused = await w.conversations.start(w.endpoint, w.message("Hello"), { session, token: result.token }).catch((error) => error);
+  assert.equal(refused.code, "invalid_token");
+  assert.equal(refused.details.resource_metadata, "https://manzanita.example/.well-known/oauth-protected-resource/poppy/conversations");
+  const started = await w.conversations.start(w.endpoint, w.message("Hello"), { session, token: forEndpoint });
+  assert.ok(started.conversation_id);
+  // Signed out, the Session header alone (guides).
+  assert.ok((await w.conversations.start(w.endpoint, w.message("Hi"), { session })).conversation_id);
 });

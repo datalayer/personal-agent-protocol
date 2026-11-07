@@ -604,3 +604,71 @@ async def test_the_hosts_rate_limit_refuses_with_when_to_ask_again() -> None:
     forged = await world.http.post(endpoint, json={}, headers={"Authorization": "Bearer forged"})
     assert (forged.status_code, forged.json()) == (400, {"error": "invalid_session"})
     assert len(admitted) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_company_publishes_its_logo_its_skills_and_a_conversation_resource() -> None:
+    """Discovery additions (0.3 as published): `organization.logo_uri` and `skill_index`, the
+    skill served and verified (§3.1, §9.4); the conversation endpoint as a service of its own
+    (§4.5, guides, *A conversation endpoint at another provider*): its own resource metadata,
+    a token for it from the company's issuer, and only that token accepted there."""
+
+    import dataclasses
+
+    from personal_agent_protocol import DiscoveryClient, PersonalAgentProtocolError
+    from personal_agent_protocol.accounts import RefreshTokenClient, ServiceTokens
+    from personal_agent_protocol.demo.manzanita import CONFIG, manzanita
+
+    skill = "---\nname: exchange-a-jacket\n---\nAsk for the order, then POST an exchange.\n"
+    world = World()
+    world.shop, world.plugin = manzanita(
+        world.network,
+        world.clock,
+        config=dataclasses.replace(
+            CONFIG,
+            logo_uri="https://manzanita.example/logo.png",
+            skills=(("exchange-a-jacket", "Exchange a jacket for another size.", skill),),
+            conversation_resource=True,
+        ),
+    )
+    token = await signed_in(world)
+    session = world.session
+    company = world.company
+    endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    assert company.document.organization.logo_uri == "https://manzanita.example/logo.png"
+
+    discovery = DiscoveryClient(reactor=world.reactor, http_client=world.http)
+    (entry,) = company.skills
+    assert (entry.name, entry.type) == ("exchange-a-jacket", "skill-md")
+    assert entry.url == "https://manzanita.example/poppy/skills/exchange-a-jacket/SKILL.md"
+    assert (await discovery.fetch_skill(entry)).decode() == skill
+
+    # The endpoint names itself in its metadata; the issuer lists it and issues for it.
+    assert endpoint in company.oauth_metadata.protected_resources  # type: ignore[union-attr]
+    tokens = ServiceTokens(
+        refresh=RefreshTokenClient(reactor=world.reactor, http_client=world.http),
+        discovery=discovery,
+        company=company,
+        reference=world.refresh_reference,  # type: ignore[arg-type]
+        context=world.account_context(),
+    )
+    assert await tokens.resource_for(endpoint) == endpoint
+    for_endpoint = await tokens.token_for(endpoint)
+    assert for_endpoint is not None and for_endpoint.resource == endpoint
+    # The default token is not for the endpoint: a challenge saying where to read which is.
+    with pytest.raises(PersonalAgentProtocolError) as raised:
+        await world.conversations.start(
+            endpoint, world.message("Hello"), session=session, token=token
+        )
+    assert raised.value.code == "invalid_token"
+    assert raised.value.details.get("resource_metadata") == (
+        "https://manzanita.example/.well-known/oauth-protected-resource/poppy/conversations"
+    )
+    started = await world.conversations.start(
+        endpoint, world.message("Hello"), session=session, token=for_endpoint
+    )
+    assert started.conversation_id
+    # Signed out, the Session header alone (guides).
+    assert (
+        await world.conversations.start(endpoint, world.message("Hi"), session=session)
+    ).conversation_id

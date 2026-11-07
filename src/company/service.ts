@@ -83,6 +83,7 @@ import {
   messageApproval,
   operationsContent,
   DISCLOSURES_EXTENSION,
+  SKILL_INDEX_SCHEMA,
   DISCLOSURES_VERSION,
   LINKS_EXTENSION,
   LINKS_VERSION,
@@ -290,6 +291,21 @@ export interface CompanyConfigOptions {
    * `/poppy/excluded-tasks.json` (§8.1): each a `task` and an optional `alternative`.
    */
   readonly excludedTasks?: readonly Readonly<Record<string, unknown>>[];
+  /** An HTTPS URL of the company's logo, published as `organization.logo_uri` (§3.1). */
+  readonly logoUri?: string;
+  /**
+   * Skills for personal agents acting for the user here (§9.4): each a name, a description and
+   * the text of its `SKILL.md`, served at `/poppy/skills/{name}/SKILL.md` and listed in the
+   * document's `skill_index` with its SHA-256 digest.
+   */
+  readonly skills?: readonly (readonly [name: string, description: string, text: string])[];
+  /**
+   * Whether the conversation endpoint is a service of its own (§4.5, guides, *A conversation
+   * endpoint at another provider*): it publishes protected resource metadata naming itself as
+   * `resource`, with this company's issuer, the issuer lists it in `protected_resources` and
+   * issues tokens for it, and it takes only those.
+   */
+  readonly conversationResource?: boolean;
   /**
    * Tasks a feedback report may name that can be done after all: the alternative (§8.2)
    * the company answers with, HTTP 200, keyed by task, compared ignoring case.
@@ -390,6 +406,9 @@ export class CompanyConfig {
   readonly scopeDescriptions: Readonly<Record<string, string>>;
   readonly scopeHints: Readonly<Record<string, readonly [string, boolean]>>;
   readonly excludedTasks: readonly Readonly<Record<string, unknown>>[];
+  readonly logoUri: string | undefined;
+  readonly skills: readonly (readonly [name: string, description: string, text: string])[];
+  readonly conversationResource: boolean;
   readonly feedbackAnswers: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly devicePage: string | undefined;
   readonly consentPage: string | undefined;
@@ -445,6 +464,9 @@ export class CompanyConfig {
     this.scopeDescriptions = { ...options.scopeDescriptions };
     this.scopeHints = { ...(options.scopeHints ?? {}) };
     this.excludedTasks = [...(options.excludedTasks ?? [])];
+    this.logoUri = options.logoUri;
+    this.skills = [...(options.skills ?? [])];
+    this.conversationResource = options.conversationResource ?? false;
     this.feedbackAnswers = { ...(options.feedbackAnswers ?? {}) };
     this.devicePage = hostedPage("devicePage", options.devicePage);
     this.consentPage = hostedPage("consentPage", options.consentPage);
@@ -590,6 +612,16 @@ export class CompanyConfig {
   }
   get mcpResourceMetadata(): string {
     return `${this.base}/.well-known/oauth-protected-resource/mcp`;
+  }
+  /**
+   * Where the conversation endpoint's own protected resource metadata is (RFC 9728 §3.1): the
+   * well-known path, then the endpoint's path.
+   */
+  get conversationResourceMetadata(): string {
+    return `${this.base}/.well-known/oauth-protected-resource/poppy/conversations`;
+  }
+  skillUrl(name: string): string {
+    return `${this.base}/poppy/skills/${name}/SKILL.md`;
   }
   get browserSessionEndpoint(): string {
     return `${this.base}/poppy/browser-session`;
@@ -1193,6 +1225,9 @@ export class CompanyService {
       if (path === "/.well-known/oauth-protected-resource/mcp" && mcp !== undefined) {
         return { status: 200, body: this.protectedResourceMetadata(), headers: {} };
       }
+      if (path === "/.well-known/oauth-protected-resource/poppy/conversations" && this.config.conversationResource) {
+        return { status: 200, body: this.conversationResourceMetadataDocument(), headers: {} };
+      }
       if (path === "/mcp" && mcp !== undefined) return await this.#mcpRoute(request, mcp);
       if (method === "GET" && path === "/poppy/browser-session" && this.config.web) {
         return await this.#joinPage();
@@ -1205,6 +1240,13 @@ export class CompanyService {
       }
       if (method === "GET" && path === "/poppy/excluded-tasks.json" && this.config.excludedTasks.length) {
         return { status: 200, body: { tasks: this.config.excludedTasks.map((task) => ({ ...task })) }, headers: {} };
+      }
+      if (method === "GET" && path.startsWith("/poppy/skills/")) {
+        // A skill's artifact (§9.4): public, as poppy.json is.
+        const skill = this.config.skills.find(([name]) => path === `/poppy/skills/${name}/SKILL.md`);
+        if (skill !== undefined) {
+          return { status: 200, body: skill[2], headers: { "Content-Type": "text/markdown; charset=utf-8" } };
+        }
       }
       if (method === "POST" && path === "/oauth/token") return await this.#token(request);
       if (method === "GET" && path === "/oauth/authorize" && this.config.direct) {
@@ -1266,7 +1308,11 @@ export class CompanyService {
     }
     const document: Record<string, unknown> = {
       protocol_version: PROTOCOL_PROFILE,
-      organization: { name: config.name, domain: domain ?? config.domain },
+      organization: {
+        name: config.name,
+        domain: domain ?? config.domain,
+        ...(config.logoUri === undefined ? {} : { logo_uri: config.logoUri }),
+      },
       agent: { protocols: [{ type: "poppy", endpoint: config.conversationsEndpoint }] },
     };
     if (config.oauth) {
@@ -1309,7 +1355,35 @@ export class CompanyService {
       };
     }
     if (Object.keys(extensions).length) document.extensions = extensions;
+    if (config.skills.length) {
+      // The pinned Agent Skills discovery index, embedded (§9.4): absolute URLs, so the entries
+      // read the same from a separate well-known index.
+      document.skill_index = {
+        $schema: SKILL_INDEX_SCHEMA,
+        skills: config.skills.map(([name, description, text]) => ({
+          name,
+          description,
+          type: "skill-md",
+          url: config.skillUrl(name),
+          digest: `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`,
+        })),
+      };
+    }
     return document;
+  }
+
+  /**
+   * RFC 9728 metadata of the conversation endpoint as a service of its own (§4.5): `resource`
+   * is the endpoint URL, path included, and its authorization server this company's issuer.
+   * Tokens for it come from the issuer with `resource` set to it.
+   */
+  conversationResourceMetadataDocument(): Record<string, unknown> {
+    return {
+      resource: this.config.conversationsEndpoint,
+      authorization_servers: [this.config.base],
+      scopes_supported: [...this.config.scopes],
+      bearer_methods_supported: ["header"],
+    };
   }
 
   /**
@@ -1361,6 +1435,7 @@ export class CompanyService {
       protected_resources: resources,
     };
     if (this.#mcp() !== undefined) resources.push(config.mcpUrl);
+    if (config.conversationResource) resources.push(config.conversationsEndpoint);
     if (config.direct) {
       grants.push(AUTHORIZATION_CODE_GRANT);
       metadata.authorization_endpoint = config.authorizationEndpoint;
@@ -1576,6 +1651,7 @@ export class CompanyService {
       return undefined;
     }
     if (this.#mcp() !== undefined && resource === this.config.mcpUrl) return resource;
+    if (this.config.conversationResource && resource === this.config.conversationsEndpoint) return resource;
     throw new Refused(400, "invalid_target");
   }
 
@@ -2717,7 +2793,16 @@ export class CompanyService {
 
   #resourceMetadataUrl(resource: string | undefined): string {
     if (resource === this.config.mcpUrl) return this.config.mcpResourceMetadata;
+    if (resource === this.config.conversationsEndpoint) return this.config.conversationResourceMetadata;
     return `${this.config.base}/.well-known/oauth-protected-resource`;
+  }
+
+  /**
+   * The `resource` conversation requests need a token for: the endpoint itself when it is a
+   * service of its own (`conversationResource`, §4.5), else the default token's.
+   */
+  #conversationResource(): string | undefined {
+    return this.config.conversationResource ? this.config.conversationsEndpoint : undefined;
   }
 
   /**
@@ -3082,7 +3167,7 @@ export class CompanyService {
   }
 
   async #startConversation(request: CompanyRequest): Promise<CompanyResponse> {
-    const [, session] = await this.#caller(request);
+    const [, session] = await this.#caller(request, this.#conversationResource());
     waitOf(request);
     const body = jsonObject(request.body);
     const parentId = body.parent_conversation_id;
@@ -3271,7 +3356,7 @@ export class CompanyService {
     const parts = path.split("/");
     const conversationId = parts[3] ?? "";
     const action = parts[4] ?? "";
-    const [, session] = await this.#caller(request);
+    const [, session] = await this.#caller(request, this.#conversationResource());
     if (!IDENTIFIER.test(conversationId)) {
       // An ID with characters not allowed is malformed, not unknown (§7.2, §7.13).
       throw new Refused(400, "invalid_request");

@@ -126,6 +126,9 @@ class PapSignIn(Display):
     #: required for ``device`` and ``mediated``.
     organization_name: str | None = None
     organization_domain: str | None = None
+    #: The company's ``organization.logo_uri`` (§3.1): shown next to its name and domain,
+    #: never in place of the domain, from a copy the host serves itself.
+    organization_logo: str | None = None
 
     @field_validator("company", "organization_domain")
     @classmethod
@@ -144,6 +147,13 @@ class PapSignIn(Display):
     def _needs(cls, value: list[str]) -> list[str]:
         if any(not scope or any(ch.isspace() for ch in scope) for scope in value):
             raise ValueError("each scope a company needs is one token")
+        return value
+
+    @field_validator("organization_logo")
+    @classmethod
+    def _logo(cls, value: str | None) -> str | None:
+        if value is not None and urlsplit(value).scheme != "https":
+            raise ValueError("a company's logo is an HTTPS URL")
         return value
 
     @field_validator("open")

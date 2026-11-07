@@ -6,7 +6,7 @@
 
 import { MetadataCache } from "./caching.js";
 import { DiscoveryError, ProtocolValidationError } from "./errors.js";
-import { readBoundedBody, withinDeadline, type CacheBounds } from "./limits.js";
+import { readBoundedBytes, withinDeadline, type CacheBounds } from "./limits.js";
 import { parseJsonStrict } from "./json.js";
 import {
   SUPPORTED_PROTOCOL_VERSIONS,
@@ -22,6 +22,7 @@ import {
   type DiscoveredCompany,
   type DiscoveryDocument,
   type ExcludedTasks,
+  type SkillEntry,
   type ProtectedResourceMetadata,
 } from "./models.js";
 import {
@@ -41,6 +42,8 @@ export interface DiscoveryOptions {
   readonly assertSafeUrl?: (url: URL) => void | Promise<void>;
   readonly maxRedirects?: number;
   readonly maxResponseBytes?: number;
+  /** The most a skill's artifact may weigh (`fetchSkill`, §9.4; default 4 MiB). */
+  readonly maxSkillBytes?: number;
   /** Total time for each metadata fetch, however slowly the server sends (default 5000). */
   readonly timeoutMs?: number;
   /** Cache-Control bounds for discovery and OAuth metadata (default: a minute to a day). */
@@ -81,6 +84,7 @@ interface ReadOptions {
   readonly urlPolicy: UrlSafetyPolicy;
   readonly maxRedirects: number;
   readonly maxResponseBytes: number;
+  readonly maxSkillBytes: number;
   readonly timeoutMs: number;
   readonly cache: MetadataCache;
   readonly signal: AbortSignal | undefined;
@@ -100,7 +104,32 @@ async function fetchJson(
   initialUrl: URL,
   options: ReadOptions,
 ): Promise<Fetched & { readonly headers: Headers }> {
-  const { transport, urlPolicy, maxRedirects, maxResponseBytes, timeoutMs, signal } = options;
+  const { bytes, finalUrl, headers } = await fetchBytes(initialUrl, options, {
+    accept: "application/json",
+    maxBytes: options.maxResponseBytes,
+  });
+  const contentType = headers.get("content-type")?.split(";", 1)[0]?.trim();
+  if (contentType !== "application/json" && contentType !== "application/poppy+json") {
+    throw new DiscoveryError("invalid_content_type", "Discovery response must be JSON");
+  }
+  try {
+    const body = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    return { value: parseJsonStrict(body), finalUrl, headers };
+  } catch (cause) {
+    if (cause instanceof ProtocolValidationError) throw cause;
+    throw new ProtocolValidationError("invalid_json", "Response is not valid JSON", {
+      cause,
+    });
+  }
+}
+
+/** A public document at `url`, redirects followed within the address rules (§3). */
+async function fetchBytes(
+  initialUrl: URL,
+  options: ReadOptions,
+  bounds: { readonly accept: string; readonly maxBytes: number },
+): Promise<{ readonly bytes: Uint8Array; readonly finalUrl: URL; readonly headers: Headers }> {
+  const { transport, urlPolicy, maxRedirects, timeoutMs, signal } = options;
   let current = initialUrl;
   for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
     await urlPolicy.assertSafe(current);
@@ -110,7 +139,7 @@ async function fetchJson(
       response = await withinDeadline(
         (aborted) =>
           transport.fetch(current, {
-            headers: { Accept: "application/json" },
+            headers: { Accept: bounds.accept },
             redirect: "manual",
             credentials: "omit",
             signal: aborted,
@@ -143,40 +172,41 @@ async function fetchJson(
         { statusCode: response.status },
       );
     }
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
-    if (contentType !== "application/json" && contentType !== "application/poppy+json") {
-      throw new DiscoveryError("invalid_content_type", "Discovery response must be JSON");
-    }
-    const body = await readBoundedBody(response, {
-      maxBytes: maxResponseBytes,
+    const bytes = await readBoundedBytes(response, {
+      maxBytes: bounds.maxBytes,
       timeoutMs,
       startedAt,
       tooLarge: () =>
         new DiscoveryError("response_too_large", "Discovery response exceeds size limit"),
     });
-    try {
-      return { value: parseJsonStrict(body), finalUrl: current, headers: response.headers };
-    } catch (cause) {
-      if (cause instanceof ProtocolValidationError) throw cause;
-      throw new ProtocolValidationError("invalid_json", "Response is not valid JSON", {
-        cause,
-      });
-    }
+    return { bytes, finalUrl: current, headers: response.headers };
   }
-  throw new DiscoveryError("too_many_redirects", "Discovery exceeded redirect limit");
+  throw new Error("redirect loop exited unexpectedly");
 }
 
-export function discoverCompany(
-  domain: string,
-  options: DiscoveryOptions = {},
-): Promise<DiscoveredCompany> {
-  return traced(
-    options.reactor,
-    "pap.discovery.discover",
-    { "pap.company.domain": domain.replace(/\.$/, "").toLowerCase() },
-    () => discover(domain, options),
-    (company) => ({ "pap.company.issuer": company.oauthMetadata?.issuer }),
-  );
+/**
+ * The artifact of one of a Company's skills, its `digest` verified (§9.4).
+ *
+ * `skill` is one of `companySkills(company)`: its `url` is resolved and HTTPS, and it is fetched
+ * as other public metadata is, through the URL safety policy, redirects included, with no
+ * credential and no Session header, at most `maxSkillBytes`. The bytes are the artifact as
+ * published: the `SKILL.md` of a `skill-md` entry, or an archive, whose extraction, with the
+ * proposal's archive safety checks, is the host's. A digest that differs is
+ * `skill_digest_mismatch`. A skill is Company content (§10.1): its scripts run only when the
+ * host's configuration allows.
+ */
+export async function fetchSkill(skill: SkillEntry, options: DiscoveryOptions = {}): Promise<Uint8Array> {
+  const { read } = readOptions(options);
+  const { bytes } = await fetchBytes(new URL(skill.url), read, {
+    accept: "*/*",
+    maxBytes: read.maxSkillBytes,
+  });
+  const hashed = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", bytes));
+  const digest = `sha256:${Array.from(hashed, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  if (digest !== skill.digest) {
+    throw new DiscoveryError("skill_digest_mismatch", "The skill's content is not what its digest names");
+  }
+  return bytes;
 }
 
 function readOptions(options: DiscoveryOptions): { reactor: ReactorPlatformView; read: ReadOptions } {
@@ -198,6 +228,7 @@ function readOptions(options: DiscoveryOptions): { reactor: ReactorPlatformView;
     urlPolicy,
     maxRedirects: options.maxRedirects ?? 3,
     maxResponseBytes: options.maxResponseBytes ?? 100 * 1024,
+    maxSkillBytes: options.maxSkillBytes ?? 4 * 1024 * 1024,
     timeoutMs,
     cache: new MetadataCache(reactor, options.cacheBounds),
     signal: options.signal,

@@ -10,7 +10,7 @@ import re
 from datetime import datetime
 from ipaddress import ip_address
 from typing import Any, Literal, cast
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -127,8 +127,46 @@ class ProtocolModel(BaseModel):
 class Organization(ProtocolModel):
     name: str = Field(min_length=1)
     domain: str
+    #: An HTTPS URL of the Company's logo (§3.1), named as in client metadata (§4.1). An
+    #: agent shows it next to the Company's name and domain, never in place of the domain,
+    #: and serves its own copy (guides, *Finding a company*).
+    logo_uri: str | None = None
 
     _normalize_domain = field_validator("domain")(_domain)
+
+    @field_validator("logo_uri")
+    @classmethod
+    def validate_logo_uri(cls, value: str | None) -> str | None:
+        return None if value is None else _https_url(value, "organization.logo_uri")
+
+
+#: The Agent Skills discovery draft revision `skill_index` pins (§9.4): the `$schema` an
+#: index names. An index with another, or none, is ignored; the rest of poppy.json is used.
+SKILL_INDEX_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json"
+#: The artifact types the SDK recognizes (§9.4): a single `SKILL.md`, or an archive with
+#: supporting files. An entry of another type is skipped.
+SKILL_TYPES = frozenset({"skill-md", "archive"})
+
+
+class SkillEntry(ProtocolModel):
+    """A skill a Company publishes for Personal Agents acting for the User there (§9.4).
+
+    `url` is resolved against poppy.json's final URL (RFC 3986 §5) and is HTTPS; `digest` is
+    the SHA-256 of the artifact's raw bytes, `sha256:` and 64 lowercase hex characters,
+    which `DiscoveryClient.fetch_skill` verifies. A skill is Company content (§10.1): it
+    grants no account access, changes no scopes, and supplies no User approval.
+    """
+
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+    url: str
+    digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        return _https_url(value, "skill url")
 
 
 class MediatedField(ProtocolModel):
@@ -322,6 +360,9 @@ class DiscoveryDocument(ProtocolModel):
     feedback: FeedbackDescriptor | None = None
     excluded_tasks: ExcludedTasksDescriptor | None = None
     extensions: dict[str, ExtensionDescriptor] = Field(default_factory=dict)
+    #: The Company's Agent Skills discovery index, as published (§3.1, §9.4); read it
+    #: through `usable_skills`, which skips what this SDK does not recognize.
+    skill_index: dict[str, Any] | None = None
 
     @field_validator("protocol_version")
     @classmethod
@@ -336,8 +377,37 @@ class DiscoveryDocument(ProtocolModel):
     @model_validator(mode="after")
     def validate_interfaces(self) -> DiscoveryDocument:
         if self.agent is None and not self.apis and self.web is None:
-            raise ValueError("one of agent, apis, or web is required")
+            # At least one of the three, not exactly one (§3.1).
+            raise ValueError("at least one of agent, apis, or web is required")
         return self
+
+    def usable_skills(self, base_url: str) -> list[SkillEntry]:
+        """The skills of `skill_index` this SDK can use (§9.4), each `url` resolved.
+
+        Nothing when there is no index or its `$schema` is not `SKILL_INDEX_SCHEMA`; an
+        entry whose `type` is unknown, which lacks a field, whose `digest` is malformed, or
+        whose `url`, resolved against `base_url` (the final poppy.json URL), is not HTTPS is
+        skipped. The guides suggest telling the User when that mattered for the task.
+        """
+
+        index = self.skill_index
+        if not isinstance(index, dict) or index.get("$schema") != SKILL_INDEX_SCHEMA:
+            return []
+        skills = index.get("skills")
+        if not isinstance(skills, list):
+            return []
+        usable: list[SkillEntry] = []
+        for raw in skills:
+            if not isinstance(raw, dict) or raw.get("type") not in SKILL_TYPES:
+                continue
+            url = raw.get("url")
+            if not isinstance(url, str) or not url:
+                continue
+            try:
+                usable.append(SkillEntry.model_validate({**raw, "url": urljoin(base_url, url)}))
+            except ValidationError:
+                continue
+        return usable
 
     @property
     def sign_in_disabled(self) -> bool:
@@ -1028,6 +1098,12 @@ class DiscoveredCompany(ProtocolModel):
         """Whether the Company turned sign-in off with `auth.disabled` (§3.2)."""
 
         return self.document.sign_in_disabled
+
+    @property
+    def skills(self) -> list[SkillEntry]:
+        """The Company's skills this SDK can use (§9.4), resolved against `discovery_url`."""
+
+        return self.document.usable_skills(self.discovery_url)
 
     def require_oauth(self) -> OAuthServerMetadata:
         """The issuer's metadata, or `AuthorizationError`, before any sign-in.

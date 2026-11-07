@@ -196,6 +196,8 @@ export interface DeviceSignInStart {
   readonly reference: string;
   readonly organizationName: string;
   readonly organizationDomain: string;
+  /** The company's `organization.logo_uri`, shown next to its name and domain (§3.1). */
+  readonly organizationLogo?: string;
   readonly userCode: string;
   readonly verificationUri: string;
   readonly verificationUriComplete?: string;
@@ -221,7 +223,7 @@ export interface DeviceSignInBeginOptions {
   readonly scopes: readonly string[];
   readonly tenantId: string;
   /** The company's, from its poppy.json: named with the link and the code (§4.6). */
-  readonly organization: { readonly name: string; readonly domain: string };
+  readonly organization: { readonly name: string; readonly domain: string; readonly logo_uri?: string };
   /**
    * The issuer's `protected_resources` (OAuth metadata): the verification link is
    * refused (`unsafe_verification_uri`) unless its host is the issuer's or one of these
@@ -330,6 +332,7 @@ export class DeviceSignInClient {
       reference,
       organizationName: options.organization.name,
       organizationDomain: options.organization.domain,
+      ...(options.organization.logo_uri === undefined ? {} : { organizationLogo: options.organization.logo_uri }),
       userCode: authorization.userCode,
       verificationUri: authorization.verificationUri,
       ...(authorization.verificationUriComplete === undefined

@@ -70,6 +70,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`companyIdentifier`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Who the Company is (§3.2): its issuer, else `https://{organization.domain}`.
 - [`companyIssuer`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The Company's OAuth issuer, as found from its domain (§3.2).
 - [`companyResource`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. `https://{organization.domain}`: the resource the default access token is for.
+- [`companySkills`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The Company's skills this SDK can use (§9.4), resolved against `discoveryUrl`.
 - [`ContributedSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Class; entry `.`. The `pap.signer` contribution, asked each time it signs: whichever the host contributes.
 - [`ConversationClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Class; entry `.`. Start and continue PAP conversations, each request with the Session header.
 - [`ConversationClientOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Interface; entry `.`. Public TypeScript interface `ConversationClientOptions`.
@@ -113,7 +114,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`DISCLOSURES_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Const; entry `.`. Public TypeScript const `DISCLOSURES_EXTENSION`.
 - [`DISCLOSURES_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Const; entry `.`. Public TypeScript const `DISCLOSURES_VERSION`.
 - [`DisclosuresContent`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. The Disclosures extension's content of a Company message, `extensions.disclosures`.
-- [`discoverCompany`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/discovery.ts) — Function; entry `.`. Public TypeScript function `discoverCompany`.
+- [`discoverCompany`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/discovery.ts) — Value; entry `.`. Public TypeScript value `discoverCompany`.
 - [`DiscoveredCompany`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. A verified `poppy.json`, its domain's protected resource metadata, and its issuer's.
 - [`DiscoveryDocument`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. Public TypeScript interface `DiscoveryDocument`.
 - [`DiscoveryError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/errors.ts) — Class; entry `.`. Public TypeScript class `DiscoveryError`.
@@ -154,6 +155,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`FeedbackReport`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/feedback.ts) — Interface; entry `.`. One report of a task the company offers no way to do through the protocol (§8).
 - [`FeedbackReportOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/feedback.ts) — Interface; entry `.`. Public TypeScript interface `FeedbackReportOptions`.
 - [`fetchMcpServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/mcp.ts) — Value; entry `.`. Public TypeScript value `fetchMcpServerMetadata`.
+- [`fetchSkill`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/discovery.ts) — Value; entry `.`. Public TypeScript value `fetchSkill`.
 - [`finishSignIn`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Value; entry `.`. Public TypeScript value `finishSignIn`.
 - [`firstContribution`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Function; entry `.`. Public TypeScript function `firstContribution`.
 - [`generateMessageId`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Function; entry `.`. Generate a user-global message ID with at least 128 random bits.
@@ -374,6 +376,9 @@ Unknown or internal symbols are deliberately excluded.
 - [`signOperatorRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operator-signatures.ts) — Value; entry `.`. Public TypeScript value `signOperatorRequest`.
 - [`SignOperatorRequestOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operator-signatures.ts) — Interface; entry `.`. Public TypeScript interface `SignOperatorRequestOptions`.
 - [`SignOutResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Interface; entry `.`. Sign-out (§5.5): how many refresh tokens were revoked, and whether all were.
+- [`SKILL_INDEX_SCHEMA`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Const; entry `.`. The Agent Skills discovery draft revision `skill_index` pins (§9.4): the `$schema` an index
+- [`SKILL_TYPES`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Const; entry `.`. The artifact types the SDK recognizes (§9.4): a single `SKILL.md`, or an archive with
+- [`SkillEntry`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. A skill a Company publishes for Personal Agents acting for the User there (§9.4).
 - [`staleResourceMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/accounts.ts) — Function; entry `.`. Whether a service refused a token not issued for it (§4.5).
 - [`StartConversationOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Interface; entry `.`. Public TypeScript interface `StartConversationOptions`.
 - [`StreamItem`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/conversations.ts) — Type; entry `.`. Public TypeScript type `StreamItem`.
@@ -401,6 +406,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`UrlSafetyPolicies`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `UrlSafetyPolicies`.
 - [`UrlSafetyPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `UrlSafetyPolicy`.
 - [`usableReferences`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The references an agent may follow (§8.2).
+- [`usableSkills`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The skills of `skill_index` this SDK can use (§9.4), each `url` resolved.
 - [`validateDirectSignInCallback`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/auth.ts) — Function; entry `.`. Public TypeScript function `validateDirectSignInCallback`.
 - [`verificationHostAllowed`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/device.ts) — Function; entry `.`. Whether a device sign-in link may be shown for this company (§4.6).
 - [`verifyOperatorSignature`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operator-signatures.ts) — Value; entry `.`. Public TypeScript value `verifyOperatorSignature`.

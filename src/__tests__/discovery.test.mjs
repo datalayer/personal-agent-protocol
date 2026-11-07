@@ -5,6 +5,7 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -19,6 +20,10 @@ import {
   companyIssuer,
   companyResource,
   discoverCompany,
+  fetchSkill,
+  companySkills,
+  usableSkills,
+  SKILL_INDEX_SCHEMA,
   generatePairwiseUserId,
   parseClientMetadata,
   parseConversationEventPage,
@@ -452,5 +457,87 @@ test("requires client security URLs to stay on the client ID domain", () => {
       }),
     (error) =>
       error instanceof ProtocolValidationError && error.code === "client_domain_mismatch",
+  );
+});
+
+const SKILL_INDEX_URL = "https://example.com/.well-known/poppy.json";
+const SKILL_TEXT = "---\nname: manage-bookings\n---\nChange a booking through the orders API.\n";
+const skillIndex = (...skills) => ({ $schema: SKILL_INDEX_SCHEMA, skills });
+const entry = (changes = {}) => ({
+  name: "manage-bookings",
+  description: "Manage the User's bookings.",
+  type: "skill-md",
+  url: "https://cdn.example.com/skills/manage-bookings/SKILL.md",
+  digest: `sha256:${"0".repeat(64)}`,
+  ...changes,
+});
+
+test("the logo and the skill index are read, and the skills resolved", async () => {
+  // `organization.logo_uri` is an HTTPS URL (§3.1); `skill_index` is used as far as the SDK
+  // recognizes it, each `url` resolved against poppy.json's final URL (§9.4).
+  const document = parseDiscoveryDocument(await fixture("discovery-valid.json"));
+  assert.equal(document.organization.logo_uri, "https://example.com/logo.png");
+  assert.deepEqual(usableSkills(document, SKILL_INDEX_URL).map((skill) => skill.name), ["manage-bookings"]);
+  assert.throws(
+    () => parseDiscoveryDocument({ ...document, organization: { name: "X", domain: "example.com", logo_uri: "http://example.com/logo.png" } }),
+    ProtocolValidationError,
+  );
+  const varied = parseDiscoveryDocument({
+    ...(await fixture("discovery-valid.json")),
+    skill_index: skillIndex(
+      entry(),
+      entry({ name: "relative", url: "skills/relative/SKILL.md" }),
+      entry({ name: "origin", url: "/skills/origin/SKILL.md", type: "archive" }),
+      entry({ name: "unknown-type", type: "bundle" }),
+      entry({ name: "no-digest", digest: undefined }),
+      entry({ name: "bad-digest", digest: "sha256:short" }),
+      entry({ name: "not-https", url: "http://cdn.example.com/x/SKILL.md" }),
+      "not an entry",
+    ),
+  });
+  assert.deepEqual(
+    usableSkills(varied, SKILL_INDEX_URL).map((skill) => [skill.name, skill.type, skill.url]),
+    [
+      ["manage-bookings", "skill-md", "https://cdn.example.com/skills/manage-bookings/SKILL.md"],
+      ["relative", "skill-md", "https://example.com/.well-known/skills/relative/SKILL.md"],
+      ["origin", "archive", "https://example.com/skills/origin/SKILL.md"],
+    ],
+  );
+  // An index of another revision, or none: ignored, the rest of the document used (§9.4).
+  for (const index of [
+    { $schema: "https://schemas.agentskills.io/discovery/9.0.0/schema.json", skills: [entry()] },
+    { skills: [entry()] },
+    undefined,
+  ]) {
+    const unknown = parseDiscoveryDocument({ ...(await fixture("discovery-valid.json")), skill_index: index });
+    assert.deepEqual(usableSkills(unknown, SKILL_INDEX_URL), []);
+  }
+});
+
+test("a skill is fetched and its digest verified", async () => {
+  // `fetchSkill` reads the artifact as other metadata is read and checks its digest (§9.4).
+  const digest = `sha256:${createHash("sha256").update(SKILL_TEXT, "utf8").digest("hex")}`;
+  const document = {
+    ...(await fixture("discovery-valid.json")),
+    skill_index: skillIndex(
+      entry({ url: "/skills/manage-bookings/SKILL.md", digest }),
+      entry({ name: "tampered", url: "/skills/manage-bookings/SKILL.md" }),
+    ),
+  };
+  const site = await companySite({ document });
+  const fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "example.com" && url.pathname === "/skills/manage-bookings/SKILL.md") {
+      return new Response(SKILL_TEXT, { status: 200, headers: { "content-type": "text/markdown" } });
+    }
+    return site(input);
+  };
+  const company = await discoverCompany("example.com", { fetch });
+  const [good, tampered] = companySkills(company);
+  assert.equal(good.url, "https://example.com/skills/manage-bookings/SKILL.md");
+  assert.equal(new TextDecoder().decode(await fetchSkill(good, { fetch })), SKILL_TEXT);
+  await assert.rejects(
+    fetchSkill(tampered, { fetch }),
+    (error) => error instanceof DiscoveryError && error.code === "skill_digest_mismatch",
   );
 });

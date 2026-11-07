@@ -94,6 +94,7 @@ from .mediated import (
 )
 from .models import (
     AUTHORIZATION_CODE_GRANT,
+    SKILL_INDEX_SCHEMA,
     SUPPORTED_PROTOCOL_VERSIONS,
     Alternative,
     AlternativeReference,
@@ -122,6 +123,7 @@ from .models import (
     Organization,
     ProtectedResourceMetadata,
     ScopeHint,
+    SkillEntry,
     is_loopback_redirect,
     operations_content,
     redirect_uri_matches,
@@ -266,6 +268,7 @@ __all__ = [
     "RETRY_POLICIES",
     "SESSION_SIGNERS",
     "SIGNERS",
+    "SKILL_INDEX_SCHEMA",
     "SUPPORTED_PROTOCOL_VERSIONS",
     "TELEMETRY_ATTRIBUTES",
     "TELEMETRY_EVENTS",
@@ -396,6 +399,7 @@ __all__ = [
     "SignInResult",
     "SignOutResult",
     "Signer",
+    "SkillEntry",
     "SqlitePairwiseUserIdStore",
     "StreamItem",
     "StreamReconnected",

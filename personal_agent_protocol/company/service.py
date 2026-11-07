@@ -97,6 +97,7 @@ from ..models import (
     LINKS_VERSION,
     MEDIATED_RESERVED_FIELDS,
     REFRESH_TOKEN_GRANT,
+    SKILL_INDEX_SCHEMA,
     Approval,
     Author,
     ClientMetadata,
@@ -399,6 +400,17 @@ class CompanyConfig:
     #: Tasks a feedback report may name that can be done after all: the alternative
     #: (§8.2) the company answers with, HTTP 200, keyed by task, compared ignoring case.
     feedback_answers: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: An HTTPS URL of the company's logo, published as `organization.logo_uri` (§3.1).
+    logo_uri: str | None = None
+    #: Skills for personal agents acting for the user here (§9.4): each a name, a
+    #: description and the text of its `SKILL.md`, served at `/poppy/skills/{name}/SKILL.md`
+    #: and listed in the document's `skill_index` with its SHA-256 digest.
+    skills: tuple[tuple[str, str, str], ...] = ()
+    #: Whether the conversation endpoint is a service of its own (§4.5, guides, *A
+    #: conversation endpoint at another provider*): it publishes protected resource
+    #: metadata naming itself as `resource`, with this company's issuer, the issuer lists
+    #: it in `protected_resources` and issues tokens for it, and it takes only those.
+    conversation_resource: bool = False
     web: bool = False
     #: A hosted Device Sign-In page (`verification_uri`); `&code=<user_code>` completes it.
     device_page: str | None = None
@@ -577,6 +589,16 @@ class CompanyConfig:
     @property
     def mcp_resource_metadata(self) -> str:
         return f"{self.base}/.well-known/oauth-protected-resource/mcp"
+
+    @property
+    def conversation_resource_metadata(self) -> str:
+        """Where the conversation endpoint's own protected resource metadata is (RFC 9728
+        §3.1): the well-known path, then the endpoint's path."""
+
+        return f"{self.base}/.well-known/oauth-protected-resource/poppy/conversations"
+
+    def skill_url(self, name: str) -> str:
+        return f"{self.base}/poppy/skills/{name}/SKILL.md"
 
     @property
     def browser_session_endpoint(self) -> str:
@@ -1058,6 +1080,11 @@ class CompanyService:
                 return CompanyResponse(200, self.oauth_metadata())
             if path == "/.well-known/oauth-protected-resource/mcp" and self._mcp() is not None:
                 return CompanyResponse(200, self.protected_resource_metadata())
+            if (
+                path == "/.well-known/oauth-protected-resource/poppy/conversations"
+                and self.config.conversation_resource
+            ):
+                return CompanyResponse(200, self.conversation_resource_metadata_document())
             if path == "/mcp" and self._mcp() is not None:
                 return await self._mcp_route(request)
             if method == "GET" and path == "/poppy/browser-session" and self.config.web:
@@ -1074,6 +1101,13 @@ class CompanyService:
                 return CompanyResponse(
                     200, {"tasks": [dict(task) for task in self.config.excluded_tasks]}
                 )
+            if method == "GET" and path.startswith("/poppy/skills/"):
+                # A skill's artifact (§9.4): public, as poppy.json is.
+                for name, _, text in self.config.skills:
+                    if path == f"/poppy/skills/{name}/SKILL.md":
+                        return CompanyResponse(
+                            200, text, headers={"Content-Type": "text/markdown; charset=utf-8"}
+                        )
             if method == "POST" and path == "/oauth/token":
                 return await self._token(request)
             if method == "GET" and path == "/oauth/authorize" and self.config.direct:
@@ -1132,6 +1166,8 @@ class CompanyService:
             "organization": {"name": config.name, "domain": organization},
             "agent": {"protocols": [{"type": "poppy", "endpoint": config.conversations_endpoint}]},
         }
+        if config.logo_uri is not None:
+            document["organization"]["logo_uri"] = config.logo_uri
         if config.oauth:
             # Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
             auth: dict[str, Any] = {"issuer": config.base}
@@ -1179,6 +1215,22 @@ class CompanyService:
             }
         if extensions:
             document["extensions"] = extensions
+        if config.skills:
+            # The pinned Agent Skills discovery index, embedded (§9.4): absolute URLs, so the
+            # entries read the same from a separate well-known index.
+            document["skill_index"] = {
+                "$schema": SKILL_INDEX_SCHEMA,
+                "skills": [
+                    {
+                        "name": name,
+                        "description": description,
+                        "type": "skill-md",
+                        "url": config.skill_url(name),
+                        "digest": f"sha256:{hashlib.sha256(text.encode()).hexdigest()}",
+                    }
+                    for name, description, text in config.skills
+                ],
+            }
         return document
 
     def domain_resource_metadata(self, domain: str | None = None) -> dict[str, Any]:
@@ -1191,6 +1243,18 @@ class CompanyService:
         organization = self.config.organization_domain(domain)
         return {
             "resource": f"https://{organization}",
+            "authorization_servers": [self.config.base],
+            "scopes_supported": list(self.config.scopes),
+            "bearer_methods_supported": ["header"],
+        }
+
+    def conversation_resource_metadata_document(self) -> dict[str, Any]:
+        """RFC 9728 metadata of the conversation endpoint as a service of its own (§4.5):
+        `resource` is the endpoint URL, path included, and its authorization server this
+        company's issuer. Tokens for it come from the issuer with `resource` set to it."""
+
+        return {
+            "resource": self.config.conversations_endpoint,
             "authorization_servers": [self.config.base],
             "scopes_supported": list(self.config.scopes),
             "bearer_methods_supported": ["header"],
@@ -1230,6 +1294,8 @@ class CompanyService:
         }
         if self._mcp() is not None:
             metadata["protected_resources"].append(config.mcp_url)
+        if config.conversation_resource:
+            metadata["protected_resources"].append(config.conversations_endpoint)
         if config.direct:
             grants.append(AUTHORIZATION_CODE_GRANT)
             metadata["authorization_endpoint"] = config.authorization_endpoint
@@ -1451,6 +1517,8 @@ class CompanyService:
         }:
             return None
         if self._mcp() is not None and resource == self.config.mcp_url:
+            return resource
+        if self.config.conversation_resource and resource == self.config.conversations_endpoint:
             return resource
         raise _RefusedError(400, "invalid_target")
 
@@ -2429,11 +2497,19 @@ class CompanyService:
                 headers={"Accept-Signature": accept_signature(request.headers)},
             )
 
+    def _conversation_resource(self) -> str | None:
+        """The `resource` conversation requests need a token for: the endpoint itself when it
+        is a service of its own (`conversation_resource`, §4.5), else the default token's."""
+
+        return self.config.conversations_endpoint if self.config.conversation_resource else None
+
     def _resource_metadata_url(self, resource: str | None) -> str:
         """The protected resource metadata URL of the service a request was for (RFC 9728)."""
 
         if resource == self.config.mcp_url:
             return self.config.mcp_resource_metadata
+        if resource == self.config.conversations_endpoint:
+            return self.config.conversation_resource_metadata
         return f"{self.config.base}/.well-known/oauth-protected-resource"
 
     async def _session(self, verified: Any) -> str:
@@ -2807,7 +2883,7 @@ class CompanyService:
             )
 
     async def _start_conversation(self, request: CompanyRequest) -> CompanyResponse:
-        _, session = await self._caller(request)
+        _, session = await self._caller(request, resource=self._conversation_resource())
         _wait(request)
         body = _json_object(request.body)
         parent_id = body.get("parent_conversation_id")
@@ -2989,7 +3065,7 @@ class CompanyService:
         parts = path.split("/")
         conversation_id = parts[3]
         action = parts[4] if len(parts) > 4 else ""
-        _, session = await self._caller(request)
+        _, session = await self._caller(request, resource=self._conversation_resource())
         if not _IDENTIFIER.fullmatch(conversation_id):
             # An ID with characters not allowed is malformed, not unknown (§7.2, §7.13).
             raise _RefusedError(400, "invalid_request")

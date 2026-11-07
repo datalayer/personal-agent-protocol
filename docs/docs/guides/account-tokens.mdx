@@ -98,6 +98,18 @@ whether a DPoP proof goes.
   Sessions continue signed out (§5.5). What happens to access tokens already
   issued follows RFC 7009 §2.1; the reference companies stop them at once.
 
+## A conversation endpoint at another provider
+
+The rules for tokens for one service cover a conversation endpoint a provider
+runs on another host (spec 4.5): `ServiceTokens.token_for(endpoint)`
+(`tokenFor`) reads the endpoint's RFC 9728 metadata and, when its `resource` is
+not the company's domain, requests a token for it from the company's issuer
+with RFC 8707 `resource`, and `ConversationClient` sends that token there. The
+resource identifier is the endpoint URL with its tenant path, so tokens for
+different companies at the provider have different audiences; the Session JWT's
+audience and the User IDs stay the company's identifier. The reference companies
+play this provider with `conversation_resource` (`conversationResource`).
+
 ## Security boundary
 
 - The refresh token never reaches a model, a conversation, a URL, a log, or an

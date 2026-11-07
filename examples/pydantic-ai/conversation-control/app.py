@@ -26,7 +26,7 @@ from personal_agent_protocol import (
     Message,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
 )
 from personal_agent_protocol.company import build_company, company_app
 from personal_agent_protocol.demo.kit import (
@@ -91,7 +91,7 @@ async def explain_conversation_control() -> dict[str, Any]:
 
     def say(text: str, author: str = "agent") -> Message:
         return Message(
-            id=generate_message_id(reactor),
+            id=generate_request_id(reactor),
             author=Author(type=author),  # type: ignore[arg-type]
             text=text,
         )
@@ -155,12 +155,17 @@ async def explain_conversation_control() -> dict[str, Any]:
             refusals[f"{action}_names_the_open_direct_conversation"] = (error.details or {}).get(
                 "conversation_id"
             ) == direct.conversation_id
-    direct_closed = await conversations.close(
-        endpoint, direct.conversation_id, session=session, token=token
+    # A close is accepted (202) and acted on in its own time; the state says when (§8.12).
+    await conversations.close(endpoint, direct.conversation_id, session=session, token=token)
+    direct_closed = await conversations.read_until_done(
+        endpoint, direct.conversation_id, session=session, token=token, wait=0
     )
 
     # 4. Handoff to a person at the company; their replies' author is `human`.
-    handed = await conversations.handoff(endpoint, parent, session=session, token=token)
+    await conversations.handoff(endpoint, parent, session=session, token=token)
+    handed = await conversations.read_until_done(
+        endpoint, parent, session=session, token=token, cursor=page.cursor, wait=0
+    )
     page = await conversations.send(
         endpoint, parent, say("Thank you"), session=session, token=token, cursor=page.cursor, wait=0
     )
@@ -182,8 +187,13 @@ async def explain_conversation_control() -> dict[str, Any]:
     replies = [event.message for event in page.events if event.message is not None]
     person = replies[-1].author.model_dump(exclude_none=True) if replies else None
 
-    # 5. Closing ends the conversation; what it started is not cancelled.
-    closed = await conversations.close(endpoint, parent, session=session, token=token)
+    # 5. Closing ends the conversation; what it started is not cancelled. Read until the
+    # company has acted on everything first (§8.12).
+    await conversations.read_until_done(endpoint, parent, session=session, token=token, wait=0)
+    await conversations.close(endpoint, parent, session=session, token=token)
+    closed = await conversations.read_until_done(
+        endpoint, parent, session=session, token=token, wait=0
+    )
     try:
         await conversations.send(
             endpoint, parent, say("One more thing"), session=session, token=token

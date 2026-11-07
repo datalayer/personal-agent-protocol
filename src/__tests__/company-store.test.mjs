@@ -100,7 +100,7 @@ test("a company restarted over its store continues every flow", async () => {
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
   const endpoint = company.document.agent.protocols[0].endpoint;
-  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
+  const message = (text) => ({ id: conversations.generateRequestId(), author: { type: "human" }, text });
   const session = await new SessionClient({ reactor: host.reactor, fetch }).start({
     clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT,
   });
@@ -172,7 +172,7 @@ test("a company restarted over its store continues every flow", async () => {
     await conversations.send(
       endpoint,
       page.conversation_id,
-      { id: conversations.generateMessageId(), author: { type: "agent" }, extensions: operationsContent({ approval }) },
+      { id: conversations.generateRequestId(), author: { type: "agent" }, extensions: operationsContent({ approval }) },
       { session, token: again.token, wait: 0 },
     );
   }

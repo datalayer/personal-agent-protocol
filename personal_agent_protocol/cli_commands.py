@@ -75,7 +75,7 @@ from .cli_host import (
     approval_key,
     approval_mac,
 )
-from .conversations import generate_message_id
+from .conversations import generate_request_id
 from .device import DeviceSignInClient
 from .errors import PersonalAgentProtocolError
 from .identity import AgentIdentityClient
@@ -403,7 +403,7 @@ async def _send_approval(
 
 def _message(reactor: Any, text: str, human: bool) -> Message:
     return Message(
-        id=generate_message_id(reactor),
+        id=generate_request_id(reactor),
         author=Author(type="human" if human else "agent"),
         text=text,
     )
@@ -1063,7 +1063,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
             stored = {
                 **approval.model_dump(mode="json"),
                 "session": session,
-                "message_id": generate_message_id(runtime.reactor),
+                "message_id": generate_request_id(runtime.reactor),
             }
             store = first_contribution(runtime.reactor, TOKEN_STORES, "token store")
             # Bound to a key in the protected token store: an approval written into
@@ -1329,11 +1329,8 @@ def _render_receipt_or_page(payload: dict) -> None:
         typer.echo(f"conversation {payload['conversation_id']}")
         _render_page(payload)
         return
-    typer.echo(
-        f"conversation {payload['conversation_id']}: working: {payload.get('working')} "
-        f"· handoff: {payload.get('handoff')} · responder: {payload['responder']} "
-        f"· closed: {payload.get('closed')}"
-    )
+    # A successful POST means accepted, not acted on (§8.3): `events` reads the state.
+    typer.echo(f"conversation {payload['conversation_id']}: accepted")
 
 
 def _write_report(report: Any, output_format: str, output: Path | None) -> None:

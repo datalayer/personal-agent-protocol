@@ -18,7 +18,7 @@ export {
 } from "./errors.js";
 export {
   ConversationClient,
-  generateMessageId,
+  generateRequestId,
   type ConversationClientOptions,
   type ConversationEventOptions,
   type ConversationReceipt,

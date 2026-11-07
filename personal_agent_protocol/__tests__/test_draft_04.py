@@ -159,7 +159,10 @@ async def test_a_request_without_poppy_version_or_in_an_unserved_one_is_refused(
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     headers = await session_headers(world.reactor, "POST", endpoint, session=session, token=None)
-    body = {"message": world.message("Hello").model_dump(mode="json", exclude_none=True)}
+    body = {
+        "id": "req_version_0000000000",
+        "message": world.message("Hello").model_dump(mode="json", exclude_none=True),
+    }
     without = {k: v for k, v in headers.items() if k != "Poppy-Version"}
     refused = await world.http.post(endpoint, headers=without, json=body)
     assert refused.status_code == 400 and refused.json() == {"error": "version_unsupported"}
@@ -211,7 +214,10 @@ async def test_the_company_serves_its_other_versions_documents() -> None:
     # A request in the older version is served, with the notice; the current one carries none.
     endpoint = document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     headers = await session_headers(world.reactor, "POST", endpoint, session=session, token=None)
-    body = {"message": world.message("Hello").model_dump(mode="json", exclude_none=True)}
+    body = {
+        "id": "req_versions_000000000",
+        "message": world.message("Hello").model_dump(mode="json", exclude_none=True),
+    }
     older_answer = await world.http.post(
         endpoint, headers={**headers, "Poppy-Version": "0.0"}, json=body
     )
@@ -219,7 +225,9 @@ async def test_the_company_serves_its_other_versions_documents() -> None:
     assert older_answer.headers["Deprecation"] == f"@{int(since.timestamp())}"
     assert older_answer.headers["Sunset"] == "Fri, 01 Jan 2027 00:00:00 GMT"
     headers = await session_headers(world.reactor, "POST", endpoint, session=session, token=None)
-    current = await world.http.post(endpoint, headers=headers, json=body)
+    current = await world.http.post(
+        endpoint, headers=headers, json={**body, "id": "req_current_000000000"}
+    )
     assert current.status_code == 201 and "Sunset" not in current.headers
     with pytest.raises(ValueError):
         replace(CONFIG, protocol_versions=(PROTOCOL_PROFILE, PROTOCOL_PROFILE))

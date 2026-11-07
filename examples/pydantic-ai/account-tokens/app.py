@@ -23,7 +23,7 @@ from personal_agent_protocol import (
     PapSession,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.demo.kit import (
@@ -108,7 +108,7 @@ async def explain_account_tokens() -> dict[str, Any]:
 
     def question() -> Message:
         return Message(
-            id=generate_message_id(reactor), author=Author(type="human"), text="Where is my order?"
+            id=generate_request_id(reactor), author=Author(type="human"), text="Where is my order?"
         )
 
     # 1. A refresh names no Session: it gets a new access token for the account, and the

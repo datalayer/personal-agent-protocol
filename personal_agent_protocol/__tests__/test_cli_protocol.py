@@ -286,13 +286,17 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
     assert events["working"] is False and events["has_more"] is False
     followed = pap("conversations", "follow", session, conversation, "--max-events", "2", "--json")
     assert len(followed["events"]) == 2
-    assert pap("conversations", "handoff", session, conversation, "--json")["handoff"] == "none"
+    handed = pap("conversations", "handoff", session, conversation, "--json")
+    assert handed["conversation_id"] == conversation and "handoff" not in handed
+    assert pap("conversations", "events", session, conversation, "--json")["handoff"] == "none"
     direct = pap("conversations", "direct", session, conversation, "I'll ask myself.", "--json")[
         "conversation_id"
     ]
     pap("conversations", "send", session, conversation, "Meanwhile?", code=1)
     pap("conversations", "close", session, direct, "--json")
-    assert pap("conversations", "close", session, conversation, "--json")["closed"] is True
+    closed = pap("conversations", "close", session, conversation, "--json")
+    assert closed["conversation_id"] == conversation and "closed" not in closed
+    assert pap("conversations", "events", session, conversation, "--json")["closed"] is True
 
     # A new access token from the refresh token.
     renewed = pap("sessions", "renew", session, "--json")["session"]

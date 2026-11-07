@@ -45,7 +45,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
   let page;
   let proposal;
   const endpoint = () => discovered.document.agent.protocols[0].endpoint;
-  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
+  const message = (text) => ({ id: conversations.generateRequestId(), author: { type: "human" }, text });
 
   for (const step of scenario.steps) {
     log(step.step);
@@ -112,7 +112,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
         const answer = await conversations.send(
           endpoint(),
           page.conversation_id,
-          { id: conversations.generateMessageId(), author: { type: "agent" }, extensions: operationsContent({ approval }) },
+          { id: conversations.generateRequestId(), author: { type: "agent" }, extensions: operationsContent({ approval }) },
           { session, token: signedIn, wait: 0 },
         );
         const said = answer.events.filter((event) => event.message?.role === "company").map((event) => event.message);

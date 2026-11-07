@@ -130,12 +130,28 @@ the state once `has_more` is `false`.
 
 ## Handoff (§8.9) and closing (§8.12)
 
+Every conversation `POST` carries a request `id` the agent chooses (§8.3):
+`start`, `send`, `handoff`, `cancel_handoff` and `close` take `request_id`
+(`requestId`), default to the message's `id`, and generate one otherwise
+(`generate_request_id`). A retry sends the same ID to the same path with the
+same body and gets the original response; a reuse with another body or path is
+`request_id_conflict`. The company acts on messages, handoff requests and
+cancels in the order it accepts them, and a successful `POST` (201 or 202)
+returns only `conversation_id`: read the state for what happened.
+
 `handoff()` asks for a person at the company: `handoff` is `pending` while
 one is looked for, then `responder` becomes `human` when someone takes it, or
 `handoff` goes back to `none` and the company agent says none is available.
-`close()` ends the conversation (`closed` is `true`);
-the company refuses later messages with `conversation_closed`. Closing does
-not cancel anything the conversation started, such as an order or a return.
+`cancel_handoff()` (`cancelHandoff`) withdraws the request: the company MAY stop
+looking, or keep looking when it cannot withdraw it, and a person may have
+joined first, so read `handoff` and `responder` and never depend on the cancel
+taking effect. `close()` ends the conversation: it is accepted with 202, and a
+close doesn't wait its turn, so the company MAY act on or drop requests it has
+not acted on yet; `read_until_done` first when they matter. Once acted on,
+`closed` is `true` with a state event; later messages, handoff requests and
+cancels are `conversation_closed`, and a close of a closed conversation is 202
+and changes nothing. Closing does not cancel anything the conversation started,
+such as an order or a return.
 
 ## Who wrote each message: `author`
 

@@ -312,7 +312,7 @@ example("docs/docs/guides/conversations.mdx#0", async (w) => {
   const session = await w.signedOut("shop.example");
   const endpoint = company.document.agent.protocols[0].endpoint;
   const conversations = new portable.ConversationClient({ reactor: w.reactor, transport: w.transport });
-  const message = { id: conversations.generateMessageId(), author: { type: "human" }, text: "Hello" };
+  const message = { id: conversations.generateRequestId(), author: { type: "human" }, text: "Hello" };
   const page = await conversations.start(endpoint, message, { session, wait: 0 });
   await conversations.close(endpoint, page.conversation_id, { session });
   const handled = [];

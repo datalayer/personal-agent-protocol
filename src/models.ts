@@ -448,8 +448,16 @@ export interface Author extends UnknownFields {
   readonly image?: string;
 }
 
+/**
+ * A message sent by either side, or returned in a conversation event (§8.4).
+ *
+ * `id` is set by the Company when it records the message as an event: a Personal Agent
+ * message's ID is its request's ID (§8.3), a Company message's one it chooses. On a message the
+ * Personal Agent builds, `id` is the request ID the client sends at the top level of the `POST`;
+ * the message itself goes without it.
+ */
 export interface Message extends UnknownFields {
-  readonly id: string;
+  readonly id?: string;
   readonly author: Author;
   readonly role?: "user" | "company";
   readonly text?: string;
@@ -1453,7 +1461,7 @@ export function parseMessage(value: unknown): Message {
   }
   return {
     ...source,
-    id: identifier(source.id, "message.id"),
+    ...(source.id === undefined ? {} : { id: identifier(source.id, "message.id") }),
     author: parseAuthor(source.author),
     ...(source.role === undefined
       ? {}

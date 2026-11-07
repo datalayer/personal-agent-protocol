@@ -24,7 +24,7 @@ from personal_agent_protocol import (
 )
 from personal_agent_protocol.company import CLIENT_POLICIES
 from personal_agent_protocol.company.store import DEVICE, PendingDevice
-from personal_agent_protocol.conversations import generate_message_id
+from personal_agent_protocol.conversations import generate_request_id
 from personal_agent_protocol.models import Approval, operations_content
 from personal_agent_protocol.transport import session_headers
 
@@ -133,7 +133,7 @@ async def test_polling_too_fast_is_slow_down() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_reused_message_id_with_new_text_conflicts_and_a_retry_replays() -> None:
+async def test_a_reused_request_id_with_new_text_conflicts_and_a_retry_replays() -> None:
     world = World()
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
@@ -147,7 +147,7 @@ async def test_a_reused_message_id_with_new_text_conflicts_and_a_retry_replays()
             first.model_copy(update={"text": "Something else"}),
             session=session,
         )
-    assert raised.value.code == "message_id_conflict"
+    assert raised.value.code == "request_id_conflict"
 
 
 @pytest.mark.asyncio
@@ -336,7 +336,7 @@ async def test_a_revised_operation_answers_a_new_revision_and_is_never_performed
 
     async def approving(operation: Any) -> Any:
         message = Message(
-            id=generate_message_id(world.reactor),
+            id=generate_request_id(world.reactor),
             author=Author(type="agent"),
             extensions=operations_content(
                 approval=Approval(operation_id=operation.operation_id, revision=operation.revision)

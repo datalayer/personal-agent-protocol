@@ -1,6 +1,6 @@
 ---
 title: Conversation messages
-description: Start and continue a PAP conversation with safe idempotent message IDs.
+description: Start and continue a PAP conversation with safe idempotent request IDs.
 ---
 
 import Deck from '@theme/Deck';
@@ -10,10 +10,16 @@ import deck from '@site/decks/examples/conversation-messages.deck.json';
 
 <Deck spec={deck} />
 
-PAP message IDs are user-global idempotency keys. Generate one with at least
-128 random bits, retain the complete `Message`, and retry that same object after
-an ambiguous network failure. Reusing its ID with different content is a
-`message_id_conflict`.
+Every conversation `POST` carries a request `id` (§8.3), a user-global
+idempotency key the personal agent chooses; a message's ID is its request's, so
+the message itself goes without one. Generate one with at least 128 random
+bits (`generate_request_id`, `generateRequestId`), retain the complete `Message`
+whose `id` holds it, and retry that same object after an ambiguous network
+failure: the same ID to the same path with the same body returns the original
+response. Reusing the ID with another body, or at another path, is a
+`request_id_conflict`. A successful `POST` means the company accepted the
+request, not that it acted on it: the response without `wait` holds only
+`conversation_id`, and the state is read (§8.7).
 
 ```mermaid
 sequenceDiagram
@@ -22,12 +28,12 @@ sequenceDiagram
   participant H as Trusted host
   participant C as Company agent
   A->>H: Ask to start a conversation
-  H->>H: Generate msg_ ID (128 random bits)
+  H->>H: Generate a request ID (128 random bits)
   H->>C: POST first message + Session JWT
   C-->>H: 201 conversation_id and the state fields
   H-->>A: Conversation state only
   A->>H: Continue with context update
-  H->>C: POST new message ID + Session JWT
+  H->>C: POST new request ID + Session JWT
   C-->>H: 202 state fields or waited event page
   Note over H,C: Retry keeps the exact ID and content
   H-->>A: Safe conversation result

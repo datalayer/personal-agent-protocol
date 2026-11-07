@@ -99,18 +99,21 @@ test("a company that does not stream says so", async () => {
   );
 });
 
-test("handoff and close post empty objects", async () => {
-  const { client, seen } = arrange((url) =>
-    url.endsWith("/handoff")
-      ? json(202, { conversation_id: "cnv_1", working: false, handoff: "pending", responder: "agent", closed: false })
-      : json(200, { conversation_id: "cnv_1", working: false, handoff: "none", responder: "human", closed: true }),
-  );
-  assert.equal((await client.handoff(endpoint, "cnv_1", { session: session() })).handoff, "pending");
-  assert.equal((await client.close(endpoint, "cnv_1", { session: session() })).responder, "human");
-  assert.deepEqual(seen.map((s) => [new URL(s.url).pathname, s.init.body]), [
-    ["/conversations/cnv_1/handoff", "{}"],
-    ["/conversations/cnv_1/close", "{}"],
+test("handoff, its cancel and close post a request ID", async () => {
+  // Accepted, not yet acted on: 202 and the conversation's ID alone (§8.3).
+  const { client, seen } = arrange(() => json(202, { conversation_id: "cnv_1" }));
+  const queued = await client.handoff(endpoint, "cnv_1", { session: session(), requestId: "hnd_1" });
+  const cancelled = await client.cancelHandoff(endpoint, "cnv_1", { session: session() });
+  const closed = await client.close(endpoint, "cnv_1", { session: session(), requestId: "cls_1" });
+  assert.deepEqual([queued, cancelled, closed], [{ conversation_id: "cnv_1" }, { conversation_id: "cnv_1" }, { conversation_id: "cnv_1" }]);
+  assert.deepEqual(seen.map((s) => new URL(s.url).pathname), [
+    "/conversations/cnv_1/handoff",
+    "/conversations/cnv_1/handoff/cancel",
+    "/conversations/cnv_1/close",
   ]);
+  const bodies = seen.map((s) => JSON.parse(s.init.body));
+  assert.deepEqual([bodies[0], bodies[2]], [{ id: "hnd_1" }, { id: "cls_1" }]);
+  assert.ok(Object.keys(bodies[1]).join() === "id" && bodies[1].id.startsWith("req_"));
 });
 
 test("a Direct Conversation names its parent; the parent points to it", async () => {
@@ -132,7 +135,9 @@ test("accepting an invitation names the parent and the event, and sends no messa
   // Company-first Direct Conversations (§8.10): both IDs, no `message`.
   const { client, seen } = arrange(() => json(201, { conversation_id: "cnv_direct", working: false, handoff: "none", responder: "agent", closed: false }));
   const opened = await client.acceptUserRequest(endpoint, "cnv_1", "evt_c6", { session: session() });
-  assert.deepEqual(JSON.parse(seen[0].init.body), { parent_conversation_id: "cnv_1", user_requested_event_id: "evt_c6" });
+  const { id, ...rest } = JSON.parse(seen[0].init.body);
+  assert.deepEqual(rest, { parent_conversation_id: "cnv_1", user_requested_event_id: "evt_c6" });
+  assert.ok(id.startsWith("req_"));
   assert.equal(opened.conversation_id, "cnv_direct");
   await assert.rejects(client.start(endpoint, undefined, { session: session() }), TypeError);
   await assert.rejects(client.start(endpoint, undefined, { session: session(), userRequestedEventId: "evt_c6" }), TypeError);

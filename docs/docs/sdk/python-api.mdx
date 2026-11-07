@@ -90,7 +90,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`FeedbackDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where personal agents report a task the protocol can't do at this company (§8).
 - [`FeedbackError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. The company refused a feedback report: `invalid_request`, `rate_limited`, a token error.
 - [`FeedbackReport`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. One report of a task the company offers no way to do through the protocol (§8).
-- [`generate_message_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Function. Generate a user-global message ID with at least 128 random bits.
+- [`generate_request_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Function. Generate a user-global message ID with at least 128 random bits.
 - [`generate_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. Generate a non-PII user ID to persist for one user/company issuer pair.
 - [`IdentityError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Personal-agent metadata or public keys could not be verified safely.
 - [`InMemoryDelegatedKeys`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Delegated keys in this process's memory, one per User ID.

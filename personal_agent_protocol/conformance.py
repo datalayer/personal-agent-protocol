@@ -1062,11 +1062,11 @@ async def _no_cookies(ctx: ConformanceContext, _: FixtureCase) -> None:
     endpoint = await ctx.conversations_endpoint()
     body = json.dumps(
         {
+            "id": _message_id(),
             "message": {
-                "id": _message_id(),
                 "author": {"type": "agent"},
                 "text": ctx.scenario.greeting,
-            }
+            },
         }
     ).encode()
     response = await ctx.send(
@@ -1420,7 +1420,9 @@ async def _disconnect(ctx: ConformanceContext, _: FixtureCase) -> None:
 
 
 def _message_id() -> str:
-    return "msg_" + base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
+    """A request ID (§8.3): the message's, chosen by the agent, with 128 random bits."""
+
+    return "req_" + base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
 
 
 def _message(text: str, author: Literal["agent", "human"] = "agent") -> Message:
@@ -1435,13 +1437,7 @@ async def _start_and_reply(ctx: ConformanceContext, _: FixtureCase) -> None:
     receipt = await ctx.agent.conversations.start(
         endpoint, _message(ctx.scenario.greeting), session=session
     )
-    check(
-        isinstance(receipt.working, bool)
-        and receipt.handoff
-        and receipt.responder
-        and isinstance(receipt.closed, bool),
-        "the answer has the four state fields",
-    )
+    check(receipt.conversation_id, "the answer has the conversation ID, and nothing to act on")
     url = f"{endpoint}/{receipt.conversation_id}/events"
     raw = await ctx.send(
         "GET",
@@ -1483,18 +1479,24 @@ async def _retry(ctx: ConformanceContext, _: FixtureCase) -> None:
     check(len(after.events) == len(page.events), "a retry adds nothing")
 
 
-@case("conversations.message-id-conflict")
+@case("conversations.request-id-conflict")
 async def _conflict(ctx: ConformanceContext, _: FixtureCase) -> None:
     user = ctx.new_user()
     session = await ctx.session(user)
     endpoint = await ctx.conversations_endpoint()
     message = _message(ctx.scenario.greeting)
-    await ctx.agent.conversations.start(endpoint, message, session=session)
+    started = await ctx.agent.conversations.start(endpoint, message, session=session)
     changed = message.model_copy(update={"text": "Something else entirely."})
     with _raises(PersonalAgentProtocolError) as raised:
         await ctx.agent.conversations.start(endpoint, changed, session=session)
-    check(raised.value.code == "message_id_conflict", f"got {raised.value.code}")
-    check(raised.value.status_code == 409, "message_id_conflict is HTTP 409")
+    check(raised.value.code == "request_id_conflict", f"got {raised.value.code}")
+    check(raised.value.status_code == 409, "request_id_conflict is HTTP 409")
+    # The same ID at another path is a reuse too (§8.3).
+    with _raises(PersonalAgentProtocolError) as raised:
+        await ctx.agent.conversations.handoff(
+            endpoint, started.conversation_id, session=session, request_id=message.id
+        )
+    check(raised.value.code == "request_id_conflict", f"another path: got {raised.value.code}")
 
 
 async def _conversation(
@@ -1732,7 +1734,7 @@ async def _handoff(ctx: ConformanceContext, _: FixtureCase) -> None:
     endpoint = await ctx.conversations_endpoint()
     conversation = await _conversation(ctx, user, session)
     receipt = await ctx.agent.conversations.handoff(endpoint, conversation, session=session)
-    check(receipt.handoff in {"none", "pending"}, "handoff answers a handoff state")
+    check(receipt.conversation_id == conversation, "a handoff is accepted with 202 and the ID")
     page = await ctx.agent.conversations.read_until_done(
         endpoint, conversation, session=session, wait=0
     )
@@ -1741,6 +1743,34 @@ async def _handoff(ctx: ConformanceContext, _: FixtureCase) -> None:
     check(states[-1].handoff == page.handoff, "the last state event is the current handoff")
     check(states[-1].responder == page.responder, "and the current responder")
     check(states[-1].closed == page.closed, "and whether it is closed")
+
+
+@case("conversations.handoff-cancel")
+async def _handoff_cancel(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A cancel is accepted (202); the company stops looking, or a person has joined, and
+    the agent reads which from handoff and responder (§8.9)."""
+
+    user = ctx.new_user()
+    session = await ctx.session(user)
+    endpoint = await ctx.conversations_endpoint()
+    conversation = await _conversation(ctx, user, session)
+    await ctx.agent.conversations.handoff(endpoint, conversation, session=session)
+    cancelled = await ctx.agent.conversations.cancel_handoff(
+        endpoint, conversation, session=session
+    )
+    check(cancelled.conversation_id == conversation, "a cancel is accepted with 202 and the ID")
+    page = await ctx.agent.conversations.read_until_done(
+        endpoint, conversation, session=session, wait=0
+    )
+    check(
+        page.handoff == "none" or page.responder == "human",
+        "after a cancel, no one is looked for, or a person joined first",
+    )
+    # A cancel when no one is looked for changes nothing (§8.9).
+    count = len(page.events)
+    await ctx.agent.conversations.cancel_handoff(endpoint, conversation, session=session)
+    after = await ctx.agent.conversations.read_events(endpoint, conversation, session=session)
+    check(len(after.events) == count, "a cancel with nothing pending adds no event")
 
 
 @case("conversations.direct-conversation")
@@ -1823,13 +1853,28 @@ async def _closed(ctx: ConformanceContext, _: FixtureCase) -> None:
     endpoint = await ctx.conversations_endpoint()
     conversation = await _conversation(ctx, user, session)
     closed = await ctx.agent.conversations.close(endpoint, conversation, session=session)
-    check(closed.closed is True, "closing answers closed")
+    check(closed.conversation_id == conversation, "a close is accepted with 202 and the ID")
+    page = await ctx.agent.conversations.read_until_done(
+        endpoint, conversation, session=session, wait=0
+    )
+    check(page.closed, "once acted on, the conversation is closed")
+    check(
+        any(event.type == "state" and event.closed for event in page.events),
+        "a state event records the close",
+    )
     with _raises(PersonalAgentProtocolError) as raised:
         await ctx.agent.conversations.send(
             endpoint, conversation, _message("Still there?"), session=session
         )
     check(raised.value.code == "conversation_closed", f"got {raised.value.code}")
     check(raised.value.status_code == 409, "conversation_closed is HTTP 409")
+    with _raises(PersonalAgentProtocolError) as raised:
+        await ctx.agent.conversations.cancel_handoff(endpoint, conversation, session=session)
+    check(
+        raised.value.code == "conversation_closed", f"a cancel after a close: {raised.value.code}"
+    )
+    again = await ctx.agent.conversations.close(endpoint, conversation, session=session)
+    check(again.conversation_id == conversation, "a close of a closed conversation is 202")
     page = await ctx.agent.conversations.read_events(endpoint, conversation, session=session)
     check(page.closed and page.events, "its events stay readable")
 
@@ -2500,7 +2545,7 @@ async def _version_header_required(ctx: ConformanceContext, _: FixtureCase) -> N
         "POST",
         endpoint,
         headers={**headers, "Content-Type": "application/json"},
-        content=json.dumps({"message": body}).encode(),
+        content=json.dumps({"id": _message_id(), "message": body}).encode(),
     )
     expect_refusal(response, 400, "version_unsupported", "no Poppy-Version")
     check(response.headers.get("content-type", "").startswith("application/json"), "a JSON body")
@@ -2520,7 +2565,7 @@ async def _version_unserved(ctx: ConformanceContext, _: FixtureCase) -> None:
         "POST",
         endpoint,
         headers={**headers, "Content-Type": "application/json"},
-        content=json.dumps({"message": body}).encode(),
+        content=json.dumps({"id": _message_id(), "message": body}).encode(),
     )
     expect_refusal(response, 400, "version_unsupported", "an unserved Poppy-Version")
 
@@ -3507,7 +3552,10 @@ async def _no_issuer_audience(ctx: ConformanceContext, fixture: FixtureCase) -> 
     check(session.issuer == ctx.base_url, "the Session names the identifier")
     url = await ctx.conversations_endpoint()
     message = json.dumps(
-        {"message": _message(ctx.scenario.greeting).model_dump(mode="json", exclude_none=True)}
+        {
+            "id": _message_id(),
+            "message": _message(ctx.scenario.greeting).model_dump(mode="json", exclude_none=True),
+        }
     ).encode()
     json_body = {"Content-Type": "application/json"}
     accepted = await ctx.send(

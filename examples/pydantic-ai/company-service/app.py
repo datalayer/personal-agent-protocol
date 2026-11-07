@@ -36,7 +36,7 @@ from personal_agent_protocol import (
     Message,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
     operations_content,
 )
 from personal_agent_protocol.company import (
@@ -196,7 +196,7 @@ async def run_company_service() -> dict[str, Any]:
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     def say(text: str) -> Message:
-        return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
+        return Message(id=generate_request_id(reactor), author=Author(type="human"), text=text)
 
     page = await conversations.start(endpoint, say("When is my book due?"), session=session, wait=0)
     asked = [e for e in page.events if e.type != "state"][-1]
@@ -246,7 +246,9 @@ async def run_company_service() -> dict[str, Any]:
             endpoint,
             page.conversation_id,
             Message(
-                id=generate_message_id(reactor), author=Author(type="agent"), extensions=operations_content(approval=approval)
+                id=generate_request_id(reactor),
+                author=Author(type="agent"),
+                extensions=operations_content(approval=approval),
             ),
             session=session,
             token=signed_in,

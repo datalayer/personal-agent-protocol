@@ -86,7 +86,7 @@ nonce kept per origin. It refuses every redirect
 redirects to. See the [Session transport flow](/examples/session-transport/).
 
 `ConversationClient` composes that transport to start and continue PAP
-conversations. `generateMessageId()` uses Reactor's cryptographic random source
+conversations. `generateRequestId()` uses Reactor's cryptographic random source
 to create a user-global idempotency key. Retain the complete message and reuse
 it unchanged when retrying an ambiguous request. The client parses immediate
 receipts or waited event pages and propagates `AbortSignal` without exposing

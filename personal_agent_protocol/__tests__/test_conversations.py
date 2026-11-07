@@ -21,7 +21,7 @@ from personal_agent_protocol import (
     SessionHttpClient,
     SessionJwtRequest,
     build_pap_reactor,
-    generate_message_id,
+    generate_request_id,
 )
 
 
@@ -85,7 +85,7 @@ async def test_start_and_continue_preserve_message_ids_and_parse_waited_events()
         reactor.register_plugin(PluginManifest(name="conversations-test", version="1"), Plugin())
         client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
         first = Message(
-            id=generate_message_id(reactor), author=Author(type="agent"), text="Return the jacket"
+            id=generate_request_id(reactor), author=Author(type="agent"), text="Return the jacket"
         )
         page = await client.start(
             "https://api.example/conversations",
@@ -94,7 +94,7 @@ async def test_start_and_continue_preserve_message_ids_and_parse_waited_events()
             wait=10,
         )
         follow_up = Message(
-            id=generate_message_id(reactor),
+            id=generate_request_id(reactor),
             author=Author(type="agent"),
             context={"user_available": False},
         )
@@ -109,8 +109,9 @@ async def test_start_and_continue_preserve_message_ids_and_parse_waited_events()
         reactor.stop()
 
     assert page.conversation_id == receipt.conversation_id == "cnv_one"
-    assert seen[0]["message"]["id"] == first.id  # type: ignore[index]
-    assert seen[1]["message"]["id"] == follow_up.id  # type: ignore[index]
+    # The request's `id` is top-level and the message goes without one (§8.3).
+    assert seen[0]["id"] == first.id and "id" not in seen[0]["message"]  # type: ignore[index]
+    assert seen[1]["id"] == follow_up.id and "id" not in seen[1]["message"]  # type: ignore[index]
     assert first.id != follow_up.id
 
 
@@ -296,7 +297,7 @@ async def test_an_authorization_event_with_its_challenge_on_an_accepted_message_
             plugins=[(PluginManifest(name="jwts", version="1"), Plugin())],
         )
         client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
-        message = Message(id=generate_message_id(reactor), author=Author(type="agent"), text="Hi")
+        message = Message(id=generate_request_id(reactor), author=Author(type="agent"), text="Hi")
         answer = await client.start(
             "https://company.example/poppy", message, session=session(), wait=0
         )

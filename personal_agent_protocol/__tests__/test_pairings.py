@@ -39,7 +39,7 @@ from personal_agent_protocol import (
     Message,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
 )
 from personal_agent_protocol.apis import ApiClient
 from personal_agent_protocol.demo.kit import (
@@ -168,7 +168,7 @@ class _Journey:
         self.seen: dict[str, Any] = {}
 
     def message(self, text: str) -> Message:
-        return Message(id=generate_message_id(self.reactor), author=Author(type="human"), text=text)
+        return Message(id=generate_request_id(self.reactor), author=Author(type="human"), text=text)
 
     async def discover(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
         self.company = await DiscoveryClient(reactor=self.reactor, http_client=self.http).discover(
@@ -264,7 +264,7 @@ class _Journey:
                 endpoint,
                 self.page.conversation_id,
                 Message(
-                    id=generate_message_id(self.reactor),
+                    id=generate_request_id(self.reactor),
                     author=Author(type="agent"),
                     extensions=operations_content(approval=approval),
                 ),

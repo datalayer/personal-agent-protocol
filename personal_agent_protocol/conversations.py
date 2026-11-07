@@ -14,20 +14,12 @@ from typing import Literal, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
-from pydantic import Field, field_validator
+from pydantic import Field
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import ConversationError, ProtocolValidationError
 from .json import loads_strict
-from .models import (
-    ConversationEvent,
-    ConversationEventPage,
-    ConversationState,
-    Message,
-    ProtocolModel,
-    known_handoff,
-    known_responder,
-)
+from .models import ConversationEvent, ConversationEventPage, Message, ProtocolModel
 from .reactor import RANDOM_SOURCES, RandomSource, first_contribution
 from .refusals import refusal_code, refusal_details
 from .sessions import AccessToken, PapSession
@@ -36,29 +28,11 @@ from .transport import SessionHttpClient
 
 
 class ConversationReceipt(ProtocolModel):
-    """What a `POST` without `wait` returns: the conversation and its state (§8.3, §8.7)."""
+    """What a successful `POST` without `wait` returns (§8.3): the Company accepted the
+    request, not yet acted on it, so only `conversation_id`. What happened is read from
+    the conversation's events and state (§8.5, §8.7)."""
 
     conversation_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,256}$")
-    working: bool
-    handoff: Literal["none", "pending"]
-    responder: Literal["agent", "human"]
-    closed: bool
-
-    _handoff = field_validator("handoff", mode="before")(
-        classmethod(lambda cls, value: known_handoff(value))
-    )
-    _responder = field_validator("responder", mode="before")(
-        classmethod(lambda cls, value: known_responder(value))
-    )
-
-    @property
-    def state(self) -> ConversationState:
-        return ConversationState(
-            working=self.working,
-            handoff=self.handoff,
-            responder=self.responder,
-            closed=self.closed,
-        )
 
 
 class WorkingChanged(ProtocolModel):
@@ -98,14 +72,18 @@ CursorExpiredHandler = Callable[[], Awaitable[None] | None]
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
 
-def generate_message_id(reactor: PluginPlatform) -> str:
-    """Generate a user-global message ID with at least 128 random bits."""
+def generate_request_id(reactor: PluginPlatform) -> str:
+    """A request ID with at least 128 random bits, unique for the User (§8.3, guides).
+
+    Every conversation `POST` carries one, chosen by the Personal Agent: a message's ID
+    is its request's. A retry sends the same ID to the same path with the same body.
+    """
 
     random = cast(RandomSource, first_contribution(reactor, RANDOM_SOURCES, "random source"))
     entropy = random.bytes(16)
     if len(entropy) < 16:
-        raise ConversationError("insufficient_entropy", "message IDs require 128 random bits")
-    return "msg_" + base64.urlsafe_b64encode(entropy).decode().rstrip("=")
+        raise ConversationError("insufficient_entropy", "request IDs require 128 random bits")
+    return "req_" + base64.urlsafe_b64encode(entropy).decode().rstrip("=")
 
 
 class ConversationClient:
@@ -127,19 +105,21 @@ class ConversationClient:
         *,
         session: PapSession,
         token: AccessToken | None = None,
+        request_id: str | None = None,
         parent_conversation_id: str | None = None,
         user_requested_event_id: str | None = None,
         cursor: str | None = None,
         wait: int | None = None,
     ) -> ConversationResponse:
-        """Start a conversation; retry the same Message object to preserve its ID.
+        """Start a conversation (§8.3). The request's `id` is `request_id`, else the
+        message's `id`, else a new one; to retry, send the same again.
 
         `message` may be None only when accepting a `user_requested` event, with
         `parent_conversation_id` and `user_requested_event_id` both given: the company
         then speaks first (§8.10, `accept_user_request`).
         """
 
-        body: dict[str, object] = {}
+        body: dict[str, object] = {"id": self._request_id(request_id, message)}
         if message is not None:
             body["message"] = self._outgoing_message(message)
         if parent_conversation_id is not None:
@@ -171,16 +151,20 @@ class ConversationClient:
         *,
         session: PapSession,
         token: AccessToken | None = None,
+        request_id: str | None = None,
         cursor: str | None = None,
         wait: int | None = None,
     ) -> ConversationResponse:
-        """Continue a conversation with an idempotent, caller-retained message ID."""
+        """Send another message (§8.3), under a request ID the caller keeps to retry it."""
 
         self._identifier(conversation_id, "conversation ID")
         url = f"{endpoint.rstrip('/')}/{conversation_id}/messages"
         return await self._send(
             url,
-            {"message": self._outgoing_message(message)},
+            {
+                "id": self._request_id(request_id, message),
+                "message": self._outgoing_message(message),
+            },
             expected_status=202,
             session=session,
             token=token,
@@ -355,6 +339,7 @@ class ConversationClient:
         *,
         session: PapSession,
         token: AccessToken | None = None,
+        request_id: str | None = None,
         wait: int | None = None,
     ) -> ConversationResponse:
         """Accept the company's `user_requested` invitation: a Direct Conversation under
@@ -371,6 +356,7 @@ class ConversationClient:
             None,
             session=session,
             token=token,
+            request_id=request_id,
             parent_conversation_id=parent_conversation_id,
             user_requested_event_id=event_id,
             wait=wait,
@@ -384,11 +370,31 @@ class ConversationClient:
         *,
         session: PapSession,
         token: AccessToken | None = None,
+        request_id: str | None = None,
     ) -> ConversationReceipt:
-        """Ask for a person at the company (§8.9): `handoff` is `pending` while one is
-        found, and `responder` becomes `human` when one joins."""
+        """Ask for a person at the company (§8.9): accepted with 202; `handoff` is
+        `pending` while one is found, and `responder` becomes `human` when one joins."""
 
-        return await self._control(endpoint, conversation_id, "handoff", 202, session, token)
+        return await self._control(endpoint, conversation_id, "handoff", session, token, request_id)
+
+    @traced("pap.conversation.cancel_handoff", before=by_endpoint, after=conversation_result)
+    async def cancel_handoff(
+        self,
+        endpoint: str,
+        conversation_id: str,
+        *,
+        session: PapSession,
+        token: AccessToken | None = None,
+        request_id: str | None = None,
+    ) -> ConversationReceipt:
+        """Withdraw a request for a person (§8.9): accepted with 202. The company MAY stop
+        looking, and MAY keep looking when it cannot withdraw the request; a person can
+        also join first. Read `handoff` and `responder` for the outcome, and never depend
+        on the cancel taking effect."""
+
+        return await self._control(
+            endpoint, conversation_id, "handoff/cancel", session, token, request_id
+        )
 
     @traced("pap.conversation.close", before=by_endpoint, after=conversation_result)
     async def close(
@@ -398,10 +404,16 @@ class ConversationClient:
         *,
         session: PapSession,
         token: AccessToken | None = None,
+        request_id: str | None = None,
     ) -> ConversationReceipt:
-        """Close the conversation (§7.12); what it started is not cancelled."""
+        """Close the conversation (§8.12): accepted with 202, and acted on in its own time.
 
-        return await self._control(endpoint, conversation_id, "close", 200, session, token)
+        A close doesn't wait its turn: the company MAY act on requests it hasn't acted on
+        yet or drop them, so `read_until_done` first when they matter. What the
+        conversation started is not cancelled.
+        """
+
+        return await self._control(endpoint, conversation_id, "close", session, token, request_id)
 
     async def stream(  # noqa: C901 - one SSE reader with its reconnect rules
         self,
@@ -511,26 +523,38 @@ class ConversationClient:
                 last_event_id=last_event_id, discarded_message_ids=tuple(partial)
             )
 
+    def _request_id(self, request_id: str | None, message: Message | None = None) -> str:
+        """The request's `id` (§8.3): as given, else the message's, else a new one."""
+
+        chosen = request_id or (message.id if message is not None else None)
+        if chosen is None:
+            return generate_request_id(self.transport.reactor)
+        self._identifier(chosen, "request ID")
+        return chosen
+
     async def _control(
         self,
         endpoint: str,
         conversation_id: str,
         action: str,
-        expected_status: int,
         session: PapSession,
         token: AccessToken | None = None,
+        request_id: str | None = None,
     ) -> ConversationReceipt:
+        """A handoff, its cancel, or a close (§8.9, §8.12): a request ID, HTTP 202."""
+
         self._identifier(conversation_id, "conversation ID")
+        body = {"id": self._request_id(request_id)}
         response = await self.transport.request(
             "POST",
             f"{endpoint.rstrip('/')}/{conversation_id}/{action}",
             session=session,
             token=token,
             headers={"Content-Type": "application/json"},
-            content=b"{}",
+            content=json.dumps(body, separators=(",", ":")).encode(),
         )
         payload = self._parse_payload(response)
-        if response.status_code != expected_status:
+        if response.status_code != 202:
             raise self._rejected(response, payload)
         try:
             return ConversationReceipt.model_validate(payload)
@@ -618,9 +642,11 @@ class ConversationClient:
 
     @staticmethod
     def _outgoing_message(message: Message) -> dict[str, object]:
+        """The message as sent: no `id` (the request's is top-level) and no `role` (§8.4)."""
+
         if message.role is not None:
             raise ProtocolValidationError("invalid_message", "outgoing messages cannot set role")
-        return message.model_dump(mode="json", exclude_none=True)
+        return message.model_dump(mode="json", exclude_none=True, exclude={"id"})
 
     @staticmethod
     def _identifier(value: str, label: str) -> None:

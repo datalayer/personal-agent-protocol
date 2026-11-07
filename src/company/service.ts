@@ -149,7 +149,7 @@ import {
   type JoinCode,
   type JsonObject,
   type KnownClient,
-  type MessageReceipt,
+  type RequestReceipt,
   type OperationOutcome,
   type OperationProposal,
   type OperationRevision,
@@ -899,11 +899,28 @@ function waitOf(request: CompanyRequest): number | undefined {
 }
 
 /** A message as the personal agent sent it; a `role` it set is ignored (§7.4). */
-function incoming(value: unknown): Message {
-  const message = parseMessage(value);
-  if (message.role === undefined) return message;
-  const { role: _role, ...rest } = message;
-  return rest as Message;
+/**
+ * A message as the personal agent sent it (§8.4): its ID is its request's, and a `role` or `id`
+ * it set is ignored.
+ */
+function incoming(value: unknown, requestId: string): Message {
+  const { role: _role, id: _id, ...rest } = parseMessage(value);
+  return { ...rest, id: requestId } as Message;
+}
+
+/** The request's `id` (§8.3): required, in the URL-safe base64 alphabet, else `invalid_request`. */
+function requestIdOf(body: Record<string, unknown>): string {
+  const value = body.id;
+  if (typeof value !== "string" || !IDENTIFIER.test(value)) throw new Refused(400, "invalid_request");
+  return value;
+}
+
+/**
+ * What a request asked, for a retry to be told from a reuse of its ID (§8.3): its path and its
+ * body, canonical. Query parameters, such as `cursor` and `wait`, are not part.
+ */
+function requestDigest(path: string, body: Record<string, unknown>): string {
+  return digest(canonical([path, body]));
 }
 
 function rpcError(requestId: unknown, code: number, message: string): CompanyResponse {
@@ -3296,6 +3313,16 @@ export class CompanyService {
     const [, session] = await this.#caller(request, this.#conversationResource());
     waitOf(request);
     const body = jsonObject(request.body);
+    // Every POST has a request `id` (§8.3): a retry with the same ID, path and body gets the
+    // original answer; a reuse with another is `request_id_conflict`.
+    const requestId = requestIdOf(body);
+    const requestKey = requestDigest(new URL(request.url).pathname, body);
+    const owner = [session.clientId, session.pairwiseUserId] as const;
+    const replay = await this.#replayed(owner, requestId, requestKey);
+    if (replay !== undefined) {
+      // A retried start answers only a caller that may read the conversation now.
+      return this.#answer(request, await this.#owned(replay, session), 201);
+    }
     const parentId = body.parent_conversation_id;
     const eventId = body.user_requested_event_id;
     if (eventId !== undefined && eventId !== null) {
@@ -3304,20 +3331,14 @@ export class CompanyService {
       if (parentId === undefined || parentId === null || typeof eventId !== "string") {
         throw new Refused(400, "invalid_request");
       }
-      const first = body.message === undefined || body.message === null ? undefined : incoming(body.message);
-      return this.#acceptUserRequest(request, session, String(parentId), eventId, first);
+      const first = body.message === undefined || body.message === null ? undefined : incoming(body.message, requestId);
+      return this.#acceptUserRequest(request, session, String(parentId), eventId, first, requestId, requestKey);
     }
     if (body.message === undefined || body.message === null) {
       // A request without `message` is valid only when accepting an invitation.
       throw new Refused(400, "invalid_request");
     }
-    const message = incoming(body.message);
-    const owner = [session.clientId, session.pairwiseUserId] as const;
-    const replay = await this.#replayed(owner, message);
-    if (replay !== undefined) {
-      // A retried start answers only a caller that may read the conversation now.
-      return this.#answer(request, await this.#owned(replay, session), 201);
-    }
+    const message = incoming(body.message, requestId);
     let parent: StoredConversation | undefined;
     if (parentId !== undefined && parentId !== null) {
       parent = await this.#directParent(String(parentId), session);
@@ -3334,13 +3355,13 @@ export class CompanyService {
       events: [],
       forgotten: [],
     };
-    const claimed = await this.#claim(owner, message, conversationId);
+    const claimed = await this.#claim(owner, requestId, requestKey, conversationId);
     if (claimed !== undefined) {
       return this.#answer(request, await this.#owned(claimed, session), 201);
     }
     await this.store.put(RecordKinds.conversation, conversationId, json(conversation));
     if (parent !== undefined) {
-      await this.#openDirect(parent.conversationId, conversationId, owner, message);
+      await this.#openDirect(parent.conversationId, conversationId, owner, requestId);
     }
     return this.#answer(request, await this.#receive(conversationId, session, message), 201);
   }
@@ -3378,6 +3399,8 @@ export class CompanyService {
     parentId: string,
     eventId: string,
     first: Message | undefined,
+    requestId: string,
+    requestKey: string,
   ): Promise<CompanyResponse> {
     const owner = [session.clientId, session.pairwiseUserId] as const;
     let parent = await this.#owned(parentId, session);
@@ -3415,11 +3438,9 @@ export class CompanyService {
       await this.store.delete(RecordKinds.acceptance, key);
       throw error;
     }
+    await this.#claim(owner, requestId, requestKey, conversationId);
     let opened = await this.#companyFirst(conversationId, session);
-    if (first !== undefined) {
-      const claimed = await this.#claim(owner, first, conversationId);
-      if (claimed === undefined) opened = await this.#receive(conversationId, session, first);
-    }
+    if (first !== undefined) opened = await this.#receive(conversationId, session, first);
     return this.#answer(request, opened, 201);
   }
 
@@ -3458,7 +3479,7 @@ export class CompanyService {
     parentId: string,
     conversationId: string,
     owner: readonly [string, string],
-    message: Message | undefined,
+    requestId: string | undefined,
   ): Promise<void> {
     const opened = this.#event({ type: "direct_opened", conversation_id: conversationId });
     try {
@@ -3473,7 +3494,7 @@ export class CompanyService {
       if (changed === undefined) throw new Refused(404, "conversation_not_found");
     } catch (error) {
       await this.store.delete(RecordKinds.conversation, conversationId);
-      if (message !== undefined) await this.store.delete(RecordKinds.messageId, this.#messageKey(owner, message.id));
+      if (requestId !== undefined) await this.store.delete(RecordKinds.requestId, this.#requestKey(owner, requestId));
       throw error;
     }
   }
@@ -3485,7 +3506,7 @@ export class CompanyService {
   ): Promise<CompanyResponse> {
     const parts = path.split("/");
     const conversationId = parts[3] ?? "";
-    const action = parts[4] ?? "";
+    const action = parts.slice(4).join("/");
     const [, session] = await this.#caller(request, this.#conversationResource());
     if (!IDENTIFIER.test(conversationId)) {
       // An ID with characters not allowed is malformed, not unknown (§7.2, §7.13).
@@ -3503,11 +3524,37 @@ export class CompanyService {
       return this.#pageResponse(request, conversation, 200);
     }
     if (method !== "POST") throw new Refused(405, "method_not_allowed");
+    if (!["messages", "handoff", "handoff/cancel", "close"].includes(action)) throw new Refused(404, "not_found");
+    // Every POST has a request `id` (§8.3): a retry gets the original answer and is not acted
+    // on again; a reuse with another path or body is `request_id_conflict`.
+    const body = jsonObject(request.body);
+    const requestId = requestIdOf(body);
+    const requestKey = requestDigest(new URL(request.url).pathname, body);
+    const owner = [session.clientId, session.pairwiseUserId] as const;
+    let replayed = await this.#replayed(owner, requestId, requestKey);
+    if (replayed === undefined) replayed = await this.#claim(owner, requestId, requestKey, conversationId);
+    if (replayed !== undefined) return this.#answer(request, await this.#conversation(conversationId), 202);
     if (action === "close") {
+      // Accepted (202) and acted on at once: closed, with its state event (§8.12); a close of
+      // a closed conversation changes nothing.
       await this.#close(conversationId);
-      return this.#receipt(await this.#conversation(conversationId), 200);
+      return this.#answer(request, await this.#conversation(conversationId), 202);
     }
     this.#open(conversation);
+    if (action === "handoff/cancel") {
+      const changed = await this.#change<StoredConversation>(
+        RecordKinds.conversation,
+        conversationId,
+        (current) => {
+          this.#open(current);
+          // The company stops looking when it still is; a cancel when `handoff` isn't
+          // pending changes nothing (§8.9).
+          return current.handoff === "pending" ? this.#changed(current, { handoff: "none" }) : current;
+        },
+      );
+      if (changed === undefined) throw new Refused(404, "conversation_not_found");
+      return this.#answer(request, changed[1], 202);
+    }
     if (action === "handoff") {
       const changed = await this.#change<StoredConversation>(
         RecordKinds.conversation,
@@ -3538,51 +3585,41 @@ export class CompanyService {
         },
       );
       if (changed === undefined) throw new Refused(404, "conversation_not_found");
-      return this.#receipt(changed[1], 202);
+      return this.#answer(request, changed[1], 202);
     }
-    if (action === "messages") {
-      const message = incoming(jsonObject(request.body).message);
-      const owner = [session.clientId, session.pairwiseUserId] as const;
-      const replay = await this.#replayed(owner, message);
-      if (replay === undefined && (await this.#claim(owner, message, conversationId)) === undefined) {
-        await this.#receive(conversationId, session, message);
-      }
-      return this.#answer(request, await this.#conversation(conversationId), 202);
-    }
-    throw new Refused(404, "not_found");
+    // Received, or not: `#receive` releases the request ID when it refuses the message.
+    await this.#receive(conversationId, session, incoming(body.message, requestId));
+    return this.#answer(request, await this.#conversation(conversationId), 202);
   }
 
-  #messageKey(owner: readonly [string, string], messageId: string): string {
-    return composite(owner[0], owner[1], messageId);
+  #requestKey(owner: readonly [string, string], requestId: string): string {
+    return composite(owner[0], owner[1], requestId);
   }
 
-  /** A retried message returns its conversation; a reused ID with new content conflicts. */
-  async #replayed(owner: readonly [string, string], message: Message): Promise<string | undefined> {
-    const known = await this.#read<MessageReceipt>(
-      RecordKinds.messageId,
-      this.#messageKey(owner, message.id),
-    );
+  /**
+   * A retried request returns its conversation; a reused ID with another path or body is
+   * `request_id_conflict` (§8.3).
+   */
+  async #replayed(owner: readonly [string, string], requestId: string, requestKey: string): Promise<string | undefined> {
+    const known = await this.#read<RequestReceipt>(RecordKinds.requestId, this.#requestKey(owner, requestId));
     if (known === undefined) return undefined;
-    if (known.digest !== digest(JSON.stringify(plain(message)))) {
-      throw new Refused(409, "message_id_conflict");
-    }
+    if (known.digest !== requestKey) throw new Refused(409, "request_id_conflict");
     return known.conversationId;
   }
 
-  /** Record the message ID, once: `undefined` when this call did, else the earlier conversation. */
+  /** Record the request ID, once: `undefined` when this call did, else the earlier conversation. */
   async #claim(
     owner: readonly [string, string],
-    message: Message,
+    requestId: string,
+    requestKey: string,
     conversationId: string,
   ): Promise<string | undefined> {
-    const receipt: MessageReceipt = {
-      conversationId,
-      digest: digest(JSON.stringify(plain(message))),
-    };
+    const receipt: RequestReceipt = { conversationId, digest: requestKey };
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
-      const key = this.#messageKey(owner, message.id);
-      if (await this.store.create(RecordKinds.messageId, key, json(receipt))) return undefined;
-      const replay = await this.#replayed(owner, message);
+      if (await this.store.create(RecordKinds.requestId, this.#requestKey(owner, requestId), json(receipt))) {
+        return undefined;
+      }
+      const replay = await this.#replayed(owner, requestId, requestKey);
       if (replay !== undefined) return replay;
     }
     throw new Refused(503, "temporarily_unavailable");
@@ -3617,9 +3654,9 @@ export class CompanyService {
       );
       if (changed === undefined) throw new Refused(404, "conversation_not_found");
     } catch (error) {
-      // Not received: the same message may be sent again.
+      // Not received: the same request may be sent again.
       const owner = [session.clientId, session.pairwiseUserId] as const;
-      await this.store.delete(RecordKinds.messageId, this.#messageKey(owner, message.id));
+      if (message.id !== undefined) await this.store.delete(RecordKinds.requestId, this.#requestKey(owner, message.id));
       throw error;
     }
     if (changed === undefined) throw new Refused(404, "conversation_not_found");
@@ -3779,12 +3816,12 @@ export class CompanyService {
     }
   }
 
+  /** A successful POST means accepted, not acted on: only `conversation_id` (§8.3). */
   #receipt(conversation: StoredConversation, status: number): CompanyResponse {
     return {
       status,
       body: {
         conversation_id: conversation.conversationId,
-        ...this.#stateFields(conversation),
       },
       headers: {},
     };

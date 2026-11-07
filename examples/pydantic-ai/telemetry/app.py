@@ -33,7 +33,7 @@ from personal_agent_protocol import (
     RecordingTelemetrySink,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
     operations_content,
 )
 from personal_agent_protocol.demo.kit import (
@@ -101,7 +101,7 @@ async def read_pap_telemetry() -> dict[str, Any]:
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     def say(text: str) -> Message:
-        return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
+        return Message(id=generate_request_id(reactor), author=Author(type="human"), text=text)
 
     page = await conversations.start(
         endpoint, say("Where is my jacket order?"), session=session, wait=0
@@ -140,7 +140,11 @@ async def read_pap_telemetry() -> dict[str, Any]:
     await conversations.send(
         endpoint,
         page.conversation_id,
-        Message(id=generate_message_id(reactor), author=Author(type="agent"), extensions=operations_content(approval=approval)),
+        Message(
+            id=generate_request_id(reactor),
+            author=Author(type="agent"),
+            extensions=operations_content(approval=approval),
+        ),
         session=session,
         token=signed_in,
         wait=0,

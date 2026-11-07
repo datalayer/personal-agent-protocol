@@ -26,7 +26,7 @@ from personal_agent_protocol import (
     Message,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
     operations_content,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
@@ -72,7 +72,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
     conversations = ConversationClient(transport=transport)
 
     def say(text: str) -> Message:
-        return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
+        return Message(id=generate_request_id(reactor), author=Author(type="human"), text=text)
 
     # Discovery and a signed-out Session.
     company = await DiscoveryClient(reactor=reactor, http_client=http).discover(DOMAIN)
@@ -145,7 +145,9 @@ async def run_manzanita_journey() -> dict[str, Any]:
             endpoint,
             page.conversation_id,
             Message(
-                id=generate_message_id(reactor), author=Author(type="agent"), extensions=operations_content(approval=approval)
+                id=generate_request_id(reactor),
+                author=Author(type="agent"),
+                extensions=operations_content(approval=approval),
             ),
             session=session,
             token=signed_in,

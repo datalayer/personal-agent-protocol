@@ -854,9 +854,15 @@ class Author(ProtocolModel):
 
 
 class Message(ProtocolModel):
-    """Message sent by either side or returned in a conversation event."""
+    """A message sent by either side, or returned in a conversation event (§8.4).
 
-    id: str
+    `id` is set by the Company when it records the message as an event: a Personal
+    Agent message's ID is its request's ID (§8.3), a Company message's one it chooses.
+    On a message the Personal Agent builds, `id` is the request ID the client sends
+    at the top level of the `POST`; the message itself goes without it.
+    """
+
+    id: str | None = None
     author: Author
     role: Literal["user", "company"] | None = None
     text: str | None = None
@@ -922,8 +928,8 @@ class Message(ProtocolModel):
 
     @field_validator("id")
     @classmethod
-    def validate_id(cls, value: str) -> str:
-        if not _IDENTIFIER.fullmatch(value):
+    def validate_id(cls, value: str | None) -> str | None:
+        if value is not None and not _IDENTIFIER.fullmatch(value):
             raise ValueError("message ID must use the URL-safe base64 alphabet")
         return value
 

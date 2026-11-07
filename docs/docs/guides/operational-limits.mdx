@@ -120,7 +120,7 @@ the rotation against each reference company.
 3. At most `max_attempts` tries in all.
 4. Only safe methods (`GET`, `HEAD`, `OPTIONS`) are retried on their own.
    A write is returned to the caller, which retries it with its idempotency
-   key or message ID unchanged.
+   key or request ID unchanged.
 5. Every attempt has a fresh Session JWT.
 
 ## Idempotency keys on API writes
@@ -151,7 +151,7 @@ the method, path, query and body and the response, never the credentials:
 
 The Guides name no error for a repeated key with a different body;
 `idempotency_key_conflict` (409) is this SDK's choice, alongside
-`message_id_conflict` for a reused conversation message ID. An operation's
+`request_id_conflict` for a reused conversation request ID (§8.3). An operation's
 approval takes no key: the operation ID identifies a retry.
 
 ## Shared rate-limit budgets

@@ -47,7 +47,7 @@ AUTHORIZATION = "authorization"
 CODE = "code"
 MEDIATED = "mediated"
 CONVERSATION = "conversation"
-MESSAGE_ID = "message_id"
+REQUEST_ID = "request_id"
 #: A `user_requested` event the agent accepted, by parent conversation and event ID: the
 #: Direct Conversation it started, returned again on a retry, even after it closes (§8.10).
 ACCEPTANCE = "acceptance"
@@ -79,7 +79,7 @@ RECORD_KINDS = (
     CODE,
     MEDIATED,
     CONVERSATION,
-    MESSAGE_ID,
+    REQUEST_ID,
     ACCEPTANCE,
     OPERATION,
     PROPOSAL,
@@ -727,8 +727,9 @@ class StoredConversation:
 
 
 @dataclass(frozen=True)
-class MessageReceipt:
-    """A message ID seen from one agent and user: its conversation and content digest."""
+class RequestReceipt:
+    """A request ID seen from one agent and user (§8.3): its conversation, and a digest of
+    the path and body it came with, so a retry is told from a reuse."""
 
     conversation_id: str
     digest: str
@@ -737,7 +738,7 @@ class MessageReceipt:
         return {"conversation_id": self.conversation_id, "digest": self.digest}
 
     @classmethod
-    def from_json(cls, value: JsonObject) -> MessageReceipt:
+    def from_json(cls, value: JsonObject) -> RequestReceipt:
         return cls(conversation_id=value["conversation_id"], digest=value["digest"])
 
 
@@ -1087,7 +1088,7 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     CODE: IssuedCode.from_json,
     MEDIATED: PendingMediated.from_json,
     CONVERSATION: StoredConversation.from_json,
-    MESSAGE_ID: MessageReceipt.from_json,
+    REQUEST_ID: RequestReceipt.from_json,
     ACCEPTANCE: Acceptance.from_json,
     OPERATION: StoredOperation.from_json,
     PROPOSAL: OperationProposal.from_json,

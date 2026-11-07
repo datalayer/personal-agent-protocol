@@ -39,7 +39,7 @@ import {
   type JoinCode,
   type JsonObject,
   type KnownClient,
-  type MessageReceipt,
+  type RequestReceipt,
   type OperationProposal,
   type PendingAuthorization,
   type PendingDevice,
@@ -188,7 +188,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       events: [{ id: "evt_1", payload: { id: "evt_1", type: "state", nested: [1, null] } }],
       forgotten: ["evt_0"],
     } satisfies StoredConversation,
-    [RecordKinds.messageId]: { conversationId: "cnv_1", digest: "digest" } satisfies MessageReceipt,
+    [RecordKinds.requestId]: { conversationId: "cnv_1", digest: "digest" } satisfies RequestReceipt,
     [RecordKinds.operation]: {
       operationId: "op_1",
       action: "exchange",

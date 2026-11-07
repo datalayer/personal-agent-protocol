@@ -16,8 +16,6 @@ import {
   type ConversationEventPage,
   type ConversationResponder,
   type Message,
-  type ConversationState,
-  parseConversationState,
 } from "./models.js";
 import { RandomSources, firstContribution } from "./reactor.js";
 import type { AccessToken, PapSession } from "./sessions.js";
@@ -28,8 +26,12 @@ import { refusalCode, refusalDetails } from "./refusals.js";
 
 const identifier = /^[A-Za-z0-9_-]{1,256}$/;
 
-/** What a `POST` without `wait` returns: the conversation and its state (§8.3, §8.7). */
-export interface ConversationReceipt extends ConversationState {
+/**
+ * What a successful `POST` without `wait` returns (§8.3): the Company accepted the request, not
+ * yet acted on it, so only `conversation_id`. What happened is read from the conversation's
+ * events and state (§8.5, §8.7).
+ */
+export interface ConversationReceipt {
   readonly conversation_id: string;
 }
 
@@ -84,6 +86,11 @@ export interface ConversationRequestOptions {
   readonly session: PapSession;
   /** Signed in with it, signed out without. */
   readonly token?: AccessToken | undefined;
+  /**
+   * The request's `id` (§8.3): as given, else the message's `id`, else a new one. To retry,
+   * send the same again.
+   */
+  readonly requestId?: string | undefined;
   readonly cursor?: string;
   readonly wait?: number;
   readonly signal?: AbortSignal;
@@ -137,8 +144,13 @@ function base64Url(bytes: Uint8Array): string {
   return output;
 }
 
-/** Generate a user-global message ID with at least 128 random bits. */
-export function generateMessageId(reactor: ReactorPlatformView): string {
+/**
+ * A request ID with at least 128 random bits, unique for the User (§8.3, guides).
+ *
+ * Every conversation `POST` carries one, chosen by the Personal Agent: a message's ID is its
+ * request's. A retry sends the same ID to the same path with the same body.
+ */
+export function generateRequestId(reactor: ReactorPlatformView): string {
   const bytes = firstContribution(
     reactor,
     RandomSources,
@@ -147,10 +159,10 @@ export function generateMessageId(reactor: ReactorPlatformView): string {
   if (bytes.byteLength < 16) {
     throw new ConversationError(
       "insufficient_entropy",
-      "message IDs require 128 random bits",
+      "request IDs require 128 random bits",
     );
   }
-  return `msg_${base64Url(bytes)}`;
+  return `req_${base64Url(bytes)}`;
 }
 
 /** Start and continue PAP conversations, each request with the Session header. */
@@ -169,8 +181,16 @@ export class ConversationClient {
     this.#maxResponseBytes = maximum;
   }
 
-  generateMessageId(): string {
-    return generateMessageId(this.#reactor);
+  generateRequestId(): string {
+    return generateRequestId(this.#reactor);
+  }
+
+  /** The request's `id` (§8.3): as given, else the message's, else a new one. */
+  #requestId(requestId: string | undefined, message?: Message): string {
+    const chosen = requestId ?? message?.id;
+    if (chosen === undefined) return generateRequestId(this.#reactor);
+    assertIdentifier(chosen, "request ID");
+    return chosen;
   }
 
   start(
@@ -192,7 +212,7 @@ export class ConversationClient {
     message: Message | undefined,
     options: StartConversationOptions,
   ): Promise<ConversationResponse> {
-    const body: Record<string, unknown> = {};
+    const body: Record<string, unknown> = { id: this.#requestId(options.requestId, message) };
     if (message !== undefined) body.message = this.#outgoing(message);
     if (options.parentConversationId !== undefined) {
       assertIdentifier(options.parentConversationId, "parent conversation ID");
@@ -259,7 +279,7 @@ export class ConversationClient {
     assertIdentifier(conversationId, "conversation ID");
     return this.#send(
       `${endpoint.replace(/\/$/, "")}/${conversationId}/messages`,
-      { message: this.#outgoing(message) },
+      { id: this.#requestId(options.requestId, message), message: this.#outgoing(message) },
       202,
       options,
     );
@@ -477,10 +497,33 @@ export class ConversationClient {
     conversationId: string,
     options: ConversationRequestOptions,
   ): Promise<ConversationReceipt> {
-    return this.#control(endpoint, conversationId, "handoff", 202, options);
+    return this.#control(endpoint, conversationId, "handoff", options);
   }
 
-  /** Close the conversation (§7.12); what it started is not cancelled. */
+  /**
+   * Withdraw a request for a person (§8.9): accepted with 202. The company MAY stop looking, and
+   * MAY keep looking when it cannot withdraw the request; a person can also join first. Read
+   * `handoff` and `responder` for the outcome, and never depend on the cancel taking effect.
+   */
+  cancelHandoff(
+    endpoint: string,
+    conversationId: string,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationReceipt> {
+    return traced(
+      this.#reactor,
+      "pap.conversation.cancel_handoff",
+      byEndpoint(endpoint),
+      () => this.#control(endpoint, conversationId, "handoff/cancel", options),
+      conversationResult,
+    );
+  }
+
+  /**
+   * Close the conversation (§8.12): accepted with 202, and acted on in its own time. A close
+   * doesn't wait its turn: the company MAY act on requests it hasn't acted on yet or drop them,
+   * so `readUntilDone` first when they matter. What the conversation started is not cancelled.
+   */
   close(
     endpoint: string,
     conversationId: string,
@@ -500,7 +543,7 @@ export class ConversationClient {
     conversationId: string,
     options: ConversationRequestOptions,
   ): Promise<ConversationReceipt> {
-    return this.#control(endpoint, conversationId, "close", 200, options);
+    return this.#control(endpoint, conversationId, "close", options);
   }
 
   /**
@@ -590,11 +633,11 @@ export class ConversationClient {
     }
   }
 
+  /** A handoff, its cancel, or a close (§8.9, §8.12): a request ID, HTTP 202. */
   async #control(
     endpoint: string,
     conversationId: string,
-    action: "handoff" | "close",
-    expectedStatus: number,
+    action: "handoff" | "handoff/cancel" | "close",
     options: ConversationRequestOptions,
   ): Promise<ConversationReceipt> {
     assertIdentifier(conversationId, "conversation ID");
@@ -605,17 +648,18 @@ export class ConversationClient {
         session: options.session,
         token: options.token,
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ id: this.#requestId(options.requestId) }),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       },
     );
-    const parsed = parseConversationResponse(await this.#responsePayload(response, expectedStatus));
+    const parsed = parseConversationResponse(await this.#responsePayload(response, 202));
     if ("events" in parsed) {
       throw new ConversationError("invalid_response", "conversation response was malformed");
     }
     return parsed;
   }
 
+  /** The message as sent: no `id` (the request's is top-level) and no `role` (§8.4). */
   #outgoing(message: Message): Message {
     const parsed = parseMessage(message);
     if (parsed.role !== undefined) {
@@ -624,7 +668,8 @@ export class ConversationClient {
         "outgoing messages cannot set role",
       );
     }
-    return parsed;
+    const { id: _id, ...rest } = parsed;
+    return rest as Message;
   }
 
   async #send(
@@ -768,13 +813,7 @@ function parseConversationResponse(value: unknown): ConversationResponse {
     );
   }
   assertIdentifier(source.conversation_id, "conversation ID");
-  let state: ConversationState;
-  try {
-    state = parseConversationState(source, "conversation response");
-  } catch (cause) {
-    throw new ConversationError("invalid_response", "conversation response was malformed", { cause });
-  }
-  return { conversation_id: source.conversation_id, ...state };
+  return { conversation_id: source.conversation_id };
 }
 
 function parseWorking(data: string): WorkingChanged {

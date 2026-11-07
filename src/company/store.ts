@@ -220,7 +220,7 @@ export const RecordKinds = {
   code: "code",
   mediated: "mediated",
   conversation: "conversation",
-  messageId: "message_id",
+  requestId: "request_id",
   /**
    * A `user_requested` event the agent accepted, by parent conversation and event ID: the
    * Direct Conversation it started, returned again on a retry, even after it closes (§8.10).
@@ -483,8 +483,11 @@ export interface StoredConversation {
   readonly forgotten: readonly string[];
 }
 
-/** A message ID seen from one agent and user: its conversation and content digest. */
-export interface MessageReceipt {
+/**
+ * A request ID seen from one agent and user (§8.3): its conversation, and a digest of the path
+ * and body it came with, so a retry is told from a reuse.
+ */
+export interface RequestReceipt {
   readonly conversationId: string;
   readonly digest: string;
 }

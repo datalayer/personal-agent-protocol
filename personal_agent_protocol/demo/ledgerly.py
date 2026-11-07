@@ -48,7 +48,7 @@ from ..company import (
     build_company,
     company_app,
 )
-from ..conversations import ConversationClient, generate_message_id
+from ..conversations import ConversationClient, generate_request_id
 from ..device import DeviceSignInClient
 from ..discovery import DiscoveryClient
 from ..models import Approval, Author, DiscoveredCompany, Message, Operation, operations_content
@@ -175,7 +175,7 @@ class LedgerlyAsPersonalAgent:
         page = await self.conversations.start(
             await self.conversation_endpoint(),
             Message(
-                id=generate_message_id(self.reactor),
+                id=generate_request_id(self.reactor),
                 author=Author(type="agent"),
                 text=f"Pay {reference}: {currency} {amount} to {payee}",
             ),
@@ -197,7 +197,7 @@ class LedgerlyAsPersonalAgent:
             await self.conversation_endpoint(),
             conversation_id,
             Message(
-                id=generate_message_id(self.reactor),
+                id=generate_request_id(self.reactor),
                 author=Author(type="agent"),
                 extensions=operations_content(
                     approval=Approval(

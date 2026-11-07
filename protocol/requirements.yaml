@@ -2098,16 +2098,69 @@ requirements:
   section: '8.3'
   level: MUST
   role: personal-agent
-  text: The Personal Agent chooses each message's id, and MUST make it unique for the User.
+  text: Every POST body has an id, chosen by the Personal Agent, which MUST make it unique for the User
+    across all its requests. A message's ID is its request's ID, so the message itself has no id.
   status: implemented
   implementation:
-  - personal_agent_protocol.conversations:generate_message_id
+  - personal_agent_protocol.conversations:generate_request_id
+  - personal_agent_protocol.conversations:ConversationClient._request_id
+  - personal_agent_protocol.conversations:ConversationClient._outgoing_message
   tests:
   - personal_agent_protocol/__tests__/test_conversations.py::test_start_and_continue_preserve_message_ids_and_parse_waited_events
+  - personal_agent_protocol/__tests__/test_conversation_control.py::test_handoff_cancel_and_close_post_a_request_id
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   conformance:
   - conversations.retry-replays
-  - conversations.message-id-conflict
+  - conversations.request-id-conflict
+- id: PAP-8.3-02
+  section: '8.3'
+  level: MUST
+  role: company
+  text: Every POST body has an id, chosen by the Personal Agent, which MUST make it unique for the User. If
+    the Company has already accepted a request with that ID, path, and body, it returns the original
+    response and doesn't act on the request again. If the path or body is different, the Company returns
+    request_id_conflict. The Company keeps this check for as long as it keeps the conversation.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._replayed
+  - personal_agent_protocol.company.service:CompanyService._claim
+  - personal_agent_protocol.company.service:_request_digest
+  tests:
+  - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_reused_request_id_with_new_text_conflicts_and_a_retry_replays
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_repeated_handoff_and_close_change_nothing
+  conformance:
+  - conversations.retry-replays
+  - conversations.request-id-conflict
+- id: PAP-8.9-01
+  section: '8.9'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent learns which happened from handoff and responder, and MUST NOT depend on the
+    cancel taking effect.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient.cancel_handoff
+  - personal_agent_protocol.conversations:ConversationClient.read_until_done
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.handoff-cancel
+- id: PAP-8.12-01
+  section: '8.12'
+  level: MUST NOT
+  role: personal-agent
+  text: A close doesn't wait its turn (8.3). The Company MAY act on any request it hasn't acted on yet, or
+    MAY drop it, whether it accepted the request before or after the close. Which one happens can depend
+    on timing, so the Personal Agent MUST NOT depend on either.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient.close
+  - personal_agent_protocol.conversations:ConversationClient.read_until_done
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  - personal_agent_protocol/__tests__/test_company_rules.py::test_repeated_handoff_and_close_change_nothing
+  conformance:
+  - conversations.closed
 - id: PAP-8.4-01
   section: '8.4'
   level: MUST

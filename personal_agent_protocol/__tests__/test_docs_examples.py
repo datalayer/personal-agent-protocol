@@ -63,7 +63,7 @@ from personal_agent_protocol.company import (
     build_company,
     company_app,
 )
-from personal_agent_protocol.conversations import ConversationClient, generate_message_id
+from personal_agent_protocol.conversations import ConversationClient, generate_request_id
 from personal_agent_protocol.demo import northwind as northwind_demo
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
@@ -483,7 +483,7 @@ async def _stream(docs: Docs) -> tuple[dict[str, Any], Check]:
     endpoint = company.document.agent.protocols[0].endpoint
     conversations = ConversationClient(transport=docs.transport)
     message = Message(
-        id=generate_message_id(docs.reactor), author=Author(type="human"), text="Hello"
+        id=generate_request_id(docs.reactor), author=Author(type="human"), text="Hello"
     )
     page = await conversations.start(endpoint, message, session=session, wait=0)
     await conversations.close(endpoint, page.conversation_id, session=session)

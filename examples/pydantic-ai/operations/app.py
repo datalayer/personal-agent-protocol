@@ -23,7 +23,7 @@ from personal_agent_protocol import (
     Message,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
     operations_content,
 )
 from personal_agent_protocol.demo.kit import (
@@ -140,7 +140,7 @@ async def explain_operations() -> dict[str, Any]:
     page = await conversations.start(
         chat,
         Message(
-            id=generate_message_id(reactor),
+            id=generate_request_id(reactor),
             author=Author(type="agent"),
             text="Pay INV-0042: EUR 1250.00 to Acme GmbH",
         ),
@@ -154,7 +154,11 @@ async def explain_operations() -> dict[str, Any]:
     conversation = page.conversation_id
 
     async def approving(approval: Approval, message_id: str) -> Any:
-        message = Message(id=message_id, author=Author(type="agent"), extensions=operations_content(approval=approval))
+        message = Message(
+            id=message_id,
+            author=Author(type="agent"),
+            extensions=operations_content(approval=approval),
+        )
         sent = await conversations.send(
             chat, conversation, message, session=session, token=token, wait=0
         )
@@ -175,7 +179,7 @@ async def explain_operations() -> dict[str, Any]:
         summary=first.summary.replace("1250.00", "1262.50") + " Includes a EUR 12.50 fee.",
         terms={**(first.terms or {}), "amount": {"amount": "1262.50", "currency": "EUR"}},
     )
-    answered = await approving(approval, generate_message_id(reactor))
+    answered = await approving(approval, generate_request_id(reactor))
     revised = answered.operation
     if not (revised is not None):
         raise RuntimeError("the example world is incomplete")
@@ -189,7 +193,7 @@ async def explain_operations() -> dict[str, Any]:
     # 5. The answer to the approval is lost. The same approval, in the same message, is
     #    sent again: the bank performs it once, and a retry adds nothing.
     wire.armed = True
-    message_id = generate_message_id(reactor)
+    message_id = generate_request_id(reactor)
     sent = await operations.send(lambda given: approving(given, message_id), newer)
     told = await conversations.read_events(chat, conversation, session=session, token=token)
     said = [e.message for e in told.events if e.message is not None and e.message.role == "company"]

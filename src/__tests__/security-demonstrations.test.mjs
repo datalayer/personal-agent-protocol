@@ -123,7 +123,7 @@ async function world({ durable = false, maxAge } = {}) {
   w.tokens = firstContribution(w.host.reactor, TokenStores, "token store");
   w.start = (pairwiseUserId = PAIRWISE, reactor = w.host.reactor, clientId = w.identity.clientId) =>
     new SessionClient({ reactor, fetch }).start({ clientId, pairwiseUserId, issuer: w.metadata.issuer, tenantId: TENANT });
-  w.message = (text, id = w.conversations.generateMessageId()) => ({ id, author: { type: "human" }, text });
+  w.message = (text, id = w.conversations.generateRequestId()) => ({ id, author: { type: "human" }, text });
   w.last = (method, path) =>
     [...wire].reverse().find((item) => (item.init.method ?? "GET") === method && new URL(item.url).pathname === path);
   w.resend = (item) => network(item.url, item.init);

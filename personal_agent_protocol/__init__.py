@@ -46,7 +46,7 @@ from .conversations import (
     StreamReconnected,
     TextDelta,
     WorkingChanged,
-    generate_message_id,
+    generate_request_id,
 )
 from .crypto import (
     DelegatedKey,
@@ -421,8 +421,8 @@ __all__ = [
     "build_pap_reactor",
     "create_resolving_client",
     "feedback_endpoint",
-    "generate_message_id",
     "generate_pairwise_user_id",
+    "generate_request_id",
     "is_loopback_redirect",
     "jwk_thumbprint",
     "mediated_sign_in",

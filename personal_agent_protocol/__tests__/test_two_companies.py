@@ -18,7 +18,7 @@ from personal_agent_protocol import (
     Message,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
 )
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
@@ -82,7 +82,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
 
     def say(text: str) -> Message:
-        return Message(id=generate_message_id(reactor), author=Author(type="human"), text=text)
+        return Message(id=generate_request_id(reactor), author=Author(type="human"), text=text)
 
     # 1. Ledgerly is not yet connected to Northwind: Ada approves it on Northwind's page.
     page = await conversations.start(
@@ -122,7 +122,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment
         endpoint,
         page.conversation_id,
         Message(
-            id=generate_message_id(reactor),
+            id=generate_request_id(reactor),
             author=Author(type="agent"),
             extensions=operations_content(approval=approval),
         ),

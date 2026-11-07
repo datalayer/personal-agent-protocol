@@ -613,14 +613,14 @@ async def test_a_message_is_recorded_as_sent_and_its_role_is_the_companys_to_set
         session,
         f"{endpoint}?wait=0",
         {
+            "id": "msg_role_sent",
             "message": {
-                "id": "msg_role_sent",
                 "author": {"type": "agent"},
                 "role": "company",
                 "text": "Hi",
                 "data": {"order": "ord_1"},
                 "context": {"locale": "en-US"},
-            }
+            },
         },
     )
     assert started.status_code == 201
@@ -665,15 +665,19 @@ async def test_repeated_handoff_and_close_change_nothing() -> None:
         endpoint, world.message("A person, please"), session=session, wait=0
     )
     first = await world.conversations.handoff(endpoint, page.conversation_id, session=session)
-    assert first.responder == "human"
-    count = len((await world.shop.conversation_record(page.conversation_id)).events)
+    assert first.conversation_id == page.conversation_id
+    record = await world.shop.conversation_record(page.conversation_id)
+    assert (record.handoff, record.responder) == ("none", "human")
+    count = len(record.events)
     again = await world.conversations.handoff(endpoint, page.conversation_id, session=session)
-    assert (again.handoff, again.responder) == (first.handoff, first.responder)
+    assert again == first
     assert len((await world.shop.conversation_record(page.conversation_id)).events) == count
     closed = await world.conversations.close(endpoint, page.conversation_id, session=session)
-    count = len((await world.shop.conversation_record(page.conversation_id)).events)
+    record = await world.shop.conversation_record(page.conversation_id)
+    assert record.closed and closed.conversation_id == page.conversation_id
+    count = len(record.events)
     closed_again = await world.conversations.close(endpoint, page.conversation_id, session=session)
-    assert closed_again == closed and closed.closed
+    assert closed_again == closed
     assert len((await world.shop.conversation_record(page.conversation_id)).events) == count
 
 

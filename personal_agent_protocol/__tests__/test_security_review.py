@@ -212,7 +212,10 @@ async def test_finding_3_a_retried_start_answers_only_who_may_read_the_conversat
         world,
         signed_out,
         endpoint + "?wait=0",
-        {"message": message.model_dump(mode="json", exclude_none=True)},
+        {
+            "id": message.id,
+            "message": message.model_dump(mode="json", exclude_none=True, exclude={"id"}),
+        },
     )
     # Signed out: the challenge with `scope`, no error code and no body (§7).
     assert retried.status_code == 401 and not retried.content
@@ -292,8 +295,8 @@ async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
         session,
         f"{endpoint}/{conversation_id}/messages",
         {
+            "id": world.message("x").id,
             "message": {
-                "id": world.message("x").id,
                 "author": {"type": "agent"},
                 "extensions": {
                     "operations": {
@@ -303,7 +306,7 @@ async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
                         }
                     }
                 },
-            }
+            },
         },
         token=narrowed.token,
     )

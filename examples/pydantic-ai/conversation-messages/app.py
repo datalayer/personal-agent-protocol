@@ -19,7 +19,7 @@ from personal_agent_protocol import (
     SessionClient,
     SessionHttpClient,
     build_pap_reactor,
-    generate_message_id,
+    generate_request_id,
 )
 
 
@@ -73,7 +73,7 @@ async def demonstrate_conversation() -> dict[str, object]:
         )
         # The personal agent writes this message itself: its `author` is `agent`.
         first = Message(
-            id=generate_message_id(reactor),
+            id=generate_request_id(reactor),
             author=Author(type="agent"),
             text="Can this order be returned?",
         )
@@ -83,7 +83,7 @@ async def demonstrate_conversation() -> dict[str, object]:
             session=session,
         )
         follow_up = Message(
-            id=generate_message_id(reactor),
+            id=generate_request_id(reactor),
             author=Author(type="agent"),
             context={"user_available": False},
         )

@@ -12,25 +12,27 @@
         "PAP-8.5-03",
         "PAP-5.2-01"
       ],
-      "description": "Starting a conversation returns 201 with the four state fields; every read has cursor, has_more, working, handoff, responder, closed; company messages have author (§8.3, §8.7)."
+      "description": "Starting a conversation returns 201 with conversation_id; every read has cursor, has_more, working, handoff, responder, closed; company messages have author (§8.3, §8.7)."
     },
     {
       "id": "conversations.retry-replays",
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-8.3-01"
+        "PAP-8.3-01",
+        "PAP-8.3-02"
       ],
-      "description": "Sending the same message (same ID, same content) again returns the same conversation and adds nothing."
+      "description": "Sending the same request (same ID, same path, same body) again returns the original response and adds nothing (§8.3)."
     },
     {
-      "id": "conversations.message-id-conflict",
+      "id": "conversations.request-id-conflict",
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-8.3-01"
+        "PAP-8.3-01",
+        "PAP-8.3-02"
       ],
-      "description": "Reusing a message ID with different content is message_id_conflict (409)."
+      "description": "Reusing a request ID with a different body, or at another path, is request_id_conflict (409) (§8.3)."
     },
     {
       "id": "conversations.invalid-cursor",
@@ -110,7 +112,16 @@
       "kind": "positive",
       "role": "company",
       "requirements": [],
-      "description": "Handoff answers 202 with the state fields; handoff is pending while a person is looked for, and a state event records each change of handoff, responder or closed (§8.7, §8.9)."
+      "description": "A handoff is accepted (202); handoff is pending while a person is looked for, and a state event records each change of handoff, responder or closed (§8.7, §8.9)."
+    },
+    {
+      "id": "conversations.handoff-cancel",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-8.9-01"
+      ],
+      "description": "A handoff cancel is accepted (202); the company stops looking or a person joined first, read from handoff and responder; a cancel with nothing pending changes nothing (§8.9)."
     },
     {
       "id": "conversations.direct-conversation",
@@ -143,8 +154,10 @@
       "id": "conversations.closed",
       "kind": "negative",
       "role": "company",
-      "requirements": [],
-      "description": "Closing answers with closed true; a later message is conversation_closed (409); the events stay readable."
+      "requirements": [
+        "PAP-8.12-01"
+      ],
+      "description": "A close is accepted (202) and, once acted on, closed is true with a state event; a later message or handoff cancel is conversation_closed (409), a close again 202; the events stay readable (§8.12)."
     },
     {
       "id": "conversations.not-found-indistinguishable",

@@ -44,7 +44,7 @@ from personal_agent_protocol import (
     DeviceSignInClient,
     Message,
     WorkingChanged,
-    generate_message_id,
+    generate_request_id,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.company import MemoryCompanyStore, MemoryReplayCache
@@ -454,7 +454,7 @@ async def test_one_conversation_fans_out_to_many_subscribers_from_their_cursors(
 
     def message(text: str) -> Message:
         return Message(
-            id=generate_message_id(world.reactor), author=Author(type="human"), text=text
+            id=generate_request_id(world.reactor), author=Author(type="human"), text=text
         )
 
     page = await conversations.start(endpoint, message("Hello"), session=session, wait=0)

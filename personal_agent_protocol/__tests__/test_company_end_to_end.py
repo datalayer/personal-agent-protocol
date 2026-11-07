@@ -22,7 +22,7 @@ from personal_agent_protocol import (
     PapSession,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
 from personal_agent_protocol.company import MemoryCompanyStore, StaleConversationError
@@ -124,7 +124,7 @@ class World:
         self.shop, self.plugin = manzanita(self.network, self.clock, store=self.store)
 
     def message(self, text: str) -> Message:
-        return Message(id=generate_message_id(self.reactor), author=Author(type="human"), text=text)
+        return Message(id=generate_request_id(self.reactor), author=Author(type="human"), text=text)
 
 
 @pytest.mark.asyncio
@@ -191,7 +191,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
             endpoint,
             page.conversation_id,
             Message(
-                id=generate_message_id(world.reactor),
+                id=generate_request_id(world.reactor),
                 author=Author(type="agent"),
                 extensions=operations_content(approval=approval),
             ),

@@ -66,7 +66,7 @@ test("starts and continues with distinct user-global message IDs", async () => {
   };
   const { reactor, client } = setup(fetch);
   const first = {
-    id: client.generateMessageId(),
+    id: client.generateRequestId(),
     author: { type: "agent" },
     text: "Return the jacket",
   };
@@ -76,7 +76,7 @@ test("starts and continues with distinct user-global message IDs", async () => {
     request,
   );
   const followUp = {
-    id: client.generateMessageId(),
+    id: client.generateRequestId(),
     author: { type: "agent" },
     context: { user_available: false },
   };
@@ -89,8 +89,10 @@ test("starts and continues with distinct user-global message IDs", async () => {
   reactor.stop();
   assert.equal(continued.conversation_id, "cnv_one");
   assert.notEqual(first.id, followUp.id);
-  assert.equal(calls[0].body.message.id, first.id);
-  assert.equal(calls[1].body.message.id, followUp.id);
+  // The request's `id` is top-level and the message goes without one (§8.3).
+  assert.equal(calls[0].body.id, first.id);
+  assert.equal(calls[1].body.id, followUp.id);
+  assert.ok(!("id" in calls[0].body.message) && !("id" in calls[1].body.message));
   // Signed out: the Session header alone.
   assert.equal(calls[0].headers["Poppy-Session"], "jwt-for-post");
   assert.ok(!("Authorization" in calls[0].headers));
@@ -129,7 +131,7 @@ test("an authorization event with its challenge on an accepted message is one ne
   const { reactor, client } = setup(fetch);
   const answer = await client.start(
     "https://company.example/poppy",
-    { id: client.generateMessageId(), author: { type: "agent" }, text: "Hi" },
+    { id: client.generateRequestId(), author: { type: "agent" }, text: "Hi" },
     { ...request, wait: 0 },
   );
   assert.deepEqual(calls, ["/poppy"]);
@@ -138,10 +140,10 @@ test("an authorization event with its challenge on an accepted message is one ne
   reactor.stop();
 });
 
-test("surfaces message ID conflicts without response body details", async () => {
+test("surfaces request ID conflicts without response body details", async () => {
   const fetch = async () =>
     new Response(
-      JSON.stringify({ error: "message_id_conflict", secret: "omit" }),
+      JSON.stringify({ error: "request_id_conflict", secret: "omit" }),
       { status: 409 },
     );
   const { reactor, client } = setup(fetch);
@@ -153,7 +155,7 @@ test("surfaces message ID conflicts without response body details", async () => 
     ),
     (error) =>
       error instanceof ConversationError &&
-      error.code === "message_id_conflict" &&
+      error.code === "request_id_conflict" &&
       !error.toString().includes("secret"),
   );
   reactor.stop();
@@ -321,7 +323,7 @@ test("a session_ended while sending starts a new Session once, and the message g
   const { reactor, client } = setup(fetch);
   const mine = session();
   const before = mine.sid;
-  const message = { id: client.generateMessageId(), author: { type: "agent" }, text: "Hello" };
+  const message = { id: client.generateRequestId(), author: { type: "agent" }, text: "Hello" };
   await client.send("https://api.example/conversations", "cnv_one", message, { session: mine });
   reactor.stop();
   assert.notEqual(mine.sid, before);

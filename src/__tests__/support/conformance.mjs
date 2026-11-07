@@ -809,7 +809,7 @@ caseFor("security.authorization-header-without-cookies")(async (ctx) => {
   const endpoint = await ctx.conversationsEndpoint();
   const response = await ctx.send("POST", endpoint, {
     headers: { ...(await ctx.auth(session, "POST", endpoint)), "Content-Type": "application/json" },
-    body: JSON.stringify({ message: { id: messageId(), author: { type: "agent" }, text: ctx.scenario.greeting } }),
+    body: JSON.stringify({ id: messageId(), message: { author: { type: "agent" }, text: ctx.scenario.greeting } }),
   });
   check(response.status === 201, `served without cookies: got ${response.status}`);
 });
@@ -1057,7 +1057,8 @@ caseFor("lifecycle.disconnect-from-account-settings")(async (ctx) => {
 
 // Conversations -----------------------------------------------------------------------
 
-const messageId = () => opaque("msg");
+/** A request ID (§8.3): the message's, chosen by the agent. */
+const messageId = () => opaque("req");
 const message = (text, author = "agent") => ({ id: messageId(), author: { type: author }, text });
 
 async function asUser(ctx) {
@@ -1077,7 +1078,7 @@ async function conversationOf(ctx, session, token) {
 caseFor("conversations.start-and-reply")(async (ctx) => {
   const { session, endpoint } = await asUser(ctx);
   const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { session });
-  check(typeof receipt.working === "boolean" && receipt.handoff && receipt.responder && typeof receipt.closed === "boolean", "the answer has the four state fields");
+  check(receipt.conversation_id, "the answer has the conversation ID, and nothing to act on");
   const url = `${endpoint}/${receipt.conversation_id}/events`;
   const body = await (await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) })).json();
   for (const key of ["cursor", "has_more", "working", "handoff", "responder", "closed"]) check(key in body, `a read includes ${key}`);
@@ -1097,16 +1098,22 @@ caseFor("conversations.retry-replays")(async (ctx) => {
   check(after.events.length === page.events.length, "a retry adds nothing");
 });
 
-caseFor("conversations.message-id-conflict")(async (ctx) => {
+caseFor("conversations.request-id-conflict")(async (ctx) => {
   const { session, endpoint } = await asUser(ctx);
   const first = message(ctx.scenario.greeting);
-  await ctx.agent.conversations.start(endpoint, first, { session });
+  const started = await ctx.agent.conversations.start(endpoint, first, { session });
   const error = await refused(
     ctx.agent.conversations.start(endpoint, { ...first, text: "Something else entirely." }, { session }),
-    "a reused message ID",
+    "a reused request ID",
   );
-  check(error.code === "message_id_conflict", `got ${error.code}`);
-  check(error.statusCode === 409, "message_id_conflict is HTTP 409");
+  check(error.code === "request_id_conflict", `got ${error.code}`);
+  check(error.statusCode === 409, "request_id_conflict is HTTP 409");
+  // The same ID at another path is a reuse too (§8.3).
+  const other = await refused(
+    ctx.agent.conversations.handoff(endpoint, started.conversation_id, { session, requestId: first.id }),
+    "a request ID reused at another path",
+  );
+  check(other.code === "request_id_conflict", `another path: got ${other.code}`);
 });
 
 caseFor("conversations.invalid-cursor")(async (ctx) => {
@@ -1243,13 +1250,28 @@ caseFor("conversations.handoff")(async (ctx) => {
   const { session, endpoint } = await asUser(ctx);
   const conversation = await conversationOf(ctx, session);
   const receipt = await ctx.agent.conversations.handoff(endpoint, conversation, { session });
-  check(["none", "pending"].includes(receipt.handoff), "handoff answers a handoff state");
+  check(receipt.conversation_id === conversation, "a handoff is accepted with 202 and the ID");
   const page = await ctx.agent.conversations.readUntilDone(endpoint, conversation, { session, wait: 0 });
   const states = page.events.filter((event) => event.type === "state");
   check(states.length, "each change of handoff, responder or closed is a state event");
   check(states.at(-1).handoff === page.handoff, "the last state event is the current handoff");
   check(states.at(-1).responder === page.responder, "and the current responder");
   check(states.at(-1).closed === page.closed, "and whether it is closed");
+});
+
+caseFor("conversations.handoff-cancel")(async (ctx) => {
+  const { session, endpoint } = await asUser(ctx);
+  const conversation = await conversationOf(ctx, session);
+  await ctx.agent.conversations.handoff(endpoint, conversation, { session });
+  const cancelled = await ctx.agent.conversations.cancelHandoff(endpoint, conversation, { session });
+  check(cancelled.conversation_id === conversation, "a cancel is accepted with 202 and the ID");
+  const page = await ctx.agent.conversations.readUntilDone(endpoint, conversation, { session, wait: 0 });
+  check(page.handoff === "none" || page.responder === "human", "after a cancel, no one is looked for, or a person joined first");
+  // A cancel when no one is looked for changes nothing (§8.9).
+  const count = page.events.length;
+  await ctx.agent.conversations.cancelHandoff(endpoint, conversation, { session });
+  const after = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
+  check(after.events.length === count, "a cancel with nothing pending adds no event");
 });
 
 caseFor("conversations.direct-conversation")(async (ctx) => {
@@ -1297,10 +1319,17 @@ caseFor("conversations.closed")(async (ctx) => {
   const { session, endpoint } = await asUser(ctx);
   const conversation = await conversationOf(ctx, session);
   const closed = await ctx.agent.conversations.close(endpoint, conversation, { session });
-  check(closed.closed === true, "closing answers closed");
+  check(closed.conversation_id === conversation, "a close is accepted with 202 and the ID");
+  const settled = await ctx.agent.conversations.readUntilDone(endpoint, conversation, { session, wait: 0 });
+  check(settled.closed, "once acted on, the conversation is closed");
+  check(settled.events.some((event) => event.type === "state" && event.closed), "a state event records the close");
   const error = await refused(ctx.agent.conversations.send(endpoint, conversation, message("Still there?"), { session }), "a message to a closed conversation");
   check(error.code === "conversation_closed", `got ${error.code}`);
   check(error.statusCode === 409, "conversation_closed is HTTP 409");
+  const cancel = await refused(ctx.agent.conversations.cancelHandoff(endpoint, conversation, { session }), "a cancel after a close");
+  check(cancel.code === "conversation_closed", `a cancel after a close: ${cancel.code}`);
+  const again = await ctx.agent.conversations.close(endpoint, conversation, { session });
+  check(again.conversation_id === conversation, "a close of a closed conversation is 202");
   const page = await ctx.agent.conversations.readEvents(endpoint, conversation, { session });
   check(page.closed && page.events.length, "its events stay readable");
 });
@@ -1809,7 +1838,7 @@ caseFor("protocol.version-header-required")(async (ctx) => {
   const { "Poppy-Version": _version, ...headers } = await ctx.auth(session, "POST", endpoint);
   const response = await ctx.send("POST", endpoint, {
     headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ message: message(ctx.scenario.greeting) }),
+    body: JSON.stringify({ id: messageId(), message: message(ctx.scenario.greeting) }),
   });
   await expectRefusal(response, 400, "version_unsupported", "no Poppy-Version");
   check((response.headers.get("content-type") ?? "").startsWith("application/json"), "a JSON body");
@@ -1820,7 +1849,7 @@ caseFor("protocol.version-unserved")(async (ctx) => {
   const headers = { ...(await ctx.auth(session, "POST", endpoint)), "Poppy-Version": "99.0" };
   const response = await ctx.send("POST", endpoint, {
     headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ message: message(ctx.scenario.greeting) }),
+    body: JSON.stringify({ id: messageId(), message: message(ctx.scenario.greeting) }),
   });
   await expectRefusal(response, 400, "version_unsupported", "an unserved Poppy-Version");
 });
@@ -2534,7 +2563,7 @@ caseFor("no-issuer.session-audience")(async (ctx, fixture) => {
   const session = await ctx.session(ctx.newUser());
   check(session.issuer === ctx.baseUrl, "the Session names the identifier");
   const url = await ctx.conversationsEndpoint();
-  const body = JSON.stringify({ message: message(ctx.scenario.greeting) });
+  const body = JSON.stringify({ id: messageId(), message: message(ctx.scenario.greeting) });
   const headers = { "Content-Type": "application/json" };
   const accepted = await ctx.send("POST", url, { headers: { ...(await ctx.auth(session, "POST", url)), ...headers }, body });
   check(accepted.ok, `aud is the identifier: got ${accepted.status}`);

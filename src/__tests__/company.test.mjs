@@ -92,7 +92,7 @@ async function world({ answers = [], extensions, config, plugins, algorithm, bli
       tenantId: TENANT,
       ...(agentId === undefined ? {} : { agentId }),
     });
-  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
+  const message = (text) => ({ id: conversations.generateRequestId(), author: { type: "human" }, text });
   const endpoint = company.document.agent.protocols[0].endpoint;
   const context = {
     tokenEndpoint: metadata.token_endpoint,
@@ -668,7 +668,7 @@ test("an operation in a conversation: a message's approval, a new revision for o
     const answer = await w.conversations.send(
       w.endpoint,
       page.conversation_id,
-      { id: w.conversations.generateMessageId(), author: { type: "agent" }, extensions: operationsContent({ approval: approvalOf(operation) }) },
+      { id: w.conversations.generateRequestId(), author: { type: "agent" }, extensions: operationsContent({ approval: approvalOf(operation) }) },
       { session, token, cursor: yes.cursor, wait: 0 },
     );
     return answer.events.filter((event) => event.message?.role === "company").at(-1)?.message;
@@ -687,7 +687,7 @@ test("an operation in a conversation: a message's approval, a new revision for o
   const again = await w.conversations.send(
     w.endpoint,
     page.conversation_id,
-    { id: w.conversations.generateMessageId(), author: { type: "agent" }, extensions: operationsContent({ approval: approvalOf(newer) }) },
+    { id: w.conversations.generateRequestId(), author: { type: "agent" }, extensions: operationsContent({ approval: approvalOf(newer) }) },
     { session, token, wait: 0 },
   );
   assert.equal(again.events.filter((event) => event.message?.text?.startsWith("Exchanged")).length, 1);
@@ -821,15 +821,15 @@ test("conversations: an idempotent retry, a reused ID, handoff, Direct Conversat
   assert.equal(retried.conversation_id, page.conversation_id);
   const conflict = await w.transport.request("POST", w.endpoint, {
     session, headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: { ...first, text: "Something else" } }),
+    body: JSON.stringify({ id: first.id, message: { author: first.author, text: "Something else" } }),
   });
   assert.equal(conflict.status, 409);
-  assert.deepEqual(await conflict.json(), { error: "message_id_conflict" });
+  assert.deepEqual(await conflict.json(), { error: "request_id_conflict" });
 
   const direct = await w.conversations.start(w.endpoint, w.message("Just us"), { session, parentConversationId: page.conversation_id, wait: 0 });
   const blocked = await w.transport.request("POST", `${w.endpoint}/${page.conversation_id}/messages`, {
     session, headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: w.message("Still there?") }),
+    body: JSON.stringify({ id: w.conversations.generateRequestId(), message: w.message("Still there?") }),
   });
   assert.equal(blocked.status, 409);
   assert.deepEqual(await blocked.json(), { error: "direct_conversation_open", conversation_id: direct.conversation_id });
@@ -838,8 +838,9 @@ test("conversations: an idempotent retry, a reused ID, handoff, Direct Conversat
   assert.deepEqual(parent.events.slice(-2).map((event) => event.type), ["direct_opened", "direct_closed"]);
 
   const handed = await w.conversations.handoff(w.endpoint, page.conversation_id, { session });
-  assert.equal(handed.handoff, "none");
-  assert.equal(handed.responder, "agent");
+  assert.equal(handed.conversation_id, page.conversation_id);
+  const afterHandoff = await w.conversations.readUntilDone(w.endpoint, page.conversation_id, { session, wait: 0 });
+  assert.deepEqual([afterHandoff.handoff, afterHandoff.responder], ["none", "agent"]);
 
   const cursor = parent.events[0].id;
   await w.shop.forgetEvents(page.conversation_id, { keep: 1 });
@@ -877,7 +878,8 @@ test("the company speaks first in a Direct Conversation the user accepted", asyn
   // Also once it closed, and the parent takes messages again.
   await w.conversations.close(w.endpoint, direct.conversation_id, { session, token });
   const closed = await w.conversations.acceptUserRequest(w.endpoint, page.conversation_id, eventId, { session, token, wait: 0 });
-  assert.deepEqual([closed.conversation_id, closed.closed], [direct.conversation_id, true]);
+  assert.equal(closed.conversation_id, direct.conversation_id);
+  assert.equal((await w.conversations.readEvents(w.endpoint, direct.conversation_id, { session, token })).closed, true);
   await w.conversations.send(w.endpoint, page.conversation_id, w.message("Thanks"), { session, token });
 
   // An event that is no `user_requested` event of the parent is `invalid_request`.

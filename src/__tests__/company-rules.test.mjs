@@ -75,7 +75,7 @@ async function world({ answers = [], extensions, config, plugins, controlled = f
     tenantId: TENANT,
   };
   const tokens = new RefreshTokenClient({ reactor: host.reactor, fetch });
-  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
+  const message = (text) => ({ id: conversations.generateRequestId(), author: { type: "human" }, text });
   const endpoint = company.document.agent.protocols[0].endpoint;
   const postJson = (session, url, body, token) =>
     transport.request("POST", url, { session, token, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -408,7 +408,7 @@ test("wait is a whole number of seconds, and a larger one is capped", async () =
   const capped = await w.conversations.readEvents(w.endpoint, page.conversation_id, { session, wait: 86_400 });
   assert.equal(capped.conversation_id, page.conversation_id);
   // A malformed message on the POSTs: none of text, data, context.
-  const bad = await w.postJson(session, `${w.endpoint}/${page.conversation_id}/messages`, { message: { id: "msg_x", author: { type: "agent" } } });
+  const bad = await w.postJson(session, `${w.endpoint}/${page.conversation_id}/messages`, { id: "msg_x", message: { author: { type: "agent" } } });
   assert.deepEqual([bad.status, await bad.json()], [400, { error: "invalid_request" }]);
   // An ID with characters not allowed is malformed, not unknown (§7.2).
   const odd = await w.transport.request("GET", `${w.endpoint}/cnv.bad/events`, { session });
@@ -419,8 +419,8 @@ test("a message is recorded as sent, and its role is the company's to set", asyn
   const w = await world();
   const session = await w.start();
   const started = await w.postJson(session, `${w.endpoint}?wait=0`, {
+    id: "msg_role_sent",
     message: {
-      id: "msg_role_sent",
       author: { type: "agent" },
       role: "company",
       text: "Hi",
@@ -458,16 +458,19 @@ test("a repeated handoff and close change nothing", async () => {
   const session = await w.start();
   const page = await w.conversations.start(w.endpoint, w.message("A person, please"), { session, wait: 0 });
   const first = await w.conversations.handoff(w.endpoint, page.conversation_id, { session });
-  assert.equal(first.responder, "human");
-  let count = (await w.shop.conversationRecord(page.conversation_id)).events.length;
+  assert.equal(first.conversation_id, page.conversation_id);
+  let record = await w.shop.conversationRecord(page.conversation_id);
+  assert.deepEqual([record.handoff, record.responder], ["none", "human"]);
+  let count = record.events.length;
   const again = await w.conversations.handoff(w.endpoint, page.conversation_id, { session });
-  assert.deepEqual([again.handoff, again.responder], [first.handoff, first.responder]);
+  assert.deepEqual(again, first);
   assert.equal((await w.shop.conversationRecord(page.conversation_id)).events.length, count);
   const closed = await w.conversations.close(w.endpoint, page.conversation_id, { session });
-  count = (await w.shop.conversationRecord(page.conversation_id)).events.length;
+  record = await w.shop.conversationRecord(page.conversation_id);
+  assert.ok(record.closed && closed.conversation_id === page.conversation_id);
+  count = record.events.length;
   const closedAgain = await w.conversations.close(w.endpoint, page.conversation_id, { session });
   assert.deepEqual(closedAgain, closed);
-  assert.equal(closed.closed, true);
   assert.equal((await w.shop.conversationRecord(page.conversation_id)).events.length, count);
 });
 

@@ -20,7 +20,7 @@ from personal_agent_protocol import (
     Message,
     SessionClient,
     SessionHttpClient,
-    generate_message_id,
+    generate_request_id,
 )
 from personal_agent_protocol.conversations import StreamReconnected, TextDelta, WorkingChanged
 from personal_agent_protocol.demo.kit import (
@@ -104,7 +104,7 @@ async def explain_conversation_streaming() -> dict[str, Any]:
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     receipt = await conversations.start(
         endpoint,
-        Message(id=generate_message_id(reactor), author=Author(type="human"), text="Hello"),
+        Message(id=generate_request_id(reactor), author=Author(type="human"), text="Hello"),
         session=session,
     )
 

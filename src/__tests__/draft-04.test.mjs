@@ -58,7 +58,8 @@ async function world(config) {
   return { clock, fetch, identity, shop, host, sites, company, session };
 }
 
-const greeting = () => ({ message: { id: "msg_0123456789abcdefghij", author: { type: "human" }, text: "Hello" } });
+let requests = 0;
+const greeting = () => ({ id: `req_0123456789abcdefgh_${(requests += 1)}`, message: { author: { type: "human" }, text: "Hello" } });
 
 const fixtures = new URL("../../protocol/fixtures/", import.meta.url);
 const fixture = (name) => JSON.parse(readFileSync(new URL(name, fixtures), "utf8"));

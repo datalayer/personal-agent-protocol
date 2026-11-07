@@ -77,7 +77,7 @@ async function world({ plugins, config, durable = false } = {}) {
   const metadata = company.oauthMetadata;
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const start = () => sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT });
-  const message = (text) => ({ id: conversations.generateMessageId(), author: { type: "human" }, text });
+  const message = (text) => ({ id: conversations.generateRequestId(), author: { type: "human" }, text });
   const endpoint = company.document.agent.protocols[0].endpoint;
   const postJson = (session, url, body, token) =>
     transport.request("POST", url, { session, token, headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) });
@@ -203,7 +203,8 @@ test("finding 3: a retried start answers only who may read the conversation", as
   const message = w.message("Where is my jacket order?");
   await w.conversations.start(w.endpoint, message, { session: signed, token, wait: 0 });
   const signedOut = await w.start();
-  const retried = await w.postJson(signedOut, `${w.endpoint}?wait=0`, { message });
+  const { id, ...sent } = message;
+  const retried = await w.postJson(signedOut, `${w.endpoint}?wait=0`, { id, message: sent });
   // Signed out: the challenge with `scope`, no error code and no body (§7).
   assert.equal(retried.status, 401);
   assert.equal(await retried.text(), "");
@@ -234,8 +235,8 @@ test("finding 5: an operation records and requires its scopes", async () => {
     session,
     `${w.endpoint}/${page.conversation_id}/messages`,
     {
+      id: w.message("x").id,
       message: {
-        id: w.message("x").id,
         author: { type: "agent" },
         extensions: { operations: { approval: { operation_id: proposal.operation_id, revision: proposal.revision } } },
       },

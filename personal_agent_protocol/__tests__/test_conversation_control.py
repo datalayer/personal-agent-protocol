@@ -174,40 +174,30 @@ async def test_a_stream_that_keeps_closing_empty_gives_up() -> None:
 
 
 @pytest.mark.asyncio
-async def test_handoff_and_close_post_empty_objects() -> None:
+async def test_handoff_cancel_and_close_post_a_request_id() -> None:
     seen: list[tuple[str, bytes]] = []
 
     def company(request: httpx.Request) -> httpx.Response:
         seen.append((request.url.path, request.content))
-        if request.url.path.endswith("/handoff"):
-            return httpx.Response(
-                202,
-                json={
-                    "conversation_id": "cnv_1",
-                    "working": False,
-                    "handoff": "pending",
-                    "responder": "agent",
-                    "closed": False,
-                },
-            )
-        return httpx.Response(
-            200,
-            json={
-                "conversation_id": "cnv_1",
-                "working": False,
-                "handoff": "none",
-                "responder": "human",
-                "closed": True,
-            },
-        )
+        # Accepted, not yet acted on: 202 and the conversation's ID alone (§8.3).
+        return httpx.Response(202, json={"conversation_id": "cnv_1"})
 
     client, http = client_for(company)
     async with http:
-        queued = await client.handoff(ENDPOINT, "cnv_1", session=session())
-        closed = await client.close(ENDPOINT, "cnv_1", session=session())
-    assert queued.handoff == "pending"
-    assert closed.closed and closed.responder == "human"
-    assert seen == [("/conversations/cnv_1/handoff", b"{}"), ("/conversations/cnv_1/close", b"{}")]
+        queued = await client.handoff(ENDPOINT, "cnv_1", session=session(), request_id="hnd_1")
+        cancelled = await client.cancel_handoff(ENDPOINT, "cnv_1", session=session())
+        closed = await client.close(ENDPOINT, "cnv_1", session=session(), request_id="cls_1")
+    # Accepted: only the conversation's ID comes back (§8.3); the state is read (§8.7).
+    assert queued.conversation_id == cancelled.conversation_id == closed.conversation_id == "cnv_1"
+    paths = [path for path, _ in seen]
+    assert paths == [
+        "/conversations/cnv_1/handoff",
+        "/conversations/cnv_1/handoff/cancel",
+        "/conversations/cnv_1/close",
+    ]
+    bodies = [json.loads(content) for _, content in seen]
+    assert bodies[0] == {"id": "hnd_1"} and bodies[2] == {"id": "cls_1"}
+    assert set(bodies[1]) == {"id"} and str(bodies[1]["id"]).startswith("req_")
 
 
 @pytest.mark.asyncio
@@ -278,7 +268,10 @@ async def test_accepting_an_invitation_sends_both_ids_and_no_message() -> None:
             await client.start(ENDPOINT, None, session=session())
         with pytest.raises(ValueError):
             await client.start(ENDPOINT, None, session=session(), user_requested_event_id="evt_c6")
-    assert seen == [{"parent_conversation_id": "cnv_1", "user_requested_event_id": "evt_c6"}]
+    assert [{k: v for k, v in body.items() if k != "id"} for body in seen] == [
+        {"parent_conversation_id": "cnv_1", "user_requested_event_id": "evt_c6"}
+    ]
+    assert str(seen[0]["id"]).startswith("req_")
     assert opened.conversation_id == "cnv_direct"
 
 

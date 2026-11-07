@@ -188,10 +188,10 @@ from .store import (
     IDEMPOTENCY,
     JOIN_CODE,
     MEDIATED,
-    MESSAGE_ID,
     OPERATION,
     PROPOSAL,
     REFRESH_TOKEN,
+    REQUEST_ID,
     SESSION,
     SIGN_IN_ATTEMPTS,
     USER_CODE,
@@ -207,13 +207,13 @@ from .store import (
     JoinCode,
     JsonObject,
     KnownClient,
-    MessageReceipt,
     OperationOutcome,
     OperationProposal,
     OperationRevision,
     PendingAuthorization,
     PendingDevice,
     PendingMediated,
+    RequestReceipt,
     SignInAttempts,
     StoredConversation,
     StoredEvent,
@@ -874,11 +874,31 @@ def _wait(request: CompanyRequest) -> int | None:
     return min(int(value), MAX_WAIT_SECONDS)
 
 
-def _incoming(value: object) -> Message:
-    """A message as the personal agent sent it; a `role` it set is ignored (§7.4)."""
+def _incoming(value: object, request_id: str) -> Message:
+    """A message as the personal agent sent it (§8.4): its ID is its request's, and a
+    `role` or `id` it set is ignored."""
 
     message = Message.model_validate(value)
-    return message if message.role is None else message.model_copy(update={"role": None})
+    return message.model_copy(update={"role": None, "id": request_id})
+
+
+def _request_id(body: Mapping[str, Any]) -> str:
+    """The request's `id` (§8.3): required, in the URL-safe base64 alphabet, else
+    `invalid_request`."""
+
+    value = body.get("id")
+    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
+        raise _RefusedError(400, "invalid_request")
+    return value
+
+
+def _request_digest(path: str, body: Mapping[str, Any]) -> str:
+    """What a request asked, for a retry to be told from a reuse of its ID (§8.3): its path
+    and its body, canonical. Query parameters, such as `cursor` and `wait`, are not part."""
+
+    return hashlib.sha256(
+        json.dumps([path, body], sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _json_object(body: bytes) -> dict[str, Any]:
@@ -2988,6 +3008,15 @@ class CompanyService:
         _, session = await self._caller(request, resource=self._conversation_resource())
         _wait(request)
         body = _json_object(request.body)
+        # Every POST has a request `id` (§8.3): a retry with the same ID, path and body
+        # gets the original answer; a reuse with another is `request_id_conflict`.
+        request_id = _request_id(body)
+        digest = _request_digest(urlsplit(request.url).path, body)
+        owner = (session.client_id, session.pairwise_user_id)
+        replay = await self._replayed(owner, request_id, digest)
+        if replay is not None:
+            # A retried start answers only a caller that may read the conversation now.
+            return self._answer(request, await self._owned(replay, session), 201)
         parent_id = body.get("parent_conversation_id")
         event_id = body.get("user_requested_event_id")
         if event_id is not None:
@@ -2995,20 +3024,16 @@ class CompanyService:
             # with or without a first message of the agent's; the company speaks first.
             if parent_id is None or not isinstance(event_id, str):
                 raise _RefusedError(400, "invalid_request")
-            first = None if body.get("message") is None else _incoming(body.get("message"))
+            first = (
+                None if body.get("message") is None else _incoming(body.get("message"), request_id)
+            )
             return await self._accept_user_request(
-                request, session, str(parent_id), event_id, first
+                request, session, str(parent_id), event_id, first, request_id, digest
             )
         if body.get("message") is None:
             # A request without `message` is valid only when accepting an invitation.
             raise _RefusedError(400, "invalid_request")
-        message = _incoming(body.get("message"))
-        owner = (session.client_id, session.pairwise_user_id)
-        replay = await self._replayed(owner, message)
-        if replay is not None:
-            # A retried start answers only a caller that may read the conversation now.
-            return self._answer(request, await self._owned(replay, session), 201)
-        parent_id = body.get("parent_conversation_id")
+        message = _incoming(body.get("message"), request_id)
         parent = None if parent_id is None else await self._direct_parent(str(parent_id), session)
         conversation = StoredConversation(
             conversation_id=self._id("cnv"),
@@ -3016,12 +3041,12 @@ class CompanyService:
             parent_id=parent.conversation_id if parent else None,
         )
         conversation_id = conversation.conversation_id
-        replay = await self._claim(owner, message, conversation_id)
+        replay = await self._claim(owner, request_id, digest, conversation_id)
         if replay is not None:
             return self._answer(request, await self._owned(replay, session), 201)
         await self.store.put(CONVERSATION, conversation_id, conversation.to_json())
         if parent is not None:
-            await self._open_direct(parent.conversation_id, conversation_id, owner, message)
+            await self._open_direct(parent.conversation_id, conversation_id, owner, request_id)
         conversation = await self._receive(conversation_id, session, message)
         return self._answer(request, conversation, 201)
 
@@ -3049,6 +3074,8 @@ class CompanyService:
         parent_id: str,
         event_id: str,
         first: Message | None,
+        request_id: str,
+        digest: str,
     ) -> CompanyResponse:
         """The agent accepts a `user_requested` event: a Direct Conversation the company
         speaks first in (§8.10).
@@ -3088,11 +3115,10 @@ class CompanyService:
         except _RefusedError:
             await self.store.delete(ACCEPTANCE, key)
             raise
+        await self._claim(owner, request_id, digest, conversation_id)
         conversation = await self._company_first(conversation_id, session)
         if first is not None:
-            replay = await self._claim(owner, first, conversation_id)
-            if replay is None:
-                conversation = await self._receive(conversation_id, session, first)
+            conversation = await self._receive(conversation_id, session, first)
         return self._answer(request, conversation, 201)
 
     async def _company_first(
@@ -3139,7 +3165,7 @@ class CompanyService:
         parent_id: str,
         conversation_id: str,
         owner: tuple[str, str],
-        message: Message | None,
+        request_id: str | None,
     ) -> None:
         """One write marks the parent's Direct Conversation; if it cannot, none was started."""
 
@@ -3157,8 +3183,8 @@ class CompanyService:
                 raise _RefusedError(404, "conversation_not_found")
         except _RefusedError:
             await self.store.delete(CONVERSATION, conversation_id)
-            if message is not None:
-                await self.store.delete(MESSAGE_ID, _composite(*owner, message.id))
+            if request_id is not None:
+                await self.store.delete(REQUEST_ID, _composite(*owner, request_id))
             raise
 
     async def _conversation_route(  # noqa: C901 - the conversation's actions
@@ -3166,7 +3192,7 @@ class CompanyService:
     ) -> CompanyResponse:
         parts = path.split("/")
         conversation_id = parts[3]
-        action = parts[4] if len(parts) > 4 else ""
+        action = "/".join(parts[4:])
         _, session = await self._caller(request, resource=self._conversation_resource())
         if not _IDENTIFIER.fullmatch(conversation_id):
             # An ID with characters not allowed is malformed, not unknown (§7.2, §7.13).
@@ -3182,10 +3208,41 @@ class CompanyService:
             return self._page_response(request, conversation, 200)
         if method != "POST":
             raise _RefusedError(405, "method_not_allowed")
+        if action not in {"messages", "handoff", "handoff/cancel", "close"}:
+            raise _RefusedError(404, "not_found")
+        # Every POST has a request `id` (§8.3): a retry gets the original answer and is not
+        # acted on again; a reuse with another path or body is `request_id_conflict`.
+        body = _json_object(request.body)
+        request_id = _request_id(body)
+        digest = _request_digest(urlsplit(request.url).path, body)
+        owner = (session.client_id, session.pairwise_user_id)
+        replayed = await self._replayed(owner, request_id, digest)
+        if replayed is None:
+            replayed = await self._claim(owner, request_id, digest, conversation_id)
+        if replayed is not None:
+            return self._answer(request, await self._conversation(conversation_id), 202)
         if action == "close":
+            # Accepted (202) and acted on at once: closed, with its state event (§8.12); a
+            # close of a closed conversation changes nothing.
             await self._close(conversation_id)
-            return self._receipt(await self._conversation(conversation_id), 200)
+            return self._answer(request, await self._conversation(conversation_id), 202)
         self._open(conversation)
+        if action == "handoff/cancel":
+
+            def cancel(current: StoredConversation) -> StoredConversation:
+                self._open(current)
+                # The company stops looking when it still is; a cancel when `handoff`
+                # isn't pending changes nothing (§8.9).
+                if current.handoff != "pending":
+                    return current
+                return self._changed(current, handoff="none")
+
+            changed = await self._change(
+                CONVERSATION, conversation_id, StoredConversation.from_json, cancel
+            )
+            if changed is None:
+                raise _RefusedError(404, "conversation_not_found")
+            return self._answer(request, changed[1], 202)
         if action == "handoff":
 
             def handoff(current: StoredConversation) -> StoredConversation:
@@ -3217,44 +3274,36 @@ class CompanyService:
             )
             if changed is None:
                 raise _RefusedError(404, "conversation_not_found")
-            return self._receipt(changed[1], 202)
-        if action == "messages":
-            message = _incoming(_json_object(request.body).get("message"))
-            owner = (session.client_id, session.pairwise_user_id)
-            replay = await self._replayed(owner, message)
-            if replay is None and await self._claim(owner, message, conversation_id) is None:
-                await self._receive(conversation_id, session, message)
-            return self._answer(request, await self._conversation(conversation_id), 202)
-        raise _RefusedError(404, "not_found")
+            return self._answer(request, changed[1], 202)
+        # Received, or not: `_receive` releases the request ID when it refuses the message.
+        await self._receive(conversation_id, session, _incoming(body.get("message"), request_id))
+        return self._answer(request, await self._conversation(conversation_id), 202)
 
-    @staticmethod
-    def _message_digest(message: Message) -> str:
-        return hashlib.sha256(message.model_dump_json(exclude_none=True).encode()).hexdigest()
-
-    async def _replayed(self, owner: tuple[str, str], message: Message) -> str | None:
-        """A retried message returns its conversation; a reused ID with new content conflicts."""
+    async def _replayed(self, owner: tuple[str, str], request_id: str, digest: str) -> str | None:
+        """A retried request returns its conversation; a reused ID with another path or body
+        is `request_id_conflict` (§8.3)."""
 
         known = await self._read(
-            MESSAGE_ID, _composite(*owner, message.id), MessageReceipt.from_json
+            REQUEST_ID, _composite(*owner, request_id), RequestReceipt.from_json
         )
         if known is None:
             return None
-        if known.digest != self._message_digest(message):
-            raise _RefusedError(409, "message_id_conflict")
+        if known.digest != digest:
+            raise _RefusedError(409, "request_id_conflict")
         return known.conversation_id
 
     async def _claim(
-        self, owner: tuple[str, str], message: Message, conversation_id: str
+        self, owner: tuple[str, str], request_id: str, digest: str, conversation_id: str
     ) -> str | None:
-        """Record the message ID, once: `None` when this call did, else the earlier conversation."""
+        """Record the request ID, once: `None` when this call did, else the earlier conversation."""
 
-        receipt = MessageReceipt(conversation_id, self._message_digest(message))
+        receipt = RequestReceipt(conversation_id, digest)
         for _ in range(_CAS_ATTEMPTS):
             if await self.store.create(
-                MESSAGE_ID, _composite(*owner, message.id), receipt.to_json()
+                REQUEST_ID, _composite(*owner, request_id), receipt.to_json()
             ):
                 return None
-            replay = await self._replayed(owner, message)
+            replay = await self._replayed(owner, request_id, digest)
             if replay is not None:
                 return replay
         raise _RefusedError(503, "temporarily_unavailable")
@@ -3291,9 +3340,10 @@ class CompanyService:
             if changed is None:
                 raise _RefusedError(404, "conversation_not_found")
         except _RefusedError:
-            # Not received: the same message may be sent again.
+            # Not received: the same request may be sent again.
             owner = (session.client_id, session.pairwise_user_id)
-            await self.store.delete(MESSAGE_ID, _composite(*owner, message.id))
+            if message.id is not None:
+                await self.store.delete(REQUEST_ID, _composite(*owner, message.id))
             raise
         conversation = changed[1]
         events: list[StoredEvent] = []
@@ -3454,13 +3504,9 @@ class CompanyService:
             )
 
     def _receipt(self, conversation: StoredConversation, status: int) -> CompanyResponse:
-        return CompanyResponse(
-            status,
-            {
-                "conversation_id": conversation.conversation_id,
-                **self._state_fields(conversation),
-            },
-        )
+        """A successful POST means accepted, not acted on: only `conversation_id` (§8.3)."""
+
+        return CompanyResponse(status, {"conversation_id": conversation.conversation_id})
 
     @staticmethod
     def _state_fields(conversation: StoredConversation) -> dict[str, Any]:

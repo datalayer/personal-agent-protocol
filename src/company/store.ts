@@ -326,8 +326,11 @@ export interface AccountAgent {
  * company bounds that with its `pap.company.clientPolicy` (or a store that ages them out).
  */
 export interface KnownClient {
-  /** The extensions it lists, each with its major version. */
-  readonly extensions: Readonly<Record<string, string>>;
+  /**
+   * A marker: the agent's identity was verified; the extensions an agent uses are declared per
+   * request (§3.4), never kept here.
+   */
+  readonly seen: true;
 }
 
 export interface PendingDevice {

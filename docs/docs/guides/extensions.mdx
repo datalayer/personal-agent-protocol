@@ -15,50 +15,61 @@ A company advertises support in its discovery document:
 ```json
 {
   "extensions": {
-    "operations": {
-      "version": "2"
-    }
+    "operations": [
+      {
+        "version": "2"
+      }
+    ]
   }
 }
 ```
 
-A personal agent advertises compatible extensions in its client metadata.
+A personal agent declares the extensions it uses, per request, in `Poppy-Extensions`.
 Protocol-defined extensions use plain names. Third-party names begin with a
 domain controlled by their author, such as `example.com/gift-wrap`. Both sides
 ignore unknown extensions and unknown fields.
 
 ## Negotiate in code
 
-Both SDKs negotiate the same way: an extension is used only when the company
-and the agent both list it, at the same major version, and this SDK
-implements that version (`SUPPORTED_EXTENSIONS`: Operations version 2, Mediated
-Sign-In version 1). An extension the company recognizes from the request itself, such
-as Mediated Sign-In with its grant type, needs no entry on the agent's side, and a
-company can't refuse it with `extension_required`.
+A company lists each extension with an entry per major version it supports
+(§3.3), and a personal agent declares the extensions it uses with that company,
+one version each, in the `Poppy-Extensions` header on every request with the
+Session header, the same throughout a Session (§3.4): nothing of them is in its
+client metadata any more. Both SDKs negotiate the same way: for each extension
+the company lists, the version this SDK implements when the company lists it
+(`SUPPORTED_EXTENSIONS`: Operations version 2, Mediated Sign-In version 1, Links
+and Disclosures version 1); the result is the Session's `extensions`
+(`SessionClient.start(..., company=company)` negotiates it, or pass `extensions`
+for a host that implements fewer). An extension the company recognizes from the
+request itself, such as Mediated Sign-In with its grant type, is used without
+being declared, and a company can't refuse it with `extension_required`. The
+header is an RFC 9651 List of Strings (`format_extensions_header`,
+`formatExtensionsHeader`); a company reads it per request
+(`parse_extensions_header`, `parseExtensionsHeader`), and one that fails to parse
+declares nothing.
 
 ```python
-from personal_agent_protocol.extensions import negotiate_extensions
+from personal_agent_protocol.extensions import format_extensions_header, negotiate_extensions
 from personal_agent_protocol.models import ExtensionDescriptor
 
 company = {
-    "operations": ExtensionDescriptor(version="2"),
-    "example.com/gift-wrap": ExtensionDescriptor(version="2"),
+    "operations": [ExtensionDescriptor(version="2"), ExtensionDescriptor(version="1")],
+    "example.com/gift-wrap": [ExtensionDescriptor(version="2")],
 }
-agent = {"operations": ExtensionDescriptor(version="2")}
-assert negotiate_extensions(company, agent) == {"operations": "2"}
+negotiated = negotiate_extensions(company)
+assert negotiated == {"operations": "2"}
+assert format_extensions_header(negotiated) == '"operations";v="2"'
 ```
 
 ```typescript
-import { negotiateExtensions } from '@datalayer/personal-agent-protocol';
+import { formatExtensionsHeader, negotiateExtensions } from '@datalayer/personal-agent-protocol';
 
-const negotiated = negotiateExtensions(
-  {
-    operations: { version: '2' },
-    'example.com/gift-wrap': { version: '2' },
-  },
-  { operations: { version: '2' } },
-);
+const negotiated = negotiateExtensions({
+  operations: [{ version: '2' }, { version: '1' }],
+  'example.com/gift-wrap': [{ version: '2' }],
+});
 console.log(negotiated); // { operations: '2' }
+console.log(formatExtensionsHeader(negotiated)); // "operations";v="2"
 ```
 
 The Operations behavior itself lives in `OperationsClient` (Python and

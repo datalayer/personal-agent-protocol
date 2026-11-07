@@ -139,6 +139,7 @@ class LedgerlyAsPersonalAgent:
                 client_id=self.identity.client_id,
                 pairwise_user_id=link.pairwise_user_id,
                 issuer=metadata.issuer,
+                company=company,
                 tenant_id=TENANT,
             )
         device = DeviceSignInClient(reactor=self.reactor, http_client=self.http)

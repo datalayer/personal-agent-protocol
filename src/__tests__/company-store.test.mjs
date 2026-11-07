@@ -21,6 +21,7 @@ import {
   firstContribution,
   messageOperation,
   operationsContent,
+  negotiateExtensions,
 } from "../../lib/index.js";
 import { MemoryCompanyStore, StoreConformanceError, checkStore } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
@@ -103,6 +104,7 @@ test("a company restarted over its store continues every flow", async () => {
   const message = (text) => ({ id: conversations.generateRequestId(), author: { type: "human" }, text });
   const session = await new SessionClient({ reactor: host.reactor, fetch }).start({
     clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT,
+    extensions: negotiateExtensions(company.document.extensions, identity.supportedExtensions),
   });
 
   // Before: a conversation with events, and a Device Sign-In the user has not approved.

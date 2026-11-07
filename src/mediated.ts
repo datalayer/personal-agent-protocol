@@ -10,6 +10,7 @@ import { AuthorizationError, ProtocolValidationError } from "./errors.js";
 import {
   MEDIATED_EXTENSION,
   MEDIATED_GRANT,
+  companyExtension,
   parseMediatedSignIn,
   requireOauth,
   signInDisabled,
@@ -65,14 +66,9 @@ const SIGN_IN_ID = /^[A-Za-z0-9_-]{1,256}$/;
 
 /** The extension's entry at this version, when the issuer lists the grant too. */
 function declared(company: DiscoveredCompany): unknown {
-  const descriptor = company.document.extensions[MEDIATED_EXTENSION];
+  const descriptor = companyExtension(company.document, MEDIATED_EXTENSION, MEDIATED_VERSION);
   const metadata = company.oauthMetadata;
-  if (
-    descriptor === undefined ||
-    descriptor.version !== MEDIATED_VERSION ||
-    metadata === undefined ||
-    !metadata.grant_types_supported.includes(MEDIATED_GRANT)
-  ) {
+  if (descriptor === undefined || metadata === undefined || !metadata.grant_types_supported.includes(MEDIATED_GRANT)) {
     return undefined;
   }
   return descriptor;

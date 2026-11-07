@@ -47,7 +47,6 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 from .errors import PersonalAgentProtocolError, TransportError
 from .models import (
     Approval,
-    ClientMetadata,
     DiscoveryDocument,
     Message,
     Operation,
@@ -62,6 +61,7 @@ from .reactor import (
     first_contribution,
     optional_contribution,
 )
+from .sessions import PapSession
 from .telemetry import operation_result, traced
 
 OPERATIONS_EXTENSION = "operations"
@@ -82,16 +82,13 @@ class OperationError(PersonalAgentProtocolError):
     """An operation could not be approved, or its approval could not be sent."""
 
 
-def operations_negotiated(document: DiscoveryDocument, metadata: ClientMetadata) -> bool:
-    """Whether both sides list `operations` with this version (another major doesn't count)."""
+def operations_negotiated(document: DiscoveryDocument, session: PapSession) -> bool:
+    """Whether the Company lists `operations` at this version and the Session declares it
+    (Operations 2): another major version doesn't count."""
 
-    company = document.extensions.get(OPERATIONS_EXTENSION)
-    agent = metadata.extensions.get(OPERATIONS_EXTENSION)
     return (
-        company is not None
-        and agent is not None
-        and company.version == OPERATIONS_VERSION
-        and agent.version == OPERATIONS_VERSION
+        document.extension(OPERATIONS_EXTENSION, OPERATIONS_VERSION) is not None
+        and session.extensions.get(OPERATIONS_EXTENSION) == OPERATIONS_VERSION
     )
 
 

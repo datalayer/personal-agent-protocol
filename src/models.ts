@@ -288,7 +288,11 @@ export interface DiscoveryDocument extends UnknownFields {
   readonly apis: readonly ApiDescriptor[];
   readonly feedback?: FeedbackDescriptor;
   readonly excluded_tasks?: ExcludedTasksDescriptor;
-  readonly extensions: Readonly<Record<string, ExtensionDescriptor>>;
+  /**
+   * The extensions the Company supports, keyed by name, each a list with an entry per major
+   * version it supports (§3.3); each extension defines the entry's other fields.
+   */
+  readonly extensions: Readonly<Record<string, readonly ExtensionDescriptor[]>>;
   /**
    * The Company's Agent Skills discovery index, as published (§3.1, §9.4); read it through
    * `usableSkills`, which skips what this SDK does not recognize.
@@ -346,7 +350,6 @@ export interface ClientMetadata extends UnknownFields {
   readonly jwks_uri: string;
   readonly redirect_uris: readonly string[];
   readonly token_endpoint_auth_method: "private_key_jwt";
-  readonly extensions: Readonly<Record<string, ExtensionDescriptor>>;
 }
 
 export interface JsonWebKey extends UnknownFields {
@@ -849,21 +852,39 @@ function nullsAbsent(
 function extensions(
   value: unknown,
   label: string,
-): Readonly<Record<string, ExtensionDescriptor>> {
+): Readonly<Record<string, readonly ExtensionDescriptor[]>> {
   const source = record(value ?? {}, label);
   return Object.fromEntries(
-    Object.entries(source).map(([name, item]) => {
-      const extension = record(item, `${label}.${name}`);
-      const version = string(extension.version, `${label}.${name}.version`);
-      if (!/^(0|[1-9][0-9]*)$/.test(version)) {
-        throw new ProtocolValidationError(
-          "invalid_extension_version",
-          `${label}.${name}.version must be a major version`,
-        );
+    Object.entries(source).map(([name, items]) => {
+      const entries = array(items, `${label}.${name}`);
+      if (!entries.length) {
+        throw new ProtocolValidationError("invalid_extension", `${label}.${name} lists at least one version`);
       }
-      return [name, { ...extension, version } as ExtensionDescriptor];
+      return [
+        name,
+        entries.map((item, index) => {
+          const extension = record(item, `${label}.${name}[${index}]`);
+          const version = string(extension.version, `${label}.${name}[${index}].version`);
+          if (!/^(0|[1-9][0-9]*)$/.test(version)) {
+            throw new ProtocolValidationError(
+              "invalid_extension_version",
+              `${label}.${name}[${index}].version must be a major version`,
+            );
+          }
+          return { ...extension, version } as ExtensionDescriptor;
+        }),
+      ];
     }),
   );
+}
+
+/** The Company's entry for `name` at `version` (§3.3), or `undefined`. */
+export function companyExtension(
+  document: DiscoveryDocument,
+  name: string,
+  version: string,
+): ExtensionDescriptor | undefined {
+  return (document.extensions[name] ?? []).find((entry) => entry.version === version);
 }
 
 function httpsUrl(value: unknown, label: string): string {
@@ -1222,7 +1243,6 @@ export function parseClientMetadata(value: unknown): ClientMetadata {
     jwks_uri: jwksUri,
     redirect_uris: redirectUris,
     token_endpoint_auth_method: authMethod,
-    extensions: extensions(source.extensions, "extensions"),
   } as ClientMetadata;
 }
 

@@ -409,7 +409,9 @@ class DiscoveryDocument(ProtocolModel):
     apis: list[ApiDescriptor] = Field(default_factory=list)
     feedback: FeedbackDescriptor | None = None
     excluded_tasks: ExcludedTasksDescriptor | None = None
-    extensions: dict[str, ExtensionDescriptor] = Field(default_factory=dict)
+    #: The extensions the Company supports, keyed by name, each a list with an entry per
+    #: major version it supports (§3.3); each extension defines the entry's other fields.
+    extensions: dict[str, list[ExtensionDescriptor]] = Field(default_factory=dict)
     #: The Company's Agent Skills discovery index, as published (§3.1, §9.4); read it
     #: through `usable_skills`, which skips what this SDK does not recognize.
     skill_index: dict[str, Any] | None = None
@@ -429,6 +431,23 @@ class DiscoveryDocument(ProtocolModel):
                 raise ValueError("supported_versions are keyed by major.minor")
             _https_url(url, f"supported_versions[{version}]")
         return value
+
+    @field_validator("extensions")
+    @classmethod
+    def validate_extensions(
+        cls, value: dict[str, list[ExtensionDescriptor]]
+    ) -> dict[str, list[ExtensionDescriptor]]:
+        for name, entries in value.items():
+            if not entries:
+                raise ValueError(f"extensions.{name} lists at least one version")
+        return value
+
+    def extension(self, name: str, version: str) -> ExtensionDescriptor | None:
+        """The Company's entry for `name` at `version` (§3.3), or `None`."""
+
+        return next(
+            (entry for entry in self.extensions.get(name, []) if entry.version == version), None
+        )
 
     @model_validator(mode="after")
     def validate_interfaces(self) -> DiscoveryDocument:
@@ -640,7 +659,6 @@ class ClientMetadata(ProtocolModel):
     jwks_uri: str
     redirect_uris: list[str] = Field(default_factory=list)
     token_endpoint_auth_method: Literal["private_key_jwt"] = "private_key_jwt"
-    extensions: dict[str, ExtensionDescriptor] = Field(default_factory=dict)
 
     @field_validator("client_id", "logo_uri", "jwks_uri")
     @classmethod

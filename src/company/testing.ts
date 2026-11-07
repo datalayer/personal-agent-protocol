@@ -132,7 +132,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       revoked: true,
     } satisfies AccountFamily,
     [RecordKinds.accountAgent]: { families: ["fam_1", "fam_2"] } satisfies AccountAgent,
-    [RecordKinds.client]: { extensions: { operations: "2" } } satisfies KnownClient,
+    [RecordKinds.client]: { seen: true } satisfies KnownClient,
     [RecordKinds.device]: {
       clientId: "c",
       scopes: ["a"],

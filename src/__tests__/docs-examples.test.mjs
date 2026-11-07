@@ -122,6 +122,7 @@ async function docsWorld() {
       pairwiseUserId,
       issuer,
       tenantId: TENANT,
+      company: await discovered(domain),
     });
   }
   async function signedIn(domain, scopes) {

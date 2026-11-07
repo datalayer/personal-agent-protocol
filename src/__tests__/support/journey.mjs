@@ -60,6 +60,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
         pairwiseUserId: agent.pairwise_user_id,
         issuer: discovered.oauthMetadata.issuer,
         tenantId: agent.tenant_id,
+        company: discovered,
       });
       assert.equal(signedIn !== undefined, expect.signed_in);
     } else if (step.step === "ask") {
@@ -102,7 +103,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
       proposal = messageOperation(page.events.filter((e) => e.type !== "state").at(-1).message);
       assert.equal(proposal !== undefined, expect.operation);
     } else if (step.step === "approve") {
-      assert.ok(operationsNegotiated(discovered.document, parseClientMetadata(identity.metadata)), "both sides list Operations v2");
+      assert.ok(operationsNegotiated(discovered.document, session), "the company lists Operations v2 and the Session declares it");
       const approval = await new OperationsClient({ reactor }).askUser(proposal, {
         organization: discovered.document.organization,
         tenantId: agent.tenant_id,

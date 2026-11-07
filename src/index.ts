@@ -278,6 +278,9 @@ export {
   extensionNameKind,
   extensionRequired,
   negotiateExtensions,
+  formatExtensionsHeader,
+  parseExtensionsHeader,
+  EXTENSIONS_HEADER,
 } from "./extensions.js";
 export {
   ApiClient,
@@ -323,6 +326,7 @@ export {
   companyIssuer,
   companyResource,
   companySkills,
+  companyExtension,
   knownResponder,
   knownHandoff,
   conversationState,

@@ -39,9 +39,10 @@ sequenceDiagram
 
 The walkthrough:
 
-1. **Negotiation.** `operations_negotiated()` is true only when the company and
-   the agent both list `operations` version 2. Without it, a company handles
-   approval itself or answers with `extension_required`.
+1. **Negotiation.** `operations_negotiated()` is true only when the company
+   lists `operations` version 2 and the Session declares it in `Poppy-Extensions`
+   (§3.4). Without it, a company handles approval itself or answers with
+   `extension_required`.
 2. **The user decides.** `ask_user()` goes through the host's own approval
    surface, naming the company and showing its summary, and every operation is
    asked about. A chat message never approves anything.

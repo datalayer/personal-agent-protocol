@@ -68,11 +68,10 @@ FIXTURE_SCHEMAS = {
     "invalid-session-valid.json": "oauth-error",
 }
 
-#: Fixtures of Operations version 2, as upstream's schemas describe it. The events page
-#: fixture carries draft 0.4's state fields (§8.7, P4-06); it is checked against
-#: `events-response` again once the vendored schemas are replaced at 46beb21 (P4-03).
+#: Fixtures of Operations version 2, as upstream's schemas describe it.
 OPERATIONS_V2 = {
     "operation-valid.json": "operation",
+    "conversation-events-valid.json": "events-response",
 }
 
 
@@ -118,17 +117,20 @@ def test_feedback_has_no_kind_and_an_alternative_no_length_cap() -> None:
     assert Alternative.model_validate(long).instructions == long["instructions"]
 
 
-def test_unknown_status_and_responder_are_allowed_in_an_event_by_type_only() -> None:
-    """A state event's values come from the spec's lists; the SDK reads others as 8.7 says."""
+def test_a_state_event_carries_handoff_responder_and_closed() -> None:
+    """A state event's values come from the spec's lists (§8.7); the SDK reads others as
+    8.7 says, and the upstream schema requires the three fields."""
 
     event = {
         "id": "evt_1",
         "type": "state",
         "created_at": "2026-10-10T17:03:00Z",
-        "status": "idle",
+        "handoff": "none",
         "responder": "agent",
+        "closed": False,
     }
     assert errors("event", event) == []
+    assert errors("event", {**event, "handoff": None}) != []
 
 
 @pytest.mark.asyncio

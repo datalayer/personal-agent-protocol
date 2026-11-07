@@ -78,6 +78,7 @@ from .cli_host import (
 from .conversations import generate_request_id
 from .device import DeviceSignInClient
 from .errors import PersonalAgentProtocolError
+from .extensions import negotiate_extensions
 from .identity import AgentIdentityClient
 from .mcp import McpClient, fetch_mcp_server_metadata, mcp_api
 from .mediated import MediatedSignInClient, mediated_sign_in
@@ -485,10 +486,13 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 pairwise_user_id=pairwise,
                 issuer=company.identifier,
                 tenant_id=runtime.tenant_id,
+                # The extensions this host implements that the company lists (§3.4).
+                extensions=negotiate_extensions(company.document.extensions),
             )
             record = SessionRecord(
                 id=started.handle,
                 sid=started.sid,
+                extensions=dict(started.extensions),
                 domain=company.document.organization.domain,
                 company=company.document.organization.name,
                 issuer=company.identifier,

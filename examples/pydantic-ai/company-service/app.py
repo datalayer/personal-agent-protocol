@@ -29,7 +29,6 @@ from reactor import PluginManifest
 
 from personal_agent_protocol import (
     Author,
-    ClientMetadata,
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
@@ -190,6 +189,7 @@ async def run_company_service() -> dict[str, Any]:
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
+        company=company,
         tenant_id=TENANT,
     )
     steps.append("started a signed-out Session, its ID chosen here")
@@ -230,9 +230,7 @@ async def run_company_service() -> dict[str, Any]:
         wait=0,
     )
     proposal = [e for e in page.events if e.type != "state"][-1].message.operation  # type: ignore[union-attr]
-    negotiated = operations_negotiated(
-        company.document, ClientMetadata.model_validate(atlas.metadata)
-    )
+    negotiated = operations_negotiated(company.document, session)
     if proposal is None or not negotiated:
         raise RuntimeError("the example world is incomplete")
     steps.append(f"the library asked approval of revision {proposal.revision}: {proposal.summary}")

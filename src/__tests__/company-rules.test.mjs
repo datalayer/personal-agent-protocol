@@ -36,6 +36,7 @@ import {
   companyIdentifier,
   offersDevice,
   requireOauth,
+  negotiateExtensions,
 } from "../../lib/index.js";
 import { ClientPolicies, CompanyApis, CompanyConfig, JOIN_COOKIE, OperationExecutors, SignInRefused, WEB_COOKIE } from "../../lib/server.js";
 import { ADA, ADA_CODE, CONFIG_OPTIONS, manzanita,
@@ -95,7 +96,14 @@ async function world({ answers = [], extensions, config, plugins, controlled = f
     clock, fetch, identity, shop, plugin, host, transport, conversations, company, metadata, sessions, sites,
     context, tokens, message, endpoint, postJson, mediatedGrant, controlledBrowser,
     api: new ApiClient({ transport }),
-    start: () => sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT }),
+    start: () =>
+      sessions.start({
+        clientId: identity.clientId,
+        pairwiseUserId: PAIRWISE,
+        issuer: metadata.issuer,
+        tenantId: TENANT,
+        extensions: negotiateExtensions(company.document.extensions, identity.supportedExtensions),
+      }),
   };
 }
 
@@ -372,10 +380,12 @@ test("Mediated Sign-In attempts are limited: 429 with Retry-After and no body, t
 });
 
 test("an extension used by the request needs no client metadata entry", async () => {
-  // Plain lists no extension: the grant type says it uses Mediated Sign-In (§3.3).
+  // Plain declares no extension: the grant type says it uses Mediated Sign-In, and the token
+  // endpoint receives no Poppy-Extensions (§3.3, §3.4).
   const w = await world();
   const plain = await agentIdentity({ domain: "plain.example", name: "Plain", extensions: [] });
-  assert.deepEqual(plain.metadata.extensions, {});
+  assert.ok(!("extensions" in plain.metadata));
+  assert.deepEqual(plain.supportedExtensions, {});
   w.sites["plain.example"] = plain.documents;
   const host = await agentHost({ identity: plain, fetch: w.fetch, clock: w.clock, answers: [{ ...ADA }, { code: ADA_CODE }] });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });

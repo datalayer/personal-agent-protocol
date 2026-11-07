@@ -70,6 +70,7 @@ import { IDEMPOTENCY_KEY, WRITE_METHODS } from "../apis.js";
 import { DPOP_ALGORITHM } from "../crypto.js";
 import { OPERATOR_SIGNATURE_REFUSED, acceptSignature, verifyOperatorSignature } from "../operator-signatures.js";
 import { ProofError, ProtocolValidationError, SessionError } from "../errors.js";
+import { parseExtensionsHeader } from "../extensions.js";
 import { parseJsonStrict } from "../json.js";
 import { MEDIATED_EXTENSION, MEDIATED_VERSION } from "../mediated.js";
 import {
@@ -199,6 +200,8 @@ const JOIN_LIFETIME_SECONDS = 60;
 const SESSION_HEADER = "poppy-session";
 /** The header that names the request's protocol version, with the Session header (§3.4). */
 const VERSION_HEADER = "poppy-version";
+/** The header that declares the request's extensions, one version each (§3.4). */
+const EXTENSIONS_HEADER = "poppy-extensions";
 /** The key prefix of a `client_id`'s Mediated Sign-In attempts: it has its own limit. */
 const CLIENT_ATTEMPTS = "client:";
 /** How long a Mediated Sign-In's one-time code can be sent, in seconds. */
@@ -734,6 +737,8 @@ export interface CallerSession {
   readonly resource?: string;
   /** The protocol version the request is in, its `Poppy-Version` (§3.4). */
   readonly protocolVersion: string;
+  /** The extensions the request declares, one version each, its `Poppy-Extensions` (§3.4). */
+  readonly extensions: Readonly<Record<string, string>>;
 }
 
 class Refused extends Error {
@@ -1449,16 +1454,19 @@ export class CompanyService {
     if (config.feedback) document.feedback = { endpoint: config.feedbackEndpoint };
     if (config.excludedTasks.length) document.excluded_tasks = { url: config.excludedTasksUrl };
     const extensions: Record<string, unknown> = {};
-    if (config.operations) extensions[OPERATIONS_EXTENSION] = { version: OPERATIONS_VERSION };
-    if (config.links) extensions[LINKS_EXTENSION] = { version: LINKS_VERSION };
-    if (config.disclosures) extensions[DISCLOSURES_EXTENSION] = { version: DISCLOSURES_VERSION };
+    if (config.operations) extensions[OPERATIONS_EXTENSION] = [{ version: OPERATIONS_VERSION }];
+    if (config.links) extensions[LINKS_EXTENSION] = [{ version: LINKS_VERSION }];
+    if (config.disclosures) extensions[DISCLOSURES_EXTENSION] = [{ version: DISCLOSURES_VERSION }];
     if (config.mediatedFields.length) {
-      extensions[MEDIATED_EXTENSION] = {
-        version: MEDIATED_VERSION,
-        fields: config.mediatedFields.map(([name, label, secret]) => ({ name, label, secret })),
-        scopes: [...config.mediatedGrantScopes],
-      };
+      extensions[MEDIATED_EXTENSION] = [
+        {
+          version: MEDIATED_VERSION,
+          fields: config.mediatedFields.map(([name, label, secret]) => ({ name, label, secret })),
+          scopes: [...config.mediatedGrantScopes],
+        },
+      ];
     }
+    // Each extension a list, one entry per version the company supports (§3.3).
     if (Object.keys(extensions).length) document.extensions = extensions;
     if (config.skills.length) {
       // The pinned Agent Skills discovery index, embedded (§9.4): absolute URLs, so the entries
@@ -1592,14 +1600,12 @@ export class CompanyService {
   }
 
   /** What a personal agent declares, kept whichever request verified it first. */
-  async #rememberClient(clientId: string, metadata: ClientMetadata): Promise<void> {
-    const extensions = Object.fromEntries(
-      Object.entries(metadata.extensions ?? {}).map(([name, item]) => [name, item.version]),
-    );
+  /** A personal agent whose identity was verified, kept whichever request did it. */
+  async #rememberClient(clientId: string, _metadata: ClientMetadata): Promise<void> {
     const known = await this.#read<KnownClient>(RecordKinds.client, clientId);
-    if (known === undefined || canonical(known.extensions) !== canonical(extensions)) {
-      await this.store.put(RecordKinds.client, clientId, json({ extensions } satisfies KnownClient));
-      // Its identity verified for the first time, or with new metadata.
+    if (known === undefined) {
+      await this.store.put(RecordKinds.client, clientId, json({ seen: true } satisfies KnownClient));
+      // Its identity verified for the first time.
       this.#report("pap.company.identity.check", "ok", {});
     }
   }
@@ -1614,8 +1620,9 @@ export class CompanyService {
   }
 
   /** Whether the agent listed this version of Operations when it last authenticated. */
-  async #supportsOperations(clientId: string): Promise<boolean> {
-    return this.#supportsExtension(clientId, OPERATIONS_EXTENSION, OPERATIONS_VERSION);
+  /** Whether the request declares this version of Operations (Operations 2). */
+  #supportsOperations(session: CallerSession): boolean {
+    return this.#supportsExtension(session, OPERATIONS_EXTENSION, OPERATIONS_VERSION);
   }
 
   /**
@@ -1644,14 +1651,11 @@ export class CompanyService {
   }
 
   /**
-   * Whether the agent's client metadata lists `name` at `version` (§3.3, §8.4).
-   *
-   * Extension content goes only to a side that lists the extension with the same version,
-   * read from the metadata the agent last authenticated with.
+   * Whether the request declares `name` at `version` in `Poppy-Extensions` (§3.3, §3.4, §8.4):
+   * extension content goes only where the declaration says.
    */
-  async #supportsExtension(clientId: string, name: string, version: string): Promise<boolean> {
-    const known = await this.#read<KnownClient>(RecordKinds.client, clientId);
-    return known !== undefined && known.extensions[name] === version;
+  #supportsExtension(session: CallerSession, name: string, version: string): boolean {
+    return session.extensions[name] === version;
   }
 
   /**
@@ -2553,7 +2557,7 @@ export class CompanyService {
     session: CallerSession,
     body: unknown,
   ): Promise<CompanyResponse> {
-    const negotiated = await this.#supportsOperations(session.clientId);
+    const negotiated = this.#supportsOperations(session);
     const approval = negotiated
       ? parseApprovalHeader(request.headers[APPROVAL_HEADER.toLowerCase()])
       : undefined;
@@ -2720,7 +2724,7 @@ export class CompanyService {
     if (typeof name !== "string" || !isObject(args)) {
       return { refused: rpcError(null, -32602, "Invalid params") };
     }
-    const negotiated = await this.#supportsOperations(session.clientId);
+    const negotiated = this.#supportsOperations(session);
     const approval = negotiated ? approvalFromMeta(params._meta) : undefined;
     let target: StoredOperation | undefined;
     try {
@@ -2870,6 +2874,8 @@ export class CompanyService {
       scopes: issued === undefined ? [] : issued.scopes,
       ...(resource === undefined ? {} : { resource }),
       protocolVersion: version,
+      // What the request declares (§3.4); a header that fails to parse declares none.
+      extensions: parseExtensionsHeader(request.headers[EXTENSIONS_HEADER]),
     };
     const wait = await this.#admitted(session);
     if (wait !== undefined) throw new RateLimitedRefusal(wait);
@@ -3449,7 +3455,7 @@ export class CompanyService {
    * company agent's reply to an opening turn, with no message from the agent.
    */
   async #companyFirst(conversationId: string, session: CallerSession): Promise<StoredConversation> {
-    const negotiated = await this.#supportsOperations(session.clientId);
+    const negotiated = this.#supportsOperations(session);
     const agent = firstContribution(this.reactor, CompanyAgents, "company agent");
     const replies = await agent.respond({
       conversationId,
@@ -3633,7 +3639,7 @@ export class CompanyService {
   ): Promise<StoredConversation> {
     const incoming = plain(message);
     const received = this.#event({ type: "message", message: { ...incoming, role: "user" } });
-    const negotiated = await this.#supportsOperations(session.clientId);
+    const negotiated = this.#supportsOperations(session);
     let target: StoredOperation | undefined;
     let changed: readonly [StoredConversation, StoredConversation] | undefined;
     try {
@@ -3768,7 +3774,7 @@ export class CompanyService {
     // Extension content goes only to an agent that lists the extension, at the same version
     // (§8.4); the message says what it says in `text` and `data` without it.
     const extensions: Record<string, Record<string, unknown>> = {};
-    if (reply.operation !== undefined && (await this.#supportsOperations(session.clientId))) {
+    if (reply.operation !== undefined && (this.#supportsOperations(session))) {
       const request = fingerprint("conversation", conversationId);
       const asked = this.#asked(session, reply.operation, request);
       const decision = await this.#decide(session, asked, undefined, undefined);
@@ -3777,14 +3783,14 @@ export class CompanyService {
     if (
       reply.links?.length &&
       this.config.links &&
-      (await this.#supportsExtension(session.clientId, LINKS_EXTENSION, LINKS_VERSION))
+      this.#supportsExtension(session, LINKS_EXTENSION, LINKS_VERSION)
     ) {
       extensions[LINKS_EXTENSION] = { items: reply.links.map((link) => ({ ...link })) };
     }
     if (reply.disclosures?.length) {
       if (
         this.config.disclosures &&
-        (await this.#supportsExtension(session.clientId, DISCLOSURES_EXTENSION, DISCLOSURES_VERSION))
+        this.#supportsExtension(session, DISCLOSURES_EXTENSION, DISCLOSURES_VERSION)
       ) {
         extensions[DISCLOSURES_EXTENSION] = { items: reply.disclosures.map((text) => ({ text })) };
       } else {
@@ -4553,6 +4559,7 @@ export class CompanyService {
       ...(signedIn && joined.accountId !== undefined ? { accountId: joined.accountId } : {}),
       scopes: signedIn ? joined.scopes : [],
       protocolVersion: joined.protocolVersion ?? this.config.preferredVersion,
+      extensions: {},
       ...(signedIn && joined.family !== undefined ? { family: joined.family } : {}),
     };
   }

@@ -19,6 +19,7 @@
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { TransportError } from "./errors.js";
+import { formatExtensionsHeader } from "./extensions.js";
 import { parseJsonStrict } from "./json.js";
 import { budgetKey, parseRetryAfter, RetryPolicy } from "./limits.js";
 import { SIGNATURE_AGENT_HEADER, SIGNATURE_HEADER, SIGNATURE_INPUT_HEADER } from "./operator-signatures.js";
@@ -41,6 +42,8 @@ import { DPOP_HEADER, DPOP_NONCE_HEADER, type AccessToken, type PapSession } fro
 export const SESSION_HEADER = "Poppy-Session";
 /** The protocol version the request is in (§3.4), on every request with the Session header. */
 export const VERSION_HEADER = "Poppy-Version";
+/** The extensions the Session uses, one version each (§3.4), when it uses any. */
+export const EXTENSIONS_HEADER = "Poppy-Extensions";
 /** Refusals that ask the caller to come back later (Guides, retries and rate limits). */
 const later = new Set([429, 503]);
 /** Methods retried on their own: they change nothing at the company. */
@@ -150,6 +153,8 @@ export async function sessionHeaders(
     [SESSION_HEADER]: jwt.reveal(),
     [VERSION_HEADER]: session.protocolVersion,
   };
+  const declared = formatExtensionsHeader(session.extensions);
+  if (declared !== undefined) headers[EXTENSIONS_HEADER] = declared;
   if (token !== undefined) headers.Authorization = `${token.tokenType} ${token.accessToken.reveal()}`;
   if (token?.tokenType === "DPoP") {
     const proof = await firstContribution(reactor, DpopProvers, "DPoP prover").prove({

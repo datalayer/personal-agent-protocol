@@ -17,8 +17,8 @@ from __future__ import annotations
 import base64
 import inspect
 import secrets
-from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal, cast
 from urllib.parse import urlsplit
@@ -30,7 +30,12 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 from .crypto import DPOP_ALGORITHM, SESSION_ID
 from .errors import PersonalAgentProtocolError, ProtocolValidationError, SessionError
 from .json import loads_strict
-from .models import SUPPORTED_PROTOCOL_VERSIONS, ProtocolModel, compatible_versions
+from .models import (
+    SUPPORTED_PROTOCOL_VERSIONS,
+    DiscoveredCompany,
+    ProtocolModel,
+    compatible_versions,
+)
 from .profile import PROTOCOL_PROFILE
 from .reactor import (
     CLOCKS,
@@ -172,6 +177,11 @@ class PapSession:
     #: `Poppy-Version` on every request with the Session header, the same for its whole
     #: life: the version this SDK implements, compatible with the one chosen at discovery.
     protocol_version: str = PROTOCOL_PROFILE
+    #: The extensions the Session uses with the Company, one version each (§3.3, §3.4):
+    #: declared in `Poppy-Extensions` on every request with the Session header, the same
+    #: for the Session's life; `negotiate_extensions` picks them from the Company's
+    #: document. Extension content goes only where the declaration says.
+    extensions: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not SESSION_ID.fullmatch(self.sid):
@@ -214,6 +224,7 @@ class PapSession:
             "tenant_id": self.tenant_id,
             "agent_id": self.agent_id,
             "protocol_version": self.protocol_version,
+            "extensions": dict(self.extensions),
         }
 
     @classmethod
@@ -226,6 +237,7 @@ class PapSession:
             tenant_id=str(value["tenant_id"]),
             agent_id=value.get("agent_id"),
             protocol_version=str(value.get("protocol_version") or PROTOCOL_PROFILE),
+            extensions=dict(cast(dict[str, str], value.get("extensions") or {})),
         )
 
 
@@ -370,13 +382,22 @@ class SessionClient:
         issuer: str,
         tenant_id: str,
         agent_id: str | None = None,
+        extensions: Mapping[str, str] | None = None,
+        company: DiscoveredCompany | None = None,
     ) -> PapSession:
         """A new Session, signed out, with a new random `sid` (§5.2): no request is sent.
 
         `pairwise_user_id` is the User ID for the Company's `issuer` (§5.1);
-        `agent_id`, when the User has several agents, says which one.
+        `agent_id`, when the User has several agents, says which one; `extensions`,
+        the ones the Session uses with the Company, one version each, declared on
+        every request (§3.4): as given, else negotiated from `company`'s document for
+        everything this SDK implements (`negotiate_extensions`), else none.
         """
 
+        if extensions is None and company is not None:
+            from .extensions import negotiate_extensions
+
+            extensions = negotiate_extensions(company.document.extensions)
         return PapSession(
             sid=new_session_id(self._random().bytes),
             sub=pairwise_user_id,
@@ -384,6 +405,7 @@ class SessionClient:
             client_id=client_id,
             tenant_id=tenant_id,
             agent_id=agent_id,
+            extensions=dict(extensions or {}),
         )
 
     async def token_request(

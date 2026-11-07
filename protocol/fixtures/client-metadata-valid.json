@@ -6,14 +6,5 @@
   "redirect_uris": [
     "https://agent.example/oauth/callback"
   ],
-  "token_endpoint_auth_method": "private_key_jwt",
-  "extensions": {
-    "operations": {
-      "version": "2"
-    },
-    "example.org/preferences": {
-      "version": "2",
-      "mode": "compact"
-    }
-  }
+  "token_endpoint_auth_method": "private_key_jwt"
 }

@@ -37,6 +37,8 @@ import {
   extensionRequired,
   knownApis,
   negotiateExtensions,
+  formatExtensionsHeader,
+  parseExtensionsHeader,
   parseConversationEventPage,
   parseDiscoveryDocument,
   parseJsonStrict,
@@ -112,7 +114,16 @@ const CHECKS = {
 
   extension_negotiation(given, expect) {
     const document = (extensions) => parseDiscoveryDocument({ protocol_version: "0.3", organization: { name: "E", domain: "example.com" }, web: {}, extensions });
-    assert.deepEqual(negotiateExtensions(document(given.company).extensions, document(given.agent).extensions), expect.negotiated);
+    const negotiated = negotiateExtensions(document(given.company).extensions);
+    assert.deepEqual(negotiated, expect.negotiated);
+    assert.equal(formatExtensionsHeader(negotiated), expect.declared ?? undefined);
+  },
+
+  extensions_header(given, expect) {
+    assert.equal(formatExtensionsHeader(given.declared), expect.header);
+    for (const [header, declared] of Object.entries(given.parse)) assert.deepEqual(parseExtensionsHeader(header), declared, header);
+    assert.deepEqual(parseExtensionsHeader(undefined), {});
+    assert.deepEqual(parseExtensionsHeader(null), {});
   },
 
   extension_names(given, expect) {
@@ -127,7 +138,7 @@ const CHECKS = {
       web: {},
       extensions: Object.fromEntries(Object.entries(given).filter(([name]) => extensionNameKind(name) !== "invalid")),
     }).extensions;
-    assert.equal(preserved["example.com/gift-wrap"].color, "red");
+    assert.equal(preserved["example.com/gift-wrap"][0].color, "red");
   },
 
   extension_required(given, expect) {

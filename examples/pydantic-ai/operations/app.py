@@ -16,7 +16,6 @@ from pydantic_ai import Agent
 from personal_agent_protocol import (
     Approval,
     Author,
-    ClientMetadata,
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
@@ -35,6 +34,7 @@ from personal_agent_protocol.demo.kit import (
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.northwind import ACCOUNT, DOMAIN, northwind
+from personal_agent_protocol.extensions import negotiate_extensions
 from personal_agent_protocol.operations import (
     OperationError,
     OperationsClient,
@@ -106,6 +106,7 @@ async def explain_operations() -> dict[str, Any]:
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
+        company=company,
         tenant_id=TENANT,
     )
     device = DeviceSignInClient(reactor=reactor, http_client=http)
@@ -125,11 +126,19 @@ async def explain_operations() -> dict[str, Any]:
     if not (token is not None):
         raise RuntimeError("the example world is incomplete")
 
-    # Negotiation: both the bank's poppy.json and the agent's metadata list version 2.
-    negotiated = operations_negotiated(
-        company.document, ClientMetadata.model_validate(atlas.metadata)
+    # Negotiation: the bank's poppy.json lists version 2 and the Session declares it (§3.4);
+    # a Session of an agent that implements no extension declares none.
+    negotiated = operations_negotiated(company.document, session)
+    plain_session = await SessionClient(reactor=reactor, http_client=http).start(
+        client_id=plain.client_id,
+        pairwise_user_id=PAIRWISE,
+        issuer=metadata.issuer,
+        tenant_id=TENANT,
+        extensions=negotiate_extensions(
+            company.document.extensions, supported=plain.supported_extensions
+        ),
     )
-    without = operations_negotiated(company.document, ClientMetadata.model_validate(plain.metadata))
+    without = operations_negotiated(company.document, plain_session)
     transport = SessionHttpClient(reactor=reactor, http_client=http)
     conversations = ConversationClient(transport=transport)
     operations = OperationsClient(reactor=reactor)

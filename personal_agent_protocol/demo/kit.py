@@ -107,6 +107,8 @@ class AgentIdentity:
     domain: str
     name: str
     path: str = "/agent.json"
+    #: The extensions the agent implements and declares, per Session, with a company that
+    #: lists them (§3.4); nothing of them is in its client metadata.
     extensions: tuple[str, ...] = ("operations",)
     private_key: ec.EllipticCurvePrivateKey = field(
         default_factory=lambda: ec.generate_private_key(ec.SECP256R1())
@@ -132,10 +134,14 @@ class AgentIdentity:
             "jwks_uri": f"https://{self.domain}/jwks.json",
             "redirect_uris": [f"https://{self.domain}/oauth/callback"],
             "token_endpoint_auth_method": "private_key_jwt",
-            "extensions": {
-                name: {"version": SUPPORTED_EXTENSIONS.get(name, "1")} for name in self.extensions
-            },
         }
+
+    @property
+    def supported_extensions(self) -> dict[str, str]:
+        """The extensions this agent implements, by name and version (§3.4): what it may
+        declare with a Company that lists them (`negotiate_extensions`)."""
+
+        return {name: SUPPORTED_EXTENSIONS.get(name, "1") for name in self.extensions}
 
     @property
     def operator_url(self) -> str:

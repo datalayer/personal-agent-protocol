@@ -56,7 +56,8 @@ async def discover_pap_company(domain: str) -> dict[str, Any]:
         "protected_resources": list(metadata.protected_resources) if metadata else [],
         "interfaces": interfaces,
         "extensions": {
-            name: descriptor.version for name, descriptor in document.extensions.items()
+            name: [entry.version for entry in entries]
+            for name, entries in document.extensions.items()
         },
     }
 

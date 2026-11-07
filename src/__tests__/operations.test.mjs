@@ -37,6 +37,8 @@ import {
   operationsContent,
   messageApproval,
   messageOperation,
+  PapSession,
+  negotiateExtensions,
 } from "../../lib/index.js";
 
 const fixtures = new URL("../../protocol/fixtures/", import.meta.url);
@@ -144,14 +146,19 @@ test("a message with only an approval is a message, and text alone approves noth
 
 test("operations are used only when both sides list version 2", () => {
   assert.deepEqual([OPERATIONS_EXTENSION, OPERATIONS_VERSION], ["operations", "2"]);
-  const document = (version) =>
-    parseDiscoveryDocument({ ...fixture("discovery-valid.json"), extensions: { operations: { version } } });
-  const agent = (extensions) => parseClientMetadata({ ...fixture("client-metadata-valid.json"), extensions });
-  const both = agent({ operations: { version: "2" } });
-  assert.equal(operationsNegotiated(document("2"), both), true);
-  assert.equal(operationsNegotiated(document("2"), agent({})), false);
-  assert.equal(operationsNegotiated(document("1"), both), false);
-  assert.equal(operationsNegotiated(document("2"), agent({ operations: { version: "1" } })), false);
+  const document = (...versions) =>
+    parseDiscoveryDocument({ ...fixture("discovery-valid.json"), extensions: { operations: versions.map((version) => ({ version })) } });
+  const session = (extensions) =>
+    new PapSession({ sid: "Yx2b7Qd_Kp8mR3vT1nWc4A", sub: "usr_1", issuer: "https://auth.example.com", clientId: "https://agent.example/agent.json", tenantId: "t", extensions });
+  // The company lists version 2 and the Session declares it (Operations 2).
+  assert.equal(operationsNegotiated(document("2"), session({ operations: "2" })), true);
+  assert.equal(operationsNegotiated(document("1", "2"), session({ operations: "2" })), true);
+  assert.equal(operationsNegotiated(document("2"), session({})), false);
+  assert.equal(operationsNegotiated(document("1"), session({ operations: "2" })), false);
+  assert.equal(operationsNegotiated(document("2"), session({ operations: "1" })), false);
+  // Negotiation picks the version this SDK implements from the company's list.
+  assert.deepEqual(negotiateExtensions(document("1", "2").extensions), { operations: "2" });
+  assert.deepEqual(negotiateExtensions(document("1").extensions), {});
 });
 
 // The Poppy-Approval header -------------------------------------------------------------------

@@ -87,6 +87,7 @@ from ..errors import (
     ProtocolValidationError,
     SessionError,
 )
+from ..extensions import parse_extensions_header
 from ..json import loads_strict
 from ..mediated import MEDIATED_EXTENSION, MEDIATED_GRANT, MEDIATED_VERSION
 from ..models import (
@@ -694,6 +695,8 @@ class CallerSession:
     resource: str | None = None
     #: The protocol version the request is in, its `Poppy-Version` (§3.4).
     protocol_version: str = PROTOCOL_PROFILE
+    #: The extensions the request declares, one version each, its `Poppy-Extensions` (§3.4).
+    extensions: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def signed_in(self) -> bool:
@@ -704,6 +707,8 @@ class CallerSession:
 SESSION_HEADER = "poppy-session"
 #: The header that names the request's protocol version, with the Session header (§3.4).
 VERSION_HEADER = "poppy-version"
+#: The header that declares the request's extensions, one version each (§3.4).
+EXTENSIONS_HEADER = "poppy-extensions"
 
 
 @dataclass(frozen=True)
@@ -1290,22 +1295,25 @@ class CompanyService:
             document["feedback"] = {"endpoint": config.feedback_endpoint}
         if config.excluded_tasks:
             document["excluded_tasks"] = {"url": config.excluded_tasks_url}
+        # Each extension a list, one entry per version the company supports (§3.3).
         extensions: dict[str, Any] = {}
         if config.operations:
-            extensions[OPERATIONS_EXTENSION] = {"version": OPERATIONS_VERSION}
+            extensions[OPERATIONS_EXTENSION] = [{"version": OPERATIONS_VERSION}]
         if config.links:
-            extensions[LINKS_EXTENSION] = {"version": LINKS_VERSION}
+            extensions[LINKS_EXTENSION] = [{"version": LINKS_VERSION}]
         if config.disclosures:
-            extensions[DISCLOSURES_EXTENSION] = {"version": DISCLOSURES_VERSION}
+            extensions[DISCLOSURES_EXTENSION] = [{"version": DISCLOSURES_VERSION}]
         if config.mediated_fields:
-            extensions[MEDIATED_EXTENSION] = {
-                "version": MEDIATED_VERSION,
-                "fields": [
-                    {"name": name, "label": label, "secret": secret}
-                    for name, label, secret in config.mediated_fields
-                ],
-                "scopes": list(config.mediated_grant_scopes),
-            }
+            extensions[MEDIATED_EXTENSION] = [
+                {
+                    "version": MEDIATED_VERSION,
+                    "fields": [
+                        {"name": name, "label": label, "secret": secret}
+                        for name, label, secret in config.mediated_fields
+                    ],
+                    "scopes": list(config.mediated_grant_scopes),
+                }
+            ]
         if extensions:
             document["extensions"] = extensions
         if config.skills:
@@ -1440,14 +1448,13 @@ class CompanyService:
         await self._remember_client(client_id, metadata)
         return client_id
 
-    async def _remember_client(self, client_id: str, metadata: ClientMetadata) -> None:
-        """What a personal agent declares, kept whichever request verified it first."""
+    async def _remember_client(self, client_id: str, _metadata: ClientMetadata) -> None:
+        """A personal agent whose identity was verified, kept whichever request did it."""
 
-        extensions = {name: item.version for name, item in metadata.extensions.items()}
         known = await self._read(CLIENT, client_id, KnownClient.from_json)
-        if known is None or known.extensions != extensions:
-            await self.store.put(CLIENT, client_id, KnownClient(extensions).to_json())
-            # Its identity verified for the first time, or with new metadata.
+        if known is None:
+            await self.store.put(CLIENT, client_id, KnownClient().to_json())
+            # Its identity verified for the first time.
             self._report("pap.company.identity.check", "ok", {})
 
     async def _allowed(self, client_id: str) -> bool:
@@ -1487,20 +1494,18 @@ class CompanyService:
             raise _RefusedError(400, "invalid_scope")
         return granted
 
-    async def _supports_operations(self, client_id: str) -> bool:
-        """Whether the agent listed this version of Operations when it last authenticated."""
+    @staticmethod
+    def _supports_operations(session: CallerSession) -> bool:
+        """Whether the request declares this version of Operations (Operations 2)."""
 
-        return await self._supports_extension(client_id, OPERATIONS_EXTENSION, OPERATIONS_VERSION)
+        return CompanyService._supports_extension(session, OPERATIONS_EXTENSION, OPERATIONS_VERSION)
 
-    async def _supports_extension(self, client_id: str, name: str, version: str) -> bool:
-        """Whether the agent's client metadata lists `name` at `version` (§3.3, §8.4).
+    @staticmethod
+    def _supports_extension(session: CallerSession, name: str, version: str) -> bool:
+        """Whether the request declares `name` at `version` in `Poppy-Extensions` (§3.3,
+        §3.4, §8.4): extension content goes only where the declaration says."""
 
-        Extension content goes only to a side that lists the extension with the same
-        version, read from the metadata the agent last authenticated with.
-        """
-
-        known = await self._read(CLIENT, client_id, KnownClient.from_json)
-        return known is not None and known.extensions.get(name) == version
+        return session.extensions.get(name) == version
 
     async def _token(self, request: CompanyRequest) -> CompanyResponse:
         """The token endpoint (§4): every grant carries a client assertion, and nothing else.
@@ -2395,7 +2400,7 @@ class CompanyService:
         session: CallerSession,
         body: Any,
     ) -> CompanyResponse:
-        negotiated = await self._supports_operations(session.client_id)
+        negotiated = self._supports_operations(session)
         approval = (
             parse_approval_header(request.headers.get(APPROVAL_HEADER.lower()))
             if negotiated
@@ -2560,6 +2565,8 @@ class CompanyService:
             family=None if issued is None else issued.family,
             resource=resource,
             protocol_version=cast(str, version),
+            # What the request declares (§3.4); a header that fails to parse declares none.
+            extensions=parse_extensions_header(request.headers.get(EXTENSIONS_HEADER)),
         )
         wait = await self._admitted(session)
         if wait is not None:
@@ -3127,7 +3134,7 @@ class CompanyService:
         """The company's first message in a Direct Conversation it was invited to (§8.10):
         the company agent's reply to an opening turn, with no message from the agent."""
 
-        negotiated = await self._supports_operations(session.client_id)
+        negotiated = self._supports_operations(session)
         agent = cast(
             CompanyAgent, first_contribution(self.reactor, COMPANY_AGENTS, "company agent")
         )
@@ -3332,7 +3339,7 @@ class CompanyService:
                 events=(*current.events, received),
             )
 
-        negotiated = await self._supports_operations(session.client_id)
+        negotiated = self._supports_operations(session)
         try:
             target = await self._approval_target(session, message.approval) if negotiated else None
             changed = await self._change(
@@ -3457,7 +3464,7 @@ class CompanyService:
         # Extension content goes only to an agent that lists the extension, at the same
         # version (§8.4); the message says what it says in `text` and `data` without it.
         extensions: dict[str, Any] = {}
-        if reply.operation is not None and await self._supports_operations(session.client_id):
+        if reply.operation is not None and self._supports_operations(session):
             fingerprint = _fingerprint("conversation", conversation_id)
             asked = self._asked(session, reply.operation, fingerprint)
             decision = await self._decide(session, asked, None, None)
@@ -3465,13 +3472,13 @@ class CompanyService:
         if (
             reply.links
             and self.config.links
-            and await self._supports_extension(session.client_id, LINKS_EXTENSION, LINKS_VERSION)
+            and self._supports_extension(session, LINKS_EXTENSION, LINKS_VERSION)
         ):
             content = LinksContent(items=list(reply.links))
             extensions[LINKS_EXTENSION] = content.model_dump(mode="json", exclude_none=True)
         if reply.disclosures:
-            if self.config.disclosures and await self._supports_extension(
-                session.client_id, DISCLOSURES_EXTENSION, DISCLOSURES_VERSION
+            if self.config.disclosures and self._supports_extension(
+                session, DISCLOSURES_EXTENSION, DISCLOSURES_VERSION
             ):
                 disclosed = DisclosuresContent(
                     items=[Disclosure(text=text) for text in reply.disclosures]
@@ -4193,7 +4200,7 @@ class CompanyService:
         arguments = params.get("arguments") or {}
         if not isinstance(name, str) or not isinstance(arguments, dict):
             return _rpc_error(None, -32602, "Invalid params")
-        negotiated = await self._supports_operations(session.client_id)
+        negotiated = self._supports_operations(session)
         approval = approval_from_meta(params.get("_meta")) if negotiated else None
         try:
             target = await self._approval_target(session, approval)

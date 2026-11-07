@@ -96,6 +96,7 @@ async def read_pap_telemetry() -> dict[str, Any]:
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
+        company=company,
         tenant_id=TENANT,
     )
     endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]

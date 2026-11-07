@@ -78,7 +78,7 @@ from personal_agent_protocol.demo.kit import (
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, ManzanitaPlugin
-from personal_agent_protocol.models import Author, ClientMetadata, DiscoveryDocument, Message
+from personal_agent_protocol.models import Author, DiscoveryDocument, Message
 from personal_agent_protocol.reactor import first_contribution, resolve_addresses
 
 ROOT = Path(__file__).parents[2]
@@ -234,6 +234,7 @@ class Docs:
             client_id=self.agent.client_id,
             pairwise_user_id=await self.pairwise(domain),
             issuer=company.oauth_metadata.issuer,
+            company=company,
             tenant_id=TENANT,
         )
 
@@ -535,7 +536,7 @@ async def _operations_client(docs: Docs) -> tuple[dict[str, Any], Check]:
     return {
         "reactor": docs.reactor,
         "discovered": await docs.discovered("shop.example"),
-        "my_client_metadata": ClientMetadata.model_validate(docs.agent.metadata),
+        "session": await docs.signed_out("shop.example"),
     }, check
 
 

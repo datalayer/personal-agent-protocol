@@ -67,7 +67,7 @@ https://personalagentprotocol.org/docs/0.2/spec. This repository implements
 ## Vendored JSON Schemas
 
 `protocol/schemas/` holds JSON Schemas copied unchanged from the upstream
-company kit (`kit/company/schemas/`) at commit 2289293, under the upstream
+company kit (`kit/company/schemas/`) at commit 46beb21 (draft 0.4), under the upstream
 repository's license (Apache License 2.0). The tests check the shared
 fixtures and the reference company's documents against them
 (`personal_agent_protocol/__tests__/test_schemas.py`). They are replaced

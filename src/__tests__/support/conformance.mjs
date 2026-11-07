@@ -82,6 +82,7 @@ import {
   operatorDirectory,
   operatorKeyFrom,
   signOperatorRequest,
+  negotiateExtensions,
   offersDevice,
   offersDirect,
   preferredSignIn,
@@ -193,13 +194,14 @@ export async function identityFrom({ domain, name, privateJwk, operatorJwk, exte
     jwks_uri: `https://${domain}/jwks.json`,
     redirect_uris: [`https://${domain}/oauth/callback`],
     token_endpoint_auth_method: "private_key_jwt",
-    extensions: Object.fromEntries(extensions.map((extension) => [extension, { version: extension === "operations" ? OPERATIONS_VERSION : "1" }])),
   };
   return {
     domain,
     name,
     kid,
     extensions,
+    // The extensions the agent implements and declares, per Session, with a company that lists them (§3.4).
+    supportedExtensions: Object.fromEntries(extensions.map((extension) => [extension, extension === "operations" ? OPERATIONS_VERSION : "1"])),
     clientId,
     privateKey,
     jwks,
@@ -342,11 +344,10 @@ export class Context {
     return endpoint;
   }
 
+  /** Skip unless the company lists Operations v2 and this agent declares it (Operations 2). */
   async operationsNegotiated() {
-    const metadata = parseClientMetadata(this.agent.identity.metadata);
-    if (!operationsNegotiated((await this.company()).document, metadata)) {
-      throw new SkipCase("operations v2 is not negotiated with this company");
-    }
+    const negotiated = negotiateExtensions((await this.company()).document.extensions, this.agent.identity.supportedExtensions);
+    if (negotiated.operations !== OPERATIONS_VERSION) throw new SkipCase("operations v2 is not negotiated with this company");
   }
 
   /** An API path at the company's API (its OpenAPI `url`'s origin), else its origin. */
@@ -390,12 +391,15 @@ export class Context {
     return new ControlledBrowser(this.agent.browserFetch);
   }
 
+  /** A Session with the company, declaring the extensions the agent implements that the company lists (§3.4). */
   async session(user, agent = this.agent) {
+    const company = await this.company();
     return agent.sessions.start({
       clientId: agent.identity.clientId,
       pairwiseUserId: user,
-      issuer: companyIdentifier(await this.company()),
+      issuer: companyIdentifier(company),
       tenantId: this.tenantId,
+      extensions: negotiateExtensions(company.document.extensions, agent.identity.supportedExtensions),
     });
   }
 
@@ -627,7 +631,7 @@ const refreshForm = async (ctx, reference, identity) => ({
 
 caseFor("protocol.extension-required-company")(async (ctx) => {
   const other = ctx.otherAgent();
-  check(!("operations" in other.identity.metadata.extensions), "the second identity lists no operations");
+  check(!("operations" in other.identity.supportedExtensions), "the second identity declares no operations");
   const proposal = ctx.proposal("user");
   const user = ctx.newUser();
   const session = await ctx.session(user, other);
@@ -2639,7 +2643,7 @@ caseFor("no-issuer.sign-in-offered-without-issuer")(async (ctx, fixture) => {
   for (const offers of [
     { auth: { issuer: ctx.baseUrl } },
     { agent: { protocols: [{ type: "poppy", endpoint, access: "signed_in" }] } },
-    { extensions: { "mediated-sign-in": { version: "1" } } },
+    { extensions: { "mediated-sign-in": [{ version: "1" }] } },
   ]) {
     const answer = jsonAnswer(200, { ...company.document, ...offers });
     const fetch = oneAnswer(ctx, `${ctx.baseUrl}/.well-known/poppy.json`, answer);

@@ -20,7 +20,8 @@ import { DPOP_ALGORITHM, SESSION_ID } from "./crypto.js";
 import { PersonalAgentProtocolError, ProtocolValidationError, SessionError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { readLimitedText } from "./limits.js";
-import { SUPPORTED_PROTOCOL_VERSIONS, compatibleVersions } from "./models.js";
+import { negotiateExtensions } from "./extensions.js";
+import { SUPPORTED_PROTOCOL_VERSIONS, compatibleVersions, type DiscoveredCompany } from "./models.js";
 import { PROTOCOL_PROFILE } from "./profile.js";
 import {
   Clocks,
@@ -184,6 +185,7 @@ export interface PapSessionJson {
   readonly tenant_id: string;
   readonly agent_id: string | null;
   readonly protocol_version?: string;
+  readonly extensions?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -207,6 +209,13 @@ export class PapSession {
    * implements, compatible with the one chosen at discovery.
    */
   readonly protocolVersion: string;
+  /**
+   * The extensions the Session uses with the Company, one version each (§3.3, §3.4): declared
+   * in `Poppy-Extensions` on every request with the Session header, the same for the Session's
+   * life; `negotiateExtensions` picks them from the Company's document. Extension content goes
+   * only where the declaration says.
+   */
+  readonly extensions: Readonly<Record<string, string>>;
 
   constructor(options: {
     readonly sid: string;
@@ -216,6 +225,7 @@ export class PapSession {
     readonly tenantId: string;
     readonly agentId?: string | undefined;
     readonly protocolVersion?: string | undefined;
+    readonly extensions?: Readonly<Record<string, string>> | undefined;
   }) {
     if (!SESSION_ID.test(options.sid)) {
       throw new ProtocolValidationError(
@@ -246,6 +256,7 @@ export class PapSession {
       throw new ProtocolValidationError("unsupported_protocol_version", "a Session uses a protocol version this SDK implements");
     }
     this.protocolVersion = version;
+    this.extensions = { ...(options.extensions ?? {}) };
   }
 
   /** The Session's name for a person or a CLI: `ses_` and its `sid`. */
@@ -272,6 +283,7 @@ export class PapSession {
       tenant_id: this.tenantId,
       agent_id: this.agentId ?? null,
       protocol_version: this.protocolVersion,
+      extensions: { ...this.extensions },
     };
   }
 
@@ -284,6 +296,7 @@ export class PapSession {
       tenantId: value.tenant_id,
       ...(value.agent_id === null ? {} : { agentId: value.agent_id }),
       ...(value.protocol_version === undefined ? {} : { protocolVersion: value.protocol_version }),
+      ...(value.extensions === undefined ? {} : { extensions: value.extensions }),
     });
   }
 }
@@ -458,6 +471,13 @@ export interface SessionStartOptions {
   readonly tenantId: string;
   /** When the User has several agents, which one (§5.1). */
   readonly agentId?: string;
+  /**
+   * The extensions the Session uses with the Company, one version each, declared on every
+   * request (§3.4): as given, else negotiated from `company`'s document for everything this SDK
+   * implements (`negotiateExtensions`), else none.
+   */
+  readonly extensions?: Readonly<Record<string, string>>;
+  readonly company?: DiscoveredCompany;
 }
 
 export interface TokenRequestOptions {
@@ -517,6 +537,9 @@ export class SessionClient {
           clientId: options.clientId,
           tenantId: options.tenantId,
           ...(options.agentId === undefined ? {} : { agentId: options.agentId }),
+          extensions:
+            options.extensions ??
+            (options.company === undefined ? {} : negotiateExtensions(options.company.document.extensions)),
         }),
       sessionResult,
     );

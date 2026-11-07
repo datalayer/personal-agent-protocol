@@ -17,21 +17,23 @@ Direct Sign-In, then Device Sign-In, when the company offers them.
 ```json
 {
   "extensions": {
-    "mediated-sign-in": {
-      "version": "1",
-      "fields": [
-        { "name": "email", "label": "Email", "secret": false },
-        { "name": "password", "label": "Password", "secret": true }
-      ],
-      "scopes": ["orders:read"]
-    }
+    "mediated-sign-in": [
+      {
+        "version": "1",
+        "fields": [
+          { "name": "email", "label": "Email", "secret": false },
+          { "name": "password", "label": "Password", "secret": true }
+        ],
+        "scopes": ["orders:read"]
+      }
+    ]
   }
 }
 ```
 
-The personal agent doesn't list the extension in its client metadata: the
-company recognizes it from the grant type, and can't answer it with
-`extension_required`. `mediated_sign_in(company)` reads what a discovered
+The personal agent doesn't declare the extension in `Poppy-Extensions`, which
+the token endpoint doesn't receive: the company recognizes it from the grant
+type, and can't answer it with `extension_required`. `mediated_sign_in(company)` reads what a discovered
 company offers, or `None`.
 
 :::note Mediated Sign-In is transitional

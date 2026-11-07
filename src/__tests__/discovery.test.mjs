@@ -62,7 +62,7 @@ test("parses the shared discovery fixture and preserves extension fields", async
   assert.equal(document.auth.scopes.addresses, "See and change your saved shipping addresses");
   assert.deepEqual(document.auth.scope_hints["orders:write"], { changes: "irreversible", personal_data: true });
   assert.equal(document.excluded_tasks.url, "https://example.com/poppy/excluded-tasks.json");
-  assert.equal(document.extensions.operations.version, "2");
+  assert.equal(document.extensions.operations[0].version, "2");
 });
 
 const jsonResponse = (body, status = 200, headers = {}) =>
@@ -411,7 +411,8 @@ test("parses shared client, conversation, and operation fixtures", async () => {
     await fixture("conversation-events-valid.json"),
   );
 
-  assert.equal(client.extensions["example.org/preferences"].mode, "compact");
+  // Extensions left the client metadata document (§3.4): an agent declares them per request.
+  assert.ok(!("extensions" in client));
   assert.equal(operation.revision, "1791487200-k3Jd9Qx2mW8v");
   assert.equal("user_approval_required" in operation, false);
   assert.deepEqual(messageOperation(page.events[0].message), operation);

@@ -56,7 +56,7 @@ from personal_agent_protocol.demo.sockets import (
     _DialLocal,
     served_over_tls,
 )
-from personal_agent_protocol.models import Author, ClientMetadata, operations_content
+from personal_agent_protocol.models import Author, operations_content
 from personal_agent_protocol.operations import OperationsClient, operations_negotiated
 
 pytest.importorskip("uvicorn")
@@ -183,6 +183,7 @@ class _Journey:
             client_id=self.identity.client_id,
             pairwise_user_id=agent["pairwise_user_id"],
             issuer=self.company.oauth_metadata.issuer,
+            company=self.company,
             tenant_id=agent["tenant_id"],
         )
         assert (self.signed_in is not None) is expect["signed_in"]
@@ -248,9 +249,7 @@ class _Journey:
 
     async def approve(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
         proposal = self.proposal
-        assert operations_negotiated(
-            self.company.document, ClientMetadata.model_validate(self.identity.metadata)
-        )
+        assert operations_negotiated(self.company.document, self.session)
         endpoint = self.company.document.agent.protocols[0].endpoint
         approval = await OperationsClient(reactor=self.reactor).ask_user(
             proposal,

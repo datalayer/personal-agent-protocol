@@ -115,7 +115,7 @@ async def test_with_an_issuer_the_identifier_is_the_issuer() -> None:
                 ]
             }
         },
-        {"extensions": {"mediated-sign-in": {"version": "2"}}},
+        {"extensions": {"mediated-sign-in": [{"version": "2"}]}},
     ],
     ids=["auth.issuer", "access", "mediated"],
 )
@@ -128,7 +128,7 @@ async def test_no_issuer_is_refused_for_a_company_that_offers_sign_in(
 
 @pytest.mark.asyncio
 async def test_an_ordinary_extension_needs_no_issuer() -> None:
-    document = {**SIGNED_OUT, "extensions": {"example.com/gift-wrap": {"version": "1"}}}
+    document = {**SIGNED_OUT, "extensions": {"example.com/gift-wrap": [{"version": "1"}]}}
     company = await _discover(_site(resource=httpx.Response(404), document=document))
     assert company.identifier == "https://example.com"
 

@@ -7,8 +7,8 @@
 // What draft 0.4 adds, both sides, in one process: the port of
 // personal_agent_protocol/__tests__/test_draft_04.py.
 //
-// Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); what a
-// message took into account (§8.4, P4-08).
+// Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
+// declared per request (§3.3, §3.4, P4-03); what a message took into account (§8.4, P4-08).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -22,7 +22,11 @@ import {
   SessionClient,
   SessionFetchClient,
   chooseProtocolVersion,
+  companyExtension,
   compatibleVersions,
+  formatExtensionsHeader,
+  negotiateExtensions,
+  parseExtensionsHeader,
   discoverCompany,
   parseDiscoveryDocument,
   parseMessage,
@@ -232,4 +236,37 @@ test("the company agent names the request it answered, and people do not", async
   const settled = await conversations.readUntilDone(CONVERSATIONS, page.conversation_id, { session: w.session, wait: 0 });
   const event = await w.shop.staffReply(page.conversation_id, { after: settled.events.at(-1).id, text: "Marta here.", authorName: "Marta" });
   assert.equal(event.message.as_of_request, undefined);
+});
+
+
+// Extensions declared per request (§3.3, §3.4) ---------------------------------------
+
+test("a Session declares the extensions it uses with the company", async () => {
+  const w = await world();
+  const session = await new SessionClient({ reactor: w.host.reactor, fetch: w.fetch }).start({
+    clientId: w.identity.clientId,
+    pairwiseUserId: PAIRWISE,
+    issuer: w.company.oauthMetadata.issuer,
+    tenantId: TENANT,
+    company: w.company,
+  });
+  assert.deepEqual(w.company.document.extensions.operations, [{ version: "2" }]);
+  assert.equal(companyExtension(w.company.document, "operations", "2")?.version, "2");
+  assert.deepEqual(session.extensions, { operations: "2", links: "1", disclosures: "1", "mediated-sign-in": "1" });
+  const headers = await sessionHeaders(w.host.reactor, "GET", "https://manzanita.example/api/orders", { session });
+  // Mediated Sign-In is recognized from its grant: used, never declared (§3.3).
+  assert.equal(headers["Poppy-Extensions"], '"disclosures";v="1", "links";v="1", "operations";v="2"');
+  assert.ok(!("extensions" in w.identity.metadata));
+  assert.deepEqual(PapSession.fromJson(session.toJson()).extensions, session.extensions);
+  // The company reads the declaration per request: a Session declaring nothing gets no extension content.
+  const plain = new PapSession({ ...session, clientId: w.identity.clientId, extensions: {} });
+  const conversations = new ConversationClient({ reactor: w.host.reactor, transport: new SessionFetchClient({ reactor: w.host.reactor, fetch: w.fetch }) });
+  const page = await conversations.start(CONVERSATIONS, { id: "req_plain_000000000000", author: { type: "human" }, text: "Where is my order?" }, { session: plain, wait: 0 });
+  const replies = page.events.filter((e) => e.message?.role === "company").map((e) => e.message);
+  assert.ok(replies.length > 0 && replies.every((reply) => reply.extensions === undefined));
+  assert.deepEqual(negotiateExtensions({ operations: [{ version: "1" }] }), {});
+  assert.deepEqual(negotiateExtensions({ operations: [{ version: "1" }, { version: "2" }] }), { operations: "2" });
+  assert.equal(formatExtensionsHeader({}), undefined);
+  assert.deepEqual(parseExtensionsHeader('"operations";v="2", "links";v="1"'), { operations: "2", links: "1" });
+  assert.deepEqual(parseExtensionsHeader('"operations"'), {});
 });

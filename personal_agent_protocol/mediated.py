@@ -70,11 +70,10 @@ _SIGN_IN_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 def _declared(company: DiscoveredCompany) -> dict[str, object] | None:
     """The extension's entry at this version, when the issuer lists the grant too."""
 
-    descriptor = company.document.extensions.get(MEDIATED_EXTENSION)
+    descriptor = company.document.extension(MEDIATED_EXTENSION, MEDIATED_VERSION)
     metadata = company.oauth_metadata
     if (
         descriptor is None
-        or descriptor.version != MEDIATED_VERSION
         or metadata is None
         or MEDIATED_GRANT not in metadata.grant_types_supported
     ):

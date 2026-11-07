@@ -103,7 +103,11 @@ async def discover_company(
             [item.type for item in document.agent.protocols] if document.agent else []
         ),
         "web": document.web is not None,
-        "extensions": {name: item.version for name, item in sorted(document.extensions.items())},
+        # Each extension with every version the Company lists (§3.3).
+        "extensions": {
+            name: [item.version for item in items]
+            for name, items in sorted(document.extensions.items())
+        },
     }
 
 

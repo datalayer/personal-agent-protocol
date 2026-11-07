@@ -101,6 +101,7 @@ async def _journey() -> dict[str, Any]:
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
+        company=company,
         tenant_id=TENANT,
     )
     try:

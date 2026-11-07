@@ -21,6 +21,7 @@ import {
   openapiUrl,
   parseOperation,
   parseTokenResponse,
+  negotiateExtensions,
 } from "../../lib/index.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -42,6 +43,7 @@ async function world() {
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
   const session = await new SessionClient({ reactor: host.reactor, fetch }).start({
+    extensions: negotiateExtensions(company.document.extensions, identity.supportedExtensions),
     clientId: identity.clientId,
     pairwiseUserId: PAIRWISE,
     issuer: metadata.issuer,

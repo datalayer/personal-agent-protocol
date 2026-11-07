@@ -37,8 +37,9 @@ from personal_agent_protocol.demo.kit import (
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, manzanita
+from personal_agent_protocol.extensions import negotiate_extensions
 from personal_agent_protocol.mediated import MEDIATED_GRANT, MediatedSignInClient
-from personal_agent_protocol.models import Author, ClientMetadata, operations_content
+from personal_agent_protocol.models import Author, operations_content
 from personal_agent_protocol.operations import OperationsClient, operations_negotiated
 
 SHOP = "https://manzanita.example"
@@ -116,6 +117,10 @@ class World:
             pairwise_user_id=PAIRWISE,
             issuer=company.oauth_metadata.issuer,
             tenant_id=TENANT,
+            # The extensions this agent implements that the company lists (§3.4).
+            extensions=negotiate_extensions(
+                company.document.extensions, supported=self.atlas.supported_extensions
+            ),
         )
 
     def restart(self) -> None:
@@ -179,8 +184,7 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
     assert proposal is not None
 
     # The user approves exactly this revision; it is performed once.
-    client_metadata = ClientMetadata.model_validate(world.atlas.metadata)
-    assert operations_negotiated(world.company.document, client_metadata)
+    assert operations_negotiated(world.company.document, session)
     approval = await OperationsClient(reactor=world.reactor).ask_user(
         proposal, organization=world.company.document.organization, tenant_id=TENANT
     )

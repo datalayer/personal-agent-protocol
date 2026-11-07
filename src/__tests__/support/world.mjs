@@ -69,14 +69,17 @@ export async function agentIdentity({ domain, name, extensions = ["operations"],
     jwks_uri: `https://${domain}/jwks.json`,
     redirect_uris: [`https://${domain}/oauth/callback`],
     token_endpoint_auth_method: "private_key_jwt",
-    extensions: Object.fromEntries(extensions.map((extension) => [extension, { version: EXTENSION_VERSIONS[extension] ?? "1" }])),
   };
+  // The extensions the agent implements and declares, per Session, with a company that lists
+  // them (§3.4); nothing of them is in its client metadata.
+  const supportedExtensions = Object.fromEntries(extensions.map((extension) => [extension, EXTENSION_VERSIONS[extension] ?? "1"]));
   const members =
     publicJwk.kty === "RSA"
       ? { kty: publicJwk.kty, n: publicJwk.n, e: publicJwk.e }
       : { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y };
   const jwks = { keys: [{ ...members, kid, use: "sig", alg: algorithm }] };
   return {
+    supportedExtensions,
     domain,
     name,
     clientId,

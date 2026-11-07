@@ -363,11 +363,13 @@ def test_direct_and_device_may_ask_for_a_scope_absent_from_scopes_supported() ->
             "organization": {"name": "Example", "domain": "example.com"},
             "web": {},
             "extensions": {
-                "mediated-sign-in": {
-                    "version": "1",
-                    "fields": [{"name": "email", "label": "Email", "secret": False}],
-                    "scopes": ["orders:read"],
-                }
+                "mediated-sign-in": [
+                    {
+                        "version": "1",
+                        "fields": [{"name": "email", "label": "Email", "secret": False}],
+                        "scopes": ["orders:read"],
+                    }
+                ]
             },
         }
     )

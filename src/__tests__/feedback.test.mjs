@@ -22,6 +22,7 @@ import {
   parseDiscoveryDocument,
   parseFeedbackReport,
   usableReferences,
+  negotiateExtensions,
 } from "../../lib/index.js";
 import { CompanyRateLimits } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
@@ -50,7 +51,13 @@ async function world({ config, plugins } = {}) {
   const metadata = company.oauthMetadata;
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const start = () =>
-    sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT });
+    sessions.start({
+      clientId: identity.clientId,
+      pairwiseUserId: PAIRWISE,
+      issuer: metadata.issuer,
+      tenantId: TENANT,
+      extensions: negotiateExtensions(company.document.extensions, identity.supportedExtensions),
+    });
   return { clock, fetch, identity, shop, host, transport, company, metadata, start };
 }
 

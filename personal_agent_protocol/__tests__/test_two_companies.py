@@ -61,6 +61,7 @@ async def test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
+        company=company,
         tenant_id=TENANT,
     )
     device = DeviceSignInClient(reactor=reactor, http_client=http)

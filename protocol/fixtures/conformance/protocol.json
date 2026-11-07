@@ -359,29 +359,31 @@
       "kind": "positive",
       "role": "personal-agent",
       "requirements": [
-        "PAP-3.3-02"
+        "PAP-3.3-02",
+        "PAP-3.4-07"
       ],
       "check": "extension_negotiation",
       "input": {
         "company": {
-          "gift-wrap": {
-            "version": "1"
-          },
-          "operations": {
-            "version": "2"
-          }
-        },
-        "agent": {
-          "operations": {
-            "version": "2"
-          }
+          "gift-wrap": [
+            {
+              "version": "1"
+            }
+          ],
+          "operations": [
+            {
+              "version": "2"
+            }
+          ]
         }
       },
       "expect": {
         "negotiated": {
           "operations": "2"
-        }
-      }
+        },
+        "declared": "\"operations\";v=\"2\""
+      },
+      "description": "An extension this agent does not implement is ignored; the ones it does are declared at the version the company lists (§3.3, §3.4)."
     },
     {
       "id": "protocol.extension-version-mismatch",
@@ -393,21 +395,19 @@
       "check": "extension_negotiation",
       "input": {
         "company": {
-          "operations": {
-            "version": "1",
-            "endpoint": "https://api.example.com/poppy/operations"
-          }
-        },
-        "agent": {
-          "operations": {
-            "version": "2"
-          }
+          "operations": [
+            {
+              "version": "1",
+              "endpoint": "https://api.example.com/poppy/operations"
+            }
+          ]
         }
       },
       "expect": {
-        "negotiated": {}
+        "negotiated": {},
+        "declared": null
       },
-      "description": "An entry of another major version isn't support for this one."
+      "description": "An entry of another major version isn't support for this one: nothing is declared."
     },
     {
       "id": "protocol.extension-recognized-from-the-request",
@@ -417,29 +417,31 @@
         "PAP-3.3-02"
       ],
       "check": "extension_negotiation",
-      "description": "An extension the Company recognizes from the request needs no client metadata entry.",
+      "description": "An extension the Company recognizes from the request, such as Mediated Sign-In's grant, is used without being declared in Poppy-Extensions (§3.3, §3.4).",
       "input": {
         "company": {
-          "mediated-sign-in": {
-            "version": "1",
-            "fields": [
-              {
-                "name": "email",
-                "label": "Email",
-                "secret": false
-              }
-            ],
-            "scopes": [
-              "orders:read"
-            ]
-          }
-        },
-        "agent": {}
+          "mediated-sign-in": [
+            {
+              "version": "1",
+              "fields": [
+                {
+                  "name": "email",
+                  "label": "Email",
+                  "secret": false
+                }
+              ],
+              "scopes": [
+                "orders:read"
+              ]
+            }
+          ]
+        }
       },
       "expect": {
         "negotiated": {
           "mediated-sign-in": "1"
-        }
+        },
+        "declared": null
       }
     },
     {
@@ -452,22 +454,32 @@
       ],
       "check": "extension_names",
       "input": {
-        "example.com/gift-wrap": {
-          "version": "2",
-          "color": "red"
-        },
-        "operations": {
-          "version": "2"
-        },
-        "gift-wrap": {
-          "version": "1"
-        },
-        "Gift Wrap!": {
-          "version": "1"
-        },
-        "localhost/x": {
-          "version": "1"
-        }
+        "example.com/gift-wrap": [
+          {
+            "version": "2",
+            "color": "red"
+          }
+        ],
+        "operations": [
+          {
+            "version": "2"
+          }
+        ],
+        "gift-wrap": [
+          {
+            "version": "1"
+          }
+        ],
+        "Gift Wrap!": [
+          {
+            "version": "1"
+          }
+        ],
+        "localhost/x": [
+          {
+            "version": "1"
+          }
+        ]
       },
       "expect": {
         "third_party": [
@@ -500,7 +512,8 @@
       },
       "expect": {
         "extension": "operations"
-      }
+      },
+      "description": "At an endpoint the protocol or an extension defines, extension_required and its extension are in the JSON body (§3.3); the token endpoint returns none."
     },
     {
       "id": "protocol.extension-required-at-an-api",
@@ -2039,7 +2052,7 @@
         "OPS-2-01",
         "PAP-3.3-03"
       ],
-      "description": "A personal agent that does not list operations gets extension_required (403) from a channel that would propose one, never an operation."
+      "description": "A request that does not declare operations gets extension_required (403) from a channel that would propose one, never an operation (§3.3, Operations 2)."
     },
     {
       "id": "protocol.feedback-needs-no-auth",
@@ -2139,6 +2152,44 @@
         "PAP-9.3-06"
       ],
       "description": "A feedback report with a Session Token and no scope is accepted with 202, a kind the company doesn't recognize too; a task over 200 characters is invalid_request; without a token it is 401."
+    },
+    {
+      "id": "protocol.extensions-header",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.4-07",
+        "PAP-3.3-02"
+      ],
+      "check": "extensions_header",
+      "description": "Poppy-Extensions is an RFC 9651 List of Strings with the version in v; a header that fails to parse, or an item without a version, declares nothing (§3.4).",
+      "input": {
+        "declared": {
+          "operations": "2",
+          "links": "1",
+          "mediated-sign-in": "1"
+        },
+        "parse": {
+          "\"operations\";v=\"2\", \"links\";v=\"1\"": {
+            "operations": "2",
+            "links": "1"
+          },
+          "\"operations\";v=\"2\"": {
+            "operations": "2"
+          },
+          "\"operations\"": {},
+          "operations;v=\"2\"": {},
+          "\"operations\";v=2": {},
+          "\"operations\";v=\"2\",": {},
+          "\"Gift Wrap!\";v=\"1\", \"links\";v=\"1\"": {
+            "links": "1"
+          },
+          "": {}
+        }
+      },
+      "expect": {
+        "header": "\"links\";v=\"1\", \"operations\";v=\"2\""
+      }
     }
   ]
 }

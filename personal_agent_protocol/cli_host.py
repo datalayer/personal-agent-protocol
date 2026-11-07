@@ -441,6 +441,8 @@ class SessionRecord:
     token_type: Literal["Bearer", "DPoP"] = "Bearer"
     #: The issuer's `dpop_signing_alg_values_supported`, for its refreshes (§4.5).
     dpop_signing_algs: list[str] | None = None
+    #: The extensions the Session declares with the company, one version each (§3.4).
+    extensions: dict[str, str] = field(default_factory=dict)
 
     def public(self) -> dict[str, Any]:
         """What may be printed: opaque references, never a token or the User ID."""
@@ -569,6 +571,7 @@ class CliRuntime:
                 client_id=record.client_id,
                 tenant_id=record.tenant_id,
                 agent_id=record.agent_id,
+                extensions=dict(record.extensions),
             )
             self.live[record.id] = session
         return session

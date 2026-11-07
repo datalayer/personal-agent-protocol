@@ -57,27 +57,31 @@
     "url": "https://example.com/poppy/excluded-tasks.json"
   },
   "extensions": {
-    "operations": {
-      "version": "2"
-    },
-    "mediated-sign-in": {
-      "version": "1",
-      "fields": [
-        {
-          "name": "email",
-          "label": "Email",
-          "secret": false
-        },
-        {
-          "name": "password",
-          "label": "Password",
-          "secret": true
-        }
-      ],
-      "scopes": [
-        "orders:read"
-      ]
-    }
+    "operations": [
+      {
+        "version": "2"
+      }
+    ],
+    "mediated-sign-in": [
+      {
+        "version": "1",
+        "fields": [
+          {
+            "name": "email",
+            "label": "Email",
+            "secret": false
+          },
+          {
+            "name": "password",
+            "label": "Password",
+            "secret": true
+          }
+        ],
+        "scopes": [
+          "orders:read"
+        ]
+      }
+    ]
   },
   "skill_index": {
     "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",

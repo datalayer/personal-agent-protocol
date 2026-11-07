@@ -501,12 +501,13 @@ async def test_a_company_can_refuse_a_mediated_sign_in_with_access_denied() -> N
 
 @pytest.mark.asyncio
 async def test_an_extension_used_by_the_request_needs_no_client_metadata_entry() -> None:
-    """Plain lists no extension: the grant type says it uses Mediated Sign-In (§3.3)."""
+    """Plain declares no extension: the grant type says it uses Mediated Sign-In, and the
+    token endpoint receives no Poppy-Extensions (§3.3, §3.4)."""
 
     world = World()
     plain = AgentIdentity(domain="plain.example", name="Plain", extensions=())
     world.network.add(plain.domain, plain.website())
-    assert plain.metadata["extensions"] == {}
+    assert "extensions" not in plain.metadata and plain.supported_extensions == {}
     reactor = personal_agent_reactor(
         PersonalAgentHost(
             plain, world.clock, protected_input=ScriptedInput(dict(ADA), {"code": ADA_CODE})
@@ -542,7 +543,16 @@ async def test_northwind_publishes_the_extension_with_less_than_its_other_sign_i
     assert offered is not None and offered.scopes == ["accounts:read"]
     assert [field.name for field in offered.fields] == ["account_number", "pin"]
     assert MEDIATED_GRANT in company.oauth_metadata.grant_types_supported  # type: ignore[union-attr]
-    assert bank.discovery_document()["extensions"]["mediated-sign-in"]["version"] == "1"
+    assert bank.discovery_document()["extensions"]["mediated-sign-in"] == [
+        {
+            "version": "1",
+            "fields": [
+                {"name": "account_number", "label": "Account number", "secret": False},
+                {"name": "pin", "label": "PIN", "secret": True},
+            ],
+            "scopes": ["accounts:read"],
+        }
+    ]
     world.host.protected_input.answers.extend(
         [
             {"account_number": ACCOUNT_NUMBER, "pin": ACCOUNT_PIN},

@@ -27,13 +27,16 @@ the approved request is the result.
 ```python
 from personal_agent_protocol import OperationsClient, operations_negotiated
 
-negotiated = operations_negotiated(discovered.document, my_client_metadata)
+negotiated = operations_negotiated(discovered.document, session)
 if not negotiated:
-    ...  # one side doesn't list operations version 2: the company handles approval itself
+    ...  # the company lists no operations version 2, or the Session doesn't declare it
 operations = OperationsClient(reactor=reactor)
 ```
 
-A company that needs the extension answers an agent that doesn't list it with
+The company lists `operations` with an entry for version 2 in `poppy.json`, and
+the agent declares it in `Poppy-Extensions` on every request of the Session
+(`SessionClient.start(..., company=company)` negotiates the declaration). A
+company that needs the extension answers a request that doesn't declare it with
 `extension_required`, and an MCP tool with an ordinary tool error. Another major
 version doesn't count as support.
 

@@ -11,11 +11,12 @@ import {
   parseApproval,
   parseOperation,
   type Approval,
-  type ClientMetadata,
   type DiscoveryDocument,
   type Operation,
   type Organization,
+  companyExtension,
 } from "./models.js";
+import type { PapSession } from "./sessions.js";
 import {
   ApprovalSurfaces,
   Clocks,
@@ -81,11 +82,14 @@ export class OperationError extends PersonalAgentProtocolError {
   }
 }
 
-/** Whether both sides list `operations` with this version (another major doesn't count). */
-export function operationsNegotiated(document: DiscoveryDocument, metadata: ClientMetadata): boolean {
+/**
+ * Whether the Company lists `operations` at this version and the Session declares it
+ * (Operations 2): another major version doesn't count.
+ */
+export function operationsNegotiated(document: DiscoveryDocument, session: PapSession): boolean {
   return (
-    document.extensions[OPERATIONS_EXTENSION]?.version === OPERATIONS_VERSION &&
-    metadata.extensions[OPERATIONS_EXTENSION]?.version === OPERATIONS_VERSION
+    companyExtension(document, OPERATIONS_EXTENSION, OPERATIONS_VERSION) !== undefined &&
+    session.extensions[OPERATIONS_EXTENSION] === OPERATIONS_VERSION
   );
 }
 

@@ -208,6 +208,7 @@ async def test_a_company_takes_an_agent_that_signs_everything_blindly() -> None:
         client_id=atlas.client_id,
         pairwise_user_id="usr_ada_blind",
         issuer=metadata.issuer,
+        company=company,
         tenant_id="t",
     )
     conversations = ConversationClient(

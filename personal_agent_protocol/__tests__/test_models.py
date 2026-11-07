@@ -27,9 +27,11 @@ def test_discovery_fixture_round_trips_and_preserves_extensions() -> None:
 
     assert document.protocol_version == "0.3"
     assert document.apis[1].type == "mcp"
-    assert document.extensions["operations"].version == "2"
-    assert document.extensions["mediated-sign-in"].model_extra == {
-        "fields": source["extensions"]["mediated-sign-in"]["fields"],
+    assert [entry.version for entry in document.extensions["operations"]] == ["2"]
+    assert document.extension("operations", "2") is not None
+    assert document.extension("operations", "1") is None
+    assert document.extensions["mediated-sign-in"][0].model_extra == {
+        "fields": source["extensions"]["mediated-sign-in"][0]["fields"],
         "scopes": ["orders:read"],
     }
 
@@ -89,7 +91,8 @@ def test_shared_client_conversation_and_operation_fixtures() -> None:
         (FIXTURES / "conversation-events-valid.json").read_text()
     )
 
-    assert client.extensions["example.org/preferences"].model_extra == {"mode": "compact"}
+    # Extensions left the client metadata document (§3.4): an agent declares them per request.
+    assert not hasattr(client, "extensions")
     assert operation.revision == "1791487200-k3Jd9Qx2mW8v"
     assert page.events[0].message is not None
     # The operation is the Operations extension's content, `extensions.operations` (§8.4).

@@ -29,6 +29,7 @@ from pydantic import SecretStr
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import TransportError
+from .extensions import format_extensions_header
 from .json import loads_strict
 from .operator_signatures import (
     SIGNATURE_AGENT_HEADER,
@@ -66,6 +67,8 @@ from .sessions import DPOP_HEADER, DPOP_NONCE_HEADER, AccessToken, PapSession
 SESSION_HEADER = "Poppy-Session"
 #: The protocol version the request is in (§3.4), on every request with the Session header.
 VERSION_HEADER = "Poppy-Version"
+#: The extensions the Session uses, one version each (§3.4), when it uses any.
+EXTENSIONS_HEADER = "Poppy-Extensions"
 #: Refusals that ask the caller to come back later (Guides, retries and rate limits).
 _LATER = frozenset({429, 503})
 #: Methods retried on their own: they change nothing at the company.
@@ -176,6 +179,9 @@ async def session_headers(
     )
     # The Session header and, with it, the version the Session uses the Company at (§3.4).
     headers = {SESSION_HEADER: jwt.get_secret_value(), VERSION_HEADER: session.protocol_version}
+    declared = format_extensions_header(session.extensions)
+    if declared is not None:
+        headers[EXTENSIONS_HEADER] = declared
     if token is not None:
         headers["Authorization"] = f"{token.token_type} {token.access_token.get_secret_value()}"
     if token is not None and token.token_type == "DPoP":  # noqa: S105 - an OAuth token type

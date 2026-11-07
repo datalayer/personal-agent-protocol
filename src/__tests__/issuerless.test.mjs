@@ -67,7 +67,7 @@ test("with an issuer the identifier is the issuer", async () => {
 for (const [name, offers] of [
   ["auth.issuer", { auth: { issuer: "https://auth.example.com" } }],
   ["access", { agent: { protocols: [{ type: "poppy", endpoint: "https://example.com/p", access: "signed_in" }] } }],
-  ["mediated", { extensions: { "mediated-sign-in": { version: "2" } } }],
+  ["mediated", { extensions: { "mediated-sign-in": [{ version: "2" }] } }],
 ]) {
   test(`no issuer is refused for a company that offers sign-in (${name})`, async () => {
     await assert.rejects(discover({ resource: notFound, document: { ...SIGNED_OUT, ...offers } }), code("issuer_not_found"));
@@ -75,7 +75,7 @@ for (const [name, offers] of [
 }
 
 test("an ordinary extension needs no issuer", async () => {
-  const document = { ...SIGNED_OUT, extensions: { "example.com/gift-wrap": { version: "1" } } };
+  const document = { ...SIGNED_OUT, extensions: { "example.com/gift-wrap": [{ version: "1" }] } };
   assert.equal(companyIdentifier(await discover({ resource: notFound, document })), "https://example.com");
 });
 

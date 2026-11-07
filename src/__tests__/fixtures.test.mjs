@@ -27,6 +27,7 @@ import {
   messageApproval,
   messageLinks,
   messageDisclosures,
+  companyExtension,
 } from "../../lib/index.js";
 
 const fixtures = new URL("../../protocol/fixtures/", import.meta.url);
@@ -37,7 +38,9 @@ test("discovery fixture round-trips and preserves extensions", () => {
   const document = parseDiscoveryDocument(fixture("discovery-valid.json"));
   assert.equal(document.protocol_version, "0.3");
   assert.equal(document.apis[1].type, "mcp");
-  assert.equal(document.extensions.operations.version, "2");
+  assert.deepEqual(document.extensions.operations.map((entry) => entry.version), ["2"]);
+  assert.equal(companyExtension(document, "operations", "2")?.version, "2");
+  assert.equal(companyExtension(document, "operations", "1"), undefined);
 });
 
 test("auth is optional: the issuer comes from the domain's protected resource metadata", () => {
@@ -64,7 +67,7 @@ test("shared client, conversation, and operation fixtures", () => {
   const client = parseClientMetadata(fixture("client-metadata-valid.json"));
   const operation = parseOperation(fixture("operation-valid.json"));
   const page = parseConversationEventPage(fixture("conversation-events-valid.json"));
-  assert.equal(client.extensions["example.org/preferences"].mode, "compact");
+  assert.ok(!("extensions" in client));
   assert.equal(operation.revision, "1791487200-k3Jd9Qx2mW8v");
   assert.equal("user_approval_required" in operation, false);
   // The operation is the Operations extension's content, `extensions.operations` (§8.4).

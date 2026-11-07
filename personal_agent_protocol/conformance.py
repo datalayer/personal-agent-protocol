@@ -78,6 +78,7 @@ from .demo.kit import AgentIdentity, ControlledBrowser, MemoryVault, MutableCloc
 from .device import DeviceSignInClient
 from .discovery import DiscoveryClient
 from .errors import AuthorizationError, PersonalAgentProtocolError, TransportError
+from .extensions import negotiate_extensions
 from .feedback import FeedbackClient, FeedbackReport, feedback_endpoint
 from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
 from .models import (
@@ -94,7 +95,6 @@ from .operations import (
     OPERATIONS_VERSION,
     OperationsClient,
     approval_header,
-    operations_negotiated,
 )
 from .operator_signatures import (
     OPERATOR_SIGNATURE_REFUSED,
@@ -443,9 +443,13 @@ class ConformanceContext:
         return endpoint
 
     async def operations_negotiated(self) -> None:
-        if not operations_negotiated(
-            (await self.company()).document, _client_metadata(self.agent.identity)
-        ):
+        """Skip unless the company lists Operations v2 and this agent declares it (Operations 2)."""
+
+        negotiated = negotiate_extensions(
+            (await self.company()).document.extensions,
+            supported=self.agent.identity.supported_extensions,
+        )
+        if negotiated.get("operations") != OPERATIONS_VERSION:
             raise SkipCase("operations v2 is not negotiated with this company")
 
     def url(self, path: str) -> str:
@@ -487,6 +491,9 @@ class ConformanceContext:
         return "usr_conf_" + base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
 
     async def session(self, user: str, agent: Agent | None = None) -> PapSession:
+        """A Session with the company, declaring the extensions the agent implements that
+        the company lists (§3.4)."""
+
         company = await self.company()
         actor = agent or self.agent
         return await actor.sessions.start(
@@ -494,6 +501,9 @@ class ConformanceContext:
             pairwise_user_id=user,
             issuer=company.identifier,
             tenant_id=self.tenant_id,
+            extensions=negotiate_extensions(
+                company.document.extensions, supported=actor.identity.supported_extensions
+            ),
         )
 
     async def sign_in(
@@ -3670,7 +3680,7 @@ async def _sign_in_without_issuer(ctx: ConformanceContext, fixture: FixtureCase)
     for offers in (
         {"auth": {"issuer": ctx.base_url}},
         {"agent": agent},
-        {"extensions": {"mediated-sign-in": {"version": "1"}}},
+        {"extensions": {"mediated-sign-in": [{"version": "1"}]}},
     ):
         answer = _json_answer(200, {**served, **offers})
         url = f"{ctx.base_url}/.well-known/poppy.json"

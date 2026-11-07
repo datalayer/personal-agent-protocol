@@ -30,6 +30,7 @@ import {
   parseTokenResponse,
   sessionHeaders,
   parseProtectedResourceMetadata,
+  negotiateExtensions,
 } from "../../lib/index.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
 import { ControlledBrowser } from "./support/controlled-browser.mjs";
@@ -58,7 +59,13 @@ async function world({ extensions } = {}) {
   const metadata = company.oauthMetadata;
   const sessions = new SessionClient({ reactor, fetch });
   const start = () =>
-    sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT });
+    sessions.start({
+      clientId: identity.clientId,
+      pairwiseUserId: PAIRWISE,
+      issuer: metadata.issuer,
+      tenantId: TENANT,
+      extensions: negotiateExtensions(company.document.extensions, identity.supportedExtensions),
+    });
   const context = {
     tokenEndpoint: metadata.token_endpoint,
     revocationEndpoint: metadata.revocation_endpoint,

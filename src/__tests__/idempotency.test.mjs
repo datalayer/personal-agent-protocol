@@ -20,6 +20,7 @@ import {
   SessionFetchClient,
   discoverCompany,
   newIdempotencyKey,
+  negotiateExtensions,
 } from "../../lib/index.js";
 import { CompanyConfig } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
@@ -45,11 +46,12 @@ async function world(config) {
   const transport = new SessionFetchClient({ reactor: host.reactor, fetch });
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
-  return { clock, fetch, identity, shop, plugin, host, transport, metadata };
+  return { clock, fetch, identity, shop, plugin, host, transport, company, metadata };
 }
 
 async function session(w) {
   return await new SessionClient({ reactor: w.host.reactor, fetch: w.fetch }).start({
+    extensions: negotiateExtensions(w.company.document.extensions, w.identity.supportedExtensions),
     clientId: w.identity.clientId,
     pairwiseUserId: PAIRWISE,
     issuer: w.metadata.issuer,

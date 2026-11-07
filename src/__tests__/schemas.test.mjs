@@ -41,8 +41,7 @@ const FIXTURE_SCHEMAS = {
   "delegation-valid.json": "delegation",
   "invalid-session-valid.json": "oauth-error",
   "operation-valid.json": "operation",
-  // The events page fixture carries draft 0.4's state fields (§8.7, P4-06); it is checked
-  // against `events-response` again once the vendored schemas are replaced at 46beb21 (P4-03).
+  "conversation-events-valid.json": "events-response",
 };
 
 for (const [fixture, schema] of Object.entries(FIXTURE_SCHEMAS)) {

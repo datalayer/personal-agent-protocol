@@ -74,6 +74,7 @@ async def explain_account_tokens() -> dict[str, Any]:
             client_id=atlas.client_id,
             pairwise_user_id=PAIRWISE,
             issuer=metadata.issuer,
+            company=company,
             tenant_id=TENANT,
         )
         started = await device.begin(
@@ -121,6 +122,7 @@ async def explain_account_tokens() -> dict[str, Any]:
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
+        company=company,
         tenant_id=TENANT,
     )
     answered = await conversations.start(

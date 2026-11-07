@@ -577,8 +577,8 @@ requirements:
   section: '3.3'
   level: MUST
   role: personal-agent
-  text: Personal Agents and Companies MUST ignore extensions they don't support and fields they don't
-    recognize, so either side can work with the other under this specification alone.
+  text: Personal Agents and Companies MUST ignore extensions and versions they don't support and fields
+    they don't recognize, so either side can work with the other under this specification alone.
   status: implemented
   implementation:
   - personal_agent_protocol.extensions:negotiate_extensions
@@ -594,8 +594,8 @@ requirements:
   section: '3.3'
   level: MUST
   role: company
-  text: Personal Agents and Companies MUST ignore extensions they don't support and fields they don't
-    recognize, so either side can work with the other under this specification alone.
+  text: Personal Agents and Companies MUST ignore extensions and versions they don't support and fields
+    they don't recognize, so either side can work with the other under this specification alone.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._client
@@ -609,8 +609,8 @@ requirements:
   section: '3.3'
   level: MUST
   role: personal-agent
-  text: Personal Agents and Companies MUST ignore extensions they don't support and fields they don't
-    recognize, so either side can work with the other under this specification alone.
+  text: Personal Agents and Companies MUST ignore extensions and versions they don't support and fields
+    they don't recognize, so either side can work with the other under this specification alone.
   status: implemented
   implementation:
   - personal_agent_protocol.models:ProtocolModel
@@ -629,8 +629,8 @@ requirements:
   section: '3.3'
   level: MUST
   role: company
-  text: Personal Agents and Companies MUST ignore extensions they don't support and fields they don't
-    recognize, so either side can work with the other under this specification alone.
+  text: Personal Agents and Companies MUST ignore extensions and versions they don't support and fields
+    they don't recognize, so either side can work with the other under this specification alone.
   status: partial
   implementation:
   - personal_agent_protocol.models:ProtocolModel
@@ -722,15 +722,25 @@ requirements:
   level: MUST
   role: personal-agent
   text: On every request with the Session header (5.2), the Personal Agent sends the protocol version it
-    implements, compatible with the chosen one, in Poppy-Version, as major.minor. The Personal Agent MUST
-    send the same values on every request in a Session, and starts a new Session to change them.
+    implements, compatible with the chosen one, in Poppy-Version, as major.minor. When it uses extensions
+    with the Company, it also sends Poppy-Extensions, an RFC 9651 List of Strings, each the name of an
+    extension in the chosen document, with the version it uses as a String in the v parameter. The
+    Personal Agent MUST send the same values on every request in a Session, and starts a new Session to
+    change them.
   status: implemented
   implementation:
   - personal_agent_protocol.sessions:PapSession
   - personal_agent_protocol.transport:session_headers
   - personal_agent_protocol.transport:VERSION_HEADER
+  - personal_agent_protocol.extensions:format_extensions_header
+  - personal_agent_protocol.extensions:negotiate_extensions
   tests:
   - personal_agent_protocol/__tests__/test_draft_04.py::test_every_request_with_the_session_header_names_the_sessions_version
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_session_declares_the_extensions_it_uses_with_the_company
+  - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  conformance:
+  - protocol.extensions-header
+  - protocol.unknown-extension-ignored
 - id: PAP-3.4-08
   section: '3.4'
   level: MUST
@@ -2190,12 +2200,14 @@ requirements:
   section: '8.4'
   level: MUST NOT
   role: both
-  text: A side MUST NOT send an extension's content unless the other side lists that extension with the
-    same version; the Company checks the Personal Agent's client metadata document (4.1), and the Personal
-    Agent checks the Company's poppy.json (3.1).
+  text: A side MUST NOT send an extension's content unless the other side uses that extension with the
+    same version; the Company checks the request's Poppy-Extensions (3.4), and the Personal Agent checks
+    the Company's document for the version it chose (3.1).
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._reply
+  - personal_agent_protocol.company.service:CompanyService._supports_extension
+  - personal_agent_protocol.extensions:parse_extensions_header
   - personal_agent_protocol.models:operations_content
   tests:
   - personal_agent_protocol/__tests__/test_company_rules.py::test_extension_content_goes_only_to_an_agent_that_lists_the_extension
@@ -2852,7 +2864,9 @@ requirements:
   section: '2'
   level: MUST NOT
   role: company
-  text: A Company MUST NOT return operations to a Personal Agent that doesn't list that version.
+  text: The extension is used only when the Company lists operations with version "2" and the request
+    declares that version. A Company MUST NOT return operations in response to a request that doesn't
+    declare it.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService._api_answer

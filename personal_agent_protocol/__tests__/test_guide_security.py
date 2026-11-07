@@ -90,6 +90,7 @@ async def session_accepted(world: World, identity: AgentIdentity) -> bool:
         client_id=identity.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
+        company=world.company,
         tenant_id=TENANT,
     )
     answer = await world.http.get(

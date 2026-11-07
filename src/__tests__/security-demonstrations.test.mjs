@@ -42,6 +42,7 @@ import {
   sessionJwtClaims,
   staleResourceMetadata,
   PROTOCOL_PROFILE,
+  negotiateExtensions,
 } from "../../lib/index.js";
 import { MemoryCompanyStore, RecordKinds } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
@@ -122,7 +123,13 @@ async function world({ durable = false, maxAge } = {}) {
   };
   w.tokens = firstContribution(w.host.reactor, TokenStores, "token store");
   w.start = (pairwiseUserId = PAIRWISE, reactor = w.host.reactor, clientId = w.identity.clientId) =>
-    new SessionClient({ reactor, fetch }).start({ clientId, pairwiseUserId, issuer: w.metadata.issuer, tenantId: TENANT });
+    new SessionClient({ reactor, fetch }).start({
+      clientId,
+      pairwiseUserId,
+      issuer: w.metadata.issuer,
+      tenantId: TENANT,
+      extensions: negotiateExtensions(w.company.document.extensions, w.identity.supportedExtensions),
+    });
   w.message = (text, id = w.conversations.generateRequestId()) => ({ id, author: { type: "human" }, text });
   w.last = (method, path) =>
     [...wire].reverse().find((item) => (item.init.method ?? "GET") === method && new URL(item.url).pathname === path);

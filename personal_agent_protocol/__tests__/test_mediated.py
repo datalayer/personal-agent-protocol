@@ -20,7 +20,11 @@ from personal_agent_protocol import (
     MediatedSignIn,
     mediated_sign_in,
 )
-from personal_agent_protocol.extensions import extension_required, negotiate_extensions
+from personal_agent_protocol.extensions import (
+    extension_required,
+    format_extensions_header,
+    negotiate_extensions,
+)
 from personal_agent_protocol.mediated import MEDIATED_GRANT, MediatedSignInClient
 from personal_agent_protocol.models import (
     DiscoveredCompany,
@@ -56,7 +60,7 @@ def company(
         "agent": AGENT,
     }
     if extension is not None:
-        document["extensions"] = {"mediated-sign-in": extension}
+        document["extensions"] = {"mediated-sign-in": [extension]}
     return DiscoveredCompany(
         discovery_url="https://shop.example/.well-known/poppy.json",
         document=DiscoveryDocument.model_validate(document),
@@ -383,10 +387,13 @@ def test_a_dpop_answer_to_a_mediated_sign_in_with_no_proof_is_refused() -> None:
 
 
 def test_an_extension_used_by_the_request_is_negotiated_without_an_agent_entry() -> None:
-    company_side = {"mediated-sign-in": ExtensionDescriptor(version="1")}
-    assert negotiate_extensions(company_side, {}) == {"mediated-sign-in": "1"}
+    company_side = {"mediated-sign-in": [ExtensionDescriptor(version="1")]}
+    negotiated = negotiate_extensions(company_side)
+    assert negotiated == {"mediated-sign-in": "1"}
+    # Used, never declared: the token endpoint recognizes the grant (§3.3, §3.4).
+    assert format_extensions_header(negotiated) is None
     # Another major version is not this extension.
-    assert negotiate_extensions({"mediated-sign-in": ExtensionDescriptor(version="2")}, {}) == {}
+    assert negotiate_extensions({"mediated-sign-in": [ExtensionDescriptor(version="2")]}) == {}
 
 
 def test_a_refusal_of_an_extension_the_request_uses_is_not_extension_required() -> None:

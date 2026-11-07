@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Protocol, cast, runtime_checkable
@@ -439,23 +439,21 @@ class AccountAgent:
 
 @dataclass(frozen=True)
 class KnownClient:
-    """What a verified personal agent declared: the extensions it supports.
+    """A personal agent whose identity this company verified.
 
     One record per `client_id` that authenticated, kept without expiry. Only
     an agent with valid metadata and keys at its own domain adds one, but an
     operator of many domains can add many: a company bounds that with its
-    `pap.company.clientPolicy` (or a store that ages records out).
+    `pap.company.clientPolicy` (or a store that ages records out). The
+    extensions an agent uses are declared per request (§3.4), never kept here.
     """
 
-    #: The extensions it lists, each with its major version.
-    extensions: Mapping[str, str] = field(default_factory=dict)
-
     def to_json(self) -> JsonObject:
-        return {"extensions": dict(self.extensions)}
+        return {}
 
     @classmethod
     def from_json(cls, value: JsonObject) -> KnownClient:
-        return cls(extensions=dict(value["extensions"]))
+        return cls()
 
 
 @dataclass(frozen=True)

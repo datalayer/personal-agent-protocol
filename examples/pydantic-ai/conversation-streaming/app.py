@@ -96,6 +96,7 @@ async def explain_conversation_streaming() -> dict[str, Any]:
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
+        company=company,
         tenant_id=TENANT,
     )
     conversations = ConversationClient(

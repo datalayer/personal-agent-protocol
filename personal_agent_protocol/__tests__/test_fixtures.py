@@ -52,7 +52,9 @@ from personal_agent_protocol.errors import (
 from personal_agent_protocol.extensions import (
     extension_name_kind,
     extension_required,
+    format_extensions_header,
     negotiate_extensions,
+    parse_extensions_header,
 )
 from personal_agent_protocol.feedback import feedback_endpoint
 from personal_agent_protocol.json import loads_strict
@@ -135,8 +137,11 @@ async def _public(_: str) -> list[str]:
     return ["93.184.216.34"]
 
 
-def _descriptors(values: dict[str, Any]) -> dict[str, ExtensionDescriptor]:
-    return {name: ExtensionDescriptor.model_validate(value) for name, value in values.items()}
+def _descriptors(values: dict[str, Any]) -> dict[str, list[ExtensionDescriptor]]:
+    return {
+        name: [ExtensionDescriptor.model_validate(entry) for entry in entries]
+        for name, entries in values.items()
+    }
 
 
 async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture check
@@ -160,10 +165,14 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         if "feedback_endpoint" in expect:
             assert feedback_endpoint(document) == expect["feedback_endpoint"]
     elif case.check == "extension_negotiation":
-        negotiated = negotiate_extensions(
-            _descriptors(given["company"]), _descriptors(given["agent"])
-        )
+        negotiated = negotiate_extensions(_descriptors(given["company"]))
         assert negotiated == expect["negotiated"]
+        assert format_extensions_header(negotiated) == expect["declared"]
+    elif case.check == "extensions_header":
+        assert format_extensions_header(given["declared"]) == expect["header"]
+        for header, declared in given["parse"].items():
+            assert parse_extensions_header(header) == declared, header
+        assert parse_extensions_header(None) == {}
     elif case.check == "extension_names":
         kinds: dict[str, list[str]] = {"plain": [], "third-party": [], "invalid": []}
         for name in given:
@@ -174,7 +183,7 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         preserved = _descriptors(
             {k: v for k, v in given.items() if extension_name_kind(k) != "invalid"}
         )
-        assert preserved["example.com/gift-wrap"].model_extra == {"color": "red"}
+        assert preserved["example.com/gift-wrap"][0].model_extra == {"color": "red"}
     elif case.check == "extension_required":
         assert (
             extension_required(given["status"], given["body"], given.get("www_authenticate"))

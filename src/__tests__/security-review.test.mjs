@@ -36,6 +36,7 @@ import {
   parseProtectedResourceMetadata,
   messageOperation,
   PROTOCOL_PROFILE,
+  negotiateExtensions,
 } from "../../lib/index.js";
 import {
   ClientPolicies,
@@ -76,7 +77,14 @@ async function world({ plugins, config, durable = false } = {}) {
   const company = await discoverCompany("manzanita.example", { reactor: host.reactor });
   const metadata = company.oauthMetadata;
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
-  const start = () => sessions.start({ clientId: identity.clientId, pairwiseUserId: PAIRWISE, issuer: metadata.issuer, tenantId: TENANT });
+  const start = () =>
+    sessions.start({
+      clientId: identity.clientId,
+      pairwiseUserId: PAIRWISE,
+      issuer: metadata.issuer,
+      tenantId: TENANT,
+      extensions: negotiateExtensions(company.document.extensions, identity.supportedExtensions),
+    });
   const message = (text) => ({ id: conversations.generateRequestId(), author: { type: "human" }, text });
   const endpoint = company.document.agent.protocols[0].endpoint;
   const postJson = (session, url, body, token) =>

@@ -19,7 +19,6 @@ from pydantic_ai import Agent
 
 from personal_agent_protocol import (
     Author,
-    ClientMetadata,
     ConversationClient,
     DeviceSignInClient,
     DiscoveryClient,
@@ -83,6 +82,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
         client_id=atlas.client_id,
         pairwise_user_id=PAIRWISE,
         issuer=metadata.issuer,
+        company=company,
         tenant_id=TENANT,
     )
     name = company.document.organization.name
@@ -134,7 +134,7 @@ async def run_manzanita_journey() -> dict[str, Any]:
     steps.append(f"company proposed revision {proposal.revision}: {proposal.summary}")
 
     # Ada approves exactly that revision, in the host's own interface; it is done once.
-    if not operations_negotiated(company.document, ClientMetadata.model_validate(atlas.metadata)):
+    if not operations_negotiated(company.document, session):
         raise RuntimeError("the example world is incomplete")
     approval = await OperationsClient(reactor=reactor).ask_user(
         proposal, organization=company.document.organization, tenant_id=TENANT

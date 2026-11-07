@@ -35,9 +35,6 @@ async def inspect_pap_agent(client_id: str) -> dict[str, Any]:
         "client_name": metadata.client_name,
         "redirect_count": len(metadata.redirect_uris),
         "signing_algorithms": algorithms,
-        "extensions": {
-            name: descriptor.version for name, descriptor in metadata.extensions.items()
-        },
     }
 
 

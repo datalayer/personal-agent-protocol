@@ -21,7 +21,6 @@ from personal_agent_protocol import (
     APPROVAL_SURFACES,
     CLOCKS,
     Approval,
-    ClientMetadata,
     DiscoveryDocument,
     Message,
     Operation,
@@ -43,6 +42,7 @@ from personal_agent_protocol.company import (
 )
 from personal_agent_protocol.company.points import COMPANY_MCP, OPERATION_EXECUTORS
 from personal_agent_protocol.demo.kit import ScriptedApprovals
+from personal_agent_protocol.extensions import negotiate_extensions
 from personal_agent_protocol.mcp import McpClient
 from personal_agent_protocol.models import (
     Author,
@@ -50,6 +50,7 @@ from personal_agent_protocol.models import (
     operations_content,
 )
 from personal_agent_protocol.reactor import RATE_LIMIT_BUDGETS, first_contribution
+from personal_agent_protocol.sessions import PapSession
 
 from .test_company_end_to_end import World
 from .test_company_refusals import signed_in
@@ -163,24 +164,33 @@ def test_a_message_with_only_an_approval_is_a_message_and_a_text_alone_approves_
 
 
 def test_operations_are_used_only_when_both_sides_list_version_2() -> None:
-    def document(version: str) -> DiscoveryDocument:
+    def document(*versions: str) -> DiscoveryDocument:
         return DiscoveryDocument.model_validate(
             {
                 **json.loads((FIXTURES / "discovery-valid.json").read_text()),
-                "extensions": {"operations": {"version": version}},
+                "extensions": {"operations": [{"version": version} for version in versions]},
             }
         )
 
-    metadata = json.loads((FIXTURES / "client-metadata-valid.json").read_text())
+    def session(extensions: dict[str, str]) -> PapSession:
+        return PapSession(
+            sid="Yx2b7Qd_Kp8mR3vT1nWc4A",
+            sub="usr_1",
+            issuer="https://auth.example.com",
+            client_id="https://agent.example/agent.json",
+            tenant_id="t",
+            extensions=extensions,
+        )
 
-    def agent(extensions: dict[str, object]) -> ClientMetadata:
-        return ClientMetadata.model_validate({**metadata, "extensions": extensions})
-
-    both = agent({"operations": {"version": "2"}})
-    assert operations_negotiated(document("2"), both)
-    assert not operations_negotiated(document("2"), agent({}))
-    assert not operations_negotiated(document("1"), both)
-    assert not operations_negotiated(document("2"), agent({"operations": {"version": "1"}}))
+    # The company lists version 2 and the Session declares it (Operations 2).
+    assert operations_negotiated(document("2"), session({"operations": "2"}))
+    assert operations_negotiated(document("1", "2"), session({"operations": "2"}))
+    assert not operations_negotiated(document("2"), session({}))
+    assert not operations_negotiated(document("1"), session({"operations": "2"}))
+    assert not operations_negotiated(document("2"), session({"operations": "1"}))
+    # Negotiation picks the version this SDK implements from the company's list.
+    assert negotiate_extensions(document("1", "2").extensions) == {"operations": "2"}
+    assert negotiate_extensions(document("1").extensions) == {}
 
 
 # The Poppy-Approval header ------------------------------------------------------------------
@@ -1158,28 +1168,26 @@ def test_the_default_expiry_leaves_the_user_fifteen_minutes() -> None:
 
 def test_the_discovery_entry_has_a_version_and_no_endpoint() -> None:
     world = World()
-    assert world.shop.discovery_document()["extensions"]["operations"] == {"version": "2"}
+    assert world.shop.discovery_document()["extensions"]["operations"] == [{"version": "2"}]
 
 
 def test_an_old_extension_entry_is_not_this_version() -> None:
     from personal_agent_protocol.demo.kit import AgentIdentity
 
-    assert AgentIdentity(domain="a.example", name="A").metadata["extensions"] == {
-        "operations": {"version": "2"}
-    }
+    identity = AgentIdentity(domain="a.example", name="A")
+    # Nothing of the extensions is in the client metadata (§3.4): the agent declares what it
+    # implements per Session, with a company that lists it.
+    assert "extensions" not in identity.metadata
+    assert identity.supported_extensions == {"operations": "2"}
 
 
 @pytest.mark.asyncio
 async def test_an_agent_listing_version_1_is_not_sent_an_operation() -> None:
-    world, session, token, api = await _world()
-    from personal_agent_protocol.company.store import CLIENT, KnownClient
-
-    await world.shop.store.put(
-        CLIENT, world.atlas.client_id, KnownClient({"operations": "1"}).to_json()
-    )
-    world.shop._remember_client = _keep  # type: ignore[attr-defined,method-assign,assignment]
+    _, session, token, api = await _world()
+    # The Session declares another major version: not this extension (§3.3, Operations 2).
+    session_v1 = dataclasses.replace(session, extensions={"operations": "1"})
     with pytest.raises(ApiError) as raised:
-        await api.call("POST", EXCHANGE, session=session, token=token, body={})
+        await api.call("POST", EXCHANGE, session=session_v1, token=token, body={})
     assert raised.value.code == "extension_required"
     assert raised.value.details == {"extension": "operations"}
 

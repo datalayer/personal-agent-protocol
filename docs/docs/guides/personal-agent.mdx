@@ -59,6 +59,16 @@ again, once; choosing the same version, or none, ends the request. A
 `Deprecation` or `Sunset` header on a response is a sign to move that company to a
 newer version before the date it gives.
 
+Extensions are declared the same way (§3.3, §3.4): a company lists each with an
+entry per version it supports, `negotiate_extensions(company.document.extensions)`
+(`negotiateExtensions`) picks the version this SDK implements for each one the
+company lists, and `SessionClient.start(..., company=company)` keeps the result as
+the Session's `extensions`, sent in `Poppy-Extensions` on every request with the
+Session header, the same for the Session's life. A host that implements fewer
+passes `extensions` itself. Nothing of the extensions is in the client metadata
+any more, and the company sends an extension's content only to a request that
+declares it.
+
 ## Available now: start a signed-out session
 
 Resolve one pairwise identifier, the User ID, for each tenant, internal user,

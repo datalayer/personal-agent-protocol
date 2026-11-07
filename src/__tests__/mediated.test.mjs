@@ -23,6 +23,7 @@ import {
   buildPapReactor,
   extensionRequired,
   mediatedSignIn,
+  formatExtensionsHeader,
   negotiateExtensions,
   parseDiscoveryDocument,
   parseOAuthServerMetadata,
@@ -48,7 +49,7 @@ function company(extension = EXTENSION, grants = [MEDIATED_GRANT], more = {}) {
       protocol_version: "0.3",
       organization: { name: "Shop", domain: "shop.example" },
       agent: AGENT,
-      ...(extension === null ? {} : { extensions: { [MEDIATED_EXTENSION]: extension } }),
+      ...(extension === null ? {} : { extensions: { [MEDIATED_EXTENSION]: [extension] } }),
       ...more,
     }),
     oauthMetadata: parseOAuthServerMetadata({
@@ -328,9 +329,12 @@ test("no refresh token, no sign-in", async () => {
 
 test("an extension used by the request is negotiated without an agent entry", () => {
   assert.equal(MEDIATED_VERSION, "1");
-  assert.deepEqual(negotiateExtensions({ [MEDIATED_EXTENSION]: { version: "1" } }, {}), { [MEDIATED_EXTENSION]: "1" });
+  const negotiated = negotiateExtensions({ [MEDIATED_EXTENSION]: [{ version: "1" }] });
+  assert.deepEqual(negotiated, { [MEDIATED_EXTENSION]: "1" });
+  // Used, never declared: the token endpoint recognizes the grant (§3.3, §3.4).
+  assert.equal(formatExtensionsHeader(negotiated), undefined);
   // Another major version is not this extension.
-  assert.deepEqual(negotiateExtensions({ [MEDIATED_EXTENSION]: { version: "2" } }, {}), {});
+  assert.deepEqual(negotiateExtensions({ [MEDIATED_EXTENSION]: [{ version: "2" }] }), {});
 });
 
 test("a refusal of an extension the request uses is not extension_required", () => {

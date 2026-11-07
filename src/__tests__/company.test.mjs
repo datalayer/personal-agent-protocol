@@ -43,6 +43,7 @@ import {
   messageOperation,
   operationsContent,
   PROTOCOL_PROFILE,
+  negotiateExtensions,
 } from "../../lib/index.js";
 import { CompanyAccounts, CompanyApis, CompanyMcps, CompanyRateLimits, StaleConversationError } from "../../lib/server.js";
 import { ADA, ADA_CODE, manzanita,
@@ -86,6 +87,7 @@ async function world({ answers = [], extensions, config, plugins, algorithm, bli
   const sessions = new SessionClient({ reactor: host.reactor, fetch });
   const start = (pairwiseUserId = PAIRWISE, agentId) =>
     sessions.start({
+      extensions: negotiateExtensions(company.document.extensions, identity.supportedExtensions),
       clientId: identity.clientId,
       pairwiseUserId,
       issuer: metadata.issuer,
@@ -196,15 +198,15 @@ test("discovery and OAuth metadata publish one issuer, plain OAuth, and the two 
     "orders:write": "Exchange or return items in your orders",
   });
   assert.equal(w.company.document.apis[0].url, "https://manzanita.example/api/openapi.json");
-  assert.deepEqual(w.company.document.extensions.operations, { version: "2" });
-  assert.deepEqual(w.company.document.extensions["mediated-sign-in"], {
+  assert.deepEqual(w.company.document.extensions.operations, [{ version: "2" }]);
+  assert.deepEqual(w.company.document.extensions["mediated-sign-in"], [{
     version: "1",
     fields: [
       { name: "email", label: "Email", secret: false },
       { name: "password", label: "Password", secret: true },
     ],
     scopes: ["orders:read", "orders:write"],
-  });
+  }]);
   assert.equal(w.company.document.auth.mediated, undefined);
   assert.ok(w.metadata.grant_types_supported.includes(MEDIATED_GRANT));
   assert.ok(!w.metadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:jwt-bearer"));
@@ -1231,6 +1233,7 @@ test("a token of another agent in a Session is refused", async () => {
   const host = await agentHost({ identity: stranger, fetch: w.fetch, clock: w.clock });
   const session = await new SessionClient({ reactor: host.reactor, fetch: w.fetch }).start({
     clientId: stranger.clientId, pairwiseUserId: PAIRWISE, issuer: w.metadata.issuer, tenantId: TENANT,
+    extensions: negotiateExtensions(w.company.document.extensions, stranger.supportedExtensions),
   });
   const headers = await sessionHeaders(host.reactor, "GET", ORDERS, { session, token: result.token });
   const answer = await w.fetch(ORDERS, { method: "GET", headers });

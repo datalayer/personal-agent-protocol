@@ -5,8 +5,8 @@
 """What draft 0.4 adds, both sides, in one process: `src/__tests__/draft-04.test.mjs`
 ports it.
 
-Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); what a
-message took into account (§8.4, P4-08).
+Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
+declared per request (§3.3, §3.4, P4-03); what a message took into account (§8.4, P4-08).
 """
 
 from __future__ import annotations
@@ -24,6 +24,11 @@ from personal_agent_protocol.company import CompanyConfig
 from personal_agent_protocol.demo.kit import InProcessNetwork, MutableClock
 from personal_agent_protocol.demo.manzanita import CONFIG, manzanita
 from personal_agent_protocol.errors import ConversationError
+from personal_agent_protocol.extensions import (
+    format_extensions_header,
+    negotiate_extensions,
+    parse_extensions_header,
+)
 from personal_agent_protocol.models import (
     DEVICE_CODE_GRANT,
     MEDIATED_GRANT,
@@ -31,6 +36,7 @@ from personal_agent_protocol.models import (
     ConversationEventPage,
     DiscoveredCompany,
     DiscoveryDocument,
+    ExtensionDescriptor,
     Message,
     OAuthServerMetadata,
     choose_protocol_version,
@@ -297,3 +303,59 @@ async def test_the_company_agent_names_the_request_it_answered_and_people_do_not
     assert event.message is not None and event.message.as_of_request is None
     shown = PapReplies.of("manzanita.example", page.conversation_id, replies)
     assert shown is not None and shown.replies[0].as_of_request == first.id
+
+
+# Extensions declared per request (§3.3, §3.4) ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_session_declares_the_extensions_it_uses_with_the_company() -> None:
+    """A company lists each extension with an entry per version; the Session declares the
+    ones this agent implements in `Poppy-Extensions`, the same on every request; the company
+    sends an extension's content only to a request that declares it (§3.3, §3.4, §8.4)."""
+
+    world = World()
+    session = await world.signed_out_session()
+    document = world.company.document
+    assert document.extensions["operations"] == [ExtensionDescriptor(version="2")]
+    assert document.extension("operations", "2") is not None
+    # Atlas implements Operations alone; the SDK as a whole implements four.
+    assert session.extensions == {"operations": "2"}
+    everything = negotiate_extensions(document.extensions)
+    assert everything == {
+        "operations": "2",
+        "links": "1",
+        "disclosures": "1",
+        "mediated-sign-in": "1",
+    }
+    headers = await session_headers(
+        world.reactor, "GET", "https://manzanita.example/api/orders", session=session, token=None
+    )
+    assert headers["Poppy-Extensions"] == '"operations";v="2"'
+    # Mediated Sign-In is recognized from its grant: used, never declared (§3.3).
+    assert (
+        format_extensions_header(everything)
+        == '"disclosures";v="1", "links";v="1", "operations";v="2"'
+    )
+    assert "extensions" not in world.atlas.metadata
+    assert PapSession.from_json(session.to_json()).extensions == session.extensions
+    # The company reads the declaration per request: a Session declaring nothing gets the
+    # notice in `text` and no links, whatever the agent's other Sessions declare.
+    endpoint = document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    plain = replace(session, extensions={})
+    page = await world.conversations.start(
+        endpoint, world.message("Where is my order?"), session=plain, wait=0
+    )
+    assert isinstance(page, ConversationEventPage)
+    replies = [e.message for e in page.events if e.message and e.message.role == "company"]
+    assert replies and all(reply.extensions is None for reply in replies)
+    # Negotiation picks this SDK's version from the company's list, and nothing else.
+    assert negotiate_extensions({"operations": [ExtensionDescriptor(version="1")]}) == {}
+    assert negotiate_extensions(
+        {"operations": [ExtensionDescriptor(version="1"), ExtensionDescriptor(version="2")]}
+    ) == {"operations": "2"}
+    assert parse_extensions_header('"operations";v="2", "links";v="1"') == {
+        "operations": "2",
+        "links": "1",
+    }
+    assert parse_extensions_header('"operations"') == {}

@@ -165,7 +165,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
         REFRESH_TOKEN: AccountGrant("acct_1", "c", ("a", "b"), later, True, "fam_1", now),
         ACCOUNT_FAMILY: AccountFamily("c", "acct_1", ("t1", "t2"), ("a1",), True),
         ACCOUNT_AGENT: AccountAgent(("fam_1", "fam_2")),
-        CLIENT: KnownClient({"operations": "2"}),
+        CLIENT: KnownClient(),
         DEVICE: PendingDevice("c", ("a",), "ABCD-EFGH", later, 10, now, "acct_1", ("a",), True),
         USER_CODE: UserCode("dev_digest"),
         AUTHORIZATION: PendingAuthorization(

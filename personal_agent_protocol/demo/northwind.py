@@ -36,6 +36,7 @@ from ..company import (
 )
 from ..models import Operation
 from .kit import ClockPlugin, InProcessNetwork, MutableClock
+from .manzanita import WHICH_ONE, acknowledgement_only
 
 DOMAIN = "northwind.example"
 ACCOUNT = "acct_ada_northwind"
@@ -100,6 +101,9 @@ class NorthwindAgent:
     async def respond(self, turn: Turn) -> Sequence[Reply]:
         if turn.account_id is None:
             return [Reply(authorization=("insufficient_scope", "accounts:read payments:write"))]
+        if acknowledgement_only(turn.text):
+            # A reply that could answer more than one open question answers none (guides).
+            return [Reply(text=WHICH_ONE)]
         match = _PAY.match((turn.text or "").strip())
         if match is None:
             if "accounts:read" not in turn.scopes:

@@ -66,6 +66,21 @@ EXCHANGE_NOTICE = "Exchanged items ship once the original jacket is received."
 INVITATION = "A returns specialist would like to talk with you about the damaged jacket."
 #: Manzanita's first message in the Direct Conversation the user accepted (§8.10).
 OPENING = "Hi, this is Rosa from Manzanita returns. Tell me what happened with the jacket."
+#: Replies that say only yes (guides, *Explicit replies and approvals*): one could answer
+#: sign-in, an earlier question or a request for approval, so a company agent treats it as
+#: answering none of them and asks which is meant, acting on nothing.
+ACKNOWLEDGEMENTS = frozenset(
+    {"yes", "ok", "okay", "done", "sure", "fine", "go ahead", "approved", "confirmed", "agreed"}
+)
+#: What the demo company agents answer such a reply with.
+WHICH_ONE = "Which do you mean? Say what you are answering, and I will go on from there."
+
+
+def acknowledgement_only(text: str | None) -> bool:
+    """Whether `text` is a bare acknowledgement, which could answer more than one question."""
+
+    return (text or "").strip().rstrip(".!").lower() in ACKNOWLEDGEMENTS
+
 
 CONFIG = CompanyConfig(
     name="Manzanita Outfitters",
@@ -124,6 +139,9 @@ class ManzanitaAgent:
         if turn.opening:
             # The user accepted the invitation: the company speaks first (§8.10).
             return [Reply(text=OPENING, persona={"id": "rosa", "name": "Rosa"})]
+        if acknowledgement_only(turn.text):
+            # A reply that could answer more than one open question answers none (guides).
+            return [Reply(text=WHICH_ONE)]
         if turn.account_id is not None and "damaged" in text:
             # A person would like to talk with the user: an invitation, not a message.
             return [

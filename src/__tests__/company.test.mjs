@@ -47,6 +47,8 @@ import { CompanyAccounts, CompanyApis, CompanyMcps, CompanyRateLimits, StaleConv
 import { ADA, ADA_CODE, manzanita,
   INVITATION,
   OPENING,
+  WHICH_ONE,
+  acknowledgementOnly,
 } from "../../lib/demo/manzanita.js";
 import { runJourney } from "./support/journey.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -1401,4 +1403,19 @@ test("the company publishes its logo, its skills and a conversation resource of 
   assert.ok(started.conversation_id);
   // Signed out, the Session header alone (guides).
   assert.ok((await w.conversations.start(w.endpoint, w.message("Hi"), { session })).conversation_id);
+});
+
+test("a bare acknowledgement is answered with a question, and acted on by nothing", async () => {
+  // Explicit replies (guides): a short reply that could answer more than one open question
+  // answers none; the company agent asks which is meant.
+  assert.ok(acknowledgementOnly("Yes.") && acknowledgementOnly(" go ahead "));
+  assert.ok(!acknowledgementOnly("Yes, exchange it") && !acknowledgementOnly(undefined));
+  const w = await world();
+  const session = await w.start();
+  const { result } = await directSignIn(w);
+  const page = await w.conversations.start(w.endpoint, w.message("ok"), { session, token: result.token, wait: 0 });
+  const answers = page.events.filter((event) => event.message?.role === "company").map((event) => event.message);
+  assert.deepEqual(answers.map((message) => message.text), [WHICH_ONE]);
+  assert.ok(answers.every((message) => message.extensions?.operations === undefined));
+  assert.ok(!page.events.some((event) => event.type === "authorization"));
 });

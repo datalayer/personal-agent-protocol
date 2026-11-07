@@ -84,6 +84,21 @@ export const EXCHANGE_NOTICE = "Exchanged items ship once the original jacket is
 export const INVITATION = "A returns specialist would like to talk with you about the damaged jacket.";
 /** Manzanita's first message in the Direct Conversation the user accepted (§8.10). */
 export const OPENING = "Hi, this is Rosa from Manzanita returns. Tell me what happened with the jacket.";
+/**
+ * Replies that say only yes (guides, *Explicit replies and approvals*): one could answer sign-in,
+ * an earlier question or a request for approval, so a company agent treats it as answering none
+ * of them and asks which is meant, acting on nothing.
+ */
+export const ACKNOWLEDGEMENTS: ReadonlySet<string> = new Set([
+  "yes", "ok", "okay", "done", "sure", "fine", "go ahead", "approved", "confirmed", "agreed",
+]);
+/** What the demo company agent answers such a reply with. */
+export const WHICH_ONE = "Which do you mean? Say what you are answering, and I will go on from there.";
+
+/** Whether `text` is a bare acknowledgement, which could answer more than one question. */
+export function acknowledgementOnly(text: string | undefined): boolean {
+  return ACKNOWLEDGEMENTS.has((text ?? "").trim().replace(/[.!]+$/u, "").toLowerCase());
+}
 
 export const ORDER = {
   order_id: "ord_7Hk2",
@@ -190,6 +205,10 @@ export class ManzanitaAgent implements CompanyAgent {
     if (turn.opening) {
       // The user accepted the invitation: the company speaks first (§8.10).
       return [{ text: OPENING, persona: { id: "rosa", name: "Rosa" } }];
+    }
+    if (acknowledgementOnly(turn.text)) {
+      // A reply that could answer more than one open question answers none (guides).
+      return [{ text: WHICH_ONE }];
     }
     if (turn.accountId !== undefined && text.includes("damaged")) {
       // A person would like to talk with the user: an invitation, not a message.

@@ -672,3 +672,27 @@ async def test_the_company_publishes_its_logo_its_skills_and_a_conversation_reso
     assert (
         await world.conversations.start(endpoint, world.message("Hi"), session=session)
     ).conversation_id
+
+
+@pytest.mark.asyncio
+async def test_a_bare_acknowledgement_is_answered_with_a_question_and_acted_on_by_nothing() -> None:
+    """Explicit replies (guides): a short reply that could answer more than one open question
+    answers none; the company agent asks which is meant."""
+
+    from personal_agent_protocol.demo.manzanita import WHICH_ONE, acknowledgement_only
+
+    assert acknowledgement_only("Yes.") and acknowledgement_only(" go ahead ")
+    assert not acknowledgement_only("Yes, exchange it") and not acknowledgement_only(None)
+    world = World()
+    token = await signed_in(world)
+    session = world.session
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    page = await world.conversations.start(
+        endpoint, world.message("ok"), session=session, token=token, wait=0
+    )
+    answers = [
+        e.message for e in page.events if e.message is not None and e.message.role == "company"
+    ]
+    assert [m.text for m in answers] == [WHICH_ONE]
+    assert all(m.extensions is None or "operations" not in m.extensions for m in answers)
+    assert not any(e.type == "authorization" for e in page.events)

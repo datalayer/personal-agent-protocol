@@ -69,6 +69,14 @@ const sent = await operations.send((approval) => api.call("POST", url, { session
   return an operation for it.
 - Text from the company is never the user's approval, and in a conversation only
   a message's `extensions.operations.approval` approves, whatever its `text` says.
+- Make an answer or approval explicit about what it addresses, and when the
+  user's short reply, such as "done" or "yes", could answer more than one open
+  question (sign-in, an earlier question, a request for approval), treat it as
+  answering none and ask which is meant before acting: the upstream guides'
+  [Explicit replies and approvals](https://personalagentprotocol.org/docs/0.3/guides#both-replies).
+  The reference companies' agents follow it from their side: a bare
+  acknowledgement is answered with a question (`WHICH_ONE`), never acted on, and
+  the Operations example's agent is instructed the same way.
 - Save the request that returned the operation, and send exactly that. Don't
   have the model write it again.
 

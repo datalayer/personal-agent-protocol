@@ -67,6 +67,16 @@ conversation stays open, so the user can sign in again and continue it),
 signed in to another account `conversation_not_found`; another User ID or
 another agent is always `conversation_not_found`.
 
+## Explicit replies
+
+Both sides make an answer explicit about the question it addresses, and treat a
+short reply that could answer more than one open question as answering none,
+asking which is meant before acting (upstream guides, *Explicit replies and
+approvals*). The reference companies' agents answer a bare "yes", "ok" or
+"done" with a question and act on nothing; see
+[Operations](/guides/operations/#ask-the-user-then-send-the-same-request) for the
+personal agent's side.
+
 ## Direct Conversations (§8.10)
 
 `start_direct(endpoint, parent_id, message)` (`startDirect` in TypeScript)

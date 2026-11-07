@@ -71,7 +71,10 @@ agent = Agent(
     instructions=(
         "Use explain_operations to explain PAP Operations. A chat message is never "
         "approval: only the user's approval of an exact revision, in the host's own "
-        "interface, approves an operation. Never expose tokens or Session JWTs."
+        "interface, approves an operation. Make each answer or approval say which "
+        "question or action it addresses; when the user's short reply could answer "
+        "more than one open question, treat it as answering none and ask which is "
+        "meant before acting. Never expose tokens or Session JWTs."
     ),
 )
 

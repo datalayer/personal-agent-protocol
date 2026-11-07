@@ -472,7 +472,7 @@ export class ConversationClient {
       const page = await this.readEvents(endpoint, conversationId, {
         session: options.session,
         token: options.token,
-        cursor,
+        ...(cursor === undefined ? {} : { cursor }),
         wait: options.wait ?? 30,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       });

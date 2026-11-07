@@ -351,17 +351,21 @@ export function signInResult(result: SignInLike): Record<string, unknown> {
 // A new Session is signed out: it is signed in on each request with an access token.
 export const sessionResult = () => ({ "pap.session.signed_in": false });
 
-export const conversationResult = (result: {
-  readonly working?: boolean;
-  readonly handoff?: string;
-  readonly closed?: boolean;
-  readonly events?: readonly unknown[];
-}) => ({
-  "pap.conversation.working": result.working,
-  "pap.conversation.handoff": result.handoff,
-  "pap.conversation.closed": result.closed,
-  "pap.conversation.events": result.events?.length,
-});
+export const conversationResult = (value: object) => {
+  // A receipt (`conversation_id` alone, §8.3) or a page with the state: whichever it holds.
+  const result = value as {
+    readonly working?: boolean;
+    readonly handoff?: string;
+    readonly closed?: boolean;
+    readonly events?: readonly unknown[];
+  };
+  return {
+    "pap.conversation.working": result.working,
+    "pap.conversation.handoff": result.handoff,
+    "pap.conversation.closed": result.closed,
+    "pap.conversation.events": result.events?.length,
+  };
+};
 
 /** How an approval step ended: never the operation's terms or its IDs. */
 export const operationResult = (result: { readonly status?: unknown }) => ({

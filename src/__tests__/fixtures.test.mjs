@@ -36,7 +36,7 @@ const invalid = (code) => (error) => error.code === code || (code === undefined 
 
 test("discovery fixture round-trips and preserves extensions", () => {
   const document = parseDiscoveryDocument(fixture("discovery-valid.json"));
-  assert.equal(document.protocol_version, "0.3");
+  assert.equal(document.protocol_version, "0.4");
   assert.equal(document.apis[1].type, "mcp");
   assert.deepEqual(document.extensions.operations.map((entry) => entry.version), ["2"]);
   assert.equal(companyExtension(document, "operations", "2")?.version, "2");
@@ -45,7 +45,7 @@ test("discovery fixture round-trips and preserves extensions", () => {
 
 test("auth is optional: the issuer comes from the domain's protected resource metadata", () => {
   const document = parseDiscoveryDocument({
-    protocol_version: "0.3",
+    protocol_version: "0.4",
     organization: { name: "Example", domain: "example.com" },
     apis: [{ type: "openapi", url: "https://api.example.com/openapi.json", description: "Example" }],
   });

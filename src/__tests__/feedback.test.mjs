@@ -94,7 +94,7 @@ test("a report is task and description only", () => {
 });
 
 test("feedback is listed with an HTTPS endpoint", () => {
-  const base = { protocol_version: "0.3", organization: { name: "Example", domain: "example.com" }, web: {} };
+  const base = { protocol_version: "0.4", organization: { name: "Example", domain: "example.com" }, web: {} };
   const listed = parseDiscoveryDocument({ ...base, auth: { issuer: "https://example.com" }, feedback: { endpoint: "https://example.com/poppy/feedback" } });
   assert.equal(feedbackEndpoint(listed), "https://example.com/poppy/feedback");
   assert.equal(feedbackEndpoint(parseDiscoveryDocument(base)), undefined);

@@ -1,6 +1,6 @@
 {
   "suite": "operator",
-  "profile": "0.3",
+  "profile": "0.4",
   "description": "Operator signatures (spec 5.3, RFC 9421, Web Bot Auth draft 01): a personal agent that signs requests carrying the Session header, and a company that checks them. A SHOULD on the agent, and each company's choice, so the default world leaves checking off; in operator-signatures a company checks what it is offered, and in operator-signatures-required it serves verified requests alone, which is what proves a pairing verifies. Cases with a check are decided by the SDK alone.",
   "worlds": {
     "operator-signatures": {

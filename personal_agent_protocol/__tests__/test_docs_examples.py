@@ -777,7 +777,7 @@ def test_the_json_example_is_valid(key: str) -> None:
     else:
         DiscoveryDocument.model_validate(
             {
-                "protocol_version": "0.3",
+                "protocol_version": "0.4",
                 "organization": {"name": "Example", "domain": "example.com"},
                 "auth": {"issuer": "https://example.com", "scopes": {"a:read": "Read a"}},
                 "agent": {"protocols": [{"type": "poppy", "endpoint": "https://example.com/c"}]},

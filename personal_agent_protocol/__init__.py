@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Python SDK for Personal Agent Protocol 0.3, as published."""
+"""Python SDK for Personal Agent Protocol draft 0.4, as of upstream 46beb21."""
 
 from .__version__ import __version__
 from .accounts import (

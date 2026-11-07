@@ -14,9 +14,9 @@ holds all of them equal.
 
 from __future__ import annotations
 
-#: The Personal Agent Protocol version implemented: 0.3 as published.
-PROTOCOL_PROFILE = "0.3"
-#: The upstream specification revision implemented: the day 0.3 was published (commit 2289293).
-PROTOCOL_REVISION = "2026-11-04"
+#: The Personal Agent Protocol version implemented: draft 0.4, as of upstream commit 46beb21.
+PROTOCOL_PROFILE = "0.4"
+#: The upstream specification revision implemented: the date of commit 46beb21.
+PROTOCOL_REVISION = "2026-11-06"
 
 __all__ = ["PROTOCOL_PROFILE", "PROTOCOL_REVISION"]

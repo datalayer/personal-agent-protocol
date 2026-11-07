@@ -15,7 +15,7 @@ import { CompanyConfig } from "../../lib/server.js";
 
 const RESOURCE_METADATA = "/.well-known/oauth-protected-resource";
 const SIGNED_OUT = {
-  protocol_version: "0.3",
+  protocol_version: "0.4",
   organization: { name: "Example", domain: "Example.COM" },
   apis: [{ type: "openapi", url: "https://example.com/o.json", description: "Catalog" }],
   agent: { protocols: [{ type: "poppy", endpoint: "https://example.com/poppy" }] },

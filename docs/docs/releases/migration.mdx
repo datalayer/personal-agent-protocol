@@ -10,6 +10,43 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.31 → 0.32
+
+0.32.0 moves both SDKs and both reference companies from version 0.3 as published to
+**draft 0.4 as of upstream `46beb21`** (2026-11-06; served at `/docs/spec` until it is
+published). There is no compatibility with 0.3: every request with the Session header
+names its version in `Poppy-Version`, so an SDK or company at 0.31 and one at 0.32
+refuse each other (`version_unsupported`). Python spells the names below in
+`snake_case`, TypeScript in `camelCase`.
+
+| Change | What to do |
+| --- | --- |
+| `PROTOCOL_PROFILE` and `PROTOCOL_REVISION` | `0.4` and `2026-11-06`; fixtures and documents say `"protocol_version": "0.4"` |
+| Direct Sign-In is preferred (spec 4) | `DiscoveredCompany.preferred_sign_in` / `preferredSignIn(company)` and `sign_in_types` / `signInTypes`: use Direct Sign-In when the company offers it; the conformance runner does |
+| Several protocol versions (spec 3.4) | `DiscoveryDocument.supported_versions`; `discover` chooses the newest compatible version (`choose_protocol_version`, `chooseProtocolVersion`) and fetches its document; `PapSession.protocol_version` is sent in `Poppy-Version`; `version_unsupported` (`version_unsupported(response)`, `versionUnsupported`) means discover again and start a new Session. A company sets `CompanyConfig.protocol_versions` and `deprecated_versions` (`Deprecation` and `Sunset` headers) |
+| Extensions are per-version lists, declared per request (spec 3.3, 3.4) | `poppy.json`'s `extensions` maps each name to a list of `{version, ...}` entries (`document.extension(name, version)`, `companyExtension`); client metadata no longer lists extensions (`ClientMetadata.extensions` is gone, `AgentIdentity.supported_extensions` says what the agent implements); start a Session with `extensions=negotiate_extensions(...)` or `company=`, and they go in `Poppy-Extensions` (`format_extensions_header`, `parse_extensions_header`) |
+| Conversations across versions (spec 8.2) | A conversation records the versions it started in; `CompanyConfig.conversation_carry_over=False` refuses a message, handoff or cancel from other versions with `version_mismatch` (409), its `protocol_version` in the error's details |
+| A conversation's state in four fields (spec 8.6, 8.7) | `status` is gone: read `working`, `handoff`, `responder` and `closed` (`ConversationEventPage.state`, `conversationState`); a stream's `working` event (`WorkingChanged`); `read_until_done` / `readUntilDone` reads until `working` is false |
+| Requests accepted, then acted on (spec 8.3, 8.9, 8.12) | Every conversation POST carries a top-level `id`: `request_id` / `requestId`, defaulting to the message's `id`, which no longer goes in the message; `generate_request_id` / `generateRequestId` replace `generate_message_id`; a receipt without `wait` holds only `conversation_id`; `message_id_conflict` is now `request_id_conflict`; `cancel_handoff` / `cancelHandoff` (`POST {id}/handoff/cancel`); a close is accepted with 202. Company stores: the `message_id` record kind is now `request_id` (`RequestReceipt`) |
+| What a message took into account (spec 8.4) | `Message.as_of_request` on a company agent's message, `as_of_cursor` on one the agent wrote (`send(as_of_cursor=...)`, `asOfCursor`); `PapReplies` is version 5 |
+| The browser join scope and website flags (spec 3.1, 4.7, 6) | A signed-in join needs `poppy:browser-sign-in` (`BROWSER_SIGN_IN_SCOPE`): request it with the task's scopes, else `BrowserSessionError` `insufficient_scope`; `web.unscoped` and `web.disabled` (`browser_sign_in_unscoped`, `browsing_disabled`); a company sets `web_unscoped` / `web_disabled` |
+| A DPoP key per User ID (spec 4.5) | `DpopKeyCustody.key_for` / `forget` (`keyFor`) take `sub`; a sign-in or refresh at an issuer that lists ES256 names its User ID: `pairwise_user_id=` / `pairwiseUserId` on `DeviceSignInClient.begin`, `DirectSignInClient.begin`, `MediatedSignInClient.sign_in` and `RefreshTokenContext`, refused before any request without one. A CLI key file's DPoP keys are made again |
+| Sign-in's other changes (spec 3.2, 4.5, 4.7, 5.2) | Resource metadata whose `resource` isn't the URL it was derived from is treated as absent; `document.scope_descriptions(openapi)` / `scopeDescriptions` lets `auth.scopes` win; a company with `auth.disabled` that never issued a refresh token answers refresh and revocation unverified; the reference companies refuse a delegated key that signed for another User ID (`invalid_session`, a new `delegated_key` record kind) |
+| Operations (Operations 3, 5, 6) | `Approval.approved_at` and `input_type` (`ask_user(input_type=...)`, `inputType`), in `Poppy-Approval` and `_meta`; any Session of the same agent and User approves, an operation returned signed out only while signed out; a revision is the terms (else the `summary`) and `expires_at`; the approving request is compared by meaning |
+| The guides | `CompanyService.revoke_client` / `revokeClient`; `CompanyConfig.refresh_reuse_revokes` / `refreshReuseRevokes` (off by default) |
+
+The ledger (`protocol/requirements.yaml`) is at `46beb21`. Withdrawn: `PAP-8.7-01` (the
+conversation `status` it described is gone); `PAP-3.4-06` and `PAP-3.4-10` are not used:
+those statements are MAY or descriptive. Added: `PAP-3.4-01` to `-05`, `-07` to `-09`,
+`PAP-4-01`, `PAP-4-02`, `PAP-4.5-02`, `PAP-6-16` to `-19`, `PAP-8.3-02`, `PAP-8.4-04`,
+`PAP-8.4-05`, `PAP-8.9-01`, `PAP-8.12-01`, `OPS-6-04` to `-06`, and guide entries.
+Rewritten for 0.4: `OPS-2-01`, `PAP-3.1-01`, `PAP-3.3-02` to `-05`, `PAP-8.3-01`,
+`PAP-8.4-03`, `PAP-8.5-03`. The conformance case `conversations.message-id-conflict` is
+now `conversations.request-id-conflict`; new cases cover Direct Sign-In, supported
+versions, `Poppy-Version`, `Poppy-Extensions`, the browser scope and website flags,
+`handoff/cancel` and `as_of_request`. The vendored schemas are replaced whole at
+`46beb21`.
+
 ## 0.30 → 0.31
 
 0.31.0 moves both SDKs and both reference companies from draft 0.3 as of `ec16efa` to

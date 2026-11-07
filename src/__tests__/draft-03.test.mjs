@@ -258,7 +258,7 @@ test("the issuer lists the grants and scopes it offers", () => {
 
 test("scopes are the company's and described; poppy: is no longer reserved", () => {
   const document = {
-    protocol_version: "0.3",
+    protocol_version: "0.4",
     organization: { name: "Example", domain: "example.com" },
     auth: { issuer: "https://auth.example.com", scopes: { "poppy:read": "Read" } },
     web: {},
@@ -272,7 +272,7 @@ test("an unknown changes hint is read as irreversible", () => {
   assert.equal(effectiveChanges({ changes: "permanent", personal_data: false }), "irreversible");
   assert.equal(effectiveChanges({ changes: "none", personal_data: true }), "none");
   const document = (hint) => ({
-    protocol_version: "0.3",
+    protocol_version: "0.4",
     organization: { name: "Example", domain: "example.com" },
     auth: { issuer: "https://auth.example.com", scopes: { a: "A" }, scope_hints: { a: hint } },
     web: {},

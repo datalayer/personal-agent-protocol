@@ -24,7 +24,7 @@ from personal_agent_protocol.reactor import build_pap_reactor
 
 RESOURCE_METADATA = "/.well-known/oauth-protected-resource"
 SIGNED_OUT: dict[str, Any] = {
-    "protocol_version": "0.3",
+    "protocol_version": "0.4",
     "organization": {"name": "Example", "domain": "Example.COM"},
     "apis": [{"type": "openapi", "url": "https://example.com/o.json", "description": "Catalog"}],
     "agent": {"protocols": [{"type": "poppy", "endpoint": "https://example.com/poppy"}]},

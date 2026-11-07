@@ -6,21 +6,24 @@ title: Compatibility and conformance report
 
 # Compatibility and conformance report
 
-SDK version **0.31.0**, PAP profile **0.3** (as published 2026-11-04), Operations extension **v2**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
+SDK version **0.32.0**, PAP profile **0.4** (the draft as of 2026-11-06), Operations extension **v2**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
 
 ## Pairings
 
 | Personal agent | Company | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: |
-| Python | Python | 162 | 0 | 0 |
-| Python | TypeScript | 162 | 0 | 0 |
-| TypeScript | Python | 162 | 0 | 0 |
-| TypeScript | TypeScript | 162 | 0 | 0 |
+| Python | Python | 169 | 0 | 0 |
+| Python | TypeScript | 169 | 0 | 0 |
+| TypeScript | Python | 169 | 0 | 0 |
+| TypeScript | TypeScript | 169 | 0 | 0 |
 
 ## Protocol
 
 | Case | Kind | Requirements | Python → Python | Python → TypeScript | TypeScript → Python | TypeScript → TypeScript |
 | --- | --- | --- | --- | --- | --- | --- |
+| `protocol.version-header-required` | negative | PAP-3.4-08, PAP-3.4-09, GUIDE-co-versions-03 | pass | pass | pass | pass |
+| `protocol.version-unserved` | negative | PAP-3.4-08, PAP-3.4-09 | pass | pass | pass | pass |
+| `protocol.supported-versions-published` | positive | PAP-3.4-01, PAP-3.4-04, GUIDE-co-versions-01 | pass | pass | pass | pass |
 | `protocol.extension-required-company` | negative | OPS-2-01, PAP-3.3-03 | pass | pass | pass | pass |
 | `protocol.feedback-report` | positive | PAP-9.3-01, PAP-9.3-06 | pass | pass | pass | pass |
 
@@ -73,6 +76,7 @@ SDK version **0.31.0**, PAP profile **0.3** (as published 2026-11-04), Operation
 | `lifecycle.stale-resource-metadata` | recovery | PAP-7-02 | pass | pass | pass | pass |
 | `lifecycle.parallel-sessions` | positive | PAP-5.1-01 | pass | pass | pass | pass |
 | `lifecycle.sign-in-scopes` | positive | PAP-4.7-04, PAP-4.7-05 | pass | pass | pass | pass |
+| `lifecycle.direct-sign-in-offered` | positive | PAP-4-01, GUIDE-co-device-02 | pass | pass | pass | pass |
 | `lifecycle.unknown-scope-refused` | negative | PAP-4.7-05 | pass | pass | pass | pass |
 | `lifecycle.refresh-token-serves-any-session` | positive |  | pass | pass | pass | pass |
 | `lifecycle.rotated-token` | negative | PAP-4.4-01 | pass | pass | pass | pass |
@@ -88,16 +92,17 @@ SDK version **0.31.0**, PAP profile **0.3** (as published 2026-11-04), Operation
 | `lifecycle.mcp-token-for-its-url` | positive | PAP-7-03, PAP-7-02, GUIDE-pa-tokens-01 | pass | pass | pass | pass |
 | `lifecycle.mcp-token-only-at-mcp` | negative | PAP-7-05, PAP-5.3-09 | pass | pass | pass | pass |
 | `lifecycle.mcp-sign-out-takes-effect` | positive | GUIDE-co-lifetimes-02, PAP-7-02 | pass | pass | pass | pass |
-| `lifecycle.browser-joins-session` | positive | PAP-6-01, PAP-6-03, GUIDE-co-browser-01, PAP-6-11, PAP-6-12, GUIDE-co-browser-02, PAP-6-05, PAP-6-06 | pass | pass | pass | pass |
+| `lifecycle.browser-joins-session` | positive | GUIDE-co-browser-01, GUIDE-co-browser-02, PAP-6-01, PAP-6-03, PAP-6-05, PAP-6-06, PAP-6-11, PAP-6-12, PAP-6-16 | pass | pass | pass | pass |
+| `lifecycle.browser-sign-in-scope` | negative | PAP-6-16, PAP-6-17 | pass | pass | pass | pass |
 | `lifecycle.browser-join-refused` | negative | PAP-6-06, PAP-6-07, PAP-6-08, PAP-6-09, PAP-6-10, PAP-6-03 | pass | pass | pass | pass |
 
 ## Conversations
 
 | Case | Kind | Requirements | Python → Python | Python → TypeScript | TypeScript → Python | TypeScript → TypeScript |
 | --- | --- | --- | --- | --- | --- | --- |
-| `conversations.start-and-reply` | positive | PAP-8.7-01, PAP-8.7-02, PAP-8.5-03, PAP-5.2-01 | pass | pass | pass | pass |
-| `conversations.retry-replays` | positive | PAP-8.3-01 | pass | pass | pass | pass |
-| `conversations.message-id-conflict` | negative | PAP-8.3-01 | pass | pass | pass | pass |
+| `conversations.start-and-reply` | positive | PAP-8.7-02, PAP-8.5-03, PAP-5.2-01 | pass | pass | pass | pass |
+| `conversations.retry-replays` | positive | PAP-8.3-01, PAP-8.3-02 | pass | pass | pass | pass |
+| `conversations.request-id-conflict` | negative | PAP-8.3-01, PAP-8.3-02 | pass | pass | pass | pass |
 | `conversations.invalid-cursor` | negative | PAP-8.5-02 | pass | pass | pass | pass |
 | `conversations.cursor-expired-recovery` | recovery | GUIDE-pa-conv-02 | pass | pass | pass | pass |
 | `conversations.has-more-drained` | positive | PAP-8.5-03 | pass | pass | pass | pass |
@@ -106,11 +111,13 @@ SDK version **0.31.0**, PAP profile **0.3** (as published 2026-11-04), Operation
 | `conversations.sse-reconnect` | recovery | GUIDE-pa-conv-03 | pass | pass | pass | pass |
 | `conversations.text-delta-not-actionable` | positive | GUIDE-pa-conv-03 | pass | pass | pass | pass |
 | `conversations.attribution` | positive | PAP-8.8-01, PAP-8.7-02 | pass | pass | pass | pass |
-| `conversations.handoff` | positive | PAP-8.7-01 | pass | pass | pass | pass |
+| `conversations.as-of-request` | positive | PAP-8.4-04, PAP-8.4-05, GUIDE-co-conv-06 | pass | pass | pass | pass |
+| `conversations.handoff` | positive | GUIDE-pa-conv-05, GUIDE-co-conv-05 | pass | pass | pass | pass |
+| `conversations.handoff-cancel` | positive | PAP-8.9-01, GUIDE-co-conv-07 | pass | pass | pass | pass |
 | `conversations.direct-conversation` | positive | PAP-8.10-01 | pass | pass | pass | pass |
 | `conversations.direct-of-direct-refused` | negative | PAP-8.10-01 | pass | pass | pass | pass |
 | `conversations.authorization-then-same-conversation` | positive | GUIDE-co-conv-03 | pass | pass | pass | pass |
-| `conversations.closed` | negative | PAP-8.7-01 | pass | pass | pass | pass |
+| `conversations.closed` | negative | PAP-8.12-01, GUIDE-pa-conv-05 | pass | pass | pass | pass |
 | `conversations.not-found-indistinguishable` | negative | PAP-8.2-01 | pass | pass | pass | pass |
 | `conversations.signed-out-on-account-conversation` | negative | PAP-8.2-01 | pass | pass | pass | pass |
 
@@ -205,7 +212,7 @@ SDK version **0.31.0**, PAP profile **0.3** (as published 2026-11-04), Operation
 
 ## Decided by each SDK alone
 
-66 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
+79 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
 
 | Case | Kind | Check | SDKs |
 | --- | --- | --- | --- |
@@ -249,9 +256,22 @@ SDK version **0.31.0**, PAP profile **0.3** (as published 2026-11-04), Operation
 | `protocol.redirect-ends-with-a-query` | negative | discovery | python, typescript |
 | `protocol.organization-domain-redirect-www` | positive | discovery | python, typescript |
 | `protocol.organization-domain-case-insensitive` | positive | discovery | python, typescript |
+| `protocol.supported-versions-newest-compatible` | positive | discovery | python, typescript |
+| `protocol.no-compatible-version` | negative | discovery | python, typescript |
+| `protocol.supported-versions-other-host` | negative | discovery | python, typescript |
+| `protocol.supported-versions-redirect` | negative | discovery | python, typescript |
+| `protocol.supported-versions-version-mismatch` | negative | discovery | python, typescript |
+| `protocol.supported-versions-lists-more` | negative | discovery | python, typescript |
+| `protocol.supported-versions-other-issuer` | negative | discovery | python, typescript |
+| `protocol.web-disabled` | positive | discovery_document | python, typescript |
+| `protocol.web-disabled-with-endpoint` | negative | discovery_document | python, typescript |
+| `protocol.web-disabled-without-interfaces` | negative | discovery_document | python, typescript |
+| `protocol.web-unscoped` | positive | discovery_document | python, typescript |
+| `protocol.web-unscoped-without-endpoint` | negative | discovery_document | python, typescript |
 | `protocol.feedback-needs-no-auth` | positive | discovery | python, typescript |
 | `protocol.feedback-endpoint-https` | negative | discovery_document | python, typescript |
 | `protocol.feedback-endpoint-listed` | positive | discovery_document | python, typescript |
+| `protocol.extensions-header` | positive | extensions_header | python, typescript |
 | `security.duplicate-json-members` | negative | strict_json | python, typescript |
 | `security.ssrf-loopback` | negative | url_safety | python, typescript |
 | `security.ssrf-private` | negative | url_safety | python, typescript |

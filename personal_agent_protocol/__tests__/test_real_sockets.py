@@ -116,7 +116,7 @@ async def test_metadata_connects_to_the_approved_address() -> None:
     import uvicorn
 
     document = {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {"name": "Pinned", "domain": "pinned.example"},
         "web": {},
     }

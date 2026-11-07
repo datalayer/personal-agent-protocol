@@ -1,6 +1,6 @@
 {
   "suite": "security",
-  "profile": "0.3",
+  "profile": "0.4",
   "description": "Duplicate JSON members, SSRF, redirects, oversized metadata, JOSE algorithm confusion, audiences, clock skew, replay, delegations, and Session JWT mismatches.",
   "cases": [
     {
@@ -223,7 +223,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -298,7 +298,7 @@
             "status": 200,
             "padding_bytes": 102401,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -332,7 +332,7 @@
               "interval_seconds": 0.05
             },
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"

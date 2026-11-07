@@ -1,6 +1,6 @@
 {
   "suite": "protocol",
-  "profile": "0.3",
+  "profile": "0.4",
   "description": "Protocol versions, unknown fields and types, extensions, and extension_required.",
   "cases": [
     {
@@ -33,7 +33,7 @@
       "check": "discovery_document",
       "description": "auth.scopes is optional: a document with an auth that describes no scope is used (§3.1, §4.7).",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -62,7 +62,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -109,7 +109,7 @@
       "check": "discovery_document",
       "description": "A poppy entry's access is session by default, or signed_in; a value the SDK doesn't know is an absent hint, and another protocol's access says nothing (§3.2).",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -202,7 +202,7 @@
       ],
       "check": "discovery_document",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com",
@@ -291,7 +291,7 @@
       ],
       "check": "discovery_document",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -328,7 +328,7 @@
       ],
       "check": "discovery_document",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -662,7 +662,7 @@
           "https://example.co.uk/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example UK",
                 "domain": "example.co.uk"
@@ -717,7 +717,7 @@
           "https://example.fr/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example FR",
                 "domain": "example.fr"
@@ -771,7 +771,7 @@
           "https://example.fr/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example FR",
                 "domain": "example.fr"
@@ -826,7 +826,7 @@
           "https://example.fr/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example FR",
                 "domain": "example.fr"
@@ -881,7 +881,7 @@
           "https://example.fr/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example FR",
                 "domain": "example.fr"
@@ -936,7 +936,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -991,7 +991,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1051,7 +1051,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1107,7 +1107,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1163,7 +1163,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1219,7 +1219,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1275,7 +1275,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1330,7 +1330,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1359,7 +1359,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1415,7 +1415,7 @@
           "https://shop-a.example/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Shop A",
                 "domain": "shop-a.example"
@@ -1469,7 +1469,7 @@
           "https://www.example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1505,7 +1505,7 @@
           "https://host.provider.example/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1540,7 +1540,7 @@
           "https://example.com/uploads/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1575,7 +1575,7 @@
           "https://example.com/.well-known/poppy.json?v=2": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1612,7 +1612,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1642,7 +1642,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "Example.COM"
@@ -1674,7 +1674,7 @@
             "json": {
               "protocol_version": "0.9",
               "supported_versions": {
-                "0.3": "https://example.com/poppy/0.3.json",
+                "0.4": "https://example.com/poppy/0.4.json",
                 "0.1": "https://example.com/poppy/0.1.json"
               },
               "organization": {
@@ -1684,10 +1684,10 @@
               "web": {}
             }
           },
-          "https://example.com/poppy/0.3.json": {
+          "https://example.com/poppy/0.4.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1705,7 +1705,7 @@
       },
       "expect": {
         "issuer": null,
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization_domain": "example.com"
       }
     },
@@ -1765,7 +1765,7 @@
             "json": {
               "protocol_version": "0.9",
               "supported_versions": {
-                "0.3": "https://cdn.example.net/poppy/0.3.json"
+                "0.4": "https://cdn.example.net/poppy/0.4.json"
               },
               "organization": {
                 "name": "Example",
@@ -1774,10 +1774,10 @@
               "web": {}
             }
           },
-          "https://cdn.example.net/poppy/0.3.json": {
+          "https://cdn.example.net/poppy/0.4.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1814,7 +1814,7 @@
             "json": {
               "protocol_version": "0.9",
               "supported_versions": {
-                "0.3": "https://example.com/poppy/0.3.json"
+                "0.4": "https://example.com/poppy/0.4.json"
               },
               "organization": {
                 "name": "Example",
@@ -1823,16 +1823,16 @@
               "web": {}
             }
           },
-          "https://example.com/poppy/0.3.json": {
+          "https://example.com/poppy/0.4.json": {
             "status": 302,
             "headers": {
-              "location": "https://example.com/uploads/0.3.json"
+              "location": "https://example.com/uploads/0.4.json"
             }
           },
-          "https://example.com/uploads/0.3.json": {
+          "https://example.com/uploads/0.4.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1869,7 +1869,7 @@
             "json": {
               "protocol_version": "0.9",
               "supported_versions": {
-                "0.3": "https://example.com/poppy/0.3.json"
+                "0.4": "https://example.com/poppy/0.4.json"
               },
               "organization": {
                 "name": "Example",
@@ -1878,7 +1878,7 @@
               "web": {}
             }
           },
-          "https://example.com/poppy/0.3.json": {
+          "https://example.com/poppy/0.4.json": {
             "status": 200,
             "json": {
               "protocol_version": "0.9",
@@ -1918,7 +1918,7 @@
             "json": {
               "protocol_version": "0.9",
               "supported_versions": {
-                "0.3": "https://example.com/poppy/0.3.json"
+                "0.4": "https://example.com/poppy/0.4.json"
               },
               "organization": {
                 "name": "Example",
@@ -1927,10 +1927,10 @@
               "web": {}
             }
           },
-          "https://example.com/poppy/0.3.json": {
+          "https://example.com/poppy/0.4.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -1970,7 +1970,7 @@
             "json": {
               "protocol_version": "0.9",
               "supported_versions": {
-                "0.3": "https://example.com/poppy/0.3.json"
+                "0.4": "https://example.com/poppy/0.4.json"
               },
               "organization": {
                 "name": "Example",
@@ -1982,10 +1982,10 @@
               }
             }
           },
-          "https://example.com/poppy/0.3.json": {
+          "https://example.com/poppy/0.4.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -2056,7 +2056,7 @@
       "check": "discovery_document",
       "description": "web.disabled asks Personal Agents not to browse: the Company lists its agent or APIs and no browser_session_endpoint (§6).",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -2090,7 +2090,7 @@
       "check": "discovery_document",
       "description": "A Company that sets web.disabled MUST NOT list browser_session_endpoint (§6).",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -2122,7 +2122,7 @@
       "check": "discovery_document",
       "description": "A Company that sets web.disabled MUST list agent or apis (§6).",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -2147,7 +2147,7 @@
       "check": "discovery_document",
       "description": "web.unscoped says poppy:browser-sign-in gives the account's full access on the website; the scope is requested only from a Company that lists browser_session_endpoint (§6).",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -2175,7 +2175,7 @@
       "check": "discovery_document",
       "description": "A Company that sets web.unscoped MUST list browser_session_endpoint (§6).",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -2213,7 +2213,7 @@
           "https://example.com/.well-known/poppy.json": {
             "status": 200,
             "json": {
-              "protocol_version": "0.3",
+              "protocol_version": "0.4",
               "organization": {
                 "name": "Example",
                 "domain": "example.com"
@@ -2242,7 +2242,7 @@
       "check": "discovery_document",
       "description": "Every URL the protocol defines is HTTPS, the feedback endpoint included (§3, §3.1).",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"
@@ -2269,7 +2269,7 @@
       "check": "discovery_document",
       "description": "A company that wants feedback lists feedback.endpoint (§8).",
       "input": {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {
           "name": "Example",
           "domain": "example.com"

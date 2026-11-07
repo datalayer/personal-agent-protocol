@@ -1,6 +1,6 @@
 {
   "suite": "conversations",
-  "profile": "0.3",
+  "profile": "0.4",
   "description": "Message IDs, cursors, has_more, SSE, text-delta, attribution, handoff, Direct Conversations, closure, and errors.",
   "cases": [
     {

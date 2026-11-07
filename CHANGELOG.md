@@ -6,7 +6,39 @@
 
 # Changelog
 
-## 0.31.0 (unreleased)
+## 0.32.0 (unreleased)
+
+Draft 0.4 as of upstream `46beb21` (2026-11-06) in both SDKs and both reference
+companies, with no compatibility with 0.3 as published: see the
+[0.31 → 0.32 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#031--032).
+
+- **Breaking on the wire:** every request with the Session header names its
+  protocol version in `Poppy-Version` (`version_unsupported` otherwise) and the
+  extensions it uses in `Poppy-Extensions`; client metadata lists no extensions;
+  every conversation POST carries a request `id`, accepted then acted on
+  (`request_id_conflict`, a 202 close, `handoff/cancel`); a conversation's state
+  is `working`, `handoff`, `responder` and `closed`, and a stream sends `working`;
+  a signed-in browser join needs `poppy:browser-sign-in`.
+- **Versions and extensions:** `supported_versions` and the newest compatible
+  version's document; `Deprecation` and `Sunset`; extensions as per-version lists;
+  conversations across versions (`version_mismatch`, `conversation_carry_over`).
+- **Sign-in:** Direct Sign-In preferred (`preferred_sign_in`); a DPoP key per User
+  ID (`pairwise_user_id` on sign-ins and refreshes); resource metadata only for the
+  URL it was derived from; `auth.scopes` over an OpenAPI description
+  (`scope_descriptions`); refresh and revocation unverified while no refresh token
+  was issued under `auth.disabled`; a delegated key refused for a second User ID.
+- **Website:** `web.unscoped` and `web.disabled` (`web_unscoped`, `web_disabled`).
+- **Messages:** `as_of_request` and `as_of_cursor`; `PapReplies` version 5.
+- **Operations:** `approved_at` and `input_type`; any Session of the agent and User
+  approves; revisions by terms; requests compared by meaning.
+- **Guides:** `revoke_client` and `refresh_reuse_revokes` in the reference
+  companies; key rotation, refresh token custody, operations without storage, and
+  feedback at `feedback.endpoint`.
+- **Ledger and reports:** `protocol/requirements.yaml` at `46beb21`, the vendored
+  schemas replaced at `46beb21`, the coverage pages and the conformance report
+  regenerated.
+
+## 0.31.0 (2026-11-07)
 
 Version 0.3 as published (upstream `2289293`, 2026-11-04) in both SDKs and both
 reference companies, with no compatibility with draft 0.3 as of `ec16efa`: see the

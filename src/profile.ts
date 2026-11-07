@@ -9,7 +9,7 @@
 // specification page it was implemented from; the Operations extension version is
 // OPERATIONS_VERSION (operations.ts). A test holds both SDKs and the docs equal.
 
-/** The Personal Agent Protocol version implemented: 0.3 as published. */
-export const PROTOCOL_PROFILE = "0.3";
-/** The upstream specification revision implemented: the day 0.3 was published (commit 2289293). */
-export const PROTOCOL_REVISION = "2026-11-04";
+/** The Personal Agent Protocol version implemented: draft 0.4, as of upstream commit 46beb21. */
+export const PROTOCOL_PROFILE = "0.4";
+/** The upstream specification revision implemented: the date of commit 46beb21. */
+export const PROTOCOL_REVISION = "2026-11-06";

@@ -253,7 +253,7 @@ def test_the_issuer_lists_the_grants_and_scopes_it_offers() -> None:
 
 def test_scopes_are_the_companys_described_and_never_poppy() -> None:
     document = {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {"name": "Example", "domain": "example.com"},
         "auth": {"issuer": "https://auth.example.com", "scopes": {"poppy:read": "Read"}},
         "web": {},

@@ -85,7 +85,7 @@ const sent = await operations.send((approval) => api.call("POST", url, { session
   user's short reply, such as "done" or "yes", could answer more than one open
   question (sign-in, an earlier question, a request for approval), treat it as
   answering none and ask which is meant before acting: the upstream guides'
-  [Explicit replies and approvals](https://personalagentprotocol.org/docs/0.3/guides#both-replies).
+  [Explicit replies and approvals](https://personalagentprotocol.org/docs/guides#both-replies).
   The reference companies' agents follow it from their side: a bare
   acknowledgement is answered with a question (`WHICH_ONE`), never acted on, and
   the Operations example's agent is instructed the same way.
@@ -242,4 +242,4 @@ against one committed example, `protocol/fixtures/pap-confirm-display.json`.
 - Tokens stay host-only; errors carry codes only.
 
 See the runnable [Operations example](/examples/operations/) and the upstream
-[Operations extension](https://personalagentprotocol.org/docs/0.3/extensions/operations).
+[Operations extension](https://personalagentprotocol.org/docs/extensions/operations).

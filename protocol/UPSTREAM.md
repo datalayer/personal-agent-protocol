@@ -1,22 +1,42 @@
 # Upstream protocol snapshot
 
 - Protocol: Personal Agent Protocol (Poppy)
-- Profile implemented: 0.3 as published
-- Upstream page revision: 2026-11-04
-- Upstream source: commit 2289293 of https://github.com/personal-agent-protocol/personal-agent-protocol
-- Last reviewed by this repository: 2026-11-07
-- Specification: https://personalagentprotocol.org/docs/0.3/spec
-- Guides: https://personalagentprotocol.org/docs/0.3/guides
+- Profile implemented: draft 0.4 as of 46beb21
+- Upstream page revision: 2026-11-06
+- Upstream source: commit 46beb21 of https://github.com/personal-agent-protocol/personal-agent-protocol
+- Last reviewed by this repository: 2026-11-07 (through 51fb46e, a Roadmap page that changes no requirement)
+- Specification: https://personalagentprotocol.org/docs/spec
+- Guides: https://personalagentprotocol.org/docs/guides
 - Operations extension: version 2
 - Mediated Sign-In extension: version 1
-- Mediated Sign-In extension page: https://personalagentprotocol.org/docs/0.3/extensions/mediated-sign-in
-- Operations extension page: https://personalagentprotocol.org/docs/0.3/extensions/operations
+- Mediated Sign-In extension page: https://personalagentprotocol.org/docs/extensions/mediated-sign-in
+- Operations extension page: https://personalagentprotocol.org/docs/extensions/operations
+
+Draft 0.4 is being written upstream at /docs/spec; it is not published yet, so
+this repository follows it as of a named commit, as it followed draft 0.3 in
+0.25 to 0.27, each release naming the commit. SDK 0.32 implements it as of
+46beb21 (2026-11-06), with no compatibility with 0.3 as published: Direct
+Sign-In preferred; several protocol versions (`supported_versions`,
+`Poppy-Version`, `version_unsupported`, `Deprecation` and `Sunset`); extensions
+as per-version lists in `poppy.json`, declared per request in
+`Poppy-Extensions` and no longer in client metadata; conversations across
+versions (`version_mismatch`); the browser join scope `poppy:browser-sign-in`,
+`web.unscoped` and `web.disabled`; a conversation's state in four fields
+(`working`, `handoff`, `responder`, `closed`) and the `working` stream event;
+every conversation request with its own `id`, accepted then acted on, with
+`request_id_conflict`, `handoff/cancel` and a 202 close; `as_of_request` and
+`as_of_cursor`; sign-in's minor changes (auth.disabled for any Company with an
+issuer, refresh and revocation unverified when no refresh token was issued, a
+DPoP key per User ID, resource metadata only for the URL it was derived from,
+`auth.scopes` over an OpenAPI description, a delegated key refused for a second
+User ID); Operations' minor changes (`approved_at` and `input_type`, revisions
+by terms, any Session of the agent and User approving, requests compared by
+meaning); and the guides' changes. The changes are in the CHANGELOG and the
+0.31 → 0.32 migration page.
 
 Version 0.3 was published upstream on 2026-11-04 (commit 2289293, "0.3 is
-published and won't change"): the specification is frozen at /docs/0.3/spec,
-and draft 0.4 is being written at /docs/spec. This repository implements 0.3 as
-published, reviewed on 2026-11-07; every later upstream commit is reviewed
-before a release names it. 3e9bada rewrote 0.3, and the SDKs keep no
+published and won't change"): the specification is frozen at /docs/0.3/spec.
+SDK 0.31 implements 0.3 as published. 3e9bada rewrote 0.3, and the SDKs keep no
 compatibility with the a95b757 shape 0.27 implements. The changes, each in the
 CHANGELOG and the 0.27 → 0.28 migration page: Sessions are separate from OAuth,
 with a `Poppy-Session` JWT per request named by a random `sid`, signed with
@@ -61,8 +81,9 @@ Upstream is a draft. Changes are reviewed and released as explicit protocol
 profiles; generated code must never change from an unattended documentation
 fetch. Draft 0.1 stays readable, frozen, at
 https://personalagentprotocol.org/docs/0.1/spec; draft 0.2 is frozen at
-https://personalagentprotocol.org/docs/0.2/spec. This repository implements
-0.3 only and uses no earlier document.
+https://personalagentprotocol.org/docs/0.2/spec, and 0.3 at
+https://personalagentprotocol.org/docs/0.3/spec. This repository implements
+draft 0.4 only and uses no earlier document.
 
 ## Vendored JSON Schemas
 

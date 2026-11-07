@@ -10,7 +10,7 @@ signs and verifies a Session JWT, rejects its replay, and exposes only boolean
 policy evidence to the model. It is the reference example for the host/model
 boundary described below.
 
-Both SDKs implement the asymmetric cryptographic operations of draft 0.3:
+Both SDKs implement the asymmetric cryptographic operations of draft 0.4:
 
 - `JoseSigner` signs client assertions and delegations with a key from
   `jwks_uri`, with ES256 or PS384. Its `purpose` sets the header's `typ`: `JWT`
@@ -90,7 +90,7 @@ client assertion names, and can't recognize a delegation it signed when a compan
 shows it. `RsaBlindSigningKey` is a reference holder, with an RSA key of at least
 2048 bits (3072 suggested).
 
-The privacy has a price, which [spec 10.7](https://personalagentprotocol.org/docs/0.3/spec#delegated-key-security)
+The privacy has a price, which [spec 10.7](https://personalagentprotocol.org/docs/spec#delegated-key-security)
 states and a host has to accept before it turns this on:
 
 - **The signature stops meaning approval.** A key that signs blindly signs

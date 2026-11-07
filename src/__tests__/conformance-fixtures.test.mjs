@@ -119,7 +119,7 @@ const CHECKS = {
   },
 
   extension_negotiation(given, expect) {
-    const document = (extensions) => parseDiscoveryDocument({ protocol_version: "0.3", organization: { name: "E", domain: "example.com" }, web: {}, extensions });
+    const document = (extensions) => parseDiscoveryDocument({ protocol_version: "0.4", organization: { name: "E", domain: "example.com" }, web: {}, extensions });
     const negotiated = negotiateExtensions(document(given.company).extensions);
     assert.deepEqual(negotiated, expect.negotiated);
     assert.equal(formatExtensionsHeader(negotiated), expect.declared ?? undefined);
@@ -139,7 +139,7 @@ const CHECKS = {
     assert.deepEqual(kinds.plain.sort(), expect.plain);
     assert.deepEqual(kinds.invalid.sort(), [...expect.invalid].sort());
     const preserved = parseDiscoveryDocument({
-      protocol_version: "0.3",
+      protocol_version: "0.4",
       organization: { name: "E", domain: "example.com" },
       web: {},
       extensions: Object.fromEntries(Object.entries(given).filter(([name]) => extensionNameKind(name) !== "invalid")),

@@ -1,6 +1,6 @@
 {
   "suite": "dpop",
-  "profile": "0.3",
+  "profile": "0.4",
   "description": "DPoP (spec 4.5, RFC 9449): a company that binds its access tokens, and a personal agent that proves. Cases with a world run against the reference company configured as that world says, in every language pairing; the default world stays Bearer, so the pairings cover both. Cases with a check are decided by the SDK alone.",
   "worlds": {
     "dpop-binding": {

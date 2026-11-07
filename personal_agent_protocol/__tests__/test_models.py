@@ -25,7 +25,7 @@ def test_discovery_fixture_round_trips_and_preserves_extensions() -> None:
     source = json.loads((FIXTURES / "discovery-valid.json").read_text())
     document = DiscoveryDocument.model_validate(source)
 
-    assert document.protocol_version == "0.3"
+    assert document.protocol_version == "0.4"
     assert document.apis[1].type == "mcp"
     assert [entry.version for entry in document.extensions["operations"]] == ["2"]
     assert document.extension("operations", "2") is not None
@@ -41,7 +41,7 @@ def test_discovery_needs_an_issuer_for_an_api_not_auth() -> None:
 
     document = DiscoveryDocument.model_validate(
         {
-            "protocol_version": "0.3",
+            "protocol_version": "0.4",
             "organization": {"name": "Example", "domain": "example.com"},
             "apis": [
                 {
@@ -55,7 +55,7 @@ def test_discovery_needs_an_issuer_for_an_api_not_auth() -> None:
     assert document.auth is None and not document.needs_issuer
     website = DiscoveryDocument.model_validate(
         {
-            "protocol_version": "0.3",
+            "protocol_version": "0.4",
             "organization": {"name": "Example", "domain": "example.com"},
             "web": {},
         }

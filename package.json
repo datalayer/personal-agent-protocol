@@ -1,7 +1,7 @@
 {
   "name": "@datalayer/personal-agent-protocol",
-  "version": "0.31.0",
-  "description": "TypeScript SDK for Personal Agent Protocol 0.3 (2026-11-04) and its Operations extension v2",
+  "version": "0.32.0",
+  "description": "TypeScript SDK for Personal Agent Protocol 0.4 (2026-11-06) and its Operations extension v2",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/datalayer/personal-agent-protocol.git"

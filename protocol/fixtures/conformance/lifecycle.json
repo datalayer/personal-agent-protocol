@@ -1,6 +1,6 @@
 {
   "suite": "lifecycle",
-  "profile": "0.3",
+  "profile": "0.4",
   "description": "Parallel Sessions, renewal, account binding, rotation, narrowing, and sign-out.",
   "cases": [
     {

@@ -55,7 +55,7 @@ def company(
     extension: dict[str, object] | None = EXTENSION, grants: tuple[str, ...] = (MEDIATED_GRANT,)
 ) -> DiscoveredCompany:
     document: dict[str, object] = {
-        "protocol_version": "0.3",
+        "protocol_version": "0.4",
         "organization": {"name": "Shop", "domain": "shop.example"},
         "agent": AGENT,
     }
@@ -306,7 +306,7 @@ def test_a_company_without_the_grant_offers_no_mediated_sign_in() -> None:
 def test_the_old_auth_mediated_offers_nothing() -> None:
     document = DiscoveryDocument.model_validate(
         {
-            "protocol_version": "0.3",
+            "protocol_version": "0.4",
             "organization": {"name": "Shop", "domain": "shop.example"},
             "agent": AGENT,
             "auth": {

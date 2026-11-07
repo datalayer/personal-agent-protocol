@@ -359,7 +359,7 @@ def test_direct_and_device_may_ask_for_a_scope_absent_from_scopes_supported() ->
 
     document = DiscoveryDocument.model_validate(
         {
-            "protocol_version": "0.3",
+            "protocol_version": "0.4",
             "organization": {"name": "Example", "domain": "example.com"},
             "web": {},
             "extensions": {

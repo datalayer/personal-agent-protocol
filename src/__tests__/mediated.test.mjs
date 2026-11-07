@@ -46,7 +46,7 @@ function company(extension = EXTENSION, grants = [MEDIATED_GRANT], more = {}) {
   return {
     discoveryUrl: "https://shop.example/.well-known/poppy.json",
     document: parseDiscoveryDocument({
-      protocol_version: "0.3",
+      protocol_version: "0.4",
       organization: { name: "Shop", domain: "shop.example" },
       agent: AGENT,
       ...(extension === null ? {} : { extensions: { [MEDIATED_EXTENSION]: [extension] } }),

@@ -1,6 +1,6 @@
 {
   "suite": "no-issuer",
-  "profile": "0.3",
+  "profile": "0.4",
   "description": "A Company with no OAuth issuer (spec 3.2): signed-out Sessions, its identifier its HTTPS domain, and no sign-in. The company cases run against the reference company configured as the world says, in every language pairing. An error is never read as no issuer: the no-fallback cases change one discovery answer and the discovery stops.",
   "worlds": {
     "no-issuer": {

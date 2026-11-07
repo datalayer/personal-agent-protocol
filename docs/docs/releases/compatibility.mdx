@@ -4,18 +4,18 @@ title: Compatibility
 
 # Compatibility
 
-This page is versioned with the SDK: it describes **SDK 0.31.0**.
+This page is versioned with the SDK: it describes **SDK 0.32.0**.
 
 ## The PAP draft implemented
 
 | | Python (`personal_agent_protocol`) | TypeScript (`@datalayer/personal-agent-protocol`) |
 | --- | --- | --- |
-| PAP profile | `PROTOCOL_PROFILE` = `0.3` | `PROTOCOL_PROFILE` = `"0.3"` |
-| Specification revision | `PROTOCOL_REVISION` = `2026-11-04` | `PROTOCOL_REVISION` = `"2026-11-04"` |
+| PAP profile | `PROTOCOL_PROFILE` = `0.4` | `PROTOCOL_PROFILE` = `"0.4"` |
+| Specification revision | `PROTOCOL_REVISION` = `2026-11-06` | `PROTOCOL_REVISION` = `"2026-11-06"` |
 | Operations extension | `OPERATIONS_VERSION` = `2` | `OPERATIONS_VERSION` = `"2"` |
 
-Both SDKs implement [PAP version 0.3](https://personalagentprotocol.org/docs/0.3/spec)
-as published on **2026-11-04** (upstream commit `2289293`; the specification is frozen at `/docs/0.3/spec`), the **Operations
+Both SDKs implement [PAP draft 0.4](https://personalagentprotocol.org/docs/spec)
+as of upstream commit `46beb21` (**2026-11-06**; the draft is served at `/docs/spec` until it is published), the **Operations
 extension version 2** and the **Mediated Sign-In extension version 1**. A test holds the two SDKs, this page, the package
 descriptions, `protocol/UPSTREAM.md`, and the requirement ledger
 (`protocol/requirements.yaml`) to the same three values. Upstream is a draft:
@@ -26,6 +26,7 @@ from an unattended fetch.
 
 | SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
 | --- | --- | --- | --- | --- |
+| `0.32.0` | `0.4` | 2026-11-06 | v2 | [0.31 → 0.32](/releases/migration/#031--032): draft 0.4 as of `46beb21`; wire-breaking: `Poppy-Version` and `Poppy-Extensions` on every request, request IDs on every conversation POST, a conversation's state in four fields, `poppy:browser-sign-in` for a signed-in join |
 | `0.31.0` | `0.3` | 2026-11-04 | v2 | [0.30 → 0.31](/releases/migration/#030--031): 0.3 as published at `2289293`; wire-breaking: `poppy_dlg`, `session_ended`, extension content in `extensions` |
 | `0.30.0` | `0.3` | 2026-10-30 | v2 | none: [0.29 → 0.30](/releases/migration/#029--030) adds operator signatures, off until a host and a company ask for them |
 | `0.29.0` | `0.3` | 2026-10-30 | v2 | [0.28 → 0.29](/releases/migration/#028--029): DPoP in both SDKs and reference companies; token requests and Mediated Sign-In name their tenant; draft 0.3 as of `ec16efa`: Companies with no issuer, Bearer as MCP's baseline |
@@ -78,7 +79,7 @@ release, and the [conformance report](/protocol/conformance-report/) lists
 every case's outcome; a case a side cannot run is skipped, never passed, with
 its reason. Use the same SDK version on both sides when you control both;
 across organizations, the wire is the protocol: any two implementations of
-draft 0.3 and Operations v2 are meant to interoperate, and the conformance
+draft 0.4 and Operations v2 are meant to interoperate, and the conformance
 runner (`pap conformance run`) checks a company against it.
 
 ## Agent Runtimes

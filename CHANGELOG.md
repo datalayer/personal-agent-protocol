@@ -6,7 +6,7 @@
 
 # Changelog
 
-## 0.32.0 (unreleased)
+## 0.32.0 (2026-11-07)
 
 Draft 0.4 as of upstream `46beb21` (2026-11-06) in both SDKs and both reference
 companies, with no compatibility with 0.3 as published: see the

@@ -13,6 +13,7 @@ from .accounts import (
     RevocationResult,
     ServiceTokens,
     SignOutResult,
+    scopes_to_request,
     stale_resource_metadata,
 )
 from .apis import (
@@ -434,6 +435,7 @@ __all__ = [
     "redirect_uri_matches",
     "resolve_pairwise_user_id",
     "sign_operator_request",
+    "scopes_to_request",
     "stale_resource_metadata",
     "terms_differences",
     "validate_direct_sign_in_callback",

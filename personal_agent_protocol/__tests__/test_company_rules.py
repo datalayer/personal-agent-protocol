@@ -29,6 +29,7 @@ from personal_agent_protocol import (
     SessionClient,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
+from personal_agent_protocol.actions import discover_company
 from personal_agent_protocol.apis import ApiClient, ApiError
 from personal_agent_protocol.company import SignInRefused
 from personal_agent_protocol.demo.kit import (
@@ -49,7 +50,7 @@ from personal_agent_protocol.mediated import (
 from personal_agent_protocol.models import Approval, Author, ConversationEventPage
 from personal_agent_protocol.sessions import PapSession
 
-from .test_company_end_to_end import TENANT, World
+from .test_company_end_to_end import SHOP, TENANT, World
 
 ORDERS = "https://manzanita.example/api/orders"
 EXCHANGE = "https://manzanita.example/api/orders/ord_7Hk2/exchanges"
@@ -330,6 +331,155 @@ async def test_the_company_grants_only_the_extensions_scopes() -> None:
     assert mediated_sign_in(company).scopes == ["orders:read"]  # type: ignore[union-attr]
     refused = await world.mediated_grant(**ADA, scope="orders:read orders:write")
     assert (refused.status_code, refused.json()) == (400, {"error": "invalid_scope"})
+
+
+async def _device_refusal(
+    world: World, scopes: tuple[str, ...] = ("orders:read", "orders:write")
+) -> str:
+    """The code the device authorization endpoint refuses a sign-in with."""
+
+    metadata = world.company.oauth_metadata
+    assert metadata is not None and metadata.device_authorization_endpoint is not None
+    device = DeviceSignInClient(reactor=world.reactor, http_client=world.http)
+    with pytest.raises(AuthorizationError) as refused:
+        await device.begin(
+            device_authorization_endpoint=metadata.device_authorization_endpoint,
+            token_endpoint=metadata.token_endpoint,
+            issuer=metadata.issuer,
+            client_id=world.atlas.client_id,
+            scopes=scopes,
+            tenant_id=TENANT,
+            organization=world.company.document.organization,
+            protected_resources=metadata.protected_resources,
+        )
+    return refused.value.code
+
+
+@pytest.mark.asyncio
+async def test_a_company_that_turned_sign_in_off_is_used_signed_out() -> None:
+    """`auth.disabled` (§3.2): the issuer stays the identifier, no sign-in is started, and
+    a sign-in tried anyway gets `unauthorized_client` from the grant's endpoint (§4.1)."""
+
+    config = dataclasses.replace(MANZANITA, sign_in_disabled=True, mediated_fields=())
+    world = World()
+    world.shop, world.plugin = manzanita(world.network, world.clock, config=config)
+    company = await DiscoveryClient(reactor=world.reactor, http_client=world.http).discover(
+        "manzanita.example"
+    )
+    assert company.document.auth is not None and company.document.auth.disabled
+    assert company.sign_in_disabled and company.identifier == company.issuer == SHOP
+    assert "mediated-sign-in" not in company.document.extensions
+    # The issuer still advertises its grants, for its other clients.
+    assert company.oauth_metadata is not None and company.oauth_metadata.offers_device
+    with pytest.raises(AuthorizationError) as refused:
+        company.require_oauth()
+    assert refused.value.code == "sign_in_disabled"
+    assert mediated_sign_in(company) is None
+    summary = await discover_company(
+        "manzanita.example", reactor=world.reactor, http_client=world.http
+    )
+    assert summary["sign_in"] == [] and summary["sign_in_disabled"] is True
+
+    # Signed-out use goes on; a sign-in tried anyway is refused by client.
+    session = await world.signed_out_session()
+    endpoint = company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    page = await world.conversations.start(endpoint, world.message("Hello"), session=session)
+    assert page.conversation_id
+    assert await _device_refusal(world) == "unauthorized_client"
+    refused_grant = await world.mediated_grant(**ADA, scope="orders:read")
+    assert (refused_grant.status_code, refused_grant.json()["error"]) == (
+        400,
+        "unsupported_grant_type",
+    )
+    with pytest.raises(ValueError):
+        dataclasses.replace(MANZANITA, sign_in_disabled=True)
+
+
+@pytest.mark.asyncio
+async def test_a_company_refuses_sign_in_by_client_and_serves_it_signed_out() -> None:
+    """A client policy refuses one sign-in type to one agent with `unauthorized_client`
+    from the grant's endpoint (§4.1); the agent keeps its signed-out Sessions."""
+
+    from reactor import PluginManifest  # type: ignore[import-untyped]
+
+    from personal_agent_protocol.company import CLIENT_POLICIES
+
+    world = World()
+
+    class NoDeviceForAtlas:
+        async def allows(self, client_id: str) -> bool:
+            return True
+
+        async def allows_sign_in(self, client_id: str, grant_type: str) -> bool:
+            return not (
+                client_id.startswith("https://atlas.example/")
+                and grant_type == "urn:ietf:params:oauth:grant-type:device_code"
+            )
+
+    class Policy:
+        def provide_contributions(self, contributions: object) -> None:
+            contributions.contribute(CLIENT_POLICIES, NoDeviceForAtlas(), contribution_id="p")  # type: ignore[attr-defined]
+
+    world.shop.reactor.register_plugin(PluginManifest(name="no-device", version="1"), Policy())
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    assert (await world.conversations.start(endpoint, world.message("Hi"), session=session)).conversation_id
+    assert await _device_refusal(world) == "unauthorized_client"
+    # Direct Sign-In is still offered to it: the authorization endpoint takes the request.
+    metadata = world.company.oauth_metadata
+    assert metadata is not None and metadata.authorization_endpoint is not None
+    query = {
+        "response_type": "code",
+        "client_id": world.atlas.client_id,
+        "redirect_uri": f"https://{world.atlas.domain}/oauth/callback",
+        "scope": "orders:read",
+        "state": "s",
+        "code_challenge": "c" * 43,
+        "code_challenge_method": "S256",
+    }
+    page = await world.http.get(metadata.authorization_endpoint, params=query)
+    assert page.status_code == 200
+    # And the same request from an agent the policy refuses Direct Sign-In to is redirected
+    # back with `unauthorized_client`.
+
+    class NoDirectForAtlas(NoDeviceForAtlas):
+        async def allows_sign_in(self, client_id: str, grant_type: str) -> bool:
+            return not client_id.startswith("https://atlas.example/")
+
+    class Policy2:
+        def provide_contributions(self, contributions: object) -> None:
+            contributions.contribute(CLIENT_POLICIES, NoDirectForAtlas(), contribution_id="p2", order=-10)  # type: ignore[attr-defined]
+
+    world.shop.reactor.register_plugin(PluginManifest(name="no-direct", version="1"), Policy2())
+    redirected = await world.http.get(metadata.authorization_endpoint, params=query)
+    assert redirected.status_code in (302, 303)
+    assert "error=unauthorized_client" in redirected.headers["location"]
+    assert "state=s" in redirected.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_a_company_grants_fewer_scopes_than_asked_and_says_which() -> None:
+    """Only missing or unknown scopes are `invalid_scope`; the company may grant fewer, the
+    response's `scope` saying which (§4.7, RFC 6749 §3.3)."""
+
+    config = dataclasses.replace(MANZANITA, agent_scopes=("orders:read",))
+    world = World()
+    world.shop, world.plugin = manzanita(world.network, world.clock, config=config)
+    await world.signed_out_session()
+    token, _, error = await device_sign_in(world, "acct_ada")
+    assert error is None and token is not None
+    assert token.scope == "orders:read"
+    # Asked for nothing it grants: refused as `invalid_scope`.
+    assert await _device_refusal(world, scopes=("orders:write",)) == "invalid_scope"
+    # The Mediated Sign-In grant narrows the same way.
+    started = await world.mediated_grant(**ADA, scope="orders:read orders:write")
+    assert started.status_code == 400 and started.json()["error"] == "code_required"
+    granted = await world.mediated_grant(
+        sign_in_id=started.json()["sign_in_id"], one_time_code=ADA_CODE
+    )
+    assert granted.status_code == 200 and granted.json()["scope"] == "orders:read"
+    with pytest.raises(ValueError):
+        dataclasses.replace(MANZANITA, agent_scopes=("nothing:here",))
 
 
 @pytest.mark.asyncio

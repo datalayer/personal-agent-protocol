@@ -134,6 +134,11 @@ export function effectiveChanges(hint: ScopeHint): ScopeChanges {
  */
 export interface AuthCapabilities extends UnknownFields {
   readonly issuer?: string;
+  /**
+   * `true` when the Company offers Personal Agents no sign-in, though it has an issuer (§3.2):
+   * its identifier stays the issuer, and no sign-in is started with it.
+   */
+  readonly disabled?: boolean;
   readonly scopes: Readonly<Record<string, string>>;
   readonly scope_hints: Readonly<Record<string, ScopeHint>>;
 }
@@ -478,9 +483,25 @@ export function companyIdentifier(company: DiscoveredCompany): string {
 }
 
 /** The issuer's metadata, or `AuthorizationError` (`no_issuer`), before any sign-in. */
+/**
+ * Whether the Company turned sign-in off (`auth.disabled`, §3.2): a Personal Agent starts no
+ * Direct, Device or Mediated Sign-In with it, whatever its issuer's grants say; a Mediated
+ * Sign-In entry or `signed_in` access it lists anyway is not used.
+ */
+export function signInDisabled(document: DiscoveryDocument): boolean {
+  return document.auth?.disabled === true;
+}
+
+/**
+ * The issuer's metadata, or `AuthorizationError`, before any sign-in: `no_issuer` for a
+ * Company with no issuer, `sign_in_disabled` for one that turned sign-in off (§3.2).
+ */
 export function requireOauth(company: DiscoveredCompany): OAuthServerMetadata {
   if (company.oauthMetadata === undefined) {
     throw new AuthorizationError("no_issuer", "A Company with no issuer offers no sign-in");
+  }
+  if (signInDisabled(company.document)) {
+    throw new AuthorizationError("sign_in_disabled", "The Company turned sign-in off for Personal Agents");
   }
   return company.oauthMetadata;
 }
@@ -717,6 +738,9 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
       ...(authSource.issuer === undefined || authSource.issuer === null
         ? {}
         : { issuer: httpsUrl(authSource.issuer, "auth.issuer") }),
+      ...(authSource.disabled === undefined || authSource.disabled === null
+        ? {}
+        : { disabled: boolean(authSource.disabled, "auth.disabled") }),
       scopes: scopeNames,
       scope_hints: scopeHints,
     } as AuthCapabilities;

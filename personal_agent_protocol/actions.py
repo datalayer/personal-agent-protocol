@@ -87,6 +87,7 @@ async def discover_company(
         "issuer": metadata.issuer if metadata else None,
         "identifier": company.identifier,
         # Direct, Device and Mediated from the issuer's grants, the last with its extension.
+        # None at all when the Company turned sign-in off (`auth.disabled`, §3.2).
         "sign_in": [
             name
             for name, offered in (
@@ -94,8 +95,9 @@ async def discover_company(
                 ("device", metadata is not None and metadata.offers_device),
                 ("mediated", mediated_sign_in(company) is not None),
             )
-            if offered
+            if offered and not company.sign_in_disabled
         ],
+        "sign_in_disabled": company.sign_in_disabled,
         "apis": [item.type for item in document.apis],
         "conversation_protocols": (
             [item.type for item in document.agent.protocols] if document.agent else []

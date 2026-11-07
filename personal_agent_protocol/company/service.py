@@ -342,6 +342,16 @@ class CompanyConfig:
     device: bool = True
     direct: bool = True
     operations: bool = True
+    #: Whether the company offers personal agents no sign-in though it has an issuer
+    #: (`auth.disabled`, §3.2): its identifier stays the issuer, Direct and Device Sign-In
+    #: stay in the issuer's metadata for its other clients, and each grant's endpoint
+    #: refuses a personal agent with `unauthorized_client`.
+    sign_in_disabled: bool = False
+    #: The scopes the company grants personal agents, a subset of `scopes`; None grants
+    #: every scope asked for. A sign-in asking for more is granted these, the response's
+    #: `scope` saying which (§4.7, RFC 6749 §3.3); one asking for none of them is
+    #: `invalid_scope`.
+    agent_scopes: tuple[str, ...] | None = None
     #: Whether the company lists the Links extension, version 1, and sends the pages a
     #: reply refers to in `extensions.links` to an agent that lists it too (Links 2, 3).
     links: bool = False
@@ -438,6 +448,13 @@ class CompanyConfig:
             raise ValueError(
                 "a company with no issuer has no mediated_fields, operations, aliases or DPoP"
             )
+        if self.sign_in_disabled and (not self.oauth or self.mediated_fields):
+            # Turning sign-in off keeps the issuer and lists no Mediated Sign-In (§3.2).
+            raise ValueError("sign_in_disabled needs an issuer, and lists no mediated_fields")
+        if self.agent_scopes is not None and (
+            not self.agent_scopes or any(scope not in self.scopes for scope in self.agent_scopes)
+        ):
+            raise ValueError("agent_scopes are some of scopes")
         if self.dpop_binding not in ("off", "optional", "required"):
             raise ValueError("dpop_binding is off, optional or required")
         if self.dpop_nonces and self.dpop_binding == "off":
@@ -1112,6 +1129,8 @@ class CompanyService:
         if config.oauth:
             # Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
             auth: dict[str, Any] = {"issuer": config.base}
+            if config.sign_in_disabled:
+                auth["disabled"] = True
             auth["scopes"] = {scope: config.scope_descriptions[scope] for scope in config.scopes}
             if config.scope_hints:
                 auth["scope_hints"] = {
@@ -1275,6 +1294,33 @@ class CompanyService:
 
         policy = cast(ClientPolicy, first_contribution(self.reactor, CLIENT_POLICIES, "policy"))
         return bool(await policy.allows(client_id))
+
+    async def _sign_in_allowed(self, client_id: str, grant_type: str) -> bool:
+        """Whether this agent may sign in with this grant (§3.2, §4.1).
+
+        No agent may when the company turned sign-in off (`sign_in_disabled`); otherwise
+        the client policy decides, by `allows_sign_in` when it has one. A refused agent
+        gets `unauthorized_client` from the grant's endpoint, and is served signed out.
+        """
+
+        if self.config.sign_in_disabled:
+            return False
+        policy = first_contribution(self.reactor, CLIENT_POLICIES, "policy")
+        decide = getattr(policy, "allows_sign_in", None)
+        return True if decide is None else bool(await decide(client_id, grant_type))
+
+    def _granted_to_agents(self, scopes: Sequence[str]) -> tuple[str, ...]:
+        """The scopes of `scopes` this company grants personal agents (§4.7).
+
+        Fewer than asked when `agent_scopes` leaves some out, as RFC 6749 §3.3 allows;
+        the response's `scope` says which. None of them is `invalid_scope`.
+        """
+
+        allowed = self.config.agent_scopes
+        granted = tuple(s for s in scopes if allowed is None or s in allowed)
+        if not granted:
+            raise _RefusedError(400, "invalid_scope")
+        return granted
 
     async def _supports_operations(self, client_id: str) -> bool:
         """Whether the agent listed this version of Operations when it last authenticated."""
@@ -1479,9 +1525,12 @@ class CompanyService:
     async def _device(self, request: CompanyRequest) -> CompanyResponse:
         form = dict(parse_qsl(request.body.decode()))
         client_id = await self._client(form)
-        scopes = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
-        if not scopes or any(scope not in self.config.scopes for scope in scopes):
+        if not await self._sign_in_allowed(client_id, DEVICE_CODE_GRANT):
+            raise _RefusedError(400, "unauthorized_client")
+        asked = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
+        if not asked or any(scope not in self.config.scopes for scope in asked):
             raise _RefusedError(400, "invalid_scope")
+        scopes = self._granted_to_agents(asked)
         device_code = self._id("dev")
         lifetime = 600
         expires_at = self._now() + timedelta(seconds=lifetime)
@@ -1501,6 +1550,7 @@ class CompanyService:
             PendingDevice(
                 client_id=client_id,
                 scopes=scopes,
+                requested=asked,
                 user_code=user_code,
                 expires_at=expires_at,
                 interval=self.config.device_interval,
@@ -1609,7 +1659,7 @@ class CompanyService:
             client_id,
             approved.account_id,
             approved.granted,
-            requested=approved.scopes,
+            requested=approved.requested or approved.scopes,
             jkt=jkt,
             resource=self._resource(form),
         )
@@ -1886,6 +1936,14 @@ class CompanyService:
             return self._redirect(redirect_uri, error="invalid_request", state=state)
         if not scopes or any(scope not in self.config.scopes for scope in scopes):
             return self._redirect(redirect_uri, error="invalid_scope", state=state)
+        if not await self._sign_in_allowed(client_id, AUTHORIZATION_CODE_GRANT):
+            # Refused sign-in, or this type of it: served signed out (§4.1).
+            return self._redirect(redirect_uri, error="unauthorized_client", state=state)
+        asked = scopes
+        try:
+            scopes = self._granted_to_agents(asked)
+        except _RefusedError:
+            return self._redirect(redirect_uri, error="invalid_scope", state=state)
         request_id = self._id("authz")
         expires_at = self._now() + timedelta(minutes=10)
         # The company's own page binds the request to this browser: its consent cookie
@@ -1899,6 +1957,7 @@ class CompanyService:
                 client_id=client_id,
                 redirect_uri=redirect_uri,
                 scopes=scopes,
+                requested=asked,
                 state=state,
                 code_challenge=query["code_challenge"],
                 expires_at=expires_at,
@@ -2010,7 +2069,7 @@ class CompanyService:
                 client_id=pending.client_id,
                 redirect_uri=pending.redirect_uri,
                 code_challenge=pending.code_challenge,
-                requested=pending.scopes,
+                requested=pending.requested or pending.scopes,
                 account_id=account_id,
                 scopes=granted,
                 expires_at=expires_at,
@@ -2522,10 +2581,13 @@ class CompanyService:
         if "sign_in_id" in form or "one_time_code" in form:
             return await self._mediated_code(form, client_id, jkt)
         config = self.config
-        granted = tuple(s for s in form.get("scope", "").split(" ") if s)
-        if not granted or any(s not in config.mediated_grant_scopes for s in granted):
-            # Missing, unknown, or unavailable scopes are refused, never narrowed.
+        if not await self._sign_in_allowed(client_id, MEDIATED_GRANT):
+            raise _RefusedError(400, "unauthorized_client")
+        asked = tuple(s for s in form.get("scope", "").split(" ") if s)
+        if not asked or any(s not in config.mediated_grant_scopes for s in asked):
+            # Missing or unknown scopes are refused (§4.7).
             raise _RefusedError(400, "invalid_scope")
+        granted = self._granted_to_agents(asked)
         credentials = {name: form.get(name) for name, _, _ in config.mediated_fields}
         if any(value is None for value in credentials.values()):
             raise _RefusedError(400, "invalid_request")
@@ -2557,7 +2619,7 @@ class CompanyService:
                 client_id,
                 authenticated.account_id,
                 granted,
-                requested=granted,
+                requested=asked,
                 jkt=jkt,
                 resource=self._resource(form),
             )
@@ -2571,6 +2633,7 @@ class CompanyService:
             client_id=client_id,
             account_id=authenticated.account_id,
             scopes=granted,
+            requested=asked,
             code_reference=authenticated.code_reference,
             sent_to=authenticated.sent_to or "your device",
             expires_at=expires_at,
@@ -2649,7 +2712,7 @@ class CompanyService:
             client_id,
             completed.account_id,
             completed.scopes,
-            requested=completed.scopes,
+            requested=completed.requested or completed.scopes,
             jkt=jkt,
             resource=self._resource(form),
         )

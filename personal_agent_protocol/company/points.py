@@ -233,15 +233,24 @@ class OperationExecutor(Protocol):
 
 @runtime_checkable
 class ClientPolicy(Protocol):
-    """Allow or block a personal agent by its `client_id`."""
+    """Allow or block a personal agent by its `client_id`.
+
+    A policy may also refuse sign-in, or one sign-in type, to an agent it serves
+    signed out, with `allows_sign_in(client_id, grant_type)` (§4.1): the grant's
+    endpoint then answers `unauthorized_client`. Without the method, every agent the
+    policy allows may sign in.
+    """
 
     async def allows(self, client_id: str) -> bool: ...
 
 
 class AllowEveryAgent:
-    """The default policy: any agent with valid identity is welcome."""
+    """The default policy: any agent with valid identity is welcome, and may sign in."""
 
     async def allows(self, client_id: str) -> bool:
+        return True
+
+    async def allows_sign_in(self, client_id: str, grant_type: str) -> bool:
         return True
 
 

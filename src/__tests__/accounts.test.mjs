@@ -18,6 +18,7 @@ import {
   buildPapReactor,
   staleResourceMetadata,
   parseProtectedResourceMetadata,
+  scopesToRequest,
 } from "../../lib/index.js";
 
 const context = {
@@ -361,4 +362,11 @@ test("ServiceTokens: signed out, every token held goes", async () => {
   tokens.delete("refresh_ref");
   assert.equal(await service.tokenFor("https://shop.example/api"), undefined);
   assert.equal(forms.length, 1);
+});
+
+test("a new sign-in asks for every scope still needed", () => {
+  // Kept scopes and the missing ones, once each, never only the missing (§4.7).
+  assert.deepEqual(scopesToRequest(["orders:read"], ["orders:write"]), ["orders:read", "orders:write"]);
+  assert.deepEqual(scopesToRequest(["orders:read", "orders:write"], ["orders:read"]), ["orders:read", "orders:write"]);
+  assert.deepEqual(scopesToRequest([], ["a", "", "a"]), ["a"]);
 });

@@ -89,6 +89,10 @@ def mediated_sign_in(company: DiscoveredCompany) -> MediatedSignIn | None:
     extension this SDK can't use either.
     """
 
+    if company.sign_in_disabled:
+        # A Company that turned sign-in off lists no Mediated Sign-In; one that does
+        # anyway is not signed in to (§3.2).
+        return None
     declared = _declared(company)
     if declared is None:
         return None

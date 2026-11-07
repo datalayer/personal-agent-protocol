@@ -149,6 +149,19 @@ def test_a_refresh_that_omits_the_refresh_token_keeps_the_one_held() -> None:
     assert security.tokens.values["refresh_ref"].get_secret_value() == "refresh-token-1"
 
 
+def test_a_new_sign_in_asks_for_every_scope_still_needed() -> None:
+    """Kept scopes and the missing ones, once each, never only the missing (§4.7)."""
+
+    from personal_agent_protocol import scopes_to_request
+
+    assert scopes_to_request(("orders:read",), ("orders:write",)) == ("orders:read", "orders:write")
+    assert scopes_to_request(("orders:read", "orders:write"), ("orders:read",)) == (
+        "orders:read",
+        "orders:write",
+    )
+    assert scopes_to_request((), ("a", "", "a")) == ("a",)
+
+
 def test_a_wider_scope_is_re_consent_not_a_retry() -> None:
     client, security = arrange(lambda _: httpx.Response(400, json={"error": "invalid_scope"}))
     result = asyncio.run(client.refresh("refresh_ref", context=CONTEXT, scopes=("orders:write",)))

@@ -78,6 +78,24 @@ separate Company. APIs, conversations, feedback and browser join work signed out
 `company.require_oauth()` (`requireOauth(company)`) refuses a sign-in with
 `no_issuer`, before anything is sent.
 
+A Company whose issuer serves other clients can turn sign-in off for Personal
+Agents with `auth.disabled` in `poppy.json` (spec 3.2), keeping the issuer as its
+identifier. `company.sign_in_disabled` (`signInDisabled(document)`) says so,
+`require_oauth` then refuses with `sign_in_disabled`, `mediated_sign_in` finds
+none, and `pap company discover` lists no sign-in: the agent uses the Company
+signed out. A Company can also refuse sign-in, or one sign-in type, to a
+particular agent with `unauthorized_client` from the grant's endpoint (spec 4.1):
+the sign-in clients raise it as their `AuthorizationError`, and the host continues
+signed out, telling the user and remembering the refusal for a while rather than
+asking again on the next task.
+
+When a task needs more access than the refresh token holds, the new sign-in asks
+for every scope the agent still needs, the kept ones included, never only the
+missing ones: `scopes_to_request(held, needed)` (`scopesToRequest`), spec 4.7.
+The Company may grant fewer scopes than asked, saying which in the token
+response's `scope`, which both SDKs read; only missing or unknown scopes are
+refused with `invalid_scope`.
+
 A timeout, another status, invalid metadata, or an issuer that fails to verify
 never selects the domain: discovery stops with its error. If the identifier does
 change, because a Company adds or changes its issuer, that means new User IDs,

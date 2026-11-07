@@ -200,11 +200,21 @@ export interface OperationExecutor {
 /** Allow or block a personal agent by its `client_id`. */
 export interface ClientPolicy {
   allows(clientId: string): Promise<boolean>;
+  /**
+   * Whether an agent the policy allows may sign in with this grant (§4.1): a refusal of
+   * sign-in, or of one sign-in type, gets `unauthorized_client` from the grant's endpoint,
+   * and the agent is served signed out. Without the method, every allowed agent may.
+   */
+  allowsSignIn?(clientId: string, grantType: string): Promise<boolean>;
 }
 
-/** The default policy: any agent with valid identity is welcome. */
+/** The default policy: any agent with valid identity is welcome, and may sign in. */
 export class AllowEveryAgent implements ClientPolicy {
   async allows(_clientId: string): Promise<boolean> {
+    return true;
+  }
+
+  async allowsSignIn(_clientId: string, _grantType: string): Promise<boolean> {
     return true;
   }
 }

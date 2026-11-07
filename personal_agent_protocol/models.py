@@ -199,6 +199,9 @@ class AuthCapabilities(ProtocolModel):
     """
 
     issuer: str | None = None
+    #: `true` when the Company offers Personal Agents no sign-in, though it has an issuer
+    #: (§3.2): its identifier stays the issuer, and no sign-in is started with it.
+    disabled: bool = False
     scopes: dict[str, str] = Field(default_factory=dict)
     scope_hints: dict[str, ScopeHint] = Field(default_factory=dict)
 
@@ -335,6 +338,17 @@ class DiscoveryDocument(ProtocolModel):
         if self.agent is None and not self.apis and self.web is None:
             raise ValueError("one of agent, apis, or web is required")
         return self
+
+    @property
+    def sign_in_disabled(self) -> bool:
+        """Whether the Company turned sign-in off (`auth.disabled`, §3.2).
+
+        A Personal Agent starts no Direct, Device or Mediated Sign-In with it, whatever
+        its issuer's grants say; a Mediated Sign-In entry or `signed_in` access it lists
+        anyway is not used.
+        """
+
+        return self.auth is not None and self.auth.disabled
 
     @property
     def needs_issuer(self) -> bool:
@@ -1009,9 +1023,23 @@ class DiscoveredCompany(ProtocolModel):
 
         return self.issuer or self.resource
 
+    @property
+    def sign_in_disabled(self) -> bool:
+        """Whether the Company turned sign-in off with `auth.disabled` (§3.2)."""
+
+        return self.document.sign_in_disabled
+
     def require_oauth(self) -> OAuthServerMetadata:
-        """The issuer's metadata, or `AuthorizationError` (`no_issuer`), before any sign-in."""
+        """The issuer's metadata, or `AuthorizationError`, before any sign-in.
+
+        `no_issuer` for a Company with no issuer, `sign_in_disabled` for one that turned
+        sign-in off (§3.2): a Personal Agent starts no sign-in with either.
+        """
 
         if self.oauth_metadata is None:
             raise AuthorizationError("no_issuer", "A Company with no issuer offers no sign-in")
+        if self.sign_in_disabled:
+            raise AuthorizationError(
+                "sign_in_disabled", "The Company turned sign-in off for Personal Agents"
+            )
         return self.oauth_metadata

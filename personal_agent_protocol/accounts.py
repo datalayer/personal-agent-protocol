@@ -332,6 +332,22 @@ class RefreshTokenClient:
         )
 
 
+def scopes_to_request(held: Iterable[str], needed: Iterable[str]) -> tuple[str, ...]:
+    """The scopes a new sign-in asks for when a task needs more access (§4.7).
+
+    Every scope the agent still needs: the ones `held` by the refresh token it wants to
+    keep, then the `needed` ones it lacks, in order and once each, following RFC 6749 §3.3;
+    never only the missing ones. The new refresh token replaces the old one, which the
+    agent revokes (§4.6).
+    """
+
+    seen: dict[str, None] = {}
+    for scope in (*held, *needed):
+        if scope and scope not in seen:
+            seen[scope] = None
+    return tuple(seen)
+
+
 def stale_resource_metadata(error: PersonalAgentProtocolError) -> bool:
     """Whether a service refused a token not issued for it (§4.5).
 

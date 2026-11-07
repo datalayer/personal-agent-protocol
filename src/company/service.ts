@@ -223,6 +223,19 @@ export interface CompanyConfigOptions {
   readonly direct?: boolean;
   readonly operations?: boolean;
   /**
+   * Whether the company offers personal agents no sign-in though it has an issuer
+   * (`auth.disabled`, §3.2): its identifier stays the issuer, Direct and Device Sign-In stay in
+   * the issuer's metadata for its other clients, and each grant's endpoint refuses a personal
+   * agent with `unauthorized_client`.
+   */
+  readonly signInDisabled?: boolean;
+  /**
+   * The scopes the company grants personal agents, a subset of `scopes`; absent, every scope
+   * asked for. A sign-in asking for more is granted these, the response's `scope` saying
+   * which (§4.7, RFC 6749 §3.3); one asking for none of them is `invalid_scope`.
+   */
+  readonly agentScopes?: readonly string[];
+  /**
    * Whether the company lists the Links extension, version 1, and sends the pages a reply
    * refers to in `extensions.links` to an agent that lists it too (Links 2, 3).
    */
@@ -352,6 +365,8 @@ export class CompanyConfig {
   readonly device: boolean;
   readonly direct: boolean;
   readonly operations: boolean;
+  readonly signInDisabled: boolean;
+  readonly agentScopes: readonly string[] | undefined;
   readonly links: boolean;
   readonly disclosures: boolean;
   readonly humansAvailable: boolean;
@@ -394,6 +409,18 @@ export class CompanyConfig {
     this.device = options.device ?? true;
     this.direct = options.direct ?? true;
     this.operations = options.operations ?? true;
+    this.signInDisabled = options.signInDisabled ?? false;
+    this.agentScopes = options.agentScopes === undefined ? undefined : [...options.agentScopes];
+    if (this.signInDisabled && (!(options.oauth ?? true) || (options.mediatedFields ?? []).length)) {
+      // Turning sign-in off keeps the issuer and lists no Mediated Sign-In (§3.2).
+      throw new Error("signInDisabled needs an issuer, and lists no mediatedFields");
+    }
+    if (
+      this.agentScopes !== undefined &&
+      (!this.agentScopes.length || this.agentScopes.some((scope) => !this.scopes.includes(scope)))
+    ) {
+      throw new Error("agentScopes are some of scopes");
+    }
     this.links = options.links ?? false;
     this.disclosures = options.disclosures ?? false;
     this.humansAvailable = options.humansAvailable ?? false;
@@ -1236,6 +1263,7 @@ export class CompanyService {
     if (config.oauth) {
       // Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
       const auth: Record<string, unknown> = { issuer: config.base };
+      if (config.signInDisabled) auth.disabled = true;
       auth.scopes = Object.fromEntries(config.scopes.map((scope) => [scope, config.scopeDescriptions[scope]]));
       if (Object.keys(config.scopeHints).length) {
         auth.scope_hints = Object.fromEntries(
@@ -1399,6 +1427,31 @@ export class CompanyService {
   /** Whether the agent listed this version of Operations when it last authenticated. */
   async #supportsOperations(clientId: string): Promise<boolean> {
     return this.#supportsExtension(clientId, OPERATIONS_EXTENSION, OPERATIONS_VERSION);
+  }
+
+  /**
+   * Whether this agent may sign in with this grant (§3.2, §4.1).
+   *
+   * No agent may when the company turned sign-in off (`signInDisabled`); otherwise the client
+   * policy decides, by `allowsSignIn` when it has one. A refused agent gets
+   * `unauthorized_client` from the grant's endpoint, and is served signed out.
+   */
+  async #signInAllowed(clientId: string, grantType: string): Promise<boolean> {
+    if (this.config.signInDisabled) return false;
+    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
+    return policy.allowsSignIn === undefined ? true : policy.allowsSignIn(clientId, grantType);
+  }
+
+  /**
+   * The scopes of `scopes` this company grants personal agents (§4.7): fewer than asked when
+   * `agentScopes` leaves some out, as RFC 6749 §3.3 allows; the response's `scope` says
+   * which. None of them is `invalid_scope`.
+   */
+  #grantedToAgents(scopes: readonly string[]): string[] {
+    const allowed = this.config.agentScopes;
+    const granted = scopes.filter((scope) => allowed === undefined || allowed.includes(scope));
+    if (!granted.length) throw new Refused(400, "invalid_scope");
+    return granted;
   }
 
   /**
@@ -1600,10 +1653,12 @@ export class CompanyService {
   async #device(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
     const clientId = await this.#client(form);
-    const scopes = words(form.scope);
-    if (!scopes.length || scopes.some((scope) => !this.config.scopes.includes(scope))) {
+    if (!(await this.#signInAllowed(clientId, DEVICE_CODE_GRANT))) throw new Refused(400, "unauthorized_client");
+    const asked = words(form.scope);
+    if (!asked.length || asked.some((scope) => !this.config.scopes.includes(scope))) {
       throw new Refused(400, "invalid_scope");
     }
+    const scopes = this.#grantedToAgents(asked);
     const deviceCode = this.#id("dev");
     const lifetime = 600;
     const expiresAt = this.#later(lifetime);
@@ -1618,6 +1673,7 @@ export class CompanyService {
     const pending: PendingDevice = {
       clientId,
       scopes,
+      requested: asked,
       userCode,
       expiresAt: expiresAt.toISOString(),
       interval: this.config.deviceInterval,
@@ -1745,7 +1801,7 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     await this.store.delete(RecordKinds.userCode, approved.userCode);
-    return this.#signIn(clientId, approved.accountId, approved.granted, approved.scopes, jkt, this.#resource(form));
+    return this.#signIn(clientId, approved.accountId, approved.granted, approved.requested ?? approved.scopes, jkt, this.#resource(form));
   }
 
   async #forgetDevice(key: string, pending: PendingDevice): Promise<void> {
@@ -2013,6 +2069,16 @@ export class CompanyService {
     if (!scopes.length || scopes.some((scope) => !this.config.scopes.includes(scope))) {
       return this.#redirect(redirectUri, { error: "invalid_scope", state });
     }
+    if (!(await this.#signInAllowed(clientId, AUTHORIZATION_CODE_GRANT))) {
+      // Refused sign-in, or this type of it: served signed out (§4.1).
+      return this.#redirect(redirectUri, { error: "unauthorized_client", state });
+    }
+    let granted: readonly string[];
+    try {
+      granted = this.#grantedToAgents(scopes);
+    } catch {
+      return this.#redirect(redirectUri, { error: "invalid_scope", state });
+    }
     const requestId = this.#id("authz");
     const expiresAt = this.#later(10 * 60);
     // The company's own page binds the request to this browser: its consent cookie
@@ -2022,7 +2088,8 @@ export class CompanyService {
     const pending: PendingAuthorization = {
       clientId,
       redirectUri,
-      scopes,
+      scopes: granted,
+      requested: scopes,
       state,
       codeChallenge: query.code_challenge,
       expiresAt: expiresAt.toISOString(),
@@ -2135,7 +2202,7 @@ export class CompanyService {
       clientId: pending.clientId,
       redirectUri: pending.redirectUri,
       codeChallenge: pending.codeChallenge,
-      requested: pending.scopes,
+      requested: pending.requested ?? pending.scopes,
       accountId: options.accountId,
       scopes: granted,
       expiresAt: expiresAt.toISOString(),
@@ -2786,11 +2853,13 @@ export class CompanyService {
       return this.#mediatedCode(form, clientId, jkt);
     }
     const config = this.config;
-    const granted = words(form.scope);
-    if (!granted.length || granted.some((scope) => !config.mediatedGrantScopes.includes(scope))) {
-      // Missing, unknown, or unavailable scopes are refused, never narrowed.
+    if (!(await this.#signInAllowed(clientId, MEDIATED_GRANT))) throw new Refused(400, "unauthorized_client");
+    const asked = words(form.scope);
+    if (!asked.length || asked.some((scope) => !config.mediatedGrantScopes.includes(scope))) {
+      // Missing or unknown scopes are refused (§4.7).
       throw new Refused(400, "invalid_scope");
     }
+    const granted = this.#grantedToAgents(asked);
     const credentials: Record<string, string> = {};
     for (const [name] of config.mediatedFields) {
       const value = form[name];
@@ -2827,7 +2896,7 @@ export class CompanyService {
     const { accountId, codeReference, sentTo } = authenticated;
     if (codeReference === undefined) {
       await this.#attemptsCleared(keys);
-      return this.#signIn(clientId, accountId, granted, granted, jkt, this.#resource(form));
+      return this.#signIn(clientId, accountId, granted, asked, jkt, this.#resource(form));
     }
     const codeLocked = await this.#lockedFor([this.#codeKey(accountId)]);
     // Too many wrong codes for this account: no new code until the lockout ends.
@@ -2838,6 +2907,7 @@ export class CompanyService {
       clientId,
       accountId,
       scopes: granted,
+      requested: asked,
       codeReference,
       expiresAt: expiresAt.toISOString(),
       sentTo: sentTo ?? "your device",
@@ -2922,7 +2992,7 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     await this.#attemptsCleared([...completed.attemptKeys, codeKey]);
-    return this.#signIn(clientId, completed.accountId, completed.scopes, completed.scopes, jkt, this.#resource(form));
+    return this.#signIn(clientId, completed.accountId, completed.scopes, completed.requested ?? completed.scopes, jkt, this.#resource(form));
   }
 
   /** The sign-in ends as `status`, kept so a later code gets the same error. */

@@ -465,6 +465,9 @@ class PendingDevice:
     account_id: str | None = None
     granted: tuple[str, ...] = ()
     denied: bool = False
+    #: The scopes the agent asked for, when `scopes` grants fewer (§4.7): the token
+    #: response then says which were granted.
+    requested: tuple[str, ...] | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -477,6 +480,7 @@ class PendingDevice:
             "account_id": self.account_id,
             "granted": list(self.granted),
             "denied": self.denied,
+            "requested": None if self.requested is None else list(self.requested),
         }
 
     @classmethod
@@ -491,6 +495,7 @@ class PendingDevice:
             account_id=value["account_id"],
             granted=tuple(value["granted"]),
             denied=value["denied"],
+            requested=None if value.get("requested") is None else tuple(value["requested"]),
         )
 
 
@@ -522,6 +527,9 @@ class PendingAuthorization:
     #: The digest of the consent cookie of the browser the company's own page was
     #: shown to; `None` when a hosted consent page answers (it protects its own form).
     browser_binding: str | None = None
+    #: The scopes the agent asked for, when `scopes` grants fewer (§4.7): the token
+    #: response then says which were granted.
+    requested: tuple[str, ...] | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -533,6 +541,7 @@ class PendingAuthorization:
             "expires_at": _time(self.expires_at),
             "client_name": self.client_name,
             "browser_binding": self.browser_binding,
+            "requested": None if self.requested is None else list(self.requested),
         }
 
     @classmethod
@@ -546,6 +555,7 @@ class PendingAuthorization:
             expires_at=_parse(value["expires_at"]),
             client_name=value["client_name"],
             browser_binding=value["browser_binding"],
+            requested=None if value.get("requested") is None else tuple(value["requested"]),
         )
 
 
@@ -600,6 +610,9 @@ class PendingMediated:
     #: `code_required` while a code is awaited; once `failed` or `expired` it stays so,
     #: and a code sent to it gets the same error again.
     status: Literal["code_required", "failed", "expired"] = "code_required"
+    #: The scopes the agent asked for, when `scopes` grants fewer (§4.7): the token
+    #: response then says which were granted.
+    requested: tuple[str, ...] | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -612,6 +625,7 @@ class PendingMediated:
             "attempt_keys": list(self.attempt_keys),
             "attempts": self.attempts,
             "status": self.status,
+            "requested": None if self.requested is None else list(self.requested),
         }
 
     @classmethod
@@ -623,6 +637,7 @@ class PendingMediated:
             code_reference=value["code_reference"],
             expires_at=_parse(value["expires_at"]),
             sent_to=value["sent_to"],
+            requested=None if value.get("requested") is None else tuple(value["requested"]),
             attempt_keys=tuple(value["attempt_keys"]),
             attempts=value["attempts"],
             status=value["status"],

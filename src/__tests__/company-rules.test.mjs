@@ -32,8 +32,12 @@ import {
   messageLinks,
   messageDisclosures,
   messageOperation,
+  signInDisabled,
+  companyIdentifier,
+  offersDevice,
+  requireOauth,
 } from "../../lib/index.js";
-import { CompanyApis, CompanyConfig, JOIN_COOKIE, OperationExecutors, SignInRefused, WEB_COOKIE } from "../../lib/server.js";
+import { ClientPolicies, CompanyApis, CompanyConfig, JOIN_COOKIE, OperationExecutors, SignInRefused, WEB_COOKIE } from "../../lib/server.js";
 import { ADA, ADA_CODE, CONFIG_OPTIONS, manzanita,
   TRACKING_LINK,
   EXCHANGE_NOTICE,
@@ -667,6 +671,106 @@ test("extension content goes only to an agent that lists the extension", async (
   assert.ok(messageOperation(plainExchange) !== undefined);
   assert.deepEqual(Object.keys(plainExchange.extensions), ["operations"]);
   assert.ok(plainExchange.text.endsWith(EXCHANGE_NOTICE));
+});
+
+/** The code the device authorization endpoint refuses a sign-in with. */
+async function deviceRefusal(w, scopes = ["orders:read", "orders:write"]) {
+  const device = new DeviceSignInClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const refused = await refusal(
+    device.begin({
+      deviceAuthorizationEndpoint: w.metadata.device_authorization_endpoint,
+      tokenEndpoint: w.metadata.token_endpoint,
+      issuer: w.metadata.issuer,
+      clientId: w.identity.clientId,
+      scopes,
+      tenantId: TENANT,
+      organization: w.company.document.organization,
+      protectedResources: w.metadata.protected_resources,
+    }),
+  );
+  return refused.code;
+}
+
+test("a company that turned sign-in off is used signed out", async () => {
+  // `auth.disabled` (§3.2): the issuer stays the identifier, no sign-in is started, and a
+  // sign-in tried anyway gets `unauthorized_client` from the grant's endpoint (§4.1).
+  const w = await world({ config: { signInDisabled: true, mediatedFields: [] } });
+  assert.equal(w.company.document.auth.disabled, true);
+  assert.ok(signInDisabled(w.company.document));
+  assert.equal(companyIdentifier(w.company), SHOP);
+  assert.equal("mediated-sign-in" in w.company.document.extensions, false);
+  // The issuer still advertises its grants, for its other clients.
+  assert.ok(offersDevice(w.metadata));
+  assert.throws(() => requireOauth(w.company), (error) => error.code === "sign_in_disabled");
+  assert.equal(mediatedSignIn(w.company), undefined);
+
+  // Signed-out use goes on; a sign-in tried anyway is refused by client.
+  const session = await w.start();
+  assert.ok((await w.conversations.start(w.endpoint, w.message("Hello"), { session })).conversation_id);
+  assert.equal(await deviceRefusal(w), "unauthorized_client");
+  const [status, body] = await w.mediatedGrant({ ...ADA, scope: "orders:read" });
+  assert.deepEqual([status, body.error], [400, "unsupported_grant_type"]);
+  assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, signInDisabled: true }), Error);
+});
+
+test("a company refuses sign-in by client, and serves it signed out", async () => {
+  // A client policy refuses one sign-in type to one agent with `unauthorized_client` from
+  // the grant's endpoint (§4.1); the agent keeps its signed-out Sessions.
+  const DEVICE = "urn:ietf:params:oauth:grant-type:device_code";
+  let refusedGrants = (clientId, grantType) => clientId.startsWith("https://atlas.example/") && grantType === DEVICE;
+  const w = await world({
+    plugins: [
+      {
+        name: "no-device",
+        contributes: [
+          {
+            point: ClientPolicies,
+            value: { allows: async () => true, allowsSignIn: async (clientId, grantType) => !refusedGrants(clientId, grantType) },
+            options: { id: "no-device", order: 10 },
+          },
+        ],
+      },
+    ],
+  });
+  const session = await w.start();
+  assert.ok((await w.conversations.start(w.endpoint, w.message("Hi"), { session })).conversation_id);
+  assert.equal(await deviceRefusal(w), "unauthorized_client");
+  // Direct Sign-In is still offered to it: the authorization endpoint takes the request.
+  const query = new URLSearchParams({
+    response_type: "code",
+    client_id: w.identity.clientId,
+    redirect_uri: "https://atlas.example/oauth/callback",
+    scope: "orders:read",
+    state: "s",
+    code_challenge: "c".repeat(43),
+    code_challenge_method: "S256",
+  });
+  const page = await w.fetch(`${w.metadata.authorization_endpoint}?${query}`, { method: "GET" });
+  assert.equal(page.status, 200);
+  // The same request from an agent the policy refuses Direct Sign-In to is redirected back
+  // with `unauthorized_client`.
+  refusedGrants = (clientId) => clientId.startsWith("https://atlas.example/");
+  const redirected = await w.fetch(`${w.metadata.authorization_endpoint}?${query}`, { method: "GET", redirect: "manual" });
+  assert.ok([302, 303].includes(redirected.status));
+  assert.ok(redirected.headers.get("location").includes("error=unauthorized_client"));
+  assert.ok(redirected.headers.get("location").includes("state=s"));
+});
+
+test("a company grants fewer scopes than asked, and says which", async () => {
+  // Only missing or unknown scopes are `invalid_scope`; the company may grant fewer, the
+  // response's `scope` saying which (§4.7, RFC 6749 §3.3).
+  const w = await world({ config: { agentScopes: ["orders:read"] } });
+  await w.start();
+  const [token] = await deviceSignIn(w, "acct_ada");
+  assert.deepEqual(token.scopes, ["orders:read"]);
+  // Asked for nothing it grants: refused as `invalid_scope`.
+  assert.equal(await deviceRefusal(w, ["orders:write"]), "invalid_scope");
+  // The Mediated Sign-In grant narrows the same way.
+  const [status, started] = await w.mediatedGrant({ ...ADA, scope: "orders:read orders:write" });
+  assert.deepEqual([status, started.error], [400, "code_required"]);
+  const [granted, body] = await w.mediatedGrant({ sign_in_id: started.sign_in_id, one_time_code: ADA_CODE });
+  assert.deepEqual([granted, body.scope], [200, "orders:read"]);
+  assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, agentScopes: ["nothing:here"] }), Error);
 });
 
 test("extension_required at an API is in the challenge", async () => {

@@ -373,6 +373,22 @@ export class RefreshTokenClient {
  * `invalid_token` with `resource_metadata` in its challenge: the agent's view of which
  * resource the service asks tokens for is stale; read it again.
  */
+/**
+ * The scopes a new sign-in asks for when a task needs more access (§4.7).
+ *
+ * Every scope the agent still needs: the ones `held` by the refresh token it wants to keep,
+ * then the `needed` ones it lacks, in order and once each, following RFC 6749 §3.3; never
+ * only the missing ones. The new refresh token replaces the old one, which the agent revokes
+ * (§4.6).
+ */
+export function scopesToRequest(held: Iterable<string>, needed: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  for (const scope of [...held, ...needed]) {
+    if (scope) seen.add(scope);
+  }
+  return [...seen];
+}
+
 export function staleResourceMetadata(error: PersonalAgentProtocolError): boolean {
   return error.code === "invalid_token" && Boolean(error.details?.resource_metadata);
 }

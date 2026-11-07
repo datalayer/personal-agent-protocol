@@ -11,6 +11,7 @@ import {
   MEDIATED_EXTENSION,
   parseMediatedSignIn,
   requireOauth,
+  signInDisabled,
   type DiscoveredCompany,
   type MediatedSignIn,
 } from "./models.js";
@@ -84,6 +85,9 @@ function declared(company: DiscoveredCompany): unknown {
  * can't use either.
  */
 export function mediatedSignIn(company: DiscoveredCompany): MediatedSignIn | undefined {
+  // A Company that turned sign-in off lists no Mediated Sign-In; one that does anyway is
+  // not signed in to (§3.2).
+  if (signInDisabled(company.document)) return undefined;
   const entry = declared(company);
   if (entry === undefined) return undefined;
   try {

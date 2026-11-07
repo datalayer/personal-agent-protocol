@@ -335,6 +335,11 @@ export interface PendingDevice {
   readonly accountId?: string;
   readonly granted: readonly string[];
   readonly denied: boolean;
+  /**
+   * The scopes the agent asked for, when `scopes` grants fewer (§4.7): the token response
+   * then says which were granted.
+   */
+  readonly requested?: readonly string[];
 }
 
 /** The device sign-in a user code stands for (by device-code digest). */
@@ -357,6 +362,11 @@ export interface PendingAuthorization {
    * to; absent when a hosted consent page answers (it protects its own form).
    */
   readonly browserBinding?: string;
+  /**
+   * The scopes the agent asked for, when `scopes` grants fewer (§4.7): the token response
+   * then says which were granted.
+   */
+  readonly requested?: readonly string[];
 }
 
 /** A one-use authorization code, at most a minute old. */
@@ -387,6 +397,11 @@ export interface PendingMediated {
    * code sent to it gets the same error again.
    */
   readonly status: "code_required" | "failed" | "expired";
+  /**
+   * The scopes the agent asked for, when `scopes` grants fewer (§4.7): the token response
+   * then says which were granted.
+   */
+  readonly requested?: readonly string[];
 }
 
 /** An identifier seen once: the record is its presence, until its expiry. */

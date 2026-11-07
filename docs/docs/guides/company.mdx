@@ -180,6 +180,14 @@ implements, of draft 0.3 and Operations v2:
   (`await approve_device()` stands for the company's own approval page);
 - Mediated Sign-In with a one-time code, an attempt limit, and uniform
   failures;
+- Sign-in turned off with `sign_in_disabled` (`signInDisabled`): `auth.disabled` in
+  `poppy.json`, the issuer kept as the identifier and its grants listed for its other
+  clients, no Mediated Sign-In, and `unauthorized_client` from each grant's endpoint
+  (spec 3.2). Sign-in, or one type of it, refused to a particular agent by the client
+  policy's `allows_sign_in(client_id, grant_type)` (`allowsSignIn`), the same error
+  from the grant's endpoint, the agent served signed out (spec 4.1). Fewer scopes than
+  asked with `agent_scopes` (`agentScopes`), the token response's `scope` saying which;
+  only missing or unknown scopes are `invalid_scope` (spec 4.7);
 - Bearer access tokens, or tokens bound with DPoP (`dpop_binding`, in TypeScript
   `dpopBinding`: `off` by default, `optional` binds when a proof comes, `required`
   refuses a token request with none; `dpop_nonces`, `dpopNonces`, asks for server

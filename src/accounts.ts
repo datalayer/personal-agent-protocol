@@ -368,12 +368,6 @@ export class RefreshTokenClient {
 }
 
 /**
- * Whether a service refused a token not issued for it (§4.5).
- *
- * `invalid_token` with `resource_metadata` in its challenge: the agent's view of which
- * resource the service asks tokens for is stale; read it again.
- */
-/**
  * The scopes a new sign-in asks for when a task needs more access (§4.7).
  *
  * Every scope the agent still needs: the ones `held` by the refresh token it wants to keep,
@@ -389,6 +383,12 @@ export function scopesToRequest(held: Iterable<string>, needed: Iterable<string>
   return [...seen];
 }
 
+/**
+ * Whether a service refused a token not issued for it (§4.5).
+ *
+ * `invalid_token` with `resource_metadata` in its challenge: the agent's view of which
+ * resource the service asks tokens for is stale; read it again.
+ */
 export function staleResourceMetadata(error: PersonalAgentProtocolError): boolean {
   return error.code === "invalid_token" && Boolean(error.details?.resource_metadata);
 }

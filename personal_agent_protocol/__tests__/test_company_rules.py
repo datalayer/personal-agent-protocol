@@ -423,7 +423,9 @@ async def test_a_company_refuses_sign_in_by_client_and_serves_it_signed_out() ->
     world.shop.reactor.register_plugin(PluginManifest(name="no-device", version="1"), Policy())
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
-    assert (await world.conversations.start(endpoint, world.message("Hi"), session=session)).conversation_id
+    assert (
+        await world.conversations.start(endpoint, world.message("Hi"), session=session)
+    ).conversation_id
     assert await _device_refusal(world) == "unauthorized_client"
     # Direct Sign-In is still offered to it: the authorization endpoint takes the request.
     metadata = world.company.oauth_metadata
@@ -448,7 +450,9 @@ async def test_a_company_refuses_sign_in_by_client_and_serves_it_signed_out() ->
 
     class Policy2:
         def provide_contributions(self, contributions: object) -> None:
-            contributions.contribute(CLIENT_POLICIES, NoDirectForAtlas(), contribution_id="p2", order=-10)  # type: ignore[attr-defined]
+            contributions.contribute(
+                CLIENT_POLICIES, NoDirectForAtlas(), contribution_id="p2", order=-10
+            )  # type: ignore[attr-defined]
 
     world.shop.reactor.register_plugin(PluginManifest(name="no-direct", version="1"), Policy2())
     redirected = await world.http.get(metadata.authorization_endpoint, params=query)
@@ -776,7 +780,9 @@ async def _company_replies(world: World, extensions: tuple[str, ...]) -> tuple[M
     page = await world.conversations.start(
         endpoint, world.message("Where is my jacket order?"), session=session, token=ada, wait=0
     )
-    order = [e.message for e in page.events if e.message is not None and e.message.role == "company"]
+    order = [
+        e.message for e in page.events if e.message is not None and e.message.role == "company"
+    ]
     answered = await world.conversations.send(
         endpoint,
         page.conversation_id,

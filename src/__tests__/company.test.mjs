@@ -41,7 +41,10 @@ import {
   operationsContent,
 } from "../../lib/index.js";
 import { CompanyAccounts, CompanyApis, CompanyMcps, CompanyRateLimits, StaleConversationError } from "../../lib/server.js";
-import { ADA, ADA_CODE, manzanita } from "../../lib/demo/manzanita.js";
+import { ADA, ADA_CODE, manzanita,
+  INVITATION,
+  OPENING,
+} from "../../lib/demo/manzanita.js";
 import { runJourney } from "./support/journey.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
@@ -837,6 +840,82 @@ test("conversations: an idempotent retry, a reused ID, handoff, Direct Conversat
   const gone = await w.transport.request("GET", `${w.endpoint}/${page.conversation_id}/events?cursor=${cursor}`, { session });
   assert.equal(gone.status, 410);
   assert.deepEqual(await gone.json(), { error: "cursor_expired" });
+});
+
+test("the company speaks first in a Direct Conversation the user accepted", async () => {
+  // Company-first Direct Conversations (§8.10): the agent accepts a `user_requested` event
+  // with its ID and the parent's, without a message; the company writes first; the same
+  // acceptance returns the same conversation, also once it closed.
+  const w = await world();
+  const session = await w.start();
+  const { result } = await directSignIn(w);
+  const token = result.token;
+  const page = await w.conversations.start(w.endpoint, w.message("The jacket arrived damaged"), { session, token, wait: 0 });
+  const invited = page.events.filter((event) => event.type === "user_requested");
+  assert.equal(invited[0]?.reason, INVITATION);
+  const eventId = invited[0].id;
+
+  const direct = await w.conversations.acceptUserRequest(w.endpoint, page.conversation_id, eventId, { session, token, wait: 0 });
+  assert.notEqual(direct.conversation_id, page.conversation_id);
+  const first = direct.events.filter((event) => event.message !== undefined).map((event) => event.message);
+  assert.deepEqual(first.map((message) => message.role), ["company"]);
+  assert.equal(first[0].text, OPENING);
+  assert.equal(first[0].author.name, "Rosa");
+  const parent = await w.conversations.readEvents(w.endpoint, page.conversation_id, { session, token });
+  assert.deepEqual(parent.events.filter((event) => event.type === "direct_opened").map((event) => event.conversation_id), [direct.conversation_id]);
+
+  // The same acceptance again: the same conversation, no message added.
+  const again = await w.conversations.acceptUserRequest(w.endpoint, page.conversation_id, eventId, { session, token, wait: 0 });
+  assert.equal(again.conversation_id, direct.conversation_id);
+  assert.equal(again.events.filter((event) => event.message !== undefined).length, 1);
+  // Also once it closed, and the parent takes messages again.
+  await w.conversations.close(w.endpoint, direct.conversation_id, { session, token });
+  const closed = await w.conversations.acceptUserRequest(w.endpoint, page.conversation_id, eventId, { session, token, wait: 0 });
+  assert.deepEqual([closed.conversation_id, closed.status], [direct.conversation_id, "closed"]);
+  await w.conversations.send(w.endpoint, page.conversation_id, w.message("Thanks"), { session, token });
+
+  // An event that is no `user_requested` event of the parent is `invalid_request`.
+  const unknown = await w.conversations.acceptUserRequest(w.endpoint, page.conversation_id, "evt_nothing", { session, token }).catch((error) => error);
+  assert.equal(unknown.code, "invalid_request");
+  // A start with neither a message nor an acceptance is `invalid_request`.
+  const bare = await w.transport.request("POST", w.endpoint, {
+    session, token, headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parent_conversation_id: page.conversation_id }),
+  });
+  assert.deepEqual([bare.status, (await bare.json()).error], [400, "invalid_request"]);
+});
+
+test("each parent problem has its own error", async () => {
+  // `conversation_not_found`, `conversation_closed`, `invalid_request` for a parent that is
+  // a Direct Conversation, `direct_conversation_open` (§8.10).
+  const w = await world();
+  const session = await w.start();
+  const parent = await w.conversations.start(w.endpoint, w.message("Hello"), { session });
+  const direct = await w.conversations.startDirect(w.endpoint, parent.conversation_id, w.message("Me"), { session });
+  const refusal = async (parentId) =>
+    (await w.conversations.startDirect(w.endpoint, parentId, w.message("Again"), { session }).catch((error) => error)).code;
+  assert.equal(await refusal("cnv_unknown"), "conversation_not_found");
+  assert.equal(await refusal(direct.conversation_id), "invalid_request");
+  assert.equal(await refusal(parent.conversation_id), "direct_conversation_open");
+  await w.conversations.close(w.endpoint, parent.conversation_id, { session });
+  assert.equal(await refusal(parent.conversation_id), "conversation_closed");
+});
+
+test("the company closes a Direct Conversation left alone", async () => {
+  // Either party may close a Direct Conversation, the Company after inactivity (§8.10).
+  const w = await world({ config: { directConversationInactivitySeconds: 30 * 60 } });
+  const session = await w.start();
+  const parent = await w.conversations.start(w.endpoint, w.message("Hello"), { session });
+  const direct = await w.conversations.startDirect(w.endpoint, parent.conversation_id, w.message("Me"), { session });
+  w.clock.advance(29 * 60);
+  const page = await w.conversations.readEvents(w.endpoint, direct.conversation_id, { session });
+  assert.notEqual(page.status, "closed");
+  w.clock.advance(31 * 60);
+  const refused = await w.conversations.send(w.endpoint, direct.conversation_id, w.message("Still there?"), { session }).catch((error) => error);
+  assert.equal(refused.code, "conversation_closed");
+  const parentPage = await w.conversations.readEvents(w.endpoint, parent.conversation_id, { session });
+  assert.ok(parentPage.events.some((event) => event.type === "direct_closed"));
+  await w.conversations.send(w.endpoint, parent.conversation_id, w.message("Back"), { session });
 });
 
 test("one of the company's people answers over what they read", async () => {

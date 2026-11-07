@@ -53,6 +53,7 @@ import {
   type StoredSession,
   type UserCode,
   type WebSession,
+  type Acceptance,
 } from "./store.js";
 
 const CONCURRENCY = 16;
@@ -213,6 +214,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
     [RecordKinds.browserCookie]: web,
     [RecordKinds.joinCode]: { browser: "browser_digest", authorized: web } satisfies JoinCode,
     [RecordKinds.replay]: {} satisfies ReplayMark,
+    [RecordKinds.acceptance]: { conversationId: "cnv_2" } satisfies Acceptance,
     [RecordKinds.dpopNonce]: {} satisfies IssuedNonce,
     [RecordKinds.signInAttempts]: { failures: 3, lockedUntil: later } satisfies SignInAttempts,
     [RecordKinds.feedback]: {

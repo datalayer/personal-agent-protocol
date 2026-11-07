@@ -212,6 +212,15 @@ implements, of draft 0.3 and Operations v2:
 - conversations with idempotent messages, cursor events, waited replies, SSE,
   handoff, Direct Conversations, `authorization` events, and closing; a
   conversation that is not yours is `conversation_not_found`;
+- a company agent's reply with `user_requested` (`userRequested` in
+  TypeScript) adds the invitation to the parent; when the user accepts it, the
+  company agent is asked an opening turn (`Turn.opening`, with no text) for the
+  company's first message, and the same acceptance returns the same Direct
+  Conversation again, even once it closed; each parent problem has its own
+  error (`conversation_not_found`, `conversation_closed`, `invalid_request`,
+  `direct_conversation_open`), and `direct_conversation_inactivity`
+  (`directConversationInactivitySeconds`) closes an open Direct Conversation
+  left alone that long, when it is next asked about;
 - with `humans_available` (`humansAvailable` in TypeScript), a handoff gives
   the conversation to the company's people, and one of them answers in it
   with `await staff_reply(conversation_id, after=..., text=...)`

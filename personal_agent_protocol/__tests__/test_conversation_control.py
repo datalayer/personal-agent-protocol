@@ -228,6 +228,29 @@ async def test_a_direct_conversation_names_its_parent_and_the_parent_points_to_i
 
 
 @pytest.mark.asyncio
+async def test_accepting_an_invitation_sends_both_ids_and_no_message() -> None:
+    """Company-first Direct Conversations (§8.10): both IDs, no `message`."""
+
+    seen: list[dict[str, object]] = []
+
+    def company(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            201, json={"conversation_id": "cnv_direct", "status": "idle", "responder": "agent"}
+        )
+
+    client, http = client_for(company)
+    async with http:
+        opened = await client.accept_user_request(ENDPOINT, "cnv_1", "evt_c6", session=session())
+        with pytest.raises(ValueError):
+            await client.start(ENDPOINT, None, session=session())
+        with pytest.raises(ValueError):
+            await client.start(ENDPOINT, None, session=session(), user_requested_event_id="evt_c6")
+    assert seen == [{"parent_conversation_id": "cnv_1", "user_requested_event_id": "evt_c6"}]
+    assert opened.conversation_id == "cnv_direct"
+
+
+@pytest.mark.asyncio
 async def test_signing_in_mid_conversation_keeps_its_id() -> None:
     """An `authorization` event is answered by signing in: the conversation goes on (§7.11)."""
 

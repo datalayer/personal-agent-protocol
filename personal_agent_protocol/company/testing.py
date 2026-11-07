@@ -40,6 +40,7 @@ from typing import Any
 
 from .points import ReplayCache
 from .store import (
+    ACCEPTANCE,
     ACCESS_TOKEN,
     ACCOUNT_AGENT,
     ACCOUNT_FAMILY,
@@ -64,6 +65,7 @@ from .store import (
     SESSION,
     SIGN_IN_ATTEMPTS,
     USER_CODE,
+    Acceptance,
     AccountAgent,
     AccountFamily,
     AccountGrant,
@@ -185,6 +187,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
             forgotten=frozenset({"evt_0"}),
         ),
         MESSAGE_ID: MessageReceipt("cnv_1", "digest"),
+        ACCEPTANCE: Acceptance("cnv_2"),
         OPERATION: operation,
         PROPOSAL: OperationProposal("op_1"),
         BROWSER_COOKIE: web,

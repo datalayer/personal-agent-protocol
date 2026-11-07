@@ -430,8 +430,20 @@ def test_only_the_companys_own_words_are_replies() -> None:
         {"replies": [{"author": "model", "text": "Hello"}]},
         {"replies": [{"author": {"type": "agent"}, "text": " "}]},
         {"replies": [{"author": {"type": "agent"}, "text": "Hello", "token": "secret"}]},
-        {"replies": [{"author": "agent", "text": "Hello", "links": [{"url": "http://x.example/"}]}]},
-        {"replies": [{"author": "agent", "text": "Hello", "links": [{"url": "https://x.example/", "title": ""}]}]},
+        {
+            "replies": [
+                {"author": "agent", "text": "Hello", "links": [{"url": "http://x.example/"}]}
+            ]
+        },
+        {
+            "replies": [
+                {
+                    "author": "agent",
+                    "text": "Hello",
+                    "links": [{"url": "https://x.example/", "title": ""}],
+                }
+            ]
+        },
         {"replies": [{"author": "agent", "text": "Hello", "disclosures": [" "]}]},
         {"token": "secret"},
     ],

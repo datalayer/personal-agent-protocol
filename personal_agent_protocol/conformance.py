@@ -1759,11 +1759,8 @@ async def _direct_of_direct(ctx: ConformanceContext, _: FixtureCase) -> None:
         await ctx.agent.conversations.start_direct(
             endpoint, direct.conversation_id, _message("Hi.", author="human"), session=session
         )
-    check(
-        raised.value.code
-        in {"conversation_not_found", "conversation_closed", "direct_conversation_open"},
-        f"got {raised.value.code}",
-    )
+    # A parent that is a Direct Conversation itself is `invalid_request` (§8.10).
+    check(raised.value.code == "invalid_request", f"got {raised.value.code}")
 
 
 @case("conversations.authorization-then-same-conversation")

@@ -91,12 +91,12 @@ from ..mediated import MEDIATED_EXTENSION, MEDIATED_GRANT, MEDIATED_VERSION
 from ..models import (
     AUTHORIZATION_CODE_GRANT,
     DEVICE_CODE_GRANT,
-    MEDIATED_RESERVED_FIELDS,
-    REFRESH_TOKEN_GRANT,
     DISCLOSURES_EXTENSION,
     DISCLOSURES_VERSION,
     LINKS_EXTENSION,
     LINKS_VERSION,
+    MEDIATED_RESERVED_FIELDS,
+    REFRESH_TOKEN_GRANT,
     Approval,
     Author,
     ClientMetadata,
@@ -169,6 +169,7 @@ from .points import (
     Turn,
 )
 from .store import (
+    ACCEPTANCE,
     ACCESS_TOKEN,
     ACCOUNT_AGENT,
     ACCOUNT_FAMILY,
@@ -190,6 +191,7 @@ from .store import (
     SESSION,
     SIGN_IN_ATTEMPTS,
     USER_CODE,
+    Acceptance,
     AccountAgent,
     AccountFamily,
     AccountGrant,
@@ -352,6 +354,10 @@ class CompanyConfig:
     #: `scope` saying which (§4.7, RFC 6749 §3.3); one asking for none of them is
     #: `invalid_scope`.
     agent_scopes: tuple[str, ...] | None = None
+    #: After this long without an event, the company closes an open Direct Conversation
+    #: itself (§8.10: either party may, the Company after inactivity); None keeps it open
+    #: until a party closes it. Checked when the conversation is next asked about.
+    direct_conversation_inactivity: timedelta | None = None
     #: Whether the company lists the Links extension, version 1, and sends the pages a
     #: reply refers to in `extensions.links` to an agent that lists it too (Links 2, 3).
     links: bool = False
@@ -2738,6 +2744,12 @@ class CompanyService:
         return conversation
 
     async def _owned(self, conversation_id: str, session: CallerSession) -> StoredConversation:
+        """The conversation, when `session` may continue it (§8.2): the same `client_id`
+        and User ID, and the same account once it uses one; else `conversation_not_found`
+        (signed out where an account is needed: a challenge). Agent IDs play no part.
+        An open Direct Conversation left alone for `direct_conversation_inactivity` is
+        closed first (§8.10)."""
+
         conversation = await self._read(CONVERSATION, conversation_id, StoredConversation.from_json)
         if conversation is None or conversation.owner != (
             session.client_id,
@@ -2745,11 +2757,32 @@ class CompanyService:
         ):
             raise _RefusedError(404, "conversation_not_found")
         if conversation.account_id is not None and session.account_id != conversation.account_id:
-            # Once it used the account, it belongs to that account (§7.2, §7.11).
+            # Once it used the account, it belongs to that account (§8.2, §8.11).
             if session.account_id is None:
                 raise _needs_account(None, self._account_scopes())
             raise _RefusedError(404, "conversation_not_found")
+        if await self._inactive_direct(conversation):
+            await self._close(conversation_id)
+            return await self._conversation(conversation_id)
         return conversation
+
+    async def _inactive_direct(self, conversation: StoredConversation) -> bool:
+        """Whether this open Direct Conversation has had no event for longer than the
+        company allows (`direct_conversation_inactivity`, §8.10)."""
+
+        limit = self.config.direct_conversation_inactivity
+        if limit is None or conversation.parent_id is None or conversation.status == "closed":
+            return False
+        if not conversation.events:
+            return False
+        last = conversation.events[-1].payload.get("created_at")
+        if not isinstance(last, str):
+            return False
+        try:
+            at = datetime.fromisoformat(last.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return self._now() >= at + limit
 
     def _event(self, **payload: object) -> StoredEvent:
         event_id = self._id("evt")
@@ -2774,6 +2807,20 @@ class CompanyService:
         _, session = await self._caller(request)
         _wait(request)
         body = _json_object(request.body)
+        parent_id = body.get("parent_conversation_id")
+        event_id = body.get("user_requested_event_id")
+        if event_id is not None:
+            # Accepting the company's invitation (§8.10): the parent and the event it names,
+            # with or without a first message of the agent's; the company speaks first.
+            if parent_id is None or not isinstance(event_id, str):
+                raise _RefusedError(400, "invalid_request")
+            first = None if body.get("message") is None else _incoming(body.get("message"))
+            return await self._accept_user_request(
+                request, session, str(parent_id), event_id, first
+            )
+        if body.get("message") is None:
+            # A request without `message` is valid only when accepting an invitation.
+            raise _RefusedError(400, "invalid_request")
         message = _incoming(body.get("message"))
         owner = (session.client_id, session.pairwise_user_id)
         replay = await self._replayed(owner, message)
@@ -2798,18 +2845,120 @@ class CompanyService:
         return self._answer(request, conversation, 201)
 
     async def _direct_parent(self, parent_id: str, session: CallerSession) -> StoredConversation:
-        """The conversation a Direct Conversation opens under, if it can (§7.9)."""
+        """The conversation a Direct Conversation opens under, if it can (§8.10).
+
+        Each parent problem has its own error: `conversation_not_found` for an unknown
+        parent or one with another owner, `conversation_closed` for a closed one,
+        `invalid_request` for one that is a Direct Conversation itself, and
+        `direct_conversation_open` for one that already has an open Direct Conversation.
+        """
 
         parent = await self._owned(parent_id, session)
         if parent.status == "closed":
             raise _RefusedError(409, "conversation_closed")
         if parent.parent_id is not None:
-            raise _RefusedError(404, "conversation_not_found")
+            raise _RefusedError(400, "invalid_request")
         self._open(parent)
         return parent
 
+    async def _accept_user_request(
+        self,
+        request: CompanyRequest,
+        session: CallerSession,
+        parent_id: str,
+        event_id: str,
+        first: Message | None,
+    ) -> CompanyResponse:
+        """The agent accepts a `user_requested` event: a Direct Conversation the company
+        speaks first in (§8.10).
+
+        The parent's ownership is checked first, then the acceptance already made for
+        this parent and event, whose Direct Conversation is returned again, after its own
+        ownership check, even once it closed, with no message added. A new acceptance
+        needs the event to be a `user_requested` event of the parent (`invalid_request`),
+        and follows the parent rules; the company then records its first message, and
+        `first`, when the agent sent one, after it.
+        """
+
+        owner = (session.client_id, session.pairwise_user_id)
+        parent = await self._owned(parent_id, session)
+        key = _composite(parent_id, event_id)
+        accepted = await self._read(ACCEPTANCE, key, Acceptance.from_json)
+        if accepted is not None:
+            return self._answer(request, await self._owned(accepted.conversation_id, session), 201)
+        if not any(
+            event.id == event_id and event.payload.get("type") == "user_requested"
+            for event in parent.events
+        ):
+            raise _RefusedError(400, "invalid_request")
+        parent = await self._direct_parent(parent_id, session)
+        conversation_id = self._id("cnv")
+        conversation = StoredConversation(
+            conversation_id=conversation_id, owner=owner, parent_id=parent.conversation_id
+        )
+        if not await self.store.create(ACCEPTANCE, key, Acceptance(conversation_id).to_json()):
+            accepted = await self._read(ACCEPTANCE, key, Acceptance.from_json)
+            if accepted is None:
+                raise _RefusedError(503, "temporarily_unavailable")
+            return self._answer(request, await self._owned(accepted.conversation_id, session), 201)
+        await self.store.put(CONVERSATION, conversation_id, conversation.to_json())
+        try:
+            await self._open_direct(parent.conversation_id, conversation_id, owner, None)
+        except _RefusedError:
+            await self.store.delete(ACCEPTANCE, key)
+            raise
+        conversation = await self._company_first(conversation_id, session)
+        if first is not None:
+            replay = await self._claim(owner, first, conversation_id)
+            if replay is None:
+                conversation = await self._receive(conversation_id, session, first)
+        return self._answer(request, conversation, 201)
+
+    async def _company_first(
+        self, conversation_id: str, session: CallerSession
+    ) -> StoredConversation:
+        """The company's first message in a Direct Conversation it was invited to (§8.10):
+        the company agent's reply to an opening turn, with no message from the agent."""
+
+        negotiated = await self._supports_operations(session.client_id)
+        agent = cast(
+            CompanyAgent, first_contribution(self.reactor, COMPANY_AGENTS, "company agent")
+        )
+        replies = await agent.respond(
+            Turn(
+                conversation_id=conversation_id,
+                text=None,
+                data=None,
+                author="agent",
+                account_id=session.account_id,
+                scopes=session.scopes,
+                client_id=session.client_id,
+                is_direct=True,
+                supports_operations=negotiated,
+                opening=True,
+            )
+        )
+        events: list[StoredEvent] = []
+        for reply in replies:
+            event = await self._reply(conversation_id, session, reply)
+            if event is not None:
+                events.append(event)
+        changed = await self._change(
+            CONVERSATION,
+            conversation_id,
+            StoredConversation.from_json,
+            lambda current: replace(current, events=(*current.events, *events)),
+        )
+        if changed is None:
+            raise _RefusedError(404, "conversation_not_found")
+        return changed[1]
+
     async def _open_direct(
-        self, parent_id: str, conversation_id: str, owner: tuple[str, str], message: Message
+        self,
+        parent_id: str,
+        conversation_id: str,
+        owner: tuple[str, str],
+        message: Message | None,
     ) -> None:
         """One write marks the parent's Direct Conversation; if it cannot, none was started."""
 
@@ -2827,7 +2976,8 @@ class CompanyService:
                 raise _RefusedError(404, "conversation_not_found")
         except _RefusedError:
             await self.store.delete(CONVERSATION, conversation_id)
-            await self.store.delete(MESSAGE_ID, _composite(*owner, message.id))
+            if message is not None:
+                await self.store.delete(MESSAGE_ID, _composite(*owner, message.id))
             raise
 
     async def _conversation_route(  # noqa: C901 - the conversation's actions
@@ -3043,7 +3193,7 @@ class CompanyService:
                 reply["data"] = decision.outcome.data
         return self._event(type="message", message=reply)
 
-    async def _reply(
+    async def _reply(  # noqa: C901 - each kind of content a reply carries
         self, conversation_id: str, session: CallerSession, reply: Reply
     ) -> StoredEvent | None:
         if reply.authorization is not None:
@@ -3076,10 +3226,10 @@ class CompanyService:
             if self.config.disclosures and await self._supports_extension(
                 session.client_id, DISCLOSURES_EXTENSION, DISCLOSURES_VERSION
             ):
-                content = DisclosuresContent(
+                disclosed = DisclosuresContent(
                     items=[Disclosure(text=text) for text in reply.disclosures]
                 )
-                extensions[DISCLOSURES_EXTENSION] = content.model_dump(mode="json")
+                extensions[DISCLOSURES_EXTENSION] = disclosed.model_dump(mode="json")
             else:
                 # Without the extension, the notice is in `text` (Disclosures 2).
                 notice = " ".join(reply.disclosures)

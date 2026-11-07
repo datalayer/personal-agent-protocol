@@ -113,9 +113,7 @@ def test_shared_client_conversation_and_operation_fixtures() -> None:
 
 
 def test_message_requires_content() -> None:
-    with pytest.raises(
-        ValidationError, match="requires text, data, context, or extensions"
-    ):
+    with pytest.raises(ValidationError, match="requires text, data, context, or extensions"):
         Message.model_validate({"id": "msg_empty", "author": {"type": "agent"}})
 
 

@@ -199,7 +199,11 @@ class LedgerlyAsPersonalAgent:
             Message(
                 id=generate_message_id(self.reactor),
                 author=Author(type="agent"),
-                extensions=operations_content(approval=Approval(operation_id=proposal.operation_id, revision=proposal.revision)),
+                extensions=operations_content(
+                    approval=Approval(
+                        operation_id=proposal.operation_id, revision=proposal.revision
+                    )
+                ),
             ),
             session=link.session,  # type: ignore[arg-type]
             token=link.token,

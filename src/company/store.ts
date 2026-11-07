@@ -221,6 +221,11 @@ export const RecordKinds = {
   mediated: "mediated",
   conversation: "conversation",
   messageId: "message_id",
+  /**
+   * A `user_requested` event the agent accepted, by parent conversation and event ID: the
+   * Direct Conversation it started, returned again on a retry, even after it closes (§8.10).
+   */
+  acceptance: "acceptance",
   operation: "operation",
   proposal: "proposal",
   browserCookie: "browser_cookie",
@@ -450,6 +455,11 @@ export interface SignInAttempts {
 export interface StoredEvent {
   readonly id: string;
   readonly payload: Readonly<Record<string, unknown>>;
+}
+
+/** The Direct Conversation an accepted `user_requested` event started (§8.10). */
+export interface Acceptance {
+  readonly conversationId: string;
 }
 
 export type StoredConversationStatus = "working" | "idle" | "queued" | "closed";

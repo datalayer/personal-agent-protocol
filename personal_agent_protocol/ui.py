@@ -340,7 +340,9 @@ _WROTE: dict[str, str] = {"agent": "its agent", "human": "one of its people"}
 def _reply_text(company: str, reply: PapReply) -> str:
     """A reply without a renderer: its words, then each notice and each link with its host."""
 
-    lines = [f"{company}, {_WROTE[reply.author]}{f' ({reply.name})' if reply.name else ''}: {reply.text}"]
+    lines = [
+        f"{company}, {_WROTE[reply.author]}{f' ({reply.name})' if reply.name else ''}: {reply.text}"
+    ]
     lines.extend(f"  Notice: {item}" for item in reply.disclosures)
     lines.extend(f"  Link: {link.title or link.url} ({link.host})" for link in reply.links)
     return "\n".join(lines)
@@ -417,7 +419,8 @@ class PapReplies(Display):
     A company's message is written by its agent or by one of its people
     (``author``, with the writer's ``name`` when the company gives one,
     version 3), carries the pages it refers to and the notices it marks apart
-    (``links`` and ``disclosures``, version 4), whoever answers the conversation now (``responder``) and
+    (``links`` and ``disclosures``, version 4), whoever answers the conversation
+    now (``responder``) and
     wherever it stands (``status``: ``working``, ``idle``, ``queued`` while a
     person is found, ``closed``); the page tells them apart, as PAP-8.8-01
     asks of the personal agent's own words. Each reply is the company's text,
@@ -486,9 +489,7 @@ class PapReplies(Display):
                     author=message.author.type,
                     name=message.author.name,
                     text=message.text,
-                    links=[
-                        PapLink(url=link.url, title=link.title) for link in message.links
-                    ],
+                    links=[PapLink(url=link.url, title=link.title) for link in message.links],
                     disclosures=[item.text for item in message.disclosures],
                 )
                 for message in written
@@ -513,8 +514,8 @@ __all__ = [
     "PapActionClass",
     "PapConfirm",
     "PapConversationStatus",
-    "PapReplies",
     "PapLink",
+    "PapReplies",
     "PapReply",
     "PapSessionShown",
     "PapSignIn",

@@ -90,20 +90,35 @@ class ConversationClient:
     async def start(
         self,
         endpoint: str,
-        message: Message,
+        message: Message | None,
         *,
         session: PapSession,
         token: AccessToken | None = None,
         parent_conversation_id: str | None = None,
+        user_requested_event_id: str | None = None,
         cursor: str | None = None,
         wait: int | None = None,
     ) -> ConversationResponse:
-        """Start a conversation; retry the same Message object to preserve its ID."""
+        """Start a conversation; retry the same Message object to preserve its ID.
 
-        body: dict[str, object] = {"message": self._outgoing_message(message)}
+        `message` may be None only when accepting a `user_requested` event, with
+        `parent_conversation_id` and `user_requested_event_id` both given: the company
+        then speaks first (§8.10, `accept_user_request`).
+        """
+
+        body: dict[str, object] = {}
+        if message is not None:
+            body["message"] = self._outgoing_message(message)
         if parent_conversation_id is not None:
             self._identifier(parent_conversation_id, "parent conversation ID")
             body["parent_conversation_id"] = parent_conversation_id
+        if user_requested_event_id is not None:
+            if parent_conversation_id is None:
+                raise ValueError("a user_requested event is accepted under its parent")
+            self._identifier(user_requested_event_id, "user_requested event ID")
+            body["user_requested_event_id"] = user_requested_event_id
+        if message is None and user_requested_event_id is None:
+            raise ValueError("a conversation starts with a message, or by accepting an invitation")
         return await self._send(
             endpoint,
             body,
@@ -262,6 +277,36 @@ class ConversationClient:
             session=session,
             token=token,
             parent_conversation_id=parent_conversation_id,
+        )
+
+    @traced("pap.conversation.accept_user_request", before=by_endpoint, after=conversation_result)
+    async def accept_user_request(
+        self,
+        endpoint: str,
+        parent_conversation_id: str,
+        event_id: str,
+        *,
+        session: PapSession,
+        token: AccessToken | None = None,
+        wait: int | None = None,
+    ) -> ConversationResponse:
+        """Accept the company's `user_requested` invitation: a Direct Conversation under
+        the parent, named by the event, in which the company speaks first (§8.10).
+
+        No message goes: the company records its first message, read with `wait` here
+        or by reading or streaming events. Sent again with the same parent and event,
+        the company returns the same Direct Conversation, even once it closed. When the
+        user returns control to the agent, close it before continuing in the parent.
+        """
+
+        return await self.start(
+            endpoint,
+            None,
+            session=session,
+            token=token,
+            parent_conversation_id=parent_conversation_id,
+            user_requested_event_id=event_id,
+            wait=wait,
         )
 
     @traced("pap.conversation.handoff", before=by_endpoint, after=conversation_result)

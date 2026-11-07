@@ -75,6 +75,11 @@ export interface ConversationRequestOptions {
 
 export interface StartConversationOptions extends ConversationRequestOptions {
   readonly parentConversationId?: string;
+  /**
+   * The `user_requested` event accepted, under `parentConversationId`: the company then
+   * speaks first, and `message` may be absent (§8.10, `acceptUserRequest`).
+   */
+  readonly userRequestedEventId?: string;
 }
 
 export interface ConversationEventOptions extends ConversationRequestOptions {
@@ -154,7 +159,7 @@ export class ConversationClient {
 
   start(
     endpoint: string,
-    message: Message,
+    message: Message | undefined,
     options: StartConversationOptions,
   ): Promise<ConversationResponse> {
     return traced(
@@ -168,15 +173,50 @@ export class ConversationClient {
 
   async #start(
     endpoint: string,
-    message: Message,
+    message: Message | undefined,
     options: StartConversationOptions,
   ): Promise<ConversationResponse> {
-    const body: Record<string, unknown> = { message: this.#outgoing(message) };
+    const body: Record<string, unknown> = {};
+    if (message !== undefined) body.message = this.#outgoing(message);
     if (options.parentConversationId !== undefined) {
       assertIdentifier(options.parentConversationId, "parent conversation ID");
       body.parent_conversation_id = options.parentConversationId;
     }
+    if (options.userRequestedEventId !== undefined) {
+      if (options.parentConversationId === undefined) {
+        throw new TypeError("a user_requested event is accepted under its parent");
+      }
+      assertIdentifier(options.userRequestedEventId, "user_requested event ID");
+      body.user_requested_event_id = options.userRequestedEventId;
+    }
+    if (message === undefined && options.userRequestedEventId === undefined) {
+      throw new TypeError("a conversation starts with a message, or by accepting an invitation");
+    }
     return this.#send(endpoint, body, 201, options);
+  }
+
+  /**
+   * Accept the company's `user_requested` invitation: a Direct Conversation under the parent,
+   * named by the event, in which the company speaks first (§8.10).
+   *
+   * No message goes: the company records its first message, read with `wait` here or by
+   * reading or streaming events. Sent again with the same parent and event, the company
+   * returns the same Direct Conversation, even once it closed. When the user returns control
+   * to the agent, close it before continuing in the parent.
+   */
+  acceptUserRequest(
+    endpoint: string,
+    parentConversationId: string,
+    eventId: string,
+    options: ConversationRequestOptions,
+  ): Promise<ConversationResponse> {
+    return traced(
+      this.#reactor,
+      "pap.conversation.accept_user_request",
+      byEndpoint(endpoint),
+      () => this.#start(endpoint, undefined, { ...options, parentConversationId, userRequestedEventId: eventId }),
+      conversationResult,
+    );
   }
 
   send(

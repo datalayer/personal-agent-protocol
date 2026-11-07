@@ -152,6 +152,7 @@ import {
   type PendingAuthorization,
   type PendingDevice,
   type PendingMediated,
+  type Acceptance,
   type SignInAttempts,
   type StoreWriteOptions,
   type StoredConversation,
@@ -235,6 +236,12 @@ export interface CompanyConfigOptions {
    * which (§4.7, RFC 6749 §3.3); one asking for none of them is `invalid_scope`.
    */
   readonly agentScopes?: readonly string[];
+  /**
+   * After this long without an event, the company closes an open Direct Conversation itself
+   * (§8.10: either party may, the Company after inactivity); absent, it stays open until a
+   * party closes it. Checked when the conversation is next asked about.
+   */
+  readonly directConversationInactivitySeconds?: number;
   /**
    * Whether the company lists the Links extension, version 1, and sends the pages a reply
    * refers to in `extensions.links` to an agent that lists it too (Links 2, 3).
@@ -367,6 +374,7 @@ export class CompanyConfig {
   readonly operations: boolean;
   readonly signInDisabled: boolean;
   readonly agentScopes: readonly string[] | undefined;
+  readonly directConversationInactivitySeconds: number | undefined;
   readonly links: boolean;
   readonly disclosures: boolean;
   readonly humansAvailable: boolean;
@@ -421,6 +429,7 @@ export class CompanyConfig {
     ) {
       throw new Error("agentScopes are some of scopes");
     }
+    this.directConversationInactivitySeconds = options.directConversationInactivitySeconds;
     this.links = options.links ?? false;
     this.disclosures = options.disclosures ?? false;
     this.humansAvailable = options.humansAvailable ?? false;
@@ -3027,11 +3036,29 @@ export class CompanyService {
       throw new Refused(404, "conversation_not_found");
     }
     if (conversation.accountId !== undefined && session.accountId !== conversation.accountId) {
-      // Once it used the account, it belongs to that account (§7.2, §7.11).
+      // Once it used the account, it belongs to that account (§8.2, §8.11).
       if (session.accountId === undefined) throw needsAccount(undefined, this.#accountScopes());
       throw new Refused(404, "conversation_not_found");
     }
+    if (this.#inactiveDirect(conversation)) {
+      // An open Direct Conversation left alone too long: the company closes it (§8.10).
+      await this.#close(conversationId);
+      return this.#conversation(conversationId);
+    }
     return conversation;
+  }
+
+  /**
+   * Whether this open Direct Conversation has had no event for longer than the company
+   * allows (`directConversationInactivitySeconds`, §8.10).
+   */
+  #inactiveDirect(conversation: StoredConversation): boolean {
+    const limit = this.config.directConversationInactivitySeconds;
+    if (limit === undefined || conversation.parentId === undefined || conversation.status === "closed") return false;
+    const last = conversation.events.at(-1)?.payload.created_at;
+    if (typeof last !== "string") return false;
+    const at = Date.parse(last);
+    return !Number.isNaN(at) && this.#now().getTime() >= at + limit * 1000;
   }
 
   #event(payload: Readonly<Record<string, unknown>>): StoredEvent {
@@ -3057,6 +3084,21 @@ export class CompanyService {
     const [, session] = await this.#caller(request);
     waitOf(request);
     const body = jsonObject(request.body);
+    const parentId = body.parent_conversation_id;
+    const eventId = body.user_requested_event_id;
+    if (eventId !== undefined && eventId !== null) {
+      // Accepting the company's invitation (§8.10): the parent and the event it names,
+      // with or without a first message of the agent's; the company speaks first.
+      if (parentId === undefined || parentId === null || typeof eventId !== "string") {
+        throw new Refused(400, "invalid_request");
+      }
+      const first = body.message === undefined || body.message === null ? undefined : incoming(body.message);
+      return this.#acceptUserRequest(request, session, String(parentId), eventId, first);
+    }
+    if (body.message === undefined || body.message === null) {
+      // A request without `message` is valid only when accepting an invitation.
+      throw new Refused(400, "invalid_request");
+    }
     const message = incoming(body.message);
     const owner = [session.clientId, session.pairwiseUserId] as const;
     const replay = await this.#replayed(owner, message);
@@ -3064,13 +3106,9 @@ export class CompanyService {
       // A retried start answers only a caller that may read the conversation now.
       return this.#answer(request, await this.#owned(replay, session), 201);
     }
-    const parentId = body.parent_conversation_id;
     let parent: StoredConversation | undefined;
     if (parentId !== undefined && parentId !== null) {
-      parent = await this.#owned(String(parentId), session);
-      if (parent.status === "closed") throw new Refused(409, "conversation_closed");
-      if (parent.parentId !== undefined) throw new Refused(404, "conversation_not_found");
-      this.#open(parent);
+      parent = await this.#directParent(String(parentId), session);
     }
     const conversationId = this.#id("cnv");
     const conversation: StoredConversation = {
@@ -3093,12 +3131,118 @@ export class CompanyService {
     return this.#answer(request, await this.#receive(conversationId, session, message), 201);
   }
 
+  /**
+   * The conversation a Direct Conversation opens under, if it can (§8.10).
+   *
+   * Each parent problem has its own error: `conversation_not_found` for an unknown parent or
+   * one with another owner, `conversation_closed` for a closed one, `invalid_request` for one
+   * that is a Direct Conversation itself, and `direct_conversation_open` for one that already
+   * has an open Direct Conversation.
+   */
+  async #directParent(parentId: string, session: CallerSession): Promise<StoredConversation> {
+    const parent = await this.#owned(parentId, session);
+    if (parent.status === "closed") throw new Refused(409, "conversation_closed");
+    if (parent.parentId !== undefined) throw new Refused(400, "invalid_request");
+    this.#open(parent);
+    return parent;
+  }
+
+  /**
+   * The agent accepts a `user_requested` event: a Direct Conversation the company speaks
+   * first in (§8.10).
+   *
+   * The parent's ownership is checked first, then the acceptance already made for this
+   * parent and event, whose Direct Conversation is returned again, after its own ownership
+   * check, even once it closed, with no message added. A new acceptance needs the event to
+   * be a `user_requested` event of the parent (`invalid_request`), and follows the parent
+   * rules; the company then records its first message, and `first`, when the agent sent
+   * one, after it.
+   */
+  async #acceptUserRequest(
+    request: CompanyRequest,
+    session: CallerSession,
+    parentId: string,
+    eventId: string,
+    first: Message | undefined,
+  ): Promise<CompanyResponse> {
+    const owner = [session.clientId, session.pairwiseUserId] as const;
+    let parent = await this.#owned(parentId, session);
+    const key = composite(parentId, eventId);
+    const accepted = await this.#read<Acceptance>(RecordKinds.acceptance, key);
+    if (accepted !== undefined) {
+      return this.#answer(request, await this.#owned(accepted.conversationId, session), 201);
+    }
+    if (!parent.events.some((event) => event.id === eventId && event.payload.type === "user_requested")) {
+      throw new Refused(400, "invalid_request");
+    }
+    parent = await this.#directParent(parentId, session);
+    const conversationId = this.#id("cnv");
+    const conversation: StoredConversation = {
+      conversationId,
+      owner,
+      status: "idle",
+      responder: "agent",
+      parentId: parent.conversationId,
+      events: [],
+      forgotten: [],
+    };
+    const record: Acceptance = { conversationId };
+    if (!(await this.store.create(RecordKinds.acceptance, key, json(record)))) {
+      const raced = await this.#read<Acceptance>(RecordKinds.acceptance, key);
+      if (raced === undefined) throw new Refused(503, "temporarily_unavailable");
+      return this.#answer(request, await this.#owned(raced.conversationId, session), 201);
+    }
+    await this.store.put(RecordKinds.conversation, conversationId, json(conversation));
+    try {
+      await this.#openDirect(parent.conversationId, conversationId, owner, undefined);
+    } catch (error) {
+      await this.store.delete(RecordKinds.acceptance, key);
+      throw error;
+    }
+    let opened = await this.#companyFirst(conversationId, session);
+    if (first !== undefined) {
+      const claimed = await this.#claim(owner, first, conversationId);
+      if (claimed === undefined) opened = await this.#receive(conversationId, session, first);
+    }
+    return this.#answer(request, opened, 201);
+  }
+
+  /**
+   * The company's first message in a Direct Conversation it was invited to (§8.10): the
+   * company agent's reply to an opening turn, with no message from the agent.
+   */
+  async #companyFirst(conversationId: string, session: CallerSession): Promise<StoredConversation> {
+    const negotiated = await this.#supportsOperations(session.clientId);
+    const agent = firstContribution(this.reactor, CompanyAgents, "company agent");
+    const replies = await agent.respond({
+      conversationId,
+      author: "agent",
+      ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
+      scopes: session.scopes,
+      clientId: session.clientId,
+      isDirect: true,
+      supportsOperations: negotiated,
+      opening: true,
+    });
+    const events: StoredEvent[] = [];
+    for (const reply of replies) {
+      const event = await this.#reply(conversationId, session, reply);
+      if (event !== undefined) events.push(event);
+    }
+    const changed = await this.#change<StoredConversation>(RecordKinds.conversation, conversationId, (current) => ({
+      ...current,
+      events: [...current.events, ...events],
+    }));
+    if (changed === undefined) throw new Refused(404, "conversation_not_found");
+    return changed[1];
+  }
+
   /** One write marks the parent's Direct Conversation; if it cannot, none was started. */
   async #openDirect(
     parentId: string,
     conversationId: string,
     owner: readonly [string, string],
-    message: Message,
+    message: Message | undefined,
   ): Promise<void> {
     const opened = this.#event({ type: "direct_opened", conversation_id: conversationId });
     try {
@@ -3113,7 +3257,7 @@ export class CompanyService {
       if (changed === undefined) throw new Refused(404, "conversation_not_found");
     } catch (error) {
       await this.store.delete(RecordKinds.conversation, conversationId);
-      await this.store.delete(RecordKinds.messageId, this.#messageKey(owner, message.id));
+      if (message !== undefined) await this.store.delete(RecordKinds.messageId, this.#messageKey(owner, message.id));
       throw error;
     }
   }

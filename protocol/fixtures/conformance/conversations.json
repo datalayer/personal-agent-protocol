@@ -131,7 +131,7 @@
       "requirements": [
         "PAP-8.10-01"
       ],
-      "description": "A Direct Conversation cannot be the parent of another."
+      "description": "A Direct Conversation cannot be the parent of another: invalid_request."
     },
     {
       "id": "conversations.authorization-then-same-conversation",

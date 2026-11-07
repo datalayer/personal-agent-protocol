@@ -142,6 +142,9 @@ class Turn:
     #: Whether the personal agent negotiated Operations: without it, an operation is
     #: never sent, so the agent's words must not promise one.
     supports_operations: bool
+    #: The Company speaks first: the user accepted a `user_requested` invitation and the
+    #: Direct Conversation has no message yet (§8.10). `text` and `data` are then None.
+    opening: bool = False
 
 
 @dataclass(frozen=True)

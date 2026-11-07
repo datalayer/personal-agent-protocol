@@ -106,6 +106,11 @@ export interface Turn {
    * sent, so the agent's words must not promise one.
    */
   readonly supportsOperations: boolean;
+  /**
+   * The Company speaks first: the user accepted a `user_requested` invitation and the Direct
+   * Conversation has no message yet (§8.10). `text` and `data` are then absent.
+   */
+  readonly opening?: boolean;
 }
 
 /**

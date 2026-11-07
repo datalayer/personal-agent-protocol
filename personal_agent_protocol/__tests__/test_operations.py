@@ -1079,7 +1079,9 @@ async def test_a_failed_check_in_a_conversation_is_a_message_with_a_new_revision
     forged = Message(
         id=world.message("x").id,
         author=Author(type="agent"),
-        extensions=operations_content(approval=Approval(operation_id=operation.operation_id, revision="never_returned")),
+        extensions=operations_content(
+            approval=Approval(operation_id=operation.operation_id, revision="never_returned")
+        ),
     )
     page = await world.conversations.send(
         endpoint, conversation, forged, session=session, token=token, wait=0

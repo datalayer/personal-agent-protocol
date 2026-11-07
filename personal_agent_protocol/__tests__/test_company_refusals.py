@@ -182,6 +182,139 @@ async def test_a_direct_conversation_locks_its_parent_until_it_closes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_company_speaks_first_in_a_direct_conversation_the_user_accepted() -> None:
+    """Company-first Direct Conversations (§8.10): the agent accepts a `user_requested`
+    event with its ID and the parent's, without a message; the company writes first;
+    the same acceptance returns the same conversation, also once it closed."""
+
+    from personal_agent_protocol.demo.manzanita import INVITATION, OPENING
+
+    world = World()
+    token = await signed_in(world)
+    session = world.session
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    page = await world.conversations.start(
+        endpoint, world.message("The jacket arrived damaged"), session=session, token=token, wait=0
+    )
+    invited = [e for e in page.events if e.type == "user_requested"]
+    assert invited and invited[0].reason == INVITATION
+    event_id = invited[0].id
+
+    direct = await world.conversations.accept_user_request(
+        endpoint, page.conversation_id, event_id, session=session, token=token, wait=0
+    )
+    assert direct.conversation_id != page.conversation_id
+    first = [e.message for e in direct.events if e.message is not None]
+    assert [m.role for m in first] == ["company"] and first[0].text == OPENING
+    assert first[0].author.name == "Rosa"
+    parent = await world.conversations.read_events(
+        endpoint, page.conversation_id, session=session, token=token
+    )
+    assert [e.conversation_id for e in parent.events if e.type == "direct_opened"] == [
+        direct.conversation_id
+    ]
+
+    # The same acceptance again: the same conversation, no message added.
+    again = await world.conversations.accept_user_request(
+        endpoint, page.conversation_id, event_id, session=session, token=token, wait=0
+    )
+    assert again.conversation_id == direct.conversation_id
+    assert len([e for e in again.events if e.message is not None]) == 1
+    # Also once it closed, and the parent takes messages again.
+    await world.conversations.close(endpoint, direct.conversation_id, session=session, token=token)
+    closed = await world.conversations.accept_user_request(
+        endpoint, page.conversation_id, event_id, session=session, token=token, wait=0
+    )
+    assert closed.conversation_id == direct.conversation_id and closed.status == "closed"
+    await world.conversations.send(
+        endpoint, page.conversation_id, world.message("Thanks"), session=session, token=token
+    )
+
+    # An event that is no `user_requested` event of the parent is `invalid_request`.
+    with pytest.raises(ConversationError) as unknown:
+        await world.conversations.accept_user_request(
+            endpoint, page.conversation_id, "evt_nothing", session=session, token=token
+        )
+    assert unknown.value.code == "invalid_request"
+    # A start with neither a message nor an acceptance is `invalid_request`.
+    bare = await world.transport.request(
+        "POST",
+        endpoint,
+        session=session,
+        token=token,
+        headers={"content-type": "application/json"},
+        content=b'{"parent_conversation_id": "%s"}' % page.conversation_id.encode(),
+    )
+    assert (bare.status_code, bare.json()["error"]) == (400, "invalid_request")
+
+
+@pytest.mark.asyncio
+async def test_each_parent_problem_has_its_own_error() -> None:
+    """`conversation_not_found`, `conversation_closed`, `invalid_request` for a parent that
+    is a Direct Conversation, `direct_conversation_open` (§8.10)."""
+
+    world = World()
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    parent = await world.conversations.start(endpoint, world.message("Hello"), session=session)
+    direct = await world.conversations.start_direct(
+        endpoint, parent.conversation_id, world.message("Me"), session=session
+    )
+
+    async def refusal(parent_id: str) -> str:
+        with pytest.raises(ConversationError) as raised:
+            await world.conversations.start_direct(
+                endpoint, parent_id, world.message("Again"), session=session
+            )
+        return raised.value.code
+
+    assert await refusal("cnv_unknown") == "conversation_not_found"
+    assert await refusal(direct.conversation_id) == "invalid_request"
+    assert await refusal(parent.conversation_id) == "direct_conversation_open"
+    await world.conversations.close(endpoint, parent.conversation_id, session=session)
+    assert await refusal(parent.conversation_id) == "conversation_closed"
+
+
+@pytest.mark.asyncio
+async def test_the_company_closes_a_direct_conversation_left_alone() -> None:
+    """Either party may close a Direct Conversation, the Company after inactivity (§8.10)."""
+
+    import dataclasses
+    from datetime import timedelta
+
+    from personal_agent_protocol.demo.manzanita import CONFIG, manzanita
+
+    world = World()
+    world.shop, world.plugin = manzanita(
+        world.network,
+        world.clock,
+        config=dataclasses.replace(CONFIG, direct_conversation_inactivity=timedelta(minutes=30)),
+    )
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    parent = await world.conversations.start(endpoint, world.message("Hello"), session=session)
+    direct = await world.conversations.start_direct(
+        endpoint, parent.conversation_id, world.message("Me"), session=session
+    )
+    world.clock.advance(29 * 60)
+    page = await world.conversations.read_events(endpoint, direct.conversation_id, session=session)
+    assert page.status != "closed"
+    world.clock.advance(31 * 60)
+    with pytest.raises(ConversationError) as raised:
+        await world.conversations.send(
+            endpoint, direct.conversation_id, world.message("Still there?"), session=session
+        )
+    assert raised.value.code == "conversation_closed"
+    parent_page = await world.conversations.read_events(
+        endpoint, parent.conversation_id, session=session
+    )
+    assert any(e.type == "direct_closed" for e in parent_page.events)
+    await world.conversations.send(
+        endpoint, parent.conversation_id, world.message("Back"), session=session
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_revised_operation_answers_a_new_revision_and_is_never_performed_twice() -> None:
     world = World()
     token = await signed_in(world)
@@ -205,7 +338,9 @@ async def test_a_revised_operation_answers_a_new_revision_and_is_never_performed
         message = Message(
             id=generate_message_id(world.reactor),
             author=Author(type="agent"),
-            extensions=operations_content(approval=Approval(operation_id=operation.operation_id, revision=operation.revision)),
+            extensions=operations_content(
+                approval=Approval(operation_id=operation.operation_id, revision=operation.revision)
+            ),
         )
         page_ = await send(
             endpoint, page.conversation_id, message, session=world.session, token=token, wait=0

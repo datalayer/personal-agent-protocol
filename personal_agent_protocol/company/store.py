@@ -48,6 +48,9 @@ CODE = "code"
 MEDIATED = "mediated"
 CONVERSATION = "conversation"
 MESSAGE_ID = "message_id"
+#: A `user_requested` event the agent accepted, by parent conversation and event ID: the
+#: Direct Conversation it started, returned again on a retry, even after it closes (§8.10).
+ACCEPTANCE = "acceptance"
 OPERATION = "operation"
 PROPOSAL = "proposal"
 BROWSER_COOKIE = "browser_cookie"
@@ -77,6 +80,7 @@ RECORD_KINDS = (
     MEDIATED,
     CONVERSATION,
     MESSAGE_ID,
+    ACCEPTANCE,
     OPERATION,
     PROPOSAL,
     BROWSER_COOKIE,
@@ -645,6 +649,20 @@ class PendingMediated:
 
 
 @dataclass(frozen=True)
+class Acceptance:
+    """The Direct Conversation an accepted `user_requested` event started (§8.10)."""
+
+    conversation_id: str
+
+    def to_json(self) -> JsonObject:
+        return {"conversation_id": self.conversation_id}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> Acceptance:
+        return cls(conversation_id=value["conversation_id"])
+
+
+@dataclass(frozen=True)
 class StoredEvent:
     id: str
     payload: JsonObject
@@ -1058,6 +1076,7 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     MEDIATED: PendingMediated.from_json,
     CONVERSATION: StoredConversation.from_json,
     MESSAGE_ID: MessageReceipt.from_json,
+    ACCEPTANCE: Acceptance.from_json,
     OPERATION: StoredOperation.from_json,
     PROPOSAL: OperationProposal.from_json,
     BROWSER_COOKIE: WebSession.from_json,

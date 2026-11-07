@@ -73,6 +73,7 @@ TELEMETRY_EVENTS: dict[str, Stage] = {
     "pap.conversation.send": "conversation",
     "pap.conversation.read_events": "conversation",
     "pap.conversation.start_direct": "conversation",
+    "pap.conversation.accept_user_request": "conversation",
     "pap.conversation.handoff": "conversation",
     "pap.conversation.close": "conversation",
     "pap.operation.ask_user": "operation",

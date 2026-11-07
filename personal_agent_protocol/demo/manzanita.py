@@ -62,6 +62,10 @@ TRACKING_LINK = Link(
 #: The notice an exchange reply carries, as a disclosure to an agent that lists Disclosures,
 #: in `text` to any other (Disclosures 2, 3).
 EXCHANGE_NOTICE = "Exchanged items ship once the original jacket is received."
+#: The `reason` of the `user_requested` event Manzanita adds for a damaged jacket (§8.10).
+INVITATION = "A returns specialist would like to talk with you about the damaged jacket."
+#: Manzanita's first message in the Direct Conversation the user accepted (§8.10).
+OPENING = "Hi, this is Rosa from Manzanita returns. Tell me what happened with the jacket."
 
 CONFIG = CompanyConfig(
     name="Manzanita Outfitters",
@@ -117,6 +121,15 @@ class ManzanitaAgent:
 
     async def respond(self, turn: Turn) -> Sequence[Reply]:
         text = (turn.text or "").lower()
+        if turn.opening:
+            # The user accepted the invitation: the company speaks first (§8.10).
+            return [Reply(text=OPENING, persona={"id": "rosa", "name": "Rosa"})]
+        if turn.account_id is not None and "damaged" in text:
+            # A person would like to talk with the user: an invitation, not a message.
+            return [
+                Reply(text="I'm sorry about that. A returns specialist would like a word."),
+                Reply(user_requested=INVITATION),
+            ]
         if turn.account_id is None:
             if "order" in text or "jacket" in text or "exchange" in text:
                 return [

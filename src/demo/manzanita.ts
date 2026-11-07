@@ -80,6 +80,10 @@ export const TRACKING_LINK: Link = {
  * in `text` to any other (Disclosures 2, 3).
  */
 export const EXCHANGE_NOTICE = "Exchanged items ship once the original jacket is received.";
+/** The `reason` of the `user_requested` event Manzanita adds for a damaged jacket (§8.10). */
+export const INVITATION = "A returns specialist would like to talk with you about the damaged jacket.";
+/** Manzanita's first message in the Direct Conversation the user accepted (§8.10). */
+export const OPENING = "Hi, this is Rosa from Manzanita returns. Tell me what happened with the jacket.";
 
 export const ORDER = {
   order_id: "ord_7Hk2",
@@ -183,6 +187,14 @@ export const PROPOSALS: Readonly<Record<string, ProposedOperation>> = {
 export class ManzanitaAgent implements CompanyAgent {
   async respond(turn: Turn): Promise<readonly Reply[]> {
     const text = (turn.text ?? "").toLowerCase();
+    if (turn.opening) {
+      // The user accepted the invitation: the company speaks first (§8.10).
+      return [{ text: OPENING, persona: { id: "rosa", name: "Rosa" } }];
+    }
+    if (turn.accountId !== undefined && text.includes("damaged")) {
+      // A person would like to talk with the user: an invitation, not a message.
+      return [{ text: "I'm sorry about that. A returns specialist would like a word." }, { userRequested: INVITATION }];
+    }
     if (turn.accountId === undefined) {
       if (text.includes("order") || text.includes("jacket") || text.includes("exchange")) {
         return [

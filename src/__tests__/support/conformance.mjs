@@ -1263,7 +1263,8 @@ caseFor("conversations.direct-of-direct-refused")(async (ctx) => {
     ctx.agent.conversations.startDirect(endpoint, direct.conversation_id, message("Hi.", "human"), { session }),
     "a Direct Conversation under a Direct Conversation",
   );
-  check(["conversation_not_found", "conversation_closed", "direct_conversation_open"].includes(error.code), `got ${error.code}`);
+  // A parent that is a Direct Conversation itself is `invalid_request` (§8.10).
+  check(error.code === "invalid_request", `got ${error.code}`);
 });
 
 caseFor("conversations.authorization-then-same-conversation")(async (ctx) => {

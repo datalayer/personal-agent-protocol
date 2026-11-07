@@ -57,10 +57,15 @@ sign-in's codes or tokens.
 
 A conversation isn't tied to one access token or even one Session: the agent
 may switch tokens partway, after signing in, refreshing, or signing out, or
-continue in a new Session, as long as the token matches the conversation's
-owner. Once a conversation has used the user's account, a request on it from a
-token not signed in to that account gets `insufficient_scope`; the
-conversation stays open, so the user can sign in again and continue it.
+continue in a new Session, as long as the request matches the conversation's
+owner (§8.2): the agent's `client_id` and the User ID that started it, and,
+once it uses the user's account, that account too; Agent IDs are not part of
+it. Before it uses an account, any token of the same agent and user continues
+it, and the conversation then uses that account. After it uses account A, the
+same agent and user signed out get a challenge (`insufficient_scope`; the
+conversation stays open, so the user can sign in again and continue it),
+signed in to another account `conversation_not_found`; another User ID or
+another agent is always `conversation_not_found`.
 
 ## Direct Conversations (§8.10)
 
@@ -71,6 +76,26 @@ While it is open, the parent refuses messages and handoff with
 `direct_conversation_open`; the client exposes the open conversation's ID in
 `error.details["conversation_id"]` so the host can route the user there. The
 parent receives `direct_opened` and `direct_closed` events.
+
+The parent must be open, the caller's own, not a Direct Conversation itself,
+and without an open Direct Conversation; each failure has its own code:
+`conversation_not_found`, `conversation_closed`, `invalid_request`, and
+`direct_conversation_open`.
+
+**When the company asks.** A `user_requested` event in the parent, with its
+`reason`, is an invitation: the agent asks the user, and when they agree calls
+`accept_user_request(endpoint, parent_id, event_id)` (`acceptUserRequest` in
+TypeScript), which sends the parent's ID and the event's and no message, so
+the company speaks first. Its first message is read with `wait` on that call,
+or by reading or streaming events. The same call again, with the same parent
+and event, returns the same Direct Conversation with no message added, even
+once it closed; an event that is not a `user_requested` event of the parent is
+`invalid_request`. The `reason` stays an invitation, not the first message. If
+the user declines, the agent says so in the parent conversation.
+
+Either party may close a Direct Conversation, the company after inactivity;
+closing the parent closes it too. The agent may observe every message in it,
+and the company sends nothing there that it cannot share with the agent.
 
 ## Handoff (§8.9) and closing (§8.12)
 

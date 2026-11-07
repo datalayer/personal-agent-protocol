@@ -128,6 +128,16 @@ test("a Direct Conversation names its parent; the parent points to it", async ()
   );
 });
 
+test("accepting an invitation names the parent and the event, and sends no message", async () => {
+  // Company-first Direct Conversations (§8.10): both IDs, no `message`.
+  const { client, seen } = arrange(() => json(201, { conversation_id: "cnv_direct", status: "idle", responder: "agent" }));
+  const opened = await client.acceptUserRequest(endpoint, "cnv_1", "evt_c6", { session: session() });
+  assert.deepEqual(JSON.parse(seen[0].init.body), { parent_conversation_id: "cnv_1", user_requested_event_id: "evt_c6" });
+  assert.equal(opened.conversation_id, "cnv_direct");
+  await assert.rejects(client.start(endpoint, undefined, { session: session() }), TypeError);
+  await assert.rejects(client.start(endpoint, undefined, { session: session(), userRequestedEventId: "evt_c6" }), TypeError);
+});
+
 test("a stream that keeps closing empty gives up", async () => {
   const { client, seen } = arrange(() => sse(": nothing\n\n"));
   await assert.rejects(

@@ -69,6 +69,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`DirectSignInRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Authorization request state that redacts its URL and PKCE values.
 - [`DirectSignInResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. A completed Direct Sign-In: the access token, and the refresh token's reference.
 - [`DirectSignInStart`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Class. Non-secret status returned after handing authorization to the user.
+- [`Disclosure`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A notice a Company marks apart from the rest of a message (Disclosures 3), such as
+- [`DisclosuresContent`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The Disclosures extension's content of a Company message, `extensions.disclosures`
 - [`DiscoveredCompany`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A verified `poppy.json`, its domain's protected resource metadata, and its issuer's.
 - [`DISCOVERY_TRANSPORTS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `DISCOVERY_TRANSPORTS` constant.
 - [`DiscoveryClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/discovery.py) — Class. Discover and authenticate a company's PAP declaration.
@@ -103,6 +105,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`JsonWebKeySet`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A non-empty set of public keys suitable for PAP assertion verification.
 - [`jwk_thumbprint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Function. A public JWK's RFC 7638 SHA-256 thumbprint: a Session JWT's `kid` (§5.2).
 - [`JWT_CLIENT_ASSERTION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Constant. Public `JWT_CLIENT_ASSERTION` constant.
+- [`Link`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A web page a Company message refers to (Links 3): its HTTPS `url`, and its `title`
+- [`LinksContent`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The Links extension's content of a Company message, `extensions.links` (Links 3).
 - [`MEDIATED_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Constant. Public `MEDIATED_EXTENSION` constant.
 - [`MEDIATED_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Constant. Public `MEDIATED_GRANT` constant.
 - [`mediated_sign_in`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Function. What the company's Mediated Sign-In asks for, or `None` when it offers none.
@@ -122,10 +126,12 @@ Unknown or internal symbols are deliberately excluded.
 - [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. One action the Company performs once the User approves it (Operations 3).
 - [`operation_from`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The one operation object, from whichever interface carried it (Operations 4).
 - [`OperationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. An operation could not be approved, or its approval could not be sent.
+- [`operations_content`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. A message's `extensions` carrying the Operations extension's content (Operations 2).
 - [`OPERATIONS_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `OPERATIONS_EXTENSION` constant.
 - [`operations_negotiated`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Whether both sides list `operations` with this version (another major doesn't count).
 - [`OPERATIONS_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `OPERATIONS_VERSION` constant.
 - [`OperationsClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. Get the user's approval of an operation, and send it at most once.
+- [`OperationsContent`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The Operations extension's content of a message, `extensions.operations` (Operations 2).
 - [`operator_directory`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. The JWK Set a host serves at its `Signature-Agent` URL (Web Bot Auth §5.5.1).
 - [`operator_key_from`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. The `Ed25519OperatorKey` of a private key.
 - [`OPERATOR_SIGNERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `OPERATOR_SIGNERS` constant.
@@ -172,6 +178,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`RevocationResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Class. A revocation the company acknowledged; the local copy is gone.
 - [`RsaBlindSigningKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/blind.py) — Class. A reference `BlindSigningKey`: an RSA key of 2048 bits or more (3072 suggested).
 - [`ScopeHint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. What a scope allows, its most consequential operation (§4.4): a Company's claim.
+- [`scopes_to_request`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Function. The scopes a new sign-in asks for when a task needs more access (§4.7).
 - [`ServiceTokens`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Class. The access tokens of one account, one per service that asks for its own (§4.5).
 - [`SESSION_SIGNERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `SESSION_SIGNERS` constant.
 - [`SessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. Start Sessions, and send grants to the company's token endpoint (§4, §5).

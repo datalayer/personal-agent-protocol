@@ -42,10 +42,15 @@ def _major(section: str) -> str:
     return section.split(".", 1)[0]
 
 
-def _spec(*sections: str) -> Callable[[dict[str, Any]], bool]:
+def _spec(*sections: str, exact: tuple[str, ...] = ()) -> Callable[[dict[str, Any]], bool]:
+    """Entries of the spec in `sections` or their subsections, and in `exact` only as such:
+    section 4's own statements, not those of 4.1, which is another area's."""
+
     def matches(entry: dict[str, Any]) -> bool:
         return entry["source"] == "spec" and (
-            entry["section"] in sections or _major(entry["section"]) in sections
+            entry["section"] in sections
+            or _major(entry["section"]) in sections
+            or entry["section"] in exact
         )
 
     return matches
@@ -78,9 +83,9 @@ AREAS = (
     Area(
         "sign-in",
         "Sign-in and OAuth tokens",
-        "Direct and Device Sign-In, refresh and access tokens, and scopes (§4.2 to §4.8).",
+        "Direct and Device Sign-In, refresh and access tokens, and scopes (§4, §4.2 to §4.8).",
         SPEC,
-        _spec("4.2", "4.3", "4.4", "4.5", "4.6", "4.7", "4.8"),
+        _spec("4.2", "4.3", "4.4", "4.5", "4.6", "4.7", "4.8", exact=("4",)),
     ),
     Area(
         "browser",

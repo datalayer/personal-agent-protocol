@@ -633,6 +633,33 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._token
   reason: The company parses requests with the same extra-tolerant models and ignores unknown form fields,
     but no test sends it unknown fields.
+- id: PAP-4-01
+  section: '4'
+  level: SHOULD
+  role: company
+  text: Direct Sign-In (4.2) is the preferred sign-in type. A Company that offers sign-in SHOULD offer
+    Direct Sign-In.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.company.service:CompanyService.oauth_metadata
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_reference_company_offers_direct_sign_in
+  conformance:
+  - lifecycle.direct-sign-in-offered
+- id: PAP-4-02
+  section: '4'
+  level: SHOULD
+  role: personal-agent
+  text: A Personal Agent SHOULD use Direct Sign-In when the Company offers it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveredCompany.preferred_sign_in
+  - personal_agent_protocol.models:DiscoveredCompany.sign_in_types
+  - personal_agent_protocol.conformance:ConformanceContext.sign_in
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_direct_sign_in_is_preferred_when_offered
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_discovery_summary_lists_sign_in_types_direct_first
 - id: PAP-4.1-01
   section: '4.1'
   level: MUST
@@ -777,8 +804,8 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_device.py::test_a_device_link_is_shown_only_on_the_issuer_or_its_domains
   reason: The SDK applies the mitigations the protocol states (the link's host, the company named, codes
-    bound to a key, no approval on opening); a risk assessment and choosing Direct Sign-In when it can
-    are the deployment's.
+    bound to a key, no approval on opening) and chooses Direct Sign-In when the Company offers it
+    (PAP-4-02); the risk assessment RFC 10027 asks for is the deployment's.
 - id: PAP-4.3-02
   section: '4.3'
   level: MUST
@@ -3498,11 +3525,12 @@ guide:
   level: SHOULD
   role: personal-agent
   text: Prefer direct or device sign-in to mediated sign-in (SHOULD, Mediated Sign-In 6), and direct to
-    device sign-in (4.3).
-  status: open
-  reason: The SDK offers all three; no helper chooses among them.
-  implementation: []
-  tests: []
+    device sign-in (SHOULD, 4).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:DiscoveredCompany.preferred_sign_in
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_direct_sign_in_is_preferred_when_offered
 - id: GUIDE-pa-browser-01
   source: guide
   section: Web browsing
@@ -3575,6 +3603,32 @@ guide:
   - personal_agent_protocol.company.service:CompanyService._device
   tests:
   - personal_agent_protocol/__tests__/test_company_refusals.py::test_polling_too_fast_is_slow_down
+- id: GUIDE-co-device-02
+  source: guide
+  section: Device sign-in
+  level: SHOULD
+  role: company
+  text: Offer direct sign-in too (SHOULD, 4). Device sign-in is easier to use for phishing.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_reference_company_offers_direct_sign_in
+  conformance:
+  - lifecycle.direct-sign-in-offered
+- id: GUIDE-co-device-03
+  source: guide
+  section: Device sign-in
+  level: SHOULD
+  role: company
+  text: RFC 10027 §6.2.1.5 advises against the device authorization grant for sensitive, high-value, or
+    business-critical resources. A company whose accounts hold them, such as a bank, may offer only
+    direct sign-in.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_reference_company_offers_direct_sign_in
 - id: GUIDE-co-mediated-01
   source: guide
   section: Mediated sign-in

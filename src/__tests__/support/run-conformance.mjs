@@ -13,8 +13,8 @@
 // "clock" (ISO), "world" (a conformance world, or null for the default),
 // "agent": {"domain", "name", "key", "extensions"}, "other": {...}}.
 // The user's and the demo operator's actions are asked of the Python side, one JSON line
-// each ({"ask": "approve_device" | "wait" | "revise" | "forget_events" | "disconnect" |
-// "performed", ...}). Ends with {"report": ...} (exit 0) or {"failed": message} (exit 1).
+// each ({"ask": "approve_device" | "approve_authorization" | "wait" | "revise" |
+// "forget_events" | "disconnect" | "performed", ...}). Ends with {"report": ...} (exit 0) or {"failed": message} (exit 1).
 import { readFileSync } from "node:fs";
 
 import { Context, companyCases, identityFrom, runConformance } from "./conformance.mjs";
@@ -45,6 +45,15 @@ try {
     accounts: config.accounts,
     async approveDevice(userCode, { account, scopes }) {
       await ask({ ask: "approve_device", user_code: userCode, account, scopes: scopes ?? null });
+    },
+    async approveAuthorization(authorizationUrl, { account, scopes }) {
+      const answer = await ask({
+        ask: "approve_authorization",
+        authorization_url: authorizationUrl,
+        account,
+        scopes: scopes ?? null,
+      });
+      return answer.callback;
     },
     async wait(seconds) {
       clock.advance(seconds);

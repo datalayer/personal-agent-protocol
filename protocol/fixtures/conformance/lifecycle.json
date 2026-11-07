@@ -57,6 +57,16 @@
       "description": "A sign-in grants no more than the scopes requested and allowed for its type; partial consent shows in scope."
     },
     {
+      "id": "lifecycle.direct-sign-in-offered",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-4-01",
+        "GUIDE-co-device-02"
+      ],
+      "description": "A company that offers sign-in offers Direct Sign-In, the preferred type (§4): its issuer lists the authorization code grant and an authorization_endpoint."
+    },
+    {
       "id": "lifecycle.unknown-scope-refused",
       "kind": "negative",
       "role": "company",

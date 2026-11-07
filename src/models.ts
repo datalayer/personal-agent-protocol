@@ -22,6 +22,14 @@ export const AUTHORIZATION_CODE_GRANT = "authorization_code";
 export const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 /** The sign-in extension, listed in `extensions` (Mediated Sign-In 2). */
 export const MEDIATED_EXTENSION = "mediated-sign-in";
+/** The Mediated Sign-In extension's grant type (Mediated Sign-In 2). */
+export const MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in";
+/**
+ * The sign-in types, in the order a Personal Agent prefers them (§4): Direct Sign-In is the
+ * preferred type, Device Sign-In stays, and Mediated Sign-In is transitional.
+ */
+export const SIGN_IN_TYPES = ["direct", "device", "mediated"] as const;
+export type SignInType = (typeof SIGN_IN_TYPES)[number];
 /** `changes` values a scope hint may give (§4.4); any other is read as `irreversible`. */
 export const SCOPE_CHANGES = ["none", "reversible", "irreversible"] as const;
 export type ScopeChanges = (typeof SCOPE_CHANGES)[number];
@@ -508,6 +516,33 @@ export function companyIssuer(company: DiscoveredCompany): string | undefined {
 /** `https://{organization.domain}`: the resource the default access token is for. */
 export function companyResource(company: DiscoveredCompany): string {
   return `https://${company.document.organization.domain}`;
+}
+
+/**
+ * The sign-in types the Company offers a Personal Agent, in the order it prefers them (§4):
+ * `direct`, then `device`, then `mediated`.
+ *
+ * Direct and Device Sign-In are the issuer's grants, Mediated Sign-In its grant with the
+ * extension listed; none at all without an issuer or with sign-in turned off.
+ */
+export function signInTypes(company: DiscoveredCompany): readonly SignInType[] {
+  const metadata = company.oauthMetadata;
+  if (metadata === undefined || signInDisabled(company.document)) return [];
+  const offered = [
+    offersDirect(metadata),
+    offersDevice(metadata),
+    MEDIATED_EXTENSION in company.document.extensions &&
+      metadata.grant_types_supported.includes(MEDIATED_GRANT),
+  ];
+  return SIGN_IN_TYPES.filter((_, index) => offered[index]);
+}
+
+/**
+ * The sign-in type to use (§4): Direct Sign-In when the Company offers it, else Device Sign-In,
+ * else Mediated Sign-In; `undefined` when it offers none.
+ */
+export function preferredSignIn(company: DiscoveredCompany): SignInType | undefined {
+  return signInTypes(company)[0];
 }
 
 /** The Company's skills this SDK can use (§9.4), resolved against `discoveryUrl`. */

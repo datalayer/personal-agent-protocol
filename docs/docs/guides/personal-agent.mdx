@@ -131,8 +131,11 @@ message is never sent again. Answer it with a refresh token that covers the scop
 by having the user sign in, then send the new access token in the same Session.
 The OAuth metadata says which modes the
 company offers (`offers_direct`, `offers_device`; `mediated_sign_in(company)` for
-Mediated Sign-In): prefer Direct Sign-In, then Device Sign-In, and use
+Mediated Sign-In). `company.sign_in_types` lists them in the order the protocol
+prefers them and `company.preferred_sign_in` names the one to use (§4): Direct
+Sign-In when the company offers it, then Device Sign-In, then
 Mediated Sign-In, which is transitional, only when neither covers the task.
+`pap company discover --json` reports both as `sign_in` and `preferred_sign_in`.
 
 ## Tasks a company doesn't offer
 

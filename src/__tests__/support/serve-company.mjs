@@ -11,6 +11,7 @@
 // config.json: {"cert": path, "key": path, "ca": path, "agents": {domain: {path: document}}}.
 // Prints {"ready": {"port": N}}, then answers the user's actions at the company, one JSON
 // line each: {"op": "approve_authorization", "request_id", "account_id"} → {"callback"},
+// {"op": "approve_authorization_page", "authorization_url", "account_id", "scopes"} → {"callback"},
 // {"op": "approve_device", "user_code", "account_id"} → {"granted"},
 // {"op": "performed", "action"} → {"performed"}, {"op": "close"} → exit.
 // For the conformance runner (the driver of a demo company): config "clock" (an ISO
@@ -49,6 +50,17 @@ while (true) {
   try {
     if (command.op === "approve_authorization") {
       lines.send({ callback: await company.service.approveAuthorization(command.request_id, { accountId: command.account_id }) });
+    } else if (command.op === "approve_authorization_page") {
+      // Ada opens the consent page and allows: the callback URL her browser goes to.
+      const page = await company.service.handle({ method: "GET", url: command.authorization_url, headers: {} });
+      const requestId = String(page.body).split('name="request_id" value="', 2)[1].split('"', 1)[0];
+      const scopes = command.scopes ?? undefined;
+      lines.send({
+        callback: await company.service.approveAuthorization(requestId, {
+          accountId: command.account_id,
+          ...(scopes ? { scopes } : {}),
+        }),
+      });
     } else if (command.op === "approve_device") {
       const scopes = command.scopes ?? undefined;
       lines.send({

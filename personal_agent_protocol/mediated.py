@@ -41,6 +41,7 @@ from .auth import _scopes
 from .errors import AuthorizationError
 from .models import (
     MEDIATED_EXTENSION,
+    MEDIATED_GRANT,
     DiscoveredCompany,
     MediatedSignIn,
     ProtocolModel,
@@ -62,7 +63,6 @@ from .sessions import AccessToken, SessionClient, TokenResponse, _opaque_id, fin
 from .telemetry import sign_in_result, signed_in_as, traced
 
 MEDIATED_VERSION = "1"
-MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in"
 
 _SIGN_IN_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 

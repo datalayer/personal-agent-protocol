@@ -9,15 +9,22 @@ Sign-In browser callback. The user authenticates on the company's own page;
 the personal agent never handles a password, one-time password, or approval
 click.
 
-Prefer Direct Sign-In when it is available. Device Sign-In is the OAuth 2.0
+Direct Sign-In is the preferred type (§4): a company that offers sign-in
+should offer it, and a personal agent should use it when the company offers it.
+`DiscoveredCompany.preferred_sign_in` (`preferredSignIn(company)`) says which
+type to use, Direct first, and `sign_in_types` (`signInTypes`) lists every
+type offered in that order. Device Sign-In is the OAuth 2.0
 device authorization grant ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)),
 a cross-device flow, and easier to use for phishing: whoever holds the
 `device_code` gets the tokens, so an attacker can start a request and persuade
 the user to approve it ([RFC 10027](https://www.rfc-editor.org/rfc/rfc10027)
 §4.1.1). Companies that offer it and personal agents that use it follow the
-best practices of RFC 10027 (BCP 247) §2, whose protocol selection guidance
-keeps the device grant for when other cross-device flows aren't viable. It
-works for terminals, remote runtimes, and devices that cannot host a callback.
+best practices of RFC 10027 (BCP 247) §2, including its guidance on when to
+use the device grant (§6.2.1.5): it advises against it for sensitive,
+high-value, or business-critical resources, so a company whose accounts hold
+them, such as a bank, may offer Direct Sign-In only (`CompanyConfig(device=False)`).
+Device Sign-In works for terminals, remote runtimes, and devices that cannot
+host a callback.
 
 The device authorization request and every poll are authenticated with a client
 assertion. They name no Session: a successful poll gives an access token for the

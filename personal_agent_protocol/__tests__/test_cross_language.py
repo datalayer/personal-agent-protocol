@@ -95,7 +95,15 @@ class NodeDriver:
     """The user and the TypeScript demo company's operator, over the node process."""
 
     capabilities = frozenset(
-        {"revise", "forget_events", "disconnect", "performed", "clock", "second_identity"}
+        {
+            "revise",
+            "forget_events",
+            "disconnect",
+            "performed",
+            "clock",
+            "second_identity",
+            "direct_sign_in",
+        }
     )
 
     def __init__(self, node: NodeProcess, clock: MutableClock, other: AgentIdentity) -> None:
@@ -121,6 +129,21 @@ class NodeDriver:
                 "scopes": list(scopes) if scopes else None,
             }
         )
+
+    async def approve_authorization(
+        self, authorization_url: str, *, account: str, scopes: Sequence[str] | None = None
+    ) -> str:
+        """Ada opens the consent page and allows: the callback URL her browser goes to."""
+
+        answer = await self._ask(
+            {
+                "op": "approve_authorization_page",
+                "authorization_url": authorization_url,
+                "account_id": account,
+                "scopes": list(scopes) if scopes else None,
+            }
+        )
+        return str(answer["callback"])
 
     async def wait(self, seconds: float) -> None:
         self.clock.advance(seconds)
@@ -257,6 +280,11 @@ async def _answer(driver: DemoDriver, line: dict[str, Any]) -> dict[str, Any]:
         await driver.approve_device(
             line["user_code"], account=line["account"], scopes=line["scopes"]
         )
+    elif ask == "approve_authorization":
+        callback = await driver.approve_authorization(
+            line["authorization_url"], account=line["account"], scopes=line["scopes"]
+        )
+        return {"callback": callback}
     elif ask == "wait":
         await driver.wait(line["seconds"])
     elif ask == "revise":

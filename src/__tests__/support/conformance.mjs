@@ -84,6 +84,8 @@ import {
   signOperatorRequest,
   offersDevice,
   offersDirect,
+  preferredSignIn,
+  signInTypes,
   openapiUrl,
   operationsNegotiated,
   parseClientMetadata,
@@ -397,15 +399,16 @@ export class Context {
     });
   }
 
-  /** Device Sign-In, the user approving on the company's page through the driver. */
+  /**
+   * Sign in as the company offers it, the driver playing the user on its pages: Direct Sign-In
+   * when it is offered and the driver can (§4, the preferred type), else Device Sign-In.
+   */
   async signIn(user, session, { scopes, granted, account, agent = this.agent } = {}) {
     const metadata = await this.metadata();
-    if (!offersDevice(metadata)) {
-      if (this.driver.capabilities.has("direct_sign_in") && offersDirect(metadata)) {
-        return this.#directSignIn(agent, session, { scopes, granted, account });
-      }
-      throw new SkipCase("the company offers no Device Sign-In");
+    if (this.driver.capabilities.has("direct_sign_in") && offersDirect(metadata)) {
+      return this.#directSignIn(agent, session, { scopes, granted, account });
     }
+    if (!offersDevice(metadata)) throw new SkipCase("the company offers no Device Sign-In");
     const started = await agent.device.begin({
       deviceAuthorizationEndpoint: metadata.device_authorization_endpoint,
       tokenEndpoint: metadata.token_endpoint,
@@ -911,6 +914,13 @@ caseFor("lifecycle.sign-in-scopes")(async (ctx) => {
   check(JSON.stringify(signed.token.scopes) === JSON.stringify(granted), "only what the user approved is granted");
   check((await probe(ctx, session, signed.token)) === "served", "signed in with the token");
   check((await probe(ctx, session)) === "signed_out", "without it, the Session is signed out");
+});
+
+caseFor("lifecycle.direct-sign-in-offered")(async (ctx) => {
+  const company = await ctx.company();
+  const types = signInTypes(company);
+  if (!types.length) throw new SkipCase("the company offers no sign-in");
+  check(preferredSignIn(company) === "direct", `a company that offers sign-in offers Direct Sign-In: ${types}`);
 });
 
 caseFor("lifecycle.unknown-scope-refused")(async (ctx) => {

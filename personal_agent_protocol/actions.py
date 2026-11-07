@@ -86,17 +86,15 @@ async def discover_company(
         "protocol_version": document.protocol_version,
         "issuer": metadata.issuer if metadata else None,
         "identifier": company.identifier,
-        # Direct, Device and Mediated from the issuer's grants, the last with its extension.
-        # None at all when the Company turned sign-in off (`auth.disabled`, §3.2).
+        # Direct, Device and Mediated from the issuer's grants, the last with its extension,
+        # in the order the agent prefers them: Direct first (§4). None at all when the
+        # Company turned sign-in off (`auth.disabled`, §3.2).
         "sign_in": [
             name
-            for name, offered in (
-                ("direct", metadata is not None and metadata.offers_direct),
-                ("device", metadata is not None and metadata.offers_device),
-                ("mediated", mediated_sign_in(company) is not None),
-            )
-            if offered and not company.sign_in_disabled
+            for name in company.sign_in_types
+            if name != "mediated" or mediated_sign_in(company) is not None
         ],
+        "preferred_sign_in": company.preferred_sign_in,
         "sign_in_disabled": company.sign_in_disabled,
         "apis": [item.type for item in document.apis],
         "conversation_protocols": (

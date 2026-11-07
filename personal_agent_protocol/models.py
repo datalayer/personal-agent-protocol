@@ -38,8 +38,12 @@ REFRESH_TOKEN_GRANT = "refresh_token"
 #: The grants that say the Company offers Direct and Device Sign-In (§3.2, §4.4).
 AUTHORIZATION_CODE_GRANT = "authorization_code"
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
-#: The sign-in extension, listed in `extensions` (Mediated Sign-In 2).
+#: The sign-in extension, listed in `extensions` (Mediated Sign-In 2), and its grant type.
 MEDIATED_EXTENSION = "mediated-sign-in"
+MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in"
+#: The sign-in types, in the order a Personal Agent prefers them (§4): Direct Sign-In is
+#: the preferred type, Device Sign-In stays, and Mediated Sign-In is transitional.
+SIGN_IN_TYPES = ("direct", "device", "mediated")
 #: `changes` values a scope hint may give (§4.4); any other is read as `irreversible`.
 SCOPE_CHANGES = ("none", "reversible", "irreversible")
 _DOMAIN = re.compile(
@@ -1098,6 +1102,34 @@ class DiscoveredCompany(ProtocolModel):
         """Whether the Company turned sign-in off with `auth.disabled` (§3.2)."""
 
         return self.document.sign_in_disabled
+
+    @property
+    def sign_in_types(self) -> tuple[str, ...]:
+        """The sign-in types the Company offers a Personal Agent, in the order it prefers
+        them (§4): `direct`, then `device`, then `mediated`.
+
+        Direct and Device Sign-In are the issuer's grants, Mediated Sign-In its grant with
+        the extension listed; none at all without an issuer or with sign-in turned off.
+        """
+
+        metadata = self.oauth_metadata
+        if metadata is None or self.sign_in_disabled:
+            return ()
+        offered = (
+            metadata.offers_direct,
+            metadata.offers_device,
+            MEDIATED_EXTENSION in self.document.extensions
+            and MEDIATED_GRANT in metadata.grant_types_supported,
+        )
+        return tuple(name for name, yes in zip(SIGN_IN_TYPES, offered, strict=True) if yes)
+
+    @property
+    def preferred_sign_in(self) -> str | None:
+        """The sign-in type to use (§4): Direct Sign-In when the Company offers it, else Device
+        Sign-In, else Mediated Sign-In; `None` when it offers none."""
+
+        types = self.sign_in_types
+        return types[0] if types else None
 
     @property
     def skills(self) -> list[SkillEntry]:

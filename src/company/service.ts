@@ -71,9 +71,10 @@ import { DPOP_ALGORITHM } from "../crypto.js";
 import { OPERATOR_SIGNATURE_REFUSED, acceptSignature, verifyOperatorSignature } from "../operator-signatures.js";
 import { ProofError, ProtocolValidationError, SessionError } from "../errors.js";
 import { parseJsonStrict } from "../json.js";
-import { MEDIATED_EXTENSION, MEDIATED_GRANT, MEDIATED_VERSION } from "../mediated.js";
+import { MEDIATED_EXTENSION, MEDIATED_VERSION } from "../mediated.js";
 import {
   AUTHORIZATION_CODE_GRANT,
+  MEDIATED_GRANT,
   parseAuthor,
   DEVICE_CODE_GRANT,
   MEDIATED_RESERVED_FIELDS,

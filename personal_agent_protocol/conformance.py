@@ -506,15 +506,17 @@ class ConformanceContext:
         account: str | None = None,
         agent: Agent | None = None,
     ) -> SignedIn:
-        """Device Sign-In, the user approving on the company's page through the driver."""
+        """Sign in as the company offers it, the driver playing the user on its pages:
+        Direct Sign-In when it is offered and the driver can (§4, the preferred type),
+        else Device Sign-In."""
 
         metadata = await self.metadata()
         actor = agent or self.agent
+        if "direct_sign_in" in self.driver.capabilities and metadata.offers_direct:
+            return await self._direct_sign_in(
+                actor, user, session, scopes=scopes, granted=granted, account=account
+            )
         if not metadata.offers_device:
-            if "direct_sign_in" in self.driver.capabilities and metadata.offers_direct:
-                return await self._direct_sign_in(
-                    actor, user, session, scopes=scopes, granted=granted, account=account
-                )
             raise SkipCase("the company offers no Device Sign-In")
         started = await actor.device.begin(
             device_authorization_endpoint=cast(str, metadata.device_authorization_endpoint),
@@ -1214,6 +1216,17 @@ async def _sign_in_scopes(ctx: ConformanceContext, _: FixtureCase) -> None:
     check(signed.token.scopes == granted, "only what the user approved is granted")
     check(await _probe(ctx, session, signed.token) == "served", "signed in with the token")
     check(await _probe(ctx, session) == "signed_out", "without it, the Session is signed out")
+
+
+@case("lifecycle.direct-sign-in-offered")
+async def _direct_sign_in_offered(ctx: ConformanceContext, _: FixtureCase) -> None:
+    company = await ctx.company()
+    if not company.sign_in_types:
+        raise SkipCase("the company offers no sign-in")
+    check(
+        company.preferred_sign_in == "direct",
+        f"a company that offers sign-in offers Direct Sign-In: {company.sign_in_types}",
+    )
 
 
 @case("lifecycle.unknown-scope-refused")

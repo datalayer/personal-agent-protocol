@@ -300,8 +300,13 @@ export {
 } from "./mcp.js";
 export {
   AUTHORIZATION_CODE_GRANT,
+  MEDIATED_GRANT,
   SCOPE_CHANGES,
+  SIGN_IN_TYPES,
   SUPPORTED_PROTOCOL_VERSIONS,
+  type SignInType,
+  preferredSignIn,
+  signInTypes,
   effectiveChanges,
   isLoopbackRedirect,
   accountAccess,
@@ -401,7 +406,6 @@ export {
 } from "./accounts.js";
 export {
   MEDIATED_EXTENSION,
-  MEDIATED_GRANT,
   MEDIATED_VERSION,
   MediatedSignInClient,
   mediatedSignIn,

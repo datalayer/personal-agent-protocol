@@ -62,7 +62,11 @@ comes from that metadata too: Direct Sign-In when it has an
 `authorization_endpoint` and the authorization code grant, and Device Sign-In when
 it has a `device_authorization_endpoint` and the device code grant. The
 `mediated-sign-in` extension in `poppy.json`, with its grant type in
-`grant_types_supported`, offers Mediated Sign-In.
+`grant_types_supported`, offers Mediated Sign-In. A company that offers sign-in
+should offer Direct Sign-In, the preferred type (§4): `CompanyConfig` does by
+default (`direct=True`), and one guarding high-value resources, which RFC 10027
+§6.2.1.5 advises against the device grant for, sets `device=False` and offers
+Direct Sign-In only.
 
 Scopes are the company's own: name them for what they allow (`orders:read`,
 `payments:write`). A company should describe each in `auth.scopes` (or in an

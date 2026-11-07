@@ -9,6 +9,7 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 import { AuthorizationError, ProtocolValidationError } from "./errors.js";
 import {
   MEDIATED_EXTENSION,
+  MEDIATED_GRANT,
   parseMediatedSignIn,
   requireOauth,
   signInDisabled,
@@ -59,7 +60,6 @@ import { byIssuer, signInResult, traced } from "./telemetry.js";
 
 export { MEDIATED_EXTENSION };
 export const MEDIATED_VERSION = "1";
-export const MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in";
 
 const SIGN_IN_ID = /^[A-Za-z0-9_-]{1,256}$/;
 

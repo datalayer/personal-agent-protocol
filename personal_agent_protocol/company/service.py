@@ -2530,7 +2530,10 @@ class CompanyService:
                 },
                 extension="operations",
             )
-        fingerprint = _fingerprint("api", method, path, urlsplit(request.url).query, body)
+        # What the request means, not its bytes: the query's pairs in order, the body's JSON
+        # whatever its members' order; other headers are free (Operations 6).
+        query = sorted(parse_qsl(urlsplit(request.url).query, keep_blank_values=True))
+        fingerprint = _fingerprint("api", method, path, query, body)
         asked = self._asked(session, result.operation, fingerprint)
         return self._api_decision(await self._decide(session, asked, approval, target))
 
@@ -3780,7 +3783,11 @@ class CompanyService:
     # Operations (the extension's sections 3, 6 and 7) ---------------------------------
 
     def _asked(self, session: CallerSession, proposal: ProposedOperation, request: str) -> _Asked:
-        """What a request asks for: one action of one account, or of one signed-out Session."""
+        """What a request asks for: one action of one account, or of the agent and User signed out.
+
+        Its terms are `terms` when the action gives them, else the `summary`: a `summary`
+        reworded without changing the terms keeps the revision (Operations 3).
+        """
 
         scopes = tuple(proposal.scopes) or self.config.write_scopes
         if any(scope not in self.config.offered_scopes for scope in scopes):
@@ -3790,7 +3797,7 @@ class CompanyService:
             key=_composite(
                 session.client_id,
                 session.pairwise_user_id,
-                session.account_id or session.session_key,
+                session.account_id or "",
                 proposal.action,
                 proposal.subject,
             ),
@@ -3798,7 +3805,7 @@ class CompanyService:
             terms=proposal.terms,
             scopes=scopes,
             request=request,
-            digest=_fingerprint(proposal.summary, proposal.terms),
+            digest=_fingerprint(proposal.terms if proposal.terms is not None else proposal.summary),
         )
 
     async def _approval_target(
@@ -3806,11 +3813,12 @@ class CompanyService:
     ) -> StoredOperation | None:
         """Check 1: the operation, if this Session can approve it (Operations 3, 6).
 
-        One returned signed out can be approved only in that Session. One returned
-        signed in belongs to the account: any Session of the same personal agent and
-        user, signed in to it. A signed-out Session of theirs gets a challenge for the
-        account, and one without its scopes `insufficient_scope`. Anyone else's request
-        is handled as if it had no approval: `None`.
+        Any Session of the same personal agent and user can, including one started after
+        the Session that returned it ended. One returned signed out, only while signed
+        out. One returned signed in belongs to the account: only while signed in to it. A
+        signed-out Session of theirs gets a challenge for the account, and one without
+        its scopes `insufficient_scope`. Anyone else's request is handled as if it had no
+        approval: `None`.
         """
 
         if approval is None:
@@ -3819,7 +3827,7 @@ class CompanyService:
         if stored is None or stored.owner != (session.client_id, session.pairwise_user_id):
             return None
         if stored.account_id is None:
-            return stored if stored.session_key == session.session_key else None
+            return stored if session.account_id is None else None
         if session.account_id is None:
             raise _needs_account(None, stored.scopes)
         if session.account_id != stored.account_id:

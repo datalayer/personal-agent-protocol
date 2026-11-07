@@ -29,7 +29,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`APPROVAL_HEADER`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Const; entry `.`. The header that carries an approval to an API (Operations 6).
 - [`APPROVAL_META_KEY`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Const; entry `.`. The `_meta` key that carries an approval to an MCP tool (Operations 6).
 - [`approvalFromMeta`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The approval in an MCP tool call's `_meta`, or `undefined` (unknown members are ignored).
-- [`approvalHeader`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The value of `Poppy-Approval`: the two members, as Strings.
+- [`approvalHeader`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The value of `Poppy-Approval` (Operations 6): `operation_id`, `revision` and any `input_type`
 - [`ApprovalRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. What a user is asked to approve: nothing has been done yet.
 - [`ApprovalSent`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Interface; entry `.`. What came of sending an approval.
 - [`ApprovalSurface`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. The host's own approval surface: the user, not a model, answers.

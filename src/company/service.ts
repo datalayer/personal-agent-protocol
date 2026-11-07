@@ -2688,7 +2688,12 @@ export class CompanyService {
         },
       );
     }
-    const requested = fingerprint("api", method, path, new URL(request.url).search, body ?? null);
+    // What the request means, not its bytes: the query's pairs in order, the body's JSON whatever
+    // its members' order; other headers are free (Operations 6).
+    const query = [...new URL(request.url).searchParams.entries()].sort(([a, x], [b, y]) =>
+      a < b ? -1 : a > b ? 1 : x < y ? -1 : x > y ? 1 : 0,
+    );
+    const requested = fingerprint("api", method, path, query, body ?? null);
     const asked = this.#asked(session, result.operation, requested);
     return apiDecision(await this.#decide(session, asked, approval, target));
   }
@@ -4109,7 +4114,7 @@ export class CompanyService {
       key: composite(
         session.clientId,
         session.pairwiseUserId,
-        session.accountId ?? session.sessionKey,
+        session.accountId ?? "",
         proposal.action,
         proposal.subject ?? "",
       ),
@@ -4117,17 +4122,19 @@ export class CompanyService {
       terms: proposal.terms,
       scopes,
       request,
-      digest: fingerprint(proposal.summary, proposal.terms ?? null),
+      // The terms, else the summary: a summary reworded without changing the terms keeps the
+      // revision (Operations 3).
+      digest: fingerprint(proposal.terms ?? proposal.summary),
     };
   }
 
   /**
    * Check 1: the operation, if this Session can approve it (Operations 3, 6).
    *
-   * One returned signed out can be approved only in that Session. One returned signed in
-   * belongs to the account: any Session of the same personal agent and user, signed in to
-   * it. A signed-out Session of theirs gets a challenge for the account, and one without its
-   * scopes `insufficient_scope`. Anyone else's request is handled as if it had no approval:
+   * Any Session of the same personal agent and user can, including one started after the
+   * Session that returned it ended. One returned signed out, only while signed out. One returned
+   * signed in belongs to the account: only while signed in to it. A signed-out Session of theirs
+   * gets a challenge for the account, and one without its scopes `insufficient_scope`. Anyone else's request is handled as if it had no approval:
    * `undefined`.
    */
   async #approvalTarget(
@@ -4139,9 +4146,9 @@ export class CompanyService {
     if (stored === undefined || !sameOwner(stored.owner, [session.clientId, session.pairwiseUserId])) {
       return undefined;
     }
-    if (stored.accountId === undefined) {
-      return stored.sessionKey === session.sessionKey ? stored : undefined;
-    }
+    // Any Session of the same agent and User, even one started after: one returned signed out
+    // only while signed out, one returned signed in only while signed in to its account.
+    if (stored.accountId === undefined) return session.accountId === undefined ? stored : undefined;
     if (session.accountId === undefined) throw needsAccount(undefined, stored.scopes);
     if (session.accountId !== stored.accountId) return undefined;
     if (stored.scopes.some((scope) => !session.scopes.includes(scope))) {

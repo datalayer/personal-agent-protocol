@@ -294,7 +294,13 @@ async def test_the_user_is_asked_with_the_company_the_summary_and_any_difference
     approval = await client_for(surface).ask_user(
         operation, organization=SHOP, tenant_id="tenant", replaces=older
     )
-    assert approval == Approval(operation_id=operation.operation_id, revision=operation.revision)
+    # When the user approved, by the host's clock (Operations 6); no input type was given.
+    assert approval.approved_at is not None and approval.input_type is None
+    assert approval == Approval(
+        operation_id=operation.operation_id,
+        revision=operation.revision,
+        approved_at=approval.approved_at,
+    )
     asked = surface.asked[0]
     assert (asked.company_name, asked.company_domain) == ("Shop", "shop.example")
     assert asked.summary == operation.summary
@@ -793,7 +799,11 @@ async def test_two_requests_at_once_perform_it_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_operation_returned_signed_out_is_approved_only_in_that_session() -> None:
+async def test_an_operation_returned_signed_out_is_approved_in_any_signed_out_session() -> None:
+    """Any Session of the same agent and User can approve an operation, including one that
+    starts after the Session that returned it ends; one returned signed out, only while
+    signed out (Operations 3)."""
+
     world = World()
     session = await world.signed_out_session()
     other = await world.signed_out_session()
@@ -832,18 +842,17 @@ async def test_an_operation_returned_signed_out_is_approved_only_in_that_session
         answered = await api.call("POST", url, session=session, body={})
         assert answered.status == 403 and answered.operation is not None
         operation = answered.operation
-        # Another Session of the same agent and user: as if it had no approval.
-        elsewhere = await api.call(
-            "POST", url, session=other, body={}, approval=_approval(operation)
-        )
-        assert elsewhere.operation is not None
-        assert elsewhere.operation.operation_id != operation.operation_id
-        assert performed == []
-        # Signing in changes nothing: it can still be approved in that Session (Operations 3).
+        # Signed in, the Session can't approve it: as if it had no approval.
         token = await signed_in_to(world, session)
-        done = await api.call(
+        signed = await api.call(
             "POST", url, session=session, token=token, body={}, approval=_approval(operation)
         )
+        assert signed.operation is not None
+        assert signed.operation.operation_id != operation.operation_id
+        assert performed == []
+        # The Session that returned it ends: another signed-out Session of theirs approves it.
+        assert await world.shop.end_session(session.client_id, session.sid)
+        done = await api.call("POST", url, session=other, body={}, approval=_approval(operation))
         assert done.status == 200 and performed == [operation.operation_id]
     finally:
         world.shop._api = api_of  # type: ignore[attr-defined,method-assign]

@@ -445,9 +445,19 @@ export interface Operation extends UnknownFields {
 }
 
 /** A statement that the User approved this revision of an operation (Operations 5, 6). */
+/**
+ * A statement that the User approved this revision of an operation (Operations 5, 6).
+ *
+ * `approved_at` is when the User approved, in Unix seconds, and `input_type` how they answered
+ * (`tap`, `typed`, `voice` or another short string, never personal data): the Personal Agent's
+ * statements, which it SHOULD include. A value that isn't one is left out, never a reason to
+ * refuse the approval (Operations 6).
+ */
 export interface Approval {
   readonly operation_id: string;
   readonly revision: string;
+  readonly approved_at?: number;
+  readonly input_type?: string;
 }
 
 /**
@@ -1468,9 +1478,13 @@ function messageExtensions(value: unknown): MessageExtensions {
 
 export function parseApproval(value: unknown): Approval {
   const source = record(value, "approval");
+  const approvedAt = source.approved_at;
+  const inputType = source.input_type;
   return {
     operation_id: identifier(source.operation_id, "approval.operation_id"),
     revision: identifier(source.revision, "approval.revision"),
+    ...(typeof approvedAt === "number" && Number.isSafeInteger(approvedAt) && approvedAt >= 0 ? { approved_at: approvedAt } : {}),
+    ...(typeof inputType === "string" && /^[\x20-\x7e]{1,64}$/.test(inputType) ? { input_type: inputType } : {}),
   };
 }
 

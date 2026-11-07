@@ -131,8 +131,17 @@ export function operationFrom(payload: unknown): Operation {
 // The `Poppy-Approval` header: an RFC 9651 Dictionary ---------------------------------------
 
 /** The value of `Poppy-Approval`: the two members, as Strings. */
+/**
+ * The value of `Poppy-Approval` (Operations 6): `operation_id`, `revision` and any `input_type`
+ * as Strings, any `approved_at` as an Integer.
+ */
 export function approvalHeader(approval: Approval): string {
-  return `operation_id="${approval.operation_id}", revision="${approval.revision}"`;
+  let value = `operation_id="${approval.operation_id}", revision="${approval.revision}"`;
+  if (approval.approved_at !== undefined) value += `, approved_at=${approval.approved_at}`;
+  if (approval.input_type !== undefined) {
+    value += `, input_type="${approval.input_type.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+  }
+  return value;
 }
 
 /** The value is not an RFC 9651 Dictionary: the whole field is ignored. */
@@ -219,7 +228,7 @@ class Dictionary {
     }
   }
 
-  #bareItem(): string | typeof NOT_A_STRING {
+  #bareItem(): string | number | typeof NOT_A_STRING {
     const first = this.#peek();
     if (first === '"') return this.#string();
     if (first === "?") {
@@ -235,7 +244,9 @@ class Dictionary {
     } else if (first === "%") {
       this.#match(DISPLAY);
     } else if (first === "-" || /^[0-9]$/.test(first)) {
-      this.#match(NUMBER);
+      // An Integer is a number (`approved_at`); a Decimal is opaque.
+      const number = this.#match(NUMBER);
+      if (!number.includes(".")) return Number(number);
     } else {
       this.#match(TOKEN);
     }
@@ -276,7 +287,12 @@ export function parseApprovalHeader(value: string | null | undefined): Approval 
   if (!value) return undefined;
   try {
     const members = new Dictionary(value).members();
-    return parseApproval({ operation_id: members.get("operation_id"), revision: members.get("revision") });
+    return parseApproval({
+      operation_id: members.get("operation_id"),
+      revision: members.get("revision"),
+      approved_at: members.get("approved_at"),
+      input_type: members.get("input_type"),
+    });
   } catch {
     return undefined;
   }
@@ -393,6 +409,11 @@ export interface AskUserOptions {
   readonly replaces?: Operation;
   /** Overrides the contribution, for a host whose interface is the caller's own. */
   readonly surface?: ApprovalSurface;
+  /**
+   * How the user answers on the host's surface: `tap`, `typed`, `voice`, or another short string,
+   * never personal data. The approval says so, with `approved_at` (Operations 6).
+   */
+  readonly inputType?: string;
 }
 
 export interface OperationsClientOptions {
@@ -458,7 +479,13 @@ export class OperationsClient {
     if ((await this.#approved(request, options.surface)) !== true) {
       throw new OperationError("not_approved", "The user did not approve");
     }
-    return { operation_id: operation.operation_id, revision: operation.revision };
+    // When and how the user approved: the Personal Agent's statements (Operations 6).
+    return parseApproval({
+      operation_id: operation.operation_id,
+      revision: operation.revision,
+      approved_at: Math.floor(clock.now().getTime() / 1000),
+      ...(options.inputType === undefined ? {} : { input_type: options.inputType }),
+    });
   }
 
   async #approved(request: ApprovalRequest, surface: ApprovalSurface | undefined): Promise<unknown> {

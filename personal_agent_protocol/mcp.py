@@ -262,10 +262,7 @@ class McpClient:
         params: dict[str, Any] = {"name": name, "arguments": arguments or {}}
         if approval is not None:
             params["_meta"] = {
-                APPROVAL_META_KEY: {
-                    "operation_id": approval.operation_id,
-                    "revision": approval.revision,
-                }
+                APPROVAL_META_KEY: approval.model_dump(mode="json", exclude_none=True)
             }
         result = await self._call("tools/call", params)
         structured = result.get("structuredContent")

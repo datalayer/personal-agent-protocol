@@ -10,12 +10,15 @@
 // Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
 // declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
 // browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into account
-// (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09).
+// (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09); the Operations
+// extension's minor changes (Operations 3, 5, 6, 8.1, P4-10).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  APPROVAL_HEADER,
+  ApiClient,
   BROWSER_SIGN_IN_SCOPE,
   BrowserSessionClient,
   ConversationClient,
@@ -36,6 +39,9 @@ import {
   browserSignInScopes,
   browserSignInUnscoped,
   browsingDisabled,
+  approvalFromMeta,
+  approvalHeader,
+  parseApprovalHeader,
   parseDiscoveryDocument,
   parseMessage,
   parseOAuthServerMetadata,
@@ -47,7 +53,7 @@ import {
   signInTypes,
   versionUnsupported,
 } from "../../lib/index.js";
-import { CompanyConfig, RecordKinds } from "../../lib/server.js";
+import { CompanyApis, CompanyConfig, OperationExecutors, RecordKinds } from "../../lib/server.js";
 import { CONFIG, CONFIG_OPTIONS, manzanita } from "../../lib/demo/manzanita.js";
 import { ControlledBrowser } from "./support/controlled-browser.mjs";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -56,13 +62,13 @@ const TENANT = "atlas-demo";
 const PAIRWISE = "usr_ada_at_manzanita_000000";
 const CONVERSATIONS = "https://manzanita.example/poppy/conversations";
 
-async function world(config) {
+async function world(config, plugins) {
   const clock = new MutableClock();
   const sites = {};
   const fetch = inProcessFetch(sites);
   const identity = await agentIdentity({ domain: "atlas.example", name: "Atlas" });
   sites["atlas.example"] = identity.documents;
-  const { service: shop } = manzanita({ fetch, clock, ...(config ? { config } : {}) });
+  const { service: shop } = manzanita({ fetch, clock, ...(config ? { config } : {}), ...(plugins ? { plugins } : {}) });
   sites["manzanita.example"] = shop;
   const browser = new ControlledBrowser(fetch);
   const host = await agentHost({ identity, fetch, clock, controlledBrowser: browser });
@@ -508,4 +514,124 @@ test("a delegated key signs for one User ID", async () => {
   const refused = await get(other);
   assert.deepEqual([refused.status, (await refused.json()).error], [400, "invalid_session"]);
   assert.notEqual((await get(w.session)).status, 400);
+});
+
+// The Operations extension's minor changes (Operations 3, 5, 6, 8.1) -----------------------------
+
+const NOTES = "https://manzanita.example/api/notes";
+
+/** A company API whose action says `summary` and `terms`, set by the test, and what it performed. */
+async function notesWorld() {
+  const notes = {
+    summary: "Add a note.",
+    terms: { note: "gift" },
+    performed: [],
+    description: "Notes",
+    openapi: () => ({}),
+    handle: async () => ({ operation: { action: "orders.note", summary: notes.summary, ...(notes.terms ? { terms: notes.terms } : {}) } }),
+  };
+  const executor = {
+    action: "orders.note",
+    perform: async (operation) => {
+      notes.performed.push([operation.operation_id, operation.revision]);
+      return { summary: "Noted." };
+    },
+  };
+  const w = await world(undefined, [{
+    name: "notes",
+    version: "1",
+    contributes: [
+      { point: CompanyApis, value: notes, options: { id: "notes", order: -1 } },
+      { point: OperationExecutors, value: executor, options: { id: "note" } },
+    ],
+  }]);
+  const transport = new SessionFetchClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const another = () =>
+    new SessionClient({ reactor: w.host.reactor, fetch: w.fetch }).start({
+      clientId: w.identity.clientId,
+      pairwiseUserId: PAIRWISE,
+      issuer: w.company.oauthMetadata.issuer,
+      tenantId: TENANT,
+      company: w.company,
+    });
+  return { ...w, notes, api: new ApiClient({ transport }), transport, another };
+}
+
+test("a reworded summary keeps the revision, and new terms change it", async () => {
+  // The revision changes whenever the terms or expires_at change; a summary reworded without
+  // changing the terms can keep it. New terms are a new revision of the same operation (Operations 3).
+  const w = await notesWorld();
+  const first = (await w.api.call("POST", NOTES, { session: w.session, body: {} })).operation;
+  w.notes.summary = "Add a short note to the order.";
+  const reworded = (await w.api.call("POST", NOTES, { session: w.session, body: {} })).operation;
+  assert.equal(reworded.revision, first.revision);
+  w.notes.terms = { note: "birthday" };
+  const changed = (await w.api.call("POST", NOTES, { session: w.session, body: {} })).operation;
+  assert.equal(changed.operation_id, first.operation_id);
+  assert.notEqual(changed.revision, first.revision);
+});
+
+test("an approval says when and how the user gave it", async () => {
+  // approved_at (Unix seconds, an Integer) and input_type (a String); the Company MUST NOT reject
+  // an approval because either is missing or because it doesn't recognize the input type (Operations 6).
+  const approval = { operation_id: "exc_5Rt2", revision: "r1", approved_at: 1791487260, input_type: "tap" };
+  const header = approvalHeader(approval);
+  assert.equal(header, 'operation_id="exc_5Rt2", revision="r1", approved_at=1791487260, input_type="tap"');
+  assert.deepEqual(parseApprovalHeader(header), approval);
+  for (const odd of ['approved_at=1.5, input_type="tap"', 'approved_at="soon", input_type=tap']) {
+    const parsed = parseApprovalHeader(`operation_id="exc_5Rt2", revision="r1", ${odd}`);
+    assert.ok(parsed !== undefined && parsed.approved_at === undefined);
+  }
+  const quoted = { operation_id: "exc_5Rt2", revision: "r1", input_type: 'a "pen" tap' };
+  assert.deepEqual(parseApprovalHeader(approvalHeader(quoted)), quoted);
+  assert.deepEqual(approvalFromMeta({ "personalagentprotocol.org/approval": approval }), approval);
+  // The company performs with an input type it doesn't know.
+  const w = await notesWorld();
+  const { operation } = await w.api.call("POST", NOTES, { session: w.session, body: {} });
+  const done = await w.api.call("POST", NOTES, {
+    session: w.session,
+    body: {},
+    approval: { operation_id: operation.operation_id, revision: operation.revision, input_type: "gesture" },
+  });
+  assert.equal(done.status, 200);
+  assert.deepEqual(w.notes.performed, [[operation.operation_id, operation.revision]]);
+});
+
+test("the approving request is compared by meaning, from any Session of theirs", async () => {
+  // Same method, target URI and content, compared by what they mean, not their bytes; other header
+  // fields can differ, such as another Session of the same agent and User (Operations 6).
+  const w = await notesWorld();
+  const asked = await w.transport.request("POST", `${NOTES}?a=1&b=2`, {
+    session: w.session,
+    headers: { "Content-Type": "application/json" },
+    body: '{"x": 1, "y": 2}',
+  });
+  const { operation } = await asked.json();
+  const other = await w.another();
+  const done = await w.transport.request("POST", `${NOTES}?b=2&a=1`, {
+    session: other,
+    headers: { "Content-Type": "application/json", [APPROVAL_HEADER]: approvalHeader({ operation_id: operation.operation_id, revision: operation.revision }) },
+    body: '{"y":2,"x":1}',
+  });
+  assert.equal(done.status, 200);
+  assert.deepEqual(w.notes.performed, [[operation.operation_id, operation.revision]]);
+});
+
+test("an approval of earlier terms the user prefers is still accepted", async () => {
+  // The Company may treat a revision it replaced as failing the check; the reference company accepts
+  // earlier terms the User asked for, and refuses ones it withdrew (Operations 3, 5, 6).
+  const w = await notesWorld();
+  const first = (await w.api.call("POST", NOTES, { session: w.session, body: { note: "gift" } })).operation;
+  w.notes.terms = { note: "birthday" };
+  const later = (await w.api.call("POST", NOTES, { session: w.session, body: { note: "birthday" } })).operation;
+  assert.equal(later.operation_id, first.operation_id);
+  assert.notEqual(later.revision, first.revision);
+  w.notes.terms = { note: "gift" };
+  const done = await w.api.call("POST", NOTES, {
+    session: w.session,
+    body: { note: "gift" },
+    approval: { operation_id: first.operation_id, revision: first.revision },
+  });
+  assert.equal(done.status, 200);
+  assert.deepEqual(w.notes.performed, [[first.operation_id, first.revision]]);
 });

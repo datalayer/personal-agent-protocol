@@ -279,7 +279,9 @@ test("the user is asked with the company, the summary and any difference", async
   const operation = returned({ summary: "Exchange the jacket for USD 7.00 more." });
   const older = returned({ summary: "Exchange the jacket.", terms: { order_id: "ord_7Hk2" } });
   const approval = await clientFor(surface).askUser(operation, { organization: SHOP, tenantId: "tenant", replaces: older });
-  assert.deepEqual(approval, { operation_id: operation.operation_id, revision: operation.revision });
+  // When the user approved, by the host's clock (Operations 6); no input type was given.
+  assert.equal(typeof approval.approved_at, "number");
+  assert.deepEqual(approval, { operation_id: operation.operation_id, revision: operation.revision, approved_at: approval.approved_at });
   const [asked] = surface.asked;
   assert.deepEqual([asked.companyName, asked.companyDomain], ["Shop", "shop.example"]);
   assert.equal(asked.summary, operation.summary);

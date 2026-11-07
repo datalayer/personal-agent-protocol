@@ -835,15 +835,37 @@ class Operation(ProtocolModel):
         return value
 
 
+#: An `input_type`: a short string of printable ASCII, such as `tap`, `typed` or `voice`.
+_INPUT_TYPE = re.compile(r"^[\x20-\x7e]{1,64}$")
+
+
 class Approval(ProtocolModel):
-    """A statement that the User approved this revision of an operation (Operations 5, 6)."""
+    """A statement that the User approved this revision of an operation (Operations 5, 6).
+
+    `approved_at` is when the User approved, in Unix seconds, and `input_type` how they
+    answered (`tap`, `typed`, `voice` or another short string, never personal data): the
+    Personal Agent's statements, which it SHOULD include. A value that isn't one is left
+    out, never a reason to refuse the approval (Operations 6).
+    """
 
     operation_id: str
     revision: str
+    approved_at: int | None = None
+    input_type: str | None = None
 
     _ids = field_validator("operation_id", "revision")(
         lambda value: _identifier(value, "an operation ID or revision")
     )
+
+    @field_validator("approved_at", mode="before")
+    @classmethod
+    def validate_approved_at(cls, value: object) -> int | None:
+        return value if type(value) is int and value >= 0 else None
+
+    @field_validator("input_type", mode="before")
+    @classmethod
+    def validate_input_type(cls, value: object) -> str | None:
+        return value if isinstance(value, str) and _INPUT_TYPE.match(value) else None
 
 
 class OperationsContent(ProtocolModel):

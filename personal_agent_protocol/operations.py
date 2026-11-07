@@ -125,9 +125,16 @@ def operation_from(payload: object) -> Operation:
 
 
 def approval_header(approval: Approval) -> str:
-    """The value of `Poppy-Approval`: the two members, as Strings."""
+    """The value of `Poppy-Approval` (Operations 6): `operation_id`, `revision` and any
+    `input_type` as Strings, any `approved_at` as an Integer."""
 
-    return f'operation_id="{approval.operation_id}", revision="{approval.revision}"'
+    value = f'operation_id="{approval.operation_id}", revision="{approval.revision}"'
+    if approval.approved_at is not None:
+        value += f", approved_at={approval.approved_at}"
+    if approval.input_type is not None:
+        escaped = approval.input_type.replace("\\", "\\\\").replace('"', '\\"')
+        value += f', input_type="{escaped}"'
+    return value
 
 
 class _DictionaryError(ValueError):
@@ -216,7 +223,8 @@ class _Dictionary:
                 raise _DictionaryError(self.text)
             self.at += 1
             return self.text[self.at - 1] == "1"
-        # Only a String is a `str` here: nothing else names an operation or a revision.
+        # Only a String is a `str` here: nothing else names an operation or a revision. An
+        # Integer is an `int` (`approved_at`); any other item is opaque.
         if first == ":":
             return (self._match(_BYTES),)
         if first == "@":
@@ -225,7 +233,8 @@ class _Dictionary:
         if first == "%":
             return (self._match(_DISPLAY),)
         if first == "-" or first.isdigit():
-            return (self._match(_NUMBER),)
+            number = self._match(_NUMBER)
+            return (number,) if "." in number else int(number)
         return (self._match(_TOKEN),)
 
     def _string(self) -> str:
@@ -253,8 +262,10 @@ def parse_approval_header(value: str | None) -> Approval | None:
     """The approval a `Poppy-Approval` value states, or `None`.
 
     A value that isn't a Dictionary is ignored whole (RFC 9651), and so is one
-    without both members as Strings of the IDs' characters. Members this version
-    doesn't recognize are ignored, so later versions can add them (Operations 6).
+    without both members as Strings of the IDs' characters. `approved_at` (an Integer)
+    and `input_type` (a String) are kept when they are such, and left out otherwise.
+    Members this version doesn't recognize are ignored, so later versions can add them
+    (Operations 6).
     """
 
     if not value:
@@ -262,7 +273,12 @@ def parse_approval_header(value: str | None) -> Approval | None:
     try:
         members = _Dictionary(value).members()
         return Approval.model_validate(
-            {"operation_id": members.get("operation_id"), "revision": members.get("revision")}
+            {
+                "operation_id": members.get("operation_id"),
+                "revision": members.get("revision"),
+                "approved_at": members.get("approved_at"),
+                "input_type": members.get("input_type"),
+            }
         )
     except (_DictionaryError, ValidationError):
         return None
@@ -409,8 +425,13 @@ class OperationsClient:
         asked: Mapping[str, object] | None = None,
         replaces: Operation | None = None,
         surface: ApprovalSurface | None = None,
+        input_type: str | None = None,
     ) -> Approval:
         """Ask the user about this revision, through the host's own surface.
+
+        The approval says when the user approved (`approved_at`, the host's clock when the
+        surface answered) and, with `input_type`, how: `tap`, `typed`, `voice`, or another
+        short string the host's surface stands for, never personal data (Operations 6).
 
         Shows the company's name and the revision's `summary`, with any difference
         the terms check finds, and with what changed from `replaces`, the revision
@@ -439,7 +460,12 @@ class OperationsClient:
         )
         if await self._approved(request, surface) is not True:
             raise OperationError("not_approved", "The user did not approve")
-        return Approval(operation_id=operation.operation_id, revision=operation.revision)
+        return Approval(
+            operation_id=operation.operation_id,
+            revision=operation.revision,
+            approved_at=int(clock.now().timestamp()),
+            input_type=input_type,
+        )
 
     async def _approved(self, request: ApprovalRequest, surface: ApprovalSurface | None) -> object:
         chosen = surface

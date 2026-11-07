@@ -217,7 +217,9 @@ test("after sign-out what used the account stays and asks for sign-in", async ()
   assert.deepEqual(w.plugin.executor.performed, [operation.operation_id]);
 });
 
-test("an operation returned signed out is approved only in that Session, and signing in changes nothing", async () => {
+test("an operation returned signed out is approved in any signed-out Session of the agent and User", async () => {
+  // Any Session of the same agent and User can approve it, including one that starts after the
+  // Session that returned it ends; one returned signed out, only while signed out (Operations 3).
   const performed = [];
   const notes = {
     description: "Notes",
@@ -249,12 +251,14 @@ test("an operation returned signed out is approved only in that Session, and sig
   assert.equal(answered.status, 403);
   const { operation } = answered;
   const approval = { operation_id: operation.operation_id, revision: operation.revision };
-  // Another Session of the same agent and user: as if it had no approval.
-  const elsewhere = await w.api.call("POST", url, { session: other, body: {}, approval });
-  assert.notEqual(elsewhere.operation.operation_id, operation.operation_id);
-  assert.deepEqual(performed, []);
+  // Signed in, the Session can't approve it: as if it had no approval.
   const [token] = await deviceSignIn(w, "acct_ada");
-  const done = await w.api.call("POST", url, { session, token, body: {}, approval });
+  const signed = await w.api.call("POST", url, { session, token, body: {}, approval });
+  assert.notEqual(signed.operation.operation_id, operation.operation_id);
+  assert.deepEqual(performed, []);
+  // The Session that returned it ends: another signed-out Session of theirs approves it.
+  assert.ok(await w.shop.endSession(session.clientId, session.sid));
+  const done = await w.api.call("POST", url, { session: other, body: {}, approval });
   assert.equal(done.status, 200);
   assert.deepEqual(performed, [operation.operation_id]);
 });

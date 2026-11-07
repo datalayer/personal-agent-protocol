@@ -47,6 +47,7 @@ approval = await operations.ask_user(
     operation,
     organization=organization,          # the company's name and domain, shown with the summary
     tenant_id=tenant_id,
+    input_type="tap",                   # how the user answers on this surface
 )
 sent = await operations.send(
     lambda approval: api.call(
@@ -57,7 +58,7 @@ sent = await operations.send(
 ```
 
 ```typescript
-const approval = await operations.askUser(operation, { organization, tenantId });
+const approval = await operations.askUser(operation, { organization, tenantId, inputType: 'tap' });
 const sent = await operations.send((approval) => api.call("POST", url, { session, token, body, approval }), approval);
 ```
 
@@ -67,6 +68,14 @@ const sent = await operations.send((approval) => api.call("POST", url, { session
   wrote it, `expires_at`, and any difference the terms check found. Only `True`
   from the surface approves; anything else is `not_approved`, and a host with no
   surface can't approve at all (`no_approval_surface`).
+- The approval says when the user approved (`approved_at`, Unix seconds, the host's
+  clock when the surface answered) and, with `input_type` (`inputType`), how:
+  `tap`, `typed`, `voice`, or another short string, never personal data or anything
+  that identifies the user or their device. Both are the agent's statements, which
+  it should include (Operations 6); a company may record them and never refuses an
+  approval without them or with an input type it doesn't know. They go in
+  `Poppy-Approval` (`approved_at` an Integer), in an MCP call's `_meta`, and in a
+  message's `extensions.operations.approval`.
 - Nothing approves on the user's behalf, even when they said they would approve
   something like it. A company that lets users allow an action in advance doesn't
   return an operation for it.
@@ -96,8 +105,13 @@ terms_differences(operation, {"order_id": "ord_7Hk2", "price_difference.currency
 
 ## A new revision
 
-An approval covers one revision. When terms change the company returns the same
-`operation_id` with a new `revision`, and asks for approval again. If an
+An approval covers one revision. When terms change, because the user asked for
+different terms or because the company's changed (such as a price), the company
+returns the same `operation_id` with a new `revision`, and asks for approval again.
+The revision changes with the terms or `expires_at`; a `summary` reworded without
+changing the terms can keep it. If the user prefers an earlier revision, you can
+send its approval with the request for those terms; the company may have replaced
+it, and then answers with a new revision. If an
 approval's revision can't be accepted (one it never returned, one past its
 `expires_at`, one for another request), the company performs nothing and returns
 a new revision: never the one named, so a retry can't loop. `send` reports it as
@@ -132,10 +146,16 @@ an API a retry from a first ask.
 
 The service does the rest, in the extension's order: the Session can approve it,
 it hasn't been performed already, and the revision is one it returned, unexpired,
-for exactly this request. An operation returned signed out can be approved only
-in that Session. One returned signed in can be approved in any Session of the same
-personal agent and user signed in to that account; a signed-out Session of theirs
-gets the challenge, and anyone else's request is handled as if it had no approval.
+for exactly this request. Any Session of the same personal agent and user can
+approve it, including one that starts after the Session that returned it ended.
+One returned signed out can be approved only while signed out; one returned signed
+in only while signed in to that account, and a signed-out Session of theirs gets
+the challenge. Anyone else's request is handled as if it had no approval. "Exactly
+this request" is compared by meaning: the same method, path, query pairs in any
+order, and JSON content whatever its members' order; other headers, such as another
+Session's or a renewed token, are free. A revision is the terms (`terms`, else the
+`summary`) and `expires_at`, so a reworded `summary` keeps it; earlier revisions of
+terms the user asked for stay approvable, and ones `revise` withdrew don't.
 
 The executor returns an `ActionResult`, raises `OperationFailed` with what changed,
 or `OperationOutcomeUnknown` while it isn't known whether it took effect, which

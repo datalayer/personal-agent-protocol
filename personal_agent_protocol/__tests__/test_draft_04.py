@@ -8,7 +8,8 @@ ports it.
 Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
 declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
 browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into
-account (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09).
+account (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09); the
+Operations extension's minor changes (Operations 3, 5, 6, 8.1, P4-10).
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from personal_agent_protocol import (
     PapSession,
 )
 from personal_agent_protocol.actions import discover_company
+from personal_agent_protocol.apis import ApiClient
 from personal_agent_protocol.company import CompanyConfig
 from personal_agent_protocol.company.store import ACCOUNT_FAMILY, AccountFamily
 from personal_agent_protocol.demo.kit import InProcessNetwork, MutableClock
@@ -44,6 +46,7 @@ from personal_agent_protocol.models import (
     BROWSER_SIGN_IN_SCOPE,
     DEVICE_CODE_GRANT,
     MEDIATED_GRANT,
+    Approval,
     Author,
     ConversationEventPage,
     DiscoveredCompany,
@@ -661,3 +664,174 @@ async def test_a_delegated_key_signs_for_one_user_id() -> None:
     # The first User ID goes on with it.
     headers = await session_headers(world.reactor, "GET", orders, session=session, token=None)
     assert (await world.http.get(orders, headers=headers)).status_code in {200, 401}
+
+
+# The Operations extension's minor changes (Operations 3, 5, 6, 8.1) ---------------------------
+
+
+class _Notes:
+    """A company API whose action says `summary` and `terms`, set by the test, and an executor
+    that records what it performs: one action, `orders.note`, signed out."""
+
+    description = "Notes"
+
+    def __init__(self) -> None:
+        self.summary = "Add a note."
+        self.terms: dict[str, Any] | None = {"note": "gift"}
+        self.performed: list[tuple[str, str]] = []
+        self.action = "orders.note"
+
+    def openapi(self) -> dict[str, object]:
+        return {}
+
+    async def handle(self, call: Any) -> Any:
+        from personal_agent_protocol.company import ApiResult, ProposedOperation
+
+        return ApiResult(
+            operation=ProposedOperation(action=self.action, summary=self.summary, terms=self.terms)
+        )
+
+    async def perform(self, operation: Any, account_id: str | None) -> Any:
+        from personal_agent_protocol.company import ActionResult
+
+        self.performed.append((operation.operation_id, operation.revision))
+        return ActionResult(summary="Noted.")
+
+
+async def _notes_world() -> tuple[World, Any, _Notes]:
+    from reactor import PluginManifest  # type: ignore[import-untyped]
+
+    from personal_agent_protocol.company.points import OPERATION_EXECUTORS
+
+    world = World()
+    session = await world.signed_out_session()
+    notes = _Notes()
+
+    class Contribute:
+        def provide_contributions(self, contributions: Any) -> None:
+            contributions.contribute(OPERATION_EXECUTORS, notes, contribution_id="notes")
+
+    world.shop.reactor.register_plugin(PluginManifest(name="notes", version="1"), Contribute())
+    world.shop._api = lambda: notes  # type: ignore[attr-defined,method-assign]
+    return world, session, notes
+
+
+NOTES = "https://manzanita.example/api/notes"
+
+
+@pytest.mark.asyncio
+async def test_a_reworded_summary_keeps_the_revision_and_new_terms_change_it() -> None:
+    """The revision changes whenever the terms or `expires_at` change; a `summary` reworded
+    without changing the terms can keep it. New terms, the User's or the Company's, are a new
+    revision of the same operation (Operations 3)."""
+
+    world, session, notes = await _notes_world()
+    api = ApiClient(transport=world.transport)
+    first = (await api.call("POST", NOTES, session=session, body={})).operation
+    assert first is not None
+    notes.summary = "Add a short note to the order."
+    reworded = (await api.call("POST", NOTES, session=session, body={})).operation
+    assert reworded is not None and reworded.revision == first.revision
+    notes.terms = {"note": "birthday"}
+    changed = (await api.call("POST", NOTES, session=session, body={})).operation
+    assert changed is not None
+    assert changed.operation_id == first.operation_id and changed.revision != first.revision
+
+
+@pytest.mark.asyncio
+async def test_an_approval_says_when_and_how_the_user_gave_it() -> None:
+    """An approval can say `approved_at` (Unix seconds, an Integer) and `input_type` (a
+    String); the Company MUST NOT reject it because either is missing or because it doesn't
+    recognize the input type (Operations 6)."""
+
+    from personal_agent_protocol.operations import (
+        APPROVAL_HEADER,
+        approval_from_meta,
+        approval_header,
+        parse_approval_header,
+    )
+
+    approval = Approval(
+        operation_id="exc_5Rt2", revision="r1", approved_at=1791487260, input_type="tap"
+    )
+    header = approval_header(approval)
+    assert (
+        header == 'operation_id="exc_5Rt2", revision="r1", approved_at=1791487260, input_type="tap"'
+    )
+    assert parse_approval_header(header) == approval
+    # A value that isn't one is left out, never a reason to drop the approval.
+    for odd in ('approved_at=1.5, input_type="tap"', 'approved_at="soon", input_type=tap'):
+        parsed = parse_approval_header(f'operation_id="exc_5Rt2", revision="r1", {odd}')
+        assert parsed is not None and parsed.approved_at is None
+    quoted = Approval(operation_id="exc_5Rt2", revision="r1", input_type='a "pen" tap')
+    assert parse_approval_header(approval_header(quoted)) == quoted
+    meta = {"personalagentprotocol.org/approval": approval.model_dump(exclude_none=True)}
+    assert approval_from_meta(meta) == approval
+    # The company performs with an input type it doesn't know, or none.
+    world, session, notes = await _notes_world()
+    api = ApiClient(transport=world.transport)
+    operation = (await api.call("POST", NOTES, session=session, body={})).operation
+    assert operation is not None
+    unknown = Approval(
+        operation_id=operation.operation_id, revision=operation.revision, input_type="gesture"
+    )
+    done = await world.transport.request(
+        "POST",
+        NOTES,
+        session=session,
+        content=b"{}",
+        headers={"Content-Type": "application/json", APPROVAL_HEADER: approval_header(unknown)},
+    )
+    assert done.status_code == 200 and notes.performed == [
+        (operation.operation_id, operation.revision)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_approving_request_is_compared_by_meaning_from_any_session() -> None:
+    """The approving request has the same method, target URI and content, compared by what
+    they mean, not their bytes; other header fields can differ, such as another Session of the
+    same agent and User that can approve (Operations 6)."""
+
+    world, session, notes = await _notes_world()
+    asked = await world.transport.request(
+        "POST",
+        f"{NOTES}?a=1&b=2",
+        session=session,
+        content=b'{"x": 1, "y": 2}',
+        headers={"Content-Type": "application/json"},
+    )
+    operation = asked.json()["operation"]
+    other = await world.signed_out_session()
+    approval = Approval(operation_id=operation["operation_id"], revision=operation["revision"])
+    from personal_agent_protocol.operations import APPROVAL_HEADER, approval_header
+
+    done = await world.transport.request(
+        "POST",
+        f"{NOTES}?b=2&a=1",
+        session=other,
+        content=b'{"y":2,"x":1}',
+        headers={"Content-Type": "application/json", APPROVAL_HEADER: approval_header(approval)},
+    )
+    assert done.status_code == 200
+    assert notes.performed == [(operation["operation_id"], operation["revision"])]
+
+
+@pytest.mark.asyncio
+async def test_an_approval_of_earlier_terms_the_user_prefers_is_still_accepted() -> None:
+    """If the User prefers an earlier revision, the Personal Agent can send its approval; the
+    Company may treat a revision it replaced as failing the check. The reference company
+    accepts earlier terms the User asked for, and refuses ones it withdrew (Operations 3, 5, 6)."""
+
+    world, session, notes = await _notes_world()
+    api = ApiClient(transport=world.transport)
+    first = (await api.call("POST", NOTES, session=session, body={"note": "gift"})).operation
+    notes.terms = {"note": "birthday"}
+    later = (await api.call("POST", NOTES, session=session, body={"note": "birthday"})).operation
+    assert first is not None and later is not None
+    assert later.operation_id == first.operation_id and later.revision != first.revision
+    # Back to the first terms, with their approval: performed as they were.
+    notes.terms = {"note": "gift"}
+    approval = Approval(operation_id=first.operation_id, revision=first.revision)
+    done = await api.call("POST", NOTES, session=session, body={"note": "gift"}, approval=approval)
+    assert done.status == 200 and notes.performed == [(first.operation_id, first.revision)]

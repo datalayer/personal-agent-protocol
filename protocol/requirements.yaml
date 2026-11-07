@@ -2996,6 +2996,7 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._revision_for
   - personal_agent_protocol.company.service:CompanyService.revise
   tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_a_reworded_summary_keeps_the_revision_and_new_terms_change_it
   - personal_agent_protocol/__tests__/test_operations.py::test_new_terms_from_the_action_are_a_new_revision_of_the_same_operation
   - personal_agent_protocol/__tests__/test_operations.py::test_the_companys_revision_withdraws_the_earlier_ones
   conformance:
@@ -3162,8 +3163,10 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService._approves
   tests:
   - personal_agent_protocol/__tests__/test_operations.py::test_any_session_of_the_account_approves_and_a_signed_out_one_gets_a_challenge
-  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_returned_signed_out_is_approved_only_in_that_session
+  - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_returned_signed_out_is_approved_in_any_signed_out_session
   - personal_agent_protocol/__tests__/test_operations.py::test_an_operation_is_the_conversations_own
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_approving_request_is_compared_by_meaning_from_any_session
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_an_approval_of_earlier_terms_the_user_prefers_is_still_accepted
   conformance:
   - operations.approved-performed
   - operations.malformed-approval-header-ignored
@@ -3206,6 +3209,46 @@ requirements:
   - operations.approval-of-a-revision-never-returned
   - operations.approval-of-another-request
   - operations.expired
+- id: OPS-6-04
+  source: operations
+  section: '6'
+  level: SHOULD
+  role: personal-agent
+  text: The Personal Agent SHOULD include both approved_at, when the User approved in Unix seconds, and
+    input_type, how the User gave their answer, such as tap, typed, or voice.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.ask_user
+  - personal_agent_protocol.operations:approval_header
+  - personal_agent_protocol.mcp:McpClient.call_tool
+  tests:
+  - personal_agent_protocol/__tests__/test_operations.py::test_the_user_is_asked_with_the_company_the_summary_and_any_difference
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_an_approval_says_when_and_how_the_user_gave_it
+- id: OPS-6-05
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: personal-agent
+  text: input_type MUST NOT contain personal data, or anything that identifies the User or their device.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Approval
+  - personal_agent_protocol.operations:OperationsClient.ask_user
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_an_approval_says_when_and_how_the_user_gave_it
+- id: OPS-6-06
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: company
+  text: A Company MAY record approved_at and input_type, and MUST NOT reject an approval because either is
+    missing or because it doesn't recognize the input_type.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Approval
+  - personal_agent_protocol.operations:parse_approval_header
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_an_approval_says_when_and_how_the_user_gave_it
 - id: OPS-7-01
   source: operations
   section: '7'

@@ -305,10 +305,7 @@ export class McpClient {
           ? {}
           : {
               _meta: {
-                [APPROVAL_META_KEY]: {
-                  operation_id: approval.operation_id,
-                  revision: approval.revision,
-                },
+                [APPROVAL_META_KEY]: { ...approval },
               },
             }),
       },

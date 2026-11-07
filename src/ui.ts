@@ -230,6 +230,11 @@ export type PapReply = {
   text: string;
   links: PapLink[];
   disclosures: string[];
+  /**
+   * The request the company agent took into account when it wrote this (§8.4, version 5): a
+   * hint for telling which message a short answer answers; none from a person.
+   */
+  as_of_request: string | null;
 };
 
 /** What a company answered, as a display's `data` (`PapReplies`' fields). */
@@ -284,8 +289,9 @@ const isLink = (value: unknown): value is PapLink => {
 
 const isReply = (value: unknown): value is PapReply =>
   isObject(value) &&
-  hasExactly(value, ["author", "name", "text", "links", "disclosures"]) &&
+  hasExactly(value, ["author", "name", "text", "links", "disclosures", "as_of_request"]) &&
   isSender(value.author) &&
+  (value.as_of_request === null || isConversationId(value.as_of_request)) &&
   (value.name === null || isFilled(value.name)) &&
   isFilled(value.text) &&
   Array.isArray(value.links) &&

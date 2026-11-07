@@ -5,7 +5,8 @@
 """What draft 0.4 adds, both sides, in one process: `src/__tests__/draft-04.test.mjs`
 ports it.
 
-Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02).
+Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); what a
+message took into account (§8.4, P4-08).
 """
 
 from __future__ import annotations
@@ -26,13 +27,17 @@ from personal_agent_protocol.errors import ConversationError
 from personal_agent_protocol.models import (
     DEVICE_CODE_GRANT,
     MEDIATED_GRANT,
+    Author,
+    ConversationEventPage,
     DiscoveredCompany,
     DiscoveryDocument,
+    Message,
     OAuthServerMetadata,
     choose_protocol_version,
     compatible_versions,
 )
 from personal_agent_protocol.transport import session_headers, version_unsupported
+from personal_agent_protocol.ui import PapReplies
 
 from .test_company_end_to_end import World
 
@@ -233,3 +238,62 @@ async def test_the_company_serves_its_other_versions_documents() -> None:
         replace(CONFIG, protocol_versions=(PROTOCOL_PROFILE, PROTOCOL_PROFILE))
     with pytest.raises(ValueError):
         replace(CONFIG, deprecated_versions={"0.0": (since, until)})
+
+
+# What a message took into account (§8.4) ------------------------------------------------
+
+
+def test_only_an_ai_says_what_it_took_into_account() -> None:
+    """`as_of_request` is the Company Agent's, `as_of_cursor` the Personal Agent's, and a
+    person's message carries neither (§8.4)."""
+
+    agent = Message(author=Author(type="agent"), text="Medium, please.", as_of_cursor="evt_c2")
+    assert agent.as_of_cursor == "evt_c2"
+    company = Message(
+        id="msg_1", role="company", author=Author(type="agent"), text="Done.", as_of_request="req_1"
+    )
+    assert company.as_of_request == "req_1"
+    for fields in (
+        {"author": Author(type="human"), "as_of_cursor": "evt_c2"},
+        {"author": Author(type="human"), "as_of_request": "req_1"},
+        {"author": Author(type="agent"), "role": "user", "as_of_request": "req_1"},
+        {"author": Author(type="agent"), "role": "company", "as_of_cursor": "evt_c2"},
+        {"author": Author(type="agent"), "as_of_cursor": "not valid!"},
+    ):
+        with pytest.raises(ValueError):
+            Message(text="Hello", **fields)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_the_company_agent_names_the_request_it_answered_and_people_do_not() -> None:
+    """The reference company's agent replies carry `as_of_request`, the ID of the request
+    they took into account; a person's reply carries none; `send(as_of_cursor=)` puts the
+    agent's last cursor on its message (§8.4)."""
+
+    world = World()
+    world.shop.config = replace(world.shop.config, humans_available=True)
+    session = await world.signed_out_session()
+    endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
+    first = world.message("Hello")
+    page = await world.conversations.start(endpoint, first, session=session, wait=0)
+    assert isinstance(page, ConversationEventPage)
+    replies = [e.message for e in page.events if e.message and e.message.role == "company"]
+    assert replies and all(reply.as_of_request == first.id for reply in replies)
+    follow = Message(id="req_follow_00000000000", author=Author(type="agent"), text="And my order?")
+    page = await world.conversations.send(
+        endpoint, page.conversation_id, follow, session=session, as_of_cursor=page.cursor, wait=0
+    )
+    assert isinstance(page, ConversationEventPage)
+    mine = [e.message for e in page.events if e.message and e.message.role == "user"]
+    assert mine[-1].as_of_cursor is not None and mine[-1].as_of_cursor.startswith("evt")
+    assert mine[-1].id == follow.id
+    await world.conversations.handoff(endpoint, page.conversation_id, session=session)
+    settled = await world.conversations.read_until_done(
+        endpoint, page.conversation_id, session=session, wait=0
+    )
+    event = await world.shop.staff_reply(
+        page.conversation_id, after=settled.events[-1].id, text="Marta here.", author_name="Marta"
+    )
+    assert event.message is not None and event.message.as_of_request is None
+    shown = PapReplies.of("manzanita.example", page.conversation_id, replies)
+    assert shown is not None and shown.replies[0].as_of_request == first.id

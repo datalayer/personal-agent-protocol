@@ -3262,6 +3262,7 @@ class CompanyService:
                         "id": self._id("msg"),
                         "author": {"type": "agent"},
                         "role": "company",
+                        "as_of_request": request_id,
                         "text": "No one is available right now; I'll keep helping here.",
                     },
                 )
@@ -3372,7 +3373,7 @@ class CompanyService:
                 )
             )
             for reply in replies:
-                event = await self._reply(conversation_id, session, reply)
+                event = await self._reply(conversation_id, session, reply, message.id)
                 if event is not None:
                     events.append(event)
 
@@ -3417,6 +3418,8 @@ class CompanyService:
         decision = await self._decide(session, asked, approval, target)
         author: dict[str, object] = {"type": "agent"}
         reply: dict[str, object] = {"id": self._id("msg"), "author": author, "role": "company"}
+        if message.id is not None:
+            reply["as_of_request"] = message.id
         if decision.operation is not None:
             reply["text"] = "That approval doesn't cover these terms. Here they are to approve."
             reply["extensions"] = operations_content(operation=decision.operation)
@@ -3429,8 +3432,15 @@ class CompanyService:
         return self._event(type="message", message=reply)
 
     async def _reply(  # noqa: C901 - each kind of content a reply carries
-        self, conversation_id: str, session: CallerSession, reply: Reply
+        self,
+        conversation_id: str,
+        session: CallerSession,
+        reply: Reply,
+        as_of_request: str | None = None,
     ) -> StoredEvent | None:
+        """A company agent's reply as an event; `as_of_request` names the request it took
+        into account (§8.4), none for a message sent before taking any into account."""
+
         if reply.authorization is not None:
             error, scope = reply.authorization
             return self._event(type="authorization", error=error, scope=scope)
@@ -3438,6 +3448,8 @@ class CompanyService:
             return self._event(type="user_requested", reason=reply.user_requested)
         author: dict[str, object] = {"type": "agent", **(reply.persona or {})}
         message: dict[str, object] = {"id": self._id("msg"), "author": author, "role": "company"}
+        if as_of_request is not None:
+            message["as_of_request"] = as_of_request
         if reply.text is not None:
             message["text"] = reply.text
         if reply.data is not None:

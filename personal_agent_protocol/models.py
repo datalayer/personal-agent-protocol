@@ -865,6 +865,11 @@ class Message(ProtocolModel):
     id: str | None = None
     author: Author
     role: Literal["user", "company"] | None = None
+    #: What the writer had seen (§8.4), hints neither side depends on: on a Company Agent
+    #: message, the ID of the latest request it took into account; on a message the
+    #: Personal Agent wrote, the last cursor it had read. A person's message carries neither.
+    as_of_request: str | None = None
+    as_of_cursor: str | None = None
     text: str | None = None
     data: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
@@ -926,11 +931,13 @@ class Message(ProtocolModel):
                     raise ValueError(f"extensions.{name}: {error.errors()[0]['msg']}") from error
         return value
 
-    @field_validator("id")
+    @field_validator("id", "as_of_request", "as_of_cursor")
     @classmethod
     def validate_id(cls, value: str | None) -> str | None:
         if value is not None and not _IDENTIFIER.fullmatch(value):
-            raise ValueError("message ID must use the URL-safe base64 alphabet")
+            raise ValueError(
+                "message IDs, request IDs and cursors use the URL-safe base64 alphabet"
+            )
         return value
 
     @field_validator("context")
@@ -956,6 +963,15 @@ class Message(ProtocolModel):
         content = (self.text, self.data, self.context, self.extensions)
         if all(value is None for value in content):
             raise ValueError("a message requires text, data, context, or extensions")
+        # Only messages written by an AI say what they took into account (§8.4): a person
+        # types while messages arrive. `as_of_request` is the Company Agent's, `as_of_cursor`
+        # the Personal Agent's.
+        if self.author.type == "human" and (self.as_of_request or self.as_of_cursor):
+            raise ValueError("a person's message carries neither as_of_request nor as_of_cursor")
+        if self.role == "user" and self.as_of_request is not None:
+            raise ValueError("as_of_request is the Company Agent's")
+        if self.role == "company" and self.as_of_cursor is not None:
+            raise ValueError("as_of_cursor is the Personal Agent's")
         return self
 
 

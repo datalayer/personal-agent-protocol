@@ -1246,6 +1246,24 @@ caseFor("conversations.attribution")(async (ctx) => {
   check(theirs.length && theirs.every((item) => ["agent", "human"].includes(item.author.type)), "replies have author");
 });
 
+caseFor("conversations.as-of-request")(async (ctx) => {
+  const { session, endpoint } = await asUser(ctx);
+  const first = message(ctx.scenario.greeting);
+  const started = await ctx.agent.conversations.start(endpoint, first, { session });
+  let page = await ctx.agent.conversations.readUntilDone(endpoint, started.conversation_id, { session, wait: 0 });
+  const follow = message("Thanks.");
+  await ctx.agent.conversations.send(endpoint, started.conversation_id, follow, { session, asOfCursor: page.cursor });
+  page = await ctx.agent.conversations.readUntilDone(endpoint, started.conversation_id, { session, wait: 0 });
+  const sent = new Set([first.id, follow.id]);
+  for (const event of page.events) {
+    const m = event.message;
+    if (m === undefined) continue;
+    if (m.author.type === "human") check(m.as_of_request === undefined && m.as_of_cursor === undefined, "a person's message says nothing of what it had seen");
+    else if (m.role === "company" && m.as_of_request !== undefined) check(sent.has(m.as_of_request), `as_of_request names a request sent: ${m.as_of_request}`);
+    if (m.role === "user" && m.id === follow.id) check(m.as_of_cursor !== undefined, "the agent's as_of_cursor comes back as sent");
+  }
+});
+
 caseFor("conversations.handoff")(async (ctx) => {
   const { session, endpoint } = await asUser(ctx);
   const conversation = await conversationOf(ctx, session);

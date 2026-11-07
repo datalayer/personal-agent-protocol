@@ -3578,6 +3578,7 @@ export class CompanyService {
               id: this.#id("msg"),
               author: { type: "agent" },
               role: "company",
+              as_of_request: requestId,
               text: "No one is available right now; I'll keep helping here.",
             },
           });
@@ -3682,7 +3683,7 @@ export class CompanyService {
         supportsOperations: negotiated,
       });
       for (const reply of replies) {
-        const event = await this.#reply(conversationId, session, reply);
+        const event = await this.#reply(conversationId, session, reply, message.id);
         if (event !== undefined) events.push(event);
       }
     }
@@ -3724,6 +3725,7 @@ export class CompanyService {
     const reply: Record<string, unknown> = {
       id: this.#id("msg"),
       author: { type: "agent" },
+      ...(message.id === undefined ? {} : { as_of_request: message.id }),
       role: "company",
     };
     if (decision.operation !== undefined) {
@@ -3738,10 +3740,15 @@ export class CompanyService {
     return this.#event({ type: "message", message: reply });
   }
 
+  /**
+   * A company agent's reply as an event; `asOfRequest` names the request it took into account
+   * (§8.4), none for a message sent before taking any into account.
+   */
   async #reply(
     conversationId: string,
     session: CallerSession,
     reply: Reply,
+    asOfRequest?: string,
   ): Promise<StoredEvent | undefined> {
     if (reply.authorization !== undefined) {
       const [error, scope] = reply.authorization;
@@ -3754,6 +3761,7 @@ export class CompanyService {
       id: this.#id("msg"),
       author: { type: "agent", ...(reply.persona ?? {}) },
       role: "company",
+      ...(asOfRequest === undefined ? {} : { as_of_request: asOfRequest }),
     };
     if (reply.text !== undefined) message.text = reply.text;
     if (reply.data !== undefined) message.data = reply.data;

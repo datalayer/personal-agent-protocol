@@ -406,6 +406,9 @@ class PapReply(BaseModel):
     links: list[PapLink] = Field(default_factory=list)
     #: The notices the reply marks apart (Disclosures 3), verbatim.
     disclosures: list[str] = Field(default_factory=list)
+    #: The request the company agent took into account when it wrote this (§8.4, version
+    #: 5): a hint for telling which message a short answer answers; none from a person.
+    as_of_request: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,256}$")
 
     @field_validator("text")
     @classmethod
@@ -506,6 +509,7 @@ class PapReplies(Display):
                     text=message.text,
                     links=[PapLink(url=link.url, title=link.title) for link in message.links],
                     disclosures=[item.text for item in message.disclosures],
+                    as_of_request=message.as_of_request,
                 )
                 for message in written
             ],

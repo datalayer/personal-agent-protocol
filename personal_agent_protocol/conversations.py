@@ -152,13 +152,25 @@ class ConversationClient:
         session: PapSession,
         token: AccessToken | None = None,
         request_id: str | None = None,
+        as_of_cursor: str | None = None,
         cursor: str | None = None,
         wait: int | None = None,
     ) -> ConversationResponse:
-        """Send another message (§8.3), under a request ID the caller keeps to retry it."""
+        """Send another message (§8.3), under a request ID the caller keeps to retry it.
+
+        `as_of_cursor`, the last cursor the agent had read, goes on a message the agent
+        wrote (§8.4), so the company can tell which of its messages a short answer answers;
+        a message that already carries one keeps it, and a person's message takes none.
+        """
 
         self._identifier(conversation_id, "conversation ID")
         url = f"{endpoint.rstrip('/')}/{conversation_id}/messages"
+        if (
+            as_of_cursor is not None
+            and message.as_of_cursor is None
+            and message.author.type == "agent"
+        ):
+            message = message.model_copy(update={"as_of_cursor": as_of_cursor})
         return await self._send(
             url,
             {

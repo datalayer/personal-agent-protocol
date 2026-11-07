@@ -460,6 +460,13 @@ export interface Message extends UnknownFields {
   readonly id?: string;
   readonly author: Author;
   readonly role?: "user" | "company";
+  /**
+   * What the writer had seen (§8.4), hints neither side depends on: on a Company Agent message,
+   * the ID of the latest request it took into account; on a message the Personal Agent wrote,
+   * the last cursor it had read. A person's message carries neither.
+   */
+  readonly as_of_request?: string;
+  readonly as_of_cursor?: string;
   readonly text?: string;
   readonly data?: Readonly<Record<string, unknown>>;
   readonly context?: Readonly<Record<string, unknown>>;
@@ -1447,7 +1454,7 @@ export function parseAuthor(value: unknown): Author {
 }
 
 export function parseMessage(value: unknown): Message {
-  const source = nullsAbsent(value, "message", ["role", "text", "data", "context", "extensions"]);
+  const source = nullsAbsent(value, "message", ["role", "as_of_request", "as_of_cursor", "text", "data", "context", "extensions"]);
   const text = source.text === undefined ? undefined : string(source.text, "message.text");
   const data = optionalRecord(source.data, "message.data");
   const context = messageContext(optionalRecord(source.context, "message.context"));
@@ -1459,13 +1466,29 @@ export function parseMessage(value: unknown): Message {
       "a message requires text, data, context, or extensions",
     );
   }
+  const author = parseAuthor(source.author);
+  const role = source.role === undefined ? undefined : oneOf(source.role, ["user", "company"] as const, "message.role");
+  const asOfRequest = source.as_of_request === undefined ? undefined : identifier(source.as_of_request, "message.as_of_request");
+  const asOfCursor = source.as_of_cursor === undefined ? undefined : identifier(source.as_of_cursor, "message.as_of_cursor");
+  // Only messages written by an AI say what they took into account (§8.4): a person types
+  // while messages arrive. `as_of_request` is the Company Agent's, `as_of_cursor` the
+  // Personal Agent's.
+  if (author.type === "human" && (asOfRequest !== undefined || asOfCursor !== undefined)) {
+    throw new ProtocolValidationError("invalid_message", "a person's message carries neither as_of_request nor as_of_cursor");
+  }
+  if (role === "user" && asOfRequest !== undefined) {
+    throw new ProtocolValidationError("invalid_message", "as_of_request is the Company Agent's");
+  }
+  if (role === "company" && asOfCursor !== undefined) {
+    throw new ProtocolValidationError("invalid_message", "as_of_cursor is the Personal Agent's");
+  }
   return {
     ...source,
     ...(source.id === undefined ? {} : { id: identifier(source.id, "message.id") }),
-    author: parseAuthor(source.author),
-    ...(source.role === undefined
-      ? {}
-      : { role: oneOf(source.role, ["user", "company"] as const, "message.role") }),
+    author,
+    ...(role === undefined ? {} : { role }),
+    ...(asOfRequest === undefined ? {} : { as_of_request: asOfRequest }),
+    ...(asOfCursor === undefined ? {} : { as_of_cursor: asOfCursor }),
     ...(text === undefined ? {} : { text }),
     ...(data === undefined ? {} : { data }),
     ...(context === undefined ? {} : { context }),

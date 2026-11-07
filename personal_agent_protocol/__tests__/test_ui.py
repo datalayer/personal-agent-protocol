@@ -326,6 +326,7 @@ def _message(
     role: str = "company",
     name: str | None = None,
     extensions: dict[str, Any] | None = None,
+    as_of_request: str | None = None,
 ) -> Any:
     from personal_agent_protocol.models import Author, Message
 
@@ -337,6 +338,7 @@ def _message(
         text=text,
         data=data,
         extensions=extensions,
+        as_of_request=as_of_request,
     )
 
 
@@ -350,6 +352,7 @@ def _replies() -> PapReplies:
                 "agent",
                 "Your Ridge Jacket shipped on Tuesday.",
                 extensions={"links": {"items": [TRACKING]}},
+                as_of_request="req_Yq3v8LrT0aWc5NkE",
             ),
             _message(
                 "msg_2",

@@ -17,7 +17,8 @@
             "title": "Tracking for order ord_7Hk2"
           }
         ],
-        "disclosures": []
+        "disclosures": [],
+        "as_of_request": "req_Yq3v8LrT0aWc5NkE"
       },
       {
         "author": "human",
@@ -26,7 +27,8 @@
         "links": [],
         "disclosures": [
           "Exchanged items ship once the original jacket is received."
-        ]
+        ],
+        "as_of_request": null
       }
     ],
     "working": false,

@@ -7,7 +7,8 @@
 // What draft 0.4 adds, both sides, in one process: the port of
 // personal_agent_protocol/__tests__/test_draft_04.py.
 //
-// Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02).
+// Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); what a
+// message took into account (§8.4, P4-08).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -24,6 +25,7 @@ import {
   compatibleVersions,
   discoverCompany,
   parseDiscoveryDocument,
+  parseMessage,
   parseOAuthServerMetadata,
   preferredSignIn,
   sessionHeaders,
@@ -196,4 +198,38 @@ test("the company serves its other versions' documents", async () => {
   assert.equal(current.headers.get("sunset"), null);
   assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: [PROTOCOL_PROFILE, PROTOCOL_PROFILE] }));
   assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, deprecatedVersions: { "0.0": ["2026-11-01T00:00:00Z", "2027-01-01T00:00:00Z"] } }));
+});
+
+
+// What a message took into account (§8.4) -------------------------------------------
+
+test("only an AI says what it took into account", () => {
+  assert.equal(parseMessage({ author: { type: "agent" }, text: "Medium, please.", as_of_cursor: "evt_c2" }).as_of_cursor, "evt_c2");
+  assert.equal(parseMessage({ id: "msg_1", role: "company", author: { type: "agent" }, text: "Done.", as_of_request: "req_1" }).as_of_request, "req_1");
+  for (const fields of [
+    { author: { type: "human" }, as_of_cursor: "evt_c2" },
+    { author: { type: "human" }, as_of_request: "req_1" },
+    { author: { type: "agent" }, role: "user", as_of_request: "req_1" },
+    { author: { type: "agent" }, role: "company", as_of_cursor: "evt_c2" },
+    { author: { type: "agent" }, as_of_cursor: "not valid!" },
+  ]) {
+    assert.throws(() => parseMessage({ text: "Hello", ...fields }));
+  }
+});
+
+test("the company agent names the request it answered, and people do not", async () => {
+  const w = await world(new CompanyConfig({ ...CONFIG_OPTIONS, humansAvailable: true }));
+  const conversations = new ConversationClient({ reactor: w.host.reactor, transport: new SessionFetchClient({ reactor: w.host.reactor, fetch: w.fetch }) });
+  const first = { id: "req_first_000000000000", author: { type: "human" }, text: "Hello" };
+  let page = await conversations.start(CONVERSATIONS, first, { session: w.session, wait: 0 });
+  const replies = page.events.filter((e) => e.message?.role === "company").map((e) => e.message);
+  assert.ok(replies.length > 0 && replies.every((reply) => reply.as_of_request === first.id));
+  const follow = { id: "req_follow_00000000000", author: { type: "agent" }, text: "And my order?" };
+  page = await conversations.send(CONVERSATIONS, page.conversation_id, follow, { session: w.session, asOfCursor: page.cursor, wait: 0 });
+  const mine = page.events.filter((e) => e.message?.role === "user").map((e) => e.message);
+  assert.ok(mine.at(-1).as_of_cursor?.startsWith("evt") && mine.at(-1).id === follow.id);
+  await conversations.handoff(CONVERSATIONS, page.conversation_id, { session: w.session });
+  const settled = await conversations.readUntilDone(CONVERSATIONS, page.conversation_id, { session: w.session, wait: 0 });
+  const event = await w.shop.staffReply(page.conversation_id, { after: settled.events.at(-1).id, text: "Marta here.", authorName: "Marta" });
+  assert.equal(event.message.as_of_request, undefined);
 });

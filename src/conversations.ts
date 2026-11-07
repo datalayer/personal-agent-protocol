@@ -91,6 +91,12 @@ export interface ConversationRequestOptions {
    * send the same again.
    */
   readonly requestId?: string | undefined;
+  /**
+   * On `send`: the last cursor the agent had read, put on a message the agent wrote (§8.4) so
+   * the company can tell which of its messages a short answer answers; a message that already
+   * carries one keeps it, and a person's message takes none.
+   */
+  readonly asOfCursor?: string | undefined;
   readonly cursor?: string;
   readonly wait?: number;
   readonly signal?: AbortSignal;
@@ -277,9 +283,13 @@ export class ConversationClient {
     options: ConversationRequestOptions,
   ): Promise<ConversationResponse> {
     assertIdentifier(conversationId, "conversation ID");
+    const written =
+      options.asOfCursor !== undefined && message.as_of_cursor === undefined && message.author.type === "agent"
+        ? { ...message, as_of_cursor: options.asOfCursor }
+        : message;
     return this.#send(
       `${endpoint.replace(/\/$/, "")}/${conversationId}/messages`,
-      { id: this.#requestId(options.requestId, message), message: this.#outgoing(message) },
+      { id: this.#requestId(options.requestId, message), message: this.#outgoing(written) },
       202,
       options,
     );

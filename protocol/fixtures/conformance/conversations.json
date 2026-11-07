@@ -108,10 +108,24 @@
       "description": "The user's own words go as author human and come back with role user; company messages carry role company and an author."
     },
     {
+      "id": "conversations.as-of-request",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-8.4-04",
+        "PAP-8.4-05",
+        "GUIDE-co-conv-06"
+      ],
+      "description": "A company agent message's as_of_request, when present, names a request the agent sent; a person's message carries neither as_of_request nor as_of_cursor, and the agent's own as_of_cursor comes back as sent (§8.4)."
+    },
+    {
       "id": "conversations.handoff",
       "kind": "positive",
       "role": "company",
-      "requirements": [],
+      "requirements": [
+        "GUIDE-pa-conv-05",
+        "GUIDE-co-conv-05"
+      ],
       "description": "A handoff is accepted (202); handoff is pending while a person is looked for, and a state event records each change of handoff, responder or closed (§8.7, §8.9)."
     },
     {
@@ -119,7 +133,8 @@
       "kind": "positive",
       "role": "company",
       "requirements": [
-        "PAP-8.9-01"
+        "PAP-8.9-01",
+        "GUIDE-co-conv-07"
       ],
       "description": "A handoff cancel is accepted (202); the company stops looking or a person joined first, read from handoff and responder; a cancel with nothing pending changes nothing (§8.9)."
     },
@@ -155,7 +170,8 @@
       "kind": "negative",
       "role": "company",
       "requirements": [
-        "PAP-8.12-01"
+        "PAP-8.12-01",
+        "GUIDE-pa-conv-05"
       ],
       "description": "A close is accepted (202) and, once acted on, closed is true with a state event; a later message or handoff cancel is conversation_closed (409), a close again 202; the events stay readable (§8.12)."
     },

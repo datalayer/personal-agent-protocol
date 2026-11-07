@@ -128,6 +128,17 @@ no SSE `id` (`WorkingChanged`). A `handoff` this SDK doesn't recognize reads as
 can be newer than the events returned: apply the events in order and rely on
 the state once `has_more` is `false`.
 
+## What a message took into account (§8.4)
+
+Messages cross, so a short reply such as "Done" can be ambiguous. A company
+agent's message MAY carry `as_of_request`, the ID of the latest request it took
+into account; the reference companies set it on every agent reply. A message the
+agent writes MAY carry `as_of_cursor`, the last cursor it had read:
+`send(..., as_of_cursor=page.cursor)` (`asOfCursor`) puts it on. Both are hints
+neither side depends on, and messages people write, `author.type` `human`,
+carry neither: the models refuse them there. `PapReply.as_of_request` carries
+the hint to the page.
+
 ## Handoff (§8.9) and closing (§8.12)
 
 Every conversation `POST` carries a request `id` the agent chooses (§8.3):

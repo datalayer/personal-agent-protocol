@@ -2200,6 +2200,35 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_company_rules.py::test_extension_content_goes_only_to_an_agent_that_lists_the_extension
   - personal_agent_protocol/__tests__/test_operations.py::test_a_session_without_the_operations_scopes_is_refused
+- id: PAP-8.4-04
+  section: '8.4'
+  level: MUST NOT
+  role: both
+  text: A message from a person at the Company, or written by the User, with author.type human, MUST NOT
+    include either field.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Message.validate_content
+  - personal_agent_protocol.company.service:CompanyService.staff_reply
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_only_an_ai_says_what_it_took_into_account
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_company_agent_names_the_request_it_answered_and_people_do_not
+  conformance:
+  - conversations.as-of-request
+- id: PAP-8.4-05
+  section: '8.4'
+  level: MUST NOT
+  role: both
+  text: The Company and the Personal Agent MUST NOT depend on either field being present, and treat each
+    only as a hint for interpreting the message.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Message
+  - personal_agent_protocol.conversations:ConversationClient.read_until_done
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_only_an_ai_says_what_it_took_into_account
+  conformance:
+  - conversations.as-of-request
 - id: PAP-8.5-01
   section: '8.5'
   level: MUST
@@ -4041,6 +4070,50 @@ guide:
   - personal_agent_protocol.company.service:CompanyService._stream
   reason: The stream opens with a comment and ends after the backlog; it does not stay open with keep-alives.
   tests: []
+- id: GUIDE-co-conv-05
+  source: guide
+  section: Conversations
+  level: SHOULD
+  role: company
+  text: Report working as true from the moment you accept a request until you've acted on it and finished
+    replying, so a personal agent that reads until working is false gets the whole reply (8.7).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._receive
+  tests:
+  - personal_agent_protocol/__tests__/test_security_review.py::test_o8_a_reply_is_complete_when_working_is_false
+  conformance:
+  - conversations.handoff
+- id: GUIDE-co-conv-06
+  source: guide
+  section: Conversations
+  level: SHOULD
+  role: company
+  text: Set as_of_request on each company agent message to the latest request the agent saw when it started
+    the turn, and give the agent the as_of_cursor of each personal agent message, so it knows which of its
+    messages a reply answers (8.4). Leave as_of_request off messages from people.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._reply
+  - personal_agent_protocol.company.service:CompanyService.staff_reply
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_company_agent_names_the_request_it_answered_and_people_do_not
+  conformance:
+  - conversations.as-of-request
+- id: GUIDE-co-conv-07
+  source: guide
+  section: Conversations
+  level: SHOULD
+  role: company
+  text: If your help desk can withdraw a request for a person, do so on a handoff cancel, so no one is
+    assigned to a conversation that no longer needs them (8.9).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._conversation_route
+  tests:
+  - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+  conformance:
+  - conversations.handoff-cancel
 - id: GUIDE-co-conv-02
   source: guide
   section: Conversations
@@ -4209,6 +4282,36 @@ guide:
   tests:
   - personal_agent_protocol/__tests__/test_company_refusals.py::test_a_replayed_token_request_is_refused
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
+- id: GUIDE-pa-conv-05
+  source: guide
+  section: Conversations
+  level: SHOULD
+  role: personal-agent
+  text: Read until working is false before treating the company's reply as complete (8.7). A successful
+    POST only means the company accepted the request.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient.read_until_done
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_company_agent_names_the_request_it_answered_and_people_do_not
+  conformance:
+  - conversations.handoff
+  - conversations.closed
+- id: GUIDE-pa-conv-06
+  source: guide
+  section: Conversations
+  level: SHOULD
+  role: personal-agent
+  text: To tell whether a company agent's reply covers your latest message, compare its as_of_request with
+    that message's request ID. Send as_of_cursor on messages you write, so the company can tell whether a
+    short answer like "Done" answers its latest message or an earlier one (8.4). Messages from people carry
+    neither.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient.send
+  - personal_agent_protocol.ui:PapReply
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_04.py::test_the_company_agent_names_the_request_it_answered_and_people_do_not
 - id: GUIDE-pa-conv-02
   source: guide
   section: Conversations

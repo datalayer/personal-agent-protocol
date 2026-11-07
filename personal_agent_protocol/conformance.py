@@ -1727,6 +1727,45 @@ async def _attribution(ctx: ConformanceContext, _: FixtureCase) -> None:
     )
 
 
+@case("conversations.as-of-request")
+async def _as_of(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """`as_of_request` on a company agent message names a request the agent sent; a person's
+    message carries neither field; the agent's `as_of_cursor` comes back as sent (§8.4)."""
+
+    user = ctx.new_user()
+    session = await ctx.session(user)
+    endpoint = await ctx.conversations_endpoint()
+    first = _message(ctx.scenario.greeting)
+    started = await ctx.agent.conversations.start(endpoint, first, session=session)
+    page = await ctx.agent.conversations.read_until_done(
+        endpoint, started.conversation_id, session=session, wait=0
+    )
+    follow = _message("Thanks.")
+    await ctx.agent.conversations.send(
+        endpoint, started.conversation_id, follow, session=session, as_of_cursor=page.cursor
+    )
+    page = await ctx.agent.conversations.read_until_done(
+        endpoint, started.conversation_id, session=session, wait=0
+    )
+    sent = {first.id, follow.id}
+    for event in page.events:
+        message = event.message
+        if message is None:
+            continue
+        if message.author.type == "human":
+            check(
+                message.as_of_request is None and message.as_of_cursor is None,
+                "a person's message says nothing of what it had seen",
+            )
+        elif message.role == "company" and message.as_of_request is not None:
+            check(
+                message.as_of_request in sent,
+                f"as_of_request names a request sent: {message.as_of_request}",
+            )
+        if message.role == "user" and message.id == follow.id:
+            check(message.as_of_cursor is not None, "the agent's as_of_cursor comes back as sent")
+
+
 @case("conversations.handoff")
 async def _handoff(ctx: ConformanceContext, _: FixtureCase) -> None:
     user = ctx.new_user()

@@ -79,6 +79,7 @@ const sidebars = {
         "guides/conversations",
         "guides/operations",
         "guides/company",
+        "guides/acting-for-a-person",
         "guides/extensions",
         "guides/ucp",
         "guides/operational-limits",

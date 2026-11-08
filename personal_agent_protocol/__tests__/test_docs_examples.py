@@ -755,6 +755,121 @@ async def _negotiation(docs: Docs) -> tuple[dict[str, Any], Check]:
     return {}, _nothing
 
 
+# Acting for a person: the page's company, then its agent's steps, each after the last ----
+
+ACTING = "docs/docs/guides/acting-for-a-person.mdx"
+
+
+async def _store(docs: Docs) -> tuple[dict[str, Any], list[tuple[Any, ...]]]:
+    """The page's company (its first block), at `store.example` on the network.
+
+    The block builds its own service; this one is built from the block's `config` and
+    `StorePlugin` on the network's names and the world's clock. Returns the block's
+    namespace and what `cancel_order` was asked to cancel.
+    """
+
+    cancelled: list[tuple[Any, ...]] = []
+
+    async def cancel_order(account_id: str | None, order_id: str, *, key: str) -> str:
+        cancelled.append((account_id, order_id, key))
+        return "rfd_2Wq8"
+
+    namespace: dict[str, Any] = {
+        "__name__": "docs_example",
+        "http": docs.http,
+        "cancel_order": cancel_order,
+    }
+    await run(PYTHON[f"{ACTING}#0"], namespace)
+    service = build_company(
+        namespace["config"],
+        http_client=docs.http,
+        address_resolver=docs.network.resolve,
+        plugins=[
+            (PluginManifest(name="store", version="1"), namespace["StorePlugin"]()),
+            (PluginManifest(name="clock", version="1"), ClockPlugin(docs.clock)),
+        ],
+    )
+    docs.network.add("store.example", company_app(service))
+    docs.companies["store.example"] = service
+    return namespace, cancelled
+
+
+async def _acting_steps(docs: Docs, last: int) -> dict[str, Any]:
+    """The page's agent blocks 1 to `last`, in one namespace, as a reader runs them."""
+
+    namespace: dict[str, Any] = {
+        "__name__": "docs_example",
+        "reactor": docs.reactor,
+        "http": docs.http,
+    }
+    docs.namespace = namespace
+    for index in range(1, last + 1):
+        await run(PYTHON[f"{ACTING}#{index}"], namespace)
+    return namespace
+
+
+@case(f"{ACTING}#0")
+async def _acting_company(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def cancel_order(account_id: str | None, order_id: str, *, key: str) -> str:
+        return "rfd_2Wq8"
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=namespace["app"]), base_url="https://store.example"
+        ) as client:
+            document = (await client.get("/.well-known/poppy.json")).json()
+        assert document["auth"]["scope_hints"]["orders:cancel"] == {
+            "changes": "irreversible",
+            "personal_data": True,
+        }
+        assert document["extensions"]["operations"] == [{"version": "2"}]
+
+    return {"http": docs.http, "cancel_order": cancel_order}, check
+
+
+@case(f"{ACTING}#1")
+async def _acting_who(docs: Docs) -> tuple[dict[str, Any], Check]:
+    await _store(docs)
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["token"].scopes == ("orders:read", "orders:cancel")
+        assert f"{namespace['session'].sid} True" in out
+        assert "('orders:read', 'orders:cancel') ()" in out
+
+    return {"reactor": docs.reactor, "http": docs.http}, check
+
+
+@case(f"{ACTING}#2")
+async def _acting_authorized(docs: Docs) -> tuple[dict[str, Any], Check]:
+    _, cancelled = await _store(docs)
+    namespace = await _acting_steps(docs, 1)
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        operation = namespace["operation"]
+        assert operation.terms["order_id"] == "ord_7Hk2"
+        assert docs.host.approvals.asked[-1].summary == operation.summary  # type: ignore[union-attr]
+        assert namespace["approval"].input_type == "tap"
+        assert namespace["sent"].status == "answered" and "answered" in out
+        assert cancelled == [("acct_ada", "ord_7Hk2", operation.operation_id)]
+
+    return namespace, check
+
+
+@case(f"{ACTING}#3")
+async def _acting_happened(docs: Docs) -> tuple[dict[str, Any], Check]:
+    _, cancelled = await _store(docs)
+    namespace = await _acting_steps(docs, 2)
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert "Example Store: Cancelled order ord_7Hk2." in out
+        assert "'refund_id': 'rfd_2Wq8'" in out
+        assert out.rstrip().endswith("False")
+        # The retry performed nothing again.
+        assert len(cancelled) == 1
+
+    return namespace, check
+
+
 # The runner -------------------------------------------------------------------------------
 
 

@@ -152,7 +152,7 @@ async function docsWorld() {
     const answer = await new portable.ApiClient({ transport }).call("POST", `https://${domain}/api/orders/ord_7Hk2/exchanges`, { session, token, body: {} });
     return { session, token, operation: answer.operation };
   }
-  return { clock, fetch, identity, companies, host, reactor, scope, transport, discovered, who, signedOut, signedIn, proposed };
+  return { clock, fetch, sites, identity, companies, host, reactor, scope, transport, discovered, who, signedOut, signedIn, proposed };
 }
 
 const CASES = {};
@@ -485,6 +485,103 @@ example("docs/docs/guides/extensions.mdx#0", async () => [
   {},
   async (values) => assert.deepEqual(values.negotiated, { operations: "2" }),
 ]);
+
+// Acting for a person: the page's company, then its agent's steps, each after the last ----
+
+const ACTING = "docs/docs/guides/acting-for-a-person.mdx";
+
+/** Run one docs block in the world's scope, as the runner does, and keep what it declared there. */
+async function runBlock(key, w) {
+  const bind = (specifier) => {
+    assert.ok(MODULES[specifier], `an example imports ${specifier}`);
+    return MODULES[specifier];
+  };
+  const fetch = globalThis.fetch;
+  globalThis.fetch = w.fetch;
+  try {
+    const values = await compile(BLOCKS[key])(w.scope, bind);
+    Object.assign(w.scope, values);
+    return values;
+  } finally {
+    globalThis.fetch = fetch;
+  }
+}
+
+/**
+ * The page's company (its first block), at store.example on the network: built from the
+ * block's `config` and `plugin` on the network and the world's clock (the block builds its
+ * own too). What `cancelOrder` was asked to cancel.
+ */
+async function store(w) {
+  const cancelled = [];
+  w.scope.cancelOrder = async (accountId, orderId, { key }) => {
+    cancelled.push([accountId, orderId, key]);
+    return "rfd_2Wq8";
+  };
+  const { config, plugin } = await runBlock(`${ACTING}#0`, w);
+  const clock = { name: "store-clock", version: "1", contributes: [{ point: portable.Clocks, value: w.clock, options: { id: "docs-clock" } }] };
+  const service = server.buildCompany(config, { fetch: w.fetch, plugins: [plugin, clock] });
+  w.sites["store.example"] = w.companies["store.example"] = service;
+  return cancelled;
+}
+
+/** The page's agent blocks 1 to `last`, in the world's scope, as a reader runs them. */
+async function actingSteps(w, last) {
+  Object.assign(w.scope, { reactor: w.reactor });
+  for (let index = 1; index <= last; index += 1) await runBlock(`${ACTING}#${index}`, w);
+}
+
+example(`${ACTING}#0`, async () => [
+  { cancelOrder: async () => "rfd_2Wq8" },
+  async (values) => {
+    const document = values.service.discoveryDocument();
+    assert.deepEqual(document.auth.scope_hints["orders:cancel"], { changes: "irreversible", personal_data: true });
+    assert.deepEqual(document.extensions.operations, [{ version: "2" }]);
+    assert.equal(typeof values.listener, "function");
+  },
+]);
+
+example(`${ACTING}#1`, async (w) => {
+  await store(w);
+  return [
+    { reactor: w.reactor },
+    async (values, out) => {
+      assert.deepEqual(values.token.scopes, ["orders:read", "orders:cancel"]);
+      assert.equal(out[0], `${values.session.sid} true`);
+      assert.equal(out[1], '["orders:read","orders:cancel"] []');
+    },
+  ];
+});
+
+example(`${ACTING}#2`, async (w) => {
+  const cancelled = await store(w);
+  await actingSteps(w, 1);
+  return [
+    {},
+    async (values, out) => {
+      assert.equal(values.operation.terms.order_id, "ord_7Hk2");
+      assert.equal(w.host.approvals.asked.at(-1).summary, values.operation.summary);
+      assert.equal(values.approval.input_type, "tap");
+      assert.equal(values.sent.status, "answered");
+      assert.equal(out.at(-1), "answered");
+      assert.deepEqual(cancelled, [["acct_ada", "ord_7Hk2", values.operation.operation_id]]);
+    },
+  ];
+});
+
+example(`${ACTING}#3`, async (w) => {
+  const cancelled = await store(w);
+  await actingSteps(w, 2);
+  return [
+    {},
+    async (values, out) => {
+      assert.ok(out.some((line) => line.startsWith("Example Store: Cancelled order ord_7Hk2.") && line.includes('"refund_id":"rfd_2Wq8"')));
+      assert.equal(out.at(-1), "false");
+      // The retry performed nothing again.
+      assert.equal(cancelled.length, 1);
+    },
+  ];
+});
 
 // The runner -------------------------------------------------------------------------------
 

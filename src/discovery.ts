@@ -11,6 +11,7 @@ import { parseJsonStrict } from "./json.js";
 import {
   chooseProtocolVersion,
   chosenVersion,
+  implementedProtocolVersions,
   companyIssuer,
   companyResource,
   listsResource,
@@ -53,6 +54,13 @@ export interface DiscoveryOptions {
    * Personal Agent chooses a version again.
    */
   readonly fresh?: boolean;
+  /**
+   * The protocol versions this Personal Agent implements (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`,
+   * the published version, by default. Name `DRAFT_PROTOCOL_VERSION` among them to use
+   * Companies that serve the 1.0 draft, such as `["0.4", "1.0"]`; the newest compatible version
+   * a Company serves is chosen.
+   */
+  readonly protocolVersions?: Iterable<string>;
 }
 
 function normalizeDomain(domain: string): string {
@@ -292,7 +300,8 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
     );
   }
   const raw = discovery.value;
-  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && chosenOf(raw as Record<string, unknown>) === undefined) {
+  const implemented = implementedProtocolVersions(options.protocolVersions);
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && chosenOf(raw as Record<string, unknown>, implemented) === undefined) {
     // Neither its own version nor one it links to is compatible with one this SDK
     // implements: none of the documents is used (§3.1, §3.4).
     throw new DiscoveryError(
@@ -300,7 +309,7 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
       "poppy.json follows no protocol version this personal agent supports",
     );
   }
-  let document = parseDiscoveryDocument(raw);
+  let document = parseDiscoveryDocument(raw, implemented);
   // The document speaks for the host that served it, after redirects, compared
   // ignoring case and nothing else (§3, §3.1).
   const servedBy = discovery.finalUrl.hostname.toLowerCase().replace(/\.$/, "");
@@ -310,9 +319,9 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
       "Discovery organization domain is not the host that served the document",
     );
   }
-  const chosen = chosenVersion(document);
+  const chosen = chosenVersion(document, implemented);
   if (chosen !== undefined && chosen !== document.protocol_version) {
-    document = await versionDocument(document, chosen, discovery.finalUrl, read);
+    document = await versionDocument(document, chosen, discovery.finalUrl, read, implemented);
   }
   const resourceMetadata = await domainResourceMetadata(document, read);
   if (resourceMetadata === undefined || resourceMetadata.authorization_servers.length === 0) {
@@ -358,7 +367,7 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
   };
 }
 
-function chosenOf(raw: Record<string, unknown>): string | undefined {
+function chosenOf(raw: Record<string, unknown>, implemented: ReadonlySet<string>): string | undefined {
   const version = raw.protocol_version;
   if (typeof version !== "string") return undefined;
   const supported = raw.supported_versions;
@@ -366,7 +375,7 @@ function chosenOf(raw: Record<string, unknown>): string | undefined {
     typeof supported === "object" && supported !== null && !Array.isArray(supported)
       ? Object.keys(supported)
       : [];
-  return chooseProtocolVersion(version, others);
+  return chooseProtocolVersion(version, others, implemented);
 }
 
 /**
@@ -380,6 +389,7 @@ async function versionDocument(
   version: string,
   poppyUrl: URL,
   read: ReadOptions,
+  implemented: ReadonlySet<string>,
 ): Promise<DiscoveryDocument> {
   const url = preferred.supported_versions[version] as string;
   const host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
@@ -400,7 +410,7 @@ async function versionDocument(
   if ((raw as Record<string, unknown>).protocol_version !== version) throw mismatch();
   let document: DiscoveryDocument;
   try {
-    document = parseDiscoveryDocument(raw);
+    document = parseDiscoveryDocument(raw, implemented);
   } catch (cause) {
     throw new ProtocolValidationError("invalid_discovery_document", "A version's document failed protocol validation", { cause });
   }

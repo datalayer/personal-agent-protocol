@@ -5,15 +5,22 @@
  */
 
 import { AuthorizationError, ProtocolValidationError } from "./errors.js";
-import { PROTOCOL_PROFILE } from "./profile.js";
+import { DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE } from "./profile.js";
 
 export type UnknownFields = Readonly<Record<string, unknown>>;
 
 /**
- * The protocol versions this SDK implements (§3.4): a Company's document is used at a
- * version compatible with one of them, the same major and, before 1.0, the same minor.
+ * The protocol versions a Personal Agent implements unless it asks for others (§3.4): a
+ * Company's document is used at a version compatible with one of them, the same major and,
+ * before 1.0, the same minor. The published version only, never the draft.
  */
 export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([PROTOCOL_PROFILE]);
+/**
+ * Every protocol version this SDK implements: the published one and the 1.0 draft. A Personal
+ * Agent (`discoverCompany(domain, { protocolVersions })`) or a Company
+ * (`CompanyConfigOptions.protocolVersions`) uses the draft only when it names it.
+ */
+export const AVAILABLE_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION]);
 const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
 /** `major.minor` as numbers, or `ProtocolValidationError`. */
@@ -33,6 +40,37 @@ export function compatibleVersions(one: string, other: string): boolean {
   const [first, second] = [parseVersion(one), parseVersion(other)];
   if (first[0] !== second[0]) return false;
   return first[0] >= 1 || first[1] === second[1];
+}
+
+/**
+ * The versions a Personal Agent implements: `versions` as given, each one this SDK implements
+ * (`AVAILABLE_PROTOCOL_VERSIONS`), or `SUPPORTED_PROTOCOL_VERSIONS` when absent. Throws
+ * `RangeError` for an empty list or a version the SDK doesn't implement.
+ */
+export function implementedProtocolVersions(versions?: Iterable<string>): ReadonlySet<string> {
+  if (versions === undefined) return SUPPORTED_PROTOCOL_VERSIONS;
+  const chosen = new Set(versions);
+  if (chosen.size === 0) throw new RangeError("a Personal Agent implements at least one protocol version");
+  const unknown = [...chosen].filter((version) => !AVAILABLE_PROTOCOL_VERSIONS.has(version)).sort();
+  if (unknown.length) {
+    throw new RangeError(
+      `protocol versions this SDK doesn't implement: ${unknown.join(", ")} ` +
+        `(it implements ${[...AVAILABLE_PROTOCOL_VERSIONS].sort().join(", ")})`,
+    );
+  }
+  return chosen;
+}
+
+/**
+ * The version a Personal Agent names in `Poppy-Version` when it uses a Company at `chosen`
+ * (§3.4): the one it implements that is compatible with `chosen`, such as `1.0` for a Company
+ * used at `1.2`. Throws `RangeError` when this SDK implements none.
+ */
+export function implementedVersionFor(chosen: string): string {
+  for (const version of AVAILABLE_PROTOCOL_VERSIONS) {
+    if (compatibleVersions(chosen, version)) return version;
+  }
+  throw new RangeError(`this SDK implements no protocol version compatible with ${chosen}`);
 }
 
 /**
@@ -125,6 +163,11 @@ export function redirectUriMatches(registered: string, given: string): boolean {
   );
 }
 
+/**
+ * Who the Company says it is (§3.1). `domain` is its identity; `name` and `logo_uri` are what the
+ * domain says about itself, and nothing confirms them (§10.3): show the domain with the name
+ * (`organizationLabel`) wherever the User might rely on the name.
+ */
 export interface Organization extends UnknownFields {
   readonly name: string;
   readonly domain: string;
@@ -762,12 +805,16 @@ export interface DiscoveredCompany {
 }
 
 /**
- * The version the Personal Agent uses this Company at (§3.4): the newest, among
- * `protocol_version` and `supported_versions`, compatible with one it implements. When it is
- * not `protocol_version`, the version's own document is fetched and used.
+ * The version a Personal Agent that implements `implemented` (this SDK's default versions
+ * when absent) uses this Company at (§3.4): the newest, among `protocol_version` and
+ * `supported_versions`, compatible with one it implements. When it is not `protocol_version`,
+ * the version's own document is fetched and used.
  */
-export function chosenVersion(document: DiscoveryDocument): string | undefined {
-  return chooseProtocolVersion(document.protocol_version, Object.keys(document.supported_versions));
+export function chosenVersion(
+  document: DiscoveryDocument,
+  implemented: Iterable<string> = SUPPORTED_PROTOCOL_VERSIONS,
+): string | undefined {
+  return chooseProtocolVersion(document.protocol_version, Object.keys(document.supported_versions), implemented);
 }
 
 /**
@@ -776,6 +823,27 @@ export function chosenVersion(document: DiscoveryDocument): string | undefined {
  */
 export function companyProtocolVersion(company: DiscoveredCompany): string {
   return company.document.protocol_version;
+}
+
+/**
+ * What a Session with the Company names in `Poppy-Version` (§3.4): the version this SDK
+ * implements that is compatible with the one the Company is used at.
+ */
+export function companySessionVersion(company: DiscoveredCompany): string {
+  return implementedVersionFor(company.document.protocol_version);
+}
+
+/**
+ * The Company's name with its domain beside it, `Manzanita (manzanita.example)`; only the
+ * domain when the name is the domain. Nothing in `poppy.json` confirms that the domain belongs
+ * to the company it names, and a lookalike domain can use another Company's name and logo
+ * (§10.3): the domain is the Company, so show it wherever the User might rely on the name
+ * (guides, *Finding a company*).
+ */
+export function organizationLabel(organization: Organization): string {
+  const name = organization.name.trim();
+  if (name.toLowerCase().replace(/\.$/, "") === organization.domain) return organization.domain;
+  return `${name} (${organization.domain})`;
 }
 
 /** The Company's OAuth issuer, as found from its domain (§3.2). */
@@ -1098,7 +1166,15 @@ function stringMap(value: unknown, label: string): Readonly<Record<string, strin
   );
 }
 
-export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
+/**
+ * A `poppy.json`, checked (§3.1). Its version, or one it links to, must be compatible with one
+ * in `implemented`: by default any this SDK implements; which of them a Personal Agent uses is
+ * its own choice, made at discovery (`DiscoveryOptions.protocolVersions`).
+ */
+export function parseDiscoveryDocument(
+  value: unknown,
+  implemented: Iterable<string> = AVAILABLE_PROTOCOL_VERSIONS,
+): DiscoveryDocument {
   const source = record(value, "poppy.json");
   const version = string(source.protocol_version, "protocol_version");
   if (!VERSION.test(version)) {
@@ -1111,7 +1187,7 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     }
     httpsUrl(url, `supported_versions[${other}]`);
   }
-  if (chooseProtocolVersion(version, Object.keys(supportedVersions)) === undefined) {
+  if (chooseProtocolVersion(version, Object.keys(supportedVersions), implemented) === undefined) {
     // A document is used only at a version compatible with one this SDK implements, its
     // own or one it links to (§3.1, §3.4).
     throw new ProtocolValidationError(

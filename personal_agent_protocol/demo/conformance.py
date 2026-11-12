@@ -131,7 +131,9 @@ class ManzanitaConformance:
     `world` names a conformance world (`world_config`): Manzanita configured as it says.
     """
 
-    def __init__(self, world: str | None = None) -> None:
+    def __init__(
+        self, world: str | None = None, *, protocol_versions: tuple[str, ...] | None = None
+    ) -> None:
         self.clock = MutableClock()
         self.network = InProcessNetwork()
         self.atlas = AgentIdentity(domain="atlas.example", name="Atlas")
@@ -139,6 +141,11 @@ class ManzanitaConformance:
         for identity in (self.atlas, self.plain):
             self.network.add(identity.domain, identity.website())
         config = None if world is None else replace(CONFIG, **world_config(world))
+        #: The versions Manzanita serves and Atlas implements, both: the published version
+        #: by default, or such as `("1.0",)` to run the suite at the 1.0 draft (§3.4).
+        self.protocol_versions = protocol_versions
+        if protocol_versions is not None:
+            config = replace(config or CONFIG, protocol_versions=protocol_versions)
         self.service, self.plugin = manzanita(self.network, self.clock, config=config)
         self.driver = DemoDriver(self.service, self.plugin, self.clock, self.plain)
         self.http = self.network.client()
@@ -153,4 +160,5 @@ class ManzanitaConformance:
             clock=self.clock,
             address_resolver=self.network.resolve,
             browser_http=self.network.client(),
+            protocol_versions=self.protocol_versions,
         )

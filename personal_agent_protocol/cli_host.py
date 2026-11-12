@@ -388,10 +388,13 @@ class TerminalInput:
         self.source = source
 
     async def collect(self, request: ProtectedInputRequest) -> dict[str, SecretStr]:
+        # The domain beside the name: the name is what the domain says about itself, and a
+        # lookalike domain can use any name (§10.3; guides, *Finding a company*).
+        company = f"{request.company_name} ({request.company_domain})"
         if request.sent_to:
-            sys.stderr.write(f"{request.company_name} sent a code to {request.sent_to}.\n")
+            sys.stderr.write(f"{company} sent a code to {request.sent_to}.\n")
         return {
-            item.name: self.source.read(f"{request.company_name} {item.label}", secret=item.secret)
+            item.name: self.source.read(f"{company} {item.label}", secret=item.secret)
             for item in request.fields
         }
 

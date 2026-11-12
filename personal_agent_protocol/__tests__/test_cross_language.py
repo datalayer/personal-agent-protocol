@@ -70,6 +70,16 @@ TYPESCRIPT_WORLDS: tuple[str | None, ...] = (
     "operator-signatures-required",
 )
 
+#: Each pairing's runs: every world at the published version, and the default world with
+#: both sides on the 1.0 draft only (§3.4), which saves no report.
+RUNS: tuple[tuple[str | None, tuple[str, ...] | None], ...] = (
+    *((world, None) for world in TYPESCRIPT_WORLDS),
+    (None, ("1.0",)),
+)
+RUN_IDS = [
+    f"{world or 'default'}{f'@{versions[0]}' if versions else ''}" for world, versions in RUNS
+]
+
 
 def _operator_jwk(identity: AgentIdentity) -> dict[str, str]:
     """The operator's private JWK, for the TypeScript runner to sign as this identity."""
@@ -173,9 +183,9 @@ def _print(title: str, report: ConformanceReport) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("world", TYPESCRIPT_WORLDS)
+@pytest.mark.parametrize(("world", "versions"), RUNS, ids=RUN_IDS)
 async def test_python_runner_against_the_typescript_company(
-    tmp_path: Path, world: str | None
+    tmp_path: Path, world: str | None, versions: tuple[str, ...] | None
 ) -> None:
     from reactor import PluginManifest  # noqa: F401 - the runner's host needs Reactor
 
@@ -195,6 +205,7 @@ async def test_python_runner_against_the_typescript_company(
                 "ca": str(ca),
                 "clock": clock.now().isoformat().replace("+00:00", "Z"),
                 "world": world,
+                "protocol_versions": versions,
                 "agents": {identity.domain: identity.documents for identity in (atlas, plain)},
             }
         )
@@ -222,6 +233,7 @@ async def test_python_runner_against_the_typescript_company(
             clock=clock,
             address_resolver=network.resolve,
             browser_http=browser,
+            protocol_versions=versions,
         )
         try:
             report = await run_conformance(context, cases=select_cases(world=world))
@@ -232,7 +244,10 @@ async def test_python_runner_against_the_typescript_company(
         await node.send({"op": "close"})
     finally:
         await node.stop()
-    _save("python-agent-typescript-company", report.to_json(), world)
+    if versions is None:
+        _save("python-agent-typescript-company", report.to_json(), world)
+    else:
+        assert report.profile == versions[0]
     _print("Python agent ↔ TypeScript company", report)
     failed = {r.id: r.message for r in report.results if r.outcome == "failed"}
     assert failed.keys() == TYPESCRIPT_COMPANY_GAPS.keys(), failed
@@ -308,11 +323,11 @@ async def _answer(driver: DemoDriver, line: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("world_name", TYPESCRIPT_WORLDS)
+@pytest.mark.parametrize(("world_name", "versions"), RUNS, ids=RUN_IDS)
 async def test_typescript_runner_against_the_python_company(
-    tmp_path: Path, world_name: str | None
+    tmp_path: Path, world_name: str | None, versions: tuple[str, ...] | None
 ) -> None:
-    world = ManzanitaConformance(world_name)
+    world = ManzanitaConformance(world_name, protocol_versions=versions)
     driver = world.driver
 
     def agent(identity: AgentIdentity, name: str) -> dict[str, Any]:
@@ -345,6 +360,7 @@ async def test_typescript_runner_against_the_python_company(
                     "capabilities": sorted(driver.capabilities),
                     "clock": world.clock.now().isoformat().replace("+00:00", "Z"),
                     "world": world_name,
+                    "protocol_versions": versions,
                     "agent": agent(world.atlas, "atlas"),
                     "other": agent(world.plain, "plain"),
                 }
@@ -365,8 +381,11 @@ async def test_typescript_runner_against_the_python_company(
                     await node.send({"error": f"{type(error).__name__}: {error}"})
         finally:
             await node.stop()
-    _save("typescript-agent-python-company", document, world_name)
     report = ConformanceReport.from_json(document)
+    if versions is None:
+        _save("typescript-agent-python-company", document, world_name)
+    else:
+        assert report.profile == versions[0]
     _print("TypeScript agent ↔ Python company", report)
     failed = {r.id: r.message for r in report.results if r.outcome == "failed"}
     assert failed.keys() == TYPESCRIPT_AGENT_GAPS.keys(), failed

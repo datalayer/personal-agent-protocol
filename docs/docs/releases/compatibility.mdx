@@ -4,7 +4,7 @@ title: Compatibility
 
 # Compatibility
 
-This page is versioned with the SDK: it describes **SDK 0.34.0**.
+This page is versioned with the SDK: it describes **SDK 0.35.0**.
 
 ## The PAP version implemented
 
@@ -13,11 +13,15 @@ This page is versioned with the SDK: it describes **SDK 0.34.0**.
 | PAP profile | `PROTOCOL_PROFILE` = `0.4` | `PROTOCOL_PROFILE` = `"0.4"` |
 | Specification revision | `PROTOCOL_REVISION` = `2026-11-10` | `PROTOCOL_REVISION` = `"2026-11-10"` |
 | Operations extension | `OPERATIONS_VERSION` = `3` | `OPERATIONS_VERSION` = `"3"` |
+| Draft, opt-in | `DRAFT_PROTOCOL_VERSION` = `1.0` (`DRAFT_PROTOCOL_REVISION` = `2026-11-11`) | `DRAFT_PROTOCOL_VERSION` = `"1.0"` (`DRAFT_PROTOCOL_REVISION` = `"2026-11-11"`) |
 
 Both SDKs implement [PAP version 0.4](https://personalagentprotocol.org/docs/0.4/spec)
 as published on **2026-11-10** (upstream commit `4803900`, the 1.0 release candidate, frozen at `/docs/0.4/spec`), the **Operations
-extension version 3**, the **Mediated Sign-In extension version 1** and the **Browser Control extension version 1**. They announce and accept `protocol_version` `0.4` only:
-`/docs/spec` is now the 1.0 draft, which a later release follows once it is published or changes the wire. Operations version 2 is
+extension version 3**, the **Mediated Sign-In extension version 1** and the **Browser Control extension version 1**. By default they announce and accept `protocol_version` `0.4` only.
+`/docs/spec` is now the 1.0 draft; since 0.35.0 both SDKs implement it as of upstream `c71f515` (2026-11-11) as a second
+version that a personal agent (`protocol_versions` on the discovery client) and a company (`CompanyConfig.protocol_versions`)
+use only when they name it: a draft can still change in ways that aren't backward compatible, so nothing announces `1.0`
+unasked. With both versions, the newest one both sides serve is chosen (spec 3.4). Operations version 2 is
 not supported on either side. Operations on websites (the `Poppy-Operation` header and the extension's `endpoint`) are implemented
 since 0.34.0, with the Browser Control extension. A test holds the two SDKs, this page, the package
 descriptions, `protocol/UPSTREAM.md`, and the requirement ledger
@@ -29,6 +33,7 @@ profile, never picked up from an unattended fetch.
 
 | SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
 | --- | --- | --- | --- | --- |
+| `0.35.0` | `0.4` | 2026-11-10 | v3 | none: [0.34 → 0.35](/releases/migration/#034--035) adds the 1.0 draft as an opt-in second version (`protocol_versions`) and shows a company's domain beside its name |
 | `0.34.0` | `0.4` | 2026-11-10 | v3 | none: [0.33 → 0.34](/releases/migration/#033--034) adds operations on websites (`Poppy-Operation`, the operations `endpoint`) and the Browser Control extension, version 1 |
 | `0.33.0` | `0.4` | 2026-11-10 | v3 | [0.32 → 0.33](/releases/migration/#032--033): 0.4 as published at `4803900`; wire-breaking: task coverage per Session (`tasks.endpoint`), Operations version 3 (`approver`, required `terms`, `approval_declined`), `extension_required` in a JSON body at APIs, Sessions found by User ID too, Device Sign-In links on the issuer's host or `organization.domain` |
 | `0.32.0` | `0.4` | 2026-11-06 | v2 | [0.31 → 0.32](/releases/migration/#031--032): draft 0.4 as of `46beb21`; wire-breaking: `Poppy-Version` and `Poppy-Extensions` on every request, request IDs on every conversation POST, a conversation's state in four fields, `poppy:browser-sign-in` for a signed-in join |

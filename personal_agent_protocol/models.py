@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Wire models for Personal Agent Protocol draft 0.3."""
+"""Wire models for the Personal Agent Protocol: 0.4 as published, and the 1.0 draft."""
 
 from __future__ import annotations
 
@@ -20,18 +20,26 @@ from pydantic import (
     Field,
     SerializerFunctionWrapHandler,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_serializer,
     model_validator,
 )
 
 from .errors import AuthorizationError
-from .profile import PROTOCOL_PROFILE
+from .profile import DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE
 
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
-#: The protocol versions this SDK implements (§3.4): a Company's document is used at a
-#: version compatible with one of them, the same major and, before 1.0, the same minor.
+#: The protocol versions a Personal Agent implements unless it asks for others (§3.4): a
+#: Company's document is used at a version compatible with one of them, the same major
+#: and, before 1.0, the same minor. The published version only, never the draft.
 SUPPORTED_PROTOCOL_VERSIONS = frozenset({PROTOCOL_PROFILE})
+#: Every protocol version this SDK implements: the published one and the 1.0 draft. A
+#: Personal Agent (`DiscoveryClient(protocol_versions=...)`) or a Company
+#: (`CompanyConfig.protocol_versions`) uses the draft only when it names it.
+AVAILABLE_PROTOCOL_VERSIONS = frozenset({PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION})
+#: The validation context key that names the versions a document is checked against.
+PROTOCOL_VERSIONS_CONTEXT = "pap.protocol_versions"
 
 
 def parse_version(value: str) -> tuple[int, int]:
@@ -51,6 +59,36 @@ def compatible_versions(one: str, other: str) -> bool:
     if first[0] != second[0]:
         return False
     return first[0] >= 1 or first[1] == second[1]
+
+
+def implemented_protocol_versions(versions: Iterable[str] | None = None) -> frozenset[str]:
+    """The versions a Personal Agent implements: `versions` as given, each one this SDK
+    implements (`AVAILABLE_PROTOCOL_VERSIONS`), or `SUPPORTED_PROTOCOL_VERSIONS` for
+    `None`. `ValueError` for an empty list or a version the SDK doesn't implement."""
+
+    if versions is None:
+        return SUPPORTED_PROTOCOL_VERSIONS
+    chosen = frozenset(versions)
+    if not chosen:
+        raise ValueError("a Personal Agent implements at least one protocol version")
+    unknown = sorted(chosen - AVAILABLE_PROTOCOL_VERSIONS)
+    if unknown:
+        raise ValueError(
+            f"protocol versions this SDK doesn't implement: {', '.join(unknown)}"
+            f" (it implements {', '.join(sorted(AVAILABLE_PROTOCOL_VERSIONS))})"
+        )
+    return chosen
+
+
+def implemented_version_for(chosen: str) -> str:
+    """The version a Personal Agent names in `Poppy-Version` when it uses a Company at
+    `chosen` (§3.4): the one it implements that is compatible with `chosen`, such as `1.0`
+    for a Company used at `1.2`. `ValueError` when this SDK implements none."""
+
+    for version in AVAILABLE_PROTOCOL_VERSIONS:
+        if compatible_versions(chosen, version):
+            return version
+    raise ValueError(f"this SDK implements no protocol version compatible with {chosen}")
 
 
 def choose_protocol_version(
@@ -175,6 +213,11 @@ class ProtocolModel(BaseModel):
 
 
 class Organization(ProtocolModel):
+    """Who the Company says it is (§3.1). `domain` is its identity; `name` and `logo_uri`
+    are what the domain says about itself, and nothing confirms them (§10.3): a lookalike
+    domain can use another Company's name and logo and pass every discovery check. Show
+    the domain with the name (`label`) wherever the User might rely on the name."""
+
     name: str = Field(min_length=1)
     domain: str
     #: An HTTPS URL of the Company's logo (§3.1), named as in client metadata (§4.1). An
@@ -188,6 +231,16 @@ class Organization(ProtocolModel):
     @classmethod
     def validate_logo_uri(cls, value: str | None) -> str | None:
         return None if value is None else _https_url(value, "organization.logo_uri")
+
+    @property
+    def label(self) -> str:
+        """The name with the domain beside it, `Manzanita (manzanita.example)`: the name is
+        unconfirmed, the domain is the Company (§10.3; guides, *Finding a company*). Only the
+        domain when the name is the domain."""
+
+        if self.name.strip().lower().rstrip(".") == self.domain:
+            return self.domain
+        return f"{self.name.strip()} ({self.domain})"
 
 
 #: The Agent Skills discovery draft revision `skill_index` pins (§9.4): the `$schema` an
@@ -478,19 +531,36 @@ class DiscoveryDocument(ProtocolModel):
         if self.web is not None and self.web.disabled and self.agent is None and not self.apis:
             # Asking agents not to browse means offering them the Company Agent or APIs (§6).
             raise ValueError("web.disabled needs agent or apis")
-        if self.chosen_version is None:
-            # A document is used only at a version compatible with one this SDK
-            # implements, its own or one it links to (§3.1, §3.4).
+        return self
+
+    @model_validator(mode="after")
+    def validate_version_used(self, info: ValidationInfo) -> DiscoveryDocument:
+        # A document is used only at a version compatible with one the Personal Agent
+        # implements, its own or one it links to (§3.1, §3.4): any this SDK implements, or
+        # the versions named in the validation context. Which of them a Personal Agent
+        # uses is its own choice, made at discovery (`DiscoveryClient(protocol_versions=)`).
+        context = info.context if isinstance(info.context, Mapping) else {}
+        implemented = context.get(PROTOCOL_VERSIONS_CONTEXT, AVAILABLE_PROTOCOL_VERSIONS)
+        if self.choose_version(implemented) is None:
             raise ValueError("unsupported Personal Agent Protocol version")
         return self
 
     @property
     def chosen_version(self) -> str | None:
-        """The version the Personal Agent uses this Company at (§3.4): the newest, among
-        `protocol_version` and `supported_versions`, compatible with one it implements.
-        When it is not `protocol_version`, the version's own document is fetched and used."""
+        """The version a Personal Agent on this SDK's default versions uses this Company at
+        (§3.4): the newest, among `protocol_version` and `supported_versions`, compatible
+        with one it implements. When it is not `protocol_version`, the version's own document
+        is fetched and used. `choose_version` answers for other implemented versions."""
 
-        return choose_protocol_version(self.protocol_version, self.supported_versions)
+        return self.choose_version(SUPPORTED_PROTOCOL_VERSIONS)
+
+    def choose_version(self, implemented: Iterable[str]) -> str | None:
+        """The version a Personal Agent that implements `implemented` uses this Company at
+        (§3.4), or `None` when none of the documents is compatible."""
+
+        return choose_protocol_version(
+            self.protocol_version, self.supported_versions, implemented=implemented
+        )
 
     @property
     def browsing_disabled(self) -> bool:
@@ -1439,6 +1509,13 @@ class DiscoveredCompany(ProtocolModel):
         version's document, and every Session with the Company names it in `Poppy-Version`."""
 
         return self.document.protocol_version
+
+    @property
+    def session_version(self) -> str:
+        """What a Session with the Company names in `Poppy-Version` (§3.4): the version this
+        SDK implements that is compatible with `protocol_version`."""
+
+        return implemented_version_for(self.document.protocol_version)
 
     @property
     def scopes_supported(self) -> tuple[str, ...]:

@@ -32,13 +32,32 @@ company gives an `organization.logo_uri`, show the logo next to its
 own copy rather than having the user's device load it from the company; the
 device sign-in start carries it as `organization_logo` (`organizationLogo`).
 
+### The company's name is unconfirmed
+
+Discovery proves which domain publishes a `poppy.json`, not that the domain belongs
+to the company in `organization.name` (the 1.0 draft, §10.3). Any domain can claim
+any name and logo, so a lookalike such as `example-orders.example` passes the same
+checks as `example.com`: the domain is the company's identity, and the name is what
+the domain says about itself. Choosing the right domain for the user is your
+agent's job. When you show a company's name, help the user understand that nothing
+has confirmed it, and show the domain with it whenever you are not sure the domain
+is the one the user means (guides, *Finding a company*).
+
+The SDK does this wherever it shows a name itself: `Organization.label`
+(`organizationLabel(organization)`) gives `Manzanita (manzanita.example)`, or the
+domain alone when the name is the domain; a device or mediated sign-in display
+(`PapSignIn`) names the company as name and domain; the `pap` CLI prints both on
+every company line, approval and protected prompt. `PapConfirm` and `PapReplies`
+show the `company` string you give them: pass the domain, or `Organization.label`,
+never the name alone.
+
 ## Versions
 
 A company can serve several protocol versions (§3.4). `poppy.json` is the
 document of the version it prefers; `supported_versions` maps each other version
 to that version's document. Discovery chooses the newest version compatible with
-the one this SDK implements (`PROTOCOL_PROFILE`; before 1.0 the same
-`major.minor`) and, when it is not `poppy.json`'s own, fetches that version's
+one the agent implements (before 1.0 the same `major.minor`) and, when it is not
+`poppy.json`'s own, fetches that version's
 document: an HTTPS URL on the host that served `poppy.json`, no redirect
 followed, with the version it is listed under, no `supported_versions` of its
 own, and the company's domain and issuer; anything else is refused
@@ -47,6 +66,18 @@ own, and the company's domain and issuer; anything else is refused
 `unsupported_protocol_version`. `company.document` is the chosen version's
 document and `company.protocol_version` (`companyProtocolVersion(company)`) names
 it.
+
+The versions the agent implements are `PROTOCOL_PROFILE`, 0.4 as published, unless
+you ask for others. The 1.0 draft (`DRAFT_PROTOCOL_VERSION`, `1.0`) is opt-in:
+`DiscoveryClient(protocol_versions=("0.4", "1.0"))`
+(`discoverCompany(domain, { protocolVersions: ["0.4", "1.0"] })`) uses a company at
+1.0 when it serves it and at 0.4 otherwise; `("1.0",)` alone uses only companies that
+serve the draft. A draft can still change in ways that aren't backward compatible,
+and two parties that both say `1.0` would not notice, so nothing announces 1.0 unless
+you name it. Today the draft differs from 0.4 on the wire in the version string only.
+`SessionClient.start(..., company=company)` names the version the company was
+discovered at (`company.session_version`, `companySessionVersion(company)`) in the
+Session, or pass `protocol_version` (`protocolVersion`) yourself.
 
 Every request with the Session header carries `Poppy-Version`, the version the
 Session uses the company at (`PapSession.protocol_version`, `protocolVersion`),

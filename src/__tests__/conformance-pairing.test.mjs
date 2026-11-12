@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { operationShown } from "../../lib/index.js";
+import { DRAFT_PROTOCOL_VERSION, operationShown } from "../../lib/index.js";
 
 import { exportJWK, generateKeyPair } from "jose";
 
@@ -32,7 +32,7 @@ async function agent(domain, name, extensions) {
 const GAPS = {};
 
 /** Run `cases` (every company case by default) against Manzanita, changed by `config`. */
-async function runPairing({ config, cases } = {}) {
+async function runPairing({ config, cases, protocolVersions } = {}) {
   const atlas = await agent("atlas.example", "Atlas", ["operations"]);
   const plain = await agent("plain.example", "Plain", []);
   const clock = new MutableClock();
@@ -55,6 +55,7 @@ async function runPairing({ config, cases } = {}) {
       browserFetch,
       scenario,
       clock,
+      ...(protocolVersions === undefined ? {} : { protocolVersions }),
       driver: {
         capabilities: new Set(["revise", "forget_events", "disconnect", "performed", "clock", "second_identity", "direct_sign_in"]),
         accounts: ["acct_ada", "acct_ada_business"],
@@ -104,6 +105,16 @@ test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", 
   }
   const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
   assert.deepEqual(Object.keys(failed), Object.keys(GAPS), JSON.stringify(failed));
+  assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
+});
+
+test("the conformance cases at the 1.0 draft: TypeScript agent ↔ TypeScript company over TLS", async () => {
+  // Both sides opt in: the company serves only the draft, the agent implements only the draft.
+  const versions = [DRAFT_PROTOCOL_VERSION];
+  const report = await runPairing({ config: { protocolVersions: versions }, protocolVersions: versions });
+  const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
+  assert.deepEqual(failed, {});
+  assert.equal(report.profile, "1.0");
   assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
 });
 

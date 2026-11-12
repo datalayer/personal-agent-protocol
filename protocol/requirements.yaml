@@ -184,13 +184,17 @@ requirements:
     and if none is, it MUST NOT use any of them.
   status: implemented
   implementation:
-  - personal_agent_protocol.models:DiscoveryDocument.validate_interfaces
+  - personal_agent_protocol.models:DiscoveryDocument.validate_version_used
   - personal_agent_protocol.models:choose_protocol_version
   - personal_agent_protocol.models:SUPPORTED_PROTOCOL_VERSIONS
+  - personal_agent_protocol.models:AVAILABLE_PROTOCOL_VERSIONS
+  - personal_agent_protocol.models:implemented_protocol_versions
   - personal_agent_protocol.discovery:DiscoveryClient.discover
   tests:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   - personal_agent_protocol/__tests__/test_draft_04.py::test_versions_are_compatible_by_major_and_before_1_0_by_minor
+  - personal_agent_protocol/__tests__/test_draft_10.py::test_a_draft_document_is_used_only_by_an_agent_that_implements_the_draft
+  - personal_agent_protocol/__tests__/test_draft_10.py::test_an_agent_on_the_default_uses_no_company_that_serves_only_the_draft
   conformance:
   - protocol.major-version-unsupported
   - protocol.minor-version-newer
@@ -715,10 +719,12 @@ requirements:
   - personal_agent_protocol.models:compatible_versions
   - personal_agent_protocol.models:choose_protocol_version
   - personal_agent_protocol.models:DiscoveryDocument.chosen_version
+  - personal_agent_protocol.models:DiscoveryDocument.choose_version
   - personal_agent_protocol.discovery:DiscoveryClient.discover
   tests:
   - personal_agent_protocol/__tests__/test_draft_04.py::test_versions_are_compatible_by_major_and_before_1_0_by_minor
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  - personal_agent_protocol/__tests__/test_draft_10.py::test_a_company_that_serves_both_versions_is_used_at_the_newest_the_agent_implements
   conformance:
   - protocol.supported-versions-newest-compatible
   - protocol.no-compatible-version
@@ -735,12 +741,16 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.sessions:PapSession
+  - personal_agent_protocol.sessions:SessionClient.start
+  - personal_agent_protocol.models:DiscoveredCompany.session_version
+  - personal_agent_protocol.models:implemented_version_for
   - personal_agent_protocol.transport:session_headers
   - personal_agent_protocol.transport:VERSION_HEADER
   - personal_agent_protocol.extensions:format_extensions_header
   - personal_agent_protocol.extensions:negotiate_extensions
   tests:
   - personal_agent_protocol/__tests__/test_draft_04.py::test_every_request_with_the_session_header_names_the_sessions_version
+  - personal_agent_protocol/__tests__/test_draft_10.py::test_a_session_names_the_version_given_else_the_companys_else_the_published_one
   - personal_agent_protocol/__tests__/test_draft_04.py::test_a_session_declares_the_extensions_it_uses_with_the_company
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   conformance:
@@ -5575,3 +5585,20 @@ guide:
   - personal_agent_protocol.company.service:CompanyService.discovery_document
   tests:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_no_issuer_over_tls
+- id: GUIDE-discovery-lookalike-01
+  source: guide
+  section: Finding a company (draft 1.0)
+  level: SHOULD
+  role: personal-agent
+  text: A poppy.json that passes every check proves that its domain publishes it, not that the domain belongs
+    to the company in organization.name. When you show a company's name, help the user understand that nothing
+    has confirmed it. When you're not sure the domain is the one the user means, show the domain with the
+    name.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Organization.label
+  - personal_agent_protocol.cli_host:TerminalInput.collect
+  - personal_agent_protocol.ui:PapSignIn.organization
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_10.py::test_the_name_is_shown_with_the_domain
+  - personal_agent_protocol/__tests__/test_draft_10.py::test_the_terminal_asks_for_credentials_with_the_domain_beside_the_name

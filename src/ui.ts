@@ -68,7 +68,11 @@ export type PapDeclined = { reason: string | null; instructions: string | null }
  * approve.
  */
 export type PapConfirmData = {
-  /** The Company's name (`organization.name`), or its domain. */
+  /**
+   * The company as the person knows it: its domain, or its name with the domain beside it
+   * (`organizationLabel`). The name alone is unconfirmed: a lookalike domain can use any
+   * company's name (§10.3), so a host shows the domain wherever the person might rely on it.
+   */
   company: string;
   /**
    * The company's own words, shown verbatim as text, never rephrased; null when it wrote none
@@ -308,7 +312,10 @@ export type PapReply = {
 
 /** What a company answered, as a display's `data` (`PapReplies`' fields). */
 export type PapRepliesData = {
-  /** The company, as the person knows it (its domain or its name). */
+  /**
+   * The company as the person knows it: its domain, or its name with the domain beside it
+   * (`organizationLabel`); never the name alone, which is unconfirmed (§10.3).
+   */
   company: string;
   /**
    * The conversation the replies are in, by the company's id for it: where the

@@ -6,6 +6,42 @@
 
 # Changelog
 
+## 0.35.0 (2026-11-12)
+
+The 1.0 draft (upstream `/docs/spec`, as of `c71f515`, 2026-11-11; nothing after it through
+`ad20217`), in both SDKs and both reference companies, as an **opt-in** second version:
+0.4 as published stays the default, and nothing announces `1.0` unless asked, since a
+draft can still change in ways that aren't backward compatible. **No breaking changes**:
+see the [0.34 → 0.35 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#034--035).
+
+- **Protocol version 1.0, opt-in** (spec 3.1, 3.4). `DRAFT_PROTOCOL_VERSION` (`1.0`) and
+  `DRAFT_PROTOCOL_REVISION`; `AVAILABLE_PROTOCOL_VERSIONS` (`0.4`, `1.0`) beside
+  `SUPPORTED_PROTOCOL_VERSIONS`, still `0.4` only, the default. A personal agent names
+  the versions it implements with `DiscoveryClient(protocol_versions=...)`
+  (`discoverCompany(domain, { protocolVersions })`; `implemented_protocol_versions`
+  refuses one the SDK doesn't implement): discovery chooses the newest version a company
+  serves that is compatible with one of them, as spec 3.4 says, and fetches that
+  version's document. `SessionClient.start(..., company=)` names the version the company
+  was discovered at (`DiscoveredCompany.session_version`, `companySessionVersion`,
+  `implemented_version_for`) in `Poppy-Version`, or takes `protocol_version`
+  (`protocolVersion`). A company serves the draft with
+  `CompanyConfig(protocol_versions=("0.4", "1.0"))` (`protocolVersions`): `poppy.json` at
+  0.4, `/poppy/1.0.json` in `supported_versions`, a Session served at either version.
+  `DiscoveryDocument` (`parseDiscoveryDocument`) accepts any version the SDK implements;
+  `choose_version(implemented)` (`chosenVersion(document, implemented)`) answers for a
+  given set.
+- **Lookalike domains** (spec 10.3; guides, *Finding a company*). Nothing in `poppy.json`
+  confirms that the domain belongs to the company in `organization.name`, so the SDK
+  shows the domain with the name wherever it shows a name: `Organization.label`
+  (`organizationLabel`) gives `Name (domain)`, the `pap` CLI's protected prompts name the
+  domain, and `PapConfirm` and `PapReplies` say to give the domain or the label as
+  `company`. The personal agent guide says the name is unconfirmed. No wire change.
+- **Conformance.** `ConformanceContext(protocol_versions=...)` (and the TypeScript
+  runner's `protocolVersions`) runs the suite at the draft; every case passes at `1.0` in
+  all four language pairings, beside the default runs at `0.4`. The fixture
+  `protocol.major-version-unsupported` uses `2.0`, since `1.0` is now a version the SDK
+  implements. The ledger adds `GUIDE-discovery-lookalike-01`.
+
 ## 0.34.0 (2026-11-12)
 
 What 0.33.0 left out of version 0.4 as published (upstream `4803900`; no upstream commit

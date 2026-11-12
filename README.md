@@ -11,7 +11,9 @@
 Python and TypeScript SDKs for the
 [Personal Agent Protocol](https://personalagentprotocol.org): both implement
 [version 0.4](https://personalagentprotocol.org/docs/0.4/spec) (2026-11-10), as
-published, and its Operations extension v3. See
+published, and its Operations extension v3, and the
+[1.0 draft](https://personalagentprotocol.org/docs/spec) as an opt-in second version
+(`protocol_versions`; 0.4 stays the default). See
 [Compatibility](https://personal-agent-protocol.datalayer.tech/releases/compatibility/),
 [Migration](https://personal-agent-protocol.datalayer.tech/releases/migration/),
 the [conformance report](https://personal-agent-protocol.datalayer.tech/protocol/conformance-report/),

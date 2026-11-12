@@ -123,7 +123,8 @@ class PapSignIn(Display):
     needs: list[str] = Field(default_factory=list)
     #: The company's ``organization.name`` and ``organization.domain`` from its poppy.json:
     #: shown whenever the person is asked for a code or credentials (§4.6, §4.7), so
-    #: required for ``device`` and ``mediated``.
+    #: required for ``device`` and ``mediated``, and always together: the name is what the
+    #: domain says about itself, unconfirmed, and a lookalike domain can use any (§10.3).
     organization_name: str | None = None
     organization_domain: str | None = None
     #: The company's ``organization.logo_uri`` (§3.1): shown next to its name and domain,
@@ -304,7 +305,10 @@ class PapConfirm(Display):
     person answers where the host asks them.
     """
 
-    #: The Company's name (`organization.name`), or its domain.
+    #: The company as the person knows it: its domain, or its name with the domain beside
+    #: it (``Organization.label``). The name alone is unconfirmed: a lookalike domain can
+    #: use any company's name (§10.3), so a host shows the domain wherever the person might
+    #: rely on the name.
     company: str = Field(min_length=1)
     #: The company's own words, shown verbatim as text, never rephrased; optional
     #: (Operations 3).
@@ -498,7 +502,8 @@ class PapReplies(Display):
     messages with :meth:`of`.
     """
 
-    #: The company, as the person knows it (its domain or its name).
+    #: The company as the person knows it: its domain, or its name with the domain beside
+    #: it (``Organization.label``); never the name alone, which is unconfirmed (§10.3).
     company: str = Field(min_length=1)
     #: The conversation the replies are in, by the company's id for it.
     conversation: str = Field(pattern=r"^[A-Za-z0-9_-]{1,256}$")

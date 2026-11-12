@@ -347,6 +347,7 @@ export {
 } from "./mcp.js";
 export {
   AUTHORIZATION_CODE_GRANT,
+  AVAILABLE_PROTOCOL_VERSIONS,
   MEDIATED_GRANT,
   SCOPE_CHANGES,
   SIGN_IN_TYPES,
@@ -354,7 +355,11 @@ export {
   chooseProtocolVersion,
   chosenVersion,
   companyProtocolVersion,
+  companySessionVersion,
   compatibleVersions,
+  implementedProtocolVersions,
+  implementedVersionFor,
+  organizationLabel,
   parseVersion,
   type SignInType,
   preferredSignIn,
@@ -482,7 +487,12 @@ export {
   type MediatedSignInOptions,
   type MediatedSignInResult,
 } from "./mediated.js";
-export { PROTOCOL_PROFILE, PROTOCOL_REVISION } from "./profile.js";
+export {
+  DRAFT_PROTOCOL_REVISION,
+  DRAFT_PROTOCOL_VERSION,
+  PROTOCOL_PROFILE,
+  PROTOCOL_REVISION,
+} from "./profile.js";
 export {
   PageClient,
   pageCarriesSession,

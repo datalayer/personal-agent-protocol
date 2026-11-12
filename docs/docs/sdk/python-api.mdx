@@ -35,6 +35,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`AUTHORIZATION_STATE_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `AUTHORIZATION_STATE_STORES` constant.
 - [`AuthorizationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. An authorization flow failed without exposing callback secrets.
 - [`AuthorizationStateStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist and atomically consume short-lived authorization state.
+- [`AVAILABLE_PROTOCOL_VERSIONS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `AVAILABLE_PROTOCOL_VERSIONS` constant.
 - [`BlindJoseSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/blind.py) — Class. `pap.signer` on the User's device: PS384 signatures a key signs blindly (§10.7).
 - [`BlindSigningKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/blind.py) — Class. The holder of a key in `jwks_uri`: it signs a blinded message, never seeing the JWT.
 - [`BROWSER_CONTROL_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Constant. Public `BROWSER_CONTROL_EXTENSION` constant.
@@ -93,6 +94,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`DpopKeyCustody`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Where DPoP keys live: one per User ID, made on first use.
 - [`DpopProofRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. What one DPoP proof is signed for (§4.5, RFC 9449 §4.2).
 - [`DpopProver`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign the DPoP proof of one request (§4.5).
+- [`DRAFT_PROTOCOL_REVISION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/profile.py) — Constant. Public `DRAFT_PROTOCOL_REVISION` constant.
+- [`DRAFT_PROTOCOL_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/profile.py) — Constant. Public `DRAFT_PROTOCOL_VERSION` constant.
 - [`Ed25519OperatorKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. An operator's Ed25519 key in this process's memory.
 - [`ExcludedTask`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A task the company chose not to offer through the protocol (§8.1).
 - [`FeedbackClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. Send feedback reports in a Session, signed in or out.
@@ -158,7 +161,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`OperatorSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign one request that carries the Session header, as its operator (§5.3).
 - [`OperatorSigningKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. An operator's key: `keyid` is its RFC 8037 thumbprint, and it signs with Ed25519.
 - [`OperatorVerdict`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. What one request's operator signature came to (Web Bot Auth, appendix C.1).
-- [`Organization`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `Organization` class.
+- [`Organization`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Who the Company says it is (§3.1). `domain` is its identity; `name` and `logo_uri`
 - [`page_carries_session`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pages.py) — Function. Whether a page fetch carries the Session header (§5.2): an HTTPS URL whose host is
 - [`page_marks`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Function. The forms, controls and marks of a page's HTML (Browser Control 4).
 - [`PageClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pages.py) — Class. Fetch a company's website pages without a browser, in a Session, signed out.

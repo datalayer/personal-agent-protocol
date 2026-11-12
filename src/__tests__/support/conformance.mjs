@@ -22,6 +22,8 @@ import {
   APPROVAL_HEADER,
   ApiClient,
   ApiError,
+  WebsiteOperations,
+  operationsEndpoint,
   AuthorizationStateStores,
   BrowserHandoffs,
   BrowserJoins,
@@ -1471,6 +1473,38 @@ caseFor("operations.approved-performed")(async (ctx) => {
   const operation = await propose(ctx, signed, "user");
   const done = await request(ctx, signed, "user", approved(operation));
   check(done.operation === undefined && done.status >= 200 && done.status < 300, `performed, got ${done.status}`);
+  await performed(ctx, operation, 1);
+});
+
+caseFor("operations.website-reference")(async (ctx) => {
+  // A joined browser's request is refused with a reference only; the endpoint gives the
+  // operation and records the approval; the browser's next request performs it once
+  // (Operations 4, 6, 7).
+  await ctx.operationsNegotiated();
+  const action = ctx.scenario.website_action;
+  if (!action) throw new SkipCase("the scenario has no website action");
+  const document = (await ctx.company()).document;
+  if (operationsEndpoint(document) === undefined) throw new SkipCase("the company returns no operations on its website");
+  const [browser] = await browserOf(ctx);
+  const user = ctx.newUser();
+  const signed = await ctx.signIn(user, await ctx.session(user), { scopes: [...ctx.scenario.scopes, BROWSER_SIGN_IN_SCOPE] });
+  const url = ctx.url(action.path);
+  await join(ctx, signed, url);
+  const form = Object.fromEntries(Object.entries(action.body ?? {}).map(([name, value]) => [name, String(value)]));
+  const refused = await browser.submit(url, form);
+  check(refused.status === 403, `the website performs nothing, got ${refused.status}`);
+  const reference = WebsiteOperations.reference(refused.headers, { joined: [signed.session.sid] });
+  check(reference !== undefined, "Poppy-Operation names the joined Session");
+  const sites = new WebsiteOperations({ api: ctx.agent.api, document });
+  const options = { session: signed.session, token: signed.token };
+  const operation = await sites.operation(reference, options);
+  const recorded = await sites.record(reference, approved(operation), options);
+  check(recorded.status === 204, `the approval is recorded, HTTP 204, got ${recorded.status}`);
+  check((await sites.status(reference, options)) === "approved", "a lookup says approved");
+  await performed(ctx, operation, 0);
+  const done = await browser.submit(url, form);
+  check(done.status >= 200 && done.status < 300, `the browser's request performs it, got ${done.status}`);
+  check((await sites.status(reference, options)) === "performed", "a lookup says performed");
   await performed(ctx, operation, 1);
 });
 

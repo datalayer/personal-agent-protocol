@@ -42,5 +42,12 @@
   "account_prompt": "Where is my jacket order?",
   "greeting": "Hello.",
   "mcp_read_tool": "list_orders",
-  "mcp_propose_tool": "exchange_jacket"
+  "mcp_propose_tool": "exchange_jacket",
+  "website_action": {
+    "method": "POST",
+    "path": "/orders/ord_7Hk2/exchange",
+    "body": {
+      "replacement": "ridge-insulated-m"
+    }
+  }
 }

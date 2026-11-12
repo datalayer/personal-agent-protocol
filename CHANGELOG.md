@@ -6,6 +6,51 @@
 
 # Changelog
 
+## 0.34.0 (2026-11-12)
+
+What 0.33.0 left out of version 0.4 as published (upstream `4803900`; no upstream commit
+since `ad20217`), in both SDKs and both reference companies: operations on websites and
+the Browser Control extension, version 1. **No breaking changes**: see the
+[0.33 → 0.34 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#033--034).
+
+- **Operations on websites** (Operations 2, 4, 6, 7). `WebsiteOperations` takes a
+  website's reference from the `Poppy-Operation` header of a response the agent's own
+  browser received, only when its `sid` names a Session the agent joined that browser
+  to (`BrowserSessionClient.joined_sessions`, `BrowserSessionStart.sid`); gets the
+  operation at the extension's `endpoint` (`operations_endpoint(document)`, only beside
+  `web.browser_session_endpoint`); records the approval there (`record`, `204`, through
+  `OperationsClient.send`); and looks an approved reference up (`status`:
+  `approved`, `performing`, `performed`; `before_approving_again`). A recorded agent
+  approval makes the next revision of the action the user's (`user_only`).
+  `parse_operation_header`, `operation_reference_header`, `OPERATION_HEADER`.
+- **A company's website.** The `pap.company.website` contribution point (`CompanyWebsite`,
+  `WebCall`, `WebResult`) serves the company's own pages. With `website_operations` and
+  `web`, the `operations` entry lists `endpoint` (`/poppy/operations`); a joined
+  browser whose join declared Operations 3 gets `403` with `Poppy-Operation` (a page,
+  or `{"error": "approval_required"}` for a script asking for JSON); the endpoint checks
+  the Session header and token as an API does, needs no scope, returns the operation,
+  records an approval (the first one kept until its revision expires) or declines it,
+  and answers a lookup; the browser's next request for exactly that revision performs
+  it once. A website's operation is approved only at the endpoint, and no other
+  interface's operation there. The join keeps the extensions its step 2 declared.
+- **The Browser Control extension, version 1.** `page_marks` (`pageMarks`) reads
+  `data-poppy-user-step` with the form-owner rules (section 4); `BrowserControl` refuses
+  the model's action on a marked step and every browser action while the User holds
+  control, which only the User ends (section 5); `controller_script` and
+  `controller_update_script` provide `navigator.poppy.controller` on the hosts of
+  `organization.domain` only (section 6); `browser_control_negotiated`. Not declared by
+  default: a host whose browser does all this adds `browser-control` to its supported
+  extensions. A company lists it with `browser_control`.
+- **Reference companies.** Manzanita's website: an exchange page that asks for approval
+  in a joined browser, and an in-store pickup page whose form is the User's step.
+- **Conformance.** `operations.website-reference`, in all four language pairings. The
+  ledger adds the Browser Control rows (`source: browser-control`) and implements
+  `OPS-2-02`, `OPS-4-01`, `OPS-6-13`, `OPS-6-14`; `OPS-5-09` is no longer partial.
+- **Upstream validator.** Upstream's company validator at `ed47408` passes both reference
+  companies but for `conversations.other-user`, which signs for a second User ID with
+  the same delegated key: the companies refuse that with `invalid_session`, as spec
+  5.2 allows.
+
 ## 0.33.0 (2026-11-12)
 
 Version 0.4 as published (upstream `4803900`, 2026-11-10, the 1.0 release candidate,

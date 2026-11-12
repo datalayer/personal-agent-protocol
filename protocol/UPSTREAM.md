@@ -10,8 +10,10 @@
 - Operations extension: version 3
 - Mediated Sign-In extension: version 1
 - UCP extension: version 1
+- Browser Control extension: version 1
 - Mediated Sign-In extension page: https://personalagentprotocol.org/docs/0.4/extensions/mediated-sign-in
 - Operations extension page: https://personalagentprotocol.org/docs/0.4/extensions/operations
+- Browser Control extension page: https://personalagentprotocol.org/docs/0.4/extensions/browser-control
 
 Version 0.4 was published upstream on 2026-11-10 (commit 4803900, "Publish 0.4
 as the 1.0 release candidate"): the specification is frozen at /docs/0.4/spec,
@@ -32,10 +34,10 @@ consent page that names the agent); the Session header on website pages
 fetched without a browser; scopes in the protected resource metadata; refresh
 token lifetimes left to the Company (nothing changes here: the reference
 companies keep a fixed lifetime); and where the browser-session endpoint can
-be. Not implemented in 0.33, and left for the next release: operations on
-websites (the `Poppy-Operation` header and the extension's `endpoint`,
-Operations 4 and 6) and the Browser Control extension, version 1. A host that
-joins a browser to a Session declares no `operations` on that join until then.
+be. Not implemented in 0.33, and added in 0.34 (nothing else changes in it):
+operations on websites (the `Poppy-Operation` header and the extension's
+`endpoint`, Operations 4 and 6) and the Browser Control extension, version 1.
+Upstream had no commit after ad20217 when 0.34 was built.
 
 While 0.4 was a draft, at /docs/spec, this repository followed it as of a named
 commit, as it followed draft 0.3 in 0.25 to 0.27, each release naming the

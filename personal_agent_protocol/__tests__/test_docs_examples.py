@@ -643,7 +643,7 @@ async def _approve_as_agent(docs: Docs) -> tuple[dict[str, Any], Check]:
     }, check
 
 
-@case("docs/docs/guides/operations.mdx#5")
+@case("docs/docs/guides/operations.mdx#6")
 async def _declined(docs: Docs) -> tuple[dict[str, Any], Check]:
     """Manzanita declines an agent approval of a return: nothing is done."""
 
@@ -664,6 +664,36 @@ async def _declined(docs: Docs) -> tuple[dict[str, Any], Check]:
         "approval": Approval(
             operation_id=operation.operation_id, revision=operation.revision, approver="agent"
         ),
+    }, check
+
+
+@case("docs/docs/guides/operations.mdx#5")
+async def _on_a_website(docs: Docs) -> tuple[dict[str, Any], Check]:
+    """Manzanita's exchange page in a joined browser: recorded at the endpoint, then the
+    browser's request performs it once."""
+
+    from .test_mcp_and_web import web_world
+    from .test_website_operations import EXCHANGE_PAGE, joined, press_exchange
+
+    world, browser = web_world()
+    session, token, joins = await joined(world, browser)
+    response = await press_exchange(browser)
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        assert namespace["reference"] is not None
+        assert namespace["sent"].status == "answered"
+        done = await browser.submit(EXCHANGE_PAGE, {"replacement": "ridge-insulated-m"})
+        assert done.status_code == 200
+        assert world.plugin.executor.performed == [namespace["operation"].operation_id]
+
+    return {
+        "transport": world.transport,
+        "company": world.company,
+        "browser_sessions": joins,
+        "response": response,
+        "operations": OperationsClient(reactor=world.reactor),
+        "session": session,
+        "token": token,
     }, check
 
 

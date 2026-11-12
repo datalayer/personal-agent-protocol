@@ -47,6 +47,7 @@ const sidebars = {
             "protocol/coverage/operations",
             "protocol/coverage/mediated-sign-in",
             "protocol/coverage/ucp",
+            "protocol/coverage/browser-control",
             "protocol/coverage/operational-guidance",
           ],
         },

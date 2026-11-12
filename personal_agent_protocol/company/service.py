@@ -5090,7 +5090,7 @@ class CompanyService:
                     {
                         "operation_id": target.operation_id,
                         "revision": target.approved,
-                        **target.approval,
+                        **(target.approval or {}),
                     }
                 )
                 return await self._perform(target, cast(OperationRevision, revision), approval)

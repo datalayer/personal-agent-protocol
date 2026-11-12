@@ -524,7 +524,7 @@ class WebsiteOperations:
 
         answer = await self._post(reference, session=session, token=token, approval=None)
         if answer.operation is not None:
-            return cast(Operation, answer.operation)
+            return answer.operation
         status = answer.body.get("status") if isinstance(answer.body, dict) else None
         raise OperationError(
             "already_approved",

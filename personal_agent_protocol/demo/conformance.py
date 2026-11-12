@@ -47,6 +47,9 @@ MANZANITA_SCENARIO = Scenario(
     account_prompt="Where is my jacket order?",
     mcp_read_tool="list_orders",
     mcp_propose_tool="exchange_jacket",
+    website_action=Proposal(
+        "POST", "/orders/ord_7Hk2/exchange", body={"replacement": "ridge-insulated-m"}
+    ),
 )
 
 

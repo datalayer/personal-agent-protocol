@@ -37,6 +37,17 @@
       "description": "The same request with Poppy-Approval is performed, and answered as it would have been without operations."
     },
     {
+      "id": "operations.website-reference",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-2-02",
+        "OPS-6-13",
+        "OPS-6-14"
+      ],
+      "description": "A joined browser's request for an action that needs approval is refused, HTTP 403 with a Poppy-Operation reference naming the joined Session; the extension's endpoint gives the operation and records its approval (204, nothing performed, a lookup says approved); the browser's next request performs it once (a lookup says performed)."
+    },
+    {
       "id": "operations.retry-after-the-outcome",
       "kind": "positive",
       "role": "company",

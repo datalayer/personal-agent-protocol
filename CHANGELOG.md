@@ -65,6 +65,11 @@ followed yet.
   that leaves a scope out is not a reason to sign in again.
 - **Displays.** `PapConfirm` version 3: `summary` optional, `approved_by`,
   `instruction`, `declined`.
+- **The `pap` CLI and the two-companies demo.** A stored approval's MAC covers every
+  field sent with it (`approver`, `approved_at`, `input_type`, `reference`, and the
+  message ID), so a statement changed in `state.json` is refused; an approval stored by
+  an earlier release is approved again. Ledgerly declines an agent approval of a
+  payment, so its relay to Northwind states a user approval only when the user gave one.
 - **Not in this release:** operations on websites (`Poppy-Operation`, the extension's
   `endpoint`) and the Browser Control extension. Refresh token lifetimes stay fixed in
   the reference companies, which 0.4 still allows.

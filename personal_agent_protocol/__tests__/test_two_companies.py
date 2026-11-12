@@ -31,7 +31,7 @@ from personal_agent_protocol.demo.kit import (
 from personal_agent_protocol.demo.ledgerly import ledgerly
 from personal_agent_protocol.demo.northwind import ACCOUNT, northwind
 from personal_agent_protocol.models import operations_content
-from personal_agent_protocol.operations import OperationsClient
+from personal_agent_protocol.operations import AgentInstruction, OperationsClient
 
 TENANT = "atlas-demo"
 PAIRWISE = "usr_ada_at_ledgerly_00000000"
@@ -113,6 +113,31 @@ async def test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment
     )
     assert bank_plugin.executor.performed == []
 
+    # An approval Atlas gave itself, on an instruction, is declined by Ledgerly before anything
+    # reaches Northwind: the relay states a user approval there, and only a user's is one.
+    by_atlas = await operations.approve_as_agent(
+        relayed, instruction=AgentInstruction(text="Pay what Ledgerly asks.", covers=lambda _: True)
+    )
+    declined = await conversations.send(
+        endpoint,
+        page.conversation_id,
+        Message(
+            id=generate_request_id(reactor),
+            author=Author(type="agent"),
+            extensions=operations_content(approval=by_atlas),
+        ),
+        session=session,
+        token=token,
+        wait=0,
+    )
+    said = [e.message for e in declined.events if e.message and e.message.role == "company"][-1]
+    assert said.declined is not None and said.declined.revision == relayed.revision
+    assert said.declined.reason == "A payment is sent only when you approve it yourself."
+    assert bank_plugin.executor.performed == []
+    northwind_operation = await bank.operation_record(relayed.terms["northwind_operation_id"])
+    assert (northwind_operation.status, northwind_operation.approval) == ("open", None)
+    assert host.approvals.asked == []  # type: ignore[union-attr]
+
     # 3. Ada approves in Atlas; Ledgerly sends Northwind the approval of that exact revision.
     approval = await operations.ask_user(
         relayed, organization=company.document.organization, tenant_id=TENANT
@@ -136,6 +161,9 @@ async def test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment
     bank_record = await bank.operation_record(bank_plugin.executor.performed[0])
     assert bank_record.status == "performed"
     assert bank_record.approved == relayed.terms["northwind_revision"]  # type: ignore[index]
+    # What Northwind recorded is what happened: Ada approved.
+    assert bank_record.approval == {"approver": "user"}
+    assert approval.approver == "user"
 
     # 4. Every payment is asked about: nothing is paid in advance, however like the last.
     page = await pay("INV-0043", paid)

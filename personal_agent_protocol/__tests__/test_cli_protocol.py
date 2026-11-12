@@ -7,6 +7,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -18,7 +21,7 @@ from cryptography.hazmat.primitives import serialization
 from reactor import PluginManifest, PluginPlatform  # type: ignore[import-untyped]
 from typer.testing import CliRunner
 
-from personal_agent_protocol import cli_commands
+from personal_agent_protocol import cli_commands, cli_host
 from personal_agent_protocol.cli import create_app
 from personal_agent_protocol.cli_commands import EXIT_CODES, ExitCode
 from personal_agent_protocol.cli_host import NotConfiguredError, local_host
@@ -265,6 +268,38 @@ def test_a_user_with_manzanita_from_the_command_line(tmp_path: Path, monkeypatch
     )  # fmt: skip
     assert approved["approved"] == {"operation_id": operation, "revision": revision}
     pap("operations", "send", session, operation, "--revision", "other", code=6)
+    # The MAC covers what is sent with the approval, not only which operation it is for: a
+    # statement changed in state.json (who approved, when, how, under which reference, or
+    # the message it is sent under) is not what the user's terminal recorded, and is refused.
+    approved_state = json.loads((pap.state / "state.json").read_text())
+    genuine = approved_state["approvals"][operation]
+    assert genuine["approver"] == "user" and genuine["input_type"] == "typed"
+    assert genuine["reference"].startswith("apr_") and isinstance(genuine["approved_at"], int)
+    for field, value in (
+        ("approver", "agent"),
+        ("approved_at", genuine["approved_at"] - 3600),
+        ("input_type", "voice"),
+        ("input_type", None),
+        ("reference", "apr_somebody_elses_record"),
+        ("message_id", "msg_another_request_000000"),
+    ):
+        approved_state["approvals"][operation] = {**genuine, field: value}
+        (pap.state / "state.json").write_text(json.dumps(approved_state))
+        pap("operations", "send", session, operation, "--revision", revision, code=6)
+    # A record whose MAC covers only the operation, revision and Session, as before every
+    # forwarded field was covered, does not verify: the user approves again.
+    key = asyncio.run(cli_host.approval_key(cli_host.FileSecretStore(pap.state / "secrets.json")))
+    narrow = json.dumps(
+        [genuine[name] for name in ("operation_id", "revision", "session")], separators=(",", ":")
+    )
+    old_mac = base64.urlsafe_b64encode(
+        hmac.new(key.get_secret_value().encode(), narrow.encode(), hashlib.sha256).digest()
+    ).rstrip(b"=")
+    approved_state["approvals"][operation] = {**genuine, "mac": old_mac.decode()}
+    (pap.state / "state.json").write_text(json.dumps(approved_state))
+    pap("operations", "send", session, operation, "--revision", revision, code=6)
+    approved_state["approvals"][operation] = genuine
+    (pap.state / "state.json").write_text(json.dumps(approved_state))
     done = pap("operations", "send", session, operation, "--revision", revision, "--json")
     assert done["status"] == "answered"
     # Gone once answered: nothing is left to approve, and the same operation can't be sent twice.

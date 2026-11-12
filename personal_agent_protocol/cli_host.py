@@ -452,17 +452,35 @@ class SessionRecord:
         return value
 
 
+#: What a stored approval's MAC covers, in this order: every field `pap operations send`
+#: forwards or routes by.
+APPROVAL_MAC_FIELDS = (
+    "operation_id",
+    "revision",
+    "session",
+    "message_id",
+    "approver",
+    "approved_at",
+    "input_type",
+    "reference",
+)
+
+
 def approval_mac(key: SecretStr, approval: dict[str, Any]) -> str:
     """The MAC binding a stored approval to the user's approval key.
 
-    It covers the operation ID, revision, and Session: an approval
-    written into `state.json` by anything that cannot read the protected token
-    store (another program, a tool a model runs) does not verify.
+    It covers everything of the record that is sent to the company or decides where it is
+    sent (`APPROVAL_MAC_FIELDS`): the operation ID, the revision, the Session, the message
+    ID a conversation approval is sent under, and the approval's own statements, `approver`,
+    `approved_at`, `input_type` and `reference` (Operations 6). An approval written into
+    `state.json`, or changed there, by anything that cannot read the protected token store
+    (another program, a tool a model runs) does not verify: who approved, when and how is
+    exactly what the user's terminal recorded. A record made before a field was covered
+    does not verify either, and is approved again.
     """
 
     covered = json.dumps(
-        [approval.get(name) for name in ("operation_id", "revision", "session")],
-        separators=(",", ":"),
+        [approval.get(name) for name in APPROVAL_MAC_FIELDS], separators=(",", ":")
     )
     mac = hmac.new(key.get_secret_value().encode(), covered.encode(), hashlib.sha256).digest()
     return base64.urlsafe_b64encode(mac).rstrip(b"=").decode()

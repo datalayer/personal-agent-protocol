@@ -41,6 +41,8 @@ from ..company import (
     Authenticated,
     CompanyConfig,
     CompanyService,
+    Decline,
+    DeclineRequest,
     ProposedOperation,
     Reply,
     SignInContext,
@@ -73,6 +75,21 @@ INVOICES = {
     "INV-0044": ("3400.00", "EUR", "Acme GmbH"),
 }
 
+
+def decline_agent_payments(request: DeclineRequest) -> Decline | None:
+    """Ledgerly's own rule (Operations 6): a payment at Northwind is sent only on the
+    person's own approval.
+
+    Ledgerly relays the approval to Northwind as a `user` approval, which is true only when
+    the person approved. An approval the personal agent gave on an instruction is declined
+    here, before anything is sent to Northwind, so the relay never states more than it knows.
+    """
+
+    if request.action == "northwind.payment" and request.approval.approver == "agent":
+        return Decline(reason="A payment is sent only when you approve it yourself.")
+    return None
+
+
 CONFIG = CompanyConfig(
     name="Ledgerly",
     domain=DOMAIN,
@@ -83,6 +100,7 @@ CONFIG = CompanyConfig(
         "payments:write": "Pay your bills, once you approve each payment",
     },
     scope_hints={"books:read": ("none", True), "payments:write": ("irreversible", True)},
+    decline=decline_agent_payments,
 )
 
 _INVOICE = re.compile(r"\bINV-\d{4}\b")
@@ -204,7 +222,9 @@ class LedgerlyAsPersonalAgent:
                     approval=Approval(
                         operation_id=proposal.operation_id,
                         revision=proposal.revision,
-                        # Northwind Ada approved it in Ledgerly's own conversation.
+                        # Ada approved it herself, in Ledgerly's own conversation: Ledgerly
+                        # declines an agent approval of a payment (`decline_agent_payments`),
+                        # so only a user approval ever reaches this relay.
                         approver="user",
                     )
                 ),

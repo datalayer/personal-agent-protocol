@@ -272,7 +272,10 @@ implements, of version 0.4 and Operations version 3:
   "*agent* wants to connect to your *company* account" and tells the person to
   continue only if they just asked that agent; a hosted consent or device page
   gets the same words from `authorization_request()` and `device_request()`
-  (`heading`, `caution`) (spec 10.8);
+  (`heading`, `caution`) (spec 10.8). Let people sign in there with a passkey or
+  another phishing-resistant method, as on your website: Direct and Device
+  Sign-In happen on your own pages, so passkeys work, which they cannot with
+  Mediated Sign-In;
 - a Session found by `client_id`, `sid` and User ID (spec 5.3):
   `end_session(client_id, sid, pairwise_user_id)`; and `page_session(request)` for
   the company's own website pages, which verifies the Session header a personal

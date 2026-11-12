@@ -171,7 +171,7 @@ surface:
 
 | Area            | Current support                                                                                                                   |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Models          | Forward-compatible discovery, OAuth metadata, client metadata, messages, events, and Operations version 3 models                         |
+| Models          | Forward-compatible discovery, OAuth metadata, client metadata, messages, events, and Operations version 3 models                  |
 | Discovery       | `poppy.json`, company-domain and issuer validation, bounded responses, and redirect controls                                      |
 | Sessions        | Pairwise user IDs, local Sessions named by a random `sid`, a Session JWT on every request, and redacted tokens                    |
 | Cryptography    | ES256/PS384 JOSE, delegated keys and delegations, Session JWT creation and verification, blind signing, and replay checks         |

@@ -261,7 +261,7 @@ test("a send waits out a 503 once, the budget sharing it", async () => {
   const api = new ApiClient({ transport: new SessionFetchClient({ reactor, fetch }) });
   const sent = await new OperationsClient({ reactor, sleep: time.sleep }).send(
     (approval) => api.call("POST", "https://shop.example/api/orders", { ...who, body: {}, approval }),
-    { operation_id: "exc_1", revision: "r1" },
+    { operation_id: "exc_1", revision: "r1", approver: "user" },
   );
   assert.equal(sent.status, "answered");
   assert.deepEqual(time.slept, [5]);

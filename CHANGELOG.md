@@ -6,6 +6,78 @@
 
 # Changelog
 
+## 0.33.0 (2026-11-12)
+
+Version 0.4 as published (upstream `4803900`, 2026-11-10, the 1.0 release candidate,
+frozen at `/docs/0.4/spec`) in both SDKs and both reference companies, with no
+compatibility with draft 0.4 as of `46beb21`: see the
+[0.32 → 0.33 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#032--033).
+Both sides announce and accept `protocol_version` `0.4` only; the 1.0 draft is not
+followed yet.
+
+- **Breaking: task coverage per Session** (spec 3.1, 9). `poppy.json` names one
+  `tasks.endpoint`; `excluded_tasks`, `skill_index` and `feedback` are no longer read
+  from it or published in it. `TasksClient.get(company, session=)` fetches the tasks
+  response with the Session header and no access token, keeps it for that Session as
+  its caching headers allow and never uses it in another; `SessionTasks` carries the
+  excluded tasks, the skills (each `url` resolved against `tasks.endpoint`) and the
+  feedback endpoint; with no response the agent carries on as if nothing were listed.
+  Removed: `DiscoveryClient.excluded_tasks`, `feedback_endpoint(document)`,
+  `DiscoveredCompany.skills`, `DiscoveryDocument.usable_skills`, `ExcludedTasks`,
+  `ExcludedTasksDescriptor`. The reference companies serve `GET /poppy/tasks`.
+- **Breaking: Operations version 3** (Operations 1 to 8). Version 2 is not supported:
+  an agent declares only 3, a company lists only 3, and a request that declares 2 gets
+  no operation. Every approval says `approver`, `user` or `agent`, with an optional
+  `reference` (`new_approval_reference`); an approval without one is not an approval.
+  `OperationsClient.approve_as_agent` approves on an `AgentInstruction` the host holds
+  from the user, only when the instruction's own check covers the revision's terms, and
+  hands every doubt to the user (`ask_user`); `ask_user` makes a `user` approval.
+- **Breaking: operations require terms.** `Operation.terms` is required and `summary`
+  optional (`Operation.shown`); a company's `ProposedOperation` takes `terms` first.
+- **Breaking: declining an approval.** `approval_declined` (`ApprovalDeclined`,
+  `declined_from`): `ApiResponse.declined`, `McpToolResult.declined`,
+  `Message.declined`, and `ApprovalSent.status == "declined"`, never sent again. A
+  company declines with `CompanyConfig.decline`; Manzanita declines an agent approval
+  of a return.
+- **Breaking: `extension_required` in a JSON body at APIs** (spec 3.3, 7), no longer in
+  a `WWW-Authenticate` challenge; `extension_required(status, payload)` reads no
+  challenge.
+- **Breaking for a company: Sessions found by `client_id`, `sid` and User ID** (spec
+  5.3). A known `sid` with another User ID is another Session, signed out;
+  `CompanyService.end_session(client_id, sid, pairwise_user_id)`.
+- **Breaking: Device Sign-In links on the issuer's host or `organization.domain`**
+  (spec 4.3). `verification_host_allowed(url, issuer=, domain=)`;
+  `DeviceSignInClient.begin` no longer takes `protected_resources`.
+- **Sign-ins someone else started** (spec 4.2, 10.8). The reference companies' consent
+  page starts with a heading that names the agent (`connect_heading`,
+  `connect_caution`, also in `authorization_request` and the new `device_request`);
+  `DirectSignInClient.begin(cross_device=True)` keeps a request opened on another
+  device short-lived, and `complete(callback, completed_by=)` refuses a redirect that
+  arrived for another user (`sign_in_started_by_another_user`).
+- **The Session header on website pages fetched without a browser** (spec 5.2).
+  `PageClient.fetch`: only to `organization.domain`, never with an access token, a new
+  Session JWT per redirect on that host; a company checks it with
+  `CompanyService.page_session`.
+- **Scopes in the protected resource metadata** (spec 3.2, 4.7).
+  `DiscoveredCompany.scopes_supported` reads the issuer's list and the domain's; the
+  `pap` CLI lists both.
+- **Guides.** The issuer publishes `client_id_metadata_document_supported`; a sign-in
+  that leaves a scope out is not a reason to sign in again.
+- **Displays.** `PapConfirm` version 3: `summary` optional, `approved_by`,
+  `instruction`, `declined`.
+- **The `pap` CLI and the two-companies demo.** A stored approval's MAC covers every
+  field sent with it (`approver`, `approved_at`, `input_type`, `reference`, and the
+  message ID), so a statement changed in `state.json` is refused; an approval stored by
+  an earlier release is approved again. Ledgerly declines an agent approval of a
+  payment, so its relay to Northwind states a user approval only when the user gave one.
+- **Not in this release:** operations on websites (`Poppy-Operation`, the extension's
+  `endpoint`) and the Browser Control extension. Refresh token lifetimes stay fixed in
+  the reference companies, which 0.4 still allows.
+- **Ledger and reports:** `protocol/requirements.yaml` at `4803900`, the vendored
+  schemas replaced at `ed47408` (`tasks.schema.json` and `approval-declined.schema.json`
+  added, `excluded-tasks.schema.json` removed), the coverage pages and the conformance
+  report regenerated.
+
 ## 0.32.0 (2026-11-07)
 
 Draft 0.4 as of upstream `46beb21` (2026-11-06) in both SDKs and both reference

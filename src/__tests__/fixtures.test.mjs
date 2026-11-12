@@ -38,8 +38,8 @@ test("discovery fixture round-trips and preserves extensions", () => {
   const document = parseDiscoveryDocument(fixture("discovery-valid.json"));
   assert.equal(document.protocol_version, "0.4");
   assert.equal(document.apis[1].type, "mcp");
-  assert.deepEqual(document.extensions.operations.map((entry) => entry.version), ["2"]);
-  assert.equal(companyExtension(document, "operations", "2")?.version, "2");
+  assert.deepEqual(document.extensions.operations.map((entry) => entry.version), ["3"]);
+  assert.equal(companyExtension(document, "operations", "3")?.version, "3");
   assert.equal(companyExtension(document, "operations", "1"), undefined);
 });
 
@@ -129,12 +129,12 @@ test("client metadata requires the same domain for security URLs", () => {
 });
 
 test("optional members serialized as null read as absent, as Python's models do", () => {
-  const operation = parseOperation({ ...fixture("operation-valid.json"), terms: null });
-  assert.equal("terms" in operation, false);
+  const operation = parseOperation({ ...fixture("operation-valid.json"), summary: null });
+  assert.equal("summary" in operation, false);
   // `extensions` too: a company's message with `extensions: null` is a message, not a refusal.
   const message = parseMessage({ id: "msg_1", author: { type: "agent" }, role: null, text: "Hi", data: null, context: null, extensions: null });
   assert.deepEqual(message, { id: "msg_1", author: { type: "agent" }, text: "Hi" });
   // A null where a member is required is still refused.
-  assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), summary: null }));
+  assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), terms: null }));
   assert.throws(() => parseOperation({ ...fixture("operation-valid.json"), expires_at: null }));
 });

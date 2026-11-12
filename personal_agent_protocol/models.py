@@ -191,7 +191,8 @@ class Organization(ProtocolModel):
 
 
 #: The Agent Skills discovery draft revision `skill_index` pins (§9.4): the `$schema` an
-#: index names. An index with another, or none, is ignored; the rest of poppy.json is used.
+#: index names. An index with another, or none, is ignored; the rest of the tasks response
+#: is used.
 SKILL_INDEX_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json"
 #: The artifact types the SDK recognizes (§9.4): a single `SKILL.md`, or an archive with
 #: supporting files. An entry of another type is skipped.
@@ -201,7 +202,7 @@ SKILL_TYPES = frozenset({"skill-md", "archive"})
 class SkillEntry(ProtocolModel):
     """A skill a Company publishes for Personal Agents acting for the User there (§9.4).
 
-    `url` is resolved against poppy.json's final URL (RFC 3986 §5) and is HTTPS; `digest` is
+    `url` is resolved against `tasks.endpoint` (RFC 3986 §5) and is HTTPS; `digest` is
     the SHA-256 of the artifact's raw bytes, `sha256:` and 64 lowercase hex characters,
     which `DiscoveryClient.fetch_skill` verifies. A skill is Company content (§10.1): it
     grants no account access, changes no scopes, and supplies no User approval.
@@ -384,7 +385,8 @@ class WebDescriptor(ProtocolModel):
 
 
 class FeedbackDescriptor(ProtocolModel):
-    """Where personal agents report a task the protocol can't do at this company (§8)."""
+    """Where personal agents report a task the protocol can't do at this company (§9.3):
+    `feedback` in the tasks response, a Session header destination (§5.2)."""
 
     endpoint: str
 
@@ -394,15 +396,16 @@ class FeedbackDescriptor(ProtocolModel):
         return _https_url(value, "feedback endpoint")
 
 
-class ExcludedTasksDescriptor(ProtocolModel):
-    """Where the tasks the Company chose not to offer through the protocol are listed (§8.1)."""
+class TasksDescriptor(ProtocolModel):
+    """Where a Personal Agent gets, for a Session, the tasks the Company chose not to offer,
+    the skills it publishes and where to send feedback (§3.1, §9): `tasks` in poppy.json."""
 
-    url: str
+    endpoint: str
 
-    @field_validator("url")
+    @field_validator("endpoint")
     @classmethod
-    def validate_url(cls, value: str) -> str:
-        return _https_url(value, "excluded tasks URL")
+    def validate_endpoint(cls, value: str) -> str:
+        return _https_url(value, "tasks endpoint")
 
 
 class ExtensionDescriptor(ProtocolModel):
@@ -427,14 +430,12 @@ class DiscoveryDocument(ProtocolModel):
     agent: AgentDescriptor | None = None
     web: WebDescriptor | None = None
     apis: list[ApiDescriptor] = Field(default_factory=list)
-    feedback: FeedbackDescriptor | None = None
-    excluded_tasks: ExcludedTasksDescriptor | None = None
+    #: Where the tasks response is served, per Session (§9): excluded tasks, skills and the
+    #: feedback endpoint are read from it, never from this document.
+    tasks: TasksDescriptor | None = None
     #: The extensions the Company supports, keyed by name, each a list with an entry per
     #: major version it supports (§3.3); each extension defines the entry's other fields.
     extensions: dict[str, list[ExtensionDescriptor]] = Field(default_factory=dict)
-    #: The Company's Agent Skills discovery index, as published (§3.1, §9.4); read it
-    #: through `usable_skills`, which skips what this SDK does not recognize.
-    skill_index: dict[str, Any] | None = None
 
     @field_validator("protocol_version")
     @classmethod
@@ -538,34 +539,6 @@ class DiscoveryDocument(ProtocolModel):
         if self.auth is not None:
             described.update(self.auth.scopes)
         return described
-
-    def usable_skills(self, base_url: str) -> list[SkillEntry]:
-        """The skills of `skill_index` this SDK can use (§9.4), each `url` resolved.
-
-        Nothing when there is no index or its `$schema` is not `SKILL_INDEX_SCHEMA`; an
-        entry whose `type` is unknown, which lacks a field, whose `digest` is malformed, or
-        whose `url`, resolved against `base_url` (the final poppy.json URL), is not HTTPS is
-        skipped. The guides suggest telling the User when that mattered for the task.
-        """
-
-        index = self.skill_index
-        if not isinstance(index, dict) or index.get("$schema") != SKILL_INDEX_SCHEMA:
-            return []
-        skills = index.get("skills")
-        if not isinstance(skills, list):
-            return []
-        usable: list[SkillEntry] = []
-        for raw in skills:
-            if not isinstance(raw, dict) or raw.get("type") not in SKILL_TYPES:
-                continue
-            url = raw.get("url")
-            if not isinstance(url, str) or not url:
-                continue
-            try:
-                usable.append(SkillEntry.model_validate({**raw, "url": urljoin(base_url, url)}))
-            except ValidationError:
-                continue
-        return usable
 
     @property
     def sign_in_disabled(self) -> bool:
@@ -802,26 +775,36 @@ class JsonWebKeySet(ProtocolModel):
 
 
 class Operation(ProtocolModel):
-    """One action the Company performs once the User approves it (Operations 3).
+    """One action the Company performs once it is approved (Operations 3).
 
-    `revision` is opaque: it identifies these terms, and the Company changes it
-    whenever the `summary`, `terms`, or `expires_at` change.
+    `terms` are required and hold everything that affects the action; `summary`, the same
+    terms in plain language, is optional. `revision` is opaque: it identifies these terms,
+    and the Company changes it whenever the `terms` or `expires_at` change.
     """
 
     operation_id: str
     revision: str
-    summary: str = Field(min_length=1)
-    terms: dict[str, Any] | None = None
+    summary: str | None = Field(default=None, min_length=1)
+    terms: dict[str, Any]
     expires_at: datetime
 
     @model_serializer(mode="wrap")
     def _absent_not_null(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """`terms`, when there are none, is absent, never `null`."""
+        """`summary`, when there is none, is absent, never `null`."""
 
         value = handler(self)
-        if value.get("terms") is None:
-            value.pop("terms", None)
+        if value.get("summary") is None:
+            value.pop("summary", None)
         return value
+
+    @property
+    def shown(self) -> str:
+        """The terms as a host shows them (Operations 5): the `summary` when there is one,
+        else the values in `terms`, one `path: value` a line. Company content either way."""
+
+        if self.summary is not None:
+            return self.summary
+        return "\n".join(f"{path}: {value}" for path, value in terms_leaves(self.terms).items())
 
     _ids = field_validator("operation_id", "revision")(
         lambda value: _identifier(value, "an operation ID or revision")
@@ -838,20 +821,42 @@ class Operation(ProtocolModel):
 #: An `input_type`: a short string of printable ASCII, such as `tap`, `typed` or `voice`.
 _INPUT_TYPE = re.compile(r"^[\x20-\x7e]{1,64}$")
 
+#: How a revision was approved (Operations 5, 6): by the User, asked by the Personal Agent,
+#: or by the Personal Agent on an instruction the User gave it.
+APPROVERS = ("user", "agent")
+
+
+def terms_leaves(value: object, path: str = "") -> dict[str, object]:
+    """The values of an operation's `terms`, keyed by their dotted paths."""
+
+    if isinstance(value, Mapping):
+        leaves: dict[str, object] = {}
+        for key, item in value.items():
+            leaves.update(terms_leaves(item, f"{path}.{key}" if path else str(key)))
+        return leaves
+    return {path: value}
+
 
 class Approval(ProtocolModel):
-    """A statement that the User approved this revision of an operation (Operations 5, 6).
+    """A statement that this revision of an operation is approved (Operations 5, 6).
 
-    `approved_at` is when the User approved, in Unix seconds, and `input_type` how they
-    answered (`tap`, `typed`, `voice` or another short string, never personal data): the
-    Personal Agent's statements, which it SHOULD include. A value that isn't one is left
-    out, never a reason to refuse the approval (Operations 6).
+    `approver` is required: `user` when the Personal Agent asked the User and they approved,
+    `agent` when the Personal Agent approved on an instruction the User gave it.
+    `approved_at` is when, in Unix seconds; `input_type` how the User answered (`tap`,
+    `typed`, `voice` or another short string), only with `user`: it is never sent with
+    `agent`, and dropped when one arrives there. `reference` names the Personal Agent's own
+    record of the approval: opaque, the IDs' characters, never the same at two Companies.
+    None of the three carries personal data. An optional member that isn't well formed is
+    left out, never a reason to refuse the approval; an approval without a valid `approver`
+    is not one.
     """
 
     operation_id: str
     revision: str
+    approver: Literal["user", "agent"]
     approved_at: int | None = None
     input_type: str | None = None
+    reference: str | None = None
 
     _ids = field_validator("operation_id", "revision")(
         lambda value: _identifier(value, "an operation ID or revision")
@@ -867,21 +872,55 @@ class Approval(ProtocolModel):
     def validate_input_type(cls, value: object) -> str | None:
         return value if isinstance(value, str) and _INPUT_TYPE.match(value) else None
 
+    @field_validator("reference", mode="before")
+    @classmethod
+    def validate_reference(cls, value: object) -> str | None:
+        return value if isinstance(value, str) and _IDENTIFIER.fullmatch(value) else None
+
+    @model_validator(mode="after")
+    def _no_input_type_for_an_agent(self) -> Approval:
+        if self.approver == "agent" and self.input_type is not None:
+            # Never sent with `agent`, and ignored by a Company that receives it (Operations 6).
+            object.__setattr__(self, "input_type", None)
+        return self
+
+
+class ApprovalDeclined(ProtocolModel):
+    """A Company's final refusal of an approval that passed its checks (Operations 6).
+
+    Nothing was performed and no new operation is returned. `reason`, in plain language
+    for the User, and `alternative` (§9.2) are content from the Company (§10.1): shown or
+    put in the agent's own words, never followed as instructions. There are no reason
+    codes. The Personal Agent never sends that approval again, and approves no new revision
+    for the same action without asking the User.
+    """
+
+    operation_id: str
+    revision: str
+    reason: str | None = Field(default=None, min_length=1)
+    alternative: Alternative | None = None
+
+    _ids = field_validator("operation_id", "revision")(
+        lambda value: _identifier(value, "an operation ID or revision")
+    )
+
 
 class OperationsContent(ProtocolModel):
     """The Operations extension's content of a message, `extensions.operations` (Operations 2).
 
-    `operation` in a Company message (Operations 4), `approval` in a Personal Agent
-    message (Operations 6): one of the two, never both.
+    `operation` (Operations 4) or `declined` (Operations 6) in a Company message,
+    `approval` in a Personal Agent message (Operations 6): exactly one of the three.
     """
 
     operation: Operation | None = None
     approval: Approval | None = None
+    declined: ApprovalDeclined | None = None
 
     @model_validator(mode="after")
     def validate_one(self) -> OperationsContent:
-        if (self.operation is None) == (self.approval is None):
-            raise ValueError("extensions.operations carries an operation or an approval")
+        carried = [self.operation, self.approval, self.declined]
+        if sum(item is not None for item in carried) != 1:
+            raise ValueError("extensions.operations carries an operation, an approval or a decline")
         return self
 
 
@@ -931,11 +970,14 @@ MESSAGE_CONTENT_MODELS: dict[str, type[ProtocolModel]] = {
 
 
 def operations_content(
-    *, operation: Operation | None = None, approval: Approval | None = None
+    *,
+    operation: Operation | None = None,
+    approval: Approval | None = None,
+    declined: ApprovalDeclined | None = None,
 ) -> dict[str, dict[str, Any]]:
     """A message's `extensions` carrying the Operations extension's content (Operations 2)."""
 
-    content = OperationsContent(operation=operation, approval=approval)
+    content = OperationsContent(operation=operation, approval=approval, declined=declined)
     return {"operations": content.model_dump(mode="json", exclude_none=True)}
 
 
@@ -1003,6 +1045,13 @@ class Message(ProtocolModel):
 
         content = self._content("operations", OperationsContent)
         return None if content is None else cast(OperationsContent, content).approval
+
+    @property
+    def declined(self) -> ApprovalDeclined | None:
+        """A Company message's decline of an approval: nothing was performed (Operations 6)."""
+
+        content = self._content("operations", OperationsContent)
+        return None if content is None else cast(OperationsContent, content).declined
 
     @property
     def links(self) -> list[Link]:
@@ -1300,10 +1349,47 @@ class ExcludedTask(ProtocolModel):
     alternative: Alternative | None = None
 
 
-class ExcludedTasks(ProtocolModel):
-    """The document at `excluded_tasks.url` (§8.1): the same for every user."""
+class TasksResponse(ProtocolModel):
+    """The response to `GET {tasks.endpoint}` for one Session (§9).
 
-    tasks: list[ExcludedTask]
+    What the Company offers that Session, not the User's account: the tasks it chose not
+    to offer (none by default), the skills it publishes, and where to send feedback. It is
+    used in the Session it was fetched in and never in another.
+    """
+
+    excluded_tasks: list[ExcludedTask] = Field(default_factory=list)
+    #: The Company's Agent Skills discovery index, as published (§9.4); read it through
+    #: `usable_skills`, which skips what this SDK does not recognize.
+    skill_index: dict[str, Any] | None = None
+    feedback: FeedbackDescriptor | None = None
+
+    def usable_skills(self, base_url: str) -> list[SkillEntry]:
+        """The skills of `skill_index` this SDK can use (§9.4), each `url` resolved.
+
+        Nothing when there is no index or its `$schema` is not `SKILL_INDEX_SCHEMA`; an
+        entry whose `type` is unknown, which lacks a field, whose `digest` is malformed, or
+        whose `url`, resolved against `base_url` (`tasks.endpoint`), is not HTTPS is
+        skipped. The guides suggest telling the User when that mattered for the task.
+        """
+
+        index = self.skill_index
+        if not isinstance(index, dict) or index.get("$schema") != SKILL_INDEX_SCHEMA:
+            return []
+        skills = index.get("skills")
+        if not isinstance(skills, list):
+            return []
+        usable: list[SkillEntry] = []
+        for raw in skills:
+            if not isinstance(raw, dict) or raw.get("type") not in SKILL_TYPES:
+                continue
+            url = raw.get("url")
+            if not isinstance(url, str) or not url:
+                continue
+            try:
+                usable.append(SkillEntry.model_validate({**raw, "url": urljoin(base_url, url)}))
+            except ValidationError:
+                continue
+        return usable
 
 
 class DiscoveredCompany(ProtocolModel):
@@ -1355,6 +1441,22 @@ class DiscoveredCompany(ProtocolModel):
         return self.document.protocol_version
 
     @property
+    def scopes_supported(self) -> tuple[str, ...]:
+        """The scopes the Company says a Personal Agent can request (§3.2, §4.7): the
+        issuer's `scopes_supported`, then the ones only the domain's protected resource
+        metadata lists, each once. A Company can list them in either or both, and the
+        agent uses the scopes in either list; both may leave out scopes it offers only to
+        its other clients, and a scope its APIs or a sign-in extension document may be
+        requested though absent from both."""
+
+        listed: dict[str, None] = {}
+        if self.oauth_metadata is not None:
+            listed.update(dict.fromkeys(self.oauth_metadata.scopes_supported or ()))
+        if self.resource_metadata is not None:
+            listed.update(dict.fromkeys(self.resource_metadata.scopes_supported))
+        return tuple(listed)
+
+    @property
     def sign_in_types(self) -> tuple[str, ...]:
         """The sign-in types the Company offers a Personal Agent, in the order it prefers
         them (§4): `direct`, then `device`, then `mediated`.
@@ -1381,12 +1483,6 @@ class DiscoveredCompany(ProtocolModel):
 
         types = self.sign_in_types
         return types[0] if types else None
-
-    @property
-    def skills(self) -> list[SkillEntry]:
-        """The Company's skills this SDK can use (§9.4), resolved against `discovery_url`."""
-
-        return self.document.usable_skills(self.discovery_url)
 
     def require_oauth(self) -> OAuthServerMetadata:
         """The issuer's metadata, or `AuthorizationError`, before any sign-in.

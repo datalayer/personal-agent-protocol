@@ -205,7 +205,7 @@ export class MemoryCompanyStore implements CompanyStore {
 
 // The kinds of record a company keeps (the same as the Python SDK's).
 export const RecordKinds = {
-  /** A Session by `clientId` and `sid` (§5.3), remembered a while after it ends (§5.5). */
+  /** A Session by `clientId`, `sid` and User ID (§5.3), remembered a while after it ends (§5.5). */
   session: "session",
   /** An access token the company issued, by digest (§4.5). */
   accessToken: "access_token",
@@ -271,10 +271,10 @@ export interface IssuedAccessToken {
 }
 
 /**
- * A Session, by `clientId` and `sid` (§5.3): its User ID and Agent ID, for its life.
+ * A Session, by `clientId`, `sid` and User ID (§5.3), with the Agent ID it started with.
  *
- * A request whose `sid` is unknown starts one; one that names a known `sid` keeps its `sub`
- * and `agent_id`. Once `endsAt` passes, or the company ends it (`ended`), the record is kept
+ * A request whose combination is unknown starts one, signed out; a known `sid` with another
+ * User ID is another Session. Once `endsAt` passes, or the company ends it (`ended`), the record is kept
  * for `endedSessionMemorySeconds`, so a request naming it gets `session_ended` instead of
  * silently starting it again (§5.5).
  */
@@ -522,8 +522,9 @@ export interface RequestReceipt {
  */
 export interface OperationRevision {
   readonly revision: string;
-  readonly summary: string;
-  readonly terms?: Readonly<Record<string, unknown>>;
+  /** The terms in plain language, when the company wrote them so (optional, Operations 3). */
+  readonly summary?: string;
+  readonly terms: Readonly<Record<string, unknown>>;
   readonly expiresAt: string;
   readonly request: string;
   readonly asked: string;
@@ -546,7 +547,10 @@ export type StoredOperationStatus = "open" | "performing" | "performed" | "withd
  * or nobody knows whether it took effect; `performed` with its `outcome`; `withdrawn` when
  * the company will never perform it. `accountId` is absent for one returned signed out,
  * which only the Session `sessionKey` can approve (Operations 3). `approved` and
- * `approvedAt` are the record of the approval (Operations 8.1).
+ * `approvedAt` are the record of the approval (Operations 8.1): the revision and when the
+ * company received it; `approval` is what the personal agent stated with it, `approver` and
+ * any `approved_at`, `input_type` and `reference` (Operations 6). A declined approval is never
+ * recorded.
  */
 export interface StoredOperation {
   readonly operationId: string;
@@ -562,6 +566,12 @@ export interface StoredOperation {
   readonly status: StoredOperationStatus;
   readonly approved?: string;
   readonly approvedAt?: string;
+  readonly approval?: Readonly<{
+    approver: "user" | "agent";
+    approved_at?: number;
+    input_type?: string;
+    reference?: string;
+  }>;
   readonly outcome?: OperationOutcome;
 }
 
@@ -570,7 +580,7 @@ export function latestRevision(stored: StoredOperation): OperationRevision {
   return stored.revisions[stored.revisions.length - 1] as OperationRevision;
 }
 
-/** A revision as it goes on the wire; `terms`, when there are none, is absent, never `null`. */
+/** A revision as it goes on the wire; `summary`, when there is none, is absent, never `null`. */
 export function revisionOperation(
   stored: StoredOperation,
   revision: OperationRevision = latestRevision(stored),
@@ -578,8 +588,8 @@ export function revisionOperation(
   return {
     operation_id: stored.operationId,
     revision: revision.revision,
-    summary: revision.summary,
-    ...(revision.terms === undefined ? {} : { terms: revision.terms }),
+    ...(revision.summary === undefined ? {} : { summary: revision.summary }),
+    terms: revision.terms,
     expires_at: new Date(revision.expiresAt).toISOString().replace(".000Z", "Z"),
   };
 }

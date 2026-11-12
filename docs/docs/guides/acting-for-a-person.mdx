@@ -10,8 +10,8 @@ request needs to know three things: who the agent is acting for, what the person
 authorized, and how to report back that the cancellation actually happened. This
 page answers all three from the company's side, with one example: cancelling order
 `ord_7Hk2` at Example Store. For each step it shows what goes on the wire and the
-SDK code on both sides, in Python and TypeScript, as of draft 0.4 (46beb21) and the
-Operations extension, version 2.
+SDK code on both sides, in Python and TypeScript, as of version 0.4 as published and the
+Operations extension, version 3.
 
 | The question | What answers it | Who checks it |
 | --- | --- | --- |
@@ -467,7 +467,7 @@ person's agreement to one particular cancellation.
 ### The cancellation: an operation, approved once
 
 For an action with a business effect, the company asks for the person's approval
-of its exact terms with the Operations extension, version 2. The company lists it
+of its exact terms with the Operations extension, version 3. The company lists it
 in `poppy.json`, and the agent declares it in `Poppy-Extensions` on each request
 of the Session; a company never returns an operation to a request that doesn't
 declare it (Operations 2).
@@ -857,21 +857,21 @@ await conversations.close(endpoint, page.conversation_id, { session, token });
 
 ## See also
 
-- The specification, draft 0.4: [the Session header](https://personalagentprotocol.org/docs/spec#session-header),
-  [delegated keys](https://personalagentprotocol.org/docs/spec#delegated-keys),
-  [verifying it](https://personalagentprotocol.org/docs/spec#session-verification),
-  [signing in](https://personalagentprotocol.org/docs/spec#sign-in),
-  [scopes](https://personalagentprotocol.org/docs/spec#scopes),
-  [versions](https://personalagentprotocol.org/docs/spec#versions),
-  [sending messages](https://personalagentprotocol.org/docs/spec#sending-messages),
-  [message fields](https://personalagentprotocol.org/docs/spec#message-fields),
-  [state](https://personalagentprotocol.org/docs/spec#state) and
-  [closing](https://personalagentprotocol.org/docs/spec#closing).
-- The [Operations extension](https://personalagentprotocol.org/docs/extensions/operations):
-  [asking for approval](https://personalagentprotocol.org/docs/extensions/operations#approval-required),
-  [sending it](https://personalagentprotocol.org/docs/extensions/operations#sending-approval),
-  [at most once](https://personalagentprotocol.org/docs/extensions/operations#at-most-once) and
-  [what an approval proves](https://personalagentprotocol.org/docs/extensions/operations#approval-proof).
+- The specification, version 0.4: [the Session header](https://personalagentprotocol.org/docs/0.4/spec#session-header),
+  [delegated keys](https://personalagentprotocol.org/docs/0.4/spec#delegated-keys),
+  [verifying it](https://personalagentprotocol.org/docs/0.4/spec#session-verification),
+  [signing in](https://personalagentprotocol.org/docs/0.4/spec#sign-in),
+  [scopes](https://personalagentprotocol.org/docs/0.4/spec#scopes),
+  [versions](https://personalagentprotocol.org/docs/0.4/spec#versions),
+  [sending messages](https://personalagentprotocol.org/docs/0.4/spec#sending-messages),
+  [message fields](https://personalagentprotocol.org/docs/0.4/spec#message-fields),
+  [state](https://personalagentprotocol.org/docs/0.4/spec#state) and
+  [closing](https://personalagentprotocol.org/docs/0.4/spec#closing).
+- The [Operations extension](https://personalagentprotocol.org/docs/0.4/extensions/operations):
+  [asking for approval](https://personalagentprotocol.org/docs/0.4/extensions/operations#approval-required),
+  [sending it](https://personalagentprotocol.org/docs/0.4/extensions/operations#sending-approval),
+  [at most once](https://personalagentprotocol.org/docs/0.4/extensions/operations#at-most-once) and
+  [what an approval proves](https://personalagentprotocol.org/docs/0.4/extensions/operations#approval-proof).
 - The guides: [Operations](/guides/operations/), [Signed-out sessions](/guides/sessions/),
   [Conversations](/guides/conversations/) and [Integrate a company](/guides/company/).
 - The examples: [A user with a company](/examples/user-with-a-company/) (Manzanita,

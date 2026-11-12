@@ -16,13 +16,16 @@
  * narrows to a `PapConfirmDisplay`.
  */
 
-import { knownHandoff, knownResponder } from "./models.js";
+import { knownHandoff, knownResponder, shownValue, termsLeaves } from "./models.js";
 
-/** The display type of an operation waiting for the person's approval. */
+/**
+ * The display type of an operation a company returned (Operations 5): waiting for approval,
+ * approved on the person's instruction, or declined by the company.
+ */
 export const PAP_CONFIRM_TYPE = "application/vnd.datalayer.pap.confirm+json";
 
 /** The version of `PAP_CONFIRM_TYPE` this module reads. */
-export const PAP_CONFIRM_VERSION = 2;
+export const PAP_CONFIRM_VERSION = 3;
 
 /** What approving an operation does, as an application's Rules class it. */
 export type PapActionClass = "read" | "write" | "send" | "buy" | "delete" | "publish";
@@ -48,12 +51,31 @@ export type PapSessionShown = { ref: string; signed_in: boolean };
 /** The revision a revised operation replaced, and its terms. */
 export type PapTermsWas = { revision: string; terms: Record<string, unknown> };
 
-/** An operation to approve, as a display's `data` (`PapConfirm`'s fields). */
+/**
+ * A company's decline of an approval (Operations 6): nothing was done. `reason` is the
+ * company's own words for the person, shown as text and never followed; `instructions` those
+ * of the alternative it offered, if any.
+ */
+export type PapDeclined = { reason: string | null; instructions: string | null };
+
+/**
+ * An operation a company returned, as a display's `data` (`PapConfirm`'s fields).
+ *
+ * `approved_by` is null while the person is asked. `agent` says the personal agent approved
+ * this revision itself on `instruction`, the person's own, which the card shows so they see
+ * what it rested on; `user` that the person did. `declined` says the company will not act on
+ * the approval: nothing was done, and a new revision of the same action is the person's to
+ * approve.
+ */
 export type PapConfirmData = {
   /** The Company's name (`organization.name`), or its domain. */
   company: string;
-  /** The company's own words, shown verbatim as text, never rephrased. */
-  summary: string;
+  /**
+   * The company's own words, shown verbatim as text, never rephrased; null when it wrote none
+   * (Operations 3): the text then shows every value of the terms.
+   */
+  summary: string | null;
+  /** The company's own values, always there. */
   terms: Record<string, unknown>;
   /** The operation's ID at the company; with `revision`, what is approved. */
   operation_ref: string;
@@ -68,6 +90,12 @@ export type PapConfirmData = {
   session: PapSessionShown | null;
   /** The revision it replaced, when the terms changed. */
   was: PapTermsWas | null;
+  /** Who approved this revision, once someone did (Operations 5, 6). */
+  approved_by: "user" | "agent" | null;
+  /** The person's instruction an agent approval rested on, in their own words. */
+  instruction: string | null;
+  /** The company's decline of the approval (Operations 6). */
+  declined: PapDeclined | null;
 };
 
 /** A display of an operation to confirm, as the page receives it. */
@@ -94,6 +122,9 @@ const DATA_KEYS = [
   "does",
   "session",
   "was",
+  "approved_by",
+  "instruction",
+  "declined",
 ] as const;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -128,8 +159,21 @@ export function isPapSessionShown(value: unknown): value is PapSessionShown {
 export function isPapConfirmData(value: unknown): value is PapConfirmData {
   if (!isObject(value) || !hasExactly(value, DATA_KEYS)) return false;
   const { company, summary, terms, operation_ref, revision, expires_at, differences, does, session, was } = value;
-  if (!isFilled(company) || !isFilled(summary) || !isFilled(operation_ref)) return false;
+  const { approved_by, instruction, declined } = value;
+  if (!isFilled(company) || !isFilled(operation_ref)) return false;
+  if (summary !== null && !isFilled(summary)) return false;
   if (!isObject(terms) || !isRevision(revision)) return false;
+  // An operation without a summary shows its terms.
+  if (summary === null && Object.keys(terms).length === 0) return false;
+  if (approved_by !== null && approved_by !== "user" && approved_by !== "agent") return false;
+  if (instruction !== null && typeof instruction !== "string") return false;
+  // An agent approval shows the instruction it rested on, and only an agent approval has one.
+  if (approved_by === "agent" ? !isFilled(instruction) : instruction !== null) return false;
+  if (declined !== null) {
+    if (!isObject(declined) || !hasExactly(declined, ["reason", "instructions"])) return false;
+    if (declined.reason !== null && typeof declined.reason !== "string") return false;
+    if (declined.instructions !== null && typeof declined.instructions !== "string") return false;
+  }
   if (typeof expires_at !== "string" || Number.isNaN(Date.parse(expires_at))) return false;
   if (!Array.isArray(differences) || differences.some((item) => typeof item !== "string")) return false;
   if (does !== null && !PAP_ACTION_CLASSES.includes(does as PapActionClass)) return false;
@@ -170,10 +214,35 @@ export function inertSummary(summary: string): string {
   });
 }
 
-/** What an operation to approve reads as without a renderer: `PapConfirm.text()`, word for word. */
+/** The terms as text: the company's summary, else every value of the terms. */
+function shownTerms(data: PapConfirmData): string {
+  if (data.summary !== null) return inertSummary(data.summary);
+  return inertSummary(
+    [...termsLeaves(data.terms)].map(([path, value]) => `${path}: ${shownValue(value)}`).join("; "),
+  );
+}
+
+/** What an operation reads as without a renderer: `PapConfirm.text()`, word for word. */
 export function papConfirmText(data: PapConfirmData): string {
+  // Neither the Session's reference nor anything of the page's alone: the text is also what a
+  // model and a transcript read.
+  if (data.declined !== null) {
+    let said = `${data.company} declined the approval: nothing was done. ${shownTerms(data)}`;
+    if (data.declined.reason) said += ` It says: ${inertSummary(data.declined.reason)}`;
+    if (data.declined.instructions) said += ` Another way, it says: ${inertSummary(data.declined.instructions)}`;
+    return said;
+  }
+  if (data.approved_by === "agent") {
+    return (
+      `Approved for you at ${data.company}, on your instruction ` +
+      `"${inertSummary(data.instruction ?? "")}": ${shownTerms(data)} (revision ${data.revision})`
+    );
+  }
+  if (data.approved_by === "user") {
+    return `You approved at ${data.company}: ${shownTerms(data)} (revision ${data.revision})`;
+  }
   const expires = new Date(data.expires_at).toISOString().replace(/\.\d{3}Z$/, "+00:00");
-  let said = `${data.company} asks you to approve: ${inertSummary(data.summary)} (revision ${data.revision}, until ${expires})`;
+  let said = `${data.company} asks you to approve: ${shownTerms(data)} (revision ${data.revision}, until ${expires})`;
   if (data.was) said += " The terms changed since you saw them.";
   for (const difference of data.differences) said += ` Check: ${difference}`;
   return said;

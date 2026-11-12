@@ -38,8 +38,8 @@ interfaces that are deployed and authorized consistently.
       "orders:write": {"changes": "reversible", "personal_data": true}
     }
   },
-  "excluded_tasks": {
-    "url": "https://example.com/poppy/excluded-tasks.json"
+  "tasks": {
+    "endpoint": "https://api.example.com/poppy/tasks"
   },
   "apis": [
     {
@@ -77,8 +77,9 @@ too. `auth.scope_hints` says, per scope, what its most
 consequential operation `changes` (`none`, `reversible`, `irreversible`) and
 whether it touches `personal_data`, so a personal agent can choose the
 narrowest scopes a task needs. Tasks the company chose not to offer through
-the protocol are listed at `excluded_tasks.url` (§9.1), each with an optional
-alternative.
+the protocol, the skills it publishes and its feedback endpoint are not in
+`poppy.json`: it names one `tasks.endpoint`, which answers each Session with
+them (§9), each excluded task with an optional alternative.
 
 Keep endpoint authorization in application code or a gateway; never ask a
 model to enforce scopes. A request whose token lacks a scope gets
@@ -186,7 +187,7 @@ config = CompanyConfig(
     # What each scope's most consequential operation changes, and whether it touches
     # personal data (`auth.scope_hints`).
     scope_hints={"orders:read": ("none", True), "orders:write": ("reversible", True)},
-    # Tasks not offered through the protocol, published at /poppy/excluded-tasks.json.
+    # Tasks not offered through the protocol, served per Session at /poppy/tasks.
     excluded_tasks=({"task": "Change the size of an item after it has shipped"},),
 )
 service = build_company(config, http_client=http, plugins=[(manifest, my_company_plugin)])
@@ -197,7 +198,7 @@ app = company_app(service)  # any ASGI server, or httpx.ASGITransport in tests
 response, so any web framework can serve it; `company_app()` serves it over
 plain ASGI and rebuilds each request URL on the company's published origin so
 Session JWT `htu` checks compare against what the personal agent signed. It
-implements, of draft 0.4 and Operations v2:
+implements, of version 0.4 and Operations version 3:
 
 - discovery (`/.well-known/poppy.json`) and OAuth metadata on one issuer,
   with `protected_resources`, `grant_types_supported`, `scopes_supported`,
@@ -227,8 +228,8 @@ implements, of draft 0.4 and Operations v2:
   only missing or unknown scopes are `invalid_scope` (spec 4.7);
 - `logo_uri` (`logoUri`) published as `organization.logo_uri`, and `skills`
   (`skills`), each a name, a description and the text of its `SKILL.md`, served
-  at `/poppy/skills/{name}/SKILL.md` and listed in the document's `skill_index`
-  at the pinned Agent Skills revision with its SHA-256 digest (spec 3.1, 9.4);
+  at `/poppy/skills/{name}/SKILL.md` and listed in the tasks response's `skill_index`
+  at the pinned Agent Skills revision with its SHA-256 digest (spec 9, 9.4);
 - with `conversation_resource` (`conversationResource`), the conversation
   endpoint as a service of its own, as a company whose company agent runs at
   another provider has (spec 4.5, guides *A conversation endpoint at another
@@ -257,10 +258,35 @@ implements, of draft 0.4 and Operations v2:
   gives an access token for that server alone, a `resource` the company doesn't
   serve is `invalid_target`, and a token not issued for the server is
   `invalid_token` with `resource_metadata`;
-- excluded tasks (`/poppy/excluded-tasks.json`) and feedback, answering a
+- Operations version 3: every approval's `approver` (`user`, or `agent` for one the
+  personal agent gave on the user's instruction), with any `approved_at`,
+  `input_type` and `reference`, is kept with the operation's record
+  (`StoredOperation.approval`); an approval without `approver` approves nothing;
+  `CompanyConfig.decline` (`decline`) lets the company decline an approval that
+  passed its checks, for its own reasons: return a `Decline` with a short `reason`
+  for the user and, when there is one, an `alternative`, and nothing is performed,
+  recorded or proposed anew (`approval_declined`: HTTP 403 with a JSON body at an
+  API, an error result at a tool, a later message in a conversation). Operations on
+  the website (`Poppy-Operation`, an operations `endpoint`) are not served yet;
+- sign-in pages that say who asks: the built-in consent page starts with
+  "*agent* wants to connect to your *company* account" and tells the person to
+  continue only if they just asked that agent; a hosted consent or device page
+  gets the same words from `authorization_request()` and `device_request()`
+  (`heading`, `caution`) (spec 10.8). Let people sign in there with a passkey or
+  another phishing-resistant method, as on your website: Direct and Device
+  Sign-In happen on your own pages, so passkeys work, which they cannot with
+  Mediated Sign-In;
+- a Session found by `client_id`, `sid` and User ID (spec 5.3):
+  `end_session(client_id, sid, pairwise_user_id)`; and `page_session(request)` for
+  the company's own website pages, which verifies the Session header a personal
+  agent sends when it fetches a page without a browser and reads the request as
+  signed out (spec 5.2);
+- task coverage per Session: `GET /poppy/tasks` (`tasks.endpoint` in `poppy.json`)
+  answers a request with the Session header with the excluded tasks, the skill
+  index and the feedback endpoint, marked `private`; feedback, answering a
   report about a task that can be done after all with its alternative
-  (`feedback_answers`); personal agents send feedback to `feedback.endpoint`
-  only, so an API that keeps a feedback operation for clients that don't read
+  (`feedback_answers`); personal agents send feedback to the tasks response's
+  `feedback.endpoint` only, so an API that keeps a feedback operation for clients that don't read
   `poppy.json` says in its description that personal agents use
   `feedback.endpoint`, ideally feeding the same place;
 - conversations with idempotent messages, cursor events, waited replies, SSE,
@@ -336,7 +362,7 @@ reference companies don't.
   JWT invalid, so the agent has no Session to start again. The spec names no code for
   it; this one is the SDKs'. A verified signature authenticates its key source, not
   the `client_id`. A real deployment usually verifies at its edge instead: see the
-  [guides](https://personalagentprotocol.org/docs/guides#both-operator-signatures).
+  [guides](https://personalagentprotocol.org/docs/0.4/guides#both-operator-signatures).
 
 ### Reactor points
 
@@ -578,5 +604,5 @@ checked with `check_store`, a company agent, and one executor, serves it with
 [`company-apis`](https://github.com/datalayer/personal-agent-protocol/tree/main/examples/pydantic-ai/company-apis)
 example reads and proposes through Manzanita's OpenAPI API and MCP server.
 
-Use the upstream [company implementation guidance](https://personalagentprotocol.org/docs/guides)
+Use the upstream [company implementation guidance](https://personalagentprotocol.org/docs/0.4/guides)
 alongside the normative specification.

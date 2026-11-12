@@ -208,8 +208,8 @@ comes from `@datalayer/personal-agent-protocol/server`.
 Use `parseClientMetadata`, `parseJsonWebKeySet`, `parseMessage`,
 `parseConversationEvent`, `parseConversationEventPage`, and `parseOperation`
 at trust boundaries. These parsers preserve unknown compatible fields and
-future event types while enforcing the required shapes of known draft 0.4 and
-Operations v2 objects.
+future event types while enforcing the required shapes of known version 0.4 and
+Operations version 3 objects.
 
 The models are aligned with Python through shared fixtures. Conversation
 creation, continuation, JSON event polling, SSE streaming, handoff, Direct

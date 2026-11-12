@@ -15,6 +15,7 @@ import {
   ConversationClient,
   DirectSignInClient,
   OperationsClient,
+  agentInstruction,
   SessionClient,
   SessionFetchClient,
   discoverCompany,
@@ -27,6 +28,31 @@ import {
 export const scenario = JSON.parse(
   readFileSync(new URL("../../../protocol/scenarios/user-with-a-company.json", import.meta.url), "utf8"),
 );
+
+/**
+ * The journey's one instruction, as the user gave it to the agent, with the host's own check of
+ * a revision's terms against it: the amount at `amount_path`, in `currency`, is at most
+ * `limit`. Anything it can't read is `null`: the user is asked.
+ */
+export function scriptedInstruction(spec) {
+  const at = (terms, path) => {
+    let value = terms;
+    for (const key of path.split(".")) {
+      if (typeof value !== "object" || value === null || Array.isArray(value) || !Object.hasOwn(value, key)) return undefined;
+      value = value[key];
+    }
+    return value;
+  };
+  const decimal = (text) => (/^\d+(\.\d+)?$/.test(text) ? Number(text) : undefined);
+  return agentInstruction(spec.text, (operation) => {
+    const amount = at(operation.terms, spec.amount_path);
+    const currency = at(operation.terms, spec.currency_path);
+    if (typeof amount !== "string" || typeof currency !== "string") return null;
+    const [value, limit] = [decimal(amount), decimal(spec.limit)];
+    if (value === undefined || limit === undefined) return null;
+    return currency === spec.currency && value <= limit;
+  });
+}
 
 /**
  * Run every step. `company` plays the user's side at the company, whatever process it
@@ -103,7 +129,7 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
       proposal = messageOperation(page.events.filter((e) => e.type !== "state").at(-1).message);
       assert.equal(proposal !== undefined, expect.operation);
     } else if (step.step === "approve") {
-      assert.ok(operationsNegotiated(discovered.document, session), "the company lists Operations v2 and the Session declares it");
+      assert.ok(operationsNegotiated(discovered.document, session), "the company lists Operations version 3 and the Session declares it");
       const approval = await new OperationsClient({ reactor }).askUser(proposal, {
         organization: discovered.document.organization,
         tenantId: agent.tenant_id,
@@ -124,6 +150,31 @@ export async function runJourney({ reactor, fetch, browser, identity, company, l
       assert.equal(performed.length, expect.performed);
       assert.deepEqual(performed, [proposal.operation_id]);
       seen.operation = { operation_id: proposal.operation_id, performed: performed.length };
+    } else if (step.step === "agent_approve") {
+      // The agent approves an operation itself, on the one instruction the user gave it: nobody
+      // is asked, and the approval says `approver: agent` (Operations 5, 6).
+      const api = new ApiClient({ transport });
+      const url = `https://${domain}${step.path}`;
+      const asked = await api.call(step.method, url, { session, token: signedIn, body: {} });
+      const operation = asked.operation;
+      assert.ok(operation !== undefined);
+      assert.deepEqual(operation.terms, expect.terms);
+      const surface = { asked: [], approve: async (request) => (surface.asked.push(request), true) };
+      const client = new OperationsClient({ reactor });
+      const approval = await client.approveAsAgent(operation, {
+        instruction: scriptedInstruction(step.instruction),
+        reference: client.newReference(),
+      });
+      assert.equal(approval.approver, expect.approver);
+      assert.equal(approval.input_type, undefined);
+      assert.equal(surface.asked.length > 0, expect.asked_user);
+      const sent = await client.send(
+        (given) => api.call(step.method, url, { session, token: signedIn, body: {}, approval: given }),
+        approval,
+      );
+      assert.equal(sent.status, "answered");
+      assert.equal(sent.answer.status, expect.status);
+      seen.agent_approval = { approver: approval.approver };
     } else {
       throw new Error(`unknown step ${step.step}`);
     }

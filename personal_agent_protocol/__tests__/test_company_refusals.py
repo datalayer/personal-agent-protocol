@@ -21,6 +21,7 @@ from personal_agent_protocol import (
     ConversationError,
     DeviceSignInClient,
     Message,
+    TasksClient,
 )
 from personal_agent_protocol.company import CLIENT_POLICIES
 from personal_agent_protocol.company.store import DEVICE, PendingDevice
@@ -52,7 +53,6 @@ async def signed_in(  # type: ignore[no-untyped-def]
         scopes=scopes,
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -119,7 +119,6 @@ async def test_polling_too_fast_is_slow_down() -> None:
         scopes=("orders:read",),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     store = world.shop.store
     (key,) = store.keys(DEVICE)
@@ -342,7 +341,11 @@ async def test_a_revised_operation_answers_a_new_revision_and_is_never_performed
             id=generate_request_id(world.reactor),
             author=Author(type="agent"),
             extensions=operations_content(
-                approval=Approval(operation_id=operation.operation_id, revision=operation.revision)
+                approval=Approval(
+                    approver="user",
+                    operation_id=operation.operation_id,
+                    revision=operation.revision,
+                )
             ),
         )
         page_ = await send(
@@ -409,7 +412,6 @@ async def test_a_blocked_agent_cannot_start_a_session() -> None:
             scopes=("orders:read",),
             tenant_id=TENANT,
             organization=world.company.document.organization,
-            protected_resources=metadata.protected_resources,  # type: ignore[union-attr]
         )
     assert refused.value.code == "invalid_client"
 
@@ -523,7 +525,6 @@ async def test_a_password_reset_ends_the_sign_ins_from_before_it() -> None:
         scopes=("orders:read",),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -641,7 +642,9 @@ async def test_the_company_publishes_its_logo_its_skills_and_a_conversation_reso
     assert company.document.organization.logo_uri == "https://manzanita.example/logo.png"
 
     discovery = DiscoveryClient(reactor=world.reactor, http_client=world.http)
-    (entry,) = company.skills
+    assert "skill_index" not in company.document.model_dump()
+    tasks = await TasksClient(transport=world.transport).get(company, session=session)
+    (entry,) = tasks.skills
     assert (entry.name, entry.type) == ("exchange-a-jacket", "skill-md")
     assert entry.url == "https://manzanita.example/poppy/skills/exchange-a-jacket/SKILL.md"
     assert (await discovery.fetch_skill(entry)).decode() == skill

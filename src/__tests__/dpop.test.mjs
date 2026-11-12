@@ -488,7 +488,6 @@ test("a sign-in for the MCP server needs no proof and works only there", async (
     scopes: ["orders:read"],
     tenantId: ctx.tenantId,
     organization: (await ctx.company()).document.organization,
-    protectedResources: metadata.protected_resources,
   });
   await ctx.driver.approveDevice(started.userCode, { account: ctx.driver.accounts[0] });
   await ctx.driver.wait(started.pollInterval);
@@ -541,7 +540,6 @@ test("a refused proof spends no device code", async () => {
     scopes: scenario.scopes,
     tenantId: ctx.tenantId,
     organization: (await ctx.company()).document.organization,
-    protectedResources: metadata.protected_resources,
   });
   await ctx.driver.approveDevice(started.userCode, { account: ctx.driver.accounts[0] });
   await ctx.driver.wait(started.pollInterval);

@@ -32,10 +32,11 @@ import {
   type ApiDescriptor,
   type Approval,
   type DiscoveryDocument,
+  type ApprovalDeclined,
   type Operation,
   type ProtectedResourceMetadata,
 } from "./models.js";
-import { APPROVAL_META_KEY, operationFrom } from "./operations.js";
+import { APPROVAL_DECLINED, APPROVAL_META_KEY, declinedFrom, operationFrom } from "./operations.js";
 import { challengeParameters, dpopNonceAsked, refuseRedirect } from "./refusals.js";
 import { DPOP_NONCE_HEADER, type AccessToken, type PapSession } from "./sessions.js";
 import { parseRetryAfter, readLimited, readLimitedText } from "./limits.js";
@@ -219,6 +220,8 @@ export interface McpToolResult {
   readonly structuredContent?: Readonly<Record<string, unknown>>;
   readonly isError: boolean;
   readonly operation?: Operation;
+  /** The company's decline of the approval the call carried (Operations 6). */
+  readonly declined?: ApprovalDeclined;
   /** The text items of `content`, one per line. */
   readonly text: string;
 }
@@ -320,12 +323,21 @@ export class McpClient {
         throw new McpError("invalid_operation", "the tool returned a malformed operation", { cause });
       }
     }
+    let declined: ApprovalDeclined | undefined;
+    if (isObject(structured) && structured.error === APPROVAL_DECLINED) {
+      try {
+        declined = declinedFrom(result);
+      } catch (cause) {
+        throw new McpError("invalid_decline", "the tool returned a malformed decline", { cause });
+      }
+    }
     const content = Array.isArray(result.content) ? (result.content as Record<string, unknown>[]) : [];
     return {
       content,
       ...(isObject(structured) ? { structuredContent: structured } : {}),
       isError: result.isError === true,
       ...(operation === undefined ? {} : { operation }),
+      ...(declined === undefined ? {} : { declined }),
       text: content
         .filter((item) => isObject(item) && item.type === "text")
         .map((item) => String(item.text ?? ""))

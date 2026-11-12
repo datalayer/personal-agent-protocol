@@ -62,7 +62,6 @@ async function signIn(w, granted) {
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
     organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
-    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada", ...(granted ? { scopes: granted } : {}) });
   w.clock.advance(started.pollInterval);
@@ -108,7 +107,7 @@ test("signed out, then signed in: a read, and an exchange refused until it is ap
     session: w.session,
     token,
     body: {},
-    approval: { operation_id, revision },
+    approval: { operation_id, revision, approver: "user" },
   });
   assert.equal(done.status, 200);
   assert.ok(done.body.summary.startsWith("Exchanged"));
@@ -188,6 +187,7 @@ test("approval_required comes back as the operation, not an error", async () => 
     operation_id: "exc_5Rt2",
     revision: "r1",
     summary: "Exchange it.",
+    terms: { order_id: "ord_7Hk2" },
     expires_at: "2026-10-10T18:00:00Z",
   };
   const w = await world();
@@ -210,7 +210,7 @@ test("the request: JSON in, host-owned credentials, an approval in its header", 
     },
   });
   const api = new ApiClient({ transport });
-  const approval = { operation_id: "exc_5Rt2", revision: "r1" };
+  const approval = { operation_id: "exc_5Rt2", revision: "r1", approver: "user" };
   const token = accessToken();
   const answered = await api.call("POST", ORDERS, { session: w.session, token, body: { note: "hi" }, approval });
   assert.deepEqual(answered.body, { ok: true });
@@ -220,7 +220,7 @@ test("the request: JSON in, host-owned credentials, an approval in its header", 
   assert.equal(headers.get("authorization"), "Bearer access-secret");
   assert.ok(headers.get("poppy-session"));
   assert.equal(headers.get("dpop"), null);
-  assert.equal(headers.get("poppy-approval"), 'operation_id="exc_5Rt2", revision="r1"');
+  assert.equal(headers.get("poppy-approval"), 'operation_id="exc_5Rt2", revision="r1", approver="user"');
   assert.equal(seen[0].init.body, '{"note":"hi"}');
   // Signed out: the Session header alone.
   await api.call("GET", ORDERS, { session: w.session });

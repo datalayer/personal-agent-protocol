@@ -80,7 +80,6 @@ async def test_device_sign_in_points_at_the_hosted_device_page() -> None:
         scopes=("orders:read",),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     assert started.verification_uri == DEVICE_PAGE
     assert started.verification_uri_complete == (
@@ -117,7 +116,18 @@ async def test_authorize_redirects_to_the_hosted_consent_page_which_reads_the_re
         {"scope": "orders:write", "description": "Exchange or return items in your orders"},
     ]
     assert summary["expires_at"].endswith("Z")
-    assert set(summary) == {"request_id", "client_name", "client_domain", "scopes", "expires_at"}
+    # What the page starts with and says before the person goes on (spec 10.8).
+    assert summary["heading"] == "Atlas wants to connect to your Manzanita Outfitters account"
+    assert summary["caution"] == "Only continue if you asked Atlas to do this just now."
+    assert set(summary) == {
+        "request_id",
+        "client_name",
+        "client_domain",
+        "heading",
+        "caution",
+        "scopes",
+        "expires_at",
+    }
 
     # The user allows on the hosted page; the sign-in completes as before.
     callback = await world.shop.approve_authorization(request_id, account_id="acct_ada")

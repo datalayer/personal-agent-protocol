@@ -28,7 +28,7 @@ The command groups are:
 | `pap auth`           | `direct`, `device`, and `mediated` sign-in, and `disconnect` (sign out, §4, §5.5).      |
 | `pap api`            | `openapi` calls, and `mcp` tools with a token for the MCP url only (§7).                |
 | `pap conversations`  | `start`, `send`, `events`, `follow` (SSE), `handoff`, `direct`, `close` (§8).           |
-| `pap operations`     | `show`, `approve`, `send` (Operations v2).                                              |
+| `pap operations`     | `show`, `approve`, `send` (Operations version 3).                                              |
 | `pap requirements`   | `list` and `show` the normative requirement ledger.                                     |
 | `pap conformance`    | `run` the conformance suite (`--demo`, `--tls`) and `report` JSON or JUnit.             |
 | `pap commands`       | `list` and `run` the [live-session actions](#live-session-actions) by ID, as Studio and a REPL do. |
@@ -151,7 +151,7 @@ secrets resolve Reactor contributions and expose only opaque references.
 pap company discover example.com
 pap company verify example.com --json
 pap extensions list example.com --json
-pap extensions check operations --version 2 example.com
+pap extensions check operations --version 3 example.com
 ```
 
 Both company commands use the SDK's safe discovery client. `verify` therefore

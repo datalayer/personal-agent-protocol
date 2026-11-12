@@ -93,7 +93,6 @@ async function signedIn(w, scopes = ["orders:read", "orders:write"]) {
     scopes,
     tenantId: TENANT,
     organization: w.company.document.organization,
-    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -196,7 +195,7 @@ test("a signed-in MCP token reads and proposes the same operation", async () => 
   assert.deepEqual(throughMcp.operation.terms, proposed.operation.terms);
   assert.deepEqual(operationFrom({ structuredContent: { operation: throughMcp.operation } }), throughMcp.operation);
   const { operation_id, revision } = throughMcp.operation;
-  const done = await mcp.callTool("exchange_jacket", {}, { approval: { operation_id, revision } });
+  const done = await mcp.callTool("exchange_jacket", {}, { approval: { operation_id, revision, approver: "user" } });
   assert.equal(done.isError, false);
   assert.ok(done.text.startsWith("Exchanged"));
   assert.deepEqual(w.plugin.executor.performed, [operation_id]);
@@ -322,7 +321,7 @@ test("an MCP server that ends the Session gets a new one, once", async () => {
   const mcp = mcpClient(w, session);
   assert.ok((await mcp.listTools()).length);
   const ended = session.sid;
-  assert.ok(await w.shop.endSession(session.clientId, ended));
+  assert.ok(await w.shop.endSession(session.clientId, ended, session.sub));
   assert.deepEqual((await mcp.listTools()).map((tool) => tool.name), ["list_orders", "exchange_jacket"]);
   assert.notEqual(session.sid, ended);
 });
@@ -536,7 +535,7 @@ test("a joined browser follows the Session", async () => {
   assert.equal(signedOut.accountId, undefined);
 
   // Ending the Session ends the browser's cookie with it (§6).
-  assert.ok(await w.shop.endSession(session.clientId, session.sid));
+  assert.ok(await w.shop.endSession(session.clientId, session.sid, session.sub));
   assert.equal(await w.shop.webSession(cookie), undefined);
 });
 
@@ -612,7 +611,7 @@ test("a join needs its own browser, its code once, and a live Session", async ()
   assert.equal(await errorOf(bare), "invalid_session");
   const ended = await w.start();
   assert.equal((await authorize(w, ended, `bc_${"y".repeat(22)}`)).status, 400);
-  assert.ok(await w.shop.endSession(ended.clientId, ended.sid));
+  assert.ok(await w.shop.endSession(ended.clientId, ended.sid, ended.sub));
   const refused = await authorize(w, ended, code);
   assert.equal(refused.status, 400);
   assert.equal(await errorOf(refused), "session_ended");

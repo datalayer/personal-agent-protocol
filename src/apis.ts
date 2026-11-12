@@ -27,9 +27,10 @@ import {
   type ApiDescriptor,
   type Approval,
   type DiscoveryDocument,
+  type ApprovalDeclined,
   type Operation,
 } from "./models.js";
-import { ACTION_FAILED, APPROVAL_HEADER, approvalHeader } from "./operations.js";
+import { ACTION_FAILED, APPROVAL_DECLINED, APPROVAL_HEADER, approvalHeader, declinedFrom } from "./operations.js";
 import type { AccessToken, PapSession } from "./sessions.js";
 import type { SessionFetchClient } from "./transport.js";
 import { readLimited } from "./limits.js";
@@ -96,11 +97,15 @@ export class ApiError extends PersonalAgentProtocolError {
   }
 }
 
-/** An API answer: the body, or the operation to approve (`403 approval_required`). */
+/**
+ * An API answer: the body, the operation to approve (`403 approval_required`), or the company's
+ * decline of an approval (`403 approval_declined`): nothing was performed.
+ */
 export interface ApiResponse {
   readonly status: number;
   readonly body?: unknown;
   readonly operation?: Operation;
+  readonly declined?: ApprovalDeclined;
   /** The `Idempotency-Key` a write was sent with; absent for a read. */
   readonly idempotencyKey?: string;
 }
@@ -195,6 +200,17 @@ export class ApiClient {
         return { status: 403, operation: parseOperation(member(payload, "operation")), ...sent };
       } catch (cause) {
         throw new ApiError("invalid_operation", "approval_required carries no valid operation", {
+          statusCode: 403,
+          cause,
+        });
+      }
+    }
+    if (response.status === 403 && member(payload, "error") === APPROVAL_DECLINED) {
+      try {
+        const declined = declinedFrom(payload);
+        return { status: 403, ...(declined === undefined ? {} : { declined }), ...sent };
+      } catch (cause) {
+        throw new ApiError("invalid_decline", "approval_declined names no operation and revision", {
           statusCode: 403,
           cause,
         });

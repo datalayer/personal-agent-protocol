@@ -2,9 +2,9 @@
   "suite": "operations",
   "profile": "0.4",
   "extension": {
-    "operations": "2"
+    "operations": "3"
   },
-  "description": "Asking for approval, sending it through each interface, the company's checks in order, new revisions, who can approve, and at most once.",
+  "description": "Asking for approval, sending it through each interface, who approved (the user, or the agent on the user's instruction), the company's checks in order, declines, new revisions, who can approve, and at most once.",
   "cases": [
     {
       "id": "operations.approval-required",
@@ -128,6 +128,33 @@
         "OPS-6-01"
       ],
       "description": "A signed-out Session of the same personal agent and user gets a challenge for the account."
+    },
+    {
+      "id": "operations.agent-approval",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "OPS-6-06"
+      ],
+      "description": "An approval with approver agent, a reference and no input_type is acted on: a Company MUST NOT reject or decline an approval because an optional member is missing."
+    },
+    {
+      "id": "operations.approval-without-approver",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "OPS-6-07"
+      ],
+      "description": "approver is required: a Poppy-Approval without it, as version 2 sent, is a request without an approval."
+    },
+    {
+      "id": "operations.approval-declined",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "OPS-6-10"
+      ],
+      "description": "A declined approval is HTTP 403 with error approval_declined, operation_id and revision in a JSON body; nothing is performed, no new operation is returned, and the approval is not recorded."
     },
     {
       "id": "operations.another-user-cannot-approve",

@@ -267,7 +267,7 @@ async def test_the_company_remembers_an_ended_sid_and_the_agent_starts_again_onc
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     await world.conversations.start(endpoint, world.message("Hello"), session=session)
     ended = session.sid
-    assert await world.shop.end_session(session.client_id, ended)
+    assert await world.shop.end_session(session.client_id, ended, session.sub)
     await world.conversations.start(endpoint, world.message("Hello again"), session=session)
     assert session.sid != ended
     headers = await _headers(world, ended, endpoint)

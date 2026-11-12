@@ -33,7 +33,6 @@ async def _signed_in(world: World):  # type: ignore[no-untyped-def]
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)

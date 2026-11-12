@@ -1,7 +1,7 @@
 # Copyright (c) 2025-2026 Datalayer, Inc.
 # BSD 3-Clause License
 
-"""A Pydantic AI agent demonstrating the PAP Operations extension (version 2)."""
+"""A Pydantic AI agent demonstrating the PAP Operations extension (version 3)."""
 
 from __future__ import annotations
 
@@ -118,7 +118,6 @@ async def explain_operations() -> dict[str, Any]:
         scopes=("accounts:read", "payments:write"),
         tenant_id=TENANT,
         organization=company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await bank.approve_device(started.user_code, account_id=ACCOUNT)
     clock.advance(started.poll_interval)
@@ -126,7 +125,7 @@ async def explain_operations() -> dict[str, Any]:
     if not (token is not None):
         raise RuntimeError("the example world is incomplete")
 
-    # Negotiation: the bank's poppy.json lists version 2 and the Session declares it (§3.4);
+    # Negotiation: the bank's poppy.json lists version 3 and the Session declares it (§3.4);
     # a Session of an agent that implements no extension declares none.
     negotiated = operations_negotiated(company.document, session)
     plain_session = await SessionClient(reactor=reactor, http_client=http).start(

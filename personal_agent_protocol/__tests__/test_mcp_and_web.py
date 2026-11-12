@@ -186,6 +186,7 @@ async def test_a_signed_in_mcp_token_reads_and_proposes_the_same_operation() -> 
     done = await mcp.call_tool(
         "exchange_jacket",
         approval=Approval(
+            approver="user",
             operation_id=through_mcp.operation.operation_id,
             revision=through_mcp.operation.revision,
         ),
@@ -319,7 +320,7 @@ async def test_an_mcp_server_that_ends_the_session_gets_a_new_one_once() -> None
     mcp = mcp_client(world, session)
     assert await mcp.list_tools()
     ended = session.sid
-    assert await world.shop.end_session(session.client_id, ended)
+    assert await world.shop.end_session(session.client_id, ended, session.sub)
     assert [tool["name"] for tool in await mcp.list_tools()] == ["list_orders", "exchange_jacket"]
     assert session.sid != ended
 
@@ -440,7 +441,7 @@ async def test_a_joined_browser_follows_the_session() -> None:
     assert signed_out is not None and signed_out.account_id is None
 
     # Ending the Session ends the browser's cookie with it (§6).
-    assert await world.shop.end_session(session.client_id, session.sid)
+    assert await world.shop.end_session(session.client_id, session.sid, session.sub)
     assert await world.shop.web_session(cookie) is None
 
 
@@ -549,7 +550,7 @@ async def test_a_join_needs_its_own_browser_its_code_once_and_a_live_session() -
     assert (bare.status_code, bare.json()["error"]) == (400, "invalid_session")
     ended = await world.signed_out_session()
     assert (await _authorize(world, ended, "bc_" + "y" * 22)).status_code == 400
-    assert await world.shop.end_session(ended.client_id, ended.sid)
+    assert await world.shop.end_session(ended.client_id, ended.sid, ended.sub)
     refused = await _authorize(world, ended, code)
     assert (refused.status_code, refused.json()["error"]) == (400, "session_ended")
 

@@ -8,13 +8,15 @@
  * Feedback: telling a company what its users couldn't do through the protocol (§8), as
  * in Python's `personal_agent_protocol.feedback`.
  *
- * A company that wants to know lists `feedback.endpoint` in its poppy.json. When a
+ * A company that wants to know lists `feedback.endpoint` in its tasks response, which the
+ * agent gets per Session from `tasks.endpoint` (§9, `TasksClient`). When a
  * user's task can't be done — not with the Company Agent, not with its APIs, not on its
  * website in a browser session — the personal agent MAY send one `FeedbackReport` for
  * that task with the Session header and, signed in, the access token:
  *
  * ```ts
- * const endpoint = feedbackEndpoint(company.document);
+ * const tasks = await new TasksClient({ transport }).get(company.document, { session });
+ * const endpoint = tasks.feedbackEndpoint;
  * if (endpoint !== undefined) {
  *   await new FeedbackClient({ transport }).report(
  *     endpoint,
@@ -32,7 +34,7 @@
 import { PersonalAgentProtocolError, ProtocolValidationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { readLimited } from "./limits.js";
-import { parseAlternative, type Alternative, type DiscoveryDocument } from "./models.js";
+import { parseAlternative, type Alternative } from "./models.js";
 import { refusalCode, refusalDetails } from "./refusals.js";
 import type { AccessToken, PapSession } from "./sessions.js";
 import type { SessionFetchClient } from "./transport.js";
@@ -86,11 +88,6 @@ export function parseFeedbackReport(value: {
     throw new ProtocolValidationError("invalid_feedback", "description is 1 to 2000 characters");
   }
   return { task, description };
-}
-
-/** The company's feedback endpoint, when it asks for feedback. */
-export function feedbackEndpoint(document: DiscoveryDocument): string | undefined {
-  return document.feedback?.endpoint;
 }
 
 export interface FeedbackClientOptions {

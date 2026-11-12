@@ -111,6 +111,7 @@ export {
   type BlindSigningKey,
 } from "./blind.js";
 export {
+  CROSS_DEVICE_LIFETIME_SECONDS,
   DirectSignInClient,
   buildDirectSignInRequest,
   validateDirectSignInCallback,
@@ -134,7 +135,6 @@ export {
 } from "./device.js";
 export {
   discoverCompany,
-  excludedTasks,
   fetchSkill,
   resourceMetadata,
   serviceMetadata,
@@ -146,7 +146,6 @@ export {
   FEEDBACK_TASK_MAX_LENGTH,
   FeedbackClient,
   FeedbackError,
-  feedbackEndpoint,
   parseFeedbackReport,
   type FeedbackClientOptions,
   type FeedbackReport,
@@ -156,6 +155,7 @@ export {
   REDIRECT_STATUSES,
   challengeParameters,
   dpopNonceAsked,
+  refusalCode,
   refusalDetails,
   refuseRedirect,
 } from "./refusals.js";
@@ -347,7 +347,7 @@ export {
   companyIdentifier,
   companyIssuer,
   companyResource,
-  companySkills,
+  scopesSupported,
   companyExtension,
   BROWSER_SIGN_IN_SCOPE,
   browsingDisabled,
@@ -370,7 +370,13 @@ export {
   parseAlternative,
   parseAlternativeReference,
   parseAuthor,
-  parseExcludedTasks,
+  parseTasksResponse,
+  parseApproval,
+  parseApprovalDeclined,
+  APPROVERS,
+  operationShown,
+  termsLeaves,
+  messageDeclined,
   redirectUriMatches,
   usableReferences,
   usableSkills,
@@ -404,8 +410,10 @@ export {
   type AuthCapabilities,
   type Author,
   type ExcludedTask,
-  type ExcludedTasks,
-  type ExcludedTasksDescriptor,
+  type TasksDescriptor,
+  type TasksResponse,
+  type ApprovalDeclined,
+  type Approver,
   type ScopeChanges,
   type ScopeHint,
   type ClientMetadata,
@@ -458,6 +466,22 @@ export {
 } from "./mediated.js";
 export { PROTOCOL_PROFILE, PROTOCOL_REVISION } from "./profile.js";
 export {
+  PageClient,
+  pageCarriesSession,
+  type FetchedPage,
+  type PageClientOptions,
+  type PageFetchOptions,
+} from "./pages.js";
+export {
+  TasksClient,
+  TasksError,
+  tasksEndpoint,
+  type SessionTasks,
+  type TasksClientOptions,
+  type TasksGetOptions,
+} from "./tasks.js";
+export {
+  APPROVAL_DECLINED,
   APPROVAL_HEADER,
   APPROVAL_META_KEY,
   ACTION_FAILED,
@@ -468,11 +492,16 @@ export {
   SEND_ATTEMPTS,
   approvalFromMeta,
   approvalHeader,
+  agentInstruction,
+  declinedFrom,
+  newApprovalReference,
   operationFrom,
   operationsNegotiated,
   parseApprovalHeader,
   termsDifferences,
+  type AgentInstruction,
   type ApprovalSent,
+  type ApproveAsAgentOptions,
   type AskUserOptions,
   type OperationsClientOptions,
 } from "./operations.js";
@@ -497,6 +526,7 @@ export {
   type PapActionClass,
   type PapConfirmData,
   type PapConfirmDisplay,
+  type PapDeclined,
   type PapHandoff,
   PAP_HANDOFFS,
   type PapRepliesData,

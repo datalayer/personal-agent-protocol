@@ -57,19 +57,19 @@ function within(host: string, domain: string): boolean {
 }
 
 /**
- * Whether a device sign-in link may be shown for this company (§4.6).
+ * Whether a device sign-in link may be shown for this company (§4.3).
  *
- * Its host is the host of `auth.issuer` or of a URL in the issuer's `protected_resources`,
- * or a subdomain of either; otherwise a company could pass off another company's sign-in
- * page as its own.
+ * Its host is the host of the Company's issuer or its `organization.domain`, or a subdomain of
+ * either; otherwise a company could pass off another company's sign-in page as its own. The
+ * hosts of the issuer's other `protected_resources` do not qualify.
  */
 export function verificationHostAllowed(
   url: string,
-  options: { readonly issuer: string; readonly protectedResources: readonly string[] },
+  options: { readonly issuer: string; readonly domain: string },
 ): boolean {
   const host = hostOf(url);
-  const allowed = [hostOf(options.issuer), ...options.protectedResources.map(hostOf)];
-  return host !== "" && allowed.some((domain) => domain !== "" && within(host, domain));
+  const allowed = [hostOf(options.issuer), options.domain.toLowerCase().replace(/\.+$/, "")];
+  return host !== "" && allowed.some((name) => name !== "" && within(host, name));
 }
 
 function scopes(values: readonly string[]): readonly string[] {
@@ -224,14 +224,12 @@ export interface DeviceSignInBeginOptions {
   readonly clientId: string;
   readonly scopes: readonly string[];
   readonly tenantId: string;
-  /** The company's, from its poppy.json: named with the link and the code (§4.6). */
-  readonly organization: { readonly name: string; readonly domain: string; readonly logo_uri?: string };
   /**
-   * The issuer's `protected_resources` (OAuth metadata): the verification link is
-   * refused (`unsafe_verification_uri`) unless its host is the issuer's or one of these
-   * resources', or a subdomain of either (§4.6).
+   * The company's, from its poppy.json: named with the link and the code. The verification
+   * link is refused (`unsafe_verification_uri`) unless its host is the issuer's or
+   * `organization.domain`, or a subdomain of either (§4.3).
    */
-  readonly protectedResources: readonly string[];
+  readonly organization: { readonly name: string; readonly domain: string; readonly logo_uri?: string };
   /**
    * The issuer's `dpop_signing_alg_values_supported`: each poll sends a DPoP proof when it
    * includes ES256 (§4.5), by the DPoP key of `pairwiseUserId`, which proving needs.
@@ -308,10 +306,10 @@ export class DeviceSignInClient {
     if (!response.ok) throw this.#remoteError(response, payload, "Company refused Device Sign-In");
     const authorization = parseDeviceAuthorization(payload);
     for (const link of [authorization.verificationUri, authorization.verificationUriComplete]) {
-      if (link !== undefined && !verificationHostAllowed(link, { issuer, protectedResources: options.protectedResources })) {
+      if (link !== undefined && !verificationHostAllowed(link, { issuer, domain: options.organization.domain })) {
         throw new AuthorizationError(
           "unsafe_verification_uri",
-          "The device sign-in link is not on the company's issuer or its domains",
+          "The device sign-in link is not on the company's issuer or its domain",
           { statusCode: response.status },
         );
       }

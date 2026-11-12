@@ -138,7 +138,7 @@ export interface Organization extends UnknownFields {
 
 /**
  * The Agent Skills discovery draft revision `skill_index` pins (§9.4): the `$schema` an index
- * names. An index with another, or none, is ignored; the rest of poppy.json is used.
+ * names. An index with another, or none, is ignored; the rest of the tasks response is used.
  */
 export const SKILL_INDEX_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json";
 /**
@@ -151,7 +151,7 @@ const SKILL_DIGEST = /^sha256:[0-9a-f]{64}$/u;
 /**
  * A skill a Company publishes for Personal Agents acting for the User there (§9.4).
  *
- * `url` is resolved against poppy.json's final URL (RFC 3986 §5) and is HTTPS; `digest` is the
+ * `url` is resolved against `tasks.endpoint` (RFC 3986 §5) and is HTTPS; `digest` is the
  * SHA-256 of the artifact's raw bytes, `sha256:` and 64 lowercase hex characters, which
  * `fetchSkill` verifies. A skill is Company content (§10.1): it grants no account access,
  * changes no scopes, and supplies no User approval.
@@ -325,14 +325,20 @@ export interface ExtensionDescriptor extends UnknownFields {
   readonly version: string;
 }
 
-/** Where personal agents report a task the protocol can't do at this company (§8). */
+/**
+ * Where personal agents report a task the protocol can't do at this company (§9.3): `feedback`
+ * in the tasks response, a Session header destination (§5.2).
+ */
 export interface FeedbackDescriptor extends UnknownFields {
   readonly endpoint: string;
 }
 
-/** Where the tasks the Company chose not to offer through the protocol are listed (§8.1). */
-export interface ExcludedTasksDescriptor extends UnknownFields {
-  readonly url: string;
+/**
+ * Where a Personal Agent gets, for a Session, the tasks the Company chose not to offer, the
+ * skills it publishes and where to send feedback (§3.1, §9): `tasks` in poppy.json.
+ */
+export interface TasksDescriptor extends UnknownFields {
+  readonly endpoint: string;
 }
 
 export interface DiscoveryDocument extends UnknownFields {
@@ -348,18 +354,16 @@ export interface DiscoveryDocument extends UnknownFields {
   readonly agent?: AgentDescriptor;
   readonly web?: WebDescriptor;
   readonly apis: readonly ApiDescriptor[];
-  readonly feedback?: FeedbackDescriptor;
-  readonly excluded_tasks?: ExcludedTasksDescriptor;
+  /**
+   * Where the tasks response is served, per Session (§9): excluded tasks, skills and the
+   * feedback endpoint are read from it, never from this document.
+   */
+  readonly tasks?: TasksDescriptor;
   /**
    * The extensions the Company supports, keyed by name, each a list with an entry per major
    * version it supports (§3.3); each extension defines the entry's other fields.
    */
   readonly extensions: Readonly<Record<string, readonly ExtensionDescriptor[]>>;
-  /**
-   * The Company's Agent Skills discovery index, as published (§3.1, §9.4); read it through
-   * `usableSkills`, which skips what this SDK does not recognize.
-   */
-  readonly skill_index?: Readonly<Record<string, unknown>>;
 }
 
 /** The issuer's RFC 8414 metadata, with the fields this protocol requires (§3.2). */
@@ -431,43 +435,112 @@ export interface JsonWebKeySet extends UnknownFields {
 }
 
 /**
- * One action the Company performs once the User approves it (Operations 3).
+ * One action the Company performs once it is approved (Operations 3).
  *
- * `revision` is opaque: it identifies these terms, and the Company changes it whenever the
- * `summary`, `terms`, or `expires_at` change.
+ * `terms` are required and hold everything that affects the action; `summary`, the same terms
+ * in plain language, is optional (absent, never `null`). `revision` is opaque: it identifies
+ * these terms, and the Company changes it whenever the `terms` or `expires_at` change.
  */
 export interface Operation extends UnknownFields {
   readonly operation_id: string;
   readonly revision: string;
-  readonly summary: string;
-  readonly terms?: Readonly<Record<string, unknown>>;
+  readonly summary?: string;
+  readonly terms: Readonly<Record<string, unknown>>;
   readonly expires_at: string;
 }
 
-/** A statement that the User approved this revision of an operation (Operations 5, 6). */
 /**
- * A statement that the User approved this revision of an operation (Operations 5, 6).
+ * How a revision was approved (Operations 5, 6): by the User, asked by the Personal Agent, or
+ * by the Personal Agent on an instruction the User gave it.
+ */
+export const APPROVERS = ["user", "agent"] as const;
+export type Approver = (typeof APPROVERS)[number];
+
+/** The values of an operation's `terms`, keyed by their dotted paths. */
+export function termsLeaves(value: unknown, path = ""): Map<string, unknown> {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const found = new Map<string, unknown>();
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      for (const [inner, leaf] of termsLeaves(item, path ? `${path}.${key}` : key)) found.set(inner, leaf);
+    }
+    return found;
+  }
+  return new Map([[path, value]]);
+}
+
+/**
+ * A leaf of the terms as text, as Python's `str` writes it, so both SDKs show the same: a
+ * string as it is, `True`, `False`, `None`, a number, a list of them.
+ */
+export function shownValue(value: unknown, nested = false): string {
+  if (typeof value === "string") return nested ? `'${value}'` : value;
+  if (typeof value === "boolean") return value ? "True" : "False";
+  if (value === null || value === undefined) return "None";
+  if (Array.isArray(value)) return `[${value.map((item) => shownValue(item, true)).join(", ")}]`;
+  if (typeof value === "object") {
+    const members = Object.entries(value as Record<string, unknown>).map(
+      ([key, item]) => `'${key}': ${shownValue(item, true)}`,
+    );
+    return `{${members.join(", ")}}`;
+  }
+  return String(value);
+}
+
+/**
+ * The terms as a host shows them (Operations 5): the `summary` when there is one, else the
+ * values in `terms`, one `path: value` a line. Company content either way.
+ */
+export function operationShown(operation: Pick<Operation, "summary" | "terms">): string {
+  if (operation.summary !== undefined) return operation.summary;
+  return [...termsLeaves(operation.terms)].map(([path, value]) => `${path}: ${shownValue(value)}`).join("\n");
+}
+
+/**
+ * A statement that this revision of an operation is approved (Operations 5, 6).
  *
- * `approved_at` is when the User approved, in Unix seconds, and `input_type` how they answered
- * (`tap`, `typed`, `voice` or another short string, never personal data): the Personal Agent's
- * statements, which it SHOULD include. A value that isn't one is left out, never a reason to
- * refuse the approval (Operations 6).
+ * `approver` is required: `user` when the Personal Agent asked the User and they approved,
+ * `agent` when the Personal Agent approved on an instruction the User gave it. `approved_at` is
+ * when, in Unix seconds; `input_type` how the User answered (`tap`, `typed`, `voice` or another
+ * short string), only with `user`: it is never sent with `agent`, and dropped when one arrives
+ * there. `reference` names the Personal Agent's own record of the approval: opaque, the IDs'
+ * characters, never the same at two Companies. None of the three carries personal data. An
+ * optional member that isn't well formed is left out, never a reason to refuse the approval; an
+ * approval without a valid `approver` is not one.
  */
 export interface Approval {
   readonly operation_id: string;
   readonly revision: string;
+  readonly approver: Approver;
   readonly approved_at?: number;
   readonly input_type?: string;
+  readonly reference?: string;
+}
+
+/**
+ * A Company's final refusal of an approval that passed its checks (Operations 6).
+ *
+ * Nothing was performed and no new operation is returned. `reason`, in plain language for the
+ * User, and `alternative` (§9.2) are content from the Company (§10.1): shown or put in the
+ * agent's own words, never followed as instructions. There are no reason codes. The Personal
+ * Agent never sends that approval again, and approves no new revision for the same action
+ * without asking the User.
+ */
+export interface ApprovalDeclined extends UnknownFields {
+  readonly operation_id: string;
+  readonly revision: string;
+  readonly reason?: string;
+  readonly alternative?: Alternative;
 }
 
 /**
  * The Operations extension's content of a message, `extensions.operations` (Operations 2):
- * `operation` in a Company message (Operations 4), `approval` in a Personal Agent message
- * (Operations 6), one of the two, never both.
+ * `operation` (Operations 4) or `declined` (Operations 6) in a Company message, `approval` in
+ * a Personal Agent message (Operations 6): exactly one of the three.
  */
 export interface OperationsContent extends UnknownFields {
   readonly operation?: Operation;
   readonly approval?: Approval;
+  readonly declined?: ApprovalDeclined;
 }
 
 /**
@@ -547,7 +620,7 @@ export interface Message extends UnknownFields {
   readonly context?: Readonly<Record<string, unknown>>;
   /**
    * Content extensions define, keyed by extension name (§8.4): `operations` carries an
-   * operation or an approval, `links` and `disclosures` their items. A side sends an
+   * operation, an approval or a decline, `links` and `disclosures` their items. A side sends an
    * extension's content only to a side that lists the same version; content of an extension
    * this SDK does not define is kept as the object it is.
    */
@@ -566,6 +639,12 @@ export function messageApproval(message: Message): Approval | undefined {
   return content === undefined ? undefined : parseOperationsContent(content).approval;
 }
 
+/** A Company message's decline of an approval: nothing was performed (Operations 6). */
+export function messageDeclined(message: Message): ApprovalDeclined | undefined {
+  const content = message.extensions?.[OPERATIONS_CONTENT];
+  return content === undefined ? undefined : parseOperationsContent(content).declined;
+}
+
 /** The web pages a Company message refers to (Links 3); none without the extension. */
 export function messageLinks(message: Message): readonly Link[] {
   const content = message.extensions?.[LINKS_EXTENSION];
@@ -582,6 +661,7 @@ export function messageDisclosures(message: Message): readonly Disclosure[] {
 export function operationsContent(content: {
   readonly operation?: Operation;
   readonly approval?: Approval;
+  readonly declined?: ApprovalDeclined;
 }): MessageExtensions {
   return { [OPERATIONS_CONTENT]: parseOperationsContent(content) as Record<string, unknown> };
 }
@@ -735,21 +815,32 @@ export function preferredSignIn(company: DiscoveredCompany): SignInType | undefi
   return signInTypes(company)[0];
 }
 
-/** The Company's skills this SDK can use (§9.4), resolved against `discoveryUrl`. */
-export function companySkills(company: DiscoveredCompany): SkillEntry[] {
-  return usableSkills(company.document, company.discoveryUrl);
+/**
+ * The scopes the Company says a Personal Agent can request (§3.2, §4.7): the issuer's
+ * `scopes_supported`, then the ones only the domain's protected resource metadata lists, each
+ * once. A Company can list them in either or both, and the agent uses the scopes in either
+ * list; both may leave out scopes it offers only to its other clients, and a scope its APIs or
+ * a sign-in extension document may be requested though absent from both.
+ */
+export function scopesSupported(company: DiscoveredCompany): readonly string[] {
+  return [
+    ...new Set([
+      ...(company.oauthMetadata?.scopes_supported ?? []),
+      ...(company.resourceMetadata?.scopes_supported ?? []),
+    ]),
+  ];
 }
 
 /**
- * The skills of `skill_index` this SDK can use (§9.4), each `url` resolved.
+ * The skills of a tasks response's `skill_index` this SDK can use (§9.4), each `url` resolved.
  *
  * Nothing when there is no index or its `$schema` is not `SKILL_INDEX_SCHEMA`; an entry whose
  * `type` is unknown, which lacks a field, whose `digest` is malformed, or whose `url`, resolved
- * against `baseUrl` (the final poppy.json URL), is not HTTPS is skipped. The guides suggest
- * telling the User when that mattered for the task.
+ * against `baseUrl` (`tasks.endpoint`), is not HTTPS is skipped. The guides suggest telling the
+ * User when that mattered for the task.
  */
-export function usableSkills(document: DiscoveryDocument, baseUrl: string): SkillEntry[] {
-  const index = document.skill_index;
+export function usableSkills(response: Pick<TasksResponse, "skill_index">, baseUrl: string): SkillEntry[] {
+  const index = response.skill_index;
   if (index === undefined || index === null || typeof index !== "object") return [];
   if (index.$schema !== SKILL_INDEX_SCHEMA || !Array.isArray(index.skills)) return [];
   const usable: SkillEntry[] = [];
@@ -1136,19 +1227,10 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     }
   }
 
-  let feedback: FeedbackDescriptor | undefined;
-  if (source.feedback !== undefined) {
-    const feedbackSource = record(source.feedback, "feedback");
-    feedback = { ...feedbackSource, endpoint: httpsUrl(feedbackSource.endpoint, "feedback.endpoint") };
-  }
-
-  let excludedTasks: ExcludedTasksDescriptor | undefined;
-  if (source.excluded_tasks !== undefined) {
-    const excludedSource = record(source.excluded_tasks, "excluded_tasks");
-    excludedTasks = {
-      ...excludedSource,
-      url: httpsUrl(excludedSource.url, "excluded_tasks.url"),
-    };
+  let tasks: TasksDescriptor | undefined;
+  if (source.tasks !== undefined && source.tasks !== null) {
+    const tasksSource = record(source.tasks, "tasks");
+    tasks = { ...tasksSource, endpoint: httpsUrl(tasksSource.endpoint, "tasks.endpoint") };
   }
 
   if (!agent && apis.length === 0 && !web) {
@@ -1173,8 +1255,7 @@ export function parseDiscoveryDocument(value: unknown): DiscoveryDocument {
     ...(agent ? { agent } : {}),
     ...(web ? { web } : {}),
     apis,
-    ...(feedback ? { feedback } : {}),
-    ...(excludedTasks ? { excluded_tasks: excludedTasks } : {}),
+    ...(tasks ? { tasks } : {}),
     extensions: parsedExtensions,
   } as DiscoveryDocument;
 }
@@ -1404,31 +1485,44 @@ export function parseJsonWebKeySet(value: unknown): JsonWebKeySet {
 }
 
 export function parseOperation(value: unknown): Operation {
-  const source = nullsAbsent(value, "operation", ["terms"]);
+  const source = nullsAbsent(value, "operation", ["summary"]);
   return {
     ...source,
     operation_id: identifier(source.operation_id, "operation.operation_id"),
     revision: identifier(source.revision, "operation.revision"),
-    summary: string(source.summary, "operation.summary"),
-    ...(source.terms === undefined ? {} : { terms: record(source.terms, "operation.terms") }),
+    ...(source.summary === undefined ? {} : { summary: string(source.summary, "operation.summary") }),
+    terms: record(source.terms, "operation.terms"),
     expires_at: timestamp(source.expires_at, "operation.expires_at"),
   } as Operation;
 }
 
+export function parseApprovalDeclined(value: unknown): ApprovalDeclined {
+  const source = nullsAbsent(value, "declined", ["reason", "alternative"]);
+  return {
+    ...source,
+    operation_id: identifier(source.operation_id, "declined.operation_id"),
+    revision: identifier(source.revision, "declined.revision"),
+    ...(source.reason === undefined ? {} : { reason: string(source.reason, "declined.reason") }),
+    ...(source.alternative === undefined ? {} : { alternative: parseAlternative(source.alternative) }),
+  } as ApprovalDeclined;
+}
+
 export function parseOperationsContent(value: unknown): OperationsContent {
-  const source = nullsAbsent(value, "extensions.operations", ["operation", "approval"]);
+  const source = nullsAbsent(value, "extensions.operations", ["operation", "approval", "declined"]);
   const operation = source.operation === undefined ? undefined : parseOperation(source.operation);
   const approval = source.approval === undefined ? undefined : parseApproval(source.approval);
-  if ((operation === undefined) === (approval === undefined)) {
+  const declined = source.declined === undefined ? undefined : parseApprovalDeclined(source.declined);
+  if ([operation, approval, declined].filter((item) => item !== undefined).length !== 1) {
     throw new ProtocolValidationError(
       "invalid_message",
-      "extensions.operations carries an operation or an approval",
+      "extensions.operations carries an operation, an approval or a decline",
     );
   }
   return {
     ...source,
     ...(operation === undefined ? {} : { operation }),
     ...(approval === undefined ? {} : { approval }),
+    ...(declined === undefined ? {} : { declined }),
   } as OperationsContent;
 }
 
@@ -1478,13 +1572,20 @@ function messageExtensions(value: unknown): MessageExtensions {
 
 export function parseApproval(value: unknown): Approval {
   const source = record(value, "approval");
+  const approver = oneOf(source.approver, APPROVERS, "approval.approver");
   const approvedAt = source.approved_at;
   const inputType = source.input_type;
+  const reference = source.reference;
   return {
     operation_id: identifier(source.operation_id, "approval.operation_id"),
     revision: identifier(source.revision, "approval.revision"),
+    approver,
     ...(typeof approvedAt === "number" && Number.isSafeInteger(approvedAt) && approvedAt >= 0 ? { approved_at: approvedAt } : {}),
-    ...(typeof inputType === "string" && /^[\x20-\x7e]{1,64}$/.test(inputType) ? { input_type: inputType } : {}),
+    // Never sent with `agent`, and ignored by a Company that receives it (Operations 6).
+    ...(approver === "user" && typeof inputType === "string" && /^[\x20-\x7e]{1,64}$/.test(inputType)
+      ? { input_type: inputType }
+      : {}),
+    ...(typeof reference === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(reference) ? { reference } : {}),
   };
 }
 
@@ -1734,9 +1835,21 @@ export interface ExcludedTask extends UnknownFields {
   readonly alternative?: Alternative;
 }
 
-/** The document at `excluded_tasks.url` (§8.1): the same for every user. */
-export interface ExcludedTasks extends UnknownFields {
-  readonly tasks: readonly ExcludedTask[];
+/**
+ * The response to `GET {tasks.endpoint}` for one Session (§9).
+ *
+ * What the Company offers that Session, not the User's account: the tasks it chose not to
+ * offer (none by default), the skills it publishes, and where to send feedback. It is used in
+ * the Session it was fetched in and never in another.
+ */
+export interface TasksResponse extends UnknownFields {
+  readonly excluded_tasks: readonly ExcludedTask[];
+  /**
+   * The Company's Agent Skills discovery index, as published (§9.4); read it through
+   * `usableSkills`, which skips what this SDK does not recognize.
+   */
+  readonly skill_index?: Readonly<Record<string, unknown>>;
+  readonly feedback?: FeedbackDescriptor;
 }
 
 const REFERENCE_FIELDS: Readonly<Record<string, readonly ("url" | "operation_id" | "tool")[]>> = {
@@ -1807,15 +1920,15 @@ export function usableReferences(
   );
 }
 
-export function parseExcludedTasks(value: unknown): ExcludedTasks {
-  const source = record(value, "excluded tasks");
-  const tasks = array(source.tasks, "excluded tasks.tasks").map((item, index) => {
-    const task = nullsAbsent(item, `tasks[${index}]`, ["alternative"]);
-    const name = string(task.task, `tasks[${index}].task`);
+export function parseTasksResponse(value: unknown): TasksResponse {
+  const source = nullsAbsent(value, "tasks response", ["excluded_tasks", "skill_index", "feedback"]);
+  const tasks = array(source.excluded_tasks ?? [], "excluded_tasks").map((item, index) => {
+    const task = nullsAbsent(item, `excluded_tasks[${index}]`, ["alternative"]);
+    const name = string(task.task, `excluded_tasks[${index}].task`);
     if (name.length > 200) {
       throw new ProtocolValidationError(
         "invalid_excluded_task",
-        `tasks[${index}].task must be at most 200 characters`,
+        `excluded_tasks[${index}].task must be at most 200 characters`,
       );
     }
     return {
@@ -1824,5 +1937,15 @@ export function parseExcludedTasks(value: unknown): ExcludedTasks {
       ...(task.alternative === undefined ? {} : { alternative: parseAlternative(task.alternative) }),
     } as ExcludedTask;
   });
-  return { ...source, tasks } as ExcludedTasks;
+  let feedback: FeedbackDescriptor | undefined;
+  if (source.feedback !== undefined) {
+    const feedbackSource = record(source.feedback, "feedback");
+    feedback = { ...feedbackSource, endpoint: httpsUrl(feedbackSource.endpoint, "feedback.endpoint") };
+  }
+  return {
+    ...source,
+    excluded_tasks: tasks,
+    ...(source.skill_index === undefined ? {} : { skill_index: record(source.skill_index, "skill_index") }),
+    ...(feedback === undefined ? {} : { feedback }),
+  } as TasksResponse;
 }

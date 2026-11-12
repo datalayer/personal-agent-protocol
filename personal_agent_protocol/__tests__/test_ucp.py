@@ -158,7 +158,7 @@ async def test_a_signed_out_ucp_request_carries_the_session_header_and_the_platf
     assert sent.headers[UCP_AGENT_HEADER] == f'profile="{PLATFORM}"'
     assert "poppy-session" in sent.headers and "authorization" not in sent.headers
     # The company knows the Session now: its header was verified.
-    assert await world.shop.end_session(session.client_id, session.sid)
+    assert await world.shop.end_session(session.client_id, session.sid, session.sub)
 
 
 @pytest.mark.asyncio
@@ -217,7 +217,7 @@ async def test_session_errors_at_ucp_endpoints_are_ucp_responses() -> None:
     session, client, endpoint = await _client(world)
     await client.call("POST", f"{endpoint}/catalog/search", session=session, body={})
     first = session.sid
-    assert await world.shop.end_session(session.client_id, session.sid)
+    assert await world.shop.end_session(session.client_id, session.sid, session.sub)
     await client.call("POST", f"{endpoint}/catalog/search", session=session, body={})
     assert session.sid != first
     url = f"{endpoint}/catalog/search"
@@ -238,7 +238,7 @@ async def test_a_personal_agent_declares_ucp_in_poppy_extensions() -> None:
     world = World()
     await world.signed_out_session()
     declared = negotiate_extensions(
-        world.company.document.extensions, supported={"ucp": "1", "operations": "2"}
+        world.company.document.extensions, supported={"ucp": "1", "operations": "3"}
     )
     assert declared["ucp"] == "1"
     session = await world.signed_out_session()

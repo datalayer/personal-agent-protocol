@@ -159,7 +159,6 @@ async function deviceSignIn(w, scopes = ["orders:read", "orders:write"]) {
     scopes,
     tenantId: TENANT,
     organization: w.company.document.organization,
-    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -182,7 +181,7 @@ const approveIt = (w, operation, session, token) =>
     session,
     token,
     body: {},
-    approval: { operation_id: operation.operation_id, revision: operation.revision },
+    approval: { operation_id: operation.operation_id, revision: operation.revision, approver: "user" },
   });
 
 async function beginDirect(w) {
@@ -248,11 +247,13 @@ test("cross-tenant access is refused", async () => {
   const page = await w.conversations.start(w.endpoint, w.message("Where is my jacket order?"), { session, token, wait: 0 });
   assert.equal(await probe(w, session, token), 200);
   // Another tenant of Atlas has another User ID, and another delegated key (§5.2). Naming
-  // Ada's `sid` it is another User in her Session: `invalid_session`, not a way in (§5.3).
+  // Ada's `sid` it is not in her Session: a Session is found by `client_id`, `sid` and User ID,
+  // so this is another one, signed out, and no way in to her orders (§5.3).
   const other = new PapSession({ sid: session.sid, sub: STRANGER, issuer: session.issuer, clientId: session.clientId, tenantId: "another-tenant" });
   const refused = await w.fetch(ORDERS, { method: "GET", headers: await sessionHeaders(w.host.reactor, "GET", ORDERS, { session: other }) });
-  assert.equal(refused.status, 400);
-  assert.deepEqual(await refused.json(), { error: "invalid_session" });
+  assert.equal(refused.status, 401);
+  assert.equal(await refused.text(), "");
+  assert.equal(await probe(w, session, token), 200);
   const theirs = await w.host.delegatedKeys.current({ tenantId: "another-tenant", issuer: session.issuer, sub: STRANGER });
   const ours = await w.host.delegatedKeys.current({ tenantId: TENANT, issuer: session.issuer, sub: session.sub });
   assert.notEqual(theirs.thumbprint, ours.thumbprint);
@@ -304,7 +305,7 @@ test("retries are safe", async () => {
   w.lose.path = "/api/orders/ord_7Hk2/exchanges";
   const sent = await w.operations.send(
     (approval) => w.api.call("POST", EXCHANGE, { session, token, body: {}, approval }),
-    { operation_id: operation.operation_id, revision: operation.revision },
+    { operation_id: operation.operation_id, revision: operation.revision, approver: "user" },
   );
   // Sent again with the same approval, never assumed failed, and not performed twice.
   assert.equal(sent.status, "answered");

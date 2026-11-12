@@ -10,6 +10,51 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.32 → 0.33
+
+0.33.0 moves both SDKs and both reference companies from draft 0.4 as of `46beb21` to
+**version 0.4 as published** (upstream `4803900`, 2026-11-10, the 1.0 release candidate;
+the specification is frozen at `/docs/0.4/spec`). Seven changes are breaking, with no
+compatibility: an agent at 0.32 finds no excluded tasks, skills or feedback endpoint at a
+company at 0.33, and neither side understands the other's operations. Both still say
+`Poppy-Version: 0.4`, so move every role at once. Python spells the names below in
+`snake_case`, TypeScript in `camelCase`.
+
+| Change | What to do |
+| --- | --- |
+| `PROTOCOL_REVISION` | `2026-11-10`; `PROTOCOL_PROFILE` stays `0.4`, and `protocol_version` `1.0` (the draft at `/docs/spec`) is neither announced nor accepted |
+| Task coverage per Session (spec 3.1, 9) | Read nothing of it from `poppy.json`: `tasks = await TasksClient(transport=transport).get(company, session=session)` (`new TasksClient({ transport }).get(company, { session })`) before starting on a task, then `tasks.excluded_tasks`, `tasks.skills`, `tasks.feedback_endpoint`. One call per Session: the response is never reused in another. Gone: `DiscoveryClient.excluded_tasks`, `feedback_endpoint(document)` / `feedbackEndpoint`, `DiscoveredCompany.skills`, `DiscoveryDocument.usable_skills`, `ExcludedTasks`. A company on the SDK serves `GET /poppy/tasks` and lists `tasks.endpoint` by itself; one that publishes its own `poppy.json` replaces `feedback`, `excluded_tasks` and `skill_index` with `tasks.endpoint` and serves the response there |
+| Operations version 3 (Operations 2, 5, 6) | `OPERATIONS_VERSION` is `"3"` and version 2 is gone on both sides. Build every approval with its approver: `ask_user(...)` / `askUser` returns `approver: "user"`; `Approval(operation_id=, revision=, approver="user")` when you build one by hand. A `Poppy-Approval` or `_meta` approval without `approver` approves nothing |
+| Agent approvals (Operations 5) | To approve on something the user told the agent: `await client.approve_as_agent(operation, instruction=AgentInstruction(text=..., covers=check))` (`approveAsAgent(operation, { instruction: agentInstruction(text, covers) })`). `covers` is your own check of the terms and only `True` approves; `OperationError` `ask_user` means ask the person with `ask_user`. Keep your own record under `reference=client.new_reference()` |
+| Operations require terms (Operations 3) | `Operation.terms` is always there and `summary` may be absent: show `operation.shown` (`operationShown(operation)`). A company's `ProposedOperation(action=, terms=, summary=None)` needs `terms`; `CompanyService.revise(operation_id, terms=, summary=)` |
+| Declining an approval (Operations 6) | After sending an approval read `sent.status == "declined"` (`sent.declined.reason`, `.alternative`): tell the user, never send it again, and ask them before approving a new revision of that action. By hand: `ApiResponse.declined`, `McpToolResult.declined`, `Message.declined` (`messageDeclined(message)`). A company declines with `CompanyConfig(decline=lambda request: Decline(reason=...) or None)` |
+| `extension_required` in a JSON body at APIs (spec 3.3, 7) | Nothing for a caller of `ApiClient`; `extension_required(status, payload)` / `extensionRequired` no longer takes the challenge. A company's own API answers 403 with `{"error": "extension_required", "extension": ...}` and no `WWW-Authenticate` |
+| Sessions found by User ID too (spec 5.3) | A company: `end_session(client_id, sid, pairwise_user_id)` / `endSession(clientId, sid, pairwiseUserId)`; a Session record written at 0.32 is not found again, and its Session starts anew, signed out. A request naming a known `sid` with another User ID is no longer `invalid_session` |
+| Device Sign-In links (spec 4.3) | `DeviceSignInClient.begin(...)` no longer takes `protected_resources` / `protectedResources`; `verification_host_allowed(url, issuer=, domain=)`. A company's `device_page` is on its own domain |
+| Sign-ins someone else started (spec 4.2, 10.8) | Optional and recommended: `DirectSignInClient.begin(..., cross_device=True)` when the link opens on another device (the request then lives at most 300 seconds), and `complete(callback, completed_by=tenant_id)` when you know which of your users is in the browser at the redirect. A hosted consent or device page shows `heading` and `caution` from `authorization_request()` / `device_request()` |
+| The Session header on fetched pages (spec 5.2) | Optional (a SHOULD): fetch a company's pages with `PageClient(transport=transport).fetch(url, session=session, company=company)`. A company's own pages call `CompanyService.page_session(request)` |
+| Scopes (spec 3.2, 4.7) | `DiscoveredCompany.scopes_supported` / `scopesSupported(company)` in place of the issuer's list alone |
+| `PapConfirm` | Display version 3: `terms` required, `summary` optional, and `approved_by`, `instruction`, `declined` |
+
+Not in 0.33: operations on websites (the `Poppy-Operation` header and the extension's
+`endpoint`) and the Browser Control extension. A host that joins a browser to a Session
+passes `extensions` without `operations` for that Session until they are.
+
+The ledger (`protocol/requirements.yaml`) is at `4803900`. Withdrawn: `PAP-9.1-01` (the
+excluded tasks document), `OPS-5-04` and `OPS-5-05` (version 3 lets the agent approve on
+the user's instruction). Added: `PAP-4.2-20`, `PAP-4.2-21`, `PAP-5.2-19`, `PAP-5.2-20`,
+`PAP-9-01` to `-03`, `OPS-2-02`, `OPS-4-01`, `OPS-5-07` to `-09`, `OPS-6-07` to `-14`, and
+guide entries; `OPS-2-02`, `OPS-4-01`, `OPS-6-13` and `OPS-6-14` are open (operations on
+websites). Rewritten: `PAP-3-08`, `PAP-3.2-22`, `PAP-4.3-02`, `PAP-5.2-18`, `PAP-5.3-02`,
+`PAP-9.4-01`, `-03`, `-05`, `OPS-2-01`, `OPS-3-01`, `OPS-5-02`, `OPS-5-06`, `OPS-6-04` to
+`-06`, `OPS-7-04`. Conformance cases renamed: `security.session-sub-stays-the-same` to
+`security.session-found-by-user-id`, `protocol.feedback-endpoint-https` and `-listed` to
+`protocol.tasks-endpoint-https` and `-listed`; new: `protocol.tasks-per-session`,
+`protocol.operations-version-2-not-used`, `protocol.extension-required-not-in-a-challenge`,
+`protocol.operation-requires-terms`, `operations.agent-approval`,
+`operations.approval-without-approver`, `operations.approval-declined`. The vendored
+schemas are replaced whole at `ed47408`.
+
 ## 0.31 → 0.32
 
 0.32.0 moves both SDKs and both reference companies from version 0.3 as published to

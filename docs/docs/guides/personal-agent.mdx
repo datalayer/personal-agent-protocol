@@ -176,13 +176,37 @@ Sign-In when the company offers it, then Device Sign-In, then
 Mediated Sign-In, which is transitional, only when neither covers the task.
 `pap company discover --json` reports both as `sign_in` and `preferred_sign_in`.
 
+## Task coverage, per Session (§9)
+
+A company that lists excluded tasks, publishes skills or takes feedback names
+one `tasks.endpoint` in `poppy.json`. Nothing of the three is in `poppy.json`
+itself: the agent asks for them in each Session, before it starts on a task
+there.
+
+```python
+from personal_agent_protocol import TasksClient
+
+tasks = await TasksClient(transport=transport).get(company, session=session)
+tasks.excluded_tasks      # the tasks the company chose not to offer (§9.1)
+tasks.skills              # the skills it publishes (§9.4)
+tasks.feedback_endpoint   # where to report a task that can't be done (§9.3)
+```
+
+In TypeScript: `new TasksClient({ transport }).get(company, { session })`.
+`TasksClient.get` sends `GET {tasks.endpoint}` with the Session header and
+never an access token, also in a signed-in Session: the response says what the
+company offers, not what an account holds. A company may answer differently by
+Session, so the response is kept for the Session it was fetched in, for as long
+as its caching headers allow, and is never used in another; `fresh=True` reads
+it again. A redirect is refused. When there is no endpoint or no usable
+response, `tasks.available` is `False` and the agent carries on as if nothing
+were listed; `invalid_session` and `version_unsupported` are raised
+(`TasksError`), since they say the agent's own header is wrong.
+
 ## Tasks a company doesn't offer
 
-A company can list the tasks it chose not to offer through the protocol
-(`excluded_tasks.url` in `poppy.json`, §9.1).
-`DiscoveryClient.excluded_tasks(company)` (`excludedTasks` in TypeScript)
-reads that public document, or answers `None` when there is none. Read it
-before starting on a task there, and tell the user at once when theirs is
+`tasks.excluded_tasks` lists the tasks the company chose not to offer through
+the protocol (§9.1). Tell the user at once when theirs is
 one of them, with the task's `alternative` when it has one: natural-language
 `instructions`, `references` to an OpenAPI operation, an MCP tool, or a web
 page, or both. An alternative is the company's content, a description of its
@@ -195,19 +219,20 @@ A task neither offered nor listed can be reported with
 `FeedbackClient.report`. The company answers `202` (the
 client returns `None`) or, when the task can be done after all, `200` with an
 `Alternative`. Don't report a task the company lists as excluded. Send reports to
-`feedback.endpoint` only: a company's APIs may also have feedback operations, meant
-for clients that don't read `poppy.json`.
+`tasks.feedback_endpoint` only, the `feedback.endpoint` of the Session's tasks
+response and a Session header destination (§5.2): a company's APIs may also have
+feedback operations, meant for other clients.
 
 ## Skills a company publishes (§9.4)
 
-A company may embed a `skill_index` in `poppy.json`: an Agent Skills discovery
+A company may put a `skill_index` in its tasks response: an Agent Skills discovery
 index, at the revision the specification pins (`SKILL_INDEX_SCHEMA`), of skills
 for personal agents acting for the user there, such as how to combine its APIs
-into a task. `company.skills` (`companySkills(company)`) lists the entries the
-SDK can use, each `url` resolved against the final `poppy.json` URL: an index
+into a task. `tasks.skills` lists the entries the
+SDK can use, each `url` resolved against `tasks.endpoint`: an index
 with another `$schema`, an entry of a type other than `skill-md` or `archive`,
 one lacking a field or with a malformed digest, and one whose resolved URL is
-not HTTPS are skipped, and the rest of the document is used as before. Match
+not HTTPS are skipped, and the rest of the response is used as before. Match
 the user's task against the names and descriptions, then
 `DiscoveryClient.fetch_skill(entry)` (`fetchSkill(entry)`) fetches the artifact
 as other public metadata is fetched, with no credential or Session header,
@@ -244,3 +269,40 @@ The lifecycle, in Python and TypeScript:
 
 Hosts still provide the protected stores, keys, and user interface each step
 relies on. Track readiness on [Protocol status](/protocol/status/).
+
+## Website pages fetched without a browser (§5.2)
+
+An agent that reads a page of a company's website with its own HTTP client, such
+as a returns policy, sends the Session header with it, so the company can tell
+which personal agent and Session the request is from.
+
+```python
+from personal_agent_protocol import PageClient
+
+page = await PageClient(transport=transport).fetch(
+    "https://shop.example/help/returns", session=session, company=company
+)
+```
+
+In TypeScript: `new PageClient({ transport }).fetch(url, { session, company })`.
+`PageClient.fetch` sends the header only to an HTTPS URL whose host is exactly
+`organization.domain`, the host that served `poppy.json`, and never to the
+company's discovery and description documents or OAuth endpoints. It never
+sends an access token: the request is signed out, even when a browser joined to
+the Session is signed in. A redirect gets a new Session JWT while it stays on
+that host and none after. When a page answers `invalid_session`, the result says
+so (`page.invalid_session`): treat it as a mistake in the agent's header, and
+pass `again_without_header=True` (`againWithoutHeader`) to read the page all the
+same. A headless browser is a browser: it joins the Session instead
+(`BrowserSessionClient`). `web.disabled` asks agents not to use a browser on the
+website; it does not cover these fetches.
+
+## Scopes a company doesn't grant
+
+`company.scopes_supported` (`scopesSupported(company)`) lists the scopes a
+company says an agent can request: the issuer's `scopes_supported`, the domain's
+protected resource metadata's, or both (§3.2, §4.7). A company may still grant
+fewer than requested, and may not grant a scope to this user at all. When a
+sign-in comes back without a scope the task needs (`SignInResult.missing_scopes`),
+don't send the user to sign in again just for it: tell them the access wasn't
+granted, and that someone else on the account may need to do the task.

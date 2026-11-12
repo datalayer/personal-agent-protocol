@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Python SDK for Personal Agent Protocol draft 0.4, as of upstream 46beb21."""
+"""Python SDK for Personal Agent Protocol 0.4 as published (upstream 4803900)."""
 
 from .__version__ import __version__
 from .accounts import (
@@ -83,7 +83,7 @@ from .errors import (
     SessionError,
     TransportError,
 )
-from .feedback import FeedbackClient, FeedbackError, FeedbackReport, feedback_endpoint
+from .feedback import FeedbackClient, FeedbackError, FeedbackReport
 from .identity import AgentIdentityClient
 from .mediated import (
     MEDIATED_EXTENSION,
@@ -101,6 +101,7 @@ from .models import (
     Alternative,
     AlternativeReference,
     Approval,
+    ApprovalDeclined,
     Author,
     ClientMetadata,
     ConversationEvent,
@@ -110,8 +111,6 @@ from .models import (
     DiscoveredCompany,
     DiscoveryDocument,
     ExcludedTask,
-    ExcludedTasks,
-    ExcludedTasksDescriptor,
     FeedbackDescriptor,
     JsonWebKey,
     JsonWebKeySet,
@@ -126,20 +125,26 @@ from .models import (
     ProtectedResourceMetadata,
     ScopeHint,
     SkillEntry,
+    TasksDescriptor,
+    TasksResponse,
     is_loopback_redirect,
     operations_content,
     redirect_uri_matches,
 )
 from .operations import (
     ACTION_FAILED,
+    APPROVAL_DECLINED,
     APPROVAL_HEADER,
     APPROVAL_META_KEY,
     OPERATIONS_EXTENSION,
     OPERATIONS_VERSION,
+    AgentInstruction,
     ApprovalSent,
     OperationError,
     OperationsClient,
     approval_header,
+    declined_from,
+    new_approval_reference,
     operation_from,
     operations_negotiated,
     parse_approval_header,
@@ -156,6 +161,7 @@ from .operator_signatures import (
     sign_operator_request,
     verify_operator_signature,
 )
+from .pages import FetchedPage, PageClient, page_carries_session
 from .pairwise import SqlitePairwiseUserIdStore, resolve_pairwise_user_id
 from .profile import PROTOCOL_PROFILE, PROTOCOL_REVISION
 from .reactor import (
@@ -229,6 +235,7 @@ from .sessions import (
     generate_pairwise_user_id,
     new_session_id,
 )
+from .tasks import SessionTasks, TasksClient, TasksError, tasks_endpoint
 from .telemetry import (
     TELEMETRY_ATTRIBUTES,
     TELEMETRY_EVENTS,
@@ -257,6 +264,7 @@ from .ucp import (
 
 __all__ = [
     "ACTION_FAILED",
+    "APPROVAL_DECLINED",
     "APPROVAL_HEADER",
     "APPROVAL_META_KEY",
     "APPROVAL_SURFACES",
@@ -304,12 +312,14 @@ __all__ = [
     "URL_SAFETY_POLICIES",
     "AccessToken",
     "AgentIdentityClient",
+    "AgentInstruction",
     "Alternative",
     "AlternativeReference",
     "ApiClient",
     "ApiError",
     "ApiResponse",
     "Approval",
+    "ApprovalDeclined",
     "ApprovalRequest",
     "ApprovalSent",
     "ApprovalSurface",
@@ -357,12 +367,11 @@ __all__ = [
     "DpopProver",
     "Ed25519OperatorKey",
     "ExcludedTask",
-    "ExcludedTasks",
-    "ExcludedTasksDescriptor",
     "FeedbackClient",
     "FeedbackDescriptor",
     "FeedbackError",
     "FeedbackReport",
+    "FetchedPage",
     "IdentityError",
     "InMemoryDelegatedKeys",
     "InMemoryDpopKeys",
@@ -392,6 +401,7 @@ __all__ = [
     "OperatorSigningKey",
     "OperatorVerdict",
     "Organization",
+    "PageClient",
     "PairwiseUserIdStore",
     "PapCorePlugin",
     "PapSession",
@@ -422,6 +432,7 @@ __all__ = [
     "SessionHttpClient",
     "SessionJwtRequest",
     "SessionSigner",
+    "SessionTasks",
     "SharedRateLimitBudget",
     "SignInResult",
     "SignOutResult",
@@ -432,6 +443,10 @@ __all__ = [
     "StreamReconnected",
     "SystemClock",
     "SystemRandomSource",
+    "TasksClient",
+    "TasksDescriptor",
+    "TasksError",
+    "TasksResponse",
     "TelemetryEvent",
     "TelemetrySink",
     "TextDelta",
@@ -449,13 +464,14 @@ __all__ = [
     "build_direct_sign_in_request",
     "build_pap_reactor",
     "create_resolving_client",
-    "feedback_endpoint",
+    "declined_from",
     "fetch_ucp_profile",
     "generate_pairwise_user_id",
     "generate_request_id",
     "is_loopback_redirect",
     "jwk_thumbprint",
     "mediated_sign_in",
+    "new_approval_reference",
     "new_dpop_key",
     "new_idempotency_key",
     "new_operator_key",
@@ -466,6 +482,7 @@ __all__ = [
     "operations_negotiated",
     "operator_directory",
     "operator_key_from",
+    "page_carries_session",
     "parse_approval_header",
     "pin_connections",
     "redirect_uri_matches",
@@ -474,6 +491,7 @@ __all__ = [
     "sign_operator_request",
     "speaks_ucp",
     "stale_resource_metadata",
+    "tasks_endpoint",
     "terms_differences",
     "ucp_agent_header",
     "ucp_profile_url",

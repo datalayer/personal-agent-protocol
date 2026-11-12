@@ -15,7 +15,7 @@ import test from "node:test";
 
 import { exportJWK, generateKeyPair } from "jose";
 
-import { PersonalAgentProtocolError, parseJsonStrict } from "../../lib/index.js";
+import { PersonalAgentProtocolError, parseJsonStrict, operationShown } from "../../lib/index.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
 import { NodeUrlSafetyPolicy, isGlobalAddress } from "../../lib/server.js";
 import { Context, identityFrom } from "./support/conformance.mjs";
@@ -199,8 +199,8 @@ test("random operation histories keep at most once", async () => {
     async revise(operationId) {
       const current = (await service.operationRecord(operationId)).revisions.at(-1);
       await service.revise(operationId, {
-        summary: `${current.summary} Ships in 5 days instead of 2.`,
-        terms: { ...(current.terms ?? {}), ships_in_days: 5 },
+        summary: `${operationShown(current)} Ships in 5 days instead of 2.`,
+        terms: { ...current.terms, ships_in_days: 5 },
       });
     },
     async performed(operationId) {
@@ -219,7 +219,7 @@ test("random operation histories keep at most once", async () => {
       ...(approval === undefined ? {} : { approval }),
     });
   };
-  const named = ({ operation_id, revision }) => ({ operation_id, revision });
+  const named = ({ operation_id, revision }) => ({ operation_id, revision, approver: "user" });
   const histories = Math.max(8, Math.floor(ITERATIONS / 30));
   let approvals = 0;
   for (let history = 0; history < histories; history += 1) {

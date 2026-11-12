@@ -211,7 +211,6 @@ async def run_company_service() -> dict[str, Any]:
         scopes=("loans:read", "loans:write"),
         tenant_id=TENANT,
         organization=company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await library.approve_device(started.user_code, account_id="acct_ada")
     clock.advance(started.poll_interval)

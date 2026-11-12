@@ -18,7 +18,8 @@ import {
   SessionClient,
   SessionFetchClient,
   discoverCompany,
-  feedbackEndpoint,
+  TasksClient,
+  parseTasksResponse,
   parseDiscoveryDocument,
   parseFeedbackReport,
   usableReferences,
@@ -71,7 +72,6 @@ async function signedIn(w) {
     scopes: ["orders:read"],
     tenantId: TENANT,
     organization: w.company.document.organization,
-    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -93,22 +93,24 @@ test("a report is task and description only", () => {
   assert.equal(parseFeedbackReport({ task: "x".repeat(200), description: "y".repeat(2000) }).task, "x".repeat(200));
 });
 
-test("feedback is listed with an HTTPS endpoint", () => {
+test("feedback is listed in the tasks response, with an HTTPS endpoint", () => {
+  // The endpoint is the tasks response's (§9, §9.3); poppy.json names only `tasks.endpoint`.
   const base = { protocol_version: "0.4", organization: { name: "Example", domain: "example.com" }, web: {} };
-  const listed = parseDiscoveryDocument({ ...base, auth: { issuer: "https://example.com" }, feedback: { endpoint: "https://example.com/poppy/feedback" } });
-  assert.equal(feedbackEndpoint(listed), "https://example.com/poppy/feedback");
-  assert.equal(feedbackEndpoint(parseDiscoveryDocument(base)), undefined);
-  // `auth` is optional: the issuer comes from the domain's protected resource metadata (§3.1).
-  assert.equal(feedbackEndpoint(parseDiscoveryDocument({ ...base, feedback: { endpoint: "https://example.com/poppy/feedback" } })), "https://example.com/poppy/feedback");
-  assert.throws(() =>
-    parseDiscoveryDocument({ ...base, auth: { issuer: "https://example.com" }, feedback: { endpoint: "http://example.com/poppy/feedback" } }),
-  );
+  const listed = parseTasksResponse({ feedback: { endpoint: "https://example.com/poppy/feedback" } });
+  assert.equal(listed.feedback.endpoint, "https://example.com/poppy/feedback");
+  assert.equal(parseTasksResponse({}).feedback, undefined);
+  assert.throws(() => parseTasksResponse({ feedback: { endpoint: "http://example.com/poppy/feedback" } }));
+  assert.equal(parseDiscoveryDocument({ ...base, tasks: { endpoint: "https://example.com/poppy/tasks" } }).tasks.endpoint, "https://example.com/poppy/tasks");
+  assert.throws(() => parseDiscoveryDocument({ ...base, tasks: { endpoint: "http://example.com/poppy/tasks" } }));
 });
 
 test("a signed-out and a signed-in Session report, with no scope", async () => {
   const w = await world();
   const session = await w.start();
-  const endpoint = feedbackEndpoint(w.company.document);
+  // The endpoint comes from the Session's tasks response, never from poppy.json (§9, §9.3).
+  assert.equal("feedback" in w.company.document, false);
+  const tasks = await new TasksClient({ transport: w.transport }).get(w.company, { session });
+  const endpoint = tasks.feedbackEndpoint;
   assert.equal(endpoint, FEEDBACK);
   const client = new FeedbackClient({ transport: w.transport });
   // The task can be done after all: 200 and an alternative, content from the company (§8.3).
@@ -169,7 +171,8 @@ test("feedback refusals carry their code and Retry-After", async () => {
 test("a company without feedback neither lists nor accepts it", async () => {
   const w = await world({ config: { feedback: false } });
   const session = await w.start();
-  assert.equal(feedbackEndpoint(w.company.document), undefined);
+  const tasks = await new TasksClient({ transport: w.transport }).get(w.company, { session });
+  assert.deepEqual([tasks.available, tasks.feedbackEndpoint], [true, undefined]);
   await assert.rejects(new FeedbackClient({ transport: w.transport }).report(FEEDBACK, GIFT_CARD, { session }), (error) => {
     assert.ok(error instanceof FeedbackError);
     assert.equal(error.statusCode, 404);

@@ -332,7 +332,7 @@ async def test_a_send_waits_out_a_503_once_with_the_budget_sharing_it() -> None:
             )
 
         sent = await OperationsClient(reactor=reactor, sleep=time.sleep).send(
-            request, Approval(operation_id="exc_1", revision="r1")
+            request, Approval(approver="user", operation_id="exc_1", revision="r1")
         )
     assert sent.status == "answered"
     assert time.slept == [5.0]

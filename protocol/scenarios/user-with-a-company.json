@@ -1,6 +1,6 @@
 {
   "name": "user-with-a-company",
-  "description": "A user with a company, one journey for every language pairing: discovery, a signed-out Session, a question that needs signing in, Direct Sign-In, an API read, the conversation continued, and an operation approved and performed once.",
+  "description": "A user with a company, one journey for every language pairing: discovery, a signed-out Session, a question that needs signing in, Direct Sign-In, an API read, the conversation continued, and an operation approved and performed once, and a second one approved by the agent itself on one instruction the user gave it.",
   "company": {
     "domain": "manzanita.example",
     "name": "Manzanita Outfitters",
@@ -14,34 +14,106 @@
     "redirect_path": "/oauth/callback"
   },
   "steps": [
-    { "step": "discover", "expect": { "organization": "Manzanita Outfitters", "operations": true } },
-    { "step": "session", "expect": { "signed_in": false } },
+    {
+      "step": "discover",
+      "expect": {
+        "organization": "Manzanita Outfitters",
+        "operations": true
+      }
+    },
+    {
+      "step": "session",
+      "expect": {
+        "signed_in": false
+      }
+    },
     {
       "step": "ask",
       "text": "Where is my jacket order?",
-      "expect": { "events": ["message", "message", "authorization"], "error": "insufficient_scope" }
+      "expect": {
+        "events": [
+          "message",
+          "message",
+          "authorization"
+        ],
+        "error": "insufficient_scope"
+      }
     },
     {
       "step": "sign_in",
       "method": "direct",
-      "scopes": ["orders:read", "orders:write"],
-      "expect": { "signed_in": true, "granted": ["orders:read", "orders:write"], "consent_page": ["Atlas", "atlas.example", "See your orders"] }
+      "scopes": [
+        "orders:read",
+        "orders:write"
+      ],
+      "expect": {
+        "signed_in": true,
+        "granted": [
+          "orders:read",
+          "orders:write"
+        ],
+        "consent_page": [
+          "Atlas",
+          "atlas.example",
+          "See your orders"
+        ]
+      }
     },
     {
       "step": "api_read",
       "method": "GET",
       "path": "/api/orders",
-      "expect": { "status": 200, "body": { "orders": [{ "order_id": "ord_7Hk2", "item": "Ridge Jacket, size M", "status": "delivered" }] } }
+      "expect": {
+        "status": 200,
+        "body": {
+          "orders": [
+            {
+              "order_id": "ord_7Hk2",
+              "item": "Ridge Jacket, size M",
+              "status": "delivered"
+            }
+          ]
+        }
+      }
     },
     {
       "step": "continue",
       "text": "Exchange it for something warmer",
-      "expect": { "operation": true }
+      "expect": {
+        "operation": true
+      }
     },
     {
       "step": "approve",
       "times": 2,
-      "expect": { "summary_starts_with": "Exchanged the Ridge Jacket", "performed": 1 }
+      "expect": {
+        "summary_starts_with": "Exchanged the Ridge Jacket",
+        "performed": 1
+      }
+    },
+    {
+      "step": "agent_approve",
+      "method": "POST",
+      "path": "/api/orders/ord_7Hk2/gift-wrap",
+      "instruction": {
+        "text": "Go ahead with gift wrap up to USD 10.",
+        "amount_path": "price.amount",
+        "currency_path": "price.currency",
+        "currency": "USD",
+        "limit": "10.00"
+      },
+      "expect": {
+        "terms": {
+          "order_id": "ord_7Hk2",
+          "price": {
+            "amount": "5.00",
+            "currency": "USD"
+          }
+        },
+        "approver": "agent",
+        "asked_user": false,
+        "status": 200
+      }
     }
   ]
 }

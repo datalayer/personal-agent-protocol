@@ -337,13 +337,13 @@ async def test_a_session_declares_the_extensions_it_uses_with_the_company() -> N
     world = World()
     session = await world.signed_out_session()
     document = world.company.document
-    assert document.extensions["operations"] == [ExtensionDescriptor(version="2")]
-    assert document.extension("operations", "2") is not None
+    assert document.extensions["operations"] == [ExtensionDescriptor(version="3")]
+    assert document.extension("operations", "3") is not None
     # Atlas implements Operations alone; the SDK as a whole implements four.
-    assert session.extensions == {"operations": "2"}
+    assert session.extensions == {"operations": "3"}
     everything = negotiate_extensions(document.extensions)
     assert everything == {
-        "operations": "2",
+        "operations": "3",
         "links": "1",
         "disclosures": "1",
         "mediated-sign-in": "1",
@@ -351,11 +351,11 @@ async def test_a_session_declares_the_extensions_it_uses_with_the_company() -> N
     headers = await session_headers(
         world.reactor, "GET", "https://manzanita.example/api/orders", session=session, token=None
     )
-    assert headers["Poppy-Extensions"] == '"operations";v="2"'
+    assert headers["Poppy-Extensions"] == '"operations";v="3"'
     # Mediated Sign-In is recognized from its grant: used, never declared (§3.3).
     assert (
         format_extensions_header(everything)
-        == '"disclosures";v="1", "links";v="1", "operations";v="2"'
+        == '"disclosures";v="1", "links";v="1", "operations";v="3"'
     )
     assert "extensions" not in world.atlas.metadata
     assert PapSession.from_json(session.to_json()).extensions == session.extensions
@@ -372,10 +372,10 @@ async def test_a_session_declares_the_extensions_it_uses_with_the_company() -> N
     # Negotiation picks this SDK's version from the company's list, and nothing else.
     assert negotiate_extensions({"operations": [ExtensionDescriptor(version="1")]}) == {}
     assert negotiate_extensions(
-        {"operations": [ExtensionDescriptor(version="1"), ExtensionDescriptor(version="2")]}
-    ) == {"operations": "2"}
-    assert parse_extensions_header('"operations";v="2", "links";v="1"') == {
-        "operations": "2",
+        {"operations": [ExtensionDescriptor(version="2"), ExtensionDescriptor(version="3")]}
+    ) == {"operations": "3"}
+    assert parse_extensions_header('"operations";v="3", "links";v="1"') == {
+        "operations": "3",
         "links": "1",
     }
     assert parse_extensions_header('"operations"') == {}
@@ -405,7 +405,7 @@ async def test_a_conversation_not_carried_over_to_other_versions_is_version_mism
     assert started.status_code == 201
     conversation_id = started.json()["conversation_id"]
     record = await world.shop.conversation_record(conversation_id)
-    assert (record.protocol_version, record.extensions) == ("0.0", {"operations": "2"})
+    assert (record.protocol_version, record.extensions) == ("0.0", {"operations": "3"})
     # Carried over by default: a message from this SDK's version is accepted.
     accepted = await world.conversations.send(
         endpoint, conversation_id, world.message("Still there?"), session=session
@@ -755,18 +755,27 @@ async def test_an_approval_says_when_and_how_the_user_gave_it() -> None:
     )
 
     approval = Approval(
-        operation_id="exc_5Rt2", revision="r1", approved_at=1791487260, input_type="tap"
+        approver="user",
+        operation_id="exc_5Rt2",
+        revision="r1",
+        approved_at=1791487260,
+        input_type="tap",
     )
     header = approval_header(approval)
     assert (
-        header == 'operation_id="exc_5Rt2", revision="r1", approved_at=1791487260, input_type="tap"'
+        header == 'operation_id="exc_5Rt2", revision="r1", approver="user", '
+        'approved_at=1791487260, input_type="tap"'
     )
     assert parse_approval_header(header) == approval
     # A value that isn't one is left out, never a reason to drop the approval.
     for odd in ('approved_at=1.5, input_type="tap"', 'approved_at="soon", input_type=tap'):
-        parsed = parse_approval_header(f'operation_id="exc_5Rt2", revision="r1", {odd}')
+        parsed = parse_approval_header(
+            f'operation_id="exc_5Rt2", revision="r1", approver="user", {odd}'
+        )
         assert parsed is not None and parsed.approved_at is None
-    quoted = Approval(operation_id="exc_5Rt2", revision="r1", input_type='a "pen" tap')
+    quoted = Approval(
+        approver="user", operation_id="exc_5Rt2", revision="r1", input_type='a "pen" tap'
+    )
     assert parse_approval_header(approval_header(quoted)) == quoted
     meta = {"personalagentprotocol.org/approval": approval.model_dump(exclude_none=True)}
     assert approval_from_meta(meta) == approval
@@ -776,7 +785,10 @@ async def test_an_approval_says_when_and_how_the_user_gave_it() -> None:
     operation = (await api.call("POST", NOTES, session=session, body={})).operation
     assert operation is not None
     unknown = Approval(
-        operation_id=operation.operation_id, revision=operation.revision, input_type="gesture"
+        approver="user",
+        operation_id=operation.operation_id,
+        revision=operation.revision,
+        input_type="gesture",
     )
     done = await world.transport.request(
         "POST",
@@ -806,7 +818,9 @@ async def test_the_approving_request_is_compared_by_meaning_from_any_session() -
     )
     operation = asked.json()["operation"]
     other = await world.signed_out_session()
-    approval = Approval(operation_id=operation["operation_id"], revision=operation["revision"])
+    approval = Approval(
+        approver="user", operation_id=operation["operation_id"], revision=operation["revision"]
+    )
     from personal_agent_protocol.operations import APPROVAL_HEADER, approval_header
 
     done = await world.transport.request(
@@ -835,7 +849,7 @@ async def test_an_approval_of_earlier_terms_the_user_prefers_is_still_accepted()
     assert later.operation_id == first.operation_id and later.revision != first.revision
     # Back to the first terms, with their approval: performed as they were.
     notes.terms = {"note": "gift"}
-    approval = Approval(operation_id=first.operation_id, revision=first.revision)
+    approval = Approval(approver="user", operation_id=first.operation_id, revision=first.revision)
     done = await api.call("POST", NOTES, session=session, body={"note": "gift"}, approval=approval)
     assert done.status == 200 and notes.performed == [(first.operation_id, first.revision)]
 

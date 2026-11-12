@@ -19,7 +19,6 @@ from .json import loads_strict
 from .models import (
     DiscoveredCompany,
     DiscoveryDocument,
-    ExcludedTasks,
     OAuthServerMetadata,
     ProtectedResourceMetadata,
     SkillEntry,
@@ -350,25 +349,6 @@ class DiscoveryClient:
             )
         return metadata
 
-    async def excluded_tasks(self, company: DiscoveredCompany) -> ExcludedTasks | None:
-        """The tasks the company chose not to offer through the protocol (§8.1).
-
-        A public document: a GET with no token, cached as its headers allow. `None`
-        when the company lists none. Read it before starting on a task there; whether
-        a user's task is one of them is the agent's judgment.
-        """
-
-        descriptor = company.document.excluded_tasks
-        if descriptor is None:
-            return None
-        data, _ = await self._get_json(descriptor.url)
-        try:
-            return ExcludedTasks.model_validate(data)
-        except ValidationError as exc:
-            raise ProtocolValidationError(
-                "invalid_excluded_tasks", "The excluded tasks document failed validation"
-            ) from exc
-
     @staticmethod
     def _normalize_domain(domain: str) -> str:
         value = domain.rstrip(".").lower()
@@ -403,7 +383,8 @@ class DiscoveryClient:
     async def fetch_skill(self, skill: SkillEntry) -> bytes:
         """The artifact of one of a Company's skills, its `digest` verified (§9.4).
 
-        `skill` is one of `DiscoveredCompany.skills`: its `url` is resolved and HTTPS, and
+        `skill` is one of `SessionTasks.skills`, from the Session's tasks response: its
+        `url` is resolved against `tasks.endpoint` and HTTPS, and
         it is fetched as other public metadata is, through the URL safety policy, redirects
         included, with no credential and no Session header, at most `max_skill_bytes`. The
         bytes are the artifact as published: the `SKILL.md` of a `skill-md` entry, or an

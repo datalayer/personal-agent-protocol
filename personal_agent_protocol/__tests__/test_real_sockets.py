@@ -61,7 +61,9 @@ async def test_discovery_sign_in_read_and_operation_over_tls() -> None:
             token=signed_in,
             body={},
             approval=Approval(
-                operation_id=proposed.operation.operation_id, revision=proposed.operation.revision
+                approver="user",
+                operation_id=proposed.operation.operation_id,
+                revision=proposed.operation.revision,
             ),
         )
         assert done.status == 200

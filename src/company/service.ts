@@ -15,7 +15,7 @@
  * the Python `personal_agent_protocol.company.service` and answers the same
  * requests with the same responses.
  *
- * What it implements of 0.3 as published (upstream 2289293) and Operations v2:
+ * What it implements of 0.4 as published (upstream 4803900) and Operations version 3:
  *
  * - Discovery (`/.well-known/poppy.json`), the domain's protected resource
  *   metadata naming the issuer (`/.well-known/oauth-protected-resource`), and
@@ -23,7 +23,7 @@
  *   company's own domain.
  * - Sessions (§5): the Session header on every request, verified in the spec's
  *   order (delegation, delegated key, claims, access token), Sessions kept by
- *   `client_id` and `sid`, ended ones remembered; any failure is
+ *   `client_id`, `sid` and User ID, ended ones remembered; any failure is
  *   `invalid_session` (HTTP 400); one for a Session that has ended `session_ended` (§5.5).
  *   Its own access token without the header is refused.
  * - OAuth (§4): access tokens, Bearer or, with `dpopBinding`, bound with DPoP (§4.5), and
@@ -39,7 +39,8 @@
  *   closing; a conversation that is not yours is `conversation_not_found`.
  *   Once a conversation is handed to the company's people, one of them
  *   answers in it (`staffReply`), over the last event they read.
- * - Operations v2, at no endpoint of their own: a request for an action that needs
+ * - Operations version 3, at no endpoint of their own (operations on websites are not
+ *   served): a request for an action that needs
  *   approval is refused with the operation (`403 approval_required`, an MCP error
  *   result, a company message), and the same request with the approval
  *   (`Poppy-Approval`, `_meta`, a message's `approval`) is checked in the extension's
@@ -99,7 +100,10 @@ import {
   DISCLOSURES_VERSION,
   LINKS_EXTENSION,
   LINKS_VERSION,
+  parseApprovalDeclined,
+  operationShown,
   type Approval,
+  type ApprovalDeclined,
   type ClientMetadata,
   type ConversationEvent,
   type JsonWebKeySet,
@@ -109,6 +113,7 @@ import {
   parseVersion,
 } from "../models.js";
 import {
+  APPROVAL_DECLINED,
   APPROVAL_HEADER,
   ACTION_FAILED,
   OPERATIONS_EXTENSION,
@@ -140,6 +145,8 @@ import {
   type Authenticated,
   type CompanyApi,
   type CompanyMcp,
+  type Decline,
+  type DeclineRequest,
   type ProposedOperation,
   type Reply,
   type ReplayCache,
@@ -312,8 +319,8 @@ export interface CompanyConfigOptions {
    */
   readonly scopeHints?: Readonly<Record<string, readonly [changes: string, personalData: boolean]>>;
   /**
-   * The tasks the company chose not to offer through the protocol, published at
-   * `/poppy/excluded-tasks.json` (§8.1): each a `task` and an optional `alternative`.
+   * The tasks the company chose not to offer through the protocol, listed in the tasks
+   * response (§9.1): each a `task` and an optional `alternative`.
    */
   readonly excludedTasks?: readonly Readonly<Record<string, unknown>>[];
   /** An HTTPS URL of the company's logo, published as `organization.logo_uri` (§3.1). */
@@ -343,7 +350,7 @@ export interface CompanyConfigOptions {
   /**
    * Skills for personal agents acting for the user here (§9.4): each a name, a description and
    * the text of its `SKILL.md`, served at `/poppy/skills/{name}/SKILL.md` and listed in the
-   * document's `skill_index` with its SHA-256 digest.
+   * tasks response's `skill_index` with its SHA-256 digest.
    */
   readonly skills?: readonly (readonly [name: string, description: string, text: string])[];
   /**
@@ -391,8 +398,13 @@ export interface CompanyConfigOptions {
    * second identity, and answers nothing but its discovery document.
    */
   readonly aliases?: readonly string[];
-  /** Accept feedback reports at `/poppy/feedback` and list it in poppy.json (§9.3). */
+  /** Accept feedback reports at `/poppy/feedback` and list it in the tasks response (§9, §9.3). */
   readonly feedback?: boolean;
+  /**
+   * The company's own decision on an approval that passed its checks (Operations 6): return a
+   * `Decline` to perform nothing, or `undefined` to act on it. Off by default.
+   */
+  readonly decline?: (request: DeclineRequest) => Decline | undefined;
   /** How long an ended Session's `sid` is remembered and refused (§5.5; default 30 days). */
   readonly endedSessionMemorySeconds?: number;
   /** The acceptance window of a Session JWT's `iat` (§5.3: such as one minute). */
@@ -490,6 +502,7 @@ export class CompanyConfig {
   readonly ucpProducts: readonly Readonly<Record<string, unknown>>[];
   readonly aliases: readonly string[];
   readonly feedback: boolean;
+  readonly decline: ((request: DeclineRequest) => Decline | undefined) | undefined;
   readonly endedSessionMemorySeconds: number;
   readonly sessionJwtWindowSeconds: number;
   readonly idempotencyLifetimeSeconds: number;
@@ -572,6 +585,7 @@ export class CompanyConfig {
     }
     this.aliases = [...(options.aliases ?? [])];
     this.feedback = options.feedback ?? true;
+    this.decline = options.decline;
     this.endedSessionMemorySeconds = options.endedSessionMemorySeconds ?? 30 * 24 * 60 * 60;
     this.sessionJwtWindowSeconds = options.sessionJwtWindowSeconds ?? 60;
     this.idempotencyLifetimeSeconds = options.idempotencyLifetimeSeconds ?? 24 * 60 * 60;
@@ -618,9 +632,11 @@ export class CompanyConfig {
     }
     if (this.devicePage !== undefined) {
       const host = new URL(this.devicePage).hostname.toLowerCase();
-      if (![this.domain, ...this.aliases].some((domain) => host === domain || host.endsWith(`.${domain}`))) {
-        // A personal agent shows the link only on the issuer's host or the host of one of
-        // its protected_resources, or a subdomain of either (§4.6).
+      if (!(host === this.domain || host.endsWith(`.${this.domain}`))) {
+        // A personal agent shows the link only on the issuer's host or `organization.domain`,
+        // or a subdomain of either (§4.3). The issuer is on `domain`, and an agent that found
+        // the company at an alias knows only that alias as its domain, so a page on another
+        // alias would be refused.
         throw new RangeError("devicePage must be on the company's domain or a subdomain");
       }
     }
@@ -769,8 +785,13 @@ export class CompanyConfig {
   get feedbackEndpoint(): string {
     return `${this.base}/poppy/feedback`;
   }
-  get excludedTasksUrl(): string {
-    return `${this.base}/poppy/excluded-tasks.json`;
+  /** Where the tasks response is served, per Session (§9); a skill's `url` resolves against it. */
+  get tasksEndpoint(): string {
+    return `${this.base}/poppy/tasks`;
+  }
+  /** Whether there is anything to say there: excluded tasks, skills, or feedback. */
+  get servesTasks(): boolean {
+    return this.excludedTasks.length > 0 || this.skills.length > 0 || this.feedback;
   }
 }
 
@@ -807,7 +828,7 @@ export class StaleConversationError extends Error {
 /**
  * Who a verified request is from (§5.3): its Session, and its account when signed in.
  *
- * `sessionKey` names the Session in the store (`clientId` and `sid`). `accountId`, `scopes`,
+ * `sessionKey` names the Session in the store (`clientId`, `sid` and User ID). `accountId`, `scopes`,
  * `family` and `resource` are the access token's, for this request only: a Session is
  * signed in on each request that carries one (§5.4).
  */
@@ -1059,8 +1080,8 @@ interface Asked {
   readonly action: string;
   /** The `OperationProposal` key: requests with the same one are the same operation. */
   readonly key: string;
-  readonly summary: string;
-  readonly terms: Readonly<Record<string, unknown>> | undefined;
+  readonly summary: string | undefined;
+  readonly terms: Readonly<Record<string, unknown>>;
   readonly scopes: readonly string[];
   /** The request's fingerprint, and what the action said for it. */
   readonly request: string;
@@ -1071,11 +1092,14 @@ interface Asked {
  * What an operation's request comes to, whichever interface it came through.
  *
  * `operation`: ask for approval of this revision. `outcome`: it was performed, the response
- * as it would have been without operations. Neither: it is being performed.
+ * as it would have been without operations. `declined`: the approval passed the checks and the
+ * company will not act on it; nothing was performed or recorded. None of them: it is being
+ * performed.
  */
 interface Decision {
   readonly operation?: Operation | undefined;
   readonly outcome?: OperationOutcome | undefined;
+  readonly declined?: ApprovalDeclined | undefined;
 }
 
 function byCodePoint(a: string, b: string): number {
@@ -1201,6 +1225,28 @@ function json(record: object): JsonObject {
 
 function expiry(at: Date | string | undefined): StoreWriteOptions {
   return at === undefined ? {} : { expiresAt: new Date(at) };
+}
+
+/**
+ * The heading of a company's sign-in and consent pages (§10.8; guides, consent pages): it names
+ * the personal agent and says it wants to connect, never "Sign in with …", which reads as
+ * signing in with an account at the agent.
+ */
+export function connectHeading(agent: string, company: string): string {
+  return `${agent} wants to connect to your ${company} account`;
+}
+
+/**
+ * What those pages tell the person before they go on: anyone can start a sign-in and send the
+ * link, and nothing in the request says who did (§10.8).
+ */
+export function connectCaution(agent: string): string {
+  return `Only continue if you asked ${agent} to do this just now.`;
+}
+
+/** A Session's record key: `client_id`, `sid` and User ID together (§5.3, §5.5). */
+function sessionRecordKey(clientId: string, sid: string, pairwiseUserId: string): string {
+  return composite(clientId, sid, pairwiseUserId);
 }
 
 /** One store key for several values (never ambiguous). */
@@ -1434,11 +1480,11 @@ export class CompanyService {
       if (method === "POST" && path === "/poppy/browser-session/authorize" && this.config.web) {
         return await this.#authorizeJoin(request);
       }
-      if (method === "GET" && path === "/poppy/excluded-tasks.json" && this.config.excludedTasks.length) {
-        return { status: 200, body: { tasks: this.config.excludedTasks.map((task) => ({ ...task })) }, headers: {} };
+      if (method === "GET" && path === "/poppy/tasks" && this.config.servesTasks) {
+        return await this.#tasks(request);
       }
       if (method === "GET" && path.startsWith("/poppy/skills/")) {
-        // A skill's artifact (§9.4): public, as poppy.json is.
+        // A skill's artifact (§9.4): public, fetched with no credential.
         const skill = this.config.skills.find(([name]) => path === `/poppy/skills/${name}/SKILL.md`);
         if (skill !== undefined) {
           return { status: 200, body: skill[2], headers: { "Content-Type": "text/markdown; charset=utf-8" } };
@@ -1668,8 +1714,8 @@ export class CompanyService {
     } else if (config.webDisabled) {
       document.web = { disabled: true };
     }
-    if (config.feedback) document.feedback = { endpoint: config.feedbackEndpoint };
-    if (config.excludedTasks.length) document.excluded_tasks = { url: config.excludedTasksUrl };
+    // Excluded tasks, skills and the feedback endpoint are served per Session (§9).
+    if (config.servesTasks) document.tasks = { endpoint: config.tasksEndpoint };
     const extensions: Record<string, unknown> = {};
     if (config.operations) extensions[OPERATIONS_EXTENSION] = [{ version: OPERATIONS_VERSION }];
     if (config.links) extensions[LINKS_EXTENSION] = [{ version: LINKS_VERSION }];
@@ -1686,9 +1732,19 @@ export class CompanyService {
     }
     // Each extension a list, one entry per version the company supports (§3.3).
     if (Object.keys(extensions).length) document.extensions = extensions;
+    return document;
+  }
+
+  /**
+   * The tasks response (§9): the excluded tasks, the pinned Agent Skills discovery index with
+   * absolute URLs (§9.4), and the feedback endpoint. The same for every Session of this
+   * company.
+   */
+  tasksDocument(): Record<string, unknown> {
+    const config = this.config;
+    const document: Record<string, unknown> = {};
+    if (config.excludedTasks.length) document.excluded_tasks = config.excludedTasks.map((task) => ({ ...task }));
     if (config.skills.length) {
-      // The pinned Agent Skills discovery index, embedded (§9.4): absolute URLs, so the entries
-      // read the same from a separate well-known index.
       document.skill_index = {
         $schema: SKILL_INDEX_SCHEMA,
         skills: config.skills.map(([name, description, text]) => ({
@@ -1700,7 +1756,21 @@ export class CompanyService {
         })),
       };
     }
+    if (config.feedback) document.feedback = { endpoint: config.feedbackEndpoint };
     return document;
+  }
+
+  /**
+   * `GET /poppy/tasks` (§9): the Session header verified, as at any endpoint.
+   *
+   * The response says what the company offers, not what an account holds, so the Session is
+   * never signed in here. It is the same for every Session, and marked `private` all the same:
+   * the reference never lets a shared cache hand one Session's response to another, which a
+   * company that varies it MUST ensure.
+   */
+  async #tasks(request: CompanyRequest): Promise<CompanyResponse> {
+    await this.#caller(request);
+    return { status: 200, body: this.tasksDocument(), headers: { "Cache-Control": "private, max-age=300" } };
   }
 
   /**
@@ -1781,6 +1851,9 @@ export class CompanyService {
     }
     if (config.mediatedFields.length) grants.push(MEDIATED_GRANT);
     if (config.dpopBinding !== "off") metadata.dpop_signing_alg_values_supported = [DPOP_ALGORITHM];
+    // The issuer reads client ID metadata documents (§4.1): said for other clients, such as
+    // MCP clients, as the CIMD draft's §8 defines (guides).
+    metadata.client_id_metadata_document_supported = true;
     return metadata;
   }
 
@@ -2150,6 +2223,40 @@ export class CompanyService {
           });
     if (changed === undefined) throw new Error("unknown or already approved user code");
     return changed[1].granted;
+  }
+
+  /**
+   * A pending Device Sign-In request, for the company's verification page to show; not
+   * consumed.
+   *
+   * Who asks (the agent's `client_name` and its `client_id` domain), with the `heading` and
+   * `caution` the page starts with (§10.8), and for what. Rejects for an unknown, expired,
+   * approved or denied code.
+   */
+  async deviceRequest(userCode: string): Promise<{
+    readonly client_name: string;
+    readonly client_domain: string;
+    readonly heading: string;
+    readonly caution: string;
+    readonly scopes: readonly { readonly scope: string; readonly description: string }[];
+    readonly expires_at: string;
+  }> {
+    const pointer = await this.#read<UserCode>(RecordKinds.userCode, userCode);
+    const pending =
+      pointer === undefined ? undefined : await this.#read<PendingDevice>(RecordKinds.device, pointer.device);
+    if (pending === undefined || pending.accountId !== undefined || pending.denied || this.#passed(pending.expiresAt)) {
+      throw new Error("unknown, used, or expired user code");
+    }
+    const resolver = firstContribution(this.reactor, ClientResolvers, "client resolver");
+    const [metadata] = await resolver.resolve(pending.clientId);
+    return {
+      client_name: metadata.client_name,
+      client_domain: new URL(pending.clientId).hostname,
+      heading: connectHeading(metadata.client_name, this.config.name),
+      caution: connectCaution(metadata.client_name),
+      scopes: pending.scopes.map((scope) => ({ scope, description: this.config.describe(scope) })),
+      expires_at: isoZ(new Date(pending.expiresAt)),
+    };
   }
 
   async denyDevice(userCode: string): Promise<void> {
@@ -2585,9 +2692,14 @@ export class CompanyService {
     const described = scopes
       .map((scope) => `<li>${escapeHtml(this.config.describe(scope))}</li>`)
       .join("");
+    const company = escapeHtml(this.config.name);
+    // The heading names the agent and says it wants to connect, never "Sign in with", and the
+    // page says to go on only if the person just asked it to (§10.8; guides, consent pages):
+    // anyone can start a sign-in and send someone else the link.
     return page(
       200,
-      `<h1>${escapeHtml(this.config.name)}</h1>` +
+      `<h1>${agent} wants to connect to your ${company} account</h1>` +
+        `<p>Only continue if you asked ${agent} to do this just now.</p>` +
         `<p><strong>${agent}</strong> (${agentDomain}) asks to:</p><ul>${described}</ul>` +
         `<form method="post" action="${this.config.authorizationEndpoint}" data-request-id="${requestId}">` +
         `<input type="hidden" name="request_id" value="${requestId}">` +
@@ -2640,6 +2752,8 @@ export class CompanyService {
     readonly request_id: string;
     readonly client_name: string;
     readonly client_domain: string;
+    readonly heading: string;
+    readonly caution: string;
     readonly scopes: readonly { readonly scope: string; readonly description: string }[];
     readonly expires_at: string;
   }> {
@@ -2651,6 +2765,9 @@ export class CompanyService {
       request_id: requestId,
       client_name: pending.clientName ?? "",
       client_domain: new URL(pending.clientId).hostname,
+      // What the page starts with and says before the person goes on (§10.8).
+      heading: connectHeading(pending.clientName ?? "", this.config.name),
+      caution: connectCaution(pending.clientName ?? ""),
       scopes: pending.scopes.map((scope) => ({ scope, description: this.config.describe(scope) })),
       expires_at: isoZ(new Date(pending.expiresAt)),
     };
@@ -2862,17 +2979,9 @@ export class CompanyService {
       return { status: result.status ?? 200, body: result.body, headers: {} };
     }
     if (!negotiated) {
-      // At an API, in the WWW-Authenticate challenge with its `extension` (§3.3, §7).
-      throw new Refused(
-        403,
-        "extension_required",
-        { extension: OPERATIONS_EXTENSION },
-        {
-          "WWW-Authenticate": challenges(this.config.tokenSchemes, "extension_required", {
-            extension: OPERATIONS_EXTENSION,
-          }),
-        },
-      );
+      // In a JSON body at an API too: not an access token error, so never in a
+      // `WWW-Authenticate` challenge (§3.3, §7).
+      throw new Refused(403, "extension_required", { extension: OPERATIONS_EXTENSION });
     }
     // What the request means, not its bytes: the query's pairs in order, the body's JSON whatever
     // its members' order; other headers are free (Operations 6).
@@ -3210,14 +3319,16 @@ export class CompanyService {
   }
 
   /**
-   * The Session by `client_id` and `sid`: started when unknown, checked when known (§5.3).
+   * The Session by `client_id`, `sid` and User ID: started when the combination is unknown,
+   * continued when known (§5.3).
    *
-   * A known Session keeps its User ID and Agent ID, or it is `invalid_session` (§5.2, §5.3);
-   * one that has ended, and is still remembered, is `session_ended` (§5.5), so the agent
-   * starts a new Session and sends the request again.
+   * A known `sid` with another User ID is another Session, started signed out; the Agent ID is
+   * the one the Session started with and is not checked again. One that has ended, and is
+   * still remembered, is `session_ended` (§5.5), so the agent starts a new Session and sends
+   * the request again.
    */
   async #session(verified: VerifiedSessionJwt): Promise<string> {
-    const key = composite(verified.clientId, verified.sid);
+    const key = sessionRecordKey(verified.clientId, verified.sid, verified.sub);
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
       const known = await this.#read<StoredSession>(RecordKinds.session, key);
       if (known === undefined) {
@@ -3240,24 +3351,21 @@ export class CompanyService {
       if (known.ended || this.#passed(known.endsAt)) {
         throw new SessionError("session_ended", "The Session has ended", { statusCode: 400 });
       }
-      if (known.pairwiseUserId !== verified.sub || known.agentId !== verified.agentId) {
-        // A Session keeps its User ID and Agent ID, or none, for its life (§5.2).
-        throw new SessionError("invalid_session", "Another User's Session", { statusCode: 400 });
-      }
       return key;
     }
     throw new Refused(503, "temporarily_unavailable");
   }
 
   /**
-   * The company ends a Session: requests naming its `sid` get `session_ended` (§5.5).
+   * The company ends a Session, found by `client_id`, `sid` and User ID as §5.3 finds it:
+   * requests naming it get `session_ended` (§5.5).
    *
    * Remembered for `endedSessionMemorySeconds`. Resolves to whether a Session was ended.
    */
-  async endSession(clientId: string, sid: string): Promise<boolean> {
+  async endSession(clientId: string, sid: string, pairwiseUserId: string): Promise<boolean> {
     const changed = await this.#change<StoredSession>(
       RecordKinds.session,
-      composite(clientId, sid),
+      sessionRecordKey(clientId, sid, pairwiseUserId),
       (stored) => (stored.ended ? stored : { ...stored, ended: true }),
     );
     return changed !== undefined && !changed[0].ended;
@@ -4037,6 +4145,10 @@ export class CompanyService {
     if (decision.operation !== undefined) {
       reply.text = "That approval doesn't cover these terms. Here they are to approve.";
       reply.extensions = operationsContent({ operation: decision.operation });
+    } else if (decision.declined !== undefined) {
+      // Said in a later message, the members without `error` (Operations 6).
+      reply.text = decision.declined.reason ?? "I can't act on that approval.";
+      reply.extensions = operationsContent({ declined: decision.declined });
     } else if (decision.outcome === undefined) {
       reply.text = "This is still being done. I'll say how it went here.";
     } else {
@@ -4295,6 +4407,13 @@ export class CompanyService {
     if (scopes.some((scope) => !this.config.offeredScopes.includes(scope))) {
       throw new RangeError("an operation's scopes must be among the company's scopes");
     }
+    if (!isObject(proposal.terms)) {
+      // `terms` are required of every operation (Operations 3): a summary alone is not one.
+      throw new TypeError("an operation has terms: everything that affects the action");
+    }
+    if (proposal.summary !== undefined && (typeof proposal.summary !== "string" || !proposal.summary)) {
+      throw new TypeError("an operation's summary, when it has one, says its terms in plain language");
+    }
     return {
       action: proposal.action,
       key: composite(
@@ -4308,9 +4427,9 @@ export class CompanyService {
       terms: proposal.terms,
       scopes,
       request,
-      // The terms, else the summary: a summary reworded without changing the terms keeps the
-      // revision (Operations 3).
-      digest: fingerprint(proposal.terms ?? proposal.summary),
+      // Its terms, which every operation has: a summary reworded without changing them keeps
+      // the revision (Operations 3).
+      digest: fingerprint(proposal.terms),
     };
   }
 
@@ -4365,7 +4484,11 @@ export class CompanyService {
     if (target !== undefined && approval !== undefined) {
       const revision = target.revisions.find((item) => item.revision === approval.revision);
       if (this.#approves(target, revision, asked)) {
-        return this.#perform(target, revision as OperationRevision);
+        const approved = revision as OperationRevision;
+        const declined = this.#declined(target, approved, approval);
+        // Nothing performed, no new operation, the approval not recorded.
+        if (declined !== undefined) return { declined };
+        return this.#perform(target, approved, approval);
       }
     }
     let current = target?.key === asked.key ? target : undefined;
@@ -4410,8 +4533,8 @@ export class CompanyService {
     }
     const fresh: OperationRevision = {
       revision: this.#id("rev"),
-      summary,
-      ...(terms === undefined ? {} : { terms }),
+      ...(summary === undefined ? {} : { summary }),
+      terms,
       expiresAt,
       request: asked.request,
       asked: asked.digest,
@@ -4446,16 +4569,50 @@ export class CompanyService {
     return revisionOperation(stored);
   }
 
-  /** The one compare-and-set from `open` to `performing`: only its winner performs. */
-  async #perform(target: StoredOperation, revision: OperationRevision): Promise<Decision> {
+  /**
+   * The company's own decision on an approval that passed the checks (Operations 6):
+   * `CompanyConfig.decline` says no with a `Decline`, for its own reasons, such as the
+   * `approver`. An optional member that is missing, or an unknown `input_type`, is never a
+   * reason: the hook is not asked about them.
+   */
+  #declined(target: StoredOperation, revision: OperationRevision, approval: Approval): ApprovalDeclined | undefined {
+    if (this.config.decline === undefined) return undefined;
+    const decline = this.config.decline({
+      action: target.action,
+      operation: revisionOperation(target, revision),
+      approval,
+      ...(target.accountId === undefined ? {} : { accountId: target.accountId }),
+    });
+    if (decline === undefined || decline === null) return undefined;
+    return parseApprovalDeclined({
+      operation_id: target.operationId,
+      revision: revision.revision,
+      ...(decline.reason === undefined ? {} : { reason: decline.reason }),
+      ...(decline.alternative === undefined ? {} : { alternative: { ...decline.alternative } }),
+    });
+  }
+
+  /**
+   * The one compare-and-set from `open` to `performing`: only its winner performs.
+   *
+   * The record keeps what the personal agent stated with the approval: who approved, and any
+   * `approved_at`, `input_type` and `reference` (Operations 6, 8.1).
+   */
+  async #perform(target: StoredOperation, revision: OperationRevision, approval: Approval): Promise<Decision> {
     const approvedAt = this.#now().toISOString();
+    const stated: NonNullable<StoredOperation["approval"]> = {
+      approver: approval.approver,
+      ...(approval.approved_at === undefined ? {} : { approved_at: approval.approved_at }),
+      ...(approval.input_type === undefined ? {} : { input_type: approval.input_type }),
+      ...(approval.reference === undefined ? {} : { reference: approval.reference }),
+    };
     const changed = await this.#change<StoredOperation>(
       RecordKinds.operation,
       target.operationId,
       (current) =>
         current.status !== "open"
           ? current
-          : { ...current, status: "performing", approved: revision.revision, approvedAt },
+          : { ...current, status: "performing", approved: revision.revision, approvedAt, approval: stated },
     );
     if (changed === undefined) return {};
     const [before, claimed] = changed;
@@ -4504,7 +4661,7 @@ export class CompanyService {
   /** The company changes an operation's terms: a new revision, earlier ones withdrawn. */
   async revise(
     operationId: string,
-    changes: { readonly summary: string; readonly terms: Readonly<Record<string, unknown>> },
+    changes: { readonly terms: Readonly<Record<string, unknown>>; readonly summary?: string },
   ): Promise<Operation> {
     const changed = await this.#change<StoredOperation>(
       RecordKinds.operation,
@@ -4513,14 +4670,15 @@ export class CompanyService {
         if (stored.status !== "open") {
           throw new Error("only an operation not yet approved can be revised");
         }
+        const { summary: _replaced, ...latest } = latestRevision(stored);
         return {
           ...stored,
           revisions: [
             ...stored.revisions.map((item) => ({ ...item, withdrawn: true })),
             {
-              ...latestRevision(stored),
+              ...latest,
               revision: this.#id("rev"),
-              summary: changes.summary,
+              ...(changes.summary === undefined ? {} : { summary: changes.summary }),
               terms: changes.terms,
               expiresAt: this.#later(this.config.operationLifetimeSeconds).toISOString(),
             },
@@ -4833,6 +4991,41 @@ export class CompanyService {
   }
 
   /**
+   * The Session of a website page fetched without a browser (§5.2), for the company's own
+   * pages on the host that serves its poppy.json.
+   *
+   * `undefined` when the request carries no Session header: an ordinary visitor, or a browser,
+   * which carries the join's cookie instead (`webSession`). With the header, the checks of
+   * §5.3: the caller's Session, always signed out, even when a browser joined to it is signed
+   * in, since these fetches never carry an access token (one sent anyway is ignored, so a
+   * Session JWT with `ath` fails); or, when a check fails, the response to send,
+   * `invalid_session` (HTTP 400, a JSON body) as at any endpoint, so the personal agent learns
+   * of the mistake in its header.
+   */
+  async pageSession(request: CompanyRequest): Promise<CallerSession | CompanyResponse | undefined> {
+    if (!(SESSION_HEADER.toLowerCase() in request.headers)) return undefined;
+    const signedOut: CompanyRequest = {
+      ...request,
+      headers: Object.fromEntries(
+        Object.entries(request.headers).filter(([name]) => name !== "authorization" && name !== "dpop"),
+      ),
+    };
+    try {
+      const [, session] = await this.#caller(signedOut);
+      return session;
+    } catch (error) {
+      if (error instanceof RateLimitedRefusal) return rateLimited(error.retryAfter);
+      if (error instanceof Refused) {
+        return jsonError(error.status, error.error, error.extra, error.headers, this.config.tokenSchemes);
+      }
+      if (error instanceof SessionError || error instanceof ProofError) {
+        return jsonError(400, error.code === "session_ended" ? "session_ended" : "invalid_session");
+      }
+      throw error;
+    }
+  }
+
+  /**
    * The Session a browser's cookie stands for, as it is now, for the company's pages (§6).
    *
    * Signed out once its sign-in has ended (§5.5); gone once its Session has.
@@ -4841,7 +5034,7 @@ export class CompanyService {
     if (webCookie === undefined) return undefined;
     const joined = await this.#read<WebSession>(RecordKinds.browserCookie, digest(webCookie));
     if (joined === undefined) return undefined;
-    const key = composite(joined.clientId, joined.sid);
+    const key = sessionRecordKey(joined.clientId, joined.sid, joined.pairwiseUserId);
     const stored = await this.#read<StoredSession>(RecordKinds.session, key);
     if (stored === undefined || stored.ended || this.#passed(stored.endsAt)) {
       // The cookie does not outlive the Session.
@@ -4898,6 +5091,10 @@ function apiDecision(decision: Decision): CompanyResponse {
   if (decision.operation !== undefined) {
     return jsonError(403, "approval_required", { operation: decision.operation });
   }
+  if (decision.declined !== undefined) {
+    // Like `approval_required`: a JSON body, never a challenge (Operations 6).
+    return jsonError(403, APPROVAL_DECLINED, { ...decision.declined });
+  }
   const outcome = decision.outcome;
   if (outcome === undefined) {
     return jsonError(503, "temporarily_unavailable", {}, { "Retry-After": PERFORMING_RETRY_AFTER });
@@ -4917,8 +5114,18 @@ function mcpDecision(
     return {
       result: {
         isError: true,
-        content: [{ type: "text", text: `Not done yet. This needs the user's approval: ${operation.summary}` }],
+        content: [{ type: "text", text: `Not done yet. This needs approval: ${operationShown(operation)}` }],
         structuredContent: { operation },
+      },
+    };
+  }
+  if (decision.declined !== undefined) {
+    const declined = decision.declined;
+    return {
+      result: {
+        isError: true,
+        content: [{ type: "text", text: declined.reason ?? "Not done: the approval was declined." }],
+        structuredContent: { error: APPROVAL_DECLINED, ...declined },
       },
     };
   }
@@ -4941,7 +5148,7 @@ function startCursor(conversation: StoredConversation): string {
 function page(status: number, body: string, setCookie?: string): CompanyResponse {
   return {
     status,
-    body: `<!doctype html><meta charset=utf-8><title>Sign in</title>${body}`,
+    body: `<!doctype html><meta charset=utf-8><title>Connect</title>${body}`,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "X-Frame-Options": "DENY",

@@ -138,7 +138,6 @@ async function docsWorld() {
       scopes,
       tenantId: TENANT,
       organization: company.document.organization,
-      protectedResources: metadata.protected_resources,
     });
     await companies[domain].approveDevice(started.userCode, { accountId: "acct_ada" });
     clock.advance(started.pollInterval);
@@ -483,7 +482,7 @@ example("docs/docs/guides/ucp.mdx#0", async (w) => {
 
 example("docs/docs/guides/extensions.mdx#0", async () => [
   {},
-  async (values) => assert.deepEqual(values.negotiated, { operations: "2" }),
+  async (values) => assert.deepEqual(values.negotiated, { operations: "3" }),
 ]);
 
 // Acting for a person: the page's company, then its agent's steps, each after the last ----
@@ -536,7 +535,7 @@ example(`${ACTING}#0`, async () => [
   async (values) => {
     const document = values.service.discoveryDocument();
     assert.deepEqual(document.auth.scope_hints["orders:cancel"], { changes: "irreversible", personal_data: true });
-    assert.deepEqual(document.extensions.operations, [{ version: "2" }]);
+    assert.deepEqual(document.extensions.operations, [{ version: "3" }]);
     assert.equal(typeof values.listener, "function");
   },
 ]);

@@ -11,7 +11,7 @@ import deck from '@site/decks/examples/operations.deck.json';
 <Deck spec={deck} />
 
 An operation is an action a company performs only once the user approves its exact
-terms: a payment, an exchange, a cancellation. The Operations extension (version 2)
+terms: a payment, an exchange, a cancellation. The Operations extension (version 3)
 makes the approval exact, and the action happen at most once. The paired examples
 get Ada's approval of Northwind Bank's payments.
 
@@ -21,7 +21,7 @@ sequenceDiagram
   actor Ada
   participant Atlas as Atlas host
   participant Bank as Northwind Bank
-  Note over Atlas,Bank: Both poppy.json and agent.json list operations version 2
+  Note over Atlas,Bank: Both poppy.json and agent.json list operations version 3
   Atlas->>Bank: Pay INV-0042 (in a conversation)
   Bank-->>Atlas: Message with an operation: EUR 1250.00 to Acme GmbH
   Atlas->>Ada: Northwind Bank asks: the summary, as written
@@ -40,12 +40,14 @@ sequenceDiagram
 The walkthrough:
 
 1. **Negotiation.** `operations_negotiated()` is true only when the company
-   lists `operations` version 2 and the Session declares it in `Poppy-Extensions`
+   lists `operations` version 3 and the Session declares it in `Poppy-Extensions`
    (§3.4). Without it, a company handles approval itself or answers with
    `extension_required`.
 2. **The user decides.** `ask_user()` goes through the host's own approval
-   surface, naming the company and showing its summary, and every operation is
-   asked about. A chat message never approves anything.
+   surface, naming the company and showing its terms, and makes a `user`
+   approval. A chat message never approves anything. An agent may also approve
+   on an instruction the user gave it (`approve_as_agent()`, an `agent`
+   approval): see the [Operations guide](/guides/operations/).
 3. **New terms.** An approval of a revision the company can't accept performs
    nothing, and the company returns a new revision, never the one named.
    `ask_user(replaces=...)` shows what changed before asking again.

@@ -74,6 +74,31 @@ and Mediated Sign-In.
 Denial consumes state and exposes no remote description; recovery starts a new
 flow.
 
+## A sign-in someone else started (§4.2, §10.8)
+
+Nothing in the redirect says who approved the sign-in: someone can start one,
+send the link to another person, and get tokens for that person's account if
+they approve. The protocol accepts that risk, as OAuth does, and limits it. What
+a host does:
+
+- Receive the redirect only on the device that opened the authorization URL when
+  you can: a loopback `redirect_uri`, or your own app signed in as the user who
+  started. A forwarded link then fails.
+- When you can tell which of your users is in the browser at `redirect_uri`, say
+  so: `complete(callback_url, completed_by=tenant_id)`
+  (`complete({ callbackUrl, completedBy })`) refuses a redirect that arrived for
+  another user than the one who started, `sign_in_started_by_another_user`, with
+  the state used up and no code exchanged.
+- When the link opens on another device than the one the user is on, such as a
+  link sent to a phone, pass `cross_device=True` (`crossDevice`) to `begin`: it
+  is then a cross-device flow, as Device Sign-In always is, and its request lives
+  at most 300 seconds (`CROSS_DEVICE_LIFETIME_SECONDS`). Ask only for the scopes
+  the task needs, and say who the link is for where you show it.
+
+The company's page does its part: it names the personal agent that wants to
+connect and tells the person to continue only if they just asked it to (see the
+[company guide](/guides/company/)).
+
 ## TypeScript
 
 ```typescript
@@ -153,5 +178,5 @@ request payloads. Their mock transport is pedagogical; production deployments
 must use protected key and token stores, durable expiring authorization state,
 and an HTTPS callback owned by the host.
 
-See upstream [Direct Sign-In](https://personalagentprotocol.org/docs/spec#direct-sign-in)
+See upstream [Direct Sign-In](https://personalagentprotocol.org/docs/0.4/spec#direct-sign-in)
 for the complete normative flow.

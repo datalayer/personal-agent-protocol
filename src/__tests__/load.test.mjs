@@ -143,7 +143,6 @@ test("one token request replayed concurrently is accepted once", async () => {
     scopes: ["orders:read"],
     tenantId: TENANT,
     organization: document.organization,
-    protectedResources: metadata.protected_resources,
   });
   await service.approveDevice(started.userCode, { accountId: "acct_ada" });
   clock.advance(started.pollInterval);

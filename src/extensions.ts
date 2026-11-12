@@ -20,14 +20,13 @@
 // reads the request's declaration (`parseExtensionsHeader`; a header that fails to parse
 // declares none).
 import type { ExtensionDescriptor } from "./models.js";
-import { challengeParameters } from "./refusals.js";
 
 /** The header the Personal Agent declares the extensions it uses in (§3.4). */
 export const EXTENSIONS_HEADER = "Poppy-Extensions";
 
 /** Extensions this SDK implements, by name and major version. */
 export const SUPPORTED_EXTENSIONS: Readonly<Record<string, string>> = Object.freeze({
-  operations: "2",
+  operations: "3",
   "mediated-sign-in": "1",
   links: "1",
   disclosures: "1",
@@ -135,16 +134,15 @@ export function parseExtensionsHeader(value: string | null | undefined): Record<
 /**
  * The extension a `403 extension_required` names, else `undefined` (§3.3).
  *
- * In the JSON body at the endpoints the protocol or an extension defines, such as
- * conversations; in the `WWW-Authenticate` challenge's `extension` attribute at an API. The
- * token endpoint returns none: extensions are declared per request, and one with its own grant
- * type is recognized from the request.
+ * In the JSON body, at APIs as at the endpoints the protocol or an extension defines: it is not
+ * an access token error, so a `WWW-Authenticate` challenge never carries it and none is read
+ * for it (§7). The token endpoint returns none: extensions are declared per request, and one
+ * with its own grant type is recognized from the request.
  */
-export function extensionRequired(status: number, payload: unknown, wwwAuthenticate?: string | null): string | undefined {
+export function extensionRequired(status: number, payload: unknown): string | undefined {
   if (status !== 403) return undefined;
-  let values: Record<string, unknown> =
+  const values: Record<string, unknown> =
     typeof payload === "object" && payload !== null && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
-  if (values.error !== "extension_required" && wwwAuthenticate) values = challengeParameters(wwwAuthenticate);
   if (values.error !== "extension_required") return undefined;
   const name = values.extension;
   // A company can't refuse a request that uses the extension itself (§3.3).

@@ -37,7 +37,7 @@ one version each, in the `Poppy-Extensions` header on every request with the
 Session header, the same throughout a Session (§3.4): nothing of them is in its
 client metadata any more. Both SDKs negotiate the same way: for each extension
 the company lists, the version this SDK implements when the company lists it
-(`SUPPORTED_EXTENSIONS`: Operations version 2, Mediated Sign-In version 1, Links
+(`SUPPORTED_EXTENSIONS`: Operations version 3, Mediated Sign-In version 1, Links
 and Disclosures version 1); the result is the Session's `extensions`
 (`SessionClient.start(..., company=company)` negotiates it, or pass `extensions`
 for a host that implements fewer). An extension the company recognizes from the
@@ -53,23 +53,25 @@ from personal_agent_protocol.extensions import format_extensions_header, negotia
 from personal_agent_protocol.models import ExtensionDescriptor
 
 company = {
-    "operations": [ExtensionDescriptor(version="2"), ExtensionDescriptor(version="1")],
+    "operations": [ExtensionDescriptor(version="3"), ExtensionDescriptor(version="2")],
     "example.com/gift-wrap": [ExtensionDescriptor(version="2")],
 }
 negotiated = negotiate_extensions(company)
-assert negotiated == {"operations": "2"}
-assert format_extensions_header(negotiated) == '"operations";v="2"'
+assert negotiated == {"operations": "3"}
+assert format_extensions_header(negotiated) == '"operations";v="3"'
+# Version 2 is another major version: a company that lists only it gets no declaration.
+assert negotiate_extensions({"operations": [ExtensionDescriptor(version="2")]}) == {}
 ```
 
 ```typescript
 import { formatExtensionsHeader, negotiateExtensions } from '@datalayer/personal-agent-protocol';
 
 const negotiated = negotiateExtensions({
-  operations: [{ version: '2' }, { version: '1' }],
+  operations: [{ version: '3' }, { version: '2' }],
   'example.com/gift-wrap': [{ version: '2' }],
 });
-console.log(negotiated); // { operations: '2' }
-console.log(formatExtensionsHeader(negotiated)); // "operations";v="2"
+console.log(negotiated); // { operations: '3' }
+console.log(formatExtensionsHeader(negotiated)); // "operations";v="3"
 ```
 
 The Operations behavior itself lives in `OperationsClient` (Python and

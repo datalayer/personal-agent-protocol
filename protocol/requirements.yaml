@@ -1,4 +1,4 @@
-# Personal Agent Protocol draft 0.4 as of upstream 46beb21, Operations and Mediated Sign-In: the normative requirement ledger.
+# Personal Agent Protocol 0.4 as published (upstream 4803900, frozen text as of ed47408), Operations version 3 and Mediated Sign-In: the normative requirement ledger.
 #
 # requirements: every MUST, MUST NOT, SHOULD, and SHOULD NOT of the specification
 # (source: spec, the default), the Operations extension (source: operations) and the
@@ -15,13 +15,13 @@
 
 protocol: personal-agent-protocol
 profile: '0.4'
-upstream_revision: '2026-11-06'
-reviewed: '2026-11-07'
+upstream_revision: '2026-11-10'
+reviewed: '2026-11-12'
 sources:
-  spec: https://personalagentprotocol.org/docs/spec
-  operations: https://personalagentprotocol.org/docs/extensions/operations
-  guide: https://personalagentprotocol.org/docs/guides
-  mediated: https://personalagentprotocol.org/docs/extensions/mediated-sign-in
+  spec: https://personalagentprotocol.org/docs/0.4/spec
+  operations: https://personalagentprotocol.org/docs/0.4/extensions/operations
+  guide: https://personalagentprotocol.org/docs/0.4/guides
+  mediated: https://personalagentprotocol.org/docs/0.4/extensions/mediated-sign-in
 requirements:
 - id: PAP-3-01
   section: '3'
@@ -79,7 +79,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_the_company_advertises_its_mcp_server_and_its_issuer
   conformance:
-  - protocol.feedback-endpoint-https
+  - protocol.tasks-endpoint-https
 - id: PAP-3-06
   section: '3'
   level: MUST NOT
@@ -95,7 +95,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   - personal_agent_protocol/__tests__/test_mcp_and_web.py::test_a_token_for_the_mcp_server_comes_from_a_refresh_with_its_url
   conformance:
-  - protocol.feedback-endpoint-https
+  - protocol.tasks-endpoint-https
 - id: PAP-3-07
   section: '3'
   level: MUST
@@ -114,8 +114,8 @@ requirements:
   level: MUST NOT
   role: personal-agent
   text: If the token, revocation, or device authorization endpoint, an API, {browser_session_endpoint}/authorize,
-    or a conversation, feedback, or extension endpoint answers with a redirect, the Personal Agent MUST
-    NOT send a token, Session JWT, assertion, or credentials to the new URL.
+    or a conversation, tasks, feedback, or extension endpoint answers with a redirect, the Personal Agent
+    MUST NOT send a token, Session JWT, assertion, or credentials to the new URL.
   status: implemented
   implementation:
   - personal_agent_protocol.refusals:refuse_redirect
@@ -130,6 +130,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_transport.py::test_refuses_cross_origin_redirect_and_protected_headers
   - personal_agent_protocol/__tests__/test_sessions.py::test_a_redirect_at_the_token_endpoint_gets_nothing
   - personal_agent_protocol/__tests__/test_mediated.py::test_a_redirect_never_carries_the_credentials_elsewhere
+  - personal_agent_protocol/__tests__/test_published_04.py::test_with_no_response_the_agent_carries_on_as_if_nothing_were_listed
 - id: PAP-3-09
   section: '3'
   level: MUST NOT
@@ -373,14 +374,16 @@ requirements:
   section: '3.2'
   level: SHOULD
   role: company
-  text: scopes_supported lists the scopes the issuer supports. A Company that offers sign-in SHOULD publish
-    it and include every scope a Personal Agent can request (4.7).
+  text: scopes_supported lists the scopes the issuer supports. A Company that offers sign-in SHOULD list
+    every scope a Personal Agent can request here, in scopes_supported of its protected resource metadata
+    (above), or in both (4.7).
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService.oauth_metadata
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_scopes_are_the_companys_described_and_never_poppy
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
+  - personal_agent_protocol/__tests__/test_published_04.py::test_the_reference_company_lists_its_scopes_in_both_and_says_it_reads_cimd
   conformance:
   - protocol.scopes-supported-optional
 - id: PAP-3.2-23
@@ -947,7 +950,7 @@ requirements:
   level: MUST
   role: personal-agent
   text: Before showing them, the Personal Agent MUST check that the link's host is the host of the Company's
-    issuer or of a URL in the issuer's protected_resources (3.2), or a subdomain of either
+    issuer or organization.domain (3.1), or a subdomain of either
   status: implemented
   implementation:
   - personal_agent_protocol.device:verification_host_allowed
@@ -956,6 +959,7 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_device.py::test_a_device_link_is_shown_only_on_the_issuer_or_its_domains
   - personal_agent_protocol/__tests__/test_hosted_pages.py::test_hosted_page_templates_are_checked
+  - personal_agent_protocol/__tests__/test_device.py::test_another_protected_resource_of_the_issuer_does_not_make_a_link_showable
 - id: PAP-4.3-03
   section: '4.3'
   level: MUST
@@ -979,6 +983,38 @@ requirements:
   - personal_agent_protocol.company.service:CompanyService.approve_device
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_a_device_code_works_only_for_the_agent_it_was_issued_to
+- id: PAP-4.2-20
+  section: '4.2'
+  level: MUST
+  role: both
+  text: Companies that offer Direct Sign-In, and Personal Agents that open the authorization URL on a
+    device other than the one the User is using, MUST follow the best practices in RFC 10027 (BCP 247)
+    §2, as for Device Sign-In (4.3).
+  status: partial
+  reason: The SDK keeps a cross-device request short-lived (cross_device) and the reference company's
+    page names the agent and says when to continue; limiting the scopes asked for, and the risk assessment
+    RFC 10027 asks for, are the host's and the deployment's.
+  implementation:
+  - personal_agent_protocol.auth:DirectSignInClient.begin
+  - personal_agent_protocol.company.service:connect_heading
+  - personal_agent_protocol.company.service:connect_caution
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_direct_sign_in_opened_on_another_device_is_short_lived
+  - personal_agent_protocol/__tests__/test_published_04.py::test_the_companys_page_names_the_agent_and_says_when_to_continue
+- id: PAP-4.2-21
+  section: '4.2'
+  level: SHOULD
+  role: personal-agent
+  text: A Personal Agent SHOULD receive the redirect only on the device that opened the authorization
+    URL when it can, at a loopback redirect URI or in its own app signed in as the User who started the
+    sign-in (RFC 8252).
+  status: partial
+  reason: Where the redirect is received is the host's choice of redirect_uri; the SDK refuses a redirect
+    the host says arrived for another User than the one who started (completed_by).
+  implementation:
+  - personal_agent_protocol.auth:DirectSignInClient.complete
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_redirect_that_arrives_for_another_user_gets_no_tokens
 - id: PAP-4.4-01
   section: '4.4'
   level: MUST
@@ -1240,8 +1276,8 @@ requirements:
   section: '5.2'
   level: MUST NOT
   role: personal-agent
-  text: The Personal Agent MUST NOT send a Company's Session JWT to any other destination. Discovery and
-    description documents, OAuth endpoints, and website pages don't carry this header.
+  text: The Personal Agent MUST NOT send a Company's Session JWT to any other destination, except the
+    website pages below. Discovery and description documents and OAuth endpoints don't carry this header.
   status: implemented
   implementation:
   - personal_agent_protocol.transport:SessionHttpClient
@@ -1249,6 +1285,35 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_transport.py::test_session_ended_restarts_once_with_a_fresh_jwt_and_a_redirect_gets_nothing
   - personal_agent_protocol/__tests__/test_canaries.py::test_no_credential_reaches_logs_errors_urls_or_model_text
+  - personal_agent_protocol/__tests__/test_published_04.py::test_documents_and_oauth_endpoints_on_the_same_host_never_carry_the_header
+- id: PAP-5.2-19
+  section: '5.2'
+  level: SHOULD
+  role: personal-agent
+  text: A Personal Agent that fetches a page of the Company's website with its own HTTP client, rather
+    than a browser, SHOULD send the Session header with it, so the Company can tell which Personal Agent
+    and Session the request is from.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.pages:PageClient.fetch
+  - personal_agent_protocol.pages:page_carries_session
+  - personal_agent_protocol.company.service:CompanyService.page_session
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_page_fetched_without_a_browser_carries_the_session_header_signed_out
+  - personal_agent_protocol/__tests__/test_published_04.py::test_only_pages_on_the_host_that_served_poppy_json_carry_the_header
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_redirect_gets_a_new_session_jwt_only_on_the_same_host
+- id: PAP-5.2-20
+  section: '5.2'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent MUST NOT send an access token with these requests, so the JWT has no ath and
+    the request is signed out (5.4), even when a browser joined to the Session is signed in.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.pages:PageClient.fetch
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_page_fetched_without_a_browser_carries_the_session_header_signed_out
+  - personal_agent_protocol/__tests__/test_published_04.py::test_the_company_answers_a_bad_page_header_with_invalid_session
 - id: PAP-5.2-02
   section: '5.2'
   level: MUST
@@ -1322,9 +1387,8 @@ requirements:
   status: implemented
   implementation:
   - personal_agent_protocol.sessions:SessionClient.start
-  - personal_agent_protocol.company.service:CompanyService._session
   tests:
-  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_session_keeps_the_user_id_it_started_with
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_new_sid_starts_a_session_and_the_same_sid_continues_it
   - personal_agent_protocol/__tests__/test_draft_03.py::test_a_session_keeps_the_agent_id_it_started_with
 - id: PAP-5.2-08
   section: '5.2'
@@ -1476,15 +1540,18 @@ requirements:
   section: '5.3'
   level: MUST
   role: company
-  text: A known sid continues its Session, and the JWT MUST have that Session's User ID and Agent ID.
+  text: 'The Company MUST complete the following checks before relying on Session claims, of which the
+    fourth: looks up the Session by client_id, sid, and User ID. An unknown combination starts a signed-out
+    Session with the verified client_id, User ID, and optional Agent ID, and a known one continues its
+    Session.'
   status: implemented
   implementation:
-  - personal_agent_protocol.company.service:CompanyService
+  - personal_agent_protocol.company.service:CompanyService._session
   tests:
-  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_session_keeps_the_user_id_it_started_with
+  - personal_agent_protocol/__tests__/test_draft_03.py::test_a_known_sid_with_another_user_id_is_another_session
   - personal_agent_protocol/__tests__/test_draft_03.py::test_a_session_keeps_the_agent_id_it_started_with
   conformance:
-  - security.session-sub-stays-the-same
+  - security.session-found-by-user-id
 - id: PAP-5.3-03
   section: '5.3'
   level: MUST
@@ -2454,18 +2521,47 @@ requirements:
   - personal_agent_protocol.conversations:ConversationClient
   tests:
   - personal_agent_protocol/__tests__/test_conversations.py::test_an_authorization_event_with_its_challenge_on_an_accepted_message_is_one_need
-- id: PAP-9.1-01
-  section: '9.1'
+- id: PAP-9-01
+  section: '9'
+  level: MUST
+  role: company
+  text: A Company that gives different Sessions different responses MUST mark them private or no-store
+    in Cache-Control (RFC 9111 §5.2.2), so that a shared cache doesn't give one Session's response to
+    another.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.tasks_document
+  - personal_agent_protocol.company.service:CompanyConfig.tasks_endpoint
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_the_tasks_response_is_fetched_with_the_session_header_and_no_token
+  - personal_agent_protocol/__tests__/test_published_04.py::test_poppy_json_names_a_tasks_endpoint_and_nothing_it_moved
+  conformance:
+  - protocol.tasks-per-session
+- id: PAP-9-02
+  section: '9'
   level: SHOULD
   role: personal-agent
-  text: A Personal Agent SHOULD read the excluded tasks document before it starts on a task at the Company.
+  text: A Personal Agent SHOULD get the response before it starts on a task in a Session.
   status: partial
+  reason: The SDK gets and checks it with the Session header and no access token; when to get it, and
+    whether a task is one listed, is the host's judgment.
   implementation:
-  - personal_agent_protocol.discovery:DiscoveryClient.excluded_tasks
+  - personal_agent_protocol.tasks:TasksClient.get
   tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_the_tasks_response_is_fetched_with_the_session_header_and_no_token
   - personal_agent_protocol/__tests__/test_draft_03.py::test_the_excluded_tasks_are_read_and_their_alternatives_filtered
-  reason: The SDK reads and checks it; when to read it, and whether a task is one listed, is the host's
-    judgment.
+- id: PAP-9-03
+  section: '9'
+  level: MUST NOT
+  role: personal-agent
+  text: It MAY reuse it for the rest of the Session, as its caching headers allow, and MUST NOT use it
+    in another Session.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.tasks:TasksClient.get
+  - personal_agent_protocol.tasks:SessionTasks
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_tasks_response_is_kept_for_its_session_and_never_used_in_another
 - id: PAP-9.1-02
   section: '9.1'
   level: MUST
@@ -2473,7 +2569,8 @@ requirements:
   text: Personal Agents MUST skip fields they don't recognize, so later versions can add fields.
   status: implemented
   implementation:
-  - personal_agent_protocol.models:ExcludedTasks
+  - personal_agent_protocol.models:TasksResponse
+  - personal_agent_protocol.models:ExcludedTask
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_the_excluded_tasks_are_read_and_their_alternatives_filtered
 - id: PAP-9.2-01
@@ -2524,7 +2621,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_over_tls
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_with_no_issuer_over_tls
   conformance:
-  - protocol.feedback-endpoint-listed
+  - protocol.tasks-endpoint-listed
   - protocol.feedback-report
   - no-issuer.signed-out-interfaces
 - id: PAP-9.3-08
@@ -2607,8 +2704,7 @@ requirements:
   text: A Personal Agent SHOULD NOT report a task the Company lists as excluded.
   status: partial
   implementation:
-  - personal_agent_protocol.discovery:DiscoveryClient.excluded_tasks
-  - personal_agent_protocol.feedback:FeedbackClient.report
+  - personal_agent_protocol.tasks:TasksClient.get
   tests:
   - personal_agent_protocol/__tests__/test_draft_03.py::test_the_excluded_tasks_are_read_and_their_alternatives_filtered
   reason: The SDK gives the host the excluded tasks; matching a user's task to one is the host's.
@@ -2617,7 +2713,8 @@ requirements:
   level: MUST
   role: company
   text: Companies that publish skill_index MUST follow that revision's index format, artifact distribution,
-    integrity, and HTTP requirements, with the index embedded here instead of fetched separately.
+    integrity, and HTTP requirements for artifacts, with the index in the tasks response instead of fetched
+    from its own URL.
   status: implemented
   implementation:
   - personal_agent_protocol.company.service:CompanyService.discovery_document
@@ -2641,12 +2738,10 @@ requirements:
   section: '9.4'
   level: MUST
   role: personal-agent
-  text: Personal Agents MUST resolve an entry's url against the final poppy.json URL after redirects, using RFC
-    3986 §5.
+  text: Personal Agents MUST resolve an entry's url against tasks.endpoint, using RFC 3986 §5.
   status: implemented
   implementation:
-  - personal_agent_protocol.models:DiscoveryDocument.usable_skills
-  - personal_agent_protocol.models:DiscoveredCompany.skills
+  - personal_agent_protocol.models:TasksResponse.usable_skills
   tests:
   - personal_agent_protocol/__tests__/test_discovery.py::test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved
 - id: PAP-9.4-04
@@ -2656,18 +2751,18 @@ requirements:
   text: Personal Agents SHOULD ignore unknown index fields, and SHOULD skip entries with an unknown type.
   status: implemented
   implementation:
-  - personal_agent_protocol.models:DiscoveryDocument.usable_skills
+  - personal_agent_protocol.models:TasksResponse.usable_skills
   tests:
   - personal_agent_protocol/__tests__/test_discovery.py::test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved
 - id: PAP-9.4-05
   section: '9.4'
   level: SHOULD
   role: personal-agent
-  text: Personal Agents SHOULD ignore the index when $schema is absent or unknown; the rest of poppy.json remains
-    usable.
+  text: Personal Agents SHOULD ignore the index when $schema is absent or unknown; the rest of the tasks
+    response remains usable.
   status: implemented
   implementation:
-  - personal_agent_protocol.models:DiscoveryDocument.usable_skills
+  - personal_agent_protocol.models:TasksResponse.usable_skills
   tests:
   - personal_agent_protocol/__tests__/test_discovery.py::test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved
 - id: PAP-9.4-06
@@ -2953,7 +3048,7 @@ requirements:
   section: '2'
   level: MUST NOT
   role: company
-  text: The extension is used only when the Company lists operations with version "2" and the request
+  text: The extension is used only when the Company lists operations with version "3" and the request
     declares that version. A Company MUST NOT return operations in response to a request that doesn't
     declare it.
   status: implemented
@@ -2965,23 +3060,39 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_operations.py::test_an_agent_listing_version_1_is_not_sent_an_operation
   - personal_agent_protocol/__tests__/test_company_refusals.py::test_an_agent_without_the_extension_gets_no_operations
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_request_that_declares_operations_2_gets_no_operation
   conformance:
   - protocol.extension-required-error
   - protocol.extension-required-at-an-api
   - protocol.extension-required-company
+- id: OPS-2-02
+  source: operations
+  section: '2'
+  level: MUST
+  role: company
+  text: A Company that asks for approval on its website lists endpoint, the HTTPS URL where the Personal
+    Agent gets operations its website returned and sends their approvals (4, 6). It MUST list web.browser_session_endpoint
+    with it (spec 6), because only a browser joined to a Session gets operations.
+  status: open
+  reason: 'Operations on websites (the Poppy-Operation header and the extension''s endpoint) are not implemented
+    in this release: the reference companies list no operations endpoint, and a host that joins a browser
+    to a Session declares no operations on that join.'
+  implementation: []
+  tests: []
 - id: OPS-3-01
   source: operations
   section: '3'
   level: MUST
   role: company
   text: Everything that affects the action, such as what it changes, any amount, date, or recipient, or
-    a condition for cancelling, MUST be in the revision's summary, and in terms if present.
+    a condition for cancelling, MUST be in the revision's terms, and in summary if present.
   status: partial
   reason: 'The terms are the Company''s own: the SDK carries them and can''t tell whether they are complete.'
   implementation:
   - personal_agent_protocol.company.points:ProposedOperation
   tests:
   - personal_agent_protocol/__tests__/test_operations.py::test_a_request_is_refused_with_the_operation_and_nothing_is_done
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_company_sends_terms_always_and_a_summary_when_it_has_one
   conformance:
   - operations.approval-required
 - id: OPS-3-02
@@ -3065,6 +3176,20 @@ requirements:
   - personal_agent_protocol.company.service:CompanyConfig
   tests:
   - personal_agent_protocol/__tests__/test_operations.py::test_the_default_expiry_leaves_the_user_fifteen_minutes
+- id: OPS-4-01
+  source: operations
+  section: '4'
+  level: MUST
+  role: personal-agent
+  text: The Personal Agent MUST take a reference only from the Poppy-Operation header of a response that
+    its own browser received, never from page content or a message, and only when sid names a Session
+    it joined that browser to.
+  status: open
+  reason: 'Operations on websites (the Poppy-Operation header and the extension''s endpoint) are not implemented
+    in this release: the reference companies list no operations endpoint, and a host that joins a browser
+    to a Session declares no operations on that join.'
+  implementation: []
+  tests: []
 - id: OPS-5-01
   source: operations
   section: '5'
@@ -3084,8 +3209,8 @@ requirements:
   section: '5'
   level: MUST
   role: personal-agent
-  text: The Personal Agent MUST show the User the Company's name and the revision's summary, and MUST
-    take the User's answer through its own interface.
+  text: The Personal Agent MUST show the User the Company's name and the revision's terms, and MUST take
+    the User's answer through its own interface.
   status: implemented
   implementation:
   - personal_agent_protocol.operations:OperationsClient.ask_user
@@ -3094,6 +3219,7 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_operations.py::test_the_user_is_asked_with_the_company_the_summary_and_any_difference
   - personal_agent_protocol/__tests__/test_operations.py::test_without_a_surface_nothing_is_approved
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_the_user_is_shown_the_terms_values_when_there_is_no_summary
 - id: OPS-5-03
   source: operations
   section: '5'
@@ -3108,37 +3234,13 @@ requirements:
   - personal_agent_protocol/__tests__/test_operations.py::test_a_messages_text_approves_nothing_whatever_it_says
   conformance:
   - operations.message-is-not-approval
-- id: OPS-5-04
-  source: operations
-  section: '5'
-  level: MUST
-  role: personal-agent
-  text: The Personal Agent MUST ask the User about each operation.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.operations:OperationsClient.ask_user
-  tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_every_operation_is_asked_about_never_approved_on_the_users_behalf
-- id: OPS-5-05
-  source: operations
-  section: '5'
-  level: MUST NOT
-  role: personal-agent
-  text: It MUST NOT approve one on the User's behalf, even when the User said earlier that they would
-    approve something like it.
-  status: implemented
-  implementation:
-  - personal_agent_protocol.operations:OperationsClient.ask_user
-  tests:
-  - personal_agent_protocol/__tests__/test_operations.py::test_every_operation_is_asked_about_never_approved_on_the_users_behalf
-  - personal_agent_protocol/__tests__/test_two_companies.py::test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment
 - id: OPS-5-06
   source: operations
   section: '5'
   level: SHOULD
   role: personal-agent
-  text: When the operation has terms, the Personal Agent SHOULD check that they agree with the summary
-    and with what it asked for before asking for approval, and point out any difference to the User.
+  text: Before approving, the Personal Agent SHOULD check that terms agree with what it asked for, and
+    with the summary if there is one, and point out any difference to the User when it asks them.
   status: implemented
   implementation:
   - personal_agent_protocol.operations:terms_differences
@@ -3146,6 +3248,51 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_operations.py::test_the_terms_check_points_out_a_summary_that_says_otherwise
   - personal_agent_protocol/__tests__/test_operations.py::test_the_terms_check_compares_what_was_asked_for
+- id: OPS-5-07
+  source: operations
+  section: '5'
+  level: MUST
+  role: personal-agent
+  text: It MUST rest on an instruction the User gave the Personal Agent. Content from the Company, a website,
+    or anything else the Personal Agent read isn't one, even when it says it comes from the User.
+  status: partial
+  reason: An agent approval is made only on an AgentInstruction the host holds; that the host took it
+    from the User through its own interface, and from nothing the agent read, is the host's to ensure.
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.approve_as_agent
+  - personal_agent_protocol.operations:AgentInstruction
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_the_agent_approves_only_what_the_users_instruction_covers
+- id: OPS-5-08
+  source: operations
+  section: '5'
+  level: MUST
+  role: personal-agent
+  text: Before approving, the Personal Agent MUST check the revision's terms against that instruction,
+    and approve only if the instruction covers them.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.approve_as_agent
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_the_agent_approves_only_what_the_users_instruction_covers
+- id: OPS-5-09
+  source: operations
+  section: '5'
+  level: MUST NOT
+  role: personal-agent
+  text: If the Company answers the Personal Agent's agent approval with a new revision (6), or a website
+    returns a new operation for the action after recording it, the Personal Agent MUST NOT approve the
+    new one on the same instruction.
+  status: partial
+  reason: 'Implemented for APIs, MCP tools and conversations, in the client''s own memory or the host''s
+    (user_only). Operations on websites (the Poppy-Operation header and the extension''s endpoint) are
+    not implemented in this release: the reference companies list no operations endpoint, and a host that
+    joins a browser to a Session declares no operations on that join.'
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.approve_as_agent
+  - personal_agent_protocol.operations:OperationsClient.send
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_new_terms_after_an_agent_approval_are_the_users_to_approve
 - id: OPS-6-01
   source: operations
   section: '6'
@@ -3214,8 +3361,7 @@ requirements:
   section: '6'
   level: SHOULD
   role: personal-agent
-  text: The Personal Agent SHOULD include both approved_at, when the User approved in Unix seconds, and
-    input_type, how the User gave their answer, such as tap, typed, or voice.
+  text: It SHOULD include approved_at and input_type with user.
   status: implemented
   implementation:
   - personal_agent_protocol.operations:OperationsClient.ask_user
@@ -3224,12 +3370,14 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_operations.py::test_the_user_is_asked_with_the_company_the_summary_and_any_difference
   - personal_agent_protocol/__tests__/test_draft_04.py::test_an_approval_says_when_and_how_the_user_gave_it
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_user_approval_says_user_how_and_under_which_reference
 - id: OPS-6-05
   source: operations
   section: '6'
   level: MUST NOT
   role: personal-agent
-  text: input_type MUST NOT contain personal data, or anything that identifies the User or their device.
+  text: The Personal Agent MUST NOT put personal data, or anything that identifies the User or their device,
+    in input_type or reference.
   status: implemented
   implementation:
   - personal_agent_protocol.models:Approval
@@ -3241,14 +3389,135 @@ requirements:
   section: '6'
   level: MUST NOT
   role: company
-  text: A Company MAY record approved_at and input_type, and MUST NOT reject an approval because either is
-    missing or because it doesn't recognize the input_type.
+  text: A Company MAY record approver, approved_at, input_type, and reference, and MUST NOT reject or
+    decline an approval because an optional member is missing or because it doesn't recognize the input_type.
   status: implemented
   implementation:
   - personal_agent_protocol.models:Approval
   - personal_agent_protocol.operations:parse_approval_header
   tests:
   - personal_agent_protocol/__tests__/test_draft_04.py::test_an_approval_says_when_and_how_the_user_gave_it
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_an_approval_with_only_its_approver_is_acted_on
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_the_company_performs_an_agent_approval_and_records_who_approved
+  conformance:
+  - operations.agent-approval
+- id: OPS-6-07
+  source: operations
+  section: '6'
+  level: MUST
+  role: personal-agent
+  text: 'An approval names the operation_id and the revision, and says in approver how it was approved
+    (5): user for a user approval, or agent for an agent approval. The Personal Agent MUST include approver.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Approval
+  - personal_agent_protocol.operations:approval_header
+  - personal_agent_protocol.operations:parse_approval_header
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_an_approval_names_its_approver_and_the_header_carries_every_member
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_an_approval_without_a_valid_approver_is_no_approval
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_version_2_approval_approves_nothing
+  conformance:
+  - operations.approval-without-approver
+- id: OPS-6-08
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: personal-agent
+  text: 'input_type, only with user: how the User gave their answer, as a short string, such as tap, typed,
+    or voice. The Personal Agent MUST NOT include it with agent, and a Company ignores it there.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:Approval
+  - personal_agent_protocol.operations:approval_header
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_an_agent_approval_never_carries_an_input_type
+- id: OPS-6-09
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent MUST NOT send the same reference to two Companies, so that Companies can't
+    use it to link the User's approvals at one Company to their approvals at another.
+  status: partial
+  reason: A reference the SDK makes is random for each approval, so never the same twice; a host that
+    sends its own ledger's IDs keeps them apart by Company itself.
+  implementation:
+  - personal_agent_protocol.operations:new_approval_reference
+  - personal_agent_protocol.operations:OperationsClient.new_reference
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_reference_is_opaque_random_and_never_the_same_twice
+- id: OPS-6-10
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT record a declined approval, so a website never finds it for a later request.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.company.points:Decline
+  - personal_agent_protocol.company.points:DeclineRequest
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_manzanita_declines_an_agent_approval_of_a_return_and_takes_the_users
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_tool_declines_with_an_error_result
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_conversation_declines_in_a_later_message_without_error
+  conformance:
+  - operations.approval-declined
+- id: OPS-6-11
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT put anything in reason that the Session couldn't already see.
+  status: not-applicable
+  reason: 'The reason is the company''s own words, returned by its decline hook (CompanyConfig.decline):
+    the SDK carries them as they are.'
+  implementation:
+  - personal_agent_protocol.company.points:Decline
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_manzanita_declines_an_agent_approval_of_a_return_and_takes_the_users
+- id: OPS-6-12
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: personal-agent
+  text: When an approval is declined, the Personal Agent MUST NOT send that approval again, and MUST NOT
+    approve a new revision for the same action without asking the User (5).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.send
+  - personal_agent_protocol.operations:OperationsClient.approve_as_agent
+  - personal_agent_protocol.operations:declined_from
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_declined_approval_is_final_and_never_sent_again
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_decline_is_read_from_each_interface
+- id: OPS-6-13
+  source: operations
+  section: '6'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT accept an approval of a website's operation at an API, MCP server, or conversation,
+    or an approval of another interface's operation at endpoint.
+  status: open
+  reason: 'Operations on websites (the Poppy-Operation header and the extension''s endpoint) are not implemented
+    in this release: the reference companies list no operations endpoint, and a host that joins a browser
+    to a Session declares no operations on that join.'
+  implementation: []
+  tests: []
+- id: OPS-6-14
+  source: operations
+  section: '6'
+  level: MUST
+  role: company
+  text: The Company MUST keep a recorded approval that isn't used up until the approved revision's expires_at,
+    and MUST NOT apply it to requests from a Session that can't approve the operation.
+  status: open
+  reason: 'Operations on websites (the Poppy-Operation header and the extension''s endpoint) are not implemented
+    in this release: the reference companies list no operations endpoint, and a host that joins a browser
+    to a Session declares no operations on that join.'
+  implementation: []
+  tests: []
 - id: OPS-7-01
   source: operations
   section: '7'
@@ -3307,8 +3576,8 @@ requirements:
   section: '7'
   level: MUST NOT
   role: personal-agent
-  text: The Personal Agent MUST NOT ask the User to approve a new operation for the same action until
-    it knows whether the first one was performed.
+  text: It MUST NOT approve a new operation for the same action, or ask the User to, until it knows whether
+    the first one was performed.
   status: implemented
   implementation:
   - personal_agent_protocol.operations:OperationsClient.send
@@ -4053,14 +4322,15 @@ guide:
   section: Direct and device sign-in
   level: SHOULD
   role: personal-agent
-  text: Show the link only if its host is the company's issuer host or the host of a URL in its protected_resources,
-    or a subdomain of either, and show the company's name and domain with it (MUST, 4.3).
+  text: Show the link only if its host is the company's issuer host or organization.domain, or a subdomain
+    of either, and show the company's name and domain with it (MUST, 4.3).
   status: implemented
   implementation:
   - personal_agent_protocol.device:verification_host_allowed
   - personal_agent_protocol.device:DeviceSignInStart
   tests:
   - personal_agent_protocol/__tests__/test_device.py::test_a_device_link_is_shown_only_on_the_issuer_or_its_domains
+  - personal_agent_protocol/__tests__/test_device.py::test_another_protected_resource_of_the_issuer_does_not_make_a_link_showable
 - id: GUIDE-pa-mediated-01
   source: guide
   section: Mediated sign-in
@@ -4102,8 +4372,9 @@ guide:
   section: Web browsing
   level: SHOULD NOT
   role: personal-agent
-  text: Don't browse the website of a company that sets web.disabled. Use its company agent and APIs
-    (SHOULD NOT, section 6).
+  text: Don't use a browser on the website of a company that sets web.disabled. Use its company agent
+    and APIs (SHOULD NOT, section 6). Fetching a page without a browser, such as a policy, is still fine,
+    with the Session header (5.2).
   status: implemented
   implementation:
   - personal_agent_protocol.models:DiscoveryDocument.browsing_disabled
@@ -4240,6 +4511,161 @@ guide:
   - personal_agent_protocol.company.service:CompanyConfig.describe
   tests:
   - personal_agent_protocol/__tests__/test_draft_04.py::test_web_unscoped_and_web_disabled_are_published_and_read
+- id: GUIDE-co-consent-08
+  source: guide
+  section: The consent page
+  level: SHOULD
+  role: company
+  text: Start with a heading that names the personal agent and says it wants to connect to the user's
+    account, such as "Muse wants to connect to your Example account". Show it on your sign-in page too,
+    before the user signs in, since that's where they decide whether to go on. Word it as connecting,
+    not as "Sign in with Muse", which reads as signing in with a Muse account.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:connect_heading
+  - personal_agent_protocol.company.service:CompanyService.authorization_request
+  - personal_agent_protocol.company.service:CompanyService.device_request
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_the_companys_page_names_the_agent_and_says_when_to_continue
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_device_verification_page_can_name_the_agent_too
+- id: GUIDE-co-consent-09
+  source: guide
+  section: The consent page
+  level: SHOULD
+  role: company
+  text: Tell the user to continue only if they just asked that personal agent to connect, such as "Only
+    continue if you asked Muse to do this just now."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:connect_caution
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_the_companys_page_names_the_agent_and_says_when_to_continue
+- id: GUIDE-co-issuer-05
+  source: guide
+  section: Your authorization server
+  level: SHOULD
+  role: company
+  text: 'If your authorization server accepts client ID metadata documents, publish client_id_metadata_document_supported:
+    true in its metadata, as the CIMD draft §8 defines, so other clients, such as MCP clients, can tell.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.oauth_metadata
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_the_reference_company_lists_its_scopes_in_both_and_says_it_reads_cimd
+- id: GUIDE-co-pages-01
+  source: guide
+  section: Verifying the Session header
+  level: SHOULD
+  role: company
+  text: Pages on the host that serves your poppy.json can get the Session header too, from personal agents
+    that fetch them without a browser, and never with an access token (5.2). Verify it before using it.
+    Treat the request as signed out, even when the session's browser is signed in. When the check fails,
+    return invalid_session as at any endpoint (5.3).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.page_session
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_the_company_answers_a_bad_page_header_with_invalid_session
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_page_fetched_without_a_browser_carries_the_session_header_signed_out
+- id: GUIDE-pa-pages-01
+  source: guide
+  section: The Session header
+  level: SHOULD
+  role: personal-agent
+  text: When you fetch a website page yourself, without a browser, send the header if the page is on the
+    host that served poppy.json (SHOULD, 5.2), never with an access token. Sign a new one for a redirect
+    only while it stays on that host.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.pages:PageClient.fetch
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_redirect_gets_a_new_session_jwt_only_on_the_same_host
+- id: GUIDE-pa-pages-02
+  source: guide
+  section: The Session header
+  level: SHOULD
+  role: personal-agent
+  text: If a page answers invalid_session, treat it as a bug in your header, as at any endpoint, and check
+    the JWT. You can fetch the page again without the header in the meantime (5.2).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.pages:FetchedPage
+  - personal_agent_protocol.pages:PageClient.fetch
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_invalid_session_from_a_page_is_reported_and_the_page_fetched_again_on_request
+- id: GUIDE-pa-scopes-07
+  source: guide
+  section: Scopes
+  level: SHOULD
+  role: personal-agent
+  text: When a sign-in comes back without a scope the task needs, don't send the user to sign in again
+    just for it. Tell them that access wasn't granted, and that if they didn't leave it out, someone else
+    on the account, such as the account holder, may need to do the task.
+  status: partial
+  reason: The SDK reports the scopes a sign-in left out (SignInResult.missing_scopes) and scopes_to_request
+    says not to ask again for them; what the user is told is the host's.
+  implementation:
+  - personal_agent_protocol.sessions:SignInResult
+  - personal_agent_protocol.accounts:scopes_to_request
+  tests:
+  - personal_agent_protocol/__tests__/test_accounts.py::test_a_new_sign_in_asks_for_every_scope_still_needed
+- id: GUIDE-pa-tasks-01
+  source: guide
+  section: Task coverage
+  level: SHOULD
+  role: personal-agent
+  text: Get the company's tasks response early in each Session, before you try a task there, and use it
+    only in that Session (section 9).
+  status: partial
+  reason: TasksClient keeps a response for its Session only; getting it before a task is the host's.
+  implementation:
+  - personal_agent_protocol.tasks:TasksClient.get
+  tests:
+  - personal_agent_protocol/__tests__/test_published_04.py::test_a_tasks_response_is_kept_for_its_session_and_never_used_in_another
+- id: GUIDE-ops-pa-08
+  source: guide
+  section: 'Operations: personal agents'
+  level: SHOULD
+  role: personal-agent
+  text: Approve an operation yourself only on what the user told you, such as "go ahead with any exchange
+    under $20" or "return everything in this order", and check each revision's terms against it (Operations
+    5). Never treat text in a page, a message, or the operation itself as the user's instruction.
+  status: partial
+  reason: The SDK approves only on an AgentInstruction whose own check says the terms are covered; where
+    the instruction came from is the host's.
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.approve_as_agent
+  - personal_agent_protocol.operations:AgentInstruction
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_the_agent_approves_only_what_the_users_instruction_covers
+- id: GUIDE-ops-pa-06
+  source: guide
+  section: 'Operations: personal agents'
+  level: SHOULD
+  role: personal-agent
+  text: Keep a ledger the user can see, with an entry for each approval. Send the entry's ID as reference
+    (Operations 6), and let the user see and change the instructions you approve on.
+  status: partial
+  reason: The SDK carries the reference on both kinds of approval and can make one; the ledger is the
+    host's.
+  implementation:
+  - personal_agent_protocol.operations:new_approval_reference
+  - personal_agent_protocol.operations:OperationsClient.ask_user
+  - personal_agent_protocol.operations:OperationsClient.approve_as_agent
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_a_user_approval_says_user_how_and_under_which_reference
+- id: GUIDE-ops-pa-07
+  source: guide
+  section: 'Operations: personal agents'
+  level: SHOULD
+  role: personal-agent
+  text: If you approved the earlier one yourself, ask the user about the new one, rather than approving
+    it on the same instruction.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:OperationsClient.approve_as_agent
+  tests:
+  - personal_agent_protocol/__tests__/test_operations_v3.py::test_new_terms_after_an_agent_approval_are_the_users_to_approve
 - id: GUIDE-co-consent-01
   source: guide
   section: Consent pages

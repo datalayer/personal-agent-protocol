@@ -72,7 +72,13 @@ import {
   delegationClaims,
   discoverCompany,
   dpopProofClaims,
-  feedbackEndpoint,
+  TasksClient,
+  tasksEndpoint,
+  parseTasksResponse,
+  parseApprovalDeclined,
+  usableSkills,
+  operationShown,
+  newApprovalReference,
   fetchMcpServerMetadata,
   firstContribution,
   jwkThumbprint,
@@ -350,10 +356,10 @@ export class Context {
     return endpoint;
   }
 
-  /** Skip unless the company lists Operations v2 and this agent declares it (Operations 2). */
+  /** Skip unless the company lists Operations version 3 and this agent declares it (Operations 2). */
   async operationsNegotiated() {
     const negotiated = negotiateExtensions((await this.company()).document.extensions, this.agent.identity.supportedExtensions);
-    if (negotiated.operations !== OPERATIONS_VERSION) throw new SkipCase("operations v2 is not negotiated with this company");
+    if (negotiated.operations !== OPERATIONS_VERSION) throw new SkipCase("operations version 3 is not negotiated with this company");
   }
 
   /** An API path at the company's API (its OpenAPI `url`'s origin), else its origin. */
@@ -427,7 +433,6 @@ export class Context {
       scopes: scopes ?? this.scenario.scopes,
       tenantId: this.tenantId,
       organization: (await this.company()).document.organization,
-      protectedResources: metadata.protected_resources,
       dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
       pairwiseUserId: session.sub,
     });
@@ -777,11 +782,13 @@ caseFor("security.session-header-twice")(async (ctx, fixture) => {
   await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
 });
 
-caseFor("security.session-sub-stays-the-same")(async (ctx, fixture) => {
-  // A known `sid` keeps its `sub` (§5.2, §5.3): another User ID in it is refused.
+caseFor("security.session-found-by-user-id")(async (ctx) => {
+  // A Session is found by `client_id`, `sid` and User ID (§5.3): a known `sid` with another
+  // User ID is another Session, signed out, answered as any new one is and never with
+  // `invalid_session`.
   const session = await ctx.session(ctx.newUser());
   const url = ctx.url(ctx.scenario.read_path);
-  await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) });
+  const first = await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) });
   const other = new PapSession({
     sid: session.sid,
     sub: ctx.newUser(),
@@ -790,7 +797,11 @@ caseFor("security.session-sub-stays-the-same")(async (ctx, fixture) => {
     tenantId: session.tenantId,
   });
   const response = await ctx.send("GET", url, { headers: await ctx.auth(other, "GET", url) });
-  await expectRefusal(response, fixture.expect.status, fixture.expect.error, fixture.id);
+  check((await errorOf(response)) !== "invalid_session", "another User ID on a known sid is no error");
+  check(
+    response.status === first.status,
+    `it is answered as a new signed-out Session is (${first.status}), got ${response.status}`,
+  );
 });
 
 caseFor("security.access-token-of-another-agent")(async (ctx, fixture) => {
@@ -949,7 +960,6 @@ caseFor("lifecycle.unknown-scope-refused")(async (ctx) => {
       scopes: ["conformance:not-a-scope"],
       tenantId: ctx.tenantId,
       organization: (await ctx.company()).document.organization,
-      protectedResources: metadata.protected_resources,
     }),
     "an unknown scope",
   );
@@ -1421,7 +1431,7 @@ async function performed(ctx, operation, times) {
 }
 
 /** A statement of the user's approval: the conformance runner plays the user here. */
-const approved = (operation) => ({ operation_id: operation.operation_id, revision: operation.revision });
+const approved = (operation) => ({ operation_id: operation.operation_id, revision: operation.revision, approver: "user" });
 
 function checkNewRevision(answer, operation, named) {
   check(answer.operation !== undefined, "the company returns the operation, performing nothing");
@@ -1434,7 +1444,8 @@ caseFor("operations.approval-required")(async (ctx) => {
   await ctx.operationsNegotiated();
   const [, signed] = await signedInUser(ctx);
   const operation = await propose(ctx, signed, "user");
-  check(operation.summary.trim(), "it has a summary");
+  check(typeof operation.terms === "object" && operation.terms !== null, "it has terms");
+  check(operationShown(operation).trim(), "its terms can be shown, as a summary or as their values");
   check(operation.revision, "it has an opaque revision");
   check(new Date(operation.expires_at) > ctx.now(), "it can still be approved");
   await performed(ctx, operation, 0);
@@ -1506,7 +1517,7 @@ caseFor("operations.approval-of-a-revision-never-returned")(async (ctx) => {
   await ctx.operationsNegotiated();
   const [, signed] = await signedInUser(ctx);
   const operation = await propose(ctx, signed, "user");
-  const forged = { operation_id: operation.operation_id, revision: "never_returned_0000" };
+  const forged = { operation_id: operation.operation_id, revision: "never_returned_0000", approver: "user" };
   const answer = await request(ctx, signed, "user", forged);
   checkNewRevision(answer, operation, forged.revision);
   await performed(ctx, operation, 0);
@@ -1601,6 +1612,92 @@ caseFor("operations.signed-out-session-gets-a-challenge")(async (ctx) => {
     "a signed-out approval",
   );
   check(error.statusCode === 401, "signed out, the 401 challenge for the account");
+  await performed(ctx, operation, 0);
+});
+
+/**
+ * A statement that the personal agent approved on the user's instruction: the conformance
+ * runner plays the agent that holds one.
+ */
+const approvedByAgent = (operation) => ({
+  operation_id: operation.operation_id,
+  revision: operation.revision,
+  approver: "agent",
+  reference: newApprovalReference(),
+});
+
+caseFor("operations.agent-approval")(async (ctx) => {
+  // An approval that says `approver: agent`, with a `reference` and no `input_type`, is acted
+  // on as a user's is (Operations 5, 6).
+  await ctx.operationsNegotiated();
+  if (ctx.scenario.proposals?.agent === undefined) throw new SkipCase("the scenario names no operation an agent approval performs");
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "agent");
+  check(typeof operation.terms === "object" && Object.keys(operation.terms).length > 0, "the operation has terms");
+  const answer = await request(ctx, signed, "agent", approvedByAgent(operation));
+  check(answer.operation === undefined && answer.declined === undefined, "performed, not asked again");
+  check(answer.status === 200, `answered as without operations, got ${answer.status}`);
+  await performed(ctx, operation, 1);
+});
+
+caseFor("operations.approval-without-approver")(async (ctx) => {
+  // `approver` is required: a `Poppy-Approval` without it, as version 2 sent, is a request
+  // without an approval and performs nothing (Operations 6).
+  await ctx.operationsNegotiated();
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "user");
+  const proposal = ctx.proposal("user");
+  const url = ctx.url(proposal.path);
+  const response = await ctx.send(proposal.method, url, {
+    headers: {
+      ...(await ctx.auth(signed.session, proposal.method, url, signed.token)),
+      "Content-Type": "application/json",
+      [APPROVAL_HEADER]: `operation_id="${operation.operation_id}", revision="${operation.revision}"`,
+    },
+    body: JSON.stringify(proposal.body ?? {}),
+  });
+  check(
+    response.status === 403 && (await errorOf(response)) === "approval_required",
+    "handled as a request without an approval",
+  );
+  await performed(ctx, operation, 0);
+});
+
+caseFor("operations.approval-declined")(async (ctx) => {
+  // A company that will not act on an approval that passes its checks declines it: HTTP 403,
+  // `approval_declined` with `operation_id` and `revision`, nothing performed, no new
+  // operation, and never the operation again for that approval (Operations 6).
+  await ctx.operationsNegotiated();
+  if (ctx.scenario.proposals?.declines_agent === undefined) {
+    throw new SkipCase("the scenario names no operation whose agent approval is declined");
+  }
+  const [, signed] = await signedInUser(ctx);
+  const operation = await propose(ctx, signed, "declines_agent");
+  const proposal = ctx.proposal("declines_agent");
+  const url = ctx.url(proposal.path);
+  const approval = approvedByAgent(operation);
+  const response = await ctx.send(proposal.method, url, {
+    headers: {
+      ...(await ctx.auth(signed.session, proposal.method, url, signed.token)),
+      "Content-Type": "application/json",
+      [APPROVAL_HEADER]: approvalHeader(approval),
+    },
+    body: JSON.stringify(proposal.body ?? {}),
+  });
+  check(response.status === 403, `a decline is HTTP 403, got ${response.status}`);
+  check(!response.headers.has("www-authenticate"), "in a JSON body, not a challenge");
+  const body = JSON.parse(await textOf(response));
+  check(body.error === "approval_declined", `approval_declined, got ${body.error}`);
+  const { error: _marker, ...members } = body;
+  const declined = parseApprovalDeclined(members);
+  check(
+    declined.operation_id === operation.operation_id && declined.revision === operation.revision,
+    "it names the approval's operation and revision",
+  );
+  check(!("operation" in body), "no new operation comes with a decline");
+  await performed(ctx, operation, 0);
+  const answer = await request(ctx, signed, "declines_agent", approval);
+  check(answer.declined !== undefined, "the same approval again is declined again");
   await performed(ctx, operation, 0);
 });
 
@@ -1926,11 +2023,39 @@ caseFor("protocol.ucp-profile")(async (ctx) => {
   check((metadata.token_endpoint_auth_methods_supported ?? []).includes("private_key_jwt"), "the issuer lists private_key_jwt");
 });
 
+/** The feedback endpoint the Session's tasks response lists (§9, §9.3), or a skip. */
+async function feedbackEndpointOf(ctx, session) {
+  const tasks = await new TasksClient({ transport: ctx.agent.transport }).get((await ctx.company()).document, { session });
+  if (tasks.feedbackEndpoint === undefined) throw new SkipCase("the company's tasks response lists no feedback endpoint");
+  return tasks.feedbackEndpoint;
+}
+
+caseFor("protocol.tasks-per-session")(async (ctx) => {
+  // `GET {tasks.endpoint}` with the Session header and no access token: 200 and the tasks
+  // response; a header that fails its checks, `invalid_session` (§9).
+  const document = (await ctx.company()).document;
+  const endpoint = tasksEndpoint(document);
+  if (endpoint === undefined) throw new SkipCase("the company lists no tasks endpoint");
+  for (const name of ["excluded_tasks", "skill_index", "feedback"]) {
+    check(!(name in document), `poppy.json no longer carries ${name}`);
+  }
+  const session = await ctx.session(ctx.newUser());
+  const answered = await ctx.send("GET", endpoint, { headers: await ctx.auth(session, "GET", endpoint) });
+  check(answered.status === 200, `the tasks response is 200, got ${answered.status}`);
+  const tasks = parseTasksResponse(JSON.parse(await textOf(answered)));
+  for (const skill of usableSkills(tasks, endpoint)) check(skill.url.startsWith("https://"), "a skill's url resolves to HTTPS");
+  const tampered = await ctx.auth(session, "POST", endpoint);
+  const refusedAnswer = await ctx.send("GET", endpoint, { headers: tampered });
+  check(
+    refusedAnswer.status === 400 && (await errorOf(refusedAnswer)) === "invalid_session",
+    "a Session header signed for another request is invalid_session",
+  );
+});
+
 caseFor("protocol.feedback-report")(async (ctx) => {
   // A report with the Session header, no scope: 202, or 200; malformed, 400 (§9.3).
-  const endpoint = feedbackEndpoint((await ctx.company()).document);
-  if (endpoint === undefined) throw new SkipCase("the company lists no feedback endpoint");
   const session = await ctx.session(ctx.newUser());
+  const endpoint = await feedbackEndpointOf(ctx, session);
   const post = async (body) =>
     ctx.send("POST", endpoint, {
       headers: { ...(await ctx.auth(session, "POST", endpoint)), "Content-Type": "application/json" },
@@ -2188,8 +2313,7 @@ caseFor("operator.signed-mcp")(async (ctx) => {
 
 caseFor("operator.signed-feedback")(async (ctx) => {
   const [, signed] = await signedInUser(ctx);
-  const endpoint = feedbackEndpoint((await ctx.company()).document);
-  if (endpoint === undefined) throw new SkipCase("the company lists no feedback endpoint");
+  const endpoint = await feedbackEndpointOf(ctx, signed.session);
   await new FeedbackClient({ transport: ctx.agent.transport }).report(
     endpoint,
     { task: "operator conformance", description: "A signed report." },
@@ -2500,8 +2624,7 @@ caseFor("dpop.conversation-and-stream")(async (ctx) => {
 
 caseFor("dpop.feedback")(async (ctx) => {
   const [signed] = await boundUser(ctx);
-  const endpoint = feedbackEndpoint((await ctx.company()).document);
-  if (endpoint === undefined) throw new SkipCase("the company lists no feedback endpoint");
+  const endpoint = await feedbackEndpointOf(ctx, signed.session);
   await new FeedbackClient({ transport: ctx.agent.transport }).report(
     endpoint,
     { task: "dpop conformance", description: "A report with a bound token." },
@@ -2669,8 +2792,7 @@ caseFor("no-issuer.signed-out-interfaces")(async (ctx) => {
   const endpoint = await ctx.conversationsEndpoint();
   const receipt = await ctx.agent.conversations.start(endpoint, message(ctx.scenario.greeting), { session });
   check(receipt.conversation_id, "a conversation starts signed out");
-  const feedback = feedbackEndpoint((await ctx.company()).document);
-  if (feedback === undefined) throw new SkipCase("the company lists no feedback endpoint");
+  const feedback = await feedbackEndpointOf(ctx, session);
   await new FeedbackClient({ transport: ctx.agent.transport }).report(
     feedback,
     { task: "no issuer", description: "A report from a signed-out Session." },

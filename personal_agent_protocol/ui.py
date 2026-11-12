@@ -49,7 +49,7 @@ from reactor.ui import (  # type: ignore[import-untyped]
     display_type,
 )
 
-from .models import _domain, known_handoff, known_responder
+from .models import _domain, known_handoff, known_responder, terms_leaves
 
 #: The display type of a sign-in waiting for the person.
 PAP_SIGN_IN_TYPE = "application/vnd.datalayer.pap.sign-in+json"
@@ -270,28 +270,46 @@ class PapTermsWas(BaseModel):
     terms: dict[str, Any] = Field(default_factory=dict)
 
 
-@display_type(PAP_CONFIRM_TYPE, version=2)
-class PapConfirm(Display):
-    """An operation a company returned, waiting for the person's approval (Operations 5).
+class PapDeclined(BaseModel):
+    """A company's decline of an approval (Operations 6): nothing was done. ``reason`` is
+    the company's own words for the person, shown as text and never followed;
+    ``instructions`` those of the alternative it offered, if any."""
 
-    What the person approves is exactly this revision: ``company``, the Company's
-    name; its ``summary``, verbatim and shown as text, so links, images and HTML in
-    it don't work (:func:`inert_summary`, which :meth:`text` applies); ``revision``
-    and ``expires_at``. ``terms`` are the company's own, for values worth showing;
-    ``differences`` what the personal agent's terms check found, to point out.
+    reason: str | None = None
+    instructions: str | None = None
+
+
+@display_type(PAP_CONFIRM_TYPE, version=3)
+class PapConfirm(Display):
+    """An operation a company returned (Operations 5): waiting for approval, approved on
+    the person's instruction, or declined by the company.
+
+    What is approved is exactly this revision: ``company``, the Company's name; its
+    ``terms``, the company's own values, always there; its ``summary`` when the company
+    wrote one, verbatim and shown as text, so links, images and HTML in it don't work
+    (:func:`inert_summary`, which :meth:`text` applies); ``revision`` and
+    ``expires_at``. Without a summary the text shows every value of the terms.
+    ``differences`` is what the personal agent's terms check found, to point out.
     ``does`` is what approving it does, as an application's Rules class it (``buy``
     when a term moves money); ``session`` the Session it is approved in, by a
     one-way reference; ``was`` the revision it replaced, when the terms changed.
 
+    ``approved_by`` is absent while the person is asked. ``agent`` says the personal
+    agent approved this revision itself on ``instruction``, the person's own, which the
+    card shows so they see what it rested on; ``user`` that the person did. ``declined``
+    says the company will not act on the approval: nothing was done, and a new revision
+    of the same action is the person's to approve.
+
     The buttons are the host's own: a display says what is asked, and the
-    person answers where the host asks them. Every operation is asked about.
+    person answers where the host asks them.
     """
 
     #: The Company's name (`organization.name`), or its domain.
     company: str = Field(min_length=1)
-    #: The company's own words, shown verbatim as text, never rephrased.
-    summary: str = Field(min_length=1)
-    terms: dict[str, Any] = Field(default_factory=dict)
+    #: The company's own words, shown verbatim as text, never rephrased; optional
+    #: (Operations 3).
+    summary: str | None = None
+    terms: dict[str, Any]
     #: The operation's ID at the company; with ``revision``, what is approved.
     operation_ref: str = Field(min_length=1)
     revision: str = Field(pattern=_IDENTIFIER)
@@ -302,6 +320,12 @@ class PapConfirm(Display):
     does: PapActionClass | None = None
     session: PapSessionShown | None = None
     was: PapTermsWas | None = None
+    #: Who approved this revision, once someone did (Operations 5, 6).
+    approved_by: Literal["user", "agent"] | None = None
+    #: The person's instruction an agent approval rested on, in their own words.
+    instruction: str | None = None
+    #: The company's decline of the approval (Operations 6).
+    declined: PapDeclined | None = None
 
     @field_validator("company")
     @classmethod
@@ -312,22 +336,51 @@ class PapConfirm(Display):
 
     @field_validator("summary")
     @classmethod
-    def _summary(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("an operation to approve says what it is, in the company's words")
+    def _summary(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("a summary says what the operation is, in the company's words")
         return value
 
     @model_validator(mode="after")
     def _was_earlier(self) -> PapConfirm:
         if self.was is not None and self.was.revision == self.revision:
             raise ValueError("the revision an operation replaced is another one")
+        if self.summary is None and not self.terms:
+            raise ValueError("an operation without a summary shows its terms")
+        if self.approved_by == "agent" and not (self.instruction or "").strip():
+            raise ValueError("an agent approval shows the instruction it rested on")
+        if self.instruction is not None and self.approved_by != "agent":
+            raise ValueError("only an agent approval rests on an instruction")
         return self
+
+    def _shown(self) -> str:
+        """The terms as text: the company's summary, else every value of the terms."""
+
+        if self.summary is not None:
+            return inert_summary(self.summary)
+        values = "; ".join(f"{path}: {value}" for path, value in terms_leaves(self.terms).items())
+        return inert_summary(values)
 
     def text(self) -> str:
         # Neither the Session's reference nor anything of the page's alone:
         # the text is also what a model and a transcript read.
+        if self.declined is not None:
+            said = f"{self.company} declined the approval: nothing was done. {self._shown()}"
+            if self.declined.reason:
+                said += f" It says: {inert_summary(self.declined.reason)}"
+            if self.declined.instructions:
+                said += f" Another way, it says: {inert_summary(self.declined.instructions)}"
+            return said
+        if self.approved_by == "agent":
+            return (
+                f"Approved for you at {self.company}, on your instruction "
+                f"\"{inert_summary(self.instruction or '')}\": {self._shown()} "
+                f"(revision {self.revision})"
+            )
+        if self.approved_by == "user":
+            return f"You approved at {self.company}: {self._shown()} (revision {self.revision})"
         said = (
-            f"{self.company} asks you to approve: {inert_summary(self.summary)} "
+            f"{self.company} asks you to approve: {self._shown()} "
             f"(revision {self.revision}, until {self.expires_at.isoformat()})"
         )
         if self.was is not None:

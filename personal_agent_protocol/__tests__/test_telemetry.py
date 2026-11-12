@@ -142,7 +142,7 @@ async def test_each_stage_of_a_journey_is_one_event(recorded: RecordingTelemetry
     ]
     assert polls[-1]["pap.session.signed_in"] is True
     approvals = [e.attributes for e in recorded.events if e.name == "pap.operation.ask_user"]
-    assert approvals[0] == {"pap.operation.status": "approved"}
+    assert approvals[0] == {"pap.operation.status": "approved", "pap.operation.approver": "user"}
     refreshes = [e for e in recorded.events if e.name == "pap.sign_in.refresh_token.refresh"]
     assert [e.attributes["pap.sign_in.status"] for e in refreshes] == [
         "signed_in",

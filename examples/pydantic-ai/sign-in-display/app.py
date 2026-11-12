@@ -75,7 +75,6 @@ async def read_sign_in_display() -> dict[str, Any]:
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
         organization=company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
 
     # A sign-in tool's answer, and the display a page draws for it.

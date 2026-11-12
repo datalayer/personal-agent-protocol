@@ -4,7 +4,8 @@
 # Every public code example runs: the README's and the docs'
 # Python and TypeScript blocks against reference companies, every tool of every Pydantic
 # AI example, and every Agent Runtimes PAP application built by the latest Agent
-# Runtimes release.
+# Runtimes release (or, for a release of this SDK that breaks its API, by the Agent
+# Runtimes branch that adopts it: see AGENT_RUNTIMES_REF below).
 
 name: Examples
 
@@ -45,6 +46,23 @@ jobs:
 
   agent-runtimes:
     runs-on: ubuntu-latest
+    env:
+      # The Agent Runtimes this SDK is tested with.
+      #
+      # Empty: the latest Agent Runtimes release from PyPI, and the examples of its tag.
+      # That is the rule: a released Agent Runtimes builds its PAP applications on this SDK.
+      #
+      # A branch or tag: Agent Runtimes from that git ref, and its examples. Only for a
+      # release of this SDK that breaks its API, since no Agent Runtimes release can
+      # accept an SDK version before it is published: a released one pins the previous
+      # minor, and the resolver would otherwise fall back to an old release that happens
+      # to have no upper bound. The ref is the Agent Runtimes branch that adopts the new
+      # SDK.
+      #
+      # 0.33.0 (PAP 0.4 as published, Operations version 3) is such a release: the ref is
+      # the adoption branch of https://github.com/datalayer/agent-runtimes/pull/140.
+      # Empty it again as soon as an Agent Runtimes release pins this SDK's minor.
+      AGENT_RUNTIMES_REF: feat/pap-0.33
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
@@ -53,9 +71,11 @@ jobs:
           python-version: '3.12'
           activate-environment: true
       - name: Install this SDK with the latest Agent Runtimes release
+        if: env.AGENT_RUNTIMES_REF == ''
         # `ui`: the AG-UI adapter its sign-in-display example draws through.
         run: uv pip install "agent-runtimes[a2a,ui]>=1.3.114" .
       - name: Build every Agent Runtimes PAP application of that release
+        if: env.AGENT_RUNTIMES_REF == ''
         run: |
           set -euo pipefail
           version="$(python -c "from importlib.metadata import version; print(version('agent-runtimes'))")"
@@ -64,3 +84,19 @@ jobs:
             https://github.com/datalayer/agent-runtimes.git agent-runtimes
           git -C agent-runtimes sparse-checkout set examples/personal-agent-protocol scripts
           python agent-runtimes/scripts/validate_pap_examples.py
+      - name: Install this SDK with Agent Runtimes at the ref that adopts it
+        if: env.AGENT_RUNTIMES_REF != ''
+        # Editable: a wheel of Agent Runtimes needs its built frontend, which a git
+        # checkout does not have and these examples do not use.
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --branch "$AGENT_RUNTIMES_REF" \
+            https://github.com/datalayer/agent-runtimes.git "$RUNNER_TEMP/agent-runtimes"
+          echo "agent-runtimes at $AGENT_RUNTIMES_REF ($(git -C "$RUNNER_TEMP/agent-runtimes" rev-parse --short HEAD))"
+          uv pip install -e "$RUNNER_TEMP/agent-runtimes[a2a,ui]" .
+      - name: Build every Agent Runtimes PAP application of that ref
+        if: env.AGENT_RUNTIMES_REF != ''
+        run: |
+          set -euo pipefail
+          python -c "from importlib.metadata import version; print('personal-agent-protocol', version('personal-agent-protocol'))"
+          python "$RUNNER_TEMP/agent-runtimes/scripts/validate_pap_examples.py"

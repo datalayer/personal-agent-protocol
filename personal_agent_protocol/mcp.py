@@ -37,13 +37,14 @@ from .json import loads_strict
 from .models import (
     ApiDescriptor,
     Approval,
+    ApprovalDeclined,
     DiscoveryDocument,
     Operation,
     ProtectedResourceMetadata,
     ProtocolModel,
     protected_resource_metadata_url,
 )
-from .operations import APPROVAL_META_KEY, operation_from
+from .operations import APPROVAL_DECLINED, APPROVAL_META_KEY, declined_from, operation_from
 from .reactor import SystemClock, parse_retry_after, send_bounded
 from .refusals import challenge_parameters, dpop_nonce_asked, refuse_redirect
 from .sessions import DPOP_NONCE_HEADER, AccessToken, PapSession
@@ -196,6 +197,8 @@ class McpToolResult(ProtocolModel):
     structured_content: dict[str, Any] | None = None
     is_error: bool = False
     operation: Operation | None = None
+    #: The company's decline of the approval the call carried (Operations 6).
+    declined: ApprovalDeclined | None = None
 
     @property
     def text(self) -> str:
@@ -274,12 +277,19 @@ class McpClient:
                 raise McpError(
                     "invalid_operation", "the tool returned a malformed operation"
                 ) from exc
+        declined = None
+        if isinstance(structured, dict) and structured.get("error") == APPROVAL_DECLINED:
+            try:
+                declined = declined_from(result)
+            except ValueError as exc:
+                raise McpError("invalid_decline", "the tool returned a malformed decline") from exc
         content = result.get("content")
         return McpToolResult(
             content=content if isinstance(content, list) else [],
             structured_content=structured if isinstance(structured, dict) else None,
             is_error=result.get("isError") is True,
             operation=operation,
+            declined=declined,
         )
 
     async def _ensure_initialized(self) -> None:

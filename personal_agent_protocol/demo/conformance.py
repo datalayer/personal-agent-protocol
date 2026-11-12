@@ -40,6 +40,8 @@ MANZANITA_SCENARIO = Scenario(
         ),
         "fails": Proposal("POST", "/api/orders/ord_7Hk2/returns"),
         "unknown": Proposal("POST", "/api/orders/ord_7Hk2/repairs"),
+        "agent": Proposal("POST", "/api/orders/ord_7Hk2/gift-wrap"),
+        "declines_agent": Proposal("POST", "/api/orders/ord_7Hk2/returns"),
     },
     operation_prompt="The jacket is not warm enough: can we exchange it for a warmer one?",
     account_prompt="Where is my jacket order?",
@@ -100,8 +102,8 @@ class DemoDriver:
         current = (await self.service.operation_record(operation_id)).operation
         await self.service.revise(
             operation_id,
-            summary=f"{current.summary} Ships in 5 days instead of 2.",
-            terms={**(current.terms or {}), "ships_in_days": 5},
+            summary=f"{current.shown} Ships in 5 days instead of 2.",
+            terms={**current.terms, "ships_in_days": 5},
         )
 
     async def forget_events(self, conversation_id: str) -> None:

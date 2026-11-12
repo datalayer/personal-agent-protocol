@@ -2,9 +2,9 @@
 #
 # BSD 3-Clause License
 
-"""The exact PAP draft this SDK implements.
+"""The exact PAP version this SDK implements.
 
-`PROTOCOL_PROFILE` is the draft (§1), `PROTOCOL_REVISION` the date of the
+`PROTOCOL_PROFILE` is the version (§1), `PROTOCOL_REVISION` the date of the
 upstream specification page it was implemented from, and the Operations
 extension version is `operations.OPERATIONS_VERSION`. The TypeScript SDK
 exports the same three values; `protocol/requirements.yaml`,
@@ -14,9 +14,9 @@ holds all of them equal.
 
 from __future__ import annotations
 
-#: The Personal Agent Protocol version implemented: draft 0.4, as of upstream commit 46beb21.
+#: The Personal Agent Protocol version implemented: 0.4 as published, the 1.0 release candidate.
 PROTOCOL_PROFILE = "0.4"
-#: The upstream specification revision implemented: the date of commit 46beb21.
-PROTOCOL_REVISION = "2026-11-06"
+#: The upstream specification revision implemented: the day 0.4 was published (commit 4803900).
+PROTOCOL_REVISION = "2026-11-10"
 
 __all__ = ["PROTOCOL_PROFILE", "PROTOCOL_REVISION"]

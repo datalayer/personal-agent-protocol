@@ -133,7 +133,7 @@ def render(reports: dict[str, dict[str, Any]]) -> str:
         "",
         "# Compatibility and conformance report",
         "",
-        f"SDK version **{_version()}**, PAP profile **{_PROFILE}** (the draft as of "
+        f"SDK version **{_version()}**, PAP profile **{_PROFILE}** (as published "
         f"{_REVISION}), Operations extension **v{_OPERATIONS}**. Each pairing runs every "
         "positive, negative and recovery fixture case over real TCP and TLS, the personal "
         "agent in one language and the reference company (Manzanita) in the other. A case "

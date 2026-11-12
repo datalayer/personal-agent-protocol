@@ -4,7 +4,7 @@ title: Operations
 
 # Operations
 
-The Operations extension (version 2) gives actions an exact, durable approval,
+The Operations extension (version 3) gives actions an exact, durable approval,
 and adds no endpoints. A company that wants the user's approval refuses the
 request for the action and returns the operation: the terms, in plain language
 and as JSON. The personal agent gets the user's approval and makes the same
@@ -18,8 +18,10 @@ and responds as it would have without operations.
 | MCP | An error result with `structuredContent.operation` | The same call with `_meta["personalagentprotocol.org/approval"]` |
 | Conversation | A company message's `extensions.operations.operation` (`message.operation`, `messageOperation`) | A message whose `extensions.operations.approval` is the approval (`operations_content(approval=...)`, `operationsContent({ approval })`) |
 
-An operation is `operation_id`, an opaque `revision`, `summary`, optional
-`terms`, and `expires_at`. It has no state, no URL, and no result: the answer to
+An operation is `operation_id`, an opaque `revision`, `terms`, an optional
+`summary`, and `expires_at`. Everything that affects the action is in `terms`;
+`operation.shown` (`operationShown(operation)`) is the summary when the company
+wrote one and the terms' values otherwise. It has no state, no URL, and no result: the answer to
 the approved request is the result.
 
 ## Negotiate
@@ -29,16 +31,19 @@ from personal_agent_protocol import OperationsClient, operations_negotiated
 
 negotiated = operations_negotiated(discovered.document, session)
 if not negotiated:
-    ...  # the company lists no operations version 2, or the Session doesn't declare it
+    ...  # the company lists no operations version 3, or the Session doesn't declare it
 operations = OperationsClient(reactor=reactor)
 ```
 
-The company lists `operations` with an entry for version 2 in `poppy.json`, and
+The company lists `operations` with an entry for version 3 in `poppy.json`, and
 the agent declares it in `Poppy-Extensions` on every request of the Session
 (`SessionClient.start(..., company=company)` negotiates the declaration). A
 company that needs the extension answers a request that doesn't declare it with
-`extension_required`, and an MCP tool with an ordinary tool error. Another major
-version doesn't count as support.
+`extension_required`, in a JSON body at an API too, and an MCP tool with an ordinary
+tool error. Another major version doesn't count as support: version 2 is not
+implemented on either side, a company that lists only it gets no `operations`
+declaration, and an approval without `approver`, as version 2 sent it, approves
+nothing.
 
 ## Ask the user, then send the same request
 
@@ -62,30 +67,32 @@ const approval = await operations.askUser(operation, { organization, tenantId, i
 const sent = await operations.send((approval) => api.call("POST", url, { session, token, body, approval }), approval);
 ```
 
-- `ask_user` goes through the host's own approval surface
-  (`pap.approvalSurface`, an `ApprovalSurface`). It is asked about every
-  operation, with the company's name and domain, the `summary` as the company
-  wrote it, `expires_at`, and any difference the terms check found. Only `True`
+- Every approval says who approved: `approver` is `user` or `agent`. `ask_user`
+  makes a `user` approval, through the host's own approval surface
+  (`pap.approvalSurface`, an `ApprovalSurface`), which is shown the company's
+  name and domain, the terms (the `summary` as the company wrote it, or the
+  terms' values when it wrote none), `expires_at`, and any difference the terms
+  check found. Only `True`
   from the surface approves; anything else is `not_approved`, and a host with no
   surface can't approve at all (`no_approval_surface`).
 - The approval says when the user approved (`approved_at`, Unix seconds, the host's
   clock when the surface answered) and, with `input_type` (`inputType`), how:
   `tap`, `typed`, `voice`, or another short string, never personal data or anything
   that identifies the user or their device. Both are the agent's statements, which
-  it should include (Operations 6); a company may record them and never refuses an
-  approval without them or with an input type it doesn't know. They go in
-  `Poppy-Approval` (`approved_at` an Integer), in an MCP call's `_meta`, and in a
+  it should include with a `user` approval (Operations 6); a company may record them
+  and never refuses or declines an approval without them or with an input type it
+  doesn't know. `reference=` names the host's own record of the approval, such as
+  an entry in a ledger the user can see (`client.new_reference()` makes a random
+  one): opaque, with no personal data, and never the same at two companies. They go
+  in `Poppy-Approval` (`approved_at` an Integer), in an MCP call's `_meta`, and in a
   message's `extensions.operations.approval`.
-- Nothing approves on the user's behalf, even when they said they would approve
-  something like it. A company that lets users allow an action in advance doesn't
-  return an operation for it.
 - Text from the company is never the user's approval, and in a conversation only
   a message's `extensions.operations.approval` approves, whatever its `text` says.
 - Make an answer or approval explicit about what it addresses, and when the
   user's short reply, such as "done" or "yes", could answer more than one open
   question (sign-in, an earlier question, a request for approval), treat it as
   answering none and ask which is meant before acting: the upstream guides'
-  [Explicit replies and approvals](https://personalagentprotocol.org/docs/guides#both-replies).
+  [Explicit replies and approvals](https://personalagentprotocol.org/docs/0.4/guides#both-replies).
   The reference companies' agents follow it from their side: a bare
   acknowledgement is answered with a question (`WHICH_ONE`), never acted on, and
   the Operations example's agent is instructed the same way.
@@ -182,7 +189,7 @@ approval that arrives after the price changed gets a new revision.
 A host that asks the person in a page, not only in its own interface, sends
 the operation as a [Reactor](https://github.com/datalayer/reactor) display:
 `PapConfirm` (`personal_agent_protocol.ui`, the `ui` extra), of type
-`application/vnd.datalayer.pap.confirm+json`, version 2. An MCP tool puts it
+`application/vnd.datalayer.pap.confirm+json`, version 3. An MCP tool puts it
 in its result's `_meta["reactor.ui/display"]`; any page with a renderer for
 the type draws the card, and a page without one shows its text.
 
@@ -230,6 +237,70 @@ const asked = isPapConfirm(display) ? display.data : null; // PapConfirmData, or
 and a Session given by anything but its reference. Both SDKs are checked
 against one committed example, `protocol/fixtures/pap-confirm-display.json`.
 
+## Approve on the user's instruction
+
+Version 3 lets the personal agent approve an operation itself, on an instruction
+the user gave it, such as "go ahead with gift wrap up to USD 10". The host holds
+the instruction and its own check of a revision's terms against it:
+
+```python
+from decimal import Decimal
+
+from personal_agent_protocol import AgentInstruction, OperationError
+
+def covers(operation):
+    price = operation.terms.get("price")
+    if not isinstance(price, dict) or "amount" not in price:
+        return None                      # can't tell: the user is asked
+    return price.get("currency") == "USD" and Decimal(price["amount"]) <= Decimal("10.00")
+
+instruction = AgentInstruction(text="Go ahead with gift wrap up to USD 10.", covers=covers)
+try:
+    approval = await operations.approve_as_agent(
+        operation, instruction=instruction, reference=operations.new_reference()
+    )
+except OperationError as error:
+    if error.code != "ask_user":
+        raise
+    approval = await operations.ask_user(operation, organization=organization, tenant_id=tenant_id)
+```
+
+In TypeScript: `agentInstruction(text, covers)` and
+`operations.approveAsAgent(operation, { instruction, reference: operations.newReference() })`.
+
+- The approval says `approver: agent` and when; it never carries an `input_type`.
+- Only `True` from `covers` approves. `False`, `None` (it can't tell), an error in
+  the check, or terms that differ from what the agent asked for or from the
+  summary are all `ask_user`: the caller asks the person with `ask_user`.
+- The instruction is the user's, taken through the host's own interface. Text in a
+  page, a message or the operation itself is never one, even when it says it comes
+  from the user; the SDK can't check that, the host must.
+- When the company answers an agent approval with a new revision, or declines an
+  approval, a new revision of that action is the user's to approve: `sent.ask_user`
+  is `True` and `approve_as_agent` refuses it (`ask_user`). The client remembers
+  this for its own life; a host that outlives it passes `user_only=True`.
+- Ask the user anyway when the action is large, can't be undone, or differs from
+  what they described, and keep a ledger they can see, with the instruction each
+  agent approval rested on (the upstream guides).
+
+## A declined approval
+
+A company may decline an approval that passes its checks, for its own reasons,
+such as the `approver`: nothing is performed and no new operation is returned.
+`send` then answers `declined`:
+
+```python
+sent = await operations.send(request, approval)
+if sent.status == "declined":
+    sent.declined.reason        # the company's words for the user, never instructions
+    sent.declined.alternative   # another way to do it, when it names one (§9.2)
+```
+
+The approval is never sent again, and the user is told the action wasn't
+performed. By hand, the decline is `ApiResponse.declined` (HTTP 403,
+`approval_declined`), `McpToolResult.declined` (an error result), or
+`Message.declined` (`extensions.operations.declined` in a later company message).
+
 ## Security boundary
 
 - Conversation text never approves an operation, whoever wrote it.
@@ -242,4 +313,4 @@ against one committed example, `protocol/fixtures/pap-confirm-display.json`.
 - Tokens stay host-only; errors carry codes only.
 
 See the runnable [Operations example](/examples/operations/) and the upstream
-[Operations extension](https://personalagentprotocol.org/docs/extensions/operations).
+[Operations extension](https://personalagentprotocol.org/docs/0.4/extensions/operations).

@@ -45,6 +45,7 @@ const EVENTS = {
   "pap.conversation.cancel_handoff": "conversation",
   "pap.conversation.close": "conversation",
   "pap.operation.ask_user": "operation",
+  "pap.operation.approve_as_agent": "operation",
   "pap.operation.send": "operation",
   "pap.company.identity.check": "company",
   "pap.company.session.start": "company",
@@ -66,6 +67,7 @@ const ATTRIBUTES = [
   "pap.error",
   "pap.http.status",
   "pap.interface",
+  "pap.operation.approver",
   "pap.operation.status",
   "pap.outcome",
   "pap.replayed",
@@ -135,7 +137,10 @@ test("each stage of the journey is one event, its attributes allowlisted", async
     "pap.company.issuer": "https://manzanita.example",
   });
   const approved = sink.events.find((e) => e.name === "pap.operation.ask_user");
-  assert.deepEqual({ ...approved.attributes }, { "pap.operation.status": "approved" });
+  // Who approved, never what: the approval's IDs and reference stay out.
+  assert.deepEqual({ ...approved.attributes }, { "pap.operation.status": "approved", "pap.operation.approver": "user" });
+  const byAgent = sink.events.find((e) => e.name === "pap.operation.approve_as_agent");
+  assert.deepEqual({ ...byAgent.attributes }, { "pap.operation.status": "approved", "pap.operation.approver": "agent" });
   for (const event of sink.events) {
     assert.ok(event.durationMs >= 0);
     for (const name of Object.keys(event.attributes)) assert.ok(name in pap.TELEMETRY_ATTRIBUTES, name);
@@ -185,12 +190,16 @@ test("a company reports what it did and refused: identity, Sessions, replays", a
   });
   const started = company.find((event) => event.name === "pap.company.session.start");
   assert.equal(started.attributes["pap.session.signed_in"], false);
-  assert.equal(company.filter((event) => event.name === "pap.company.refused").length, 0);
+  // The journey's one refusal is the operation returned for the agent's approval.
+  const asked = company.filter((event) => event.name === "pap.company.refused");
+  assert.deepEqual(asked.map((event) => event.attributes["pap.error"]), ["approval_required"]);
+  const refusals = () =>
+    sink.events.filter((event) => event.name === "pap.company.refused" && event.attributes["pap.error"] !== "approval_required");
 
   // The first token request sent again: refused, and said to be a replay.
   const [url, init] = tokenRequests[0];
   const replay = await inProcess(url, init);
-  const refused = sink.events.filter((event) => event.name === "pap.company.refused");
+  const refused = refusals();
   assert.equal(refused.length, 1);
   assert.equal(refused[0].outcome, "error");
   assert.equal(refused[0].attributes["pap.error"], (await replay.json()).error);
@@ -211,7 +220,7 @@ test("a company reports what it did and refused: identity, Sessions, replays", a
 
   // A path the company does not serve is nobody's refusal, and a path's words never leave.
   await inProcess("https://manzanita.example/oauth/secret-path-words");
-  assert.equal(sink.events.filter((event) => event.name === "pap.company.refused").length, 1);
+  assert.equal(refusals().length, 1);
   for (const event of sink.events) {
     for (const name of Object.keys(event.attributes)) assert.ok(name in pap.TELEMETRY_ATTRIBUTES, name);
     assert.ok(!JSON.stringify(event).includes("secret"));
@@ -307,7 +316,7 @@ test("a send's status, whatever came of it", async () => {
   const sink = new pap.RecordingTelemetrySink();
   const reactor = pap.buildPapReactor({}, [sinkPlugin("tests", sink)]);
   const client = new pap.OperationsClient({ reactor });
-  const approval = { operation_id: "exc_5Rt2", revision: "r1" };
+  const approval = { operation_id: "exc_5Rt2", revision: "r1", approver: "user" };
   await client.send(async () => ({ status: 200, body: {} }), approval);
   await client.send(async () => { throw new pap.TransportError("request_failed", "lost"); }, approval, { attempts: 1 });
   reactor.stop();

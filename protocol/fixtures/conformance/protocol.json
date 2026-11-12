@@ -372,16 +372,16 @@
           ],
           "operations": [
             {
-              "version": "2"
+              "version": "3"
             }
           ]
         }
       },
       "expect": {
         "negotiated": {
-          "operations": "2"
+          "operations": "3"
         },
-        "declared": "\"operations\";v=\"2\""
+        "declared": "\"operations\";v=\"3\""
       },
       "description": "An extension this agent does not implement is ignored; the ones it does are declared at the version the company lists (§3.3, §3.4)."
     },
@@ -408,6 +408,36 @@
         "declared": null
       },
       "description": "An entry of another major version isn't support for this one: nothing is declared."
+    },
+    {
+      "id": "protocol.operations-version-2-not-used",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "OPS-2-01"
+      ],
+      "check": "extension_negotiation",
+      "input": {
+        "company": {
+          "operations": [
+            {
+              "version": "2"
+            }
+          ],
+          "links": [
+            {
+              "version": "1"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "negotiated": {
+          "links": "1"
+        },
+        "declared": "\"links\";v=\"1\""
+      },
+      "description": "Operations version 2 is another major version than 3: a company that lists only 2 gets no operations declaration, and leaves approval to itself (Operations 2)."
     },
     {
       "id": "protocol.extension-recognized-from-the-request",
@@ -462,7 +492,7 @@
         ],
         "operations": [
           {
-            "version": "2"
+            "version": "3"
           }
         ],
         "gift-wrap": [
@@ -523,14 +553,34 @@
         "OPS-2-01"
       ],
       "check": "extension_required",
-      "description": "At an API, extension_required and its extension are in the WWW-Authenticate challenge (§3.3, §6).",
+      "description": "At an API too, extension_required and its extension are in a JSON body (§3.3, §7).",
+      "input": {
+        "status": 403,
+        "body": {
+          "error": "extension_required",
+          "extension": "operations"
+        }
+      },
+      "expect": {
+        "extension": "operations"
+      }
+    },
+    {
+      "id": "protocol.extension-required-not-in-a-challenge",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "OPS-2-01"
+      ],
+      "check": "extension_required",
+      "description": "extension_required is not an access token error: a WWW-Authenticate challenge that names it, with no JSON body, is not read as one (§3.3, §7).",
       "input": {
         "status": 403,
         "body": null,
         "www_authenticate": "DPoP error=\"extension_required\", extension=\"operations\""
       },
       "expect": {
-        "extension": "operations"
+        "extension": null
       }
     },
     {
@@ -595,7 +645,13 @@
       "input": {
         "operation_id": "exc_5Rt2",
         "revision": "1791487200-k3Jd9Qx2mW8v",
-        "summary": "Exchange the jacket for USD 70.00 more.",
+        "terms": {
+          "order_id": "ord_7Hk2",
+          "price_difference": {
+            "amount": "70.00",
+            "currency": "USD"
+          }
+        },
         "expires_at": "2026-10-10T18:00:00Z",
         "loyalty_points": 120
       },
@@ -604,6 +660,26 @@
         "extra": {
           "loyalty_points": 120
         }
+      },
+      "description": "An operation needs terms and no summary (Operations 3); members this version doesn't define are kept."
+    },
+    {
+      "id": "protocol.operation-requires-terms",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "OPS-3-01"
+      ],
+      "check": "operation",
+      "description": "An operation without terms is not one, whatever its summary says (Operations 3).",
+      "input": {
+        "operation_id": "exc_5Rt2",
+        "revision": "1791487200-k3Jd9Qx2mW8v",
+        "summary": "Exchange the jacket for USD 70.00 more.",
+        "expires_at": "2026-10-10T18:00:00Z"
+      },
+      "expect": {
+        "valid": false
       }
     },
     {
@@ -1113,8 +1189,8 @@
                 "domain": "example.com"
               },
               "web": {},
-              "feedback": {
-                "endpoint": "https://api.example.com/poppy/feedback"
+              "tasks": {
+                "endpoint": "https://api.example.com/poppy/tasks"
               }
             }
           },
@@ -2218,8 +2294,8 @@
                 "name": "Example",
                 "domain": "example.com"
               },
-              "feedback": {
-                "endpoint": "https://api.example.com/poppy/feedback"
+              "tasks": {
+                "endpoint": "https://api.example.com/poppy/tasks"
               },
               "web": {}
             }
@@ -2232,7 +2308,7 @@
       }
     },
     {
-      "id": "protocol.feedback-endpoint-https",
+      "id": "protocol.tasks-endpoint-https",
       "kind": "negative",
       "role": "personal-agent",
       "requirements": [
@@ -2240,7 +2316,7 @@
         "PAP-3-06"
       ],
       "check": "discovery_document",
-      "description": "Every URL the protocol defines is HTTPS, the feedback endpoint included (§3, §3.1).",
+      "description": "Every URL the protocol defines is HTTPS, the tasks endpoint included (§3, §3.1).",
       "input": {
         "protocol_version": "0.4",
         "organization": {
@@ -2250,8 +2326,8 @@
         "auth": {
           "issuer": "https://auth.example.com"
         },
-        "feedback": {
-          "endpoint": "http://api.example.com/poppy/feedback"
+        "tasks": {
+          "endpoint": "http://api.example.com/poppy/tasks"
         },
         "web": {}
       },
@@ -2260,14 +2336,14 @@
       }
     },
     {
-      "id": "protocol.feedback-endpoint-listed",
+      "id": "protocol.tasks-endpoint-listed",
       "kind": "positive",
       "role": "personal-agent",
       "requirements": [
         "PAP-9.3-01"
       ],
       "check": "discovery_document",
-      "description": "A company that wants feedback lists feedback.endpoint (§8).",
+      "description": "A company that lists excluded tasks, publishes skills or takes feedback lists tasks.endpoint in poppy.json (§3.1, §9); feedback, excluded_tasks and skill_index are no longer read from it.",
       "input": {
         "protocol_version": "0.4",
         "organization": {
@@ -2277,15 +2353,24 @@
         "auth": {
           "issuer": "https://auth.example.com"
         },
-        "feedback": {
-          "endpoint": "https://api.example.com/poppy/feedback"
+        "tasks": {
+          "endpoint": "https://api.example.com/poppy/tasks"
         },
         "web": {}
       },
       "expect": {
         "valid": true,
-        "feedback_endpoint": "https://api.example.com/poppy/feedback"
+        "tasks_endpoint": "https://api.example.com/poppy/tasks"
       }
+    },
+    {
+      "id": "protocol.tasks-per-session",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP-9-01"
+      ],
+      "description": "GET {tasks.endpoint} with the Session header and no access token answers 200 with the tasks response (excluded_tasks, skill_index, feedback), which poppy.json no longer carries; a Session header that fails its checks is invalid_session (§9)."
     },
     {
       "id": "protocol.feedback-report",
@@ -2309,22 +2394,22 @@
       "description": "Poppy-Extensions is an RFC 9651 List of Strings with the version in v; a header that fails to parse, or an item without a version, declares nothing (§3.4).",
       "input": {
         "declared": {
-          "operations": "2",
+          "operations": "3",
           "links": "1",
           "mediated-sign-in": "1"
         },
         "parse": {
-          "\"operations\";v=\"2\", \"links\";v=\"1\"": {
-            "operations": "2",
+          "\"operations\";v=\"3\", \"links\";v=\"1\"": {
+            "operations": "3",
             "links": "1"
           },
-          "\"operations\";v=\"2\"": {
-            "operations": "2"
+          "\"operations\";v=\"3\"": {
+            "operations": "3"
           },
           "\"operations\"": {},
-          "operations;v=\"2\"": {},
-          "\"operations\";v=2": {},
-          "\"operations\";v=\"2\",": {},
+          "operations;v=\"3\"": {},
+          "\"operations\";v=3": {},
+          "\"operations\";v=\"3\",": {},
           "\"Gift Wrap!\";v=\"1\", \"links\";v=\"1\"": {
             "links": "1"
           },
@@ -2332,7 +2417,7 @@
         }
       },
       "expect": {
-        "header": "\"links\";v=\"1\", \"operations\";v=\"2\""
+        "header": "\"links\";v=\"1\", \"operations\";v=\"3\""
       }
     },
     {

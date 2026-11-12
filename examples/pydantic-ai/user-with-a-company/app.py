@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from decimal import Decimal
 from typing import Any
 
 from pydantic_ai import Agent
@@ -29,6 +30,7 @@ from personal_agent_protocol import (
     operations_content,
 )
 from personal_agent_protocol.accounts import RefreshTokenClient, RefreshTokenContext
+from personal_agent_protocol.apis import ApiClient
 from personal_agent_protocol.demo.kit import (
     AgentIdentity,
     InProcessNetwork,
@@ -38,7 +40,31 @@ from personal_agent_protocol.demo.kit import (
     personal_agent_reactor,
 )
 from personal_agent_protocol.demo.manzanita import DOMAIN, manzanita
-from personal_agent_protocol.operations import OperationsClient, operations_negotiated
+from personal_agent_protocol.models import Operation
+from personal_agent_protocol.operations import (
+    AgentInstruction,
+    OperationsClient,
+    operations_negotiated,
+)
+
+#: The one instruction Ada gave Atlas before the journey, in her words. Atlas keeps it and
+#: checks each revision's terms against it; nothing a company says can add to it.
+GIFT_WRAP_INSTRUCTION = "Go ahead with gift wrap up to USD 10."
+GIFT_WRAP_LIMIT = Decimal("10.00")
+
+
+def gift_wrap_covered(operation: Operation) -> bool | None:
+    """Atlas's own check of a revision's terms against Ada's instruction: `True` only when
+    the price is in USD and within the limit, `None` when it can't tell (Ada is then asked)."""
+
+    price = operation.terms.get("price")
+    if not isinstance(price, dict) or not isinstance(price.get("amount"), str):
+        return None
+    try:
+        return price.get("currency") == "USD" and Decimal(price["amount"]) <= GIFT_WRAP_LIMIT
+    except ArithmeticError:
+        return None
+
 
 TENANT = "atlas-example"
 PAIRWISE = "usr_ada_at_manzanita_000000"
@@ -107,7 +133,6 @@ async def run_manzanita_journey() -> dict[str, Any]:
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
         organization=company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     steps.append(f"Ada opened {started.verification_uri} and entered the code")
     await shop.approve_device(started.user_code, account_id="acct_ada")
@@ -159,6 +184,31 @@ async def run_manzanita_journey() -> dict[str, Any]:
     await send_approval()
     steps.append(f"Ada approved; Manzanita: {result.text}")
 
+    # A second action, approved by Atlas itself on the one instruction Ada gave it
+    # (Operations 5): nobody is asked, the approval says `approver: agent`, and Atlas keeps
+    # its own record of it under `reference`.
+    api = ApiClient(transport=transport)
+    gift_wrap = f"https://{DOMAIN}/api/orders/ord_7Hk2/gift-wrap"
+    asked = await api.call("POST", gift_wrap, session=session, token=signed_in, body={})
+    if asked.operation is None:
+        raise RuntimeError("the example world is incomplete")
+    operations = OperationsClient(reactor=reactor)
+    by_atlas = await operations.approve_as_agent(
+        asked.operation,
+        instruction=AgentInstruction(text=GIFT_WRAP_INSTRUCTION, covers=gift_wrap_covered),
+        reference=operations.new_reference(),
+    )
+    wrapped = await operations.send(
+        lambda given: api.call(
+            "POST", gift_wrap, session=session, token=signed_in, body={}, approval=given
+        ),
+        by_atlas,
+    )
+    steps.append(
+        f'Atlas approved the gift wrap on Ada\'s instruction "{GIFT_WRAP_INSTRUCTION}" '
+        f"({by_atlas.approver}, {wrapped.status})"
+    )
+
     # The refresh token: narrowed for read-only follow-up, then revoked.
     accounts = RefreshTokenClient(reactor=reactor, http_client=http)
     context = RefreshTokenContext(
@@ -181,6 +231,8 @@ async def run_manzanita_journey() -> dict[str, Any]:
         "steps": steps,
         "conversation_kept_its_id_across_sign_in": page.conversation_id == conversation_id,
         "ada_was_asked": len(approvals.asked),
+        "approved_by_atlas_on_her_instruction": by_atlas.approver == "agent"
+        and wrapped.status == "answered",
         "exchanges_performed": len(shop_plugin.executor.performed),
         "narrowed_to": narrowed.granted_scopes,
         "revoked": revoked.revoked,

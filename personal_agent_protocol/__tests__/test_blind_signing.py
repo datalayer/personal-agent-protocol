@@ -188,7 +188,6 @@ async def test_a_company_takes_an_agent_that_signs_everything_blindly() -> None:
         scopes=("orders:read",),
         tenant_id="t",
         organization=company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await shop.approve_device(started.user_code, account_id="acct_ada")
     clock.advance(started.poll_interval)

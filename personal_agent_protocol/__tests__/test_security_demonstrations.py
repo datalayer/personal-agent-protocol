@@ -128,7 +128,6 @@ async def device_sign_in(world: World) -> tuple[AccessToken, str]:
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -159,7 +158,9 @@ async def approve_it(world: World, operation: Any, session: PapSession, token: A
         session=session,
         token=token,
         body={},
-        approval=Approval(operation_id=operation.operation_id, revision=operation.revision),
+        approval=Approval(
+            approver="user", operation_id=operation.operation_id, revision=operation.revision
+        ),
     )
 
 
@@ -241,14 +242,16 @@ async def test_cross_tenant_access_is_refused() -> None:
     assert await probe(world, session, token) == 200
 
     # Another tenant of Atlas has another User ID, and another delegated key (§5.2). Naming
-    # Ada's `sid` it is another User in her Session: `invalid_session`, not a way in (§5.3).
+    # Ada's `sid` it is not in her Session: a Session is found by `client_id`, `sid` and
+    # User ID, so this is another one, signed out, and no way in to her orders (§5.3).
     stranger = "usr_somebody_else_000000"
     other = dataclasses.replace(session, sub=stranger, tenant_id="another-tenant")
     refused = await world.http.get(
         ORDERS,
         headers=await session_headers(world.reactor, "GET", ORDERS, session=other, token=None),
     )
-    assert refused.status_code == 400 and refused.json()["error"] == "invalid_session"
+    assert refused.status_code == 401 and not refused.content
+    assert await probe(world, session, token) == 200
     keys = world.host.delegated_keys
     theirs = await keys.current(tenant_id="another-tenant", issuer=session.issuer, sub=stranger)
     ours = await keys.current(tenant_id=TENANT, issuer=session.issuer, sub=session.sub)
@@ -331,7 +334,8 @@ async def test_retries_are_safe() -> None:
         )
 
     sent = await OperationsClient(reactor=world.reactor).send(
-        request, Approval(operation_id=operation.operation_id, revision=operation.revision)
+        request,
+        Approval(approver="user", operation_id=operation.operation_id, revision=operation.revision),
     )
     # Sent again with the same approval, never assumed failed, and not performed twice.
     assert sent.status == "answered" and sent.answer.status == 200  # type: ignore[union-attr]

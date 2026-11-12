@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { operationShown } from "../../lib/index.js";
 
 import { exportJWK, generateKeyPair } from "jose";
 
@@ -72,8 +73,8 @@ async function runPairing({ config, cases } = {}) {
         async revise(operationId) {
           const current = (await company.service.operationRecord(operationId)).revisions.at(-1);
           await company.service.revise(operationId, {
-            summary: `${current.summary} Ships in 5 days instead of 2.`,
-            terms: { ...(current.terms ?? {}), ships_in_days: 5 },
+            summary: `${operationShown(current)} Ships in 5 days instead of 2.`,
+            terms: { ...current.terms, ships_in_days: 5 },
           });
         },
         async forgetEvents(conversationId) {

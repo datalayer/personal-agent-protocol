@@ -25,6 +25,7 @@ import shutil
 import ssl
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -56,8 +57,12 @@ from personal_agent_protocol.demo.sockets import (
     _DialLocal,
     served_over_tls,
 )
-from personal_agent_protocol.models import Author, operations_content
-from personal_agent_protocol.operations import OperationsClient, operations_negotiated
+from personal_agent_protocol.models import Author, Operation, operations_content
+from personal_agent_protocol.operations import (
+    AgentInstruction,
+    OperationsClient,
+    operations_negotiated,
+)
 
 pytest.importorskip("uvicorn")
 
@@ -233,6 +238,40 @@ class _Journey:
         assert answer.body == expect["body"]
         self.seen["read"] = True
 
+    async def agent_approve(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
+        """The agent approves an operation itself, on the one instruction the user gave it:
+        nobody is asked, and the approval says `approver: agent` (Operations 5, 6)."""
+
+        api = ApiClient(transport=self.transport)
+        url = f"https://{self.domain}{step['path']}"
+        asked = await api.call(
+            step["method"], url, session=self.session, token=self.signed_in, body={}
+        )
+        operation = asked.operation
+        assert operation is not None and operation.terms == expect["terms"]
+        surface = ScriptedApprovals(always=True)
+        client = OperationsClient(reactor=self.reactor)
+        approval = await client.approve_as_agent(
+            operation,
+            instruction=scripted_instruction(step["instruction"]),
+            reference=client.new_reference(),
+        )
+        assert approval.approver == expect["approver"] and approval.input_type is None
+        assert (len(surface.asked) > 0) is expect["asked_user"]
+        sent = await client.send(
+            lambda given: api.call(
+                step["method"],
+                url,
+                session=self.session,
+                token=self.signed_in,
+                body={},
+                approval=given,
+            ),
+            approval,
+        )
+        assert sent.status == "answered" and sent.answer.status == expect["status"]
+        self.seen["agent_approval"] = {"approver": approval.approver}
+
     async def continue_step(self, step: dict[str, Any], expect: dict[str, Any]) -> None:
         endpoint = self.company.document.agent.protocols[0].endpoint
         self.page = await self.conversations.send(
@@ -284,6 +323,32 @@ class _Journey:
         self.seen["operation"] = {"operation_id": proposal.operation_id, "performed": len(done)}
 
 
+def scripted_instruction(spec: dict[str, Any]) -> AgentInstruction:
+    """The journey's one instruction, as the user gave it to the agent, with the host's own
+    check of a revision's terms against it: the amount at `amount_path`, in `currency`, is
+    at most `limit`. Anything it can't read is `None`: the user is asked."""
+
+    def at(terms: dict[str, Any], path: str) -> Any:
+        value: Any = terms
+        for key in path.split("."):
+            if not isinstance(value, dict) or key not in value:
+                return None
+            value = value[key]
+        return value
+
+    def covers(operation: Operation) -> bool | None:
+        amount = at(operation.terms, spec["amount_path"])
+        currency = at(operation.terms, spec["currency_path"])
+        if not isinstance(amount, str) or not isinstance(currency, str):
+            return None
+        try:
+            return currency == spec["currency"] and Decimal(amount) <= Decimal(spec["limit"])
+        except ArithmeticError:
+            return None
+
+    return AgentInstruction(text=spec["text"], covers=covers)
+
+
 _STEPS = {
     "discover": _Journey.discover,
     "session": _Journey.session_step,
@@ -292,6 +357,7 @@ _STEPS = {
     "api_read": _Journey.api_read,
     "continue": _Journey.continue_step,
     "approve": _Journey.approve,
+    "agent_approve": _Journey.agent_approve,
 }
 
 

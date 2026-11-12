@@ -119,7 +119,6 @@ async function deviceSignIn(w, accountId, scopes = ["orders:read", "orders:write
     scopes,
     tenantId: TENANT,
     organization: w.company.document.organization,
-    protectedResources: w.metadata.protected_resources,
   });
   assert.deepEqual([started.organizationName, started.organizationDomain], ["Manzanita Outfitters", "manzanita.example"]);
   await w.shop.approveDevice(started.userCode, { accountId });
@@ -197,7 +196,7 @@ test("after sign-out what used the account stays and asks for sign-in", async ()
   assert.deepEqual([read.code, read.statusCode], ["insufficient_scope", 401]);
   // The operation belongs to the account: signed out, the same Session is asked to sign in.
   const { operation } = proposed;
-  const approval = { operation_id: operation.operation_id, revision: operation.revision };
+  const approval = { operation_id: operation.operation_id, revision: operation.revision, approver: "user" };
   const op = await refusal(w.api.call("POST", EXCHANGE, { session, body: {}, approval }));
   assert.ok(op instanceof ApiError);
   assert.deepEqual([op.code, op.statusCode], ["insufficient_scope", 401]);
@@ -224,7 +223,7 @@ test("an operation returned signed out is approved in any signed-out Session of 
   const notes = {
     description: "Notes",
     openapi: () => ({}),
-    handle: async () => ({ operation: { action: "orders.note", summary: "Add a note." } }),
+    handle: async () => ({ operation: { action: "orders.note", summary: "Add a note.", terms: { note: "Add a note." } } }),
   };
   const executor = {
     action: "orders.note",
@@ -250,14 +249,14 @@ test("an operation returned signed out is approved in any signed-out Session of 
   const answered = await w.api.call("POST", url, { session, body: {} });
   assert.equal(answered.status, 403);
   const { operation } = answered;
-  const approval = { operation_id: operation.operation_id, revision: operation.revision };
+  const approval = { operation_id: operation.operation_id, revision: operation.revision, approver: "user" };
   // Signed in, the Session can't approve it: as if it had no approval.
   const [token] = await deviceSignIn(w, "acct_ada");
   const signed = await w.api.call("POST", url, { session, token, body: {}, approval });
   assert.notEqual(signed.operation.operation_id, operation.operation_id);
   assert.deepEqual(performed, []);
   // The Session that returned it ends: another signed-out Session of theirs approves it.
-  assert.ok(await w.shop.endSession(session.clientId, session.sid));
+  assert.ok(await w.shop.endSession(session.clientId, session.sid, session.sub));
   const done = await w.api.call("POST", url, { session: other, body: {}, approval });
   assert.equal(done.status, 200);
   assert.deepEqual(performed, [operation.operation_id]);
@@ -532,7 +531,7 @@ test("a company ending a Session, and the personal agent starting a new one", as
   const session = await w.start();
   const ended = session.sid;
   await w.conversations.start(w.endpoint, w.message("Hello"), { session, wait: 0 });
-  assert.equal(await w.shop.endSession(session.clientId, ended), true);
+  assert.equal(await w.shop.endSession(session.clientId, ended, session.sub), true);
   captured.length = 0;
 
   // `session_ended`, HTTP 400, JSON; the request sent once more with a new `sid` (§5.5).
@@ -583,7 +582,7 @@ test("a browser joins: the cookie acts for the Session, its account and scopes, 
   await w.tokens.revoke(reference, { context: w.context });
   const out = await w.shop.webSession(web);
   assert.deepEqual([out.sid, out.accountId, out.scopes], [session.sid, undefined, []]);
-  await w.shop.endSession(session.clientId, session.sid);
+  await w.shop.endSession(session.clientId, session.sid, session.sub);
   assert.equal(await w.shop.webSession(web), undefined);
   assert.equal(await w.shop.webSession(web), undefined);
   assert.equal(await w.shop.webSession("nothing"), undefined);
@@ -703,7 +702,6 @@ async function deviceRefusal(w, scopes = ["orders:read", "orders:write"]) {
       scopes,
       tenantId: TENANT,
       organization: w.company.document.organization,
-      protectedResources: w.metadata.protected_resources,
     }),
   );
   return refused.code;
@@ -791,13 +789,15 @@ test("a company grants fewer scopes than asked, and says which", async () => {
   assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, agentScopes: ["nothing:here"] }), Error);
 });
 
-test("extension_required at an API is in the challenge", async () => {
+test("extension_required at an API is in a JSON body", async () => {
+  // Not an access token error: a JSON body at an API too, no challenge (§3.3, §7).
   const w = await world({ extensions: [] });
   const session = await w.start();
   const [token] = await deviceSignIn(w, "acct_ada");
   const response = await w.postJson(session, EXCHANGE, {}, token);
   assert.equal(response.status, 403);
-  assert.equal(response.headers.get("www-authenticate"), 'Bearer error="extension_required", extension="operations"');
+  assert.equal(response.headers.has("www-authenticate"), false);
+  assert.deepEqual(await response.json(), { error: "extension_required", extension: "operations" });
   const raised = await refusal(w.api.call("POST", EXCHANGE, { session, token, body: {} }));
   assert.ok(raised instanceof ApiError);
   assert.equal(raised.code, "extension_required");

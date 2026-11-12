@@ -56,6 +56,8 @@ import {
   type CompanyMcp,
   type CompanyService,
   type CompanyStore,
+  type Decline,
+  type DeclineRequest,
   type OperationExecutor,
   type ProposedOperation,
   type Reply,
@@ -113,6 +115,24 @@ export const UCP_PRODUCTS = [
   { id: "trailhead-shell-m", title: "Trailhead shell jacket, M", price: { amount: 8900, currency: "USD" } },
 ] as const;
 
+/**
+ * Manzanita's own rule (Operations 6): a return is refunded only on the person's own approval.
+ * An approval a personal agent gave on an instruction is declined, with a way on; the same
+ * revision approved by the person is acted on.
+ */
+export function declineAgentReturns(request: DeclineRequest): Decline | undefined {
+  if (request.action === "orders.return" && request.approval.approver === "agent") {
+    return {
+      reason: "A return is refunded only when you approve it yourself.",
+      alternative: {
+        instructions: "Approve the return when your personal agent asks you.",
+        references: [{ type: "web", url: "https://manzanita.example/returns" }],
+      },
+    };
+  }
+  return undefined;
+}
+
 export const CONFIG_OPTIONS: CompanyConfigOptions = {
   name: "Manzanita Outfitters",
   domain: DOMAIN,
@@ -130,6 +150,7 @@ export const CONFIG_OPTIONS: CompanyConfigOptions = {
   },
   scopeHints: { "orders:read": ["none", true], "orders:write": ["reversible", true] },
   excludedTasks: [{ task: "Change the size of an item after it has shipped" }],
+  decline: declineAgentReturns,
   feedbackAnswers: {
     "Pay with a gift card": {
       instructions: "Gift cards are applied on the checkout page, before paying.",
@@ -353,7 +374,7 @@ export class ExchangeExecutor implements OperationExecutor {
 
   async perform(operation: Operation, _accountId: string | undefined): Promise<ActionResult> {
     this.performed.push(operation.operation_id);
-    const terms = (operation.terms ?? {}) as Record<string, unknown>;
+    const terms = operation.terms as Record<string, unknown>;
     const difference = (terms.price_difference ?? {}) as Record<string, unknown>;
     const amount = `${String(difference.currency ?? "USD")} ${String(difference.amount ?? "0.00")}`;
     return {

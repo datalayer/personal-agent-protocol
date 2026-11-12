@@ -39,6 +39,8 @@ from ..company import (
     CompanyConfig,
     CompanyService,
     CompanyStore,
+    Decline,
+    DeclineRequest,
     OperationFailed,
     OperationOutcomeUnknown,
     ProposedOperation,
@@ -102,6 +104,23 @@ UCP_PRODUCTS: tuple[dict[str, Any], ...] = (
     },
 )
 
+
+def decline_agent_returns(request: DeclineRequest) -> Decline | None:
+    """Manzanita's own rule (Operations 6): a return is refunded only on the person's own
+    approval. An approval a personal agent gave on an instruction is declined, with a way
+    on; the same revision approved by the person is acted on."""
+
+    if request.action == "orders.return" and request.approval.approver == "agent":
+        return Decline(
+            reason="A return is refunded only when you approve it yourself.",
+            alternative={
+                "instructions": "Approve the return when your personal agent asks you.",
+                "references": [{"type": "web", "url": "https://manzanita.example/returns"}],
+            },
+        )
+    return None
+
+
 CONFIG = CompanyConfig(
     name="Manzanita Outfitters",
     domain=DOMAIN,
@@ -116,6 +135,7 @@ CONFIG = CompanyConfig(
     },
     scope_hints={"orders:read": ("none", True), "orders:write": ("reversible", True)},
     excluded_tasks=({"task": "Change the size of an item after it has shipped"},),
+    decline=decline_agent_returns,
     feedback_answers={
         "Pay with a gift card": {
             "instructions": "Gift cards are applied on the checkout page, before paying.",

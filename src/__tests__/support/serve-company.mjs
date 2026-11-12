@@ -21,6 +21,7 @@
 // "account_id"} → {"ok": ...}, and {"op": "performed", "operation_id"} → {"count"}.
 // Config "world" names a conformance world: Manzanita configured as it says.
 import { readFileSync } from "node:fs";
+import { operationShown } from "../../../lib/index.js";
 
 import { worldConfig } from "./conformance.mjs";
 import { channel } from "./lines.mjs";
@@ -84,8 +85,8 @@ while (true) {
       const record = await company.service.operationRecord(command.operation_id);
       const current = record.revisions.at(-1);
       await company.service.revise(command.operation_id, {
-        summary: `${current.summary} Ships in 5 days instead of 2.`,
-        terms: { ...(current.terms ?? {}), ships_in_days: 5 },
+        summary: `${operationShown(current)} Ships in 5 days instead of 2.`,
+        terms: { ...current.terms, ships_in_days: 5 },
       });
       lines.send({ ok: true });
     } else if (command.op === "forget_events") {

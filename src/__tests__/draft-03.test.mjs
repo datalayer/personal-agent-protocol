@@ -19,7 +19,8 @@ import {
   buildClientAssertionClaims,
   discoverCompany,
   effectiveChanges,
-  excludedTasks,
+  SessionFetchClient,
+  TasksClient,
   listsResource,
   offersDevice,
   offersDirect,
@@ -77,7 +78,6 @@ function deviceBegin(w, device, scopes) {
     scopes,
     tenantId: TENANT,
     organization: w.company.document.organization,
-    protectedResources: w.metadata.protected_resources,
   });
 }
 
@@ -122,8 +122,8 @@ test("an ended Session's sid is refused, not a new Session", async () => {
   const w = await world();
   const session = await w.sessions.start(w.who);
   assert.equal((await report(w, session)).status, 202);
-  assert.equal(await w.shop.endSession(session.clientId, session.sid), true);
-  assert.equal(await w.shop.endSession(session.clientId, session.sid), false);
+  assert.equal(await w.shop.endSession(session.clientId, session.sid, session.sub), true);
+  assert.equal(await w.shop.endSession(session.clientId, session.sid, session.sub), false);
   await refusedWith(await report(w, session), 400, { error: "session_ended" });
 
   // A Session past the lifetime the company gives it has ended the same way.
@@ -150,19 +150,33 @@ const changed = (session, change) =>
   });
 
 test("a Session keeps the Agent ID it started with", async () => {
+  // The Agent ID is fixed when the Session starts and not checked again (§5.3): a later request
+  // naming another, or none, continues the same Session.
   const w = await world();
   for (const other of ["agt_shopping", undefined]) {
     const session = await w.sessions.start({ ...w.who, agentId: "agt_travel" });
     assert.equal((await report(w, session)).status, 202);
-    await refusedWith(await report(w, changed(session, other === undefined ? {} : { agentId: other })), 400, { error: "invalid_session" });
+    const known = w.shop.store.keys(RecordKinds.session).length;
+    assert.equal((await report(w, changed(session, other === undefined ? {} : { agentId: other }))).status, 202);
+    assert.equal(w.shop.store.keys(RecordKinds.session).length, known);
   }
+  const stored = (await w.shop.store.records(RecordKinds.session)).map((record) => record.value);
+  assert.deepEqual([...new Set(stored.map((item) => item.agentId))], ["agt_travel"]);
 });
 
-test("a Session keeps the User ID it started with", async () => {
+test("a known sid with another User ID is another Session", async () => {
+  // A Session is found by `client_id`, `sid` and User ID (§5.3): the same `sid` with another
+  // User ID starts another Session, signed out, never `invalid_session`; ending one leaves the
+  // other (§5.5).
   const w = await world();
   const session = await w.sessions.start(w.who);
   assert.equal((await report(w, session)).status, 202);
-  await refusedWith(await report(w, changed(session, { sub: "usr_somebody_else_000000" })), 400, { error: "invalid_session" });
+  const other = changed(session, { sub: "usr_somebody_else_000000" });
+  assert.equal((await report(w, other)).status, 202);
+  assert.equal(w.shop.store.keys(RecordKinds.session).length, 2);
+  assert.equal(await w.shop.endSession(session.clientId, session.sid, session.sub), true);
+  await refusedWith(await report(w, session), 400, { error: "session_ended" });
+  assert.equal((await report(w, other)).status, 202);
 });
 
 test("an access token without the Session header is invalid_session", async () => {
@@ -287,9 +301,12 @@ test("an unknown changes hint is read as irreversible", () => {
 
 test("the excluded tasks are read and their alternatives filtered", async () => {
   const w = await world();
-  assert.equal(w.company.document.excluded_tasks.url, "https://manzanita.example/poppy/excluded-tasks.json");
-  const excluded = await excludedTasks(w.company, { reactor: w.host.reactor });
-  assert.deepEqual(excluded.tasks.map((task) => task.task), ["Change the size of an item after it has shipped"]);
+  assert.equal(w.company.document.tasks.endpoint, "https://manzanita.example/poppy/tasks");
+  const session = await w.sessions.start(w.who);
+  const transport = new SessionFetchClient({ reactor: w.host.reactor, fetch: w.fetch });
+  const excluded = await new TasksClient({ transport }).get(w.company, { session });
+  assert.equal(excluded.available, true);
+  assert.deepEqual(excluded.excludedTasks.map((task) => task.task), ["Change the size of an item after it has shipped"]);
   const alternative = parseAlternative({
     instructions: "Use the API.",
     references: [

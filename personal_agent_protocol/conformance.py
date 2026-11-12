@@ -79,16 +79,18 @@ from .device import DeviceSignInClient
 from .discovery import DiscoveryClient, _metadata_url
 from .errors import AuthorizationError, PersonalAgentProtocolError, TransportError
 from .extensions import negotiate_extensions
-from .feedback import FeedbackClient, FeedbackReport, feedback_endpoint
+from .feedback import FeedbackClient, FeedbackReport
 from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
 from .models import (
     BROWSER_SIGN_IN_SCOPE,
     Approval,
+    ApprovalDeclined,
     Author,
     ConversationEvent,
     DiscoveredCompany,
     Message,
     Operation,
+    TasksResponse,
     operations_content,
 )
 from .operations import (
@@ -96,6 +98,7 @@ from .operations import (
     OPERATIONS_VERSION,
     OperationsClient,
     approval_header,
+    new_approval_reference,
 )
 from .operator_signatures import (
     OPERATOR_SIGNATURE_REFUSED,
@@ -131,6 +134,7 @@ from .sessions import (
     PapSession,
     SessionClient,
 )
+from .tasks import TasksClient, tasks_endpoint
 from .transport import SESSION_HEADER, SessionHttpClient, session_headers
 from .ucp import UcpProfile, speaks_ucp, ucp_profile_url
 
@@ -268,7 +272,9 @@ class Scenario:
     """What the suite asks of one company: its scopes, paths, and prompts.
 
     `proposals` are keyed `user` (it is performed), `fails` (it fails partway),
-    and `unknown` (its outcome stays unknown). `operation_prompt` makes the
+    `unknown` (its outcome stays unknown), `agent` (performed on an agent approval)
+    and `declines_agent` (an agent approval of it is declined, the user's acted on).
+    `operation_prompt` makes the
     company agent return the `user` operation in a conversation;
     `account_prompt` makes it ask for sign-in. `mcp_read_tool` needs
     `read_scope`; `mcp_propose_tool` returns the `user` operation.
@@ -445,14 +451,15 @@ class ConformanceContext:
         return endpoint
 
     async def operations_negotiated(self) -> None:
-        """Skip unless the company lists Operations v2 and this agent declares it (Operations 2)."""
+        """Skip unless the company lists Operations version 3 and this agent declares it
+        (Operations 2)."""
 
         negotiated = negotiate_extensions(
             (await self.company()).document.extensions,
             supported=self.agent.identity.supported_extensions,
         )
         if negotiated.get("operations") != OPERATIONS_VERSION:
-            raise SkipCase("operations v2 is not negotiated with this company")
+            raise SkipCase("operations version 3 is not negotiated with this company")
 
     def url(self, path: str) -> str:
         """An API path at the company's API (its OpenAPI `url`'s origin), else its origin."""
@@ -538,7 +545,6 @@ class ConformanceContext:
             scopes=tuple(scopes or self.scenario.scopes),
             tenant_id=self.tenant_id,
             organization=(await self.company()).document.organization,
-            protected_resources=metadata.protected_resources,
             dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
             pairwise_user_id=session.sub,
         )
@@ -1020,13 +1026,15 @@ async def _session_header_twice(ctx: ConformanceContext, fixture: FixtureCase) -
     expect_refusal(response, fixture.expect["status"], fixture.expect["error"], fixture.id)
 
 
-@case("security.session-sub-stays-the-same")
-async def _session_sub(ctx: ConformanceContext, fixture: FixtureCase) -> None:
-    """A known `sid` keeps its `sub` (§5.2, §5.3): another User ID in it is refused."""
+@case("security.session-found-by-user-id")
+async def _session_sub(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A Session is found by `client_id`, `sid` and User ID (§5.3): a known `sid` with
+    another User ID is another Session, signed out, answered as any new one is and never
+    with `invalid_session`."""
 
     session = await ctx.session(ctx.new_user())
     url = ctx.url(ctx.scenario.read_path)
-    await ctx.send("GET", url, headers=await ctx.auth(session, "GET", url))
+    first = await ctx.send("GET", url, headers=await ctx.auth(session, "GET", url))
     other = PapSession(
         sid=session.sid,
         sub=ctx.new_user(),
@@ -1035,7 +1043,12 @@ async def _session_sub(ctx: ConformanceContext, fixture: FixtureCase) -> None:
         tenant_id=session.tenant_id,
     )
     response = await ctx.send("GET", url, headers=await ctx.auth(other, "GET", url))
-    expect_refusal(response, fixture.expect["status"], fixture.expect["error"], fixture.id)
+    check(_error(response) != "invalid_session", "another User ID on a known sid is no error")
+    check(
+        response.status_code == first.status_code,
+        f"it is answered as a new signed-out Session is ({first.status_code}), "
+        f"got {response.status_code}",
+    )
 
 
 @case("security.access-token-of-another-agent")
@@ -1259,7 +1272,6 @@ async def _unknown_scope(ctx: ConformanceContext, _: FixtureCase) -> None:
             scopes=("conformance:not-a-scope",),
             tenant_id=ctx.tenant_id,
             organization=(await ctx.company()).document.organization,
-            protected_resources=metadata.protected_resources,
         )
     check(raised.value.code == "invalid_scope", f"got {raised.value.code}")
 
@@ -2016,7 +2028,9 @@ async def _performed(ctx: ConformanceContext, operation: Operation, times: int) 
 def _approved(operation: Operation) -> Approval:
     """A statement of the user's approval: the conformance runner plays the user here."""
 
-    return Approval(operation_id=operation.operation_id, revision=operation.revision)
+    return Approval(
+        operation_id=operation.operation_id, revision=operation.revision, approver="user"
+    )
 
 
 def _check_new_revision(answer: Any, operation: Operation, named: str) -> Operation:
@@ -2032,7 +2046,8 @@ async def _approval_required(ctx: ConformanceContext, _: FixtureCase) -> None:
     await ctx.operations_negotiated()
     _user, signed = await _signed_in_user(ctx)
     operation = await _propose(ctx, signed, "user")
-    check(operation.summary.strip(), "it has a summary")
+    check(isinstance(operation.terms, dict), "it has terms")
+    check(operation.shown.strip(), "its terms can be shown, as a summary or as their values")
     check(operation.revision, "it has an opaque revision")
     check(operation.expires_at > ctx.now(), "it can still be approved")
     await _performed(ctx, operation, 0)
@@ -2116,7 +2131,9 @@ async def _never_returned(ctx: ConformanceContext, _: FixtureCase) -> None:
     await ctx.operations_negotiated()
     _user, signed = await _signed_in_user(ctx)
     operation = await _propose(ctx, signed, "user")
-    forged = Approval(operation_id=operation.operation_id, revision="never_returned_0000")
+    forged = Approval(
+        operation_id=operation.operation_id, revision="never_returned_0000", approver="user"
+    )
     answer = await _request(ctx, signed, "user", forged)
     _check_new_revision(answer, operation, forged.revision)
     await _performed(ctx, operation, 0)
@@ -2232,6 +2249,105 @@ async def _signed_out_operation_challenge(ctx: ConformanceContext, _: FixtureCas
             approval=_approved(operation),
         )
     check(raised.value.status_code == 401, "signed out, the 401 challenge for the account")
+    await _performed(ctx, operation, 0)
+
+
+def _approved_by_agent(operation: Operation) -> Approval:
+    """A statement that the personal agent approved on the user's instruction: the
+    conformance runner plays the agent that holds one."""
+
+    return Approval(
+        operation_id=operation.operation_id,
+        revision=operation.revision,
+        approver="agent",
+        reference=new_approval_reference(),
+    )
+
+
+@case("operations.agent-approval")
+async def _agent_approval(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """An approval that says `approver: agent`, with a `reference` and no `input_type`, is
+    acted on as a user's is (Operations 5, 6)."""
+
+    await ctx.operations_negotiated()
+    if "agent" not in ctx.scenario.proposals:
+        raise SkipCase("the scenario names no operation an agent approval performs")
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "agent")
+    check(isinstance(operation.terms, dict) and operation.terms, "the operation has terms")
+    answer = await _request(ctx, signed, "agent", _approved_by_agent(operation))
+    check(answer.operation is None and answer.declined is None, "performed, not asked again")
+    check(answer.status == 200, f"answered as without operations, got {answer.status}")
+    await _performed(ctx, operation, 1)
+
+
+@case("operations.approval-without-approver")
+async def _approval_without_approver(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """`approver` is required: a `Poppy-Approval` without it, as version 2 sent, is a
+    request without an approval and performs nothing (Operations 6)."""
+
+    await ctx.operations_negotiated()
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "user")
+    proposal = ctx.proposal("user")
+    url = ctx.url(proposal.path)
+    response = await ctx.send(
+        proposal.method,
+        url,
+        headers={
+            **await ctx.auth(signed.session, proposal.method, url, signed.token),
+            "Content-Type": "application/json",
+            APPROVAL_HEADER: f'operation_id="{operation.operation_id}", '
+            f'revision="{operation.revision}"',
+        },
+        content=json.dumps(proposal.body if proposal.body is not None else {}).encode(),
+    )
+    check(
+        response.status_code == 403 and _error(response) == "approval_required",
+        "handled as a request without an approval",
+    )
+    await _performed(ctx, operation, 0)
+
+
+@case("operations.approval-declined")
+async def _approval_declined(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A company that will not act on an approval that passes its checks declines it: HTTP
+    403, `approval_declined` with `operation_id` and `revision`, nothing performed, no
+    new operation, and never the operation again for that approval (Operations 6)."""
+
+    await ctx.operations_negotiated()
+    if "declines_agent" not in ctx.scenario.proposals:
+        raise SkipCase("the scenario names no operation whose agent approval is declined")
+    _user, signed = await _signed_in_user(ctx)
+    operation = await _propose(ctx, signed, "declines_agent")
+    proposal = ctx.proposal("declines_agent")
+    url = ctx.url(proposal.path)
+    approval = _approved_by_agent(operation)
+    response = await ctx.send(
+        proposal.method,
+        url,
+        headers={
+            **await ctx.auth(signed.session, proposal.method, url, signed.token),
+            "Content-Type": "application/json",
+            APPROVAL_HEADER: approval_header(approval),
+        },
+        content=json.dumps(proposal.body if proposal.body is not None else {}).encode(),
+    )
+    check(response.status_code == 403, f"a decline is HTTP 403, got {response.status_code}")
+    check("www-authenticate" not in response.headers, "in a JSON body, not a challenge")
+    body = response.json()
+    check(body.get("error") == "approval_declined", f"approval_declined, got {body.get('error')}")
+    declined = ApprovalDeclined.model_validate(
+        {name: value for name, value in body.items() if name != "error"}
+    )
+    check(
+        (declined.operation_id, declined.revision) == (operation.operation_id, operation.revision),
+        "it names the approval's operation and revision",
+    )
+    check("operation" not in body, "no new operation comes with a decline")
+    await _performed(ctx, operation, 0)
+    answer = await _request(ctx, signed, "declines_agent", approval)
+    check(answer.declined is not None, "the same approval again is declined again")
     await _performed(ctx, operation, 0)
 
 
@@ -2681,15 +2797,49 @@ async def _ucp_profile(ctx: ConformanceContext, _: FixtureCase) -> None:
     )
 
 
+async def _feedback_endpoint(ctx: ConformanceContext, session: PapSession) -> str:
+    """The feedback endpoint the Session's tasks response lists (§9, §9.3), or a skip."""
+
+    tasks = await TasksClient(transport=ctx.agent.transport).get(
+        (await ctx.company()).document, session=session
+    )
+    if tasks.feedback_endpoint is None:
+        raise SkipCase("the company's tasks response lists no feedback endpoint")
+    return tasks.feedback_endpoint
+
+
+@case("protocol.tasks-per-session")
+async def _tasks_per_session(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """`GET {tasks.endpoint}` with the Session header and no access token: 200 and the
+    tasks response; a header that fails its checks, `invalid_session` (§9)."""
+
+    document = (await ctx.company()).document
+    endpoint = tasks_endpoint(document)
+    if endpoint is None:
+        raise SkipCase("the company lists no tasks endpoint")
+    for name in ("excluded_tasks", "skill_index", "feedback"):
+        check(name not in document.model_dump(), f"poppy.json no longer carries {name}")
+    session = await ctx.session(ctx.new_user())
+    answered = await ctx.send("GET", endpoint, headers=await ctx.auth(session, "GET", endpoint))
+    check(answered.status_code == 200, f"the tasks response is 200, got {answered.status_code}")
+    tasks = TasksResponse.model_validate(answered.json())
+    for skill in tasks.usable_skills(endpoint):
+        check(skill.url.startswith("https://"), "a skill's url resolves to HTTPS")
+    tampered = await ctx.auth(session, "POST", endpoint)
+    refused = await ctx.send("GET", endpoint, headers=tampered)
+    check(
+        refused.status_code == 400 and _error(refused) == "invalid_session",
+        "a Session header signed for another request is invalid_session",
+    )
+
+
 @case("protocol.feedback-report")
 async def _feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
     """A report with the Session header, no scope: 202, or 200; malformed, 400 (§9.3)."""
 
-    endpoint = feedback_endpoint((await ctx.company()).document)
-    if endpoint is None:
-        raise SkipCase("the company lists no feedback endpoint")
     user = ctx.new_user()
     session = await ctx.session(user)
+    endpoint = await _feedback_endpoint(ctx, session)
 
     async def post(body: dict[str, Any]) -> httpx.Response:
         return await ctx.send(
@@ -3055,9 +3205,7 @@ async def _operator_mcp(ctx: ConformanceContext, _: FixtureCase) -> None:
 @case("operator.signed-feedback")
 async def _operator_feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
     _user, signed = await _signed_in_user(ctx)
-    endpoint = feedback_endpoint((await ctx.company()).document)
-    if endpoint is None:
-        raise SkipCase("the company lists no feedback endpoint")
+    endpoint = await _feedback_endpoint(ctx, signed.session)
     await FeedbackClient(transport=ctx.agent.transport).report(
         endpoint,
         FeedbackReport(task="operator conformance", description="A signed report."),
@@ -3477,9 +3625,7 @@ async def _dpop_conversation(ctx: ConformanceContext, _: FixtureCase) -> None:
 @case("dpop.feedback")
 async def _dpop_feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
     signed, _url = await _bound(ctx)
-    endpoint = feedback_endpoint((await ctx.company()).document)
-    if endpoint is None:
-        raise SkipCase("the company lists no feedback endpoint")
+    endpoint = await _feedback_endpoint(ctx, signed.session)
     await FeedbackClient(transport=ctx.agent.transport).report(
         endpoint,
         FeedbackReport(task="dpop conformance", description="A report with a bound token."),
@@ -3725,9 +3871,7 @@ async def _no_issuer_interfaces(ctx: ConformanceContext, _: FixtureCase) -> None
         endpoint, _message(ctx.scenario.greeting), session=session
     )
     check(receipt.conversation_id, "a conversation starts signed out")
-    feedback = feedback_endpoint((await ctx.company()).document)
-    if feedback is None:
-        raise SkipCase("the company lists no feedback endpoint")
+    feedback = await _feedback_endpoint(ctx, session)
     await FeedbackClient(transport=ctx.agent.transport).report(
         feedback,
         FeedbackReport(task="no issuer", description="A report from a signed-out Session."),

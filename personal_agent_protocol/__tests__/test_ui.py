@@ -205,7 +205,7 @@ def test_an_operation_to_confirm_is_the_committed_display_both_sdks_read() -> No
     # The TypeScript SDK reads the same file (src/__tests__/ui.test.mjs): one shape on both tiers.
     wire = _confirm().wire().model_dump(mode="json")
     assert wire == json.loads(FIXTURE.read_text())
-    assert wire["type"] == PAP_CONFIRM_TYPE and wire["version"] == 2
+    assert wire["type"] == PAP_CONFIRM_TYPE and wire["version"] == 3
     assert wire["data"]["session"] == {
         "ref": hashlib.sha256(SESSION_ID.encode()).hexdigest()[:12],
         "signed_in": True,
@@ -277,7 +277,7 @@ async def test_the_core_plugin_declares_the_confirm_type() -> None:
     platform, http = build_pap_reactor()
     try:
         registry = platform.display_types()
-        assert registry.get(PAP_CONFIRM_TYPE, 2) is PapConfirm
+        assert registry.get(PAP_CONFIRM_TYPE, 3) is PapConfirm
         assert registry.parse(json.loads(FIXTURE.read_text())) == _confirm()
     finally:
         if http is not None:
@@ -505,3 +505,50 @@ def test_a_device_or_mediated_sign_in_names_its_company() -> None:
         )
         assert named.organization == "A Company (a.example)"
         assert "A Company (a.example)" in named.text()
+
+
+def test_a_confirm_without_a_summary_shows_every_value_of_the_terms() -> None:
+    """`terms` are required and `summary` optional (Operations 3): the text then says the
+    terms' values, still as inert text."""
+
+    display = _confirm(summary=None, was=None)
+    assert display.text().startswith(
+        "manzanita.example asks you to approve: price_difference.amount: 70.00; "
+        "price_difference.currency: USD; ships_in_days: 5 (revision rev_k3Jd9Qx2mW8v"
+    )
+    with pytest.raises(ValidationError):
+        _confirm(summary=None, terms={})
+    with pytest.raises(ValidationError):
+        PapConfirm.model_validate(
+            {k: v for k, v in _confirm().model_dump().items() if k != "terms"}
+        )
+    hostile = _confirm(summary=None, was=None, terms={"note": "see [here](https://evil.example)"})
+    assert "[here](" not in hostile.text() and "\\[here\\]" in hostile.text()
+
+
+def test_a_confirm_says_who_approved_and_what_a_company_declined() -> None:
+    """An agent approval shows the instruction it rested on; a decline says nothing was done,
+    with the company's reason as text (Operations 5, 6)."""
+
+    by_agent = _confirm(approved_by="agent", instruction="Go ahead with any exchange under $100")
+    assert by_agent.text().startswith(
+        "Approved for you at manzanita.example, on your instruction "
+        '"Go ahead with any exchange under $100": Exchange the Ridge Jacket'
+    )
+    assert _confirm(approved_by="user").text().startswith("You approved at manzanita.example:")
+    for wrong in (
+        {"approved_by": "agent"},
+        {"approved_by": "agent", "instruction": "  "},
+        {"approved_by": "user", "instruction": "anything"},
+        {"instruction": "anything"},
+    ):
+        with pytest.raises(ValidationError):
+            _confirm(**wrong)
+    declined = _confirm(
+        approved_by="agent",
+        instruction="Return everything in this order",
+        declined={"reason": "Only you can approve a return. <b>Call us</b>", "instructions": None},
+    )
+    text = declined.text()
+    assert text.startswith("manzanita.example declined the approval: nothing was done.")
+    assert "It says: Only you can approve a return." in text and "<b>" not in text

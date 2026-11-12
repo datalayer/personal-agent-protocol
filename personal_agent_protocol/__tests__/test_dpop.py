@@ -613,7 +613,6 @@ async def test_a_sign_in_for_the_mcp_server_needs_no_proof_and_works_only_there(
         scopes=("orders:read",),
         tenant_id=ctx.tenant_id,
         organization=(await ctx.company()).document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await ctx.driver.approve_device(started.user_code, account=ctx.driver.accounts[0])
     await ctx.driver.wait(started.poll_interval)
@@ -651,7 +650,6 @@ async def test_a_refused_proof_spends_no_device_code(monkeypatch: pytest.MonkeyP
         scopes=MANZANITA_SCENARIO.scopes,
         tenant_id=ctx.tenant_id,
         organization=(await ctx.company()).document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await ctx.driver.approve_device(started.user_code, account=ctx.driver.accounts[0])
     await ctx.driver.wait(started.poll_interval)

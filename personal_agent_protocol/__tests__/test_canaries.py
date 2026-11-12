@@ -534,6 +534,7 @@ def _sign_in_views(harvest: Harvest) -> list[tuple[str, str]]:
         display = PapConfirm(
             company="manzanita.example",
             summary="Exchange the Ridge Jacket (M) for the Alpine Parka (M).",
+            terms={"replacement": "Alpine Parka (M)"},
             operation_ref="op_canary",
             revision="rev_canary",
             expires_at=datetime(2026, 10, 12, 18, tzinfo=timezone.utc),

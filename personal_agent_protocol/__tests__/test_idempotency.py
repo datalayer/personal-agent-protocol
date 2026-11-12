@@ -169,7 +169,9 @@ async def test_the_reference_company_keeps_each_key_per_agent_user_and_account()
             idempotency_key=step["key"],
             approval=None
             if operation is None
-            else Approval(operation_id=operation.operation_id, revision=operation.revision),
+            else Approval(
+                approver="user", operation_id=operation.operation_id, revision=operation.revision
+            ),
         )
         expect = step["expect"]
         if "error" in expect:

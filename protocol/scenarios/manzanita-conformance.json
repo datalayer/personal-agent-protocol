@@ -24,6 +24,18 @@
       "path": "/api/orders/ord_7Hk2/repairs",
       "body": null,
       "documented_as": null
+    },
+    "agent": {
+      "method": "POST",
+      "path": "/api/orders/ord_7Hk2/gift-wrap",
+      "body": null,
+      "documented_as": null
+    },
+    "declines_agent": {
+      "method": "POST",
+      "path": "/api/orders/ord_7Hk2/returns",
+      "body": null,
+      "documented_as": null
     }
   },
   "operation_prompt": "The jacket is not warm enough: can we exchange it for a warmer one?",

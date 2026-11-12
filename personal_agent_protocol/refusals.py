@@ -41,16 +41,15 @@ def challenge_parameters(header: str) -> dict[str, str]:
 def refusal_details(response: httpx.Response, payload: object) -> dict[str, object]:
     """What a refusal says besides its code: `extension`, `scope`, `retry_after`...
 
-    `extension_required` names its extension in the JSON body at the token
-    endpoint and the endpoints the protocol or an extension defines, and in
-    the `WWW-Authenticate` challenge at APIs (§3.3); either shape is read.
+    `extension_required` names its extension in the JSON body, at APIs as at the
+    endpoints the protocol or an extension defines (§3.3): a challenge is not read for it.
     `retry_after` is kept as sent on a 429 or 503 (§5.6), never acted on here.
     """
 
     challenge = challenge_parameters(response.headers.get("www-authenticate", ""))
     body = payload if isinstance(payload, dict) else {}
     details: dict[str, object] = {}
-    extension = body.get("extension", challenge.get("extension"))
+    extension = body.get("extension")
     if isinstance(extension, str) and extension:
         details["extension"] = extension
     scope = body.get("scope", challenge.get("scope"))
@@ -82,7 +81,8 @@ def refusal_code(response: httpx.Response, payload: object, default: str) -> str
     if isinstance(error, str):
         return error
     challenge = challenge_parameters(response.headers.get("www-authenticate", ""))
-    if "error" in challenge:
+    if "error" in challenge and challenge["error"] != "extension_required":
+        # Token errors come in the challenge; `extension_required` is not one (§3.3, §7).
         return challenge["error"]
     if response.status_code == 401 and challenge.get("scope"):
         return "insufficient_scope"

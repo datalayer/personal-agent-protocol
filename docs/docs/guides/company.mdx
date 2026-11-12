@@ -115,8 +115,16 @@ document is served at `/poppy/{version}.json`, with that `protocol_version` and 
 `supported_versions`. A request whose `Poppy-Version` is missing or names no served
 version is refused with `version_unsupported` (HTTP 400, JSON body) where the
 Session header is verified, and is never handled under another version. The
-reference company speaks this SDK's version only; another entry lets a personal
-agent's choice be exercised and is answered the same way.
+reference company speaks 0.4 as published (`PROTOCOL_PROFILE`) by default; another
+entry lets a personal agent's choice be exercised and is answered the same way.
+
+The 1.0 draft (`DRAFT_PROTOCOL_VERSION`) is opt-in on this side too: a company that
+adds `"1.0"` to `protocol_versions`, such as `("0.4", "1.0")`, keeps `poppy.json` at
+0.4, lists `/poppy/1.0.json` in `supported_versions`, and serves a Session at either
+version; an agent that implements both chooses 1.0, one that implements 0.4 only
+keeps 0.4. `("1.0", "0.4")` makes 1.0 the preferred document and keeps 0.4 for the
+others. Since a draft can still break compatibility, announce it only when you mean
+to follow its fixes.
 
 To retire a version, name it in `deprecated_versions` (`deprecatedVersions`) with
 when it was deprecated and when it goes away: responses to requests in that

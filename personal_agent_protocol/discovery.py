@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -17,12 +18,14 @@ from .caching import CacheBounds, MetadataCache
 from .errors import DiscoveryError, ProtocolValidationError
 from .json import loads_strict
 from .models import (
+    PROTOCOL_VERSIONS_CONTEXT,
     DiscoveredCompany,
     DiscoveryDocument,
     OAuthServerMetadata,
     ProtectedResourceMetadata,
     SkillEntry,
     choose_protocol_version,
+    implemented_protocol_versions,
     protected_resource_metadata_url,
 )
 from .reactor import (
@@ -68,7 +71,13 @@ class DiscoveryClient:
         max_skill_bytes: int = 4 * 1024 * 1024,
         timeout: float = 5.0,
         cache_bounds: CacheBounds | None = None,
+        protocol_versions: Iterable[str] | None = None,
     ) -> None:
+        """`protocol_versions` are the protocol versions this Personal Agent implements
+        (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`, the published version, by default. Name
+        `DRAFT_PROTOCOL_VERSION` among them to use Companies that serve the 1.0 draft, such
+        as `("0.4", "1.0")`; the newest compatible version a Company serves is chosen."""
+
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         if reactor is None:
@@ -86,6 +95,7 @@ class DiscoveryClient:
         self._max_skill_bytes = max_skill_bytes
         self._timeout = timeout
         self._cache = MetadataCache(reactor, cache_bounds)
+        self.protocol_versions = implemented_protocol_versions(protocol_versions)
 
     async def __aenter__(self) -> DiscoveryClient:
         return self
@@ -129,7 +139,7 @@ class DiscoveryClient:
                 "poppy.json follows no protocol version this personal agent supports",
             )
         try:
-            document = DiscoveryDocument.model_validate(document_data)
+            document = DiscoveryDocument.model_validate(document_data, context=self._context)
         except ValidationError as exc:
             raise ProtocolValidationError(
                 "invalid_discovery_document", "poppy.json failed protocol validation"
@@ -143,7 +153,7 @@ class DiscoveryClient:
                 "organization_domain_mismatch",
                 "Discovery organization domain is not the host that served the document",
             )
-        chosen = document.chosen_version
+        chosen = document.choose_version(self.protocol_versions)
         if chosen is not None and chosen != document.protocol_version:
             document = await self._version_document(document, chosen, final_url)
 
@@ -184,14 +194,17 @@ class DiscoveryClient:
             resource_metadata=resource_metadata,
         )
 
-    @staticmethod
-    def _chosen(data: dict[str, object]) -> str | None:
+    @property
+    def _context(self) -> dict[str, object]:
+        return {PROTOCOL_VERSIONS_CONTEXT: self.protocol_versions}
+
+    def _chosen(self, data: dict[str, object]) -> str | None:
         version = data.get("protocol_version")
         supported = data.get("supported_versions")
         if not isinstance(version, str):
             return None
         others = [v for v in supported if isinstance(v, str)] if isinstance(supported, dict) else []
-        return choose_protocol_version(version, others)
+        return choose_protocol_version(version, others, implemented=self.protocol_versions)
 
     async def _version_document(
         self, preferred: DiscoveryDocument, version: str, poppy_url: httpx.URL
@@ -221,7 +234,7 @@ class DiscoveryClient:
         if not isinstance(data, dict) or data.get("protocol_version") != version:
             raise mismatch
         try:
-            document = DiscoveryDocument.model_validate(data)
+            document = DiscoveryDocument.model_validate(data, context=self._context)
         except ValidationError as exc:
             raise ProtocolValidationError(
                 "invalid_discovery_document", "A version's document failed protocol validation"

@@ -31,7 +31,7 @@ from .crypto import DPOP_ALGORITHM, SESSION_ID
 from .errors import PersonalAgentProtocolError, ProtocolValidationError, SessionError
 from .json import loads_strict
 from .models import (
-    SUPPORTED_PROTOCOL_VERSIONS,
+    AVAILABLE_PROTOCOL_VERSIONS,
     DiscoveredCompany,
     ProtocolModel,
     compatible_versions,
@@ -175,7 +175,9 @@ class PapSession:
     agent_id: str | None = None
     #: The protocol version the Session uses the Company at (§3.4), named in
     #: `Poppy-Version` on every request with the Session header, the same for its whole
-    #: life: the version this SDK implements, compatible with the one chosen at discovery.
+    #: life: the version this SDK implements, compatible with the one chosen at discovery
+    #: (`DiscoveredCompany.session_version`); the published version unless the Personal
+    #: Agent opted into the 1.0 draft.
     protocol_version: str = PROTOCOL_PROFILE
     #: The extensions the Session uses with the Company, one version each (§3.3, §3.4):
     #: declared in `Poppy-Extensions` on every request with the Session header, the same
@@ -187,7 +189,7 @@ class PapSession:
         if not SESSION_ID.fullmatch(self.sid):
             raise ValueError("a Session ID is 22 to 256 URL-safe characters")
         if not any(
-            compatible_versions(self.protocol_version, v) for v in SUPPORTED_PROTOCOL_VERSIONS
+            compatible_versions(self.protocol_version, v) for v in AVAILABLE_PROTOCOL_VERSIONS
         ):
             raise ValueError("a Session uses a protocol version this SDK implements")
         if not self.sub:
@@ -401,6 +403,7 @@ class SessionClient:
         agent_id: str | None = None,
         extensions: Mapping[str, str] | None = None,
         company: DiscoveredCompany | None = None,
+        protocol_version: str | None = None,
     ) -> PapSession:
         """A new Session, signed out, with a new random `sid` (§5.2): no request is sent.
 
@@ -409,12 +412,17 @@ class SessionClient:
         the ones the Session uses with the Company, one version each, declared on
         every request (§3.4): as given, else negotiated from `company`'s document for
         everything this SDK implements (`negotiate_extensions`), else none.
+        `protocol_version`, named in `Poppy-Version` for the Session's life (§3.4): as
+        given, else the one `company` was discovered at (`session_version`), else the
+        published version.
         """
 
         if extensions is None and company is not None:
             from .extensions import negotiate_extensions
 
             extensions = negotiate_extensions(company.document.extensions)
+        if protocol_version is None:
+            protocol_version = PROTOCOL_PROFILE if company is None else company.session_version
         return PapSession(
             sid=new_session_id(self._random().bytes),
             sub=pairwise_user_id,
@@ -422,6 +430,7 @@ class SessionClient:
             client_id=client_id,
             tenant_id=tenant_id,
             agent_id=agent_id,
+            protocol_version=protocol_version,
             extensions=dict(extensions or {}),
         )
 

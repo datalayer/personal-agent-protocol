@@ -19,7 +19,8 @@
 // {"op": "approve_device", ..., "scopes"}, {"op": "revise", "operation_id"},
 // {"op": "forget_events", "conversation_id"}, {"op": "disconnect", "client_id",
 // "account_id"} → {"ok": ...}, and {"op": "performed", "operation_id"} → {"count"}.
-// Config "world" names a conformance world: Manzanita configured as it says.
+// Config "world" names a conformance world: Manzanita configured as it says; config
+// "protocol_versions" the protocol versions it serves, such as ["1.0"] for the 1.0 draft.
 import { readFileSync } from "node:fs";
 import { operationShown } from "../../../lib/index.js";
 
@@ -36,7 +37,14 @@ const company = await serveCompany({
   ca: readFileSync(config.ca),
   agents: config.agents ?? {},
   ...(clock === undefined ? {} : { clock }),
-  ...(config.world ? { config: worldConfig(config.world) } : {}),
+  ...(config.world || config.protocol_versions
+    ? {
+        config: {
+          ...(config.world ? worldConfig(config.world) : {}),
+          ...(config.protocol_versions ? { protocolVersions: config.protocol_versions } : {}),
+        },
+      }
+    : {}),
 });
 const lines = channel();
 lines.send({ ready: { port: company.port } });

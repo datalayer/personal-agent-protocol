@@ -70,9 +70,11 @@ import {
   buildPapReactor,
   challengeParameters,
   companyIdentifier,
+  companySessionVersion,
   conversationEndpoint,
   delegationClaims,
   discoverCompany,
+  implementedProtocolVersions,
   dpopProofClaims,
   TasksClient,
   tasksEndpoint,
@@ -319,7 +321,18 @@ export class Agent {
 
 /** The target company and the personal agent the suite plays. */
 export class Context {
-  constructor({ baseUrl, identity, otherIdentity, fetch, browserFetch, driver, scenario, clock, tenantId = "pap-conformance" }) {
+  constructor({
+    baseUrl,
+    identity,
+    otherIdentity,
+    fetch,
+    browserFetch,
+    driver,
+    scenario,
+    clock,
+    tenantId = "pap-conformance",
+    protocolVersions,
+  }) {
     const url = new URL(baseUrl);
     this.baseUrl = url.origin;
     this.domain = url.hostname;
@@ -328,6 +341,9 @@ export class Context {
     this.scenario = scenario;
     this.clock = clock;
     this.tenantId = tenantId;
+    // The versions the suite's agent implements (§3.4): the published one unless the 1.0
+    // draft is named, to test a company that serves it.
+    this.protocolVersions = implementedProtocolVersions(protocolVersions);
     this.agent = new Agent(identity, { fetch, clock, browserFetch });
     this.otherIdentity = otherIdentity;
     this.other = undefined;
@@ -338,7 +354,10 @@ export class Context {
 
   async company() {
     if (this.discovered === undefined) {
-      this.discovered = await discoverCompany(this.domain, { reactor: this.agent.reactor });
+      this.discovered = await discoverCompany(this.domain, {
+        reactor: this.agent.reactor,
+        protocolVersions: this.protocolVersions,
+      });
       // API paths resolve at the company's OpenAPI API (its url's origin), not discovery's.
       const api = (this.discovered.document.apis ?? []).find((item) => item.type === "openapi");
       if (api !== undefined) this.apiBase = new URL(api.url).origin;
@@ -414,7 +433,13 @@ export class Context {
       issuer: companyIdentifier(company),
       tenantId: this.tenantId,
       extensions: negotiateExtensions(company.document.extensions, agent.identity.supportedExtensions),
+      protocolVersion: companySessionVersion(company),
     });
+  }
+
+  /** The protocol version the suite speaks to the company: the one discovered, else the published one. */
+  get profile() {
+    return this.discovered === undefined ? PROTOCOL_PROFILE : companySessionVersion(this.discovered);
   }
 
   /**
@@ -797,6 +822,7 @@ caseFor("security.session-found-by-user-id")(async (ctx) => {
     issuer: session.issuer,
     clientId: session.clientId,
     tenantId: session.tenantId,
+    protocolVersion: session.protocolVersion,
   });
   const response = await ctx.send("GET", url, { headers: await ctx.auth(other, "GET", url) });
   check((await errorOf(response)) !== "invalid_session", "another User ID on a known sid is no error");
@@ -879,7 +905,7 @@ caseFor("security.refusals-disclose-no-credential")(async (ctx) => {
     headers: {
       Authorization: `Bearer ${secret}`,
       "Poppy-Session": await ctx.forgedSessionJwt(session, "GET", url, { token: refresh }),
-      "Poppy-Version": PROTOCOL_PROFILE,
+      "Poppy-Version": session.protocolVersion,
     },
   });
   await expectRefusal(used, 401, "invalid_token", "a refresh token at an API");
@@ -1028,7 +1054,7 @@ caseFor("lifecycle.refresh-token-at-api")(async (ctx) => {
     headers: {
       Authorization: `Bearer ${secret.reveal()}`,
       "Poppy-Session": await ctx.forgedSessionJwt(session, "GET", url, { token: secret }),
-      "Poppy-Version": PROTOCOL_PROFILE,
+      "Poppy-Version": session.protocolVersion,
     },
   });
   await expectRefusal(response, 401, "invalid_token", "a refresh token at an API");
@@ -1941,7 +1967,7 @@ caseFor("lifecycle.stale-resource-metadata")(async (ctx) => {
   const [user, signed] = await signedInUser(ctx);
   const tokens = new ServiceTokens({
     refresh: ctx.agent.accounts,
-    discovery: { reactor: ctx.agent.reactor },
+    discovery: { reactor: ctx.agent.reactor, protocolVersions: ctx.protocolVersions },
     company: await ctx.company(),
     reference: signed.reference,
     context: await ctx.accountContext(user),
@@ -2773,7 +2799,7 @@ const oneAnswer = (ctx, url, answer) => (input, init) =>
 /** Discovery of the company with its domain's protected resource metadata as `answer`. */
 function discoverWith(ctx, answer, options = {}) {
   const fetch = oneAnswer(ctx, `${ctx.baseUrl}/.well-known/oauth-protected-resource`, answer);
-  return discoverCompany(ctx.domain, { fetch, ...options });
+  return discoverCompany(ctx.domain, { fetch, protocolVersions: ctx.protocolVersions, ...options });
 }
 
 async function discoveryStops(ctx, fixture, answer, options) {
@@ -2873,7 +2899,7 @@ caseFor("no-issuer.sign-in-offered-without-issuer")(async (ctx, fixture) => {
   ]) {
     const answer = jsonAnswer(200, { ...company.document, ...offers });
     const fetch = oneAnswer(ctx, `${ctx.baseUrl}/.well-known/poppy.json`, answer);
-    const error = await refused(discoverCompany(ctx.domain, { fetch }), fixture.id);
+    const error = await refused(discoverCompany(ctx.domain, { fetch, protocolVersions: ctx.protocolVersions }), fixture.id);
     check(error.code === fixture.expect.error, `stopped by ${error.code}`);
   }
 });
@@ -2917,7 +2943,7 @@ export async function runConformance(ctx, { cases = companyCases(), timeoutMs = 
   return {
     schema_version: 1,
     protocol: "personal-agent-protocol",
-    profile: PROTOCOL_PROFILE,
+    profile: ctx.profile,
     extensions: { operations: OPERATIONS_VERSION },
     role: "personal-agent",
     target: ctx.baseUrl,

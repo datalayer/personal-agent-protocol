@@ -111,6 +111,7 @@ from .mediated import (
 )
 from .models import (
     AUTHORIZATION_CODE_GRANT,
+    AVAILABLE_PROTOCOL_VERSIONS,
     BROWSER_SIGN_IN_SCOPE,
     SKILL_INDEX_SCHEMA,
     SUPPORTED_PROTOCOL_VERSIONS,
@@ -187,7 +188,12 @@ from .operator_signatures import (
 )
 from .pages import FetchedPage, PageClient, page_carries_session
 from .pairwise import SqlitePairwiseUserIdStore, resolve_pairwise_user_id
-from .profile import PROTOCOL_PROFILE, PROTOCOL_REVISION
+from .profile import (
+    DRAFT_PROTOCOL_REVISION,
+    DRAFT_PROTOCOL_VERSION,
+    PROTOCOL_PROFILE,
+    PROTOCOL_REVISION,
+)
 from .reactor import (
     APPROVAL_SURFACES,
     AUTHORIZATION_STATE_STORES,
@@ -294,6 +300,7 @@ __all__ = [
     "APPROVAL_SURFACES",
     "AUTHORIZATION_CODE_GRANT",
     "AUTHORIZATION_STATE_STORES",
+    "AVAILABLE_PROTOCOL_VERSIONS",
     "BROWSER_CONTROL_EXTENSION",
     "BROWSER_CONTROL_VERSION",
     "BROWSER_HANDOFFS",
@@ -304,6 +311,8 @@ __all__ = [
     "DEVICE_CODE_GRANT",
     "DISCOVERY_TRANSPORTS",
     "DPOP_PROVERS",
+    "DRAFT_PROTOCOL_REVISION",
+    "DRAFT_PROTOCOL_VERSION",
     "JWT_CLIENT_ASSERTION",
     "MEDIATED_EXTENSION",
     "MEDIATED_GRANT",

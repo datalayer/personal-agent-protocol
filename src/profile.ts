@@ -13,3 +13,12 @@
 export const PROTOCOL_PROFILE = "0.4";
 /** The upstream specification revision implemented: the day 0.4 was published (commit 4803900). */
 export const PROTOCOL_REVISION = "2026-11-10";
+
+// DRAFT_PROTOCOL_VERSION is the 1.0 draft, which a Personal Agent or a Company uses only when it
+// asks for it (`protocolVersions`): a draft can still change in ways that aren't backward
+// compatible, so the SDK announces PROTOCOL_PROFILE unless told otherwise.
+
+/** The draft protocol version a Personal Agent or a Company can opt into: the 1.0 draft. */
+export const DRAFT_PROTOCOL_VERSION = "1.0";
+/** The draft's revision implemented: lookalike domains, its first fix (commit c71f515). */
+export const DRAFT_PROTOCOL_REVISION = "2026-11-11";

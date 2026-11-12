@@ -21,7 +21,12 @@ import { PersonalAgentProtocolError, ProtocolValidationError, SessionError } fro
 import { parseJsonStrict } from "./json.js";
 import { readLimitedText } from "./limits.js";
 import { negotiateExtensions } from "./extensions.js";
-import { SUPPORTED_PROTOCOL_VERSIONS, compatibleVersions, type DiscoveredCompany } from "./models.js";
+import {
+  AVAILABLE_PROTOCOL_VERSIONS,
+  compatibleVersions,
+  companySessionVersion,
+  type DiscoveredCompany,
+} from "./models.js";
 import { PROTOCOL_PROFILE } from "./profile.js";
 import {
   Clocks,
@@ -252,7 +257,7 @@ export class PapSession {
     this.tenantId = options.tenantId;
     this.agentId = options.agentId;
     const version = options.protocolVersion ?? PROTOCOL_PROFILE;
-    if (![...SUPPORTED_PROTOCOL_VERSIONS].some((mine) => compatibleVersions(version, mine))) {
+    if (![...AVAILABLE_PROTOCOL_VERSIONS].some((mine) => compatibleVersions(version, mine))) {
       throw new ProtocolValidationError("unsupported_protocol_version", "a Session uses a protocol version this SDK implements");
     }
     this.protocolVersion = version;
@@ -478,6 +483,12 @@ export interface SessionStartOptions {
    */
   readonly extensions?: Readonly<Record<string, string>>;
   readonly company?: DiscoveredCompany;
+  /**
+   * The protocol version the Session names in `Poppy-Version` for its life (§3.4): as given,
+   * else the one `company` was discovered at (`companySessionVersion`), else the published
+   * version.
+   */
+  readonly protocolVersion?: string;
 }
 
 export interface TokenRequestOptions {
@@ -556,6 +567,9 @@ export class SessionClient {
           clientId: options.clientId,
           tenantId: options.tenantId,
           ...(options.agentId === undefined ? {} : { agentId: options.agentId }),
+          protocolVersion:
+            options.protocolVersion ??
+            (options.company === undefined ? PROTOCOL_PROFILE : companySessionVersion(options.company)),
           extensions:
             options.extensions ??
             (options.company === undefined ? {} : negotiateExtensions(options.company.document.extensions)),

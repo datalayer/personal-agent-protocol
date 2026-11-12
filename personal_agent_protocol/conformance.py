@@ -91,6 +91,7 @@ from .models import (
     Message,
     Operation,
     TasksResponse,
+    implemented_protocol_versions,
     operations_content,
 )
 from .operations import (
@@ -398,7 +399,12 @@ class ConformanceContext:
         address_resolver: AddressResolver = resolve_addresses,
         tenant_id: str = "pap-conformance",
         browser_http: httpx.AsyncClient | None = None,
+        protocol_versions: Iterable[str] | None = None,
     ) -> None:
+        """`protocol_versions` are the ones the suite's personal agent implements (§3.4):
+        the published version by default; name `DRAFT_PROTOCOL_VERSION` among them to test a
+        company that serves the 1.0 draft at that version."""
+
         parsed = urlsplit(base_url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise ValueError("the company base URL must be an HTTPS origin")
@@ -410,6 +416,7 @@ class ConformanceContext:
         self.tenant_id = tenant_id
         self.address_resolver = address_resolver
         self.clock: Clock = clock or SystemClock()
+        self.protocol_versions = implemented_protocol_versions(protocol_versions)
         self.agent = Agent(
             identity,
             http=http,
@@ -434,7 +441,9 @@ class ConformanceContext:
 
     async def company(self) -> DiscoveredCompany:
         if self._company is None:
-            client = DiscoveryClient(reactor=self.agent.reactor)
+            client = DiscoveryClient(
+                reactor=self.agent.reactor, protocol_versions=self.protocol_versions
+            )
             self._company = await client.discover(self.domain)
             api = next(
                 (api for api in self._company.document.apis or () if api.type == "openapi"), None
@@ -466,6 +475,13 @@ class ConformanceContext:
         )
         if negotiated.get("operations") != OPERATIONS_VERSION:
             raise SkipCase("operations version 3 is not negotiated with this company")
+
+    @property
+    def profile(self) -> str:
+        """The protocol version the suite speaks to the company (§3.4): the one it was
+        discovered at, once it was, else the published version."""
+
+        return PROTOCOL_PROFILE if self._company is None else self._company.session_version
 
     def url(self, path: str) -> str:
         """An API path at the company's API (its OpenAPI `url`'s origin), else its origin."""
@@ -519,6 +535,7 @@ class ConformanceContext:
             extensions=negotiate_extensions(
                 company.document.extensions, supported=actor.identity.supported_extensions
             ),
+            protocol_version=company.session_version,
         )
 
     async def sign_in(
@@ -1047,6 +1064,7 @@ async def _session_sub(ctx: ConformanceContext, _: FixtureCase) -> None:
         issuer=session.issuer,
         client_id=session.client_id,
         tenant_id=session.tenant_id,
+        protocol_version=session.protocol_version,
     )
     response = await ctx.send("GET", url, headers=await ctx.auth(other, "GET", url))
     check(_error(response) != "invalid_session", "another User ID on a known sid is no error")
@@ -1176,7 +1194,7 @@ async def _no_disclosure(ctx: ConformanceContext, _: FixtureCase) -> None:
         headers={
             "Authorization": f"Bearer {secret}",
             "Poppy-Session": await ctx.forged_session_jwt(session, "GET", url, token=refresh_token),
-            "Poppy-Version": PROTOCOL_PROFILE,
+            "Poppy-Version": session.protocol_version,
         },
     )
     expect_refusal(used, 401, "invalid_token", "a refresh token at an API")
@@ -1374,7 +1392,7 @@ async def _refresh_token_at_api(ctx: ConformanceContext, _: FixtureCase) -> None
         headers={
             "Authorization": f"Bearer {secret.get_secret_value()}",
             "Poppy-Session": await ctx.forged_session_jwt(session, "GET", url, token=secret),
-            "Poppy-Version": PROTOCOL_PROFILE,
+            "Poppy-Version": session.protocol_version,
         },
     )
     expect_refusal(response, 401, "invalid_token", "a refresh token at an API")
@@ -2692,7 +2710,9 @@ async def _stale_metadata(ctx: ConformanceContext, _: FixtureCase) -> None:
     user, signed = await _signed_in_user(ctx)
     tokens = ServiceTokens(
         refresh=ctx.agent.accounts,
-        discovery=DiscoveryClient(reactor=ctx.agent.reactor),
+        discovery=DiscoveryClient(
+            reactor=ctx.agent.reactor, protocol_versions=ctx.protocol_versions
+        ),
         company=await ctx.company(),
         reference=signed.reference,
         context=await ctx.account_context(user),
@@ -3843,7 +3863,10 @@ async def _discover_with(
     url = f"{ctx.base_url}/.well-known/oauth-protected-resource"
     async with httpx.AsyncClient(transport=_OneAnswer(inner, url, answer)) as http:
         client = DiscoveryClient(
-            http_client=http, address_resolver=ctx.address_resolver, timeout=timeout
+            http_client=http,
+            address_resolver=ctx.address_resolver,
+            timeout=timeout,
+            protocol_versions=ctx.protocol_versions,
         )
         return await client.discover(ctx.domain)
 
@@ -3982,7 +4005,11 @@ async def _sign_in_without_issuer(ctx: ConformanceContext, fixture: FixtureCase)
         answer = _json_answer(200, {**served, **offers})
         url = f"{ctx.base_url}/.well-known/poppy.json"
         async with httpx.AsyncClient(transport=_OneAnswer(inner, url, answer)) as http:
-            client = DiscoveryClient(http_client=http, address_resolver=ctx.address_resolver)
+            client = DiscoveryClient(
+                http_client=http,
+                address_resolver=ctx.address_resolver,
+                protocol_versions=ctx.protocol_versions,
+            )
             with _raises(PersonalAgentProtocolError) as raised:
                 await client.discover(ctx.domain)
         check(raised.value.code == fixture.expect["error"], f"stopped by {raised.value.code}")
@@ -4193,7 +4220,7 @@ async def run_conformance(
     return ConformanceReport(
         target=context.base_url,
         agent=context.agent.identity.client_id,
-        profile=PROTOCOL_PROFILE,
+        profile=context.profile,
         started_at=started,
         results=tuple(results),
     )

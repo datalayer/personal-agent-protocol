@@ -551,6 +551,12 @@ export type StoredOperationStatus = "open" | "performing" | "performed" | "withd
  * company received it; `approval` is what the personal agent stated with it, `approver` and
  * any `approved_at`, `input_type` and `reference` (Operations 6). A declined approval is never
  * recorded.
+ *
+ * `website` marks an operation a website returned to a joined browser (Operations 4): approved
+ * only at the extension's `endpoint`, never at an API, an MCP server or a conversation, and no
+ * other interface's operation is approved there (Operations 6). Its approval is recorded while
+ * it is still `open` (`approved` set), and the browser's next request for exactly that
+ * revision performs it. Absent, `false`.
  */
 export interface StoredOperation {
   readonly operationId: string;
@@ -573,6 +579,7 @@ export interface StoredOperation {
     reference?: string;
   }>;
   readonly outcome?: OperationOutcome;
+  readonly website?: boolean;
 }
 
 /** The latest revision the company returned of an operation. */
@@ -617,6 +624,11 @@ export interface WebSession {
   readonly family?: string;
   /** The protocol version the joined Session uses the company at (§3.4). */
   readonly protocolVersion?: string;
+  /**
+   * The extensions step 2 of the join declared: the browser's requests declare them (§6,
+   * Operations 2, Browser Control 3). Absent, none.
+   */
+  readonly extensions?: Readonly<Record<string, string>>;
 }
 
 /**

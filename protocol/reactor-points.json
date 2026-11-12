@@ -465,6 +465,19 @@
       "tenant": null
     },
     {
+      "id": "pap.company.website",
+      "role": "company",
+      "python": "COMPANY_WEBSITES",
+      "typescript": "CompanyWebsites",
+      "contract": "CompanyWebsite",
+      "members": [
+        "handle"
+      ],
+      "default": null,
+      "resolution": "optional",
+      "tenant": null
+    },
+    {
       "id": "pap.company.rateLimit",
       "role": "company",
       "python": "COMPANY_RATE_LIMITS",

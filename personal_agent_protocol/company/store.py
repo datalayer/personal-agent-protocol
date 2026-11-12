@@ -825,6 +825,12 @@ class StoredOperation:
     revision and when the company received it; `approval` is what the personal agent
     stated with it, `approver` and any `approved_at`, `input_type` and `reference`
     (Operations 6). A declined approval is never recorded.
+
+    `website` marks an operation a website returned to a joined browser (Operations 4):
+    approved only at the extension's `endpoint`, never at an API, an MCP server or a
+    conversation, and no other interface's operation is approved there (Operations 6).
+    Its approval is recorded while it is still `open` (`approved` set), and the browser's
+    next request for exactly that revision performs it.
     """
 
     operation_id: str
@@ -842,6 +848,7 @@ class StoredOperation:
     approved_at: datetime | None = None
     approval: dict[str, Any] | None = None
     outcome: OperationOutcome | None = None
+    website: bool = False
 
     @property
     def latest(self) -> OperationRevision:
@@ -877,6 +884,8 @@ class StoredOperation:
             "approved_at": None if self.approved_at is None else _time(self.approved_at),
             "approval": self.approval,
             "outcome": None if self.outcome is None else self.outcome.to_json(),
+            # Only on a website's operation: other records are as before.
+            **({"website": True} if self.website else {}),
         }
 
     @classmethod
@@ -897,6 +906,7 @@ class StoredOperation:
             approved_at=None if approved_at is None else _parse(approved_at),
             approval=value.get("approval"),
             outcome=None if outcome is None else OperationOutcome.from_json(outcome),
+            website=bool(value.get("website", False)),
         )
 
 
@@ -934,6 +944,9 @@ class WebSession:
     family: str | None = None
     #: The protocol version the joined Session uses the company at (§3.4).
     protocol_version: str | None = None
+    #: The extensions step 2 of the join declared: the browser's requests declare them
+    #: (§6, Operations 2, Browser Control 3).
+    extensions: Mapping[str, str] = field(default_factory=dict)
 
     def to_json(self) -> JsonObject:
         return {
@@ -946,6 +959,7 @@ class WebSession:
             "scopes": list(self.scopes),
             "family": self.family,
             "protocol_version": self.protocol_version,
+            "extensions": dict(self.extensions),
         }
 
     @classmethod
@@ -960,6 +974,7 @@ class WebSession:
             scopes=tuple(value["scopes"]),
             family=value["family"],
             protocol_version=value.get("protocol_version"),
+            extensions=dict(value.get("extensions") or {}),
         )
 
 

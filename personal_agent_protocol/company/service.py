@@ -34,13 +34,17 @@ What it implements of 0.4 as published (upstream 4803900) and Operations version
   closing; a conversation that is not yours is `conversation_not_found`.
   Once a conversation is handed to the company's people, one of them
   answers in it (`staff_reply`), over the last event they read.
-- Operations version 3, at no endpoint of their own (operations on websites are not
-  served): a request for an action that needs
+- Operations version 3: a request for an action that needs
   approval is refused with the operation (`403 approval_required`, an MCP error
   result, a company message), and the same request with the approval
   (`Poppy-Approval`, `_meta`, a message's `approval`) is checked in the extension's
   order and performed at most once; a repeat gets the original response, a request
   while it is performed `503` and `Retry-After`, and a failed check a new revision.
+  With `website_operations` (and `web`), operations on the website too: a joined
+  browser's request for such an action is `403` with a `Poppy-Operation` reference, the
+  extension's `endpoint` (`/poppy/operations`) gives the agent the operation and records
+  its approval (`204`), and the browser's next request for exactly that revision
+  performs it, once (Operations 4, 6, 7). A website's operation is approved only there.
 - MCP (§7), when a `pap.company.mcp` contribution is present: a Streamable HTTP
   endpoint at `/mcp` accepting the Session header and access tokens issued for
   its url (`resource` = that url), its protected resource metadata (RFC 9728),
@@ -50,7 +54,10 @@ What it implements of 0.4 as published (upstream 4803900) and Operations version
   protocol can't do, kept for the company's operator (`feedback_reports`).
 - Web browsing (§6), with `web=True`: the browser-session page with a one-time
   code, `{endpoint}/authorize` for the personal agent, and the company's own
-  cookie for the Session.
+  cookie for the Session; the join keeps the extensions step 2 declared. With a
+  `pap.company.website` contribution, the company's own pages, for visitors and joined
+  browsers. With `browser_control`, the Browser Control extension, version 1, is listed:
+  the website marks the User's steps itself (`data-poppy-user-step`).
 - Rate limits (§5.6): HTTP 429 and `Retry-After`, no body.
 - Taking a company down: its owner reads what is under way (`open_work`),
   settles each open operation (`settle_open_operations`) and ends every
@@ -81,6 +88,7 @@ from pydantic import SecretStr, ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from ..apis import IDEMPOTENCY_KEY, WRITE_METHODS
+from ..browser_control import BROWSER_CONTROL_EXTENSION, BROWSER_CONTROL_VERSION
 from ..crypto import DPOP_ALGORITHM
 from ..errors import (
     PersonalAgentProtocolError,
@@ -122,9 +130,13 @@ from ..operations import (
     ACTION_FAILED,
     APPROVAL_DECLINED,
     APPROVAL_HEADER,
+    OPERATION_HEADER,
+    OPERATION_REFERENCE,
     OPERATIONS_EXTENSION,
     OPERATIONS_VERSION,
+    OperationReference,
     approval_from_meta,
+    operation_reference_header,
     parse_approval_header,
 )
 from ..operator_signatures import (
@@ -161,6 +173,7 @@ from .points import (
     COMPANY_MCP,
     COMPANY_RATE_LIMITS,
     COMPANY_STORES,
+    COMPANY_WEBSITES,
     OPERATION_EXECUTORS,
     OPERATOR_DIRECTORIES,
     REPLAY_CACHES,
@@ -174,6 +187,7 @@ from .points import (
     CompanyAgent,
     CompanyApi,
     CompanyMcp,
+    CompanyWebsite,
     Decline,
     DeclineRequest,
     OperationExecutor,
@@ -187,6 +201,7 @@ from .points import (
     SignInContext,
     SignInRefused,
     Turn,
+    WebCall,
 )
 from .store import (
     ACCEPTANCE,
@@ -441,6 +456,15 @@ class CompanyConfig:
     #: it in `protected_resources` and issues tokens for it, and it takes only those.
     conversation_resource: bool = False
     web: bool = False
+    #: Whether the website returns operations to a joined browser (Operations 2, 4): the
+    #: `operations` entry lists `endpoint` (`/poppy/operations`), beside the browser-session
+    #: endpoint. Only with `web` and `operations`: only a browser joined to a Session gets
+    #: operations (`serves_website_operations`).
+    website_operations: bool = False
+    #: Whether the company lists the Browser Control extension, version 1 (Browser Control
+    #: 3): its website marks the steps it leaves to the User. Only with `web`
+    #: (`lists_browser_control`).
+    browser_control: bool = False
     #: The website asks Personal Agents not to browse it (`web.disabled`, §6): the company
     #: lists no browser-session endpoint and offers its agent and APIs instead. A
     #: preference the protocol can't enforce.
@@ -723,6 +747,25 @@ class CompanyConfig:
         return f"{self.base}/poppy/browser-session"
 
     @property
+    def serves_website_operations(self) -> bool:
+        """Whether the website returns operations: `website_operations` with `web` and
+        `operations` (Operations 2)."""
+
+        return self.website_operations and self.web and self.operations
+
+    @property
+    def lists_browser_control(self) -> bool:
+        """Whether Browser Control is listed: `browser_control` with `web` (Browser Control 3)."""
+
+        return self.browser_control and self.web
+
+    @property
+    def operations_endpoint(self) -> str:
+        """Where the agent gets the website's operations and records approvals (Operations 4)."""
+
+        return f"{self.base}/poppy/operations"
+
+    @property
     def tasks_endpoint(self) -> str:
         """Where the tasks response is served, per Session (§9); a skill's `url` resolves
         against it."""
@@ -829,6 +872,8 @@ class _Asked:
     #: The request's fingerprint, and what the action said for it.
     request: str
     digest: str
+    #: Asked by a joined browser on the website (Operations 4).
+    website: bool = False
 
 
 @dataclass(frozen=True)
@@ -1291,6 +1336,12 @@ class CompanyService:
                 return await self._browser_session(request)
             if method == "POST" and path == "/poppy/browser-session/authorize" and self.config.web:
                 return await self._authorize_join(request)
+            if (
+                method == "POST"
+                and path == "/poppy/operations"
+                and self.config.serves_website_operations
+            ):
+                return await self._operations_endpoint(request)
             if method == "GET" and path == "/poppy/tasks" and self.config.serves_tasks:
                 return await self._tasks(request)
             if method == "GET" and path.startswith("/poppy/skills/"):
@@ -1322,6 +1373,12 @@ class CompanyService:
                 return CompanyResponse(200, self.ucp_profile())
             if self.config.ucp and path.startswith("/ucp/"):
                 return await self._ucp(request, method, path)
+            if (
+                method in {"GET", "POST"}
+                and self._website() is not None
+                and not path.startswith(("/poppy/", "/oauth/", "/.well-known/", "/api/"))
+            ):
+                return await self._website_route(request, method, path)
         except _RateLimitedError as limited:
             return self._rate_limited(limited.retry_after)
         except _RefusedError as refused:
@@ -1528,7 +1585,12 @@ class CompanyService:
         # Each extension a list, one entry per version the company supports (§3.3).
         extensions: dict[str, Any] = {}
         if config.operations:
-            extensions[OPERATIONS_EXTENSION] = [{"version": OPERATIONS_VERSION}]
+            entry: dict[str, Any] = {"version": OPERATIONS_VERSION}
+            if config.serves_website_operations:
+                entry["endpoint"] = config.operations_endpoint
+            extensions[OPERATIONS_EXTENSION] = [entry]
+        if config.lists_browser_control:
+            extensions[BROWSER_CONTROL_EXTENSION] = [{"version": BROWSER_CONTROL_VERSION}]
         if config.links:
             extensions[LINKS_EXTENSION] = [{"version": LINKS_VERSION}]
         if config.disclosures:
@@ -4065,11 +4127,19 @@ class CompanyService:
 
     # Operations (the extension's sections 3, 6 and 7) ---------------------------------
 
-    def _asked(self, session: CallerSession, proposal: ProposedOperation, request: str) -> _Asked:
+    def _asked(
+        self,
+        session: CallerSession,
+        proposal: ProposedOperation,
+        request: str,
+        *,
+        website: bool = False,
+    ) -> _Asked:
         """What a request asks for: one action of one account, or of the agent and User signed out.
 
         Its terms are `terms`, which every operation has: a `summary` reworded without
-        changing them keeps the revision (Operations 3).
+        changing them keeps the revision (Operations 3). The website's requests are
+        operations of their own, approved only at the extension's endpoint (Operations 6).
         """
 
         scopes = tuple(proposal.scopes) or self.config.write_scopes
@@ -4083,12 +4153,14 @@ class CompanyService:
                 session.account_id or "",
                 proposal.action,
                 proposal.subject,
+                *(("web",) if website else ()),
             ),
             summary=proposal.summary,
             terms=proposal.terms,
             scopes=scopes,
             request=request,
             digest=_fingerprint(proposal.terms),
+            website=website,
         )
 
     async def _approval_target(
@@ -4107,15 +4179,34 @@ class CompanyService:
         if approval is None:
             return None
         stored = await self._read(OPERATION, approval.operation_id, StoredOperation.from_json)
-        if stored is None or stored.owner != (session.client_id, session.pairwise_user_id):
+        if stored is None or stored.website:
+            # A website's operation is approved only at the extension's endpoint (Operations 6).
+            return None
+        return self._can_approve(session, stored)
+
+    def _can_approve(
+        self, session: CallerSession, stored: StoredOperation, *, challenge: bool = True
+    ) -> StoredOperation | None:
+        """Check 1 for one operation: it, when this Session can approve it (Operations 3).
+
+        A signed-out Session of the same agent and User gets a challenge for an account's
+        operation, unless `challenge` is off (a browser's request, which has no challenge
+        to answer). A website's operation needs no scope at the endpoint: recording an
+        approval performs nothing, and the browser's request acts with its own access
+        (Operations 4).
+        """
+
+        if stored.owner != (session.client_id, session.pairwise_user_id):
             return None
         if stored.account_id is None:
             return stored if session.account_id is None else None
         if session.account_id is None:
+            if not challenge:
+                return None
             raise _needs_account(None, stored.scopes)
         if session.account_id != stored.account_id:
             return None
-        if any(scope not in session.scopes for scope in stored.scopes):
+        if not stored.website and any(scope not in session.scopes for scope in stored.scopes):
             raise _needs_account(session.account_id, stored.scopes)
         return stored
 
@@ -4226,6 +4317,7 @@ class CompanyService:
             account_id=session.account_id,
             session_key=None if signed_in else session.session_key,
             scopes=asked.scopes if signed_in else (),
+            website=asked.website,
         )
         await self.store.put(OPERATION, stored.operation_id, stored.to_json())
         await self.store.put(PROPOSAL, asked.key, OperationProposal(stored.operation_id).to_json())
@@ -4805,8 +4897,10 @@ class CompanyService:
             scopes=session.scopes,
             family=session.family,
             expires_at=stored.ends_at,
-            # The browser joins the Session at the version it uses the company at (§3.4).
+            # The browser joins the Session at the version it uses the company at (§3.4),
+            # and its requests declare the extensions this request declared (§6).
             protocol_version=session.protocol_version,
+            extensions=dict(session.extensions),
         )
 
         def authorize(current: JoinCode) -> JoinCode:
@@ -4867,6 +4961,259 @@ class CompanyService:
                 "Cache-Control": "no-store",
             },
         )
+
+    # Operations on the website (Operations 4, 6, 7) ------------------------------------------
+
+    def _website(self) -> CompanyWebsite | None:
+        return cast(
+            CompanyWebsite | None, optional_contribution(self.reactor, COMPANY_WEBSITES, "website")
+        )
+
+    async def _website_route(  # noqa: C901 - the page, then each answer to an action
+        self, request: CompanyRequest, method: str, path: str
+    ) -> CompanyResponse:
+        """A page or form of the company's website, for a visitor or a joined browser (§6).
+
+        The website says what each request does. When it is an action that needs approval,
+        a joined browser whose join declared Operations version 3 gets the reference
+        (`_website_operation`); any other browser gets the website's own approval flow, or
+        a refusal: a Company never returns operations to a request that doesn't declare
+        the extension (Operations 2).
+        """
+
+        if method == "POST" and not _from_this_site(request, self.config.base):
+            return self._page(403, "This form can only be sent from this website.")
+        session = await self.web_session(_cookie(request, WEB_COOKIE))
+        query = dict(parse_qsl(urlsplit(request.url).query))
+        content_type = request.headers.get("content-type", "")
+        form = (
+            dict(parse_qsl(request.body.decode(), keep_blank_values=True))
+            if method == "POST" and content_type.startswith("application/x-www-form-urlencoded")
+            else {}
+        )
+        accepts_json = "application/json" in request.headers.get("accept", "")
+        result = await cast(CompanyWebsite, self._website()).handle(
+            WebCall(
+                method=method,
+                path=path,
+                query=query,
+                form=form,
+                accepts_json=accepts_json,
+                joined=session is not None,
+                client_id=None if session is None else session.client_id,
+                sid=None if session is None else session.sid,
+                account_id=None if session is None else session.account_id,
+                scopes=() if session is None else session.scopes,
+                extensions={} if session is None else dict(session.extensions),
+            )
+        )
+        if result.operation is None:
+            return _web_answer(result.status, result.body)
+        if (
+            session is None
+            or not self.config.serves_website_operations
+            or not self._supports_operations(session)
+        ):
+            # The website handles approval itself, or refuses (Operations 2).
+            own = result.own_approval
+            if own is None:
+                own = (
+                    {"error": "extension_required", "extension": OPERATIONS_EXTENSION}
+                    if accepts_json
+                    else "<!doctype html><meta charset=utf-8><title>Not available</title>"
+                    "<p>This action can't be done from this browser.</p>"
+                )
+            return _web_answer(403, own)
+        fingerprint = _fingerprint("web", method, path, sorted(query.items()), sorted(form.items()))
+        asked = self._asked(session, result.operation, fingerprint, website=True)
+        decision = await self._website_decide(session, asked)
+        if decision.operation is not None:
+            reference = OperationReference(
+                sid=session.sid, ref=_website_reference(decision.operation)
+            )
+            headers = {
+                OPERATION_HEADER: operation_reference_header(reference),
+                "Cache-Control": "no-store",
+            }
+            if accepts_json:
+                # Like an API's, without the operation: the agent gets it at the endpoint.
+                return _json_error(403, "approval_required", headers)
+            return _web_answer(
+                403,
+                "<!doctype html><meta charset=utf-8><title>Waiting for approval</title>"
+                "<p>This action is waiting for your approval in your personal agent.</p>"
+                '<form method="post"><button>Continue</button></form>',
+                headers,
+            )
+        outcome = decision.outcome
+        if outcome is None:
+            # Being performed, or nobody knows yet whether it took effect (Operations 7).
+            body: str | dict[str, Any] = (
+                {"error": "temporarily_unavailable"}
+                if accepts_json
+                else "<!doctype html><meta charset=utf-8><title>In progress</title>"
+                "<p>This action is in progress.</p>"
+            )
+            return _web_answer(503, body, {"Retry-After": _PERFORMING_RETRY_AFTER})
+        status = 200 if outcome.succeeded else 422
+        if accepts_json:
+            answer: dict[str, Any] = {"summary": outcome.summary}
+            if outcome.data is not None:
+                answer["data"] = outcome.data
+            if not outcome.succeeded:
+                answer = {"error": ACTION_FAILED, **answer}
+            return _web_answer(status, answer)
+        return _web_answer(
+            status,
+            "<!doctype html><meta charset=utf-8><title>Done</title>"
+            f"<p>{html.escape(outcome.summary)}</p>",
+        )
+
+    async def _website_decide(self, session: CallerSession, asked: _Asked) -> _Decision:
+        """A joined browser asks for an action: perform it with a recorded approval, or ask.
+
+        The recorded approval of this action's open operation, when this Session can
+        approve it and it passes check 3 for this request, is used up by performing it once
+        (check 2 in `_perform`). Otherwise the request is one without an approval, and gets
+        a revision to approve: a new reference (Operations 6). Once the action is
+        performed, the next request for it is a new operation (Operations 7).
+        """
+
+        current = await self._open_operation(asked.key)
+        if current is not None and current.approved is not None and current.approval:
+            target = self._can_approve(session, current, challenge=False)
+            revision = next(
+                (item for item in current.revisions if item.revision == current.approved), None
+            )
+            if target is not None and self._approves(target, revision, asked):
+                approval = Approval.model_validate(
+                    {
+                        "operation_id": target.operation_id,
+                        "revision": target.approved,
+                        **target.approval,
+                    }
+                )
+                return await self._perform(target, cast(OperationRevision, revision), approval)
+        return _Decision(operation=await self._revision_for(session, current, asked, None))
+
+    async def _operations_endpoint(  # noqa: C901 - the checks of section 6, in order
+        self, request: CompanyRequest
+    ) -> CompanyResponse:
+        """The extension's endpoint (Operations 4, 6): a website's operations, by reference.
+
+        The Session header and any access token are checked as at an API; no scope is
+        needed. `{"ref": …}` alone gets the operation (`403 approval_required`), or, once
+        an approval is recorded, its `status` (`200`). With `Poppy-Approval`, the checks
+        of section 6 in order, then the approval is recorded (`204`) or declined; nothing
+        is performed here. A reference the Session can't use is `400 invalid_request`;
+        one to an account's operation from a signed-out Session of the same agent and User
+        gets a challenge. Another interface's operation is never approved here.
+        """
+
+        _, session = await self._caller(request)
+        if not self._supports_operations(session):
+            raise _RefusedError(403, "extension_required", extension=OPERATIONS_EXTENSION)
+        body = _json_object(request.body)
+        ref = body.get("ref")
+        if not isinstance(ref, str) or not OPERATION_REFERENCE.fullmatch(ref):
+            raise _RefusedError(400, "invalid_request")
+        operation_id, _, revision_id = ref.partition(".")
+        stored = await self._read(OPERATION, operation_id, StoredOperation.from_json)
+        if stored is None or not stored.website:
+            raise _RefusedError(400, "invalid_request")
+        target = self._can_approve(session, stored)
+        named = next((item for item in stored.revisions if item.revision == revision_id), None)
+        if target is None or named is None:
+            raise _RefusedError(400, "invalid_request")
+        approval = parse_approval_header(request.headers.get(APPROVAL_HEADER.lower()))
+        if target.status in {"performing", "performed"} or (
+            approval is None and target.status == "open" and target.approved is not None
+        ):
+            # Check 2, and the lookup of an approved reference (Operations 6, 7).
+            status = "approved" if target.status == "open" else target.status
+            return CompanyResponse(
+                200,
+                {"operation_id": target.operation_id, "status": status},
+                {"Cache-Control": "no-store"},
+            )
+        if target.status != "open":
+            raise _RefusedError(400, "invalid_request")
+        if approval is not None and approval.operation_id == target.operation_id:
+            approved = next(
+                (item for item in target.revisions if item.revision == approval.revision), None
+            )
+            if (
+                approved is not None
+                and not approved.withdrawn
+                and self._now() <= approved.expires_at
+            ):
+                declined = self._declined(target, approved, approval)
+                if declined is not None:
+                    # Never recorded: the website never finds it (Operations 6).
+                    return _json_error(
+                        403,
+                        APPROVAL_DECLINED,
+                        **declined.model_dump(mode="json", exclude_none=True),
+                    )
+                if await self._record(target, approved, approval):
+                    return CompanyResponse(204, None, {"Cache-Control": "no-store"})
+        # No approval, or one that fails check 3 (another operation's, or a revision that
+        # can't be approved): the operation for the reference, never the revision the
+        # approval named; `invalid_request` once it has expired.
+        current = self._current_revision(target, named)
+        if current is None or (approval is not None and current.revision == approval.revision):
+            raise _RefusedError(400, "invalid_request")
+        return _json_error(
+            403,
+            "approval_required",
+            {"Cache-Control": "no-store"},
+            operation=target.revision(current).model_dump(mode="json"),
+        )
+
+    def _current_revision(
+        self, stored: StoredOperation, named: OperationRevision
+    ) -> OperationRevision | None:
+        """The revision a reference stands for now: its own while it can be approved, else
+        the operation's latest one that can; `None` once none can (expired)."""
+
+        for revision in (named, stored.latest):
+            if not revision.withdrawn and self._now() <= revision.expires_at:
+                return revision
+        return None
+
+    async def _record(
+        self, target: StoredOperation, revision: OperationRevision, approval: Approval
+    ) -> bool:
+        """Record an approval for the browser's next request (Operations 6): the first one
+        recorded is kept while it can still be used; `False` once the operation is no longer
+        open."""
+
+        stated = approval.model_dump(
+            mode="json", include={"approver", "approved_at", "input_type", "reference"}
+        )
+        recorded_at = self._now()
+
+        def record(current: StoredOperation) -> StoredOperation:
+            if current.status != "open":
+                return current
+            if current.approved is not None:
+                kept = next(
+                    (item for item in current.revisions if item.revision == current.approved),
+                    None,
+                )
+                if kept is not None and not kept.withdrawn and recorded_at <= kept.expires_at:
+                    return current
+            return replace(
+                current,
+                approved=revision.revision,
+                approved_at=recorded_at,
+                approval={key: value for key, value in stated.items() if value is not None},
+            )
+
+        changed = await self._change(
+            OPERATION, target.operation_id, StoredOperation.from_json, record
+        )
+        return changed is not None and changed[1].status == "open"
 
     async def page_session(self, request: CompanyRequest) -> CallerSession | CompanyResponse | None:
         """The Session of a website page fetched without a browser (§5.2), for the
@@ -4944,7 +5291,29 @@ class CompanyService:
             scopes=scopes,
             family=joined.family if account_id is not None else None,
             protocol_version=joined.protocol_version or self.config.preferred_version,
+            extensions=dict(joined.extensions),
         )
+
+
+def _website_reference(operation: Operation) -> str:
+    """A website's reference to one revision of an operation (Operations 4): opaque to the
+    agent, usable only in a Session that can approve the operation."""
+
+    return f"{operation.operation_id}.{operation.revision}"
+
+
+def _web_answer(
+    status: int, body: str | dict[str, Any] | None, headers: Mapping[str, str] | None = None
+) -> CompanyResponse:
+    """A page of the website (HTML, never cached, never framed) or its scripts' JSON."""
+
+    answer = dict(headers or {})
+    if isinstance(body, dict):
+        answer.setdefault("Cache-Control", "no-store")
+        return CompanyResponse(status, body, answer)
+    answer.setdefault("Content-Type", "text/html; charset=utf-8")
+    answer.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+    return CompanyResponse(status, body or "", answer)
 
 
 def _ucp_platform_profile(value: str | None) -> str | None:

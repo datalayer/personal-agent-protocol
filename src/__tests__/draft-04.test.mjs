@@ -7,12 +7,12 @@
 // What draft 0.4 adds, both sides, in one process: the port of
 // personal_agent_protocol/__tests__/test_draft_04.py.
 //
-// Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
-// declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
-// browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into account
-// (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09); the Operations
-// extension's minor changes (Operations 3, 5, 6, 8.1, P4-10); what the guides add for the
-// reference companies (P4-11).
+// Direct Sign-In preferred (§4); several protocol versions (§3.4); extensions
+// declared per request (§3.3, §3.4); conversations across versions (§8.2); the
+// browser join scope and website flags (§3.1, §4.7, §6); what a message took into account
+// (§8.4); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2); the Operations
+// extension's minor changes (Operations 3, 5, 6, 8.1); what the guides add for the
+// reference companies.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -272,7 +272,10 @@ test("a Session declares the extensions it uses with the company", async () => {
     tenantId: TENANT,
     company: w.company,
   });
-  assert.deepEqual(w.company.document.extensions.operations, [{ version: "3" }]);
+  // Manzanita's website returns operations too: the entry lists their endpoint.
+  assert.deepEqual(w.company.document.extensions.operations, [
+    { version: "3", endpoint: "https://manzanita.example/poppy/operations" },
+  ]);
   assert.equal(companyExtension(w.company.document, "operations", "3")?.version, "3");
   assert.deepEqual(session.extensions, { operations: "3", links: "1", disclosures: "1", "mediated-sign-in": "1" });
   const headers = await sessionHeaders(w.host.reactor, "GET", "https://manzanita.example/api/orders", { session });
@@ -638,7 +641,7 @@ test("an approval of earlier terms the user prefers is still accepted", async ()
   assert.deepEqual(w.notes.performed, [[first.operation_id, first.revision]]);
 });
 
-// The guides (P4-11) -----------------------------------------------------------------------------
+// The guides -----------------------------------------------------------------------------
 
 /** Ada signs Atlas in with Device Sign-In: the refresh token's reference and its context. */
 async function signedInWithReference(w) {

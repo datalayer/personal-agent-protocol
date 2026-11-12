@@ -15,6 +15,10 @@ a company agent, and the Operations extension. Its parts are contributions:
 - `ExchangeExecutor` (`pap.company.operationExecutor`): performs the
   exchange, once. Gift wrap, a return that fails partway, and a repair whose
   carrier never answers show the other ends of an operation.
+- `ManzanitaWebsite` (`pap.company.website`): the order's exchange page, whose form asks
+  for approval in a joined browser (`Poppy-Operation`, the operations endpoint), and the
+  in-store pickup page, whose form is a step for the User (Browser Control, marked
+  `data-poppy-user-step`).
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ from ..company import (
     COMPANY_AGENTS,
     COMPANY_APIS,
     COMPANY_MCP,
+    COMPANY_WEBSITES,
     OPERATION_EXECUTORS,
     ActionResult,
     ApiCall,
@@ -48,6 +53,8 @@ from ..company import (
     SignInContext,
     ToolResult,
     Turn,
+    WebCall,
+    WebResult,
     build_company,
     company_app,
 )
@@ -143,6 +150,10 @@ CONFIG = CompanyConfig(
         }
     },
     web=True,
+    # Operations on the website: the exchange page asks for approval in a joined browser.
+    website_operations=True,
+    # Browser Control, version 1: the pickup page marks its form as the User's step.
+    browser_control=True,
     # The UCP test shop (the UCP extension, version 1): its catalog, searched through UCP.
     ucp=True,
     ucp_products=UCP_PRODUCTS,
@@ -418,6 +429,108 @@ class ManzanitaMcp:
         return ToolResult(text=f"Unknown tool {name}.", is_error=True)
 
 
+#: The order's pages on Manzanita's website.
+EXCHANGE_PAGE = f"/orders/{ORDER['order_id']}/exchange"
+PICKUP_PAGE = f"/orders/{ORDER['order_id']}/pickup"
+#: The stores the pickup page offers.
+STORES = ("Portland", "Bend", "Eugene")
+
+
+def _page(title: str, body: str) -> str:
+    return f"<!doctype html><meta charset=utf-8><title>{title}</title>{body}"
+
+
+class ManzanitaWebsite:
+    """Manzanita's website: the order's exchange page and its in-store pickup page.
+
+    The exchange form asks for approval: a joined browser whose join declared Operations
+    version 3 gets a reference (`Poppy-Operation`) and, once the approval is recorded
+    at the operations endpoint, the same form performs the exchange once (Operations 4,
+    6). Any other browser is sent to sign in to the website, its own flow.
+
+    The pickup form is the User's step (Browser Control 4): marked `submission`, with the
+    last digits of the User's ID marked `interaction`. The page sends
+    `navigator.poppy.controller` with the form, and the website records it with the
+    pickup, as what the agent's software said, never as proof (Browser Control 8).
+    """
+
+    def __init__(self) -> None:
+        #: Each pickup arranged: the store, and the `controller` value the page sent.
+        self.pickups: list[dict[str, str]] = []
+
+    async def handle(self, call: WebCall) -> WebResult:
+        if call.method == "GET" and call.path == "/":
+            return WebResult(
+                body=_page(
+                    "Manzanita Outfitters",
+                    f'<p><a href="{EXCHANGE_PAGE}">Exchange your Ridge Jacket</a></p>'
+                    f'<p><a href="{PICKUP_PAGE}">Pick up your order in a store</a></p>',
+                )
+            )
+        if call.path == EXCHANGE_PAGE:
+            return self._exchange(call)
+        if call.path == PICKUP_PAGE:
+            return self._pickup(call)
+        return WebResult.not_found()
+
+    @staticmethod
+    def _exchange(call: WebCall) -> WebResult:
+        if call.method == "GET":
+            return WebResult(
+                body=_page(
+                    "Exchange",
+                    "<p>Exchange the Ridge Jacket (M) for the insulated Ridge Jacket (M), "
+                    "USD 70.00 more.</p>"
+                    f'<form method="post" action="{EXCHANGE_PAGE}">'
+                    '<input type="hidden" name="replacement" value="ridge-insulated-m">'
+                    "<button>Exchange</button></form>",
+                )
+            )
+        if call.form.get("replacement") != "ridge-insulated-m":
+            return WebResult(400, _page("Exchange", "<p>Choose a replacement.</p>"))
+        if call.account_id is None or "orders:write" not in call.scopes:
+            return WebResult(
+                401, _page("Sign in", "<p>Sign in to Manzanita to exchange an item.</p>")
+            )
+        return WebResult(
+            operation=EXCHANGE,
+            own_approval=_page(
+                "Confirm", "<p>Confirm the exchange on manzanita.example, signed in.</p>"
+            ),
+        )
+
+    def _pickup(self, call: WebCall) -> WebResult:
+        if call.method == "GET":
+            options = "".join(f"<option>{store}</option>" for store in STORES)
+            return WebResult(
+                body=_page(
+                    "Pick up in store",
+                    f'<form method="post" action="{PICKUP_PAGE}" id="pickup"'
+                    ' data-poppy-user-step="submission">'
+                    f'<label>Store <select name="store">{options}</select></label>'
+                    "<label>Last four digits of your ID "
+                    '<input name="id_last4" data-poppy-user-step="interaction"></label>'
+                    '<input type="hidden" name="controller" value="">'
+                    "<button>Arrange pickup</button></form>"
+                    "<script>document.getElementById('pickup').addEventListener('submit',"
+                    " (event) => { event.target.elements.controller.value ="
+                    " navigator.poppy?.controller ?? ''; });</script>",
+                )
+            )
+        store, last4 = call.form.get("store", ""), call.form.get("id_last4", "")
+        if store not in STORES or not (len(last4) == 4 and last4.isdigit()):
+            return WebResult(400, _page("Pick up in store", "<p>Choose a store and your ID.</p>"))
+        controller = call.form.get("controller", "")
+        self.pickups.append({"store": store, "controller": controller})
+        return WebResult(
+            body=_page(
+                "Pickup arranged",
+                f"<p>Your order will be ready in {store} tomorrow.</p>"
+                f"<p>Recorded: {controller or 'no controller'}.</p>",
+            )
+        )
+
+
 class ManzanitaPlugin:
     def __init__(self) -> None:
         self.accounts = ManzanitaAccounts()
@@ -425,6 +538,7 @@ class ManzanitaPlugin:
         self.gift_wrap = GiftWrapExecutor()
         self.returns = ReturnExecutor()
         self.repairs = RepairExecutor()
+        self.website = ManzanitaWebsite()
 
     def provide_contributions(self, contributions: object) -> None:
         contribute = contributions.contribute  # type: ignore[attr-defined]
@@ -436,6 +550,7 @@ class ManzanitaPlugin:
         contribute(OPERATION_EXECUTORS, self.repairs, contribution_id="repairs")
         contribute(COMPANY_APIS, ManzanitaApi(), contribution_id="api")
         contribute(COMPANY_MCP, ManzanitaMcp(), contribution_id="mcp")
+        contribute(COMPANY_WEBSITES, self.website, contribution_id="website")
 
 
 def manzanita(

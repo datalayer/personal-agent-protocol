@@ -15,11 +15,11 @@ the operation:
 - an MCP tool's error result with `structuredContent.operation`, answered by the
   same call with `_meta["personalagentprotocol.org/approval"]`
   (`McpClient.call_tool(approval=...)`);
-- a company message's `operation`, answered by a message with `approval`.
-
-Operations a website returns to a joined browser (`Poppy-Operation`, the extension's
-`endpoint`) are not implemented by this client: a host that joins a browser to a Session
-declares no `operations` on that join until they are.
+- a company message's `operation`, answered by a message with `approval`;
+- a website's `403` to the agent's own joined browser, with only a reference in the
+  `Poppy-Operation` header: the agent gets the operation by posting the reference to the
+  extension's `endpoint`, records the approval there (`204`), and has its browser make
+  the request again (`WebsiteOperations`).
 
 What this client guarantees on the personal agent's side:
 
@@ -50,9 +50,10 @@ from __future__ import annotations
 import asyncio
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
@@ -78,8 +79,11 @@ from .reactor import (
     first_contribution,
     optional_contribution,
 )
-from .sessions import PapSession
+from .sessions import AccessToken, PapSession
 from .telemetry import operation_result, traced
+
+if TYPE_CHECKING:
+    from .apis import ApiClient, ApiResponse
 
 OPERATIONS_EXTENSION = "operations"
 #: The version this SDK implements, and the only one: version 2 is incompatible with it
@@ -94,6 +98,10 @@ ACTION_FAILED = "action_failed"
 APPROVAL_HEADER = "Poppy-Approval"
 #: The `_meta` key that carries an approval to an MCP tool (Operations 6).
 APPROVAL_META_KEY = "personalagentprotocol.org/approval"
+#: The header that carries a website's reference to an operation (Operations 4).
+OPERATION_HEADER = "Poppy-Operation"
+#: A website's reference: at most 2048 characters of `A-Z a-z 0-9 - _ .` (Operations 4).
+OPERATION_REFERENCE = re.compile(r"[A-Za-z0-9._-]{1,2048}")
 #: How many times `send` sends an approval, unless told otherwise.
 SEND_ATTEMPTS = 3
 
@@ -367,6 +375,263 @@ def approval_from_meta(meta: object) -> Approval | None:
         return Approval.model_validate(meta.get(APPROVAL_META_KEY))
     except ValidationError:
         return None
+
+
+# Operations on websites: the `Poppy-Operation` header and the extension's `endpoint` -----
+
+
+@dataclass(frozen=True)
+class OperationReference:
+    """A website's reference to an operation (Operations 4): the `sid` of the Session the
+    website handled the browser's request as, and the opaque `ref` the Company chose."""
+
+    sid: str
+    ref: str
+
+
+def operation_reference_header(reference: OperationReference) -> str:
+    """The value of `Poppy-Operation`: a Dictionary with `sid` and `ref` as Strings."""
+
+    if not OPERATION_REFERENCE.fullmatch(reference.ref):
+        raise ValueError("a reference is 1 to 2048 characters of A-Z a-z 0-9 - _ .")
+    return f"sid={_sf_string(reference.sid)}, ref={_sf_string(reference.ref)}"
+
+
+def parse_operation_header(value: str | None) -> OperationReference | None:
+    """The reference a `Poppy-Operation` value states, or `None`.
+
+    A value that isn't a Dictionary is ignored whole (RFC 9651), and so is one without
+    `sid` and `ref` as Strings, or whose `ref` has characters or a length the extension
+    doesn't allow. Other members are ignored.
+    """
+
+    if not value:
+        return None
+    try:
+        members = _Dictionary(value).members()
+    except _DictionaryError:
+        return None
+    sid, ref = members.get("sid"), members.get("ref")
+    if not isinstance(sid, str) or not sid or not isinstance(ref, str):
+        return None
+    if not OPERATION_REFERENCE.fullmatch(ref):
+        return None
+    return OperationReference(sid=sid, ref=ref)
+
+
+def operations_endpoint(document: DiscoveryDocument) -> str | None:
+    """The `endpoint` of the Company's `operations` entry at this version, or `None`.
+
+    Only an HTTPS URL counts, and only beside `web.browser_session_endpoint`: a Company
+    lists both, because only a browser joined to a Session gets operations (Operations 2).
+    """
+
+    entry = document.extension(OPERATIONS_EXTENSION, OPERATIONS_VERSION)
+    endpoint = None if entry is None else getattr(entry, "endpoint", None)
+    if not isinstance(endpoint, str) or document.web is None:
+        return None
+    if document.web.browser_session_endpoint is None:
+        return None
+    parsed = urlsplit(endpoint)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    return endpoint
+
+
+#: What a lookup of an approved reference says (Operations 6).
+WebsiteOperationStatus = Literal["approved", "performing", "performed"]
+
+
+class WebsiteOperations:
+    """Operations a Company's website returns to the personal agent's own browser.
+
+    The approval never passes through the browser (Operations 6, 8.2):
+
+    1. `reference(headers, joined=...)` takes the reference from the `Poppy-Operation`
+       header of a response the agent's own browser received, and only when its `sid`
+       names a Session the agent joined that browser to, at this Company. Page content,
+       a message, or a header naming any other Session is never a reference.
+    2. `operation(reference, session=...)` posts `{"ref": …}` to this Company's
+       `endpoint`, with the Session header and any access token: the operation, to
+       approve as at an API (`OperationsClient.ask_user` or `approve_as_agent`).
+    3. `record(reference, approval, session=...)` posts the same body with
+       `Poppy-Approval`: `204` records it, nothing performed yet. Use it as the request
+       of `OperationsClient.send`: a decline and a new revision come back as from an API.
+    4. The host has its browser make the request again (the page's Continue button, the
+       same form): the website performs it once, using the approval recorded first.
+    5. When the browser's request fails, or answers a new reference after an approval was
+       recorded, `before_approving_again(earlier, ...)` looks the earlier reference up:
+       `performing` waits, `performed` is never approved again (Operations 7).
+
+    `endpoint` is the one `operations_endpoint` reads from this Company's `poppy.json`,
+    so a header from anywhere else can't send the Session header to a new destination.
+    """
+
+    def __init__(
+        self,
+        *,
+        api: ApiClient,
+        document: DiscoveryDocument,
+        operations: OperationsClient | None = None,
+    ) -> None:
+        endpoint = operations_endpoint(document)
+        if endpoint is None:
+            raise OperationError(
+                "no_operations_endpoint",
+                "This Company returns no operations on its website",
+            )
+        self.api = api
+        self.endpoint = endpoint
+        #: Told of every agent approval recorded here: a new operation the website returns
+        #: for the action afterwards is the User's to approve (Operations 5).
+        self.operations = operations
+
+    @staticmethod
+    def reference(
+        headers: Mapping[str, str], *, joined: Collection[str]
+    ) -> OperationReference | None:
+        """The reference in a response the agent's own browser received, or `None`.
+
+        `headers` are that response's; `joined` the `sid`s of the Sessions the agent
+        joined that browser to at this Company (`BrowserSessionClient.joined`). A header
+        whose `sid` names none of them is ignored (Operations 4).
+        """
+
+        value = next(
+            (item for name, item in headers.items() if name.lower() == OPERATION_HEADER.lower()),
+            None,
+        )
+        found = parse_operation_header(value)
+        if found is None or found.sid not in joined:
+            return None
+        return found
+
+    async def operation(
+        self,
+        reference: OperationReference,
+        *,
+        session: PapSession,
+        token: AccessToken | None = None,
+    ) -> Operation:
+        """The operation a reference names, from `endpoint` (Operations 4).
+
+        `session` is the Session the reference names, or another Session of the same
+        agent and User that can approve it; signed in, `token` is its access token. A
+        reference the Session can't use is `invalid_reference` (have the browser make
+        the request again for a new one); one already approved is `already_approved`,
+        its `status` in the details.
+        """
+
+        answer = await self._post(reference, session=session, token=token, approval=None)
+        if answer.operation is not None:
+            return cast(Operation, answer.operation)
+        status = answer.body.get("status") if isinstance(answer.body, dict) else None
+        raise OperationError(
+            "already_approved",
+            "This operation is already approved",
+            details={"status": status} if isinstance(status, str) else None,
+        )
+
+    async def record(
+        self,
+        reference: OperationReference,
+        approval: Approval,
+        *,
+        session: PapSession,
+        token: AccessToken | None = None,
+    ) -> ApiResponse:
+        """Send the approval to `endpoint` (Operations 6): an API answer, for `send`.
+
+        `204` is recorded (its `status`); `approval_declined` and a new revision come back
+        as the answer's `declined` and `operation`. Nothing is performed until the
+        browser makes the request again. An agent approval recorded here makes the next
+        revision of the action the User's to approve (`OperationsClient.user_only`).
+        """
+
+        answer = await self._post(reference, session=session, token=token, approval=approval)
+        if (
+            approval.approver == "agent"
+            and self.operations is not None
+            and answer.operation is None
+            and answer.declined is None
+        ):
+            self.operations.user_only.add(approval.operation_id)
+        return answer
+
+    async def status(
+        self,
+        reference: OperationReference,
+        *,
+        session: PapSession,
+        token: AccessToken | None = None,
+    ) -> WebsiteOperationStatus | None:
+        """What became of an approved reference: `approved`, `performing` or `performed`;
+        `None` when it has no recorded approval, or the Company no longer knows it."""
+
+        try:
+            answer = await self._post(reference, session=session, token=token, approval=None)
+        except OperationError as error:
+            if error.code == "invalid_reference":
+                return None
+            raise
+        if answer.operation is not None or not isinstance(answer.body, dict):
+            return None
+        status = answer.body.get("status")
+        if status in ("approved", "performing", "performed"):
+            return cast(WebsiteOperationStatus, status)
+        return None
+
+    async def before_approving_again(
+        self, earlier: OperationReference, *, session: PapSession, token: AccessToken | None = None
+    ) -> Literal["approve", "wait", "performed"]:
+        """After an approval was recorded, the browser's request failed or answered a new
+        reference: may the agent approve the new one? (Operations 7)
+
+        `wait` while the earlier one is `performing`; `performed` once it was, so the new
+        one is never approved; `approve` otherwise (the approval was not used, or no
+        longer matches). The agent still never approves a new revision after its own
+        agent approval was answered with new terms without asking the User (Operations 5).
+        """
+
+        status = await self.status(earlier, session=session, token=token)
+        if status == "performing":
+            return "wait"
+        if status == "performed":
+            return "performed"
+        return "approve"
+
+    async def _post(
+        self,
+        reference: OperationReference,
+        *,
+        session: PapSession,
+        token: AccessToken | None,
+        approval: Approval | None,
+    ) -> ApiResponse:
+        if not OPERATION_REFERENCE.fullmatch(reference.ref):
+            raise OperationError("invalid_reference", "Not a reference the extension allows")
+        if session.extensions.get(OPERATIONS_EXTENSION) != OPERATIONS_VERSION:
+            raise OperationError(
+                "operations_not_declared",
+                "The Session does not declare the Operations extension, version 3",
+            )
+        try:
+            return await self.api.call(
+                "POST",
+                self.endpoint,
+                session=session,
+                token=token,
+                body={"ref": reference.ref},
+                approval=approval,
+            )
+        except PersonalAgentProtocolError as error:
+            if error.code == "invalid_request" and error.status_code == 400:
+                raise OperationError(
+                    "invalid_reference",
+                    "The Company can't use this reference in this Session",
+                    status_code=400,
+                ) from error
+            raise
 
 
 # The terms check ---------------------------------------------------------------------------
@@ -733,16 +998,24 @@ __all__ = [
     "APPROVAL_META_KEY",
     "OPERATIONS_EXTENSION",
     "OPERATIONS_VERSION",
+    "OPERATION_HEADER",
+    "OPERATION_REFERENCE",
     "AgentInstruction",
     "ApprovalSent",
     "OperationError",
+    "OperationReference",
     "OperationsClient",
+    "WebsiteOperationStatus",
+    "WebsiteOperations",
     "approval_from_meta",
     "approval_header",
     "declined_from",
     "new_approval_reference",
     "operation_from",
+    "operation_reference_header",
+    "operations_endpoint",
     "operations_negotiated",
     "parse_approval_header",
+    "parse_operation_header",
     "terms_differences",
 ]

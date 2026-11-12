@@ -27,6 +27,9 @@ without touching the service:
   called with the Session header and access tokens issued for its url (§7), a
   consequential tool returning an operation in `structuredContent`
   (Operations 4).
+- `pap.company.website` answers the company's own website pages, for visitors and for
+  the personal agent's joined browser (§6); an action that needs approval returns an
+  operation, which a joined browser gets as a `Poppy-Operation` reference (Operations 4).
 - `pap.company.rateLimit` says how often the company answers one personal
   agent and one signed-in account: once a request's Session is verified, a
   refusal is HTTP 429 with `Retry-After` and no body (§5.6). None by default.
@@ -36,7 +39,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -71,6 +74,7 @@ OPERATOR_DIRECTORIES = define_contribution_point("pap.company.operatorDirectory"
 REPLAY_CACHES = define_contribution_point("pap.company.replayCache")
 COMPANY_APIS = define_contribution_point("pap.company.api")
 COMPANY_MCP = define_contribution_point("pap.company.mcp")
+COMPANY_WEBSITES = define_contribution_point("pap.company.website")
 COMPANY_RATE_LIMITS = define_contribution_point("pap.company.rateLimit")
 
 
@@ -459,6 +463,58 @@ class CompanyMcp(Protocol):
     async def call(self, name: str, arguments: dict[str, Any], call: ApiCall) -> ToolResult: ...
 
 
+@dataclass(frozen=True)
+class WebCall:
+    """One request to the company's website, from a browser (§6).
+
+    `joined` says the browser carries the cookie of a join: then `client_id`, `sid`,
+    `account_id`, `scopes` and `extensions` are its Session's, as the join gave them
+    (signed in only through a join with an access token). Otherwise it is an ordinary
+    visitor. `form` is a submitted form's fields; `accepts_json` says the request came from
+    the page's own scripts asking for JSON (Operations 4).
+    """
+
+    method: str
+    path: str
+    query: dict[str, str]
+    form: dict[str, str]
+    accepts_json: bool = False
+    joined: bool = False
+    client_id: str | None = None
+    sid: str | None = None
+    account_id: str | None = None
+    scopes: tuple[str, ...] = ()
+    extensions: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WebResult:
+    """The website's answer: a page (HTML) or JSON, or an action that needs approval.
+
+    With `operation`, the website performs nothing: for a joined browser whose join
+    declared Operations version 3 the company returns the reference (`403` and
+    `Poppy-Operation`), and performs the action once its approval is recorded at the
+    extension's endpoint and the browser asks again; for any other browser it answers
+    `own_approval`, the website's own way, or refuses (Operations 2, 4).
+    """
+
+    status: int = 200
+    body: str | dict[str, Any] | None = None
+    operation: ProposedOperation | None = None
+    own_approval: str | dict[str, Any] | None = None
+
+    @staticmethod
+    def not_found() -> WebResult:
+        return WebResult(404, "<!doctype html><title>Not found</title><p>Not found.</p>")
+
+
+@runtime_checkable
+class CompanyWebsite(Protocol):
+    """The company's website: its pages and forms, for visitors and joined browsers."""
+
+    async def handle(self, call: WebCall) -> WebResult: ...
+
+
 __all__ = [
     "CLIENT_POLICIES",
     "CLIENT_RESOLVERS",
@@ -467,6 +523,7 @@ __all__ = [
     "COMPANY_APIS",
     "COMPANY_MCP",
     "COMPANY_STORES",
+    "COMPANY_WEBSITES",
     "OPERATION_EXECUTORS",
     "OPERATOR_DIRECTORIES",
     "REPLAY_CACHES",
@@ -483,6 +540,7 @@ __all__ = [
     "CompanyApi",
     "CompanyMcp",
     "CompanyStore",
+    "CompanyWebsite",
     "Decline",
     "DeclineRequest",
     "IssuedAccessToken",
@@ -507,4 +565,6 @@ __all__ = [
     "StoredRecord",
     "ToolResult",
     "Turn",
+    "WebCall",
+    "WebResult",
 ]

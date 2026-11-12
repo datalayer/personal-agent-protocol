@@ -24,6 +24,10 @@
  * - `ExchangeExecutor` (`pap.company.operationExecutor`): performs the
  *   exchange, once. Gift wrap, a return that fails partway, and a repair whose
  *   carrier never answers show the other ends of an operation.
+ * - `ManzanitaWebsite` (`pap.company.website`): the order's exchange page, whose form asks for
+ *   approval in a joined browser (`Poppy-Operation`, the operations endpoint), and the in-store
+ *   pickup page, whose form is a step for the User (Browser Control, marked
+ *   `data-poppy-user-step`).
  *
  * Not part of either published entry: tests import it from `lib/demo/`.
  */
@@ -40,10 +44,12 @@ import {
   CompanyConfig,
   CompanyMcps,
   CompanyStores,
+  CompanyWebsites,
   OperationExecutors,
   OperationFailed,
   OperationOutcomeUnknown,
   ToolResults,
+  WebResults,
   buildCompany,
   type AccountDirectory,
   type ActionResult,
@@ -64,6 +70,9 @@ import {
   type SignInContext,
   type ToolResult,
   type Turn,
+  type CompanyWebsite,
+  type WebCall,
+  type WebResult,
 } from "../company/index.js";
 import type { Link, Operation } from "../models.js";
 import { Clocks, type Clock, type PapCoreOptions } from "../reactor.js";
@@ -158,6 +167,10 @@ export const CONFIG_OPTIONS: CompanyConfigOptions = {
     },
   },
   web: true,
+  // Operations on the website: the exchange page asks for approval in a joined browser.
+  websiteOperations: true,
+  // Browser Control, version 1: the pickup page marks its form as the User's step.
+  browserControl: true,
   // The UCP test shop (the UCP extension, version 1): its catalog, searched through UCP.
   ucp: true,
   ucpProducts: UCP_PRODUCTS,
@@ -425,6 +438,108 @@ export class RepairExecutor implements OperationExecutor {
   }
 }
 
+/** The order's pages on Manzanita's website. */
+export const EXCHANGE_PAGE = `/orders/${ORDER.order_id}/exchange`;
+export const PICKUP_PAGE = `/orders/${ORDER.order_id}/pickup`;
+/** The stores the pickup page offers. */
+export const STORES = ["Portland", "Bend", "Eugene"] as const;
+
+function sitePage(title: string, body: string): string {
+  return `<!doctype html><meta charset=utf-8><title>${title}</title>${body}`;
+}
+
+/**
+ * Manzanita's website: the order's exchange page and its in-store pickup page.
+ *
+ * The exchange form asks for approval: a joined browser whose join declared Operations
+ * version 3 gets a reference (`Poppy-Operation`) and, once the approval is recorded at the
+ * operations endpoint, the same form performs the exchange once (Operations 4, 6). Any other
+ * browser is sent to sign in to the website, its own flow.
+ *
+ * The pickup form is the User's step (Browser Control 4): marked `submission`, with the last
+ * digits of the User's ID marked `interaction`. The page sends `navigator.poppy.controller`
+ * with the form, and the website records it with the pickup, as what the agent's software
+ * said, never as proof (Browser Control 8).
+ */
+export class ManzanitaWebsite implements CompanyWebsite {
+  /** Each pickup arranged: the store, and the `controller` value the page sent. */
+  readonly pickups: { store: string; controller: string }[] = [];
+
+  async handle(call: WebCall): Promise<WebResult> {
+    if (call.method === "GET" && call.path === "/") {
+      return {
+        body: sitePage(
+          "Manzanita Outfitters",
+          `<p><a href="${EXCHANGE_PAGE}">Exchange your Ridge Jacket</a></p>` +
+            `<p><a href="${PICKUP_PAGE}">Pick up your order in a store</a></p>`,
+        ),
+      };
+    }
+    if (call.path === EXCHANGE_PAGE) return ManzanitaWebsite.#exchange(call);
+    if (call.path === PICKUP_PAGE) return this.#pickup(call);
+    return WebResults.notFound();
+  }
+
+  static #exchange(call: WebCall): WebResult {
+    if (call.method === "GET") {
+      return {
+        body: sitePage(
+          "Exchange",
+          "<p>Exchange the Ridge Jacket (M) for the insulated Ridge Jacket (M), USD 70.00 more.</p>" +
+            `<form method="post" action="${EXCHANGE_PAGE}">` +
+            '<input type="hidden" name="replacement" value="ridge-insulated-m">' +
+            "<button>Exchange</button></form>",
+        ),
+      };
+    }
+    if (call.form.replacement !== "ridge-insulated-m") {
+      return { status: 400, body: sitePage("Exchange", "<p>Choose a replacement.</p>") };
+    }
+    if (call.accountId === undefined || !call.scopes.includes("orders:write")) {
+      return { status: 401, body: sitePage("Sign in", "<p>Sign in to Manzanita to exchange an item.</p>") };
+    }
+    return {
+      operation: EXCHANGE,
+      ownApproval: sitePage("Confirm", "<p>Confirm the exchange on manzanita.example, signed in.</p>"),
+    };
+  }
+
+  #pickup(call: WebCall): WebResult {
+    if (call.method === "GET") {
+      const options = STORES.map((store) => `<option>${store}</option>`).join("");
+      return {
+        body: sitePage(
+          "Pick up in store",
+          `<form method="post" action="${PICKUP_PAGE}" id="pickup"` +
+            ' data-poppy-user-step="submission">' +
+            `<label>Store <select name="store">${options}</select></label>` +
+            "<label>Last four digits of your ID " +
+            '<input name="id_last4" data-poppy-user-step="interaction"></label>' +
+            '<input type="hidden" name="controller" value="">' +
+            "<button>Arrange pickup</button></form>" +
+            "<script>document.getElementById('pickup').addEventListener('submit'," +
+            " (event) => { event.target.elements.controller.value =" +
+            " navigator.poppy?.controller ?? ''; });</script>",
+        ),
+      };
+    }
+    const store = call.form.store ?? "";
+    const last4 = call.form.id_last4 ?? "";
+    if (!(STORES as readonly string[]).includes(store) || !/^[0-9]{4}$/.test(last4)) {
+      return { status: 400, body: sitePage("Pick up in store", "<p>Choose a store and your ID.</p>") };
+    }
+    const controller = call.form.controller ?? "";
+    this.pickups.push({ store, controller });
+    return {
+      body: sitePage(
+        "Pickup arranged",
+        `<p>Your order will be ready in ${store} tomorrow.</p>` +
+          `<p>Recorded: ${controller || "no controller"}.</p>`,
+      ),
+    };
+  }
+}
+
 /** Manzanita's contributions, and the executors a test inspects. */
 export class ManzanitaPlugin {
   readonly accounts = new ManzanitaAccounts();
@@ -432,6 +547,7 @@ export class ManzanitaPlugin {
   readonly giftWrap = new GiftWrapExecutor();
   readonly returns = new ReturnExecutor();
   readonly repairs = new RepairExecutor();
+  readonly website = new ManzanitaWebsite();
 
   plugin(): PlatformInput {
     return {
@@ -446,6 +562,7 @@ export class ManzanitaPlugin {
         { point: OperationExecutors, value: this.repairs, options: { id: "repairs" } },
         { point: CompanyApis, value: new ManzanitaApi(), options: { id: "api" } },
         { point: CompanyMcps, value: new ManzanitaMcp(), options: { id: "mcp" } },
+        { point: CompanyWebsites, value: this.website, options: { id: "website" } },
       ],
     } as PlatformInput;
   }

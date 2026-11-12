@@ -18,6 +18,10 @@ personal agent controls joins, never the User's own (§6).
 
 A join with a token signs the browser in, in place of any login it had; one without
 leaves the login the browser has, and ends the sign-in of an earlier join (§6).
+
+The browser's requests declare the extensions step 2 declared: the Session's. The client
+remembers the `sid` of each Session it joined the browser to (`joined`), the only
+Sessions whose `Poppy-Operation` references the agent takes (Operations 4).
 """
 
 from __future__ import annotations
@@ -52,6 +56,8 @@ class BrowserSessionStart(ProtocolModel):
 
     endpoint: str
     joined_at: datetime
+    #: The `sid` of the Session the browser joined.
+    sid: str
 
 
 class BrowserSessionClient:
@@ -60,6 +66,10 @@ class BrowserSessionClient:
     def __init__(self, *, reactor: PluginPlatform, transport: SessionHttpClient) -> None:
         self.reactor = reactor
         self.transport = transport
+        #: The `sid` of every Session this client joined its browser to, by the
+        #: browser-session endpoint's origin: a website's `Poppy-Operation` naming any
+        #: other Session is not taken (Operations 4).
+        self.joined: dict[str, set[str]] = {}
 
     async def join(
         self,
@@ -112,4 +122,13 @@ class BrowserSessionClient:
                 status_code=response.status_code,
             )
         await browser.submit_join_form()
-        return BrowserSessionStart(endpoint=endpoint, joined_at=clock.now())
+        origin = urlsplit(endpoint)
+        self.joined.setdefault(f"{origin.scheme}://{origin.netloc}", set()).add(session.sid)
+        return BrowserSessionStart(endpoint=endpoint, joined_at=clock.now(), sid=session.sid)
+
+    def joined_sessions(self, browser_session_endpoint: str) -> frozenset[str]:
+        """The `sid`s of the Sessions this client joined its browser to at the Company
+        whose browser-session endpoint this is: `WebsiteOperations.reference(joined=...)`."""
+
+        origin = urlsplit(browser_session_endpoint)
+        return frozenset(self.joined.get(f"{origin.scheme}://{origin.netloc}", set()))

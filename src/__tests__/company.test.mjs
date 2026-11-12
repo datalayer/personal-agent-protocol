@@ -199,7 +199,15 @@ test("discovery and OAuth metadata publish one issuer, plain OAuth, and the two 
     "poppy:browser-sign-in": "Use the website signed in, with the other access you approve",
   });
   assert.equal(w.company.document.apis[0].url, "https://manzanita.example/api/openapi.json");
-  assert.deepEqual(w.company.document.extensions.operations, [{ version: "3" }]);
+  // Manzanita's website returns operations: `endpoint`, beside the browser-session endpoint.
+  assert.deepEqual(w.company.document.extensions.operations, [
+    { version: "3", endpoint: "https://manzanita.example/poppy/operations" },
+  ]);
+  assert.deepEqual(w.company.document.extensions["browser-control"], [{ version: "1" }]);
+  // Operations at APIs, MCP servers and conversations add no endpoint (Operations 1, 2).
+  const { service: plain } = manzanita({ fetch: w.fetch, config: { websiteOperations: false, browserControl: false } });
+  assert.deepEqual(plain.discoveryDocument().extensions.operations, [{ version: "3" }]);
+  assert.equal(plain.discoveryDocument().extensions["browser-control"], undefined);
   assert.deepEqual(w.company.document.extensions["mediated-sign-in"], [{
     version: "1",
     fields: [

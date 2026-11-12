@@ -5,12 +5,12 @@
 """What draft 0.4 adds, both sides, in one process: `src/__tests__/draft-04.test.mjs`
 ports it.
 
-Direct Sign-In preferred (§4, P4-01); several protocol versions (§3.4, P4-02); extensions
-declared per request (§3.3, §3.4, P4-03); conversations across versions (§8.2, P4-04); the
-browser join scope and website flags (§3.1, §4.7, §6, P4-05); what a message took into
-account (§8.4, P4-08); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2, P4-09); the
-Operations extension's minor changes (Operations 3, 5, 6, 8.1, P4-10); what the guides add for
-the reference companies (P4-11).
+Direct Sign-In preferred (§4); several protocol versions (§3.4); extensions
+declared per request (§3.3, §3.4); conversations across versions (§8.2); the
+browser join scope and website flags (§3.1, §4.7, §6); what a message took into
+account (§8.4); sign-in's minor changes (§3.2, §4.5, §4.7, §5.2); the
+Operations extension's minor changes (Operations 3, 5, 6, 8.1); what the guides add for
+the reference companies.
 """
 
 from __future__ import annotations
@@ -337,7 +337,10 @@ async def test_a_session_declares_the_extensions_it_uses_with_the_company() -> N
     world = World()
     session = await world.signed_out_session()
     document = world.company.document
-    assert document.extensions["operations"] == [ExtensionDescriptor(version="3")]
+    # Manzanita's website returns operations too: the entry lists their endpoint.
+    assert document.extensions["operations"] == [
+        ExtensionDescriptor(version="3", endpoint="https://manzanita.example/poppy/operations")
+    ]
     assert document.extension("operations", "3") is not None
     # Atlas implements Operations alone; the SDK as a whole implements four.
     assert session.extensions == {"operations": "3"}
@@ -854,7 +857,7 @@ async def test_an_approval_of_earlier_terms_the_user_prefers_is_still_accepted()
     assert done.status == 200 and notes.performed == [(first.operation_id, first.revision)]
 
 
-# The guides (P4-11) -------------------------------------------------------------------------
+# The guides -------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

@@ -20,7 +20,8 @@ import {
   type Organization,
   companyExtension,
 } from "./models.js";
-import type { PapSession } from "./sessions.js";
+import type { ApiClient, ApiResponse } from "./apis.js";
+import type { AccessToken, PapSession } from "./sessions.js";
 import {
   ApprovalSurfaces,
   Clocks,
@@ -44,11 +45,11 @@ import { operationResult, traced } from "./telemetry.js";
  *   request with the `Poppy-Approval` header (`ApiClient.call(..., { approval })`);
  * - an MCP tool's error result with `structuredContent.operation`, answered by the same call
  *   with `_meta["personalagentprotocol.org/approval"]` (`McpClient.callTool(..., { approval })`);
- * - a company message's `operation`, answered by a message with `approval`.
- *
- * Operations a website returns to a joined browser (`Poppy-Operation`, the extension's
- * `endpoint`) are not implemented by this client: a host that joins a browser to a Session
- * declares no `operations` on that join until they are.
+ * - a company message's `operation`, answered by a message with `approval`;
+ * - a website's `403` to the agent's own joined browser, with only a reference in the
+ *   `Poppy-Operation` header: the agent gets the operation by posting the reference to the
+ *   extension's `endpoint`, records the approval there (`204`), and has its browser make the
+ *   request again (`WebsiteOperations`).
  *
  * What this client guarantees on the personal agent's side:
  *
@@ -89,6 +90,10 @@ export const ACTION_FAILED = "action_failed";
 export const APPROVAL_HEADER = "Poppy-Approval";
 /** The `_meta` key that carries an approval to an MCP tool (Operations 6). */
 export const APPROVAL_META_KEY = "personalagentprotocol.org/approval";
+/** The header that carries a website's reference to an operation (Operations 4). */
+export const OPERATION_HEADER = "Poppy-Operation";
+/** A website's reference: at most 2048 characters of `A-Z a-z 0-9 - _ .` (Operations 4). */
+export const OPERATION_REFERENCE = /^[A-Za-z0-9._-]{1,2048}$/;
 /** How many times `send` sends an approval, unless told otherwise. */
 export const SEND_ATTEMPTS = 3;
 
@@ -374,6 +379,236 @@ export function approvalFromMeta(meta: unknown): Approval | undefined {
     return parseApproval((meta as Record<string, unknown>)[APPROVAL_META_KEY]);
   } catch {
     return undefined;
+  }
+}
+
+// Operations on websites: the `Poppy-Operation` header and the extension's `endpoint` -----
+
+/**
+ * A website's reference to an operation (Operations 4): the `sid` of the Session the website
+ * handled the browser's request as, and the opaque `ref` the Company chose.
+ */
+export interface OperationReference {
+  readonly sid: string;
+  readonly ref: string;
+}
+
+/** The value of `Poppy-Operation`: a Dictionary with `sid` and `ref` as Strings. */
+export function operationReferenceHeader(reference: OperationReference): string {
+  if (!OPERATION_REFERENCE.test(reference.ref)) {
+    throw new RangeError("a reference is 1 to 2048 characters of A-Z a-z 0-9 - _ .");
+  }
+  return `sid=${sfString(reference.sid)}, ref=${sfString(reference.ref)}`;
+}
+
+/**
+ * The reference a `Poppy-Operation` value states, or `undefined`.
+ *
+ * A value that isn't a Dictionary is ignored whole (RFC 9651), and so is one without `sid` and
+ * `ref` as Strings, or whose `ref` has characters or a length the extension doesn't allow.
+ * Other members are ignored.
+ */
+export function parseOperationHeader(value: string | null | undefined): OperationReference | undefined {
+  if (!value) return undefined;
+  let members: Map<string, unknown>;
+  try {
+    members = new Dictionary(value).members();
+  } catch {
+    return undefined;
+  }
+  const sid = members.get("sid");
+  const ref = members.get("ref");
+  if (typeof sid !== "string" || !sid || typeof ref !== "string") return undefined;
+  if (!OPERATION_REFERENCE.test(ref)) return undefined;
+  return { sid, ref };
+}
+
+/**
+ * The `endpoint` of the Company's `operations` entry at this version, or `undefined`.
+ *
+ * Only an HTTPS URL counts, and only beside `web.browser_session_endpoint`: a Company lists
+ * both, because only a browser joined to a Session gets operations (Operations 2).
+ */
+export function operationsEndpoint(document: DiscoveryDocument): string | undefined {
+  const entry = companyExtension(document, OPERATIONS_EXTENSION, OPERATIONS_VERSION) as
+    | (Record<string, unknown> & { version: string })
+    | undefined;
+  const endpoint = entry?.endpoint;
+  if (typeof endpoint !== "string" || document.web?.browser_session_endpoint === undefined) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password) return undefined;
+  return endpoint;
+}
+
+/** What a lookup of an approved reference says (Operations 6). */
+export type WebsiteOperationStatus = "approved" | "performing" | "performed";
+
+export interface WebsiteOperationsOptions {
+  readonly api: ApiClient;
+  readonly document: DiscoveryDocument;
+  /**
+   * Told of every agent approval recorded here: a new operation the website returns for the
+   * action afterwards is the User's to approve (Operations 5).
+   */
+  readonly operations?: OperationsClient;
+}
+
+interface WebsiteCallOptions {
+  readonly session: PapSession;
+  readonly token?: AccessToken | undefined;
+}
+
+/**
+ * Operations a Company's website returns to the personal agent's own browser.
+ *
+ * The approval never passes through the browser (Operations 6, 8.2):
+ *
+ * 1. `reference(headers, { joined })` takes the reference from the `Poppy-Operation` header of
+ *    a response the agent's own browser received, and only when its `sid` names a Session the
+ *    agent joined that browser to, at this Company.
+ * 2. `operation(reference, { session })` posts `{"ref": …}` to this Company's `endpoint`, with
+ *    the Session header and any access token: the operation, to approve as at an API.
+ * 3. `record(reference, approval, { session })` posts the same body with `Poppy-Approval`:
+ *    `204` records it, nothing performed yet. Use it as the request of `OperationsClient.send`.
+ * 4. The host has its browser make the request again: the website performs it once.
+ * 5. When the browser's request fails, or answers a new reference after an approval was
+ *    recorded, `beforeApprovingAgain(earlier, ...)` looks the earlier reference up:
+ *    `performing` waits, `performed` is never approved again (Operations 7).
+ */
+export class WebsiteOperations {
+  readonly api: ApiClient;
+  readonly endpoint: string;
+  readonly operations: OperationsClient | undefined;
+
+  constructor(options: WebsiteOperationsOptions) {
+    const endpoint = operationsEndpoint(options.document);
+    if (endpoint === undefined) {
+      throw new OperationError("no_operations_endpoint", "This Company returns no operations on its website");
+    }
+    this.api = options.api;
+    this.endpoint = endpoint;
+    this.operations = options.operations;
+  }
+
+  /**
+   * The reference in a response the agent's own browser received, or `undefined`. `joined`
+   * holds the `sid`s of the Sessions the agent joined that browser to at this Company
+   * (`BrowserSessionClient.joinedSessions`); a header naming none of them is ignored.
+   */
+  static reference(
+    headers: Headers | Readonly<Record<string, string>>,
+    options: { readonly joined: Iterable<string> },
+  ): OperationReference | undefined {
+    let value: string | null | undefined;
+    if (headers instanceof Headers) value = headers.get(OPERATION_HEADER);
+    else {
+      value = Object.entries(headers).find(([name]) => name.toLowerCase() === OPERATION_HEADER.toLowerCase())?.[1];
+    }
+    const found = parseOperationHeader(value);
+    if (found === undefined || !new Set(options.joined).has(found.sid)) return undefined;
+    return found;
+  }
+
+  /**
+   * The operation a reference names, from `endpoint` (Operations 4). A reference the Session
+   * can't use is `invalid_reference`; one already approved is `already_approved`, its `status`
+   * in the details.
+   */
+  async operation(reference: OperationReference, options: WebsiteCallOptions): Promise<Operation> {
+    const answer = await this.#post(reference, options, undefined);
+    if (answer.operation !== undefined) return answer.operation;
+    const body = answer.body as Record<string, unknown> | undefined;
+    const status = typeof body === "object" && body !== null ? body.status : undefined;
+    throw new OperationError("already_approved", "This operation is already approved", {
+      ...(typeof status === "string" ? { details: { status } } : {}),
+    });
+  }
+
+  /**
+   * Send the approval to `endpoint` (Operations 6): an API answer, for `send`. `204` is
+   * recorded; `approval_declined` and a new revision come back as the answer's `declined` and
+   * `operation`. An agent approval recorded here makes the next revision the User's to approve.
+   */
+  async record(reference: OperationReference, approval: Approval, options: WebsiteCallOptions): Promise<ApiResponse> {
+    const answer = await this.#post(reference, options, approval);
+    if (
+      approval.approver === "agent" &&
+      this.operations !== undefined &&
+      answer.operation === undefined &&
+      answer.declined === undefined
+    ) {
+      this.operations.userOnly.add(approval.operation_id);
+    }
+    return answer;
+  }
+
+  /**
+   * What became of an approved reference: `approved`, `performing` or `performed`; `undefined`
+   * when it has no recorded approval, or the Company no longer knows it.
+   */
+  async status(reference: OperationReference, options: WebsiteCallOptions): Promise<WebsiteOperationStatus | undefined> {
+    let answer: ApiResponse;
+    try {
+      answer = await this.#post(reference, options, undefined);
+    } catch (error) {
+      if (error instanceof PersonalAgentProtocolError && error.code === "invalid_reference") return undefined;
+      throw error;
+    }
+    if (answer.operation !== undefined || typeof answer.body !== "object" || answer.body === null) return undefined;
+    const status = (answer.body as Record<string, unknown>).status;
+    return status === "approved" || status === "performing" || status === "performed" ? status : undefined;
+  }
+
+  /**
+   * After an approval was recorded, the browser's request failed or answered a new reference:
+   * may the agent approve the new one? (Operations 7) `wait` while the earlier one is
+   * `performing`; `performed` once it was; `approve` otherwise.
+   */
+  async beforeApprovingAgain(
+    earlier: OperationReference,
+    options: WebsiteCallOptions,
+  ): Promise<"approve" | "wait" | "performed"> {
+    const status = await this.status(earlier, options);
+    if (status === "performing") return "wait";
+    if (status === "performed") return "performed";
+    return "approve";
+  }
+
+  async #post(
+    reference: OperationReference,
+    options: WebsiteCallOptions,
+    approval: Approval | undefined,
+  ): Promise<ApiResponse> {
+    if (!OPERATION_REFERENCE.test(reference.ref)) {
+      throw new OperationError("invalid_reference", "Not a reference the extension allows");
+    }
+    if (options.session.extensions[OPERATIONS_EXTENSION] !== OPERATIONS_VERSION) {
+      throw new OperationError(
+        "operations_not_declared",
+        "The Session does not declare the Operations extension, version 3",
+      );
+    }
+    try {
+      return await this.api.call("POST", this.endpoint, {
+        session: options.session,
+        token: options.token,
+        body: { ref: reference.ref },
+        ...(approval === undefined ? {} : { approval }),
+      });
+    } catch (error) {
+      if (error instanceof PersonalAgentProtocolError && error.code === "invalid_request" && error.statusCode === 400) {
+        throw new OperationError("invalid_reference", "The Company can't use this reference in this Session", {
+          statusCode: 400,
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
 }
 

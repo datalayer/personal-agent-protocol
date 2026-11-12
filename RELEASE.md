@@ -30,6 +30,21 @@ tag.
    tests the Python and TypeScript packages, publishes versions not already on
    their registries, and creates a GitHub release with generated notes.
 
+## A release that breaks the API, and Agent Runtimes
+
+The `Examples` workflow builds every Agent Runtimes PAP application on this SDK.
+A released Agent Runtimes pins the SDK's previous minor, so for a release that
+breaks the API no Agent Runtimes release can accept the new version before it
+is published. For such a release:
+
+1. Adopt the new SDK on an Agent Runtimes branch, tested against this
+   repository's release branch.
+1. Set `AGENT_RUNTIMES_REF` in `.github/workflows/examples.yaml` to that branch,
+   in the release's pull request: the job then installs Agent Runtimes from the
+   ref and builds its examples.
+1. After the tag, release Agent Runtimes with the new pin, then empty
+   `AGENT_RUNTIMES_REF` so the job tests the released package again.
+
 ## Trusted publishing
 
 - PyPI project `personal-agent-protocol`: owner `datalayer`, repository

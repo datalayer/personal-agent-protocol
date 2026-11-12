@@ -45,6 +45,7 @@ import {
   CompanyMcps,
   CompanyRateLimits,
   CompanyStores,
+  CompanyWebsites,
   MemoryCompanyStore,
   OperationExecutors,
   ReplayCaches,
@@ -126,13 +127,14 @@ export function createCompanyDefaultsPlugin(
 ) {
   return definePlugin({
     name: "personal-agent-protocol.company",
-    version: "0.33.0",
+    version: "0.34.0",
     contributionPoints: [
       CompanyStores,
       CompanyAccounts,
       CompanyAgents,
       CompanyApis,
       CompanyMcps,
+      CompanyWebsites,
       CompanyRateLimits,
       OperationExecutors,
       ClientPolicies,

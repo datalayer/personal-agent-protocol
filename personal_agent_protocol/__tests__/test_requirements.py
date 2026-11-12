@@ -57,6 +57,7 @@ def test_the_ledger_is_well_formed() -> None:
         "operations",
         "mediated",
         "ucp",
+        "browser-control",
     }
     assert {item.source for item in LEDGER.guide} == {"guide"}
 

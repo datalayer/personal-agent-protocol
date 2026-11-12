@@ -6,16 +6,16 @@ title: Compatibility and conformance report
 
 # Compatibility and conformance report
 
-SDK version **0.33.0**, PAP profile **0.4** (as published 2026-11-10), Operations extension **v3**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
+SDK version **0.34.0**, PAP profile **0.4** (as published 2026-11-10), Operations extension **v3**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
 
 ## Pairings
 
 | Personal agent | Company | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: |
-| Python | Python | 174 | 0 | 0 |
-| Python | TypeScript | 174 | 0 | 0 |
-| TypeScript | Python | 174 | 0 | 0 |
-| TypeScript | TypeScript | 174 | 0 | 0 |
+| Python | Python | 175 | 0 | 0 |
+| Python | TypeScript | 175 | 0 | 0 |
+| TypeScript | Python | 175 | 0 | 0 |
+| TypeScript | TypeScript | 175 | 0 | 0 |
 
 ## Protocol
 
@@ -130,6 +130,7 @@ SDK version **0.33.0**, PAP profile **0.4** (as published 2026-11-10), Operation
 | `operations.approval-required` | positive | OPS-3-03, OPS-3-01, GUIDE-ops-co-03 | pass | pass | pass | pass |
 | `operations.same-request-same-revision` | positive | OPS-3-02 | pass | pass | pass | pass |
 | `operations.approved-performed` | positive | OPS-3-04, OPS-6-01 | pass | pass | pass | pass |
+| `operations.website-reference` | positive | OPS-2-02, OPS-6-13, OPS-6-14 | pass | pass | pass | pass |
 | `operations.retry-after-the-outcome` | positive | OPS-7-01, OPS-7-02 | pass | pass | pass | pass |
 | `operations.retry-before-the-outcome` | recovery | OPS-7-01, OPS-7-03 | pass | pass | pass | pass |
 | `operations.new-revision-on-changed-terms` | negative | OPS-3-02, OPS-6-03 | pass | pass | pass | pass |

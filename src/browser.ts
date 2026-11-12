@@ -52,6 +52,8 @@ function httpsUrl(value: string, label: string): URL {
 export interface BrowserSessionStart {
   readonly endpoint: string;
   readonly joinedAt: Date;
+  /** The `sid` of the Session the browser joined. */
+  readonly sid: string;
 }
 
 export interface BrowserJoinOptions {
@@ -66,6 +68,12 @@ export interface BrowserJoinOptions {
 export class BrowserSessionClient {
   readonly #reactor: ReactorPlatformView;
   readonly #transport: SessionFetchClient;
+  /**
+   * The `sid` of every Session this client joined its browser to, by the browser-session
+   * endpoint's origin: a website's `Poppy-Operation` naming any other Session is not taken
+   * (Operations 4).
+   */
+  readonly joined = new Map<string, Set<string>>();
 
   constructor(options: {
     readonly reactor: ReactorPlatformView;
@@ -129,6 +137,18 @@ export class BrowserSessionClient {
       );
     }
     await browser.submitJoinForm();
-    return { endpoint: options.browserSessionEndpoint, joinedAt: clock.now() };
+    const origin = new URL(endpoint).origin;
+    const sids = this.joined.get(origin) ?? new Set<string>();
+    sids.add(options.session.sid);
+    this.joined.set(origin, sids);
+    return { endpoint: options.browserSessionEndpoint, joinedAt: clock.now(), sid: options.session.sid };
+  }
+
+  /**
+   * The `sid`s of the Sessions this client joined its browser to at the Company whose
+   * browser-session endpoint this is: `WebsiteOperations.reference(headers, { joined })`.
+   */
+  joinedSessions(browserSessionEndpoint: string): ReadonlySet<string> {
+    return new Set(this.joined.get(new URL(browserSessionEndpoint).origin) ?? []);
   }
 }

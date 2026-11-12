@@ -261,6 +261,13 @@ def _scenario_json() -> dict[str, Any]:
         "greeting": scenario.greeting,
         "mcp_read_tool": scenario.mcp_read_tool,
         "mcp_propose_tool": scenario.mcp_propose_tool,
+        "website_action": None
+        if scenario.website_action is None
+        else {
+            "method": scenario.website_action.method,
+            "path": scenario.website_action.path,
+            "body": scenario.website_action.body,
+        },
     }
 
 

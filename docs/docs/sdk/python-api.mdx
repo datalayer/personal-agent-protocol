@@ -37,9 +37,14 @@ Unknown or internal symbols are deliberately excluded.
 - [`AuthorizationStateStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist and atomically consume short-lived authorization state.
 - [`BlindJoseSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/blind.py) — Class. `pap.signer` on the User's device: PS384 signatures a key signs blindly (§10.7).
 - [`BlindSigningKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/blind.py) — Class. The holder of a key in `jwks_uri`: it signs a blinded message, never seeing the JWT.
+- [`BROWSER_CONTROL_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Constant. Public `BROWSER_CONTROL_EXTENSION` constant.
+- [`browser_control_negotiated`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Function. Whether the Company lists `browser-control` version 1 with a browser-session
+- [`BROWSER_CONTROL_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Constant. Public `BROWSER_CONTROL_VERSION` constant.
 - [`BROWSER_HANDOFFS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `BROWSER_HANDOFFS` constant.
 - [`BROWSER_JOINS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `BROWSER_JOINS` constant.
 - [`BROWSER_SIGN_IN_SCOPE`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `BROWSER_SIGN_IN_SCOPE` constant.
+- [`BrowserControl`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Class. Who controls the personal agent's browser, and what its model may do there.
+- [`BrowserControlError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Class. A browser action the extension asks the personal agent not to take.
 - [`BrowserHandoff`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Hand a human-only authorization URL to a trusted browser surface.
 - [`BrowserJoin`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The personal agent's own browser, joining a Session through the company's page (§6).
 - [`BrowserSessionClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser.py) — Class. Join the agent's own browser to a Session: load, authorize, submit (§6).
@@ -52,6 +57,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`ClientMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `ClientMetadata` class.
 - [`Clock`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Supply timezone-aware wall-clock time to expiring protocol state.
 - [`CLOCKS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `CLOCKS` constant.
+- [`controller_script`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Function. The script that provides `navigator.poppy.controller` (Browser Control 6).
+- [`controller_update_script`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Function. The script the host runs in the page as soon as control changes (Browser Control 6).
 - [`ConversationClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Class. Start and continue PAP conversations through a proof-bound transport.
 - [`ConversationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A PAP conversation request failed without exposing its body.
 - [`ConversationEvent`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. One ordered PAP conversation event, including unknown future types.
@@ -126,12 +133,18 @@ Unknown or internal symbols are deliberately excluded.
 - [`new_operator_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. A new Ed25519 key, used for nothing but operator signatures (§5.3).
 - [`new_session_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. A new `sid`: 128 random bits, 22 URL-safe characters, never used again (§5.2).
 - [`OAuthServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The issuer's RFC 8414 metadata, with the fields this protocol requires (§3.2).
+- [`on_company_host`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Function. Whether `host` is `organization.domain` or one of its subdomains: the only pages
 - [`openapi_url`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. The company's OpenAPI description, when it advertises one.
 - [`OpenTelemetrySink`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/telemetry.py) — Class. `pap.telemetry` as OpenTelemetry spans, one per event, under the current span.
 - [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. One action the Company performs once it is approved (Operations 3).
 - [`operation_from`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The one operation object, from whichever interface carried it (Operations 4).
+- [`OPERATION_HEADER`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `OPERATION_HEADER` constant.
+- [`OPERATION_REFERENCE`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `OPERATION_REFERENCE` constant.
+- [`operation_reference_header`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The value of `Poppy-Operation`: a Dictionary with `sid` and `ref` as Strings.
 - [`OperationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. An operation could not be approved, or its approval could not be sent.
+- [`OperationReference`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. A website's reference to an operation (Operations 4): the `sid` of the Session the
 - [`operations_content`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. A message's `extensions` carrying the Operations extension's content (Operations 2).
+- [`operations_endpoint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The `endpoint` of the Company's `operations` entry at this version, or `None`.
 - [`OPERATIONS_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `OPERATIONS_EXTENSION` constant.
 - [`operations_negotiated`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Whether the Company lists `operations` at this version and the Session declares it
 - [`OPERATIONS_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `OPERATIONS_VERSION` constant.
@@ -147,12 +160,17 @@ Unknown or internal symbols are deliberately excluded.
 - [`OperatorVerdict`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. What one request's operator signature came to (Web Bot Auth, appendix C.1).
 - [`Organization`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `Organization` class.
 - [`page_carries_session`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pages.py) — Function. Whether a page fetch carries the Session header (§5.2): an HTTPS URL whose host is
+- [`page_marks`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Function. The forms, controls and marks of a page's HTML (Browser Control 4).
 - [`PageClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pages.py) — Class. Fetch a company's website pages without a browser, in a Session, signed out.
+- [`PageControl`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Class. A listed element (`input`, `select`, `button`, …) and the form that owns it.
+- [`PageForm`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Class. A form on the page: its position, `id`, `action`, `method`, and its mark.
+- [`PageMarks`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Class. The marked steps of one page, read from its HTML (Browser Control 4).
 - [`PAIRWISE_USER_ID_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `PAIRWISE_USER_ID_STORES` constant.
 - [`PairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist stable random identities by tenant, local user, and issuer.
 - [`PapCorePlugin`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Contribute PAP's secure defaults through Reactor.
 - [`PapSession`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. One Session: a User at one Company through this personal agent (§5).
 - [`parse_approval_header`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The approval a `Poppy-Approval` value states, or `None`.
+- [`parse_operation_header`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The reference a `Poppy-Operation` value states, or `None`.
 - [`PersonalAgentProtocolError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Base error whose string representation never includes response bodies.
 - [`pin_connections`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. Make `client`'s socket transports dial approved addresses during metadata fetches.
 - [`PinnedNetworkBackend`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Dial the address the URL safety policy approved, never the host name again.
@@ -240,8 +258,12 @@ Unknown or internal symbols are deliberately excluded.
 - [`UcpError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Class. A UCP profile or request refused: its code, and `details` such as the scopes to get.
 - [`UcpProfile`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Class. A Company's UCP profile, as far as this extension reads it (UCP extension 3).
 - [`URL_SAFETY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `URL_SAFETY_POLICIES` constant.
+- [`USER_STEP_ATTRIBUTE`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Constant. Public `USER_STEP_ATTRIBUTE` constant.
+- [`user_step_kind`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Function. What a `data-poppy-user-step` value asks, or `None` without one (Browser Control 4).
 - [`validate_direct_sign_in_callback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Validate redirect location, state, and issuer before exposing the code.
 - [`verification_host_allowed`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/device.py) — Function. Whether a device sign-in link may be shown for this company (§4.3).
 - [`verify_operator_signature`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. What the request's operator signature comes to; `headers` are lower-case.
 - [`WebBotAuthSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. `pap.operatorSigner`: a fresh Web Bot Auth signature for each request (§5.3).
+- [`WebsiteOperations`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. Operations a Company's website returns to the personal agent's own browser.
+- [`WebsiteOperationStatus`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `WebsiteOperationStatus` constant.
 - [`WorkingChanged`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Class. A stream's `working` event (§8.6): `working` is no recorded event, so the Company

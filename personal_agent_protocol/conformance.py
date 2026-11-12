@@ -96,9 +96,12 @@ from .models import (
 from .operations import (
     APPROVAL_HEADER,
     OPERATIONS_VERSION,
+    OperationReference,
     OperationsClient,
+    WebsiteOperations,
     approval_header,
     new_approval_reference,
+    operations_endpoint,
 )
 from .operator_signatures import (
     OPERATOR_SIGNATURE_REFUSED,
@@ -289,6 +292,9 @@ class Scenario:
     greeting: str = "Hello."
     mcp_read_tool: str | None = None
     mcp_propose_tool: str | None = None
+    #: A form on the website whose submission needs approval in a joined browser: its
+    #: `path`, and the form's fields as `body` (Operations 4).
+    website_action: Proposal | None = None
 
 
 class SkipCase(Exception):  # noqa: N818 - control flow for a case that cannot run
@@ -2078,6 +2084,54 @@ async def _performs(ctx: ConformanceContext, _: FixtureCase) -> None:
     operation = await _propose(ctx, signed, "user")
     done = await _request(ctx, signed, "user", _approved(operation))
     check(done.operation is None and 200 <= done.status < 300, f"performed, got {done.status}")
+    await _performed(ctx, operation, 1)
+
+
+@case("operations.website-reference")
+async def _website_reference(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A joined browser's request is refused with a reference only; the endpoint gives the
+    operation and records the approval; the browser's next request performs it once
+    (Operations 4, 6, 7)."""
+
+    await ctx.operations_negotiated()
+    action = ctx.scenario.website_action
+    if action is None:
+        raise SkipCase("the scenario has no website action")
+    document = (await ctx.company()).document
+    if operations_endpoint(document) is None:
+        raise SkipCase("the company returns no operations on its website")
+    browser, _endpoint = await _browser(ctx)
+    user = ctx.new_user()
+    signed = await ctx.sign_in(
+        user, await ctx.session(user), scopes=(*ctx.scenario.scopes, BROWSER_SIGN_IN_SCOPE)
+    )
+    url = ctx.url(action.path)
+    await _join(ctx, signed, url)
+    form = {str(name): str(value) for name, value in dict(action.body or {}).items()}
+    refused = await browser.submit(url, form)
+    check(refused.status_code == 403, f"the website performs nothing, got {refused.status_code}")
+    reference = WebsiteOperations.reference(refused.headers, joined={signed.session.sid})
+    check(reference is not None, "Poppy-Operation names the joined Session")
+    sites = WebsiteOperations(api=ctx.agent.api, document=document)
+    found = cast(OperationReference, reference)
+    operation = await sites.operation(found, session=signed.session, token=signed.token)
+    recorded = await sites.record(
+        found, _approved(operation), session=signed.session, token=signed.token
+    )
+    check(recorded.status == 204, f"the approval is recorded, HTTP 204, got {recorded.status}")
+    check(
+        await sites.status(found, session=signed.session, token=signed.token) == "approved",
+        "a lookup says approved",
+    )
+    await _performed(ctx, operation, 0)
+    done = await browser.submit(url, form)
+    check(
+        200 <= done.status_code < 300, f"the browser's request performs it, got {done.status_code}"
+    )
+    check(
+        await sites.status(found, session=signed.session, token=signed.token) == "performed",
+        "a lookup says performed",
+    )
     await _performed(ctx, operation, 1)
 
 

@@ -39,6 +39,7 @@ from personal_agent_protocol import (
 from personal_agent_protocol.apis import ApiClient, ApiError, ApiResponse
 from personal_agent_protocol.company import (
     ActionResult,
+    CompanyService,
     ProposedOperation,
 )
 from personal_agent_protocol.company.points import COMPANY_MCP, OPERATION_EXECUTORS
@@ -1206,9 +1207,18 @@ def test_the_default_expiry_leaves_the_user_fifteen_minutes() -> None:
     assert World().shop.config.operation_lifetime == timedelta(minutes=15)
 
 
-def test_the_discovery_entry_has_a_version_and_no_endpoint() -> None:
+def test_the_discovery_entry_has_an_endpoint_only_for_the_website() -> None:
     world = World()
-    assert world.shop.discovery_document()["extensions"]["operations"] == [{"version": "3"}]
+    # Manzanita's website returns operations: `endpoint`, beside the browser-session endpoint.
+    assert world.shop.discovery_document()["extensions"]["operations"] == [
+        {"version": "3", "endpoint": "https://manzanita.example/poppy/operations"}
+    ]
+    # Operations at APIs, MCP servers and conversations add no endpoint (Operations 1, 2).
+    plain = CompanyService(
+        config=dataclasses.replace(world.shop.config, website_operations=False),
+        reactor=world.shop.reactor,
+    )
+    assert plain.discovery_document()["extensions"]["operations"] == [{"version": "3"}]
 
 
 def test_an_old_extension_entry_is_not_this_version() -> None:

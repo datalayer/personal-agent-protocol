@@ -1,8 +1,9 @@
-# Personal Agent Protocol 0.4 as published (upstream 4803900, frozen text as of ed47408), Operations version 3 and Mediated Sign-In: the normative requirement ledger.
+# Personal Agent Protocol 0.4 as published (upstream 4803900, frozen text as of ed47408), Operations version 3, Mediated Sign-In and Browser Control version 1: the normative requirement ledger.
 #
 # requirements: every MUST, MUST NOT, SHOULD, and SHOULD NOT of the specification
-# (source: spec, the default), the Operations extension (source: operations) and the
-# Mediated Sign-In extension (source: mediated),
+# (source: spec, the default), the Operations extension (source: operations), the
+# Mediated Sign-In extension (source: mediated) and the Browser Control extension
+# (source: browser-control),
 # one atomic statement per entry, with the upstream text that states it.
 # guide: recommendations from the upstream Guides (source: guide), kept apart.
 #
@@ -22,6 +23,7 @@ sources:
   operations: https://personalagentprotocol.org/docs/0.4/extensions/operations
   guide: https://personalagentprotocol.org/docs/0.4/guides
   mediated: https://personalagentprotocol.org/docs/0.4/extensions/mediated-sign-in
+  browser-control: https://personalagentprotocol.org/docs/0.4/extensions/browser-control
 requirements:
 - id: PAP-3-01
   section: '3'
@@ -3073,12 +3075,12 @@ requirements:
   text: A Company that asks for approval on its website lists endpoint, the HTTPS URL where the Personal
     Agent gets operations its website returned and sends their approvals (4, 6). It MUST list web.browser_session_endpoint
     with it (spec 6), because only a browser joined to a Session gets operations.
-  status: open
-  reason: 'Operations on websites (the Poppy-Operation header and the extension''s endpoint) are not implemented
-    in this release: the reference companies list no operations endpoint, and a host that joins a browser
-    to a Session declares no operations on that join.'
-  implementation: []
-  tests: []
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  - personal_agent_protocol.operations:operations_endpoint
+  tests:
+  - personal_agent_protocol/__tests__/test_website_operations.py::test_the_company_lists_the_endpoint_with_its_browser_session_endpoint
 - id: OPS-3-01
   source: operations
   section: '3'
@@ -3184,12 +3186,13 @@ requirements:
   text: The Personal Agent MUST take a reference only from the Poppy-Operation header of a response that
     its own browser received, never from page content or a message, and only when sid names a Session
     it joined that browser to.
-  status: open
-  reason: 'Operations on websites (the Poppy-Operation header and the extension''s endpoint) are not implemented
-    in this release: the reference companies list no operations endpoint, and a host that joins a browser
-    to a Session declares no operations on that join.'
-  implementation: []
-  tests: []
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operations:WebsiteOperations.reference
+  - personal_agent_protocol.browser:BrowserSessionClient.joined_sessions
+  tests:
+  - personal_agent_protocol/__tests__/test_website_operations.py::test_a_reference_is_taken_only_from_a_joined_session
+  - personal_agent_protocol/__tests__/test_website_operations.py::test_the_header_is_a_dictionary_of_two_strings
 - id: OPS-5-01
   source: operations
   section: '5'
@@ -3283,16 +3286,14 @@ requirements:
   text: If the Company answers the Personal Agent's agent approval with a new revision (6), or a website
     returns a new operation for the action after recording it, the Personal Agent MUST NOT approve the
     new one on the same instruction.
-  status: partial
-  reason: 'Implemented for APIs, MCP tools and conversations, in the client''s own memory or the host''s
-    (user_only). Operations on websites (the Poppy-Operation header and the extension''s endpoint) are
-    not implemented in this release: the reference companies list no operations endpoint, and a host that
-    joins a browser to a Session declares no operations on that join.'
+  status: implemented
   implementation:
   - personal_agent_protocol.operations:OperationsClient.approve_as_agent
   - personal_agent_protocol.operations:OperationsClient.send
+  - personal_agent_protocol.operations:WebsiteOperations.record
   tests:
   - personal_agent_protocol/__tests__/test_operations_v3.py::test_new_terms_after_an_agent_approval_are_the_users_to_approve
+  - personal_agent_protocol/__tests__/test_website_operations.py::test_an_agent_approval_makes_the_next_revision_the_users
 - id: OPS-6-01
   source: operations
   section: '6'
@@ -3499,12 +3500,13 @@ requirements:
   role: company
   text: The Company MUST NOT accept an approval of a website's operation at an API, MCP server, or conversation,
     or an approval of another interface's operation at endpoint.
-  status: open
-  reason: 'Operations on websites (the Poppy-Operation header and the extension''s endpoint) are not implemented
-    in this release: the reference companies list no operations endpoint, and a host that joins a browser
-    to a Session declares no operations on that join.'
-  implementation: []
-  tests: []
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._approval_target
+  - personal_agent_protocol.company.service:CompanyService._operations_endpoint
+  tests:
+  - personal_agent_protocol/__tests__/test_website_operations.py::test_a_website_approval_is_never_accepted_at_the_api
+  - personal_agent_protocol/__tests__/test_website_operations.py::test_the_endpoint_refuses_what_the_session_cannot_use
 - id: OPS-6-14
   source: operations
   section: '6'
@@ -3512,12 +3514,13 @@ requirements:
   role: company
   text: The Company MUST keep a recorded approval that isn't used up until the approved revision's expires_at,
     and MUST NOT apply it to requests from a Session that can't approve the operation.
-  status: open
-  reason: 'Operations on websites (the Poppy-Operation header and the extension''s endpoint) are not implemented
-    in this release: the reference companies list no operations endpoint, and a host that joins a browser
-    to a Session declares no operations on that join.'
-  implementation: []
-  tests: []
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._record
+  - personal_agent_protocol.company.service:CompanyService._website_decide
+  tests:
+  - personal_agent_protocol/__tests__/test_website_operations.py::test_a_website_operation_is_approved_at_the_endpoint_and_performed_once
+  - personal_agent_protocol/__tests__/test_website_operations.py::test_an_approval_of_another_revision_gets_the_operation_and_a_decline_is_not_kept
 - id: OPS-7-01
   source: operations
   section: '7'
@@ -3754,6 +3757,116 @@ requirements:
   - personal_agent_protocol.ucp:UcpClient
   reason: 'UcpClient keeps no UCP workflow identifier: the host keeps carts, checkouts and orders by Company
     and User.'
+- id: BC-4-01
+  source: browser-control
+  section: '4'
+  level: SHOULD
+  role: company
+  text: The Company SHOULD mark every control that performs the step, or the form it is in, and SHOULD
+    mark them before they can be used.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.demo.manzanita:ManzanitaWebsite
+  tests:
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_the_company_lists_browser_control_and_the_join_carries_the_declaration
+- id: BC-4-02
+  source: browser-control
+  section: '4'
+  level: SHOULD NOT
+  role: company
+  text: The Company SHOULD NOT let filling in a submission form perform the step itself.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.demo.manzanita:ManzanitaWebsite
+  tests:
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_the_company_lists_browser_control_and_the_join_carries_the_declaration
+- id: BC-4-03
+  source: browser-control
+  section: '4'
+  level: MUST
+  role: company
+  text: Whatever it marks, the Company's servers MUST check the action's conditions themselves, because
+    marks don't stop anything (8.1).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.demo.manzanita:ManzanitaWebsite
+  tests:
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_the_company_lists_browser_control_and_the_join_carries_the_declaration
+- id: BC-5-01
+  source: browser-control
+  section: '5'
+  level: SHOULD NOT
+  role: personal-agent
+  text: 'A Personal Agent that declares this extension SHOULD NOT take a marked step: change or activate
+    a control that a mark covers, or submit a form that a mark covers, whether with a click, a key press,
+    an accessibility action, a script, or a WebMCP tool.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser_control:page_marks
+  - personal_agent_protocol.browser_control:BrowserControl.check_change
+  - personal_agent_protocol.browser_control:BrowserControl.check_submit
+  tests:
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_marks_add_up_and_cover_what_section_4_says
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_only_the_user_ends_their_control_and_the_model_waits_for_nothing
+- id: BC-5-02
+  source: browser-control
+  section: '5'
+  level: SHOULD NOT
+  role: personal-agent
+  text: It SHOULD NOT remove or change marks to get around them.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser_control:page_marks
+  tests:
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_marks_add_up_and_cover_what_section_4_says
+- id: BC-5-03
+  source: browser-control
+  section: '5'
+  level: MUST NOT
+  role: personal-agent
+  text: While the User holds control, the Personal Agent's software MUST NOT carry out browser actions
+    from its model.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser_control:BrowserControl.check_model_action
+  tests:
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_only_the_user_ends_their_control_and_the_model_waits_for_nothing
+- id: BC-5-04
+  source: browser-control
+  section: '5'
+  level: MUST NOT
+  role: personal-agent
+  text: Only the User ends their control, by handing it back or cancelling. A timeout, a change to the
+    page's marks, or anything the Company sends MUST NOT end it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser_control:BrowserControl.hand_back
+  - personal_agent_protocol.browser_control:BrowserControl.cancel
+  tests:
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_only_the_user_ends_their_control_and_the_model_waits_for_nothing
+- id: BC-5-05
+  source: browser-control
+  section: '5'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent MUST NOT keep its own requests, or its conversation with the User, waiting
+    until the User acts.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.browser_control:BrowserControl
+  tests:
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_only_the_user_ends_their_control_and_the_model_waits_for_nothing
+- id: BC-6-01
+  source: browser-control
+  section: '6'
+  level: MUST NOT
+  role: company
+  text: A Company MUST NOT rely on "user" as a guarantee that the User took the step.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.demo.manzanita:ManzanitaWebsite
+  tests:
+  - personal_agent_protocol/__tests__/test_browser_control.py::test_the_company_lists_browser_control_and_the_join_carries_the_declaration
 guide:
 - id: GUIDE-secrets-01
   source: guide

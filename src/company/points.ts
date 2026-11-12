@@ -404,6 +404,56 @@ export interface CompanyMcp {
   call(name: string, args: Readonly<Record<string, unknown>>, call: ApiCall): Promise<ToolResult>;
 }
 
+/**
+ * One request to the company's website, from a browser (§6).
+ *
+ * `joined` says the browser carries the cookie of a join: then `clientId`, `sid`, `accountId`,
+ * `scopes` and `extensions` are its Session's, as the join gave them (signed in only through a
+ * join with an access token). Otherwise it is an ordinary visitor. `form` is a submitted form's
+ * fields; `acceptsJson` says the request came from the page's own scripts asking for JSON
+ * (Operations 4).
+ */
+export interface WebCall {
+  readonly method: string;
+  readonly path: string;
+  readonly query: Readonly<Record<string, string>>;
+  readonly form: Readonly<Record<string, string>>;
+  readonly acceptsJson: boolean;
+  readonly joined: boolean;
+  readonly clientId?: string;
+  readonly sid?: string;
+  readonly accountId?: string;
+  readonly scopes: readonly string[];
+  readonly extensions: Readonly<Record<string, string>>;
+}
+
+/**
+ * The website's answer: a page (HTML) or JSON, or an action that needs approval.
+ *
+ * With `operation`, the website performs nothing: for a joined browser whose join declared
+ * Operations version 3 the company returns the reference (`403` and `Poppy-Operation`), and
+ * performs the action once its approval is recorded at the extension's endpoint and the browser
+ * asks again; for any other browser it answers `ownApproval`, the website's own way, or refuses
+ * (Operations 2, 4).
+ */
+export interface WebResult {
+  readonly status?: number;
+  readonly body?: string | Readonly<Record<string, unknown>>;
+  readonly operation?: ProposedOperation;
+  readonly ownApproval?: string | Readonly<Record<string, unknown>>;
+}
+
+export const WebResults = {
+  notFound(): WebResult {
+    return { status: 404, body: "<!doctype html><title>Not found</title><p>Not found.</p>" };
+  },
+} as const;
+
+/** The company's website: its pages and forms, for visitors and joined browsers. */
+export interface CompanyWebsite {
+  handle(call: WebCall): Promise<WebResult>;
+}
+
 export const CompanyStores = defineContributionPoint<CompanyStore>("pap.company.store");
 export const CompanyAccounts = defineContributionPoint<AccountDirectory>("pap.company.accounts");
 export const CompanyAgents = defineContributionPoint<CompanyAgent>("pap.company.agent");
@@ -420,6 +470,7 @@ export const OperatorDirectories = defineContributionPoint<OperatorDirectory>(
 export const ReplayCaches = defineContributionPoint<ReplayCache>("pap.company.replayCache");
 export const CompanyApis = defineContributionPoint<CompanyApi>("pap.company.api");
 export const CompanyMcps = defineContributionPoint<CompanyMcp>("pap.company.mcp");
+export const CompanyWebsites = defineContributionPoint<CompanyWebsite>("pap.company.website");
 
 /**
  * How often the company answers one personal agent, and one signed-in account.

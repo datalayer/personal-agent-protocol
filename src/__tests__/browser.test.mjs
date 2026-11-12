@@ -86,7 +86,7 @@ async function joined(browser, { company = () => new Response(null, { status: 20
       reactor,
       transport: new SessionFetchClient({ reactor, fetch }),
     }).join({ browserSessionEndpoint: ENDPOINT, session: SESSION, ...(token === undefined ? {} : { token }) });
-    assert.deepEqual(started, { endpoint: ENDPOINT, joinedAt: NOW });
+    assert.deepEqual(started, { endpoint: ENDPOINT, joinedAt: NOW, sid: SESSION.sid });
   } finally {
     reactor.stop();
   }

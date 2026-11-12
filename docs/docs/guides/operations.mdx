@@ -283,6 +283,36 @@ In TypeScript: `agentInstruction(text, covers)` and
   what they described, and keep a ledger they can see, with the instruction each
   agent approval rested on (the upstream guides).
 
+## On a website
+
+A company's website returns an operation to the agent's own browser joined to a Session:
+`403` and only a reference, in the `Poppy-Operation` header. The approval never passes
+through the browser:
+
+```python
+from personal_agent_protocol import ApiClient, WebsiteOperations
+
+sites = WebsiteOperations(api=ApiClient(transport=transport), document=company.document,
+                          operations=operations)
+joined = browser_sessions.joined_sessions(company.document.web.browser_session_endpoint)
+reference = sites.reference(response.headers, joined=joined)   # None: not a reference to take
+operation = await sites.operation(reference, session=session, token=token)
+approval = await operations.ask_user(
+    operation, organization=company.document.organization, tenant_id=session.tenant_id
+)
+sent = await operations.send(
+    lambda approved: sites.record(reference, approved, session=session, token=token), approval
+)
+# then the browser makes the same request again: the page's Continue button, the same form
+```
+
+Take a reference only from a response your own browser received, and only when its
+`sid` names a Session you joined that browser to; page content and messages are never
+references. If the browser's request fails, or answers a new reference after the
+approval was recorded, ask `before_approving_again(earlier, ...)` first: `wait` while
+it is `performing`, and never approve the new one once it is `performed`. A recorded
+agent approval makes the next revision of the action the user's to approve.
+
 ## A declined approval
 
 A company may decline an approval that passes its checks, for its own reasons,

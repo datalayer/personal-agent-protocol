@@ -100,6 +100,7 @@ import {
   DISCLOSURES_VERSION,
   LINKS_EXTENSION,
   LINKS_VERSION,
+  parseApproval,
   parseApprovalDeclined,
   operationShown,
   type Approval,
@@ -116,11 +117,15 @@ import {
   APPROVAL_DECLINED,
   APPROVAL_HEADER,
   ACTION_FAILED,
+  OPERATION_HEADER,
+  OPERATION_REFERENCE,
   OPERATIONS_EXTENSION,
   OPERATIONS_VERSION,
   approvalFromMeta,
+  operationReferenceHeader,
   parseApprovalHeader,
 } from "../operations.js";
+import { BROWSER_CONTROL_EXTENSION, BROWSER_CONTROL_VERSION } from "../browser-control.js";
 import { PROTOCOL_PROFILE } from "../profile.js";
 import { Clocks, RandomSources, firstContribution, optionalContribution } from "../reactor.js";
 import { SecretValue } from "../secret.js";
@@ -136,6 +141,7 @@ import {
   CompanyMcps,
   CompanyRateLimits,
   CompanyStores,
+  CompanyWebsites,
   OperationExecutors,
   OperationFailed,
   OperationOutcomeUnknown,
@@ -145,11 +151,13 @@ import {
   type Authenticated,
   type CompanyApi,
   type CompanyMcp,
+  type CompanyWebsite,
   type Decline,
   type DeclineRequest,
   type ProposedOperation,
   type Reply,
   type ReplayCache,
+  type WebResult,
 } from "./points.js";
 import {
   RecordKinds,
@@ -372,6 +380,18 @@ export interface CompanyConfigOptions {
   /** Web browsing (§6): a browser-session endpoint. */
   readonly web?: boolean;
   /**
+   * Whether the website returns operations to a joined browser (Operations 2, 4): the
+   * `operations` entry lists `endpoint` (`/poppy/operations`), beside the browser-session
+   * endpoint. Only with `web` and `operations`: only a browser joined to a Session gets
+   * operations (`servesWebsiteOperations`).
+   */
+  readonly websiteOperations?: boolean;
+  /**
+   * Whether the company lists the Browser Control extension, version 1 (Browser Control 3): its
+   * website marks the steps it leaves to the User. Only with `web` (`listsBrowserControl`).
+   */
+  readonly browserControl?: boolean;
+  /**
    * The website asks Personal Agents not to browse it (`web.disabled`, §6): the company lists no
    * browser-session endpoint and offers its agent and APIs instead. A preference the protocol
    * can't enforce.
@@ -496,6 +516,8 @@ export class CompanyConfig {
   readonly devicePage: string | undefined;
   readonly consentPage: string | undefined;
   readonly web: boolean;
+  readonly websiteOperations: boolean;
+  readonly browserControl: boolean;
   readonly webDisabled: boolean;
   readonly webUnscoped: boolean;
   readonly ucp: boolean;
@@ -570,6 +592,8 @@ export class CompanyConfig {
     this.devicePage = hostedPage("devicePage", options.devicePage);
     this.consentPage = hostedPage("consentPage", options.consentPage);
     this.web = options.web ?? false;
+    this.websiteOperations = options.websiteOperations ?? false;
+    this.browserControl = options.browserControl ?? false;
     this.webDisabled = options.webDisabled ?? false;
     this.webUnscoped = options.webUnscoped ?? false;
     if (this.scopes.includes(BROWSER_SIGN_IN_SCOPE)) {
@@ -781,6 +805,18 @@ export class CompanyConfig {
   }
   get browserSessionEndpoint(): string {
     return `${this.base}/poppy/browser-session`;
+  }
+  /** Whether the website returns operations: `websiteOperations` with `web` and `operations` (Operations 2). */
+  get servesWebsiteOperations(): boolean {
+    return this.websiteOperations && this.web && this.operations;
+  }
+  /** Whether Browser Control is listed: `browserControl` with `web` (Browser Control 3). */
+  get listsBrowserControl(): boolean {
+    return this.browserControl && this.web;
+  }
+  /** Where the agent gets the website's operations and records approvals (Operations 4). */
+  get operationsEndpoint(): string {
+    return `${this.base}/poppy/operations`;
   }
   get feedbackEndpoint(): string {
     return `${this.base}/poppy/feedback`;
@@ -1086,6 +1122,8 @@ interface Asked {
   /** The request's fingerprint, and what the action said for it. */
   readonly request: string;
   readonly digest: string;
+  /** Asked by a joined browser on the website (Operations 4). */
+  readonly website?: boolean;
 }
 
 /**
@@ -1480,6 +1518,9 @@ export class CompanyService {
       if (method === "POST" && path === "/poppy/browser-session/authorize" && this.config.web) {
         return await this.#authorizeJoin(request);
       }
+      if (method === "POST" && path === "/poppy/operations" && this.config.servesWebsiteOperations) {
+        return await this.#operationsEndpoint(request);
+      }
       if (method === "GET" && path === "/poppy/tasks" && this.config.servesTasks) {
         return await this.#tasks(request);
       }
@@ -1518,6 +1559,14 @@ export class CompanyService {
         return { status: 200, body: this.ucpProfile(), headers: {} };
       }
       if (this.config.ucp && path.startsWith("/ucp/")) return await this.#ucp(request, method, path);
+      const website = this.#website();
+      if (
+        (method === "GET" || method === "POST") &&
+        website !== undefined &&
+        !["/poppy/", "/oauth/", "/.well-known/", "/api/"].some((prefix) => path.startsWith(prefix))
+      ) {
+        return await this.#websiteRoute(request, website, method, path);
+      }
     } catch (error) {
       if (error instanceof RateLimitedRefusal) return rateLimited(error.retryAfter);
       if (error instanceof Refused) {
@@ -1717,7 +1766,15 @@ export class CompanyService {
     // Excluded tasks, skills and the feedback endpoint are served per Session (§9).
     if (config.servesTasks) document.tasks = { endpoint: config.tasksEndpoint };
     const extensions: Record<string, unknown> = {};
-    if (config.operations) extensions[OPERATIONS_EXTENSION] = [{ version: OPERATIONS_VERSION }];
+    if (config.operations) {
+      extensions[OPERATIONS_EXTENSION] = [
+        {
+          version: OPERATIONS_VERSION,
+          ...(config.servesWebsiteOperations ? { endpoint: config.operationsEndpoint } : {}),
+        },
+      ];
+    }
+    if (config.listsBrowserControl) extensions[BROWSER_CONTROL_EXTENSION] = [{ version: BROWSER_CONTROL_VERSION }];
     if (config.links) extensions[LINKS_EXTENSION] = [{ version: LINKS_VERSION }];
     if (config.disclosures) extensions[DISCLOSURES_EXTENSION] = [{ version: DISCLOSURES_VERSION }];
     if (config.ucp) extensions[UCP_EXTENSION] = [{ version: UCP_VERSION }];
@@ -4401,8 +4458,18 @@ export class CompanyService {
 
   // Operations (the extension's sections 3, 6 and 7) -----------------------------------
 
-  /** What a request asks for: one action of one account, or of one signed-out Session. */
-  #asked(session: CallerSession, proposal: ProposedOperation, request: string): Asked {
+  /**
+   * What a request asks for: one action of one account, or of one signed-out Session. The
+   * website's requests are operations of their own, approved only at the extension's endpoint
+   * (Operations 6).
+   */
+  #asked(
+    session: CallerSession,
+    proposal: ProposedOperation,
+    request: string,
+    options: { readonly website?: boolean } = {},
+  ): Asked {
+    const website = options.website ?? false;
     const scopes = proposal.scopes?.length ? [...proposal.scopes] : [...this.config.writeScopes];
     if (scopes.some((scope) => !this.config.offeredScopes.includes(scope))) {
       throw new RangeError("an operation's scopes must be among the company's scopes");
@@ -4422,6 +4489,7 @@ export class CompanyService {
         session.accountId ?? "",
         proposal.action,
         proposal.subject ?? "",
+        ...(website ? ["web"] : []),
       ),
       summary: proposal.summary,
       terms: proposal.terms,
@@ -4430,6 +4498,7 @@ export class CompanyService {
       // Its terms, which every operation has: a summary reworded without changing them keeps
       // the revision (Operations 3).
       digest: fingerprint(proposal.terms),
+      website,
     };
   }
 
@@ -4448,15 +4517,34 @@ export class CompanyService {
   ): Promise<StoredOperation | undefined> {
     if (approval === undefined) return undefined;
     const stored = await this.#read<StoredOperation>(RecordKinds.operation, approval.operation_id);
-    if (stored === undefined || !sameOwner(stored.owner, [session.clientId, session.pairwiseUserId])) {
-      return undefined;
-    }
+    // A website's operation is approved only at the extension's endpoint (Operations 6).
+    if (stored === undefined || stored.website === true) return undefined;
+    return this.#canApprove(session, stored);
+  }
+
+  /**
+   * Check 1 for one operation: it, when this Session can approve it (Operations 3).
+   *
+   * A signed-out Session of the same agent and User gets a challenge for an account's
+   * operation, unless `challenge` is off (a browser's request, which has no challenge to
+   * answer). A website's operation needs no scope at the endpoint: recording an approval
+   * performs nothing, and the browser's request acts with its own access (Operations 4).
+   */
+  #canApprove(
+    session: CallerSession,
+    stored: StoredOperation,
+    options: { readonly challenge?: boolean } = {},
+  ): StoredOperation | undefined {
+    if (!sameOwner(stored.owner, [session.clientId, session.pairwiseUserId])) return undefined;
     // Any Session of the same agent and User, even one started after: one returned signed out
     // only while signed out, one returned signed in only while signed in to its account.
     if (stored.accountId === undefined) return session.accountId === undefined ? stored : undefined;
-    if (session.accountId === undefined) throw needsAccount(undefined, stored.scopes);
+    if (session.accountId === undefined) {
+      if (options.challenge === false) return undefined;
+      throw needsAccount(undefined, stored.scopes);
+    }
     if (session.accountId !== stored.accountId) return undefined;
-    if (stored.scopes.some((scope) => !session.scopes.includes(scope))) {
+    if (stored.website !== true && stored.scopes.some((scope) => !session.scopes.includes(scope))) {
       throw needsAccount(session.accountId, stored.scopes);
     }
     return stored;
@@ -4562,6 +4650,7 @@ export class CompanyService {
       ...(signedIn ? {} : { sessionKey: session.sessionKey }),
       scopes: signedIn ? asked.scopes : [],
       status: "open",
+      ...(asked.website ? { website: true } : {}),
     };
     await this.store.put(RecordKinds.operation, stored.operationId, json(stored));
     const pointer: OperationProposal = { operationId: stored.operationId };
@@ -4929,8 +5018,10 @@ export class CompanyService {
       scopes: session.scopes,
       ...(session.family === undefined ? {} : { family: session.family }),
       expiresAt: stored.endsAt,
-      // The browser joins the Session at the version it uses the company at (§3.4).
+      // The browser joins the Session at the version it uses the company at (§3.4), and its
+      // requests declare the extensions this request declared (§6).
       protocolVersion: session.protocolVersion,
+      extensions: { ...session.extensions },
     };
     const changed = await this.#change<JoinCode>(RecordKinds.joinCode, digest(code), (current) => {
       if (current.authorized !== undefined) throw new Refused(400, "invalid_request");
@@ -5030,6 +5121,220 @@ export class CompanyService {
    *
    * Signed out once its sign-in has ended (§5.5); gone once its Session has.
    */
+  // Operations on the website (Operations 4, 6, 7) ------------------------------------------
+
+  #website(): CompanyWebsite | undefined {
+    return optionalContribution(this.reactor, CompanyWebsites, "website");
+  }
+
+  /**
+   * A page or form of the company's website, for a visitor or a joined browser (§6).
+   *
+   * The website says what each request does. When it is an action that needs approval, a
+   * joined browser whose join declared Operations version 3 gets the reference; any other
+   * browser gets the website's own approval flow, or a refusal: a Company never returns
+   * operations to a request that doesn't declare the extension (Operations 2).
+   */
+  async #websiteRoute(
+    request: CompanyRequest,
+    website: CompanyWebsite,
+    method: string,
+    path: string,
+  ): Promise<CompanyResponse> {
+    if (method === "POST" && !fromThisSite(request, this.config.base)) {
+      return page(403, "This form can only be sent from this website.");
+    }
+    const session = await this.webSession(cookie(request, WEB_COOKIE));
+    const query = queryOf(request);
+    const contentType = request.headers["content-type"] ?? "";
+    const form: Record<string, string> = {};
+    if (method === "POST" && contentType.startsWith("application/x-www-form-urlencoded")) {
+      for (const [name, value] of new URLSearchParams(text(request.body))) form[name] = value;
+    }
+    const acceptsJson = (request.headers.accept ?? "").includes("application/json");
+    const result: WebResult = await website.handle({
+      method,
+      path,
+      query,
+      form,
+      acceptsJson,
+      joined: session !== undefined,
+      ...(session === undefined ? {} : { clientId: session.clientId, sid: session.sid }),
+      ...(session?.accountId === undefined ? {} : { accountId: session.accountId }),
+      scopes: session === undefined ? [] : session.scopes,
+      extensions: session === undefined ? {} : { ...session.extensions },
+    });
+    if (result.operation === undefined) return webAnswer(result.status ?? 200, result.body);
+    if (session === undefined || !this.config.servesWebsiteOperations || !this.#supportsOperations(session)) {
+      // The website handles approval itself, or refuses (Operations 2).
+      const own =
+        result.ownApproval ??
+        (acceptsJson
+          ? { error: "extension_required", extension: OPERATIONS_EXTENSION }
+          : "<!doctype html><meta charset=utf-8><title>Not available</title>" +
+            "<p>This action can't be done from this browser.</p>");
+      return webAnswer(403, own);
+    }
+    const sorted = (record: Readonly<Record<string, string>>) =>
+      Object.entries(record).sort(([a], [b]) => byCodePoint(a, b));
+    const requested = fingerprint("web", method, path, sorted(query), sorted(form));
+    const asked = this.#asked(session, result.operation, requested, { website: true });
+    const decision = await this.#websiteDecide(session, asked);
+    if (decision.operation !== undefined) {
+      const headers = {
+        [OPERATION_HEADER]: operationReferenceHeader({ sid: session.sid, ref: websiteReference(decision.operation) }),
+        ...NO_STORE,
+      };
+      // Like an API's, without the operation: the agent gets it at the endpoint.
+      if (acceptsJson) return jsonError(403, "approval_required", {}, headers);
+      return webAnswer(
+        403,
+        "<!doctype html><meta charset=utf-8><title>Waiting for approval</title>" +
+          "<p>This action is waiting for your approval in your personal agent.</p>" +
+          '<form method="post"><button>Continue</button></form>',
+        headers,
+      );
+    }
+    const outcome = decision.outcome;
+    if (outcome === undefined) {
+      // Being performed, or nobody knows yet whether it took effect (Operations 7).
+      return webAnswer(
+        503,
+        acceptsJson
+          ? { error: "temporarily_unavailable" }
+          : "<!doctype html><meta charset=utf-8><title>In progress</title><p>This action is in progress.</p>",
+        { "Retry-After": PERFORMING_RETRY_AFTER },
+      );
+    }
+    const status = outcome.succeeded ? 200 : 422;
+    if (acceptsJson) {
+      const answer = { summary: outcome.summary, ...(outcome.data === undefined ? {} : { data: outcome.data }) };
+      return webAnswer(status, outcome.succeeded ? answer : { error: ACTION_FAILED, ...answer });
+    }
+    return webAnswer(
+      status,
+      `<!doctype html><meta charset=utf-8><title>Done</title><p>${escapeHtml(outcome.summary)}</p>`,
+    );
+  }
+
+  /**
+   * A joined browser asks for an action: perform it with a recorded approval, or ask.
+   *
+   * The recorded approval of this action's open operation, when this Session can approve it
+   * and it passes check 3 for this request, is used up by performing it once (check 2 in
+   * `#perform`). Otherwise the request is one without an approval, and gets a revision to
+   * approve: a new reference (Operations 6). Once the action is performed, the next request for
+   * it is a new operation (Operations 7).
+   */
+  async #websiteDecide(session: CallerSession, asked: Asked): Promise<Decision> {
+    const current = await this.#openOperation(asked.key);
+    if (current !== undefined && current.approved !== undefined && current.approval !== undefined) {
+      const target = this.#canApprove(session, current, { challenge: false });
+      const revision = current.revisions.find((item) => item.revision === current.approved);
+      if (target !== undefined && this.#approves(target, revision, asked)) {
+        const approval = parseApproval({
+          operation_id: target.operationId,
+          revision: target.approved,
+          ...target.approval,
+        });
+        return this.#perform(target, revision as OperationRevision, approval);
+      }
+    }
+    return { operation: await this.#revisionFor(session, current, asked, undefined) };
+  }
+
+  /**
+   * The extension's endpoint (Operations 4, 6): a website's operations, by reference.
+   *
+   * The Session header and any access token are checked as at an API; no scope is needed.
+   * `{"ref": …}` alone gets the operation (`403 approval_required`), or, once an approval is
+   * recorded, its `status` (`200`). With `Poppy-Approval`, the checks of section 6 in order,
+   * then the approval is recorded (`204`) or declined; nothing is performed here. A reference
+   * the Session can't use is `400 invalid_request`; one to an account's operation from a
+   * signed-out Session of the same agent and User gets a challenge. Another interface's
+   * operation is never approved here.
+   */
+  async #operationsEndpoint(request: CompanyRequest): Promise<CompanyResponse> {
+    const [, session] = await this.#caller(request);
+    if (!this.#supportsOperations(session)) {
+      throw new Refused(403, "extension_required", { extension: OPERATIONS_EXTENSION });
+    }
+    const ref = jsonObject(request.body).ref;
+    if (typeof ref !== "string" || !OPERATION_REFERENCE.test(ref)) throw new Refused(400, "invalid_request");
+    const at = ref.indexOf(".");
+    const operationId = at === -1 ? ref : ref.slice(0, at);
+    const revisionId = at === -1 ? "" : ref.slice(at + 1);
+    const stored = await this.#read<StoredOperation>(RecordKinds.operation, operationId);
+    if (stored === undefined || stored.website !== true) throw new Refused(400, "invalid_request");
+    const target = this.#canApprove(session, stored);
+    const named = stored.revisions.find((item) => item.revision === revisionId);
+    if (target === undefined || named === undefined) throw new Refused(400, "invalid_request");
+    const approval = parseApprovalHeader(request.headers[APPROVAL_HEADER.toLowerCase()]);
+    if (
+      target.status === "performing" ||
+      target.status === "performed" ||
+      (approval === undefined && target.status === "open" && target.approved !== undefined)
+    ) {
+      // Check 2, and the lookup of an approved reference (Operations 6, 7).
+      const status = target.status === "open" ? "approved" : target.status;
+      return { status: 200, body: { operation_id: target.operationId, status }, headers: { ...NO_STORE } };
+    }
+    if (target.status !== "open") throw new Refused(400, "invalid_request");
+    if (approval !== undefined && approval.operation_id === target.operationId) {
+      const approved = target.revisions.find((item) => item.revision === approval.revision);
+      if (approved !== undefined && !approved.withdrawn && this.#now().getTime() <= Date.parse(approved.expiresAt)) {
+        const declined = this.#declined(target, approved, approval);
+        // Never recorded: the website never finds it (Operations 6).
+        if (declined !== undefined) return jsonError(403, APPROVAL_DECLINED, { ...declined });
+        if (await this.#record(target, approved, approval)) return { status: 204, headers: { ...NO_STORE } };
+      }
+    }
+    // No approval, or one that fails check 3 (another operation's, or a revision that can't be
+    // approved): the operation for the reference, never the revision the approval named;
+    // `invalid_request` once it has expired.
+    const current = this.#currentRevision(target, named);
+    if (current === undefined || (approval !== undefined && current.revision === approval.revision)) {
+      throw new Refused(400, "invalid_request");
+    }
+    return jsonError(403, "approval_required", { operation: revisionOperation(target, current) });
+  }
+
+  /**
+   * The revision a reference stands for now: its own while it can be approved, else the
+   * operation's latest one that can; `undefined` once none can (expired).
+   */
+  #currentRevision(stored: StoredOperation, named: OperationRevision): OperationRevision | undefined {
+    for (const revision of [named, latestRevision(stored)]) {
+      if (!revision.withdrawn && this.#now().getTime() <= Date.parse(revision.expiresAt)) return revision;
+    }
+    return undefined;
+  }
+
+  /**
+   * Record an approval for the browser's next request (Operations 6): the first one recorded
+   * is kept while it can still be used; `false` once the operation is no longer open.
+   */
+  async #record(target: StoredOperation, revision: OperationRevision, approval: Approval): Promise<boolean> {
+    const stated: NonNullable<StoredOperation["approval"]> = {
+      approver: approval.approver,
+      ...(approval.approved_at === undefined ? {} : { approved_at: approval.approved_at }),
+      ...(approval.input_type === undefined ? {} : { input_type: approval.input_type }),
+      ...(approval.reference === undefined ? {} : { reference: approval.reference }),
+    };
+    const recordedAt = this.#now();
+    const changed = await this.#change<StoredOperation>(RecordKinds.operation, target.operationId, (current) => {
+      if (current.status !== "open") return current;
+      if (current.approved !== undefined) {
+        const kept = current.revisions.find((item) => item.revision === current.approved);
+        if (kept !== undefined && !kept.withdrawn && recordedAt.getTime() <= Date.parse(kept.expiresAt)) {
+          return current;
+        }
+      }
+      return { ...current, approved: revision.revision, approvedAt: recordedAt.toISOString(), approval: stated };
+    });
+    return changed !== undefined && changed[1].status === "open";
+  }
+
   async webSession(webCookie: string | undefined): Promise<CallerSession | undefined> {
     if (webCookie === undefined) return undefined;
     const joined = await this.#read<WebSession>(RecordKinds.browserCookie, digest(webCookie));
@@ -5059,7 +5364,7 @@ export class CompanyService {
       ...(signedIn && joined.accountId !== undefined ? { accountId: joined.accountId } : {}),
       scopes: signedIn ? joined.scopes : [],
       protocolVersion: joined.protocolVersion ?? this.config.preferredVersion,
-      extensions: {},
+      extensions: { ...(joined.extensions ?? {}) },
       ...(signedIn && joined.family !== undefined ? { family: joined.family } : {}),
     };
   }
@@ -5142,6 +5447,34 @@ function mcpDecision(
 
 function startCursor(conversation: StoredConversation): string {
   return `start_${conversation.conversationId}`;
+}
+
+/**
+ * A website's reference to one revision of an operation (Operations 4): opaque to the agent,
+ * usable only in a Session that can approve the operation.
+ */
+function websiteReference(operation: Operation): string {
+  return `${operation.operation_id}.${operation.revision}`;
+}
+
+/** A page of the website (HTML, never cached, never framed) or its scripts' JSON. */
+function webAnswer(
+  status: number,
+  body: string | Readonly<Record<string, unknown>> | undefined,
+  headers: Readonly<Record<string, string>> = {},
+): CompanyResponse {
+  if (typeof body === "object" && body !== null) {
+    return { status, body: { ...body }, headers: { "Cache-Control": "no-store", ...headers } };
+  }
+  return {
+    status,
+    body: body ?? "",
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": "frame-ancestors 'none'",
+      ...headers,
+    },
+  };
 }
 
 /** A consent page: never framed, never cached (upstream guides, consent pages). */

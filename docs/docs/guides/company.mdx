@@ -267,7 +267,18 @@ implements, of version 0.4 and Operations version 3:
   for the user and, when there is one, an `alternative`, and nothing is performed,
   recorded or proposed anew (`approval_declined`: HTTP 403 with a JSON body at an
   API, an error result at a tool, a later message in a conversation). Operations on
-  the website (`Poppy-Operation`, an operations `endpoint`) are not served yet;
+  the website, with `website_operations` (`websiteOperations`) and `web`: contribute
+  `pap.company.website` (`CompanyWebsite.handle(WebCall) -> WebResult`); a form whose
+  action needs approval returns `WebResult(operation=...)`, and a joined browser whose
+  join declared Operations 3 gets `403` with `Poppy-Operation` (a page, or
+  `{"error": "approval_required"}` for a script asking for JSON), the operations
+  `endpoint` (`POST /poppy/operations`, listed in the `operations` entry) gives the
+  agent the operation and records its approval (`204`, nothing performed), and the
+  browser's next request for that revision performs it once; a website's operation is
+  approved only there, and no other interface's is; with `browser_control`
+  (`browserControl`) the company lists the Browser Control extension and marks the
+  steps it leaves to the User with `data-poppy-user-step`, never relying on the
+  `controller` value a page sends as proof;
 - sign-in pages that say who asks: the built-in consent page starts with
   "*agent* wants to connect to your *company* account" and tells the person to
   continue only if they just asked that agent; a hosted consent or device page

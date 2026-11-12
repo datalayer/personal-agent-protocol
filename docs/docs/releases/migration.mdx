@@ -10,6 +10,23 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.33 → 0.34
+
+0.34.0 breaks nothing: it adds what 0.33.0 left out of version 0.4 as published, in both
+SDKs and both reference companies.
+
+| Addition | What to do |
+| --- | --- |
+| Operations on websites (Operations 2, 4, 6, 7) | A host that joins a browser to a Session may now declare `operations` on it. When a response its own browser received carries `Poppy-Operation`, take it with `WebsiteOperations.reference(headers, joined=browser_sessions.joined_sessions(endpoint))` (`WebsiteOperations.reference(headers, { joined })`): only a Session you joined that browser to counts. Then `operation(...)`, approve as at an API (`ask_user` or `approve_as_agent`), `record(...)` (through `OperationsClient.send`), and have the browser make the request again. If that request fails or answers a new reference, call `before_approving_again(earlier, ...)` first: `wait`, `performed` (never approve again) or `approve` |
+| A company's website (`pap.company.website`) | Contribute a `CompanyWebsite` whose `handle(WebCall)` returns a `WebResult`; an action that needs approval returns `WebResult(operation=ProposedOperation(...), own_approval=...)`. With `website_operations=True` (and `web`), the company lists the operations `endpoint`, answers a joined browser that declared Operations 3 with `403` and `Poppy-Operation`, serves `POST /poppy/operations`, and performs the action on the browser's next request once the approval is recorded; any other browser gets `own_approval` |
+| Browser Control, version 1 | Optional. A host whose browser leaves marked steps to the User, hands it control and runs `controller_script(organization_domain, channel)` declares `browser-control` with `negotiate_extensions(..., supported={**SUPPORTED_EXTENSIONS, "browser-control": "1"})`; before each browser action of the model, `BrowserControl.check_change` / `check_submit` with `page_marks(html)`. A company lists it with `browser_control=True` and marks its pages with `data-poppy-user-step` |
+| `BrowserSessionStart.sid` | The join's result names the Session; `BrowserSessionClient.joined_sessions(endpoint)` lists the Sessions a client joined its browser to |
+| Stored records | A company's `StoredOperation` gains `website` (written only when true) and `WebSession` `extensions`; records written by 0.33 read as before |
+
+The ledger: `OPS-2-02`, `OPS-4-01`, `OPS-6-13`, `OPS-6-14` are implemented and `OPS-5-09`
+is no longer partial; the Browser Control extension's rows are added (`BC-4-01` to
+`BC-6-01`). The conformance suite adds `operations.website-reference`.
+
 ## 0.32 → 0.33
 
 0.33.0 moves both SDKs and both reference companies from draft 0.4 as of `46beb21` to
@@ -37,8 +54,8 @@ company at 0.33, and neither side understands the other's operations. Both still
 | `PapConfirm` | Display version 3: `terms` required, `summary` optional, and `approved_by`, `instruction`, `declined` |
 
 Not in 0.33: operations on websites (the `Poppy-Operation` header and the extension's
-`endpoint`) and the Browser Control extension. A host that joins a browser to a Session
-passes `extensions` without `operations` for that Session until they are.
+`endpoint`) and the Browser Control extension (both in 0.34). A host on 0.33 that joins a
+browser to a Session passes `extensions` without `operations` for that Session.
 
 The ledger (`protocol/requirements.yaml`) is at `4803900`. Withdrawn: `PAP-9.1-01` (the
 excluded tasks document), `OPS-5-04` and `OPS-5-05` (version 3 lets the agent approve on

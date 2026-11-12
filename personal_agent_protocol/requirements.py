@@ -26,7 +26,7 @@ from typing import Any, Literal
 import yaml  # type: ignore[import-untyped]
 
 Level = Literal["MUST", "MUST NOT", "SHOULD", "SHOULD NOT"]
-Source = Literal["spec", "operations", "mediated", "ucp", "guide"]
+Source = Literal["spec", "operations", "mediated", "ucp", "browser-control", "guide"]
 Status = Literal["implemented", "partial", "open", "not-applicable"]
 
 LEVELS: tuple[Level, ...] = ("MUST", "MUST NOT", "SHOULD", "SHOULD NOT")

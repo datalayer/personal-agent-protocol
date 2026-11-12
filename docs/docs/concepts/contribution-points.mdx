@@ -19,8 +19,9 @@ other fails CI.
 - Two contributions at the winning order are ambiguous and fail closed: the
   SDK refuses rather than pick one by load order.
 - A point with no default and no contribution fails closed when the SDK needs
-  it (`no active … contribution`). `pap.company.api` and `pap.company.mcp` are
-  optional: with none, the company publishes no API or MCP server. So is
+  it (`no active … contribution`). `pap.company.api`, `pap.company.mcp` and
+  `pap.company.website` are optional: with none, the company publishes no API or MCP
+  server, and serves no pages beyond the protocol's own. So is
   `pap.company.rateLimit` (with none, no limit beyond the protocol's own), and so are
   `pap.telemetry` (with none, nothing is emitted), `pap.operatorSigner` (with none,
   requests go unsigned) and `pap.approvalSurface` (with none, destructive live-session
@@ -76,6 +77,7 @@ approved by the policy first.
 | `pap.company.replayCache` | `REPLAY_CACHES` | `ReplayCaches` | Remembers assertion and Session JWT IDs once | `store` |  |
 | `pap.company.api` | `COMPANY_APIS` | `CompanyApis` | The company's OpenAPI API | — (feature off) |  |
 | `pap.company.mcp` | `COMPANY_MCP` | `CompanyMcps` | The company's MCP server | — (feature off) |  |
+| `pap.company.website` | `COMPANY_WEBSITES` | `CompanyWebsites` | The company's website pages, for visitors and joined browsers; an action that needs approval returns an operation (Operations 4) | — (feature off) |  |
 | `pap.company.rateLimit` | `COMPANY_RATE_LIMITS` | `CompanyRateLimits` | How often one personal agent and one signed-in account are answered: `429 rate_limited` with `Retry-After` | — (no limit) |  |
 
 ## Tenants

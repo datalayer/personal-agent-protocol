@@ -6,7 +6,7 @@ title: Refresh tokens
 
 A Direct, Device, or Mediated Sign-In returns a refresh token: the OAuth
 `refresh_token` that keeps the user signed in after the short-lived access
-token expires (PAP draft 0.4 §4.4, §4.5). It is the most valuable credential a
+token expires (PAP version 0.4 §4.4, §4.5). It is the most valuable credential a
 personal agent holds for a user, so the SDK never hands it to a caller. It is
 written straight into the Reactor `pap.tokenStore` by the sign-in client and
 used only at the company's `token_endpoint` and `revocation_endpoint`.
@@ -132,4 +132,4 @@ play this provider with `conversation_resource` (`conversationResource`).
 - Sign-out in the product revokes, then deletes.
 
 See the runnable [refresh tokens example](/examples/account-tokens/) and the
-upstream [refresh tokens specification](https://personalagentprotocol.org/docs/spec#refresh-tokens).
+upstream [refresh tokens specification](https://personalagentprotocol.org/docs/0.4/spec#refresh-tokens).

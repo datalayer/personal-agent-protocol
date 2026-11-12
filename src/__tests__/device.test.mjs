@@ -90,7 +90,6 @@ const options = {
   scopes: ["orders:read", "orders:write"],
   tenantId: "application-one",
   organization: { name: "Company", domain: "company.example" },
-  protectedResources: ["https://company.example"],
 };
 
 test("Device Sign-In paces polling and keeps the refresh token behind a reference", async () => {
@@ -200,10 +199,9 @@ const LINKS = [
 ];
 
 for (const [link, allowed] of LINKS) {
-  test(`a device link is shown only on the issuer or its domains: ${link} ${allowed ? "shown" : "refused"}`, async () => {
-    // Its host is the issuer's, the host of a URL in protected_resources, or a subdomain of
-    // either (§4.6).
-    assert.equal(verificationHostAllowed(link, { issuer: options.issuer, protectedResources: options.protectedResources }), allowed);
+  test(`a device link is shown only on the issuer or its domain: ${link} ${allowed ? "shown" : "refused"}`, async () => {
+    // Its host is the issuer's or `organization.domain`, or a subdomain of either (§4.3).
+    assert.equal(verificationHostAllowed(link, { issuer: options.issuer, domain: options.organization.domain }), allowed);
     const extension = devicePlugin();
     const fetch = async () =>
       Response.json({
@@ -240,4 +238,20 @@ test("a device authorization answering with a redirect gets nothing", async () =
   );
   reactor.stop();
   assert.deepEqual(sent, ["https://auth.example.com/oauth/device"]);
+});
+
+test("another protected resource of the issuer does not make a link showable", () => {
+  // 0.4 as published: only the issuer's host and `organization.domain` qualify (§4.3); the
+  // hosts of the issuer's other `protected_resources` no longer do.
+  const who = { issuer: "https://auth.example.com", domain: "Company.example." };
+  assert.equal(verificationHostAllowed("https://company.example/device", who), true);
+  assert.equal(verificationHostAllowed("https://id.auth.example.com/device", who), true);
+  // `https://api.partner.example` may be among the issuer's protected resources: no matter.
+  assert.equal(verificationHostAllowed("https://api.partner.example/device", who), false);
+  assert.equal(verificationHostAllowed("https://example.com/device", who), false);
+  assert.equal(verificationHostAllowed("not a url", who), false);
+  assert.throws(
+    () => verificationHostAllowed("https://company.example/device", { issuer: "https://auth.example.com", protectedResources: ["https://company.example"] }),
+    TypeError,
+  );
 });

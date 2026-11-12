@@ -71,6 +71,7 @@ export const TELEMETRY_EVENTS: Readonly<Record<string, TelemetryStage>> = Object
   "pap.conversation.cancel_handoff": "conversation",
   "pap.conversation.close": "conversation",
   "pap.operation.ask_user": "operation",
+  "pap.operation.approve_as_agent": "operation",
   "pap.operation.send": "operation",
   // What a company built on the SDK's company service did and refused.
   "pap.company.identity.check": "company",
@@ -137,6 +138,7 @@ export const TELEMETRY_ATTRIBUTES: Readonly<Record<string, (value: unknown) => b
     "pap.conversation.closed": flag,
     "pap.conversation.events": count,
     "pap.operation.status": identifier,
+    "pap.operation.approver": oneOf("user", "agent"),
     "pap.client.id": issuer,
     "pap.interface": oneOf(...TELEMETRY_INTERFACES),
     "pap.company.route": identifier,
@@ -368,6 +370,8 @@ export const conversationResult = (value: object) => {
 };
 
 /** How an approval step ended: never the operation's terms or its IDs. */
-export const operationResult = (result: { readonly status?: unknown }) => ({
+export const operationResult = (result: { readonly status?: unknown; readonly approver?: unknown }) => ({
   "pap.operation.status": typeof result.status === "string" ? result.status : "approved",
+  // Who approved, never what: the approval's IDs and reference stay out.
+  ...(result.approver === "user" || result.approver === "agent" ? { "pap.operation.approver": result.approver } : {}),
 });

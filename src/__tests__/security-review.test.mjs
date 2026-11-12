@@ -126,7 +126,6 @@ async function deviceSignIn(w) {
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
     organization: w.company.document.organization,
-    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -246,7 +245,7 @@ test("finding 5: an operation records and requires its scopes", async () => {
       id: w.message("x").id,
       message: {
         author: { type: "agent" },
-        extensions: { operations: { approval: { operation_id: proposal.operation_id, revision: proposal.revision } } },
+        extensions: { operations: { approval: { operation_id: proposal.operation_id, revision: proposal.revision, approver: "user" } } },
       },
     },
     narrowed.token,

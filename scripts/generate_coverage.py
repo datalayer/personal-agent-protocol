@@ -4,8 +4,8 @@
 
 """Generate the protocol coverage reference from the requirement ledger.
 
-`protocol/requirements.yaml` has one entry per normative statement of PAP draft 0.4
-and Operations v2, and the Guides' recommendations apart. This script writes one
+`protocol/requirements.yaml` has one entry per normative statement of PAP 0.4 as published
+and Operations version 3, and the Guides' recommendations apart. This script writes one
 page per area under `docs/docs/protocol/coverage/` — every entry with its upstream
 section, normative level, SDK symbols, test IDs and status — and the summary table
 between the markers of `docs/docs/protocol/coverage.mdx`.

@@ -1,6 +1,6 @@
 {
   "type": "application/vnd.datalayer.pap.confirm+json",
-  "version": 2,
+  "version": 3,
   "id": "confirm-op_7Hq2",
   "text": "manzanita.example asks you to approve: Exchange the Ridge Jacket (M) for the Alpine Parka (M). You pay USD 70.00 more. (revision rev_k3Jd9Qx2mW8v, until 2026-10-12T18:00:00+00:00) The terms changed since you saw them.",
   "data": {
@@ -31,7 +31,10 @@
         },
         "ships_in_days": 2
       }
-    }
+    },
+    "approved_by": null,
+    "instruction": null,
+    "declined": null
   },
   "actions": []
 }

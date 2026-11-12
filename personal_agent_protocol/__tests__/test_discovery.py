@@ -15,6 +15,7 @@ from personal_agent_protocol import (
     DiscoveryClient,
     DiscoveryDocument,
     DiscoveryError,
+    TasksResponse,
 )
 from personal_agent_protocol.reactor import (
     ApprovedUrl,
@@ -344,7 +345,7 @@ async def test_an_alias_publishes_the_companys_discovery_and_its_issuer_lists_it
         service.discovery_document("elsewhere.example")
 
 
-SKILL_INDEX_URL = "https://example.com/.well-known/poppy.json"
+SKILL_INDEX_URL = "https://example.com/poppy/tasks"
 SKILL_TEXT = b"---\nname: manage-bookings\n---\nChange a booking through the orders API.\n"
 
 
@@ -368,12 +369,17 @@ def _entry(**changes: object) -> dict[str, object]:
 
 
 def test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved() -> None:
-    """`organization.logo_uri` is an HTTPS URL (§3.1); `skill_index` is used as far as the SDK
-    recognizes it, each `url` resolved against poppy.json's final URL (§9.4)."""
+    """`organization.logo_uri` is an HTTPS URL (§3.1); `skill_index`, in the tasks response,
+    is used as far as the SDK recognizes it, each `url` resolved against `tasks.endpoint`
+    (§9.4)."""
 
     document = DiscoveryDocument.model_validate(fixture("discovery-valid.json"))
     assert document.organization.logo_uri == "https://example.com/logo.png"
-    assert [skill.name for skill in document.usable_skills(SKILL_INDEX_URL)] == ["manage-bookings"]
+    assert document.tasks is not None
+    assert document.tasks.endpoint == "https://api.example.com/poppy/tasks"
+    assert "skill_index" not in DiscoveryDocument.model_fields
+    tasks = TasksResponse.model_validate(fixture("tasks-valid.json"))
+    assert [skill.name for skill in tasks.usable_skills(SKILL_INDEX_URL)] == ["manage-bookings"]
     with pytest.raises(ValueError):
         DiscoveryDocument.model_validate(
             {
@@ -386,9 +392,9 @@ def test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved() -> None
             }
         )
 
-    varied = DiscoveryDocument.model_validate(
+    varied = TasksResponse.model_validate(
         {
-            **fixture("discovery-valid.json"),
+            **fixture("tasks-valid.json"),
             "skill_index": _skill_index(
                 _entry(),
                 _entry(name="relative", url="skills/relative/SKILL.md"),
@@ -404,10 +410,10 @@ def test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved() -> None
     skills = varied.usable_skills(SKILL_INDEX_URL)
     assert [(skill.name, skill.type, skill.url) for skill in skills] == [
         ("manage-bookings", "skill-md", "https://cdn.example.com/skills/manage-bookings/SKILL.md"),
-        ("relative", "skill-md", "https://example.com/.well-known/skills/relative/SKILL.md"),
+        ("relative", "skill-md", "https://example.com/poppy/skills/relative/SKILL.md"),
         ("origin", "archive", "https://example.com/skills/origin/SKILL.md"),
     ]
-    # An index of another revision, or none: ignored, the rest of the document used (§9.4).
+    # An index of another revision, or none: ignored, the rest of the response used (§9.4).
     for index in (
         {
             "$schema": "https://schemas.agentskills.io/discovery/9.0.0/schema.json",
@@ -416,10 +422,11 @@ def test_the_logo_and_the_skill_index_are_read_and_the_skills_resolved() -> None
         {"skills": [_entry()]},
         None,
     ):
-        unknown = DiscoveryDocument.model_validate(
-            {**fixture("discovery-valid.json"), "skill_index": index}
+        unknown = TasksResponse.model_validate(
+            {**fixture("tasks-valid.json"), "skill_index": index}
         )
         assert unknown.usable_skills(SKILL_INDEX_URL) == []
+        assert len(unknown.excluded_tasks) == 2 and unknown.feedback is not None
 
 
 @pytest.mark.asyncio
@@ -429,13 +436,15 @@ async def test_a_skill_is_fetched_and_its_digest_verified() -> None:
     import hashlib
 
     digest = "sha256:" + hashlib.sha256(SKILL_TEXT).hexdigest()
-    document = {
-        **fixture("discovery-valid.json"),
-        "skill_index": _skill_index(
-            _entry(url="/skills/manage-bookings/SKILL.md", digest=digest),
-            _entry(name="tampered", url="/skills/manage-bookings/SKILL.md"),
-        ),
-    }
+    document = fixture("discovery-valid.json")
+    tasks = TasksResponse.model_validate(
+        {
+            "skill_index": _skill_index(
+                _entry(url="/skills/manage-bookings/SKILL.md", digest=digest),
+                _entry(name="tampered", url="/skills/manage-bookings/SKILL.md"),
+            )
+        }
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         if (
@@ -449,8 +458,9 @@ async def test_a_skill_is_fetched_and_its_digest_verified() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DiscoveryClient(http_client=http, address_resolver=public_resolver)
-        company = await client.discover("example.com")
-        good, tampered = company.skills
+        await client.discover("example.com")
+        # Resolved against tasks.endpoint, on another host than the skill's (§9.4).
+        good, tampered = tasks.usable_skills("https://example.com/poppy/tasks")
         assert good.url == "https://example.com/skills/manage-bookings/SKILL.md"
         assert await client.fetch_skill(good) == SKILL_TEXT
         with pytest.raises(DiscoveryError) as raised:

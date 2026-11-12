@@ -27,8 +27,8 @@ def test_discovery_fixture_round_trips_and_preserves_extensions() -> None:
 
     assert document.protocol_version == "0.4"
     assert document.apis[1].type == "mcp"
-    assert [entry.version for entry in document.extensions["operations"]] == ["2"]
-    assert document.extension("operations", "2") is not None
+    assert [entry.version for entry in document.extensions["operations"]] == ["3"]
+    assert document.extension("operations", "3") is not None
     assert document.extension("operations", "1") is None
     assert document.extensions["mediated-sign-in"][0].model_extra == {
         "fields": source["extensions"]["mediated-sign-in"][0]["fields"],

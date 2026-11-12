@@ -1,22 +1,46 @@
 # Upstream protocol snapshot
 
 - Protocol: Personal Agent Protocol (Poppy)
-- Profile implemented: draft 0.4 as of 46beb21
-- Upstream page revision: 2026-11-06
-- Upstream source: commit 46beb21 of https://github.com/personal-agent-protocol/personal-agent-protocol
-- Last reviewed by this repository: 2026-11-07 (through 51fb46e, a Roadmap page that changes no requirement)
-- Specification: https://personalagentprotocol.org/docs/spec
-- Guides: https://personalagentprotocol.org/docs/guides
-- Operations extension: version 2
+- Profile implemented: 0.4 as published
+- Upstream page revision: 2026-11-10
+- Upstream source: commit 4803900 of https://github.com/personal-agent-protocol/personal-agent-protocol (the frozen text as of ed47408, which only dropped the word "draft" from it)
+- Last reviewed by this repository: 2026-11-12 (through ad20217)
+- Specification: https://personalagentprotocol.org/docs/0.4/spec
+- Guides: https://personalagentprotocol.org/docs/0.4/guides
+- Operations extension: version 3
 - Mediated Sign-In extension: version 1
 - UCP extension: version 1
-- Mediated Sign-In extension page: https://personalagentprotocol.org/docs/extensions/mediated-sign-in
-- Operations extension page: https://personalagentprotocol.org/docs/extensions/operations
+- Mediated Sign-In extension page: https://personalagentprotocol.org/docs/0.4/extensions/mediated-sign-in
+- Operations extension page: https://personalagentprotocol.org/docs/0.4/extensions/operations
 
-Draft 0.4 is being written upstream at /docs/spec; it is not published yet, so
-this repository follows it as of a named commit, as it followed draft 0.3 in
-0.25 to 0.27, each release naming the commit. SDK 0.32 implements it as of
-46beb21 (2026-11-06), with no compatibility with 0.3 as published: Direct
+Version 0.4 was published upstream on 2026-11-10 (commit 4803900, "Publish 0.4
+as the 1.0 release candidate"): the specification is frozen at /docs/0.4/spec,
+and /docs/spec is now draft 1.0. SDK 0.33 implements 0.4 as published, with no
+compatibility with draft 0.4 as of 46beb21, which SDK 0.32 implemented. It
+announces and accepts `protocol_version` 0.4 only: draft 1.0 can still change
+in ways that are not backward compatible, so a later release follows it once it
+is published or changes the wire. What changed between 46beb21 and 4803900,
+each in the CHANGELOG and the 0.32 → 0.33 migration page: task coverage per
+Session (`tasks.endpoint`, fetched with the Session header and no access token;
+`excluded_tasks`, `skill_index` and `feedback` leave `poppy.json`); Operations
+version 3 (every approval says `approver`, `user` or `agent`, with an optional
+`reference`; `terms` required and `summary` optional; `approval_declined`);
+`extension_required` in a JSON body at APIs; Sessions found by `client_id`,
+`sid` and User ID; Device Sign-In links only on the issuer's host or
+`organization.domain`; sign-ins someone else started (spec 4.2, 10.8, and the
+consent page that names the agent); the Session header on website pages
+fetched without a browser; scopes in the protected resource metadata; refresh
+token lifetimes left to the Company (nothing changes here: the reference
+companies keep a fixed lifetime); and where the browser-session endpoint can
+be. Not implemented in 0.33, and left for the next release: operations on
+websites (the `Poppy-Operation` header and the extension's `endpoint`,
+Operations 4 and 6) and the Browser Control extension, version 1. A host that
+joins a browser to a Session declares no `operations` on that join until then.
+
+While 0.4 was a draft, at /docs/spec, this repository followed it as of a named
+commit, as it followed draft 0.3 in 0.25 to 0.27, each release naming the
+commit. SDK 0.32 implemented it as of 46beb21 (2026-11-06), with no
+compatibility with 0.3 as published: Direct
 Sign-In preferred; several protocol versions (`supported_versions`,
 `Poppy-Version`, `version_unsupported`, `Deprecation` and `Sunset`); extensions
 as per-version lists in `poppy.json`, declared per request in
@@ -76,20 +100,20 @@ removed, the Operations check order as listed, Session header destinations from
 `skill_index` at a pinned Agent Skills revision, at least one of `agent`,
 `apis`, `web`, and a conversation endpoint at another provider; the guides on
 explicit replies, idempotency scoped to agent, User and account, no RS256, and
-Session storage. The UCP extension (version 1, `b2b10da`) is implemented in 0.32 on the draft 0.4 shape (P3-59 of the SDK's plan was a decision for the user): the profile, the connection and identity linking, not UCP's commerce.
+Session storage. The UCP extension (version 1, `b2b10da`) is implemented since 0.32: the profile, the connection and identity linking, not UCP's commerce.
 
-Upstream is a draft. Changes are reviewed and released as explicit protocol
-profiles; generated code must never change from an unattended documentation
-fetch. Draft 0.1 stays readable, frozen, at
+A published version does not change; a later upstream version is reviewed and
+released as an explicit protocol profile, and generated code must never change
+from an unattended documentation fetch. Draft 0.1 stays readable, frozen, at
 https://personalagentprotocol.org/docs/0.1/spec; draft 0.2 is frozen at
 https://personalagentprotocol.org/docs/0.2/spec, and 0.3 at
 https://personalagentprotocol.org/docs/0.3/spec. This repository implements
-draft 0.4 only and uses no earlier document.
+0.4 as published only and uses no earlier document.
 
 ## Vendored JSON Schemas
 
 `protocol/schemas/` holds JSON Schemas copied unchanged from the upstream
-company kit (`kit/company/schemas/`) at commit 46beb21 (draft 0.4), under the upstream
+company kit (`kit/company/schemas/`) at commit ed47408 (0.4 as published), under the upstream
 repository's license (Apache License 2.0). The tests check the shared
 fixtures and the reference company's documents against them
 (`personal_agent_protocol/__tests__/test_schemas.py`). They are replaced

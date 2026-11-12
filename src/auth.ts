@@ -215,7 +215,18 @@ interface PendingDirectSignIn {
 export interface DirectSignInStart {
   readonly expiresAt: Date;
   readonly requestedScopes: readonly string[];
+  /**
+   * Whether the authorization URL opens on a device other than the one the User is using
+   * (§4.2): a cross-device flow, as Device Sign-In always is (§10.8).
+   */
+  readonly crossDevice: boolean;
 }
+
+/**
+ * The longest a Direct Sign-In request lives when its link opens on another device: a
+ * cross-device request is short-lived (RFC 10027 §2, which §4.2 makes a MUST there).
+ */
+export const CROSS_DEVICE_LIFETIME_SECONDS = 300;
 
 /** A completed Direct Sign-In: the access token, and the refresh token's reference. */
 export type DirectSignInResult = SignInResult;
@@ -224,7 +235,18 @@ export type DirectSignInResult = SignInResult;
 export interface DirectSignInBeginOptions extends DirectSignInOptions {
   readonly tokenEndpoint: string;
   readonly tenantId: string;
+  /** How long the one-use state lives: 600 seconds by default, 300 at most with `crossDevice`. */
   readonly lifetimeSeconds?: number;
+  /**
+   * The URL opens on a device other than the one the User is using, such as a link sent to a
+   * phone. Nothing in the redirect says who approved the sign-in (§10.8): the request then
+   * lives at most `CROSS_DEVICE_LIFETIME_SECONDS` (RFC 10027 §2), the host asks only for the
+   * scopes the task needs, and it says who the link is for when it shows it. Whenever it can,
+   * the host receives the redirect only on the device that opened the URL (a loopback
+   * `redirectUri`, or its own app signed in as the User who started), and names the User it
+   * finds there to `complete({ completedBy })`.
+   */
+  readonly crossDevice?: boolean;
   /**
    * The issuer's `dpop_signing_alg_values_supported`: the code exchange sends a DPoP proof
    * when it includes ES256 (§4.5), by the DPoP key of `pairwiseUserId`, which proving needs.
@@ -236,6 +258,14 @@ export interface DirectSignInBeginOptions extends DirectSignInOptions {
 
 export interface DirectSignInCompleteOptions {
   readonly callbackUrl: string;
+  /**
+   * The `tenantId` of the User the host found in the browser at `redirectUri`, when it can
+   * tell, such as by its own sign-in there: a redirect that arrives for another User than the
+   * one who started the sign-in is refused (`sign_in_started_by_another_user`), the state used
+   * up and no code exchanged, so a link someone forwarded gives its sender no tokens (§4.2,
+   * §10.8).
+   */
+  readonly completedBy?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -321,9 +351,11 @@ export class DirectSignInClient {
   }
 
   async #begin(options: DirectSignInBeginOptions): Promise<DirectSignInStart> {
-    const lifetimeSeconds = options.lifetimeSeconds ?? 600;
-    if (!Number.isInteger(lifetimeSeconds) || lifetimeSeconds < 1 || lifetimeSeconds > 900) {
-      throw new RangeError("Direct Sign-In state lifetime must be between 1 and 900 seconds");
+    const crossDevice = options.crossDevice === true;
+    const longest = crossDevice ? CROSS_DEVICE_LIFETIME_SECONDS : 900;
+    const lifetimeSeconds = options.lifetimeSeconds ?? Math.min(600, longest);
+    if (!Number.isInteger(lifetimeSeconds) || lifetimeSeconds < 1 || lifetimeSeconds > longest) {
+      throw new RangeError(`Direct Sign-In state lifetime must be between 1 and ${longest} seconds`);
     }
     if (!options.tenantId || options.tenantId.length > 256) {
       throw new RangeError("tenantId must contain between 1 and 256 characters");
@@ -364,7 +396,7 @@ export class DirectSignInClient {
       await store.take(reference);
       throw new AuthorizationError("browser_handoff_failed", "Browser handoff failed", { cause });
     }
-    return { expiresAt, requestedScopes: request.scopes };
+    return { expiresAt, requestedScopes: request.scopes, crossDevice };
   }
 
   complete(options: DirectSignInCompleteOptions): Promise<DirectSignInResult> {
@@ -394,6 +426,12 @@ export class DirectSignInClient {
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     if (clock.now().getTime() > pending.expiresAt.getTime()) {
       throw new AuthorizationError("invalid_or_expired_state", "Authorization state has expired");
+    }
+    if (options.completedBy !== undefined && options.completedBy !== pending.tenantId) {
+      throw new AuthorizationError(
+        "sign_in_started_by_another_user",
+        "The redirect arrived for another User than the one who started the sign-in",
+      );
     }
     const callback = validateDirectSignInCallback(pending.request, options.callbackUrl);
     return this.#exchange(pending, callback, options.signal);

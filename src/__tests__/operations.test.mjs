@@ -4,7 +4,7 @@
  * BSD 3-Clause License
  */
 
-// Operations v2 on the agent's side: the operation, the Poppy-Approval header, the terms check,
+// Operations version 3 on the agent's side: the operation, the Poppy-Approval header, the terms check,
 // the user's approval, and sending it at most once. The company's side is in company.test.mjs.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -80,8 +80,11 @@ test("the fixture is an operation and a revision is opaque", () => {
   const operation = returned();
   assert.equal(operation.revision, "1791487200-k3Jd9Qx2mW8v");
   assert.deepEqual(Object.keys(operation).sort(), ["expires_at", "operation_id", "revision", "summary", "terms"]);
+  // `terms` are required; `summary` is optional, and absent when there is none (Operations 3).
   const { terms: _terms, ...without } = wire();
-  assert.equal("terms" in parseOperation(without), false);
+  assert.throws(() => parseOperation(without), ProtocolValidationError);
+  const { summary: _summary, ...unsummarized } = wire();
+  assert.equal("summary" in parseOperation(unsummarized), false);
 });
 
 for (const changes of [
@@ -130,7 +133,7 @@ test("the operation from each interface", () => {
 });
 
 test("a message with only an approval is a message, and text alone approves nothing", () => {
-  const approval = { operation_id: "exc_5Rt2", revision: "r1" };
+  const approval = { operation_id: "exc_5Rt2", revision: "r1", approver: "user" };
   // The approval travels in `extensions.operations` (spec 8.4, Operations 2, 6).
   const message = parseMessage({ id: "msg_1", author: { type: "agent" }, extensions: operationsContent({ approval }) });
   assert.deepEqual(message.extensions, { operations: { approval } });
@@ -139,52 +142,54 @@ test("a message with only an approval is a message, and text alone approves noth
   assert.throws(() => parseMessage({ id: "msg_2", author: { type: "agent" } }), ProtocolValidationError);
   // A top-level `approval` is no field of a message: it is ignored, and approves nothing.
   assert.equal(messageApproval(parseMessage({ id: "msg_3", author: { type: "human" }, text: "I approve", approval })), undefined);
-  // `extensions.operations` carries an operation or an approval, never both or neither.
+  // `extensions.operations` carries exactly one of an operation, an approval and a decline.
   assert.throws(() => parseMessage({ id: "msg_4", author: { type: "agent" }, extensions: { operations: {} } }), ProtocolValidationError);
   assert.throws(() => parseMessage({ id: "msg_5", author: { type: "agent" }, extensions: { operations: { approval, operation: wire() } } }), ProtocolValidationError);
 });
 
-test("operations are used only when both sides list version 2", () => {
-  assert.deepEqual([OPERATIONS_EXTENSION, OPERATIONS_VERSION], ["operations", "2"]);
+test("operations are used only when both sides list version 3", () => {
+  assert.deepEqual([OPERATIONS_EXTENSION, OPERATIONS_VERSION], ["operations", "3"]);
   const document = (...versions) =>
     parseDiscoveryDocument({ ...fixture("discovery-valid.json"), extensions: { operations: versions.map((version) => ({ version })) } });
   const session = (extensions) =>
     new PapSession({ sid: "Yx2b7Qd_Kp8mR3vT1nWc4A", sub: "usr_1", issuer: "https://auth.example.com", clientId: "https://agent.example/agent.json", tenantId: "t", extensions });
-  // The company lists version 2 and the Session declares it (Operations 2).
-  assert.equal(operationsNegotiated(document("2"), session({ operations: "2" })), true);
-  assert.equal(operationsNegotiated(document("1", "2"), session({ operations: "2" })), true);
-  assert.equal(operationsNegotiated(document("2"), session({})), false);
-  assert.equal(operationsNegotiated(document("1"), session({ operations: "2" })), false);
-  assert.equal(operationsNegotiated(document("2"), session({ operations: "1" })), false);
+  // The company lists version 3 and the Session declares it (Operations 2); version 2 is
+  // another major version and does not count.
+  assert.equal(operationsNegotiated(document("3"), session({ operations: "3" })), true);
+  assert.equal(operationsNegotiated(document("2", "3"), session({ operations: "3" })), true);
+  assert.equal(operationsNegotiated(document("3"), session({})), false);
+  assert.equal(operationsNegotiated(document("2"), session({ operations: "3" })), false);
+  assert.equal(operationsNegotiated(document("3"), session({ operations: "2" })), false);
+  assert.equal(operationsNegotiated(document("2"), session({ operations: "2" })), false);
   // Negotiation picks the version this SDK implements from the company's list.
-  assert.deepEqual(negotiateExtensions(document("1", "2").extensions), { operations: "2" });
-  assert.deepEqual(negotiateExtensions(document("1").extensions), {});
+  assert.deepEqual(negotiateExtensions(document("2", "3").extensions), { operations: "3" });
+  assert.deepEqual(negotiateExtensions(document("2").extensions), {});
 });
 
 // The Poppy-Approval header -------------------------------------------------------------------
 
-test("the header is a Dictionary with two Strings", () => {
-  const approval = { operation_id: "exc_5Rt2", revision: "1791487200-k3Jd9Qx2mW8v" };
+test("the header is a Dictionary with three Strings", () => {
+  const approval = { operation_id: "exc_5Rt2", revision: "1791487200-k3Jd9Qx2mW8v", approver: "user" };
   const value = approvalHeader(approval);
   assert.equal(APPROVAL_HEADER, "Poppy-Approval");
-  assert.equal(value, 'operation_id="exc_5Rt2", revision="1791487200-k3Jd9Qx2mW8v"');
+  assert.equal(value, 'operation_id="exc_5Rt2", revision="1791487200-k3Jd9Qx2mW8v", approver="user"');
   assert.deepEqual(parseApprovalHeader(value), approval);
 });
 
 for (const value of [
-  'operation_id="a", revision="b"',
-  'revision="b",operation_id="a"',
-  'operation_id="a",   revision="b"  ',
-  'later=1, operation_id="a", revision="b"',
-  'operation_id="a", revision="b", flag',
-  'operation_id="a", revision="b", flag=?0, n=1.5, t=tok/en, d=:aGk=:, at=@1659578233',
-  'operation_id="a";note="x", revision="b";a;b=2',
-  'operation_id="a", revision="b", list=(1 "two" tok);p=1, empty=()',
-  'operation_id="a", revision="b", display=%"caf%c3%a9"',
-  'operation_id="old", operation_id="a", revision="b"', // the last one wins
+  'operation_id="a", revision="b", approver="user"',
+  'approver="user",revision="b",operation_id="a"',
+  'operation_id="a",   revision="b",   approver="user"  ',
+  'later=1, operation_id="a", revision="b", approver="user"',
+  'operation_id="a", revision="b", approver="user", flag',
+  'operation_id="a", revision="b", approver="user", flag=?0, n=1.5, t=tok/en, d=:aGk=:, at=@1659578233',
+  'operation_id="a";note="x", revision="b";a;b=2, approver="user"',
+  'operation_id="a", revision="b", approver="user", list=(1 "two" tok);p=1, empty=()',
+  'operation_id="a", revision="b", approver="user", display=%"caf%c3%a9"',
+  'operation_id="old", operation_id="a", revision="b", approver="user"', // the last one wins
 ]) {
   test(`the header parses as a Dictionary, ignoring unknown members: ${value}`, () => {
-    assert.deepEqual(parseApprovalHeader(value), { operation_id: "a", revision: "b" });
+    assert.deepEqual(parseApprovalHeader(value), { operation_id: "a", revision: "b", approver: "user" });
   });
 }
 
@@ -192,17 +197,20 @@ for (const value of [
   null,
   undefined,
   "",
-  "operation_id=a, revision=b", // Tokens, not Strings
-  'operation_id="a"',
-  'revision="b"',
-  'operation_id="a", revision=1',
-  'operation_id="a", revision="not an id"',
-  'operation_id="a", revision="b",', // a trailing comma
-  'operation_id="a" revision="b"',
-  'operation_id="a", revision="b', // unterminated
-  'Operation_id="a", revision="b"', // keys are lower case
-  'operation_id="a", revision="b", x=(1',
-  'operation_id="a", revision="b\\n"',
+  "operation_id=a, revision=b, approver=user", // Tokens, not Strings
+  'operation_id="a", revision="b"', // no approver: a version 2 approval is not an approval
+  'operation_id="a", revision="b", approver=user', // a Token, not a String
+  'operation_id="a", revision="b", approver="company"',
+  'operation_id="a", approver="user"',
+  'revision="b", approver="user"',
+  'operation_id="a", revision=1, approver="user"',
+  'operation_id="a", revision="not an id", approver="user"',
+  'operation_id="a", revision="b", approver="user",', // a trailing comma
+  'operation_id="a" revision="b", approver="user"',
+  'operation_id="a", approver="user", revision="b', // unterminated
+  'Operation_id="a", revision="b", approver="user"', // keys are lower case
+  'operation_id="a", revision="b", approver="user", x=(1',
+  'operation_id="a", revision="b\\n", approver="user"',
 ]) {
   test(`a value that isn't such a Dictionary is no approval: ${value}`, () => {
     assert.equal(parseApprovalHeader(value), undefined);
@@ -212,7 +220,7 @@ for (const value of [
 // The approval in `_meta` ---------------------------------------------------------------------
 
 test("the MCP approval is read from _meta, ignoring unknown members", () => {
-  const approval = { operation_id: "exc_5Rt2", revision: "r1" };
+  const approval = { operation_id: "exc_5Rt2", revision: "r1", approver: "user" };
   assert.equal(APPROVAL_META_KEY, "personalagentprotocol.org/approval");
   assert.deepEqual(approvalFromMeta({ [APPROVAL_META_KEY]: approval }), approval);
   const read = approvalFromMeta({ [APPROVAL_META_KEY]: { ...approval, later: 1 }, "another.example/thing": true });
@@ -226,10 +234,12 @@ for (const meta of [
   "approved",
   {},
   { "personalagentprotocol.org/approval": null },
-  { "personalagentprotocol.org/approval": { operation_id: "exc_5Rt2" } },
-  { "personalagentprotocol.org/approval": { operation_id: "exc_5Rt2", revision: 1 } },
-  { "personalagentprotocol.org/approval": { operation_id: "a b", revision: "r1" } },
-  { approval: { operation_id: "exc_5Rt2", revision: "r1" } },
+  { "personalagentprotocol.org/approval": { operation_id: "exc_5Rt2", approver: "user" } },
+  { "personalagentprotocol.org/approval": { operation_id: "exc_5Rt2", revision: "r1" } },
+  { "personalagentprotocol.org/approval": { operation_id: "exc_5Rt2", revision: "r1", approver: "somebody" } },
+  { "personalagentprotocol.org/approval": { operation_id: "exc_5Rt2", revision: 1, approver: "user" } },
+  { "personalagentprotocol.org/approval": { operation_id: "a b", revision: "r1", approver: "user" } },
+  { approval: { operation_id: "exc_5Rt2", revision: "r1", approver: "user" } },
 ]) {
   test(`_meta without a well-formed approval is none: ${JSON.stringify(meta)}`, () => {
     assert.equal(approvalFromMeta(meta), undefined);
@@ -253,8 +263,10 @@ test("the terms check agrees with a summary that says the same", () => {
     },
   });
   assert.deepEqual(termsDifferences(spec), []);
-  const { terms: _terms, ...without } = wire();
+  // Without a summary only what was asked is compared.
+  const { summary: _summary, ...without } = wire();
   assert.deepEqual(termsDifferences(parseOperation(without)), []);
+  assert.deepEqual(termsDifferences(parseOperation(without), { order_id: "ord_other" }).length, 1);
 });
 
 test("the terms check points out a summary that says otherwise", () => {
@@ -281,7 +293,7 @@ test("the user is asked with the company, the summary and any difference", async
   const approval = await clientFor(surface).askUser(operation, { organization: SHOP, tenantId: "tenant", replaces: older });
   // When the user approved, by the host's clock (Operations 6); no input type was given.
   assert.equal(typeof approval.approved_at, "number");
-  assert.deepEqual(approval, { operation_id: operation.operation_id, revision: operation.revision, approved_at: approval.approved_at });
+  assert.deepEqual(approval, { operation_id: operation.operation_id, revision: operation.revision, approver: "user", approved_at: approval.approved_at });
   const [asked] = surface.asked;
   assert.deepEqual([asked.companyName, asked.companyDomain], ["Shop", "shop.example"]);
   assert.equal(asked.summary, operation.summary);
@@ -358,7 +370,7 @@ test("a revision past its expiry is not put to the user", async () => {
 
 // Sending the approval ------------------------------------------------------------------------
 
-const APPROVAL = { operation_id: "exc_5Rt2", revision: "1791487200-k3Jd9Qx2mW8v" };
+const APPROVAL = { operation_id: "exc_5Rt2", revision: "1791487200-k3Jd9Qx2mW8v", approver: "user" };
 const answer = (body, operation) => ({ status: operation === undefined ? 200 : 403, body, ...(operation === undefined ? {} : { operation }) });
 const unavailable = (retryAfter) =>
   new ApiError("temporarily_unavailable", "x", {

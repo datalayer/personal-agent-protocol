@@ -2,7 +2,8 @@
 #
 # BSD 3-Clause License
 
-"""Operations v2: the operation, the user's approval, the company's checks, at most once."""
+"""Operations version 3: the operation, its approval by the user or on the user's instruction,
+the company's checks and declines, at most once."""
 
 from __future__ import annotations
 
@@ -104,7 +105,16 @@ def test_the_fixture_is_an_operation_and_a_revision_is_opaque() -> None:
         "terms",
         "expires_at",
     }
-    assert "terms" not in returned(terms=None).model_dump(mode="json")
+    # `terms` are required and `summary` optional (Operations 3): absent, never null.
+    bare = returned(summary=None)
+    assert "summary" not in bare.model_dump(mode="json")
+    assert (
+        bare.shown
+        == "order_id: ord_7Hk2\nprice_difference.amount: 70.00\nprice_difference.currency: USD"
+    )
+    assert returned().shown == returned().summary
+    with pytest.raises(ValidationError):
+        returned(terms=None)
 
 
 @pytest.mark.parametrize(
@@ -150,13 +160,15 @@ def test_operation_from_each_interface() -> None:
 
 
 def test_a_message_with_only_an_approval_is_a_message_and_a_text_alone_approves_nothing() -> None:
-    approval = Approval(operation_id="exc_5Rt2", revision="r1")
+    approval = Approval(approver="user", operation_id="exc_5Rt2", revision="r1")
     message = Message(
         id="msg_1", author=Author(type="agent"), extensions=operations_content(approval=approval)
     )
     # The approval travels in `extensions.operations` (spec 8.4, Operations 2, 6).
     assert message.model_dump(mode="json", exclude_none=True)["extensions"] == {
-        "operations": {"approval": {"operation_id": "exc_5Rt2", "revision": "r1"}}
+        "operations": {
+            "approval": {"operation_id": "exc_5Rt2", "revision": "r1", "approver": "user"}
+        }
     }
     assert message.approval == approval and message.operation is None
     with pytest.raises(ValidationError):
@@ -182,14 +194,17 @@ def test_operations_are_used_only_when_both_sides_list_version_2() -> None:
             extensions=extensions,
         )
 
-    # The company lists version 2 and the Session declares it (Operations 2).
-    assert operations_negotiated(document("2"), session({"operations": "2"}))
-    assert operations_negotiated(document("1", "2"), session({"operations": "2"}))
-    assert not operations_negotiated(document("2"), session({}))
-    assert not operations_negotiated(document("1"), session({"operations": "2"}))
-    assert not operations_negotiated(document("2"), session({"operations": "1"}))
+    # The company lists version 3 and the Session declares it (Operations 2).
+    assert operations_negotiated(document("3"), session({"operations": "3"}))
+    assert operations_negotiated(document("2", "3"), session({"operations": "3"}))
+    assert not operations_negotiated(document("3"), session({}))
+    # Version 2 is another major version: it never counts, on either side.
+    assert not operations_negotiated(document("2"), session({"operations": "3"}))
+    assert not operations_negotiated(document("3"), session({"operations": "2"}))
+    assert not operations_negotiated(document("2"), session({"operations": "2"}))
+    assert negotiate_extensions(document("2").extensions) == {}
     # Negotiation picks the version this SDK implements from the company's list.
-    assert negotiate_extensions(document("1", "2").extensions) == {"operations": "2"}
+    assert negotiate_extensions(document("2", "3").extensions) == {"operations": "3"}
     assert negotiate_extensions(document("1").extensions) == {}
 
 
@@ -197,29 +212,32 @@ def test_operations_are_used_only_when_both_sides_list_version_2() -> None:
 
 
 def test_the_header_is_a_dictionary_with_two_strings() -> None:
-    approval = Approval(operation_id="exc_5Rt2", revision="1791487200-k3Jd9Qx2mW8v")
+    approval = Approval(
+        approver="user", operation_id="exc_5Rt2", revision="1791487200-k3Jd9Qx2mW8v"
+    )
     value = approval_header(approval)
-    assert value == 'operation_id="exc_5Rt2", revision="1791487200-k3Jd9Qx2mW8v"'
+    assert value == 'operation_id="exc_5Rt2", revision="1791487200-k3Jd9Qx2mW8v", approver="user"'
     assert parse_approval_header(value) == approval
 
 
 @pytest.mark.parametrize(
     "value",
     [
-        'operation_id="a", revision="b"',
-        'revision="b",operation_id="a"',
-        'operation_id="a",   revision="b"  ',
-        'later=1, operation_id="a", revision="b"',
-        'operation_id="a", revision="b", flag',
-        'operation_id="a", revision="b", flag=?0, n=1.5, t=tok/en, d=:aGk=:, at=@1659578233',
-        'operation_id="a";note="x", revision="b";a;b=2',
-        'operation_id="a", revision="b", list=(1 "two" tok);p=1, empty=()',
-        'operation_id="a", revision="b", display=%"caf%c3%a9"',
-        'operation_id="old", operation_id="a", revision="b"',  # the last one wins
+        'operation_id="a", revision="b", approver="user"',
+        'revision="b",approver="user",operation_id="a"',
+        'operation_id="a",   revision="b", approver="user"  ',
+        'later=1, operation_id="a", revision="b", approver="user"',
+        'operation_id="a", revision="b", approver="user", flag',
+        'operation_id="a", revision="b", approver="user", flag=?0, n=1.5, t=tok/en, d=:aGk=:, '
+        "at=@1659578233",
+        'operation_id="a";note="x", revision="b", approver="user";a;b=2',
+        'operation_id="a", revision="b", approver="user", list=(1 "two" tok);p=1, empty=()',
+        'operation_id="a", revision="b", approver="user", display=%"caf%c3%a9"',
+        'operation_id="old", operation_id="a", revision="b", approver="user"',  # the last one wins
     ],
 )
 def test_the_header_parses_as_a_dictionary_ignoring_unknown_members(value: str) -> None:
-    assert parse_approval_header(value) == Approval(operation_id="a", revision="b")
+    assert parse_approval_header(value) == Approval(approver="user", operation_id="a", revision="b")
 
 
 @pytest.mark.parametrize(
@@ -263,7 +281,11 @@ def test_the_terms_check_agrees_with_a_summary_that_says_the_same() -> None:
         },
     )
     assert terms_differences(spec) == ()
-    assert terms_differences(returned(terms=None)) == ()
+    # Without a summary there is only what was asked for to compare with.
+    assert terms_differences(returned(summary=None)) == ()
+    assert terms_differences(returned(summary=None), {"order_id": "ord_other"}) == (
+        "You asked for order_id ord_other; the terms say ord_7Hk2.",
+    )
 
 
 def test_the_terms_check_points_out_a_summary_that_says_otherwise() -> None:
@@ -297,6 +319,7 @@ async def test_the_user_is_asked_with_the_company_the_summary_and_any_difference
     # When the user approved, by the host's clock (Operations 6); no input type was given.
     assert approval.approved_at is not None and approval.input_type is None
     assert approval == Approval(
+        approver="user",
         operation_id=operation.operation_id,
         revision=operation.revision,
         approved_at=approval.approved_at,
@@ -367,7 +390,7 @@ async def test_a_revision_past_its_expiry_is_not_put_to_the_user() -> None:
 
 # Sending the approval -----------------------------------------------------------------------
 
-APPROVAL = Approval(operation_id="exc_5Rt2", revision="1791487200-k3Jd9Qx2mW8v")
+APPROVAL = Approval(approver="user", operation_id="exc_5Rt2", revision="1791487200-k3Jd9Qx2mW8v")
 
 
 def answer(body: object = None, operation: Operation | None = None) -> ApiResponse:
@@ -475,7 +498,9 @@ async def _ask(api: ApiClient, session: Any, token: Any, url: str = EXCHANGE) ->
 
 
 def _approval(operation: Operation) -> Approval:
-    return Approval(operation_id=operation.operation_id, revision=operation.revision)
+    return Approval(
+        approver="user", operation_id=operation.operation_id, revision=operation.revision
+    )
 
 
 @pytest.mark.asyncio
@@ -543,7 +568,9 @@ async def test_a_failed_check_3_answers_a_new_revision_never_the_one_named() -> 
     world, session, token, api = await _world()
     operation = await _ask(api, session, token)
     # A revision the company never returned; then one that expired.
-    forged = Approval(operation_id=operation.operation_id, revision="never_returned")
+    forged = Approval(
+        approver="user", operation_id=operation.operation_id, revision="never_returned"
+    )
     first = await api.call("POST", EXCHANGE, session=session, token=token, body={}, approval=forged)
     assert first.operation == operation  # still the latest: not the one named
     world.clock.advance(16 * 60)
@@ -828,7 +855,9 @@ async def test_an_operation_returned_signed_out_is_approved_in_any_signed_out_se
             from personal_agent_protocol.company import ApiResult
 
             return ApiResult(
-                operation=ProposedOperation(action="orders.note", summary="Add a note.")
+                operation=ProposedOperation(
+                    action="orders.note", summary="Add a note.", terms={"note": "Add a note."}
+                )
             )
 
     world.shop.reactor.register_plugin(
@@ -851,7 +880,7 @@ async def test_an_operation_returned_signed_out_is_approved_in_any_signed_out_se
         assert signed.operation.operation_id != operation.operation_id
         assert performed == []
         # The Session that returned it ends: another signed-out Session of theirs approves it.
-        assert await world.shop.end_session(session.client_id, session.sid)
+        assert await world.shop.end_session(session.client_id, session.sid, session.sub)
         done = await api.call("POST", url, session=other, body={}, approval=_approval(operation))
         assert done.status == 200 and performed == [operation.operation_id]
     finally:
@@ -938,7 +967,7 @@ async def test_a_tool_returns_an_error_result_and_the_same_call_with_the_approva
     client = await _mcp(world, session)
     asked = await client.call_tool("exchange_jacket")
     assert asked.is_error and asked.operation is not None
-    assert asked.text.startswith("Not done yet. This needs the user's approval:")
+    assert asked.text.startswith("Not done yet. This needs approval:")
     assert asked.structured_content == {"operation": asked.operation.model_dump(mode="json")}
     done = await client.call_tool("exchange_jacket", approval=_approval(asked.operation))
     assert not done.is_error and done.text.startswith("Exchanged the Ridge Jacket")
@@ -1099,7 +1128,9 @@ async def test_a_failed_check_in_a_conversation_is_a_message_with_a_new_revision
         id=world.message("x").id,
         author=Author(type="agent"),
         extensions=operations_content(
-            approval=Approval(operation_id=operation.operation_id, revision="never_returned")
+            approval=Approval(
+                approver="user", operation_id=operation.operation_id, revision="never_returned"
+            )
         ),
     )
     page = await world.conversations.send(
@@ -1177,7 +1208,7 @@ def test_the_default_expiry_leaves_the_user_fifteen_minutes() -> None:
 
 def test_the_discovery_entry_has_a_version_and_no_endpoint() -> None:
     world = World()
-    assert world.shop.discovery_document()["extensions"]["operations"] == [{"version": "2"}]
+    assert world.shop.discovery_document()["extensions"]["operations"] == [{"version": "3"}]
 
 
 def test_an_old_extension_entry_is_not_this_version() -> None:
@@ -1187,7 +1218,7 @@ def test_an_old_extension_entry_is_not_this_version() -> None:
     # Nothing of the extensions is in the client metadata (§3.4): the agent declares what it
     # implements per Session, with a company that lists it.
     assert "extensions" not in identity.metadata
-    assert identity.supported_extensions == {"operations": "2"}
+    assert identity.supported_extensions == {"operations": "3"}
 
 
 @pytest.mark.asyncio

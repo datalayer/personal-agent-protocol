@@ -303,7 +303,8 @@ def _scopes(scope: list[str] | None, company: DiscoveredCompany, kind: str) -> t
         mediated = mediated_sign_in(company)
         offered = tuple(mediated.scopes) if mediated else ()
     else:
-        offered = tuple(metadata.scopes_supported or ()) if metadata else ()
+        # The issuer's list, the domain's protected resource metadata's, or both (§4.7).
+        offered = company.scopes_supported if metadata else ()
     if not scope:
         listed = ", ".join(offered) or "none listed"
         raise NotConfiguredError(
@@ -369,7 +370,19 @@ async def _send_approval(
     """Send the request that returned the operation again, with the user's approval."""
 
     held = await credentials(runtime, record)
-    approval = Approval.model_validate({key: approved[key] for key in ("operation_id", "revision")})
+    approval = Approval.model_validate(
+        {
+            key: approved.get(key)
+            for key in (
+                "operation_id",
+                "revision",
+                "approver",
+                "approved_at",
+                "input_type",
+                "reference",
+            )
+        }
+    )
     client = OperationsClient(reactor=runtime.reactor)
     if saved["kind"] == "api":
         api = ApiClient(
@@ -661,7 +674,6 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 scopes=_scopes(scope, company, "device"),
                 tenant_id=record.tenant_id,
                 organization=company.document.organization,
-                protected_resources=metadata.protected_resources,
                 dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
                 pairwise_user_id=record.pairwise_user_id,
             )
@@ -1064,6 +1076,8 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                     tenant_id=runtime.tenant_id,
                     replaces=replaces,
                     surface=None if contributed is not None else TerminalApproval(),
+                    input_type=None if contributed is not None else "typed",
+                    reference=OperationsClient(reactor=runtime.reactor).new_reference(),
                 )
             except OperationError as error:
                 raise NotApprovedError(error.code, "The user did not approve") from error

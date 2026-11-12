@@ -13,8 +13,9 @@ controls each party needs to make and enforce its own policy.
 The personal agent fetches `https://{domain}/.well-known/poppy.json`. The
 document identifies the company and advertises any supported website, OpenAPI
 or MCP APIs, company-agent protocols, Mediated Sign-In, the company's own
-scopes (`auth.scopes`, with `auth.scope_hints`), the tasks it doesn't offer
-(`excluded_tasks`), and extensions.
+scopes (`auth.scopes`, with `auth.scope_hints`), where to ask, per Session, for
+the tasks it doesn't offer, its skills and its feedback endpoint
+(`tasks.endpoint`), and extensions.
 
 Discovery is a trust bootstrap, not ordinary JSON fetching. A redirect may go
 to another host, but the document is used only when the final URL's path is
@@ -148,4 +149,4 @@ excluded tasks and feedback, and extensions.
 
 Continue with the [personal-agent guide](/guides/personal-agent/), the
 [company guide](/guides/company/), or the upstream
-[draft specification](https://personalagentprotocol.org/docs/spec).
+[specification](https://personalagentprotocol.org/docs/0.4/spec).

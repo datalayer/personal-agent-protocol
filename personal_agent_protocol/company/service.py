@@ -10,7 +10,7 @@ over plain ASGI). Every part a company would replace is a Reactor
 contribution (`points`): its store, accounts, agent, operation executors,
 client policy and resolver, and replay cache.
 
-What it implements of 0.3 as published (upstream 2289293) and Operations v2:
+What it implements of 0.4 as published (upstream 4803900) and Operations version 3:
 
 - Discovery (`/.well-known/poppy.json`), the domain's protected resource
   metadata naming the issuer (`/.well-known/oauth-protected-resource`), and
@@ -34,7 +34,8 @@ What it implements of 0.3 as published (upstream 2289293) and Operations v2:
   closing; a conversation that is not yours is `conversation_not_found`.
   Once a conversation is handed to the company's people, one of them
   answers in it (`staff_reply`), over the last event they read.
-- Operations v2, at no endpoint of their own: a request for an action that needs
+- Operations version 3, at no endpoint of their own (operations on websites are not
+  served): a request for an action that needs
   approval is refused with the operation (`403 approval_required`, an MCP error
   result, a company message), and the same request with the approval
   (`Poppy-Approval`, `_meta`, a message's `approval`) is checked in the extension's
@@ -102,6 +103,7 @@ from ..models import (
     REFRESH_TOKEN_GRANT,
     SKILL_INDEX_SCHEMA,
     Approval,
+    ApprovalDeclined,
     Author,
     ClientMetadata,
     ConversationEvent,
@@ -118,6 +120,7 @@ from ..models import (
 )
 from ..operations import (
     ACTION_FAILED,
+    APPROVAL_DECLINED,
     APPROVAL_HEADER,
     OPERATIONS_EXTENSION,
     OPERATIONS_VERSION,
@@ -171,6 +174,8 @@ from .points import (
     CompanyAgent,
     CompanyApi,
     CompanyMcp,
+    Decline,
+    DeclineRequest,
     OperationExecutor,
     OperationFailed,
     OperationOutcomeUnknown,
@@ -399,6 +404,9 @@ class CompanyConfig:
     #: ends as soon as both copies have been used. Off by default.
     refresh_reuse_revokes: bool = False
     operation_lifetime: timedelta = timedelta(minutes=15)
+    #: The company's own decision on an approval that passed its checks (Operations 6):
+    #: return a `Decline` to perform nothing, or `None` to act on it. Off by default.
+    decline: Callable[[DeclineRequest], Decline | None] | None = None
     device_interval: int = 5
     max_code_attempts: int = 3
     #: Failed Mediated Sign-In attempts (credentials or codes) a key may make before it
@@ -548,9 +556,11 @@ class CompanyConfig:
             raise ValueError("consent_page must contain {request_id}")
         if self.device_page is not None:
             host = (urlsplit(self.device_page).hostname or "").lower()
-            if not any(host == d or host.endswith(f".{d}") for d in (self.domain, *self.aliases)):
-                # A personal agent shows the link only on the issuer's host or the host of
-                # one of its protected_resources, or a subdomain of either (§4.6).
+            if not (host == self.domain or host.endswith(f".{self.domain}")):
+                # A personal agent shows the link only on the issuer's host or
+                # `organization.domain`, or a subdomain of either (§4.3). The issuer is on
+                # `domain`, and an agent that found the company at an alias knows only that
+                # alias as its domain, so a page on another alias would be refused.
                 raise ValueError("device_page must be on the company's domain or a subdomain")
         if any(scope not in self.scopes for scope in self.write_scopes):
             raise ValueError("write_scopes must be among scopes")
@@ -713,8 +723,17 @@ class CompanyConfig:
         return f"{self.base}/poppy/browser-session"
 
     @property
-    def excluded_tasks_url(self) -> str:
-        return f"{self.base}/poppy/excluded-tasks.json"
+    def tasks_endpoint(self) -> str:
+        """Where the tasks response is served, per Session (§9); a skill's `url` resolves
+        against it."""
+
+        return f"{self.base}/poppy/tasks"
+
+    @property
+    def serves_tasks(self) -> bool:
+        """Whether there is anything to say there: excluded tasks, skills, or feedback."""
+
+        return bool(self.excluded_tasks or self.skills or self.feedback)
 
     @property
     def feedback_endpoint(self) -> str:
@@ -743,7 +762,7 @@ class CompanyResponse:
 class CallerSession:
     """Who a verified request is from (§5.3): its Session, and its account when signed in.
 
-    `session_key` names the Session in the store (`client_id` and `sid`). `account_id`,
+    `session_key` names the Session in the store (`client_id`, `sid` and User ID). `account_id`,
     `scopes`, `family` and `resource` are the access token's, for this request only:
     a Session is signed in on each request that carries one (§5.4).
     """
@@ -804,8 +823,8 @@ class _Asked:
     action: str
     #: The `OperationProposal` key: requests with the same one are the same operation.
     key: str
-    summary: str
-    terms: dict[str, Any] | None
+    summary: str | None
+    terms: dict[str, Any]
     scopes: tuple[str, ...]
     #: The request's fingerprint, and what the action said for it.
     request: str
@@ -817,11 +836,14 @@ class _Decision:
     """What an operation's request comes to, whichever interface it came through.
 
     `operation`: ask for approval of this revision. `outcome`: it was performed, the
-    response as it would have been without operations. Neither: it is being performed.
+    response as it would have been without operations. `declined`: the approval passed
+    the checks and the company will not act on it; nothing was performed or recorded.
+    None of them: it is being performed.
     """
 
     operation: Operation | None = None
     outcome: OperationOutcome | None = None
+    declined: ApprovalDeclined | None = None
 
 
 class StaleConversationError(ValueError):
@@ -981,6 +1003,27 @@ def _json_object(body: bytes) -> dict[str, Any]:
 
 def _digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def connect_heading(agent: str, company: str) -> str:
+    """The heading of a company's sign-in and consent pages (§10.8; guides, consent pages):
+    it names the personal agent and says it wants to connect, never "Sign in with …",
+    which reads as signing in with an account at the agent."""
+
+    return f"{agent} wants to connect to your {company} account"
+
+
+def connect_caution(agent: str) -> str:
+    """What those pages tell the person before they go on: anyone can start a sign-in and
+    send the link, and nothing in the request says who did (§10.8)."""
+
+    return f"Only continue if you asked {agent} to do this just now."
+
+
+def _session_key(client_id: str, sid: str, pairwise_user_id: str) -> str:
+    """A Session's record key: `client_id`, `sid` and User ID together (§5.3, §5.5)."""
+
+    return _composite(client_id, sid, pairwise_user_id)
 
 
 def _composite(*parts: str) -> str:
@@ -1248,16 +1291,10 @@ class CompanyService:
                 return await self._browser_session(request)
             if method == "POST" and path == "/poppy/browser-session/authorize" and self.config.web:
                 return await self._authorize_join(request)
-            if (
-                method == "GET"
-                and path == "/poppy/excluded-tasks.json"
-                and self.config.excluded_tasks
-            ):
-                return CompanyResponse(
-                    200, {"tasks": [dict(task) for task in self.config.excluded_tasks]}
-                )
+            if method == "GET" and path == "/poppy/tasks" and self.config.serves_tasks:
+                return await self._tasks(request)
             if method == "GET" and path.startswith("/poppy/skills/"):
-                # A skill's artifact (§9.4): public, as poppy.json is.
+                # A skill's artifact (§9.4): public, fetched with no credential.
                 for name, _, text in self.config.skills:
                     if path == f"/poppy/skills/{name}/SKILL.md":
                         return CompanyResponse(
@@ -1485,10 +1522,9 @@ class CompanyService:
             document["web"] = web
         elif config.web_disabled:
             document["web"] = {"disabled": True}
-        if config.feedback:
-            document["feedback"] = {"endpoint": config.feedback_endpoint}
-        if config.excluded_tasks:
-            document["excluded_tasks"] = {"url": config.excluded_tasks_url}
+        if config.serves_tasks:
+            # Excluded tasks, skills and the feedback endpoint are served per Session (§9).
+            document["tasks"] = {"endpoint": config.tasks_endpoint}
         # Each extension a list, one entry per version the company supports (§3.3).
         extensions: dict[str, Any] = {}
         if config.operations:
@@ -1512,9 +1548,18 @@ class CompanyService:
             ]
         if extensions:
             document["extensions"] = extensions
+        return document
+
+    def tasks_document(self) -> dict[str, Any]:
+        """The tasks response (§9): the excluded tasks, the pinned Agent Skills discovery
+        index with absolute URLs (§9.4), and the feedback endpoint. The same for every
+        Session of this company."""
+
+        config = self.config
+        document: dict[str, Any] = {}
+        if config.excluded_tasks:
+            document["excluded_tasks"] = [dict(task) for task in config.excluded_tasks]
         if config.skills:
-            # The pinned Agent Skills discovery index, embedded (§9.4): absolute URLs, so the
-            # entries read the same from a separate well-known index.
             document["skill_index"] = {
                 "$schema": SKILL_INDEX_SCHEMA,
                 "skills": [
@@ -1528,7 +1573,23 @@ class CompanyService:
                     for name, description, text in config.skills
                 ],
             }
+        if config.feedback:
+            document["feedback"] = {"endpoint": config.feedback_endpoint}
         return document
+
+    async def _tasks(self, request: CompanyRequest) -> CompanyResponse:
+        """`GET /poppy/tasks` (§9): the Session header verified, as at any endpoint.
+
+        The response says what the company offers, not what an account holds, so the
+        Session is never signed in here. It is the same for every Session, and marked
+        `private` all the same: the reference never lets a shared cache hand one
+        Session's response to another, which a company that varies it MUST ensure.
+        """
+
+        await self._caller(request)
+        return CompanyResponse(
+            200, self.tasks_document(), headers={"Cache-Control": "private, max-age=300"}
+        )
 
     def domain_resource_metadata(self, domain: str | None = None) -> dict[str, Any]:
         """RFC 9728 metadata of `https://{domain}`, naming the issuer (§3.2).
@@ -1607,6 +1668,9 @@ class CompanyService:
             grants.append(MEDIATED_GRANT)
         if config.dpop_binding != "off":
             metadata["dpop_signing_alg_values_supported"] = [DPOP_ALGORITHM]
+        # The issuer reads client ID metadata documents (§4.1): said for other clients,
+        # such as MCP clients, as the CIMD draft's §8 defines (guides).
+        metadata["client_id_metadata_document_supported"] = True
         return metadata
 
     # OAuth -------------------------------------------------------------------------
@@ -1979,6 +2043,44 @@ class CompanyService:
         if changed is None:
             raise KeyError("unknown or already approved user code")
         return changed[1].granted
+
+    async def device_request(self, user_code: str) -> dict[str, Any]:
+        """A pending Device Sign-In request, for the company's verification page to show;
+        not consumed.
+
+        Who asks (the agent's `client_name` and its `client_id` domain), with the
+        `heading` and `caution` the page starts with (§10.8), and for what. Raises
+        `KeyError` for an unknown, expired, approved or denied code.
+        """
+
+        pointer = await self._read(USER_CODE, user_code, UserCode.from_json)
+        pending = (
+            None
+            if pointer is None
+            else await self._read(DEVICE, pointer.device, PendingDevice.from_json)
+        )
+        if (
+            pending is None
+            or pending.account_id is not None
+            or pending.denied
+            or self._now() >= pending.expires_at
+        ):
+            raise KeyError("unknown, used, or expired user code")
+        resolver = cast(
+            ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client resolver")
+        )
+        metadata, _ = await resolver.resolve(pending.client_id)
+        return {
+            "client_name": metadata.client_name,
+            "client_domain": urlsplit(pending.client_id).hostname or "",
+            "heading": connect_heading(metadata.client_name, self.config.name),
+            "caution": connect_caution(metadata.client_name),
+            "scopes": [
+                {"scope": scope, "description": self.config.describe(scope)}
+                for scope in pending.scopes
+            ],
+            "expires_at": pending.expires_at.isoformat().replace("+00:00", "Z"),
+        }
 
     async def deny_device(self, user_code: str) -> None:
         pointer = await self._read(USER_CODE, user_code, UserCode.from_json)
@@ -2414,9 +2516,14 @@ class CompanyService:
         described = "".join(
             f"<li>{html.escape(self.config.describe(scope))}</li>" for scope in scopes
         )
+        company = html.escape(self.config.name)
+        # The heading names the agent and says it wants to connect, never "Sign in with",
+        # and the page says to go on only if the person just asked it to (§10.8; guides,
+        # consent pages): anyone can start a sign-in and send someone else the link.
         return self._page(
             200,
-            f"<h1>{html.escape(self.config.name)}</h1>"
+            f"<h1>{agent} wants to connect to your {company} account</h1>"
+            f"<p>Only continue if you asked {agent} to do this just now.</p>"
             f"<p><strong>{agent}</strong> ({agent_domain}) asks to:</p><ul>{described}</ul>"
             f'<form method="post" action="{self.config.authorization_endpoint}" '
             f'data-request-id="{request_id}">'
@@ -2475,6 +2582,9 @@ class CompanyService:
             "request_id": request_id,
             "client_name": pending.client_name,
             "client_domain": urlsplit(pending.client_id).hostname or "",
+            # What the page starts with and says before the person goes on (§10.8).
+            "heading": connect_heading(pending.client_name, self.config.name),
+            "caution": connect_caution(pending.client_name),
             "scopes": [
                 {"scope": scope, "description": self.config.describe(scope)}
                 for scope in pending.scopes
@@ -2580,7 +2690,7 @@ class CompanyService:
         if cookie is not None:
             headers["Set-Cookie"] = cookie
         return CompanyResponse(
-            status, f"<!doctype html><meta charset=utf-8><title>Sign in</title>{body}", headers
+            status, f"<!doctype html><meta charset=utf-8><title>Connect</title>{body}", headers
         )
 
     # OpenAPI API (§6, Operations 4, 6) -----------------------------------------------------
@@ -2689,19 +2799,9 @@ class CompanyService:
                 raise _needs_account(session.account_id, str(body.get("scope", "")).split(" "))
             return CompanyResponse(result.status, result.body)
         if not negotiated:
-            # At an API, in the WWW-Authenticate challenge with its `extension` (§3.3, §7).
-            raise _RefusedError(
-                403,
-                "extension_required",
-                headers={
-                    "WWW-Authenticate": _challenges(
-                        self.config.token_schemes,
-                        "extension_required",
-                        {"extension": "operations"},
-                    )
-                },
-                extension="operations",
-            )
+            # In a JSON body at an API too: not an access token error, so never in a
+            # `WWW-Authenticate` challenge (§3.3, §7).
+            raise _RefusedError(403, "extension_required", extension="operations")
         # What the request means, not its bytes: the query's pairs in order, the body's JSON
         # whatever its members' order; other headers are free (Operations 6).
         query = sorted(parse_qsl(urlsplit(request.url).query, keep_blank_values=True))
@@ -2716,6 +2816,13 @@ class CompanyService:
         if decision.operation is not None:
             return _json_error(
                 403, "approval_required", operation=decision.operation.model_dump(mode="json")
+            )
+        if decision.declined is not None:
+            # Like `approval_required`: a JSON body, never a challenge (Operations 6).
+            return _json_error(
+                403,
+                APPROVAL_DECLINED,
+                **decision.declined.model_dump(mode="json", exclude_none=True),
             )
         outcome = decision.outcome
         if outcome is None:
@@ -2885,14 +2992,16 @@ class CompanyService:
         return f"{self.config.base}/.well-known/oauth-protected-resource"
 
     async def _session(self, verified: Any) -> str:
-        """The Session by `client_id` and `sid`: started when unknown, checked when known (§5.3).
+        """The Session by `client_id`, `sid` and User ID: started when the combination is
+        unknown, continued when known (§5.3).
 
-        A known Session keeps its User ID and Agent ID, or it is `invalid_session`
-        (§5.2, §5.3); one that has ended, and is still remembered, is `session_ended`
-        (§5.5), so the agent starts a new Session and sends the request again.
+        A known `sid` with another User ID is another Session, started signed out; the
+        Agent ID is the one the Session started with and is not checked again. One that
+        has ended, and is still remembered, is `session_ended` (§5.5), so the agent starts
+        a new Session and sends the request again.
         """
 
-        key = _composite(verified.client_id, verified.sid)
+        key = _session_key(verified.client_id, verified.sid, verified.sub)
         now = self._now()
         for _ in range(_CAS_ATTEMPTS):
             known = await self._read(SESSION, key, StoredSession.from_json)
@@ -2915,19 +3024,17 @@ class CompanyService:
                 continue
             if known.ended or now >= known.ends_at:
                 raise SessionError("session_ended", "The Session has ended", status_code=400)
-            if (known.pairwise_user_id, known.agent_id) != (verified.sub, verified.agent_id):
-                # A Session keeps its User ID and Agent ID, or none, for its life (§5.2).
-                raise SessionError("invalid_session", "Another User's Session", status_code=400)
             return key
         raise _RefusedError(503, "temporarily_unavailable")
 
-    async def end_session(self, client_id: str, sid: str) -> bool:
-        """The company ends a Session: requests naming its `sid` get `session_ended` (§5.5).
+    async def end_session(self, client_id: str, sid: str, pairwise_user_id: str) -> bool:
+        """The company ends a Session, found by `client_id`, `sid` and User ID as §5.3 finds
+        it: requests naming it get `session_ended` (§5.5).
 
         Remembered for `ended_session_memory`. Returns whether a Session was ended.
         """
 
-        key = _composite(client_id, sid)
+        key = _session_key(client_id, sid, pairwise_user_id)
         changed = await self._change(
             SESSION,
             key,
@@ -3709,6 +3816,10 @@ class CompanyService:
         if decision.operation is not None:
             reply["text"] = "That approval doesn't cover these terms. Here they are to approve."
             reply["extensions"] = operations_content(operation=decision.operation)
+        elif decision.declined is not None:
+            # Said in a later message, the members without `error` (Operations 6).
+            reply["text"] = decision.declined.reason or "I can't act on that approval."
+            reply["extensions"] = operations_content(declined=decision.declined)
         elif decision.outcome is None:
             reply["text"] = "This is still being done. I'll say how it went here."
         else:
@@ -3957,8 +4068,8 @@ class CompanyService:
     def _asked(self, session: CallerSession, proposal: ProposedOperation, request: str) -> _Asked:
         """What a request asks for: one action of one account, or of the agent and User signed out.
 
-        Its terms are `terms` when the action gives them, else the `summary`: a `summary`
-        reworded without changing the terms keeps the revision (Operations 3).
+        Its terms are `terms`, which every operation has: a `summary` reworded without
+        changing them keeps the revision (Operations 3).
         """
 
         scopes = tuple(proposal.scopes) or self.config.write_scopes
@@ -3977,7 +4088,7 @@ class CompanyService:
             terms=proposal.terms,
             scopes=scopes,
             request=request,
-            digest=_fingerprint(proposal.terms if proposal.terms is not None else proposal.summary),
+            digest=_fingerprint(proposal.terms),
         )
 
     async def _approval_target(
@@ -4046,7 +4157,12 @@ class CompanyService:
                 (item for item in target.revisions if item.revision == approval.revision), None
             )
             if self._approves(target, revision, asked):
-                return await self._perform(target, cast(OperationRevision, revision))
+                approved = cast(OperationRevision, revision)
+                declined = self._declined(target, approved, approval)
+                if declined is not None:
+                    # Nothing performed, no new operation, the approval not recorded.
+                    return _Decision(declined=declined)
+                return await self._perform(target, approved, approval)
         current = target if target is not None and target.key == asked.key else None
         if current is None or current.status != "open":
             current = await self._open_operation(asked.key)
@@ -4115,16 +4231,57 @@ class CompanyService:
         await self.store.put(PROPOSAL, asked.key, OperationProposal(stored.operation_id).to_json())
         return stored.operation
 
-    async def _perform(self, target: StoredOperation, revision: OperationRevision) -> _Decision:
-        """The one compare-and-set from `open` to `performing`: only its winner performs."""
+    def _declined(
+        self, target: StoredOperation, revision: OperationRevision, approval: Approval
+    ) -> ApprovalDeclined | None:
+        """The company's own decision on an approval that passed the checks (Operations 6):
+        `CompanyConfig.decline` says no with a `Decline`, for its own reasons, such as the
+        `approver`. An optional member that is missing, or an unknown `input_type`, is
+        never a reason: the hook is not asked about them."""
+
+        if self.config.decline is None:
+            return None
+        decline = self.config.decline(
+            DeclineRequest(
+                action=target.action,
+                operation=target.revision(revision),
+                approval=approval,
+                account_id=target.account_id,
+            )
+        )
+        if decline is None:
+            return None
+        return ApprovalDeclined.model_validate(
+            {
+                "operation_id": target.operation_id,
+                "revision": revision.revision,
+                "reason": decline.reason,
+                "alternative": None if decline.alternative is None else dict(decline.alternative),
+            }
+        )
+
+    async def _perform(
+        self, target: StoredOperation, revision: OperationRevision, approval: Approval
+    ) -> _Decision:
+        """The one compare-and-set from `open` to `performing`: only its winner performs.
+
+        The record keeps what the personal agent stated with the approval: who approved,
+        and any `approved_at`, `input_type` and `reference` (Operations 6, 8.1)."""
 
         approved_at = self._now()
+        stated = approval.model_dump(
+            mode="json", include={"approver", "approved_at", "input_type", "reference"}
+        )
 
         def claim(current: StoredOperation) -> StoredOperation:
             if current.status != "open":
                 return current
             return replace(
-                current, status="performing", approved=revision.revision, approved_at=approved_at
+                current,
+                status="performing",
+                approved=revision.revision,
+                approved_at=approved_at,
+                approval={key: value for key, value in stated.items() if value is not None},
             )
 
         changed = await self._change(
@@ -4177,7 +4334,9 @@ class CompanyService:
             raise KeyError(operation_id)
         return stored
 
-    async def revise(self, operation_id: str, *, summary: str, terms: dict[str, Any]) -> Operation:
+    async def revise(
+        self, operation_id: str, *, terms: dict[str, Any], summary: str | None = None
+    ) -> Operation:
         """The company changes an operation's terms: a new revision, earlier ones withdrawn."""
 
         def revise(stored: StoredOperation) -> StoredOperation:
@@ -4548,11 +4707,25 @@ class CompanyService:
                 "content": [
                     {
                         "type": "text",
-                        "text": "Not done yet. This needs the user's approval: "
-                        f"{operation.summary}",
+                        "text": f"Not done yet. This needs approval: {operation.shown}",
                     }
                 ],
                 "structuredContent": {"operation": operation.model_dump(mode="json")},
+            }
+        if decision.declined is not None:
+            declined = decision.declined
+            return {
+                "isError": True,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": declined.reason or "Not done: the approval was declined.",
+                    }
+                ],
+                "structuredContent": {
+                    "error": APPROVAL_DECLINED,
+                    **declined.model_dump(mode="json", exclude_none=True),
+                },
             }
         if outcome is None:
             return _json_error(
@@ -4695,6 +4868,44 @@ class CompanyService:
             },
         )
 
+    async def page_session(self, request: CompanyRequest) -> CallerSession | CompanyResponse | None:
+        """The Session of a website page fetched without a browser (§5.2), for the
+        company's own pages on the host that serves its poppy.json.
+
+        `None` when the request carries no Session header: an ordinary visitor, or a
+        browser, which carries the join's cookie instead (`web_session`). With the header,
+        the checks of §5.3: the caller's Session, always signed out, even when a browser
+        joined to it is signed in, since these fetches never carry an access token (one
+        sent anyway is ignored, so a Session JWT with `ath` fails); or, when a check
+        fails, the response to send, `invalid_session` (HTTP 400, a JSON body) as at any
+        endpoint, so the personal agent learns of the mistake in its header.
+        """
+
+        if SESSION_HEADER.lower() not in request.headers:
+            return None
+        signed_out = replace(
+            request,
+            headers={
+                name: value
+                for name, value in request.headers.items()
+                if name not in {"authorization", "dpop"}
+            },
+        )
+        try:
+            _, session = await self._caller(signed_out)
+        except _RefusedError as refused:
+            return _json_error(
+                refused.status,
+                refused.error,
+                refused.headers,
+                schemes=self.config.token_schemes,
+                **refused.extra,
+            )
+        except (SessionError, ProofError) as error:
+            known = {"invalid_session", "session_ended"}
+            return _json_error(400, error.code if error.code in known else "invalid_session")
+        return session
+
     async def web_session(self, cookie: str | None) -> CallerSession | None:
         """The Session a browser's cookie stands for, as it is now, for the company's pages (§6).
 
@@ -4706,7 +4917,7 @@ class CompanyService:
         joined = await self._read(BROWSER_COOKIE, _digest(cookie), WebSession.from_json)
         if joined is None:
             return None
-        key = _composite(joined.client_id, joined.sid)
+        key = _session_key(joined.client_id, joined.sid, joined.pairwise_user_id)
         stored = await self._read(SESSION, key, StoredSession.from_json)
         if stored is None or stored.ended or self._now() >= stored.ends_at:
             # The cookie does not outlive the Session.

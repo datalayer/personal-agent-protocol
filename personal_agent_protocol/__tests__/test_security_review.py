@@ -175,7 +175,6 @@ async def test_finding_1_device_sign_in_after_an_mcp_token_issues_the_default_to
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=md.protected_resources,  # type: ignore[union-attr]
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -261,7 +260,6 @@ async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=md.protected_resources,  # type: ignore[union-attr]
     )
     await world.shop.approve_device(started.user_code, account_id="acct_ada")
     world.clock.advance(started.poll_interval)
@@ -303,6 +301,7 @@ async def test_finding_5_an_operation_records_and_requires_its_scopes() -> None:
                         "approval": {
                             "operation_id": proposal.operation_id,
                             "revision": proposal.revision,
+                            "approver": "user",
                         }
                     }
                 },

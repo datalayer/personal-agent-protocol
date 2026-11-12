@@ -16,13 +16,11 @@ import {
   listsResource,
   needsIssuer,
   parseDiscoveryDocument,
-  parseExcludedTasks,
   parseOAuthServerMetadata,
   parseProtectedResourceMetadata,
   protectedResourceMetadataUrl,
   type DiscoveredCompany,
   type DiscoveryDocument,
-  type ExcludedTasks,
   type SkillEntry,
   type ProtectedResourceMetadata,
 } from "./models.js";
@@ -205,7 +203,8 @@ async function fetchBytes(
 /**
  * The artifact of one of a Company's skills, its `digest` verified (§9.4).
  *
- * `skill` is one of `companySkills(company)`: its `url` is resolved and HTTPS, and it is fetched
+ * `skill` is one of `SessionTasks.skills`, from the Session's tasks response: its `url` is
+ * resolved against `tasks.endpoint` and HTTPS, and it is fetched
  * as other public metadata is, through the URL safety policy, redirects included, with no
  * credential and no Session header, at most `maxSkillBytes`. The bytes are the artifact as
  * published: the `SKILL.md` of a `skill-md` entry, or an archive, whose extraction, with the
@@ -546,30 +545,4 @@ export async function serviceMetadata(
     );
   }
   return metadata;
-}
-
-/**
- * The tasks the company chose not to offer through the protocol (§8.1).
- *
- * A public document: a GET with no token, cached as its headers allow. `undefined` when
- * the company lists none. Read it before starting on a task there; whether a user's task
- * is one of them is the agent's judgment.
- */
-export async function excludedTasks(
-  company: DiscoveredCompany,
-  options: DiscoveryOptions = {},
-): Promise<ExcludedTasks | undefined> {
-  const descriptor = company.document.excluded_tasks;
-  if (descriptor === undefined) return undefined;
-  const { read } = readOptions(options);
-  const fetched = await readJson(new URL(descriptor.url), read);
-  try {
-    return parseExcludedTasks(fetched.value);
-  } catch (cause) {
-    throw new ProtocolValidationError(
-      "invalid_excluded_tasks",
-      "The excluded tasks document failed validation",
-      { cause },
-    );
-  }
 }

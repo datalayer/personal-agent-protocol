@@ -30,14 +30,13 @@ from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from .models import ExtensionDescriptor
-from .refusals import challenge_parameters
 
 #: The header the Personal Agent declares the extensions it uses in (§3.4).
 EXTENSIONS_HEADER = "Poppy-Extensions"
 
 #: Extensions this SDK implements, by name and major version.
 SUPPORTED_EXTENSIONS: Mapping[str, str] = {
-    "operations": "2",
+    "operations": "3",
     "mediated-sign-in": "1",
     "links": "1",
     "disclosures": "1",
@@ -158,22 +157,18 @@ def parse_extensions_header(  # noqa: C901 - one branch per RFC 9651 production
         position = comma.end()
 
 
-def extension_required(
-    status_code: int, payload: object, www_authenticate: str | None = None
-) -> str | None:
+def extension_required(status_code: int, payload: object) -> str | None:
     """The extension a `403 extension_required` names, else `None` (§3.3).
 
-    In the JSON body at the endpoints the protocol or an extension defines, such as
-    conversations; in the `WWW-Authenticate` challenge's `extension` attribute at an
-    API. The token endpoint returns none: extensions are declared per request, and
-    one with its own grant type is recognized from the request.
+    In the JSON body, at APIs as at the endpoints the protocol or an extension defines:
+    it is not an access token error, so a `WWW-Authenticate` challenge never carries it
+    and none is read for it (§7). The token endpoint returns none: extensions are
+    declared per request, and one with its own grant type is recognized from the request.
     """
 
     if status_code != 403:
         return None
     values: dict[str, object] = dict(payload) if isinstance(payload, dict) else {}
-    if values.get("error") != "extension_required" and www_authenticate:
-        values = dict(challenge_parameters(www_authenticate))
     if values.get("error") != "extension_required":
         return None
     name = values.get("extension")

@@ -34,9 +34,9 @@ const example = JSON.parse(
 );
 
 test("the Python SDK's display is an operation to approve, its text said the same", () => {
-  assert.equal(PAP_CONFIRM_VERSION, 2);
+  assert.equal(PAP_CONFIRM_VERSION, 3);
   assert.equal(example.type, PAP_CONFIRM_TYPE);
-  assert.equal(example.version, 2);
+  assert.equal(example.version, 3);
   assert.ok(isPapConfirm(example));
   assert.equal(papConfirmText(example.data), example.text);
   assert.deepEqual(papConfirmDisplay(example.id, example.data), example);
@@ -45,8 +45,8 @@ test("the Python SDK's display is an operation to approve, its text said the sam
 test("another type, another version, or data that says less or other is not one", () => {
   const changed = (data) => ({ ...example, data: { ...example.data, ...data } });
   assert.equal(isPapConfirm({ ...example, type: "application/vnd.datalayer.pap.sign-in+json" }), false);
-  assert.equal(isPapConfirm({ ...example, version: 1 }), false);
-  assert.equal(isPapConfirm({ ...example, version: 3 }), false);
+  assert.equal(isPapConfirm({ ...example, version: 2 }), false);
+  assert.equal(isPapConfirm({ ...example, version: 4 }), false);
   for (const data of [
     { company: " " },
     { summary: "" },
@@ -64,11 +64,63 @@ test("another type, another version, or data that says less or other is not one"
     { was: { revision: example.data.revision, terms: {} } },
     { only_the_person: "yes" },
     { token: "secret" },
+    { summary: null, terms: {} },
+    { approved_by: "company" },
+    { approved_by: "agent" },
+    { approved_by: "agent", instruction: "  " },
+    { approved_by: "user", instruction: "anything" },
+    { instruction: "anything" },
+    { declined: "no" },
+    { declined: { reason: 1, instructions: null } },
+    { declined: { reason: null } },
   ]) {
     assert.equal(isPapConfirm(changed(data)), false, JSON.stringify(data));
   }
   const { session: _, ...withoutSession } = example.data;
   assert.equal(isPapConfirmData(withoutSession), false);
+  const { terms: _terms, ...withoutTerms } = example.data;
+  assert.equal(isPapConfirmData(withoutTerms), false);
+});
+
+test("a confirm without a summary shows every value of the terms", () => {
+  // `terms` are required and `summary` optional (Operations 3): the text then says the terms'
+  // values, still as inert text.
+  const data = { ...example.data, summary: null, was: null };
+  assert.ok(isPapConfirmData(data));
+  assert.ok(
+    papConfirmText(data).startsWith(
+      "manzanita.example asks you to approve: price_difference.amount: 70.00; " +
+        "price_difference.currency: USD; ships_in_days: 5 (revision rev_k3Jd9Qx2mW8v",
+    ),
+  );
+  assert.throws(() => papConfirmDisplay("c1", { ...data, terms: {} }), TypeError);
+  const hostile = papConfirmText({ ...data, terms: { note: "see [here](https://evil.example)" } });
+  assert.ok(!hostile.includes("[here](") && hostile.includes("\\[here\\]"));
+});
+
+test("a confirm says who approved and what a company declined", () => {
+  // An agent approval shows the instruction it rested on; a decline says nothing was done, with
+  // the company's reason as text (Operations 5, 6).
+  const confirm = (changes) => ({ ...example.data, ...changes });
+  const byAgent = confirm({ approved_by: "agent", instruction: "Go ahead with any exchange under $100" });
+  assert.ok(isPapConfirmData(byAgent));
+  assert.ok(
+    papConfirmText(byAgent).startsWith(
+      'Approved for you at manzanita.example, on your instruction "Go ahead with any exchange under $100": Exchange the Ridge Jacket',
+    ),
+  );
+  assert.ok(papConfirmText(byAgent).endsWith("(revision rev_k3Jd9Qx2mW8v)"));
+  assert.ok(papConfirmText(confirm({ approved_by: "user" })).startsWith("You approved at manzanita.example:"));
+  const declined = confirm({
+    approved_by: "agent",
+    instruction: "Return everything in this order",
+    declined: { reason: "Only you can approve a return. <b>Call us</b>", instructions: "Approve it yourself." },
+  });
+  assert.ok(isPapConfirmData(declined));
+  const text = papConfirmDisplay("c1", declined).text;
+  assert.ok(text.startsWith("manzanita.example declined the approval: nothing was done."));
+  assert.ok(text.includes("It says: Only you can approve a return.") && !text.includes("<b>"));
+  assert.ok(text.endsWith("Another way, it says: Approve it yourself."));
 });
 
 test("the Session is a one-way reference and whether the person is signed in, nothing else", () => {

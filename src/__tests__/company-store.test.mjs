@@ -118,7 +118,6 @@ test("a company restarted over its store continues every flow", async () => {
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
     organization: { name: "Manzanita", domain: new URL(metadata.protected_resources[0]).hostname },
-    protectedResources: metadata.protected_resources,
   });
   clock.advance(started.pollInterval);
   assert.equal((await device.poll(started.reference)).status, "pending");
@@ -169,7 +168,7 @@ test("a company restarted over its store continues every flow", async () => {
   assert.equal(again.status, "signed_in");
 
   // The operation returned before the restart is performed once after it.
-  const approval = { operation_id: proposal.operation_id, revision: proposal.revision };
+  const approval = { operation_id: proposal.operation_id, revision: proposal.revision, approver: "user" };
   for (let time = 0; time < 2; time += 1) {
     await conversations.send(
       endpoint,

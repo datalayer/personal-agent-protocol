@@ -866,17 +866,13 @@
       }
     },
     {
-      "id": "security.session-sub-stays-the-same",
-      "kind": "negative",
+      "id": "security.session-found-by-user-id",
+      "kind": "positive",
       "role": "company",
       "requirements": [
         "PAP-5.3-02"
       ],
-      "description": "A known sid keeps its sub (§5.3).",
-      "expect": {
-        "status": 400,
-        "error": "invalid_session"
-      }
+      "description": "A Session is found by client_id, sid and User ID: a known sid with another User ID is another Session, signed out, never invalid_session (§5.3)."
     },
     {
       "id": "security.access-token-of-another-agent",

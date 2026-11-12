@@ -87,7 +87,9 @@ async def test_signed_out_then_direct_sign_in_then_a_read_and_a_proposed_exchang
         token=signed_in,
         body={},
         approval=Approval(
-            operation_id=proposed.operation.operation_id, revision=proposed.operation.revision
+            approver="user",
+            operation_id=proposed.operation.operation_id,
+            revision=proposed.operation.revision,
         ),
     )
     assert done.status == 200 and done.body["summary"].startswith("Exchanged")

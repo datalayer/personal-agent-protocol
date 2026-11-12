@@ -26,7 +26,7 @@ python -m pytest -p no:cacheprovider
 | `DiscoveryDocument`, `OAuthServerMetadata`              | Implemented           | Strict, forward-compatible wire models.                                                         |
 | `ClientMetadata`, `JsonWebKeySet`                       | Implemented           | Validate HTTPS client identity plus approved public assertion keys.                             |
 | `Message`, `ConversationEvent`, `ConversationEventPage` | Implemented models    | Validate known conversation shapes while preserving unknown event types and fields.             |
-| `Operation`, `Approval`                                 | Implemented models    | Validate Operations v2 operations and approvals: opaque revisions and timestamps.               |
+| `Operation`, `Approval`                                 | Implemented models    | Validate Operations version 3 operations and approvals: opaque revisions and timestamps.               |
 | `build_pap_reactor`                                     | Implemented           | Build the default Reactor host.                                                                 |
 | `generate_pairwise_user_id`                             | Implemented primitive | Generate an unlinkable random identifier.                                                       |
 | `SqlitePairwiseUserIdStore`, `resolve_pairwise_user_id` | Implemented           | Atomically persist/resolve stable IDs by tenant, local user, and verified issuer.               |
@@ -191,7 +191,7 @@ signature. See [Operator signatures](/guides/cryptography/#operator-signatures).
 ## Conversation and Operations models
 
 Conversation pages preserve unknown future event types so callers can skip
-them as draft 0.4 requires. Known event types are validated for their required
+them as version 0.4 requires. Known event types are validated for their required
 payload: messages, state changes, authorization requests, user requests, and
 Direct Conversation links. Operations validate their IDs and opaque revision, and
 a timezone-bearing `expires_at`.

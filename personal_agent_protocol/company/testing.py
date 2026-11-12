@@ -185,7 +185,7 @@ def record_samples(now: datetime) -> dict[str, Any]:
             responder="human",
             closed=False,
             protocol_version="0.4",
-            extensions={"operations": "2"},
+            extensions={"operations": "3"},
             parent_id="cnv_0",
             direct_child="cnv_2",
             account_id="acct_1",

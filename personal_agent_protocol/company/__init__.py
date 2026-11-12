@@ -55,6 +55,8 @@ from .points import (
     CompanyApi,
     CompanyMcp,
     CompanyStore,
+    Decline,
+    DeclineRequest,
     MemoryCompanyStore,
     MemoryReplayCache,
     OperationExecutor,
@@ -176,7 +178,7 @@ def build_company(
     reactor.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.company",
-            version="0.32.0",
+            version="0.33.0",
             contribution_points=[
                 COMPANY_STORES.id,
                 COMPANY_ACCOUNTS.id,
@@ -237,6 +239,8 @@ __all__ = [
     "CompanyService",
     "CompanyStore",
     "ConsentDecision",
+    "Decline",
+    "DeclineRequest",
     "IdentityClientResolver",
     "IdentityOperatorDirectory",
     "MemoryCompanyStore",

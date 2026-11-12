@@ -72,7 +72,6 @@ async function signedIn(w, scopes) {
     scopes,
     tenantId: TENANT,
     organization: w.company.document.organization,
-    protectedResources: metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -144,7 +143,7 @@ test("a signed-out UCP request carries the Session header and the platform profi
   assert.deepEqual(found.products.map((product) => product.id), ["stormline-insulated-m", "stormline-insulated-l"]);
   assert.equal(sent.at(-1).get(UCP_AGENT_HEADER), `profile="${PLATFORM}"`);
   assert.ok(sent.at(-1).has("poppy-session") && !sent.at(-1).has("authorization"));
-  assert.ok(await w.shop.endSession(session.clientId, session.sid));
+  assert.ok(await w.shop.endSession(session.clientId, session.sid, session.sub));
 });
 
 test("UCP without this extension, and its refusals", async () => {
@@ -187,7 +186,7 @@ test("Session errors at UCP endpoints are UCP responses", async () => {
   const { ucp, endpoint } = await client(w);
   await ucp.call("POST", `${endpoint}/catalog/search`, { session, body: {} });
   const first = session.sid;
-  assert.ok(await w.shop.endSession(session.clientId, session.sid));
+  assert.ok(await w.shop.endSession(session.clientId, session.sid, session.sub));
   await ucp.call("POST", `${endpoint}/catalog/search`, { session, body: {} });
   assert.notEqual(session.sid, first);
   const headers = await sessionHeaders(w.host.reactor, "POST", "https://elsewhere.example/", { session });
@@ -201,7 +200,7 @@ test("Session errors at UCP endpoints are UCP responses", async () => {
 
 test("a personal agent declares ucp in Poppy-Extensions", async () => {
   const w = await world();
-  const declared = negotiateExtensions(w.company.document.extensions, { ucp: "1", operations: "2" });
+  const declared = negotiateExtensions(w.company.document.extensions, { ucp: "1", operations: "3" });
   assert.equal(declared.ucp, "1");
   const session = await w.start();
   const headers = await sessionHeaders(w.host.reactor, "GET", "https://manzanita.example/", { session: { ...session, extensions: declared, protocolVersion: session.protocolVersion } });

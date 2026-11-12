@@ -79,6 +79,7 @@ TELEMETRY_EVENTS: dict[str, Stage] = {
     "pap.conversation.cancel_handoff": "conversation",
     "pap.conversation.close": "conversation",
     "pap.operation.ask_user": "operation",
+    "pap.operation.approve_as_agent": "operation",
     "pap.operation.send": "operation",
     # What a company built on `personal_agent_protocol.company` did and refused.
     "pap.company.identity.check": "company",
@@ -153,6 +154,7 @@ TELEMETRY_ATTRIBUTES: dict[str, Callable[[object], bool]] = {
     "pap.conversation.closed": _flag,
     "pap.conversation.events": _count,
     "pap.operation.status": _identifier,
+    "pap.operation.approver": _one_of("user", "agent"),
     "pap.client.id": _issuer,
     "pap.interface": _one_of(*INTERFACES),
     "pap.company.route": _identifier,
@@ -426,4 +428,11 @@ def operation_result(result: Any) -> dict[str, object]:
     """How an approval step ended: never the operation's terms or its IDs."""
 
     status = getattr(result, "status", None)
-    return {"pap.operation.status": status if isinstance(status, str) else "approved"}
+    reported: dict[str, object] = {
+        "pap.operation.status": status if isinstance(status, str) else "approved"
+    }
+    approver = getattr(result, "approver", None)
+    if approver in {"user", "agent"}:
+        # Who approved, never what: the approval's IDs and reference stay out.
+        reported["pap.operation.approver"] = approver
+    return reported

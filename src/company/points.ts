@@ -39,7 +39,7 @@ import { defineContributionPoint } from "@datalayer/reactor";
 
 import type { JWK } from "jose";
 
-import type { ClientMetadata, JsonWebKeySet, Link, Operation } from "../models.js";
+import type { Alternative, Approval, ClientMetadata, JsonWebKeySet, Link, Operation } from "../models.js";
 import type { SecretValue } from "../secret.js";
 import { RecordKinds, type CompanyStore } from "./store.js";
 
@@ -118,16 +118,40 @@ export interface Turn {
  *
  * `action` says which executor performs it, and with `subject`, what it is done to in the
  * company's records, such as the order: requests for the same action and subject are one
- * operation, whose terms can change (Operations 3). `summary` and `terms` are what it would
- * do now: anything that affects the action is in them. `scopes` are what a Session must
- * hold to approve it, recorded with it; none named, the company's `writeScopes`.
+ * operation, whose terms can change (Operations 3). `terms` are what it would do now,
+ * required: everything that affects the action is in them. `summary` says the same in plain
+ * language, and is optional. `scopes` are what a Session must hold to approve it, recorded
+ * with it; none named, the company's `writeScopes`.
  */
 export interface ProposedOperation {
   readonly action: string;
-  readonly summary: string;
-  readonly terms?: Readonly<Record<string, unknown>>;
+  readonly terms: Readonly<Record<string, unknown>>;
+  readonly summary?: string;
   readonly subject?: string;
   readonly scopes?: readonly string[];
+}
+
+/**
+ * An approval that passed the company's checks, for the company to act on or decline
+ * (Operations 6): the action, the approved revision, the approval as the personal agent stated
+ * it (`approver`, `approved_at`, `input_type`, `reference`), and the account.
+ */
+export interface DeclineRequest {
+  readonly action: string;
+  readonly operation: Operation;
+  readonly approval: Approval;
+  readonly accountId?: string;
+}
+
+/**
+ * A company's decline of an approval: nothing is performed, no new operation is returned, and
+ * the approval is not recorded. `reason` is short plain language for the user, with nothing
+ * the Session couldn't already see; `alternative` another way to do it (§9.2). There are no
+ * reason codes.
+ */
+export interface Decline {
+  readonly reason?: string;
+  readonly alternative?: Alternative | Readonly<Record<string, unknown>>;
 }
 
 /**

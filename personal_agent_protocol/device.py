@@ -72,17 +72,18 @@ def _within(host: str, domain: str) -> bool:
     return host == domain or host.endswith(f".{domain}")
 
 
-def verification_host_allowed(url: str, *, issuer: str, protected_resources: Sequence[str]) -> bool:
-    """Whether a device sign-in link may be shown for this company (§4.6).
+def verification_host_allowed(url: str, *, issuer: str, domain: str) -> bool:
+    """Whether a device sign-in link may be shown for this company (§4.3).
 
-    Its host is the host of `auth.issuer` or of a URL in the issuer's
-    `protected_resources`, or a subdomain of either; otherwise a company could
-    pass off another company's sign-in page as its own.
+    Its host is the host of the Company's issuer or its `organization.domain`, or a
+    subdomain of either; otherwise a company could pass off another company's sign-in
+    page as its own. The hosts of the issuer's other `protected_resources` do not
+    qualify.
     """
 
     host = _host(url)
-    allowed = [_host(issuer), *(_host(resource) for resource in protected_resources)]
-    return bool(host) and any(domain and _within(host, domain) for domain in allowed)
+    allowed = [_host(issuer), domain.lower().rstrip(".")]
+    return bool(host) and any(name and _within(host, name) for name in allowed)
 
 
 class DeviceSignInStart(ProtocolModel):
@@ -161,17 +162,15 @@ class DeviceSignInClient:
         scopes: tuple[str, ...],
         tenant_id: str,
         organization: Organization,
-        protected_resources: Sequence[str],
         dpop_signing_algs: Sequence[str] | None = None,
         pairwise_user_id: str | None = None,
     ) -> DeviceSignInStart:
         """Request a device code and retain it behind an opaque state reference (§4.3).
 
         Plain OAuth: the sign-in names no Session. `organization` is the company's, from its
-        poppy.json, and
-        `protected_resources` its issuer's (OAuth metadata): the verification link
-        is refused (`unsafe_verification_uri`) unless its host is the issuer's or
-        one of those resources', or a subdomain of either (§4.6). `dpop_signing_algs`
+        poppy.json: the verification link is refused (`unsafe_verification_uri`) unless its
+        host is the issuer's or `organization.domain`, or a subdomain of either (§4.3).
+        `dpop_signing_algs`
         is its `dpop_signing_alg_values_supported`: each poll sends a DPoP proof when it
         includes ES256 (§4.5), by the DPoP key of `pairwise_user_id`, the User ID the
         sign-in is for, which proving needs.
@@ -231,11 +230,11 @@ class DeviceSignInClient:
             ) from exc
         for link in (authorization.verification_uri, authorization.verification_uri_complete):
             if link is not None and not verification_host_allowed(
-                link, issuer=issuer_url, protected_resources=protected_resources
+                link, issuer=issuer_url, domain=organization.domain
             ):
                 raise AuthorizationError(
                     "unsafe_verification_uri",
-                    "The device sign-in link is not on the company's issuer or its domains",
+                    "The device sign-in link is not on the company's issuer or its domain",
                     status_code=response.status_code,
                 )
         expires_at = now + timedelta(seconds=authorization.expires_in)

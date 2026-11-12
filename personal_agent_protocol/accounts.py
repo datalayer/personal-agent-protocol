@@ -342,6 +342,12 @@ def scopes_to_request(held: Iterable[str], needed: Iterable[str]) -> tuple[str, 
     keep, then the `needed` ones it lacks, in order and once each, following RFC 6749 §3.3;
     never only the missing ones. The new refresh token replaces the old one, which the
     agent revokes (§4.6).
+
+    A Company may grant fewer scopes than requested, and may limit what it grants by User:
+    when a sign-in that asked for a scope comes back without it, the Company may not grant
+    it to this User, and asking again changes nothing. Don't send the User to sign in again
+    for a scope a sign-in just left out (`SignInResult.missing_scopes`); tell them the task needs
+    access the Company didn't give (guides, *Scopes a Company doesn't grant*).
     """
 
     seen: dict[str, None] = {}

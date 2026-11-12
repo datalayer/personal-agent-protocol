@@ -72,7 +72,6 @@ started = await client.begin(
     tenant_id="application-42",
     organization=company.document.organization,
     # The link must be on the issuer's host or one of its protected resources'.
-    protected_resources=metadata.protected_resources,
     # A DPoP proof goes with each poll when this includes ES256, by the DPoP key of the
     # User ID the sign-in is for: one key per User ID (spec 4.5).
     dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
@@ -100,7 +99,6 @@ const started = await client.begin({
   scopes: ['orders:read', 'orders:return'],
   tenantId: 'application-42',
   organization: company.document.organization,
-  protectedResources: metadata.protected_resources,
   // A DPoP proof goes with each poll when this includes ES256, by the DPoP key of the
   // User ID the sign-in is for: one key per User ID (spec 4.5).
   dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
@@ -134,4 +132,4 @@ put device codes and tokens in logs, analytics, model context, QR telemetry, or
 browser state.
 
 See the runnable [Device Sign-In example](/examples/device-sign-in/) and the
-upstream [Device Sign-In specification](https://personalagentprotocol.org/docs/spec#device-sign-in).
+upstream [Device Sign-In specification](https://personalagentprotocol.org/docs/0.4/spec#device-sign-in).

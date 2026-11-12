@@ -51,16 +51,13 @@
       "description": "Product search"
     }
   ],
-  "feedback": {
-    "endpoint": "https://api.example.com/poppy/feedback"
-  },
-  "excluded_tasks": {
-    "url": "https://example.com/poppy/excluded-tasks.json"
+  "tasks": {
+    "endpoint": "https://api.example.com/poppy/tasks"
   },
   "extensions": {
     "operations": [
       {
-        "version": "2"
+        "version": "3"
       }
     ],
     "mediated-sign-in": [
@@ -81,18 +78,6 @@
         "scopes": [
           "orders:read"
         ]
-      }
-    ]
-  },
-  "skill_index": {
-    "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
-    "skills": [
-      {
-        "name": "manage-bookings",
-        "description": "Manage the User's bookings with this Company.",
-        "type": "skill-md",
-        "url": "https://cdn.example.com/skills/manage-bookings/SKILL.md",
-        "digest": "sha256:1b2a8cde934e632f7e14fa080a627ad7191e29d412d2b8a7aa07d9c9ab2f475e"
       }
     ]
   }

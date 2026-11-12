@@ -33,14 +33,14 @@ def _typescript(path: str, name: str) -> str:
 def test_the_typescript_sdk_declares_the_same_profile_and_operations_version() -> None:
     assert _typescript("src/profile.ts", "PROTOCOL_PROFILE") == PROTOCOL_PROFILE == "0.4"
     assert _typescript("src/profile.ts", "PROTOCOL_REVISION") == PROTOCOL_REVISION
-    assert _typescript("src/operations.ts", "OPERATIONS_VERSION") == OPERATIONS_VERSION == "2"
+    assert _typescript("src/operations.ts", "OPERATIONS_VERSION") == OPERATIONS_VERSION == "3"
 
 
 def test_the_requirement_ledger_and_the_upstream_snapshot_say_the_same() -> None:
     ledger = yaml.safe_load((ROOT / "protocol" / "requirements.yaml").read_text())
     assert (ledger["profile"], ledger["upstream_revision"]) == (PROTOCOL_PROFILE, PROTOCOL_REVISION)
     upstream = (ROOT / "protocol" / "UPSTREAM.md").read_text()
-    assert f"- Profile implemented: draft {PROTOCOL_PROFILE} as of 46beb21\n" in upstream
+    assert f"- Profile implemented: {PROTOCOL_PROFILE} as published\n" in upstream
     assert f"- Upstream page revision: {PROTOCOL_REVISION}\n" in upstream
     assert f"- Operations extension: version {OPERATIONS_VERSION}\n" in upstream
 
@@ -51,8 +51,8 @@ def test_the_packages_and_the_docs_state_it() -> None:
     assert f'description = "Python SDK for Personal Agent Protocol {STATEMENT}"\n' in pyproject
     assert package["description"] == f"TypeScript SDK for Personal Agent Protocol {STATEMENT}"
     readme = " ".join((ROOT / "README.md").read_text().split())
-    # A draft: upstream serves it at /docs/spec until it is published at /docs/{version}/spec.
-    spec = "https://personalagentprotocol.org/docs/spec"
+    # Published: frozen at /docs/{version}/spec (/docs/spec is the next draft).
+    spec = f"https://personalagentprotocol.org/docs/{PROTOCOL_PROFILE}/spec"
     assert f"version {PROTOCOL_PROFILE}]({spec}) ({PROTOCOL_REVISION})" in readme
     assert f"Operations extension v{OPERATIONS_VERSION}" in readme
     docs = ROOT / "docs" / "docs"
@@ -74,7 +74,7 @@ def test_the_packages_and_the_docs_state_it() -> None:
         assert python in compatibility and typescript in compatibility
     report = (docs / "protocol" / "conformance-report.mdx").read_text()
     assert (
-        f"PAP profile **{PROTOCOL_PROFILE}** (the draft as of {PROTOCOL_REVISION}), "
+        f"PAP profile **{PROTOCOL_PROFILE}** (as published {PROTOCOL_REVISION}), "
         f"Operations extension **v{OPERATIONS_VERSION}**"
     ) in report
 

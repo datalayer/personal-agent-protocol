@@ -6,16 +6,16 @@ title: Compatibility and conformance report
 
 # Compatibility and conformance report
 
-SDK version **0.32.0**, PAP profile **0.4** (the draft as of 2026-11-06), Operations extension **v2**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
+SDK version **0.33.0**, PAP profile **0.4** (as published 2026-11-10), Operations extension **v3**. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
 
 ## Pairings
 
 | Personal agent | Company | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: |
-| Python | Python | 170 | 0 | 0 |
-| Python | TypeScript | 170 | 0 | 0 |
-| TypeScript | Python | 170 | 0 | 0 |
-| TypeScript | TypeScript | 170 | 0 | 0 |
+| Python | Python | 174 | 0 | 0 |
+| Python | TypeScript | 174 | 0 | 0 |
+| TypeScript | Python | 174 | 0 | 0 |
+| TypeScript | TypeScript | 174 | 0 | 0 |
 
 ## Protocol
 
@@ -25,6 +25,7 @@ SDK version **0.32.0**, PAP profile **0.4** (the draft as of 2026-11-06), Operat
 | `protocol.version-unserved` | negative | PAP-3.4-08, PAP-3.4-09 | pass | pass | pass | pass |
 | `protocol.supported-versions-published` | positive | PAP-3.4-01, PAP-3.4-04, GUIDE-co-versions-01 | pass | pass | pass | pass |
 | `protocol.extension-required-company` | negative | OPS-2-01, PAP-3.3-03 | pass | pass | pass | pass |
+| `protocol.tasks-per-session` | positive | PAP-9-01 | pass | pass | pass | pass |
 | `protocol.feedback-report` | positive | PAP-9.3-01, PAP-9.3-06 | pass | pass | pass | pass |
 | `protocol.ucp-profile` | positive | UCP-4-03, UCP-4-04 | pass | pass | pass | pass |
 
@@ -60,7 +61,7 @@ SDK version **0.32.0**, PAP profile **0.4** (the draft as of 2026-11-06), Operat
 | `security.session-header-missing` | negative | PAP-5.2-01, PAP-5.3-09 | pass | pass | pass | pass |
 | `security.session-jwt-replay` | negative | GUIDE-co-session-05 | pass | pass | pass | pass |
 | `security.session-header-twice` | negative | PAP-5.3-03 | pass | pass | pass | pass |
-| `security.session-sub-stays-the-same` | negative | PAP-5.3-02 | pass | pass | pass | pass |
+| `security.session-found-by-user-id` | positive | PAP-5.3-02 | pass | pass | pass | pass |
 | `security.access-token-of-another-agent` | negative | PAP-5.3-08 | pass | pass | pass | pass |
 | `security.token-in-url-refused` | negative | PAP-5.6-04, PAP-5.6-03 | pass | pass | pass | pass |
 | `security.authorization-header-without-cookies` | positive | PAP-5.6-01 | pass | pass | pass | pass |
@@ -139,6 +140,9 @@ SDK version **0.32.0**, PAP profile **0.4** (the draft as of 2026-11-06), Operat
 | `operations.expired` | negative | OPS-6-03 | pass | pass | pass | pass |
 | `operations.any-session-of-the-account-approves` | positive | OPS-6-01 | pass | pass | pass | pass |
 | `operations.signed-out-session-gets-a-challenge` | negative | OPS-6-01 | pass | pass | pass | pass |
+| `operations.agent-approval` | positive | OPS-6-06 | pass | pass | pass | pass |
+| `operations.approval-without-approver` | negative | OPS-6-07 | pass | pass | pass | pass |
+| `operations.approval-declined` | negative | OPS-6-10 | pass | pass | pass | pass |
 | `operations.another-user-cannot-approve` | negative | OPS-6-01 | pass | pass | pass | pass |
 | `operations.cross-channel-identity` | positive |  | pass | pass | pass | pass |
 | `operations.cross-channel-mcp` | positive |  | pass | pass | pass | pass |
@@ -213,7 +217,7 @@ SDK version **0.32.0**, PAP profile **0.4** (the draft as of 2026-11-06), Operat
 
 ## Decided by each SDK alone
 
-79 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
+82 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
 
 | Case | Kind | Check | SDKs |
 | --- | --- | --- | --- |
@@ -229,12 +233,15 @@ SDK version **0.32.0**, PAP profile **0.4** (the draft as of 2026-11-06), Operat
 | `protocol.unknown-conversation-protocol` | positive | discovery_document | python, typescript |
 | `protocol.unknown-extension-ignored` | positive | extension_negotiation | python, typescript |
 | `protocol.extension-version-mismatch` | negative | extension_negotiation | python, typescript |
+| `protocol.operations-version-2-not-used` | negative | extension_negotiation | python, typescript |
 | `protocol.extension-recognized-from-the-request` | positive | extension_negotiation | python, typescript |
 | `protocol.third-party-extension-name` | positive | extension_names | python, typescript |
 | `protocol.extension-required-error` | negative | extension_required | python, typescript |
 | `protocol.extension-required-at-an-api` | negative | extension_required | python, typescript |
+| `protocol.extension-required-not-in-a-challenge` | negative | extension_required | python, typescript |
 | `protocol.unknown-event-type` | positive | conversation_page | python, typescript |
 | `protocol.unknown-operation-fields` | positive | operation | python, typescript |
+| `protocol.operation-requires-terms` | negative | operation | python, typescript |
 | `protocol.message-context-fields` | negative | message_context | python, typescript |
 | `protocol.multi-domain-issuer` | positive | discovery | python, typescript |
 | `protocol.issuer-not-claiming-domain` | negative | discovery | python, typescript |
@@ -270,8 +277,8 @@ SDK version **0.32.0**, PAP profile **0.4** (the draft as of 2026-11-06), Operat
 | `protocol.web-unscoped` | positive | discovery_document | python, typescript |
 | `protocol.web-unscoped-without-endpoint` | negative | discovery_document | python, typescript |
 | `protocol.feedback-needs-no-auth` | positive | discovery | python, typescript |
-| `protocol.feedback-endpoint-https` | negative | discovery_document | python, typescript |
-| `protocol.feedback-endpoint-listed` | positive | discovery_document | python, typescript |
+| `protocol.tasks-endpoint-https` | negative | discovery_document | python, typescript |
+| `protocol.tasks-endpoint-listed` | positive | discovery_document | python, typescript |
 | `protocol.extensions-header` | positive | extensions_header | python, typescript |
 | `security.duplicate-json-members` | negative | strict_json | python, typescript |
 | `security.ssrf-loopback` | negative | url_safety | python, typescript |

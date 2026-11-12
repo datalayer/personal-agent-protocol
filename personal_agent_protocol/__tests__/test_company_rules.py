@@ -84,7 +84,6 @@ async def device_sign_in(
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     assert (started.organization_name, started.organization_domain) == (
         "Manzanita Outfitters",
@@ -214,7 +213,9 @@ async def test_after_sign_out_what_used_the_account_stays_and_asks_for_sign_in()
     # The operation belongs to the account: signed out, the same Session is asked to sign in.
     api = ApiClient(transport=world.transport)
     operation = proposed.operation
-    approval = Approval(operation_id=operation.operation_id, revision=operation.revision)
+    approval = Approval(
+        approver="user", operation_id=operation.operation_id, revision=operation.revision
+    )
     with pytest.raises(ApiError) as op:
         await api.call("POST", EXCHANGE, session=session, body={}, approval=approval)
     assert (op.value.code, op.value.status_code) == ("insufficient_scope", 401)
@@ -350,7 +351,6 @@ async def _device_refusal(
             scopes=scopes,
             tenant_id=TENANT,
             organization=world.company.document.organization,
-            protected_resources=metadata.protected_resources,
         )
     return refused.value.code
 
@@ -753,7 +753,7 @@ async def test_a_company_ending_a_session_and_the_personal_agent_starting_a_new_
     ended = session.sid
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     await world.conversations.start(endpoint, world.message("Hello"), session=session, wait=0)
-    assert await world.shop.end_session(session.client_id, ended)
+    assert await world.shop.end_session(session.client_id, ended, session.sub)
     captured.clear()
 
     # `session_ended`, HTTP 400, JSON; the request sent once more with a new `sid` (§5.5).
@@ -764,7 +764,9 @@ async def test_a_company_ending_a_session_and_the_personal_agent_starting_a_new_
 
 
 @pytest.mark.asyncio
-async def test_extension_required_at_an_api_is_in_the_challenge() -> None:
+async def test_extension_required_at_an_api_is_in_a_json_body() -> None:
+    """Not an access token error: a JSON body at an API too, no challenge (§3.3, §7)."""
+
     world = World()
     world.atlas.extensions = ()
     world.network.add(world.atlas.domain, world.atlas.website())
@@ -773,9 +775,8 @@ async def test_extension_required_at_an_api_is_in_the_challenge() -> None:
     assert token is not None
     response = await post_json(world, session, EXCHANGE, {}, token=token)
     assert response.status_code == 403
-    assert response.headers["www-authenticate"] == (
-        'Bearer error="extension_required", extension="operations"'
-    )
+    assert "www-authenticate" not in response.headers
+    assert response.json() == {"error": "extension_required", "extension": "operations"}
     with pytest.raises(ApiError) as raised:
         await ApiClient(transport=world.transport).call(
             "POST", EXCHANGE, session=session, token=token, body={}

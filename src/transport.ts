@@ -274,6 +274,21 @@ export class SessionFetchClient {
     }
   }
 
+  /** The host's Reactor, for the clients built on this transport. */
+  get reactor(): ReactorPlatformView {
+    return this.#reactor;
+  }
+
+  /** The fetch this transport sends with, for the clients built on it. */
+  get fetch(): typeof globalThis.fetch {
+    return this.#fetch;
+  }
+
+  /** The transport's clock: `pap.clock`, else the system's. */
+  now(): Date {
+    return this.#now();
+  }
+
   #now(): Date {
     return (optionalContribution(this.#reactor, Clocks, "clock") ?? { now: () => new Date() }).now();
   }

@@ -36,10 +36,9 @@ export function challengeParameters(header: string | null | undefined): Record<s
 /**
  * What a refusal says besides its code: `extension`, `scope`, `retry_after`.
  *
- * `extension_required` names its extension in the JSON body at the token endpoint and
- * the endpoints the protocol or an extension defines, and in the `WWW-Authenticate`
- * challenge at APIs (§3.3); either shape is read. `retry_after` is kept as sent on a
- * 429 or 503 (§5.6), never acted on here.
+ * `extension_required` names its extension in the JSON body, at APIs as at the endpoints
+ * the protocol or an extension defines (§3.3): a challenge is not read for it.
+ * `retry_after` is kept as sent on a 429 or 503 (§5.6), never acted on here.
  */
 export function refusalDetails(response: Response, payload: unknown): Record<string, unknown> {
   const challenge = challengeParameters(response.headers.get("www-authenticate"));
@@ -48,7 +47,7 @@ export function refusalDetails(response: Response, payload: unknown): Record<str
       ? (payload as Record<string, unknown>)
       : {};
   const details: Record<string, unknown> = {};
-  const extension = "extension" in body ? body.extension : challenge.extension;
+  const extension = body.extension;
   if (typeof extension === "string" && extension) details.extension = extension;
   const scope = "scope" in body ? body.scope : challenge.scope;
   if (typeof scope === "string" && scope) details.scope = scope;
@@ -79,7 +78,8 @@ export function refusalCode(response: Response, payload: unknown, fallback: stri
       : {};
   if (typeof body.error === "string") return body.error;
   const challenge = challengeParameters(response.headers.get("www-authenticate"));
-  if (challenge.error !== undefined) return challenge.error;
+  // Token errors come in the challenge; `extension_required` is not one (§3.3, §7).
+  if (challenge.error !== undefined && challenge.error !== "extension_required") return challenge.error;
   if (response.status === 401 && challenge.scope) return "insufficient_scope";
   if (response.status === 429) return "rate_limited";
   return fallback;

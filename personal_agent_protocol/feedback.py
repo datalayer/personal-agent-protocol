@@ -4,14 +4,16 @@
 
 """Feedback: telling a company what its users couldn't do through the protocol (§8).
 
-A company that wants to know lists `feedback.endpoint` in its poppy.json.
+A company that wants to know lists `feedback.endpoint` in its tasks response,
+which the agent gets per Session from `tasks.endpoint` (§9, `TasksClient`).
 When a user's task can't be done — not with the Company Agent, not with its
 APIs, not on its website in a browser session — the personal agent MAY send
 one `FeedbackReport` for that task, with the Session header and, signed in, the access
 token:
 
 ```python
-endpoint = feedback_endpoint(company.document)
+tasks = await TasksClient(transport=transport).get(company.document, session=session)
+endpoint = tasks.feedback_endpoint
 if endpoint is not None:
     await FeedbackClient(transport=transport).report(
         endpoint,
@@ -36,7 +38,7 @@ from pydantic import ConfigDict, Field
 
 from .errors import PersonalAgentProtocolError
 from .json import loads_strict
-from .models import Alternative, DiscoveryDocument, ProtocolModel
+from .models import Alternative, ProtocolModel
 from .refusals import refusal_code, refusal_details
 from .sessions import AccessToken, PapSession
 from .transport import SessionHttpClient
@@ -61,12 +63,6 @@ class FeedbackReport(ProtocolModel):
 
     task: str = Field(min_length=1, max_length=FEEDBACK_TASK_MAX_LENGTH)
     description: str = Field(min_length=1, max_length=FEEDBACK_DESCRIPTION_MAX_LENGTH)
-
-
-def feedback_endpoint(document: DiscoveryDocument) -> str | None:
-    """The company's feedback endpoint, when it asks for feedback."""
-
-    return document.feedback.endpoint if document.feedback is not None else None
 
 
 class FeedbackClient:
@@ -143,5 +139,4 @@ __all__ = [
     "FeedbackClient",
     "FeedbackError",
     "FeedbackReport",
-    "feedback_endpoint",
 ]

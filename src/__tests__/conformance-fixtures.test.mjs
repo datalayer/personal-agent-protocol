@@ -35,6 +35,9 @@ import {
   discoverCompany,
   extensionNameKind,
   extensionRequired,
+  refusalCode,
+  refusalDetails,
+  tasksEndpoint,
   knownApis,
   negotiateExtensions,
   browsingDisabled,
@@ -112,6 +115,17 @@ const CHECKS = {
     for (const [key, value] of Object.entries(expect.extra ?? {})) assert.deepEqual(document[key], value);
     if ("known_api_types" in expect) assert.deepEqual(knownApis(document).map((api) => api.type), expect.known_api_types);
     if ("conversation_endpoint" in expect) assert.equal(conversationEndpoint(document), expect.conversation_endpoint);
+    if ("tasks_endpoint" in expect) {
+      assert.equal(tasksEndpoint(document), expect.tasks_endpoint);
+      // What 0.4 as published moved to the tasks response is not read from poppy.json.
+      const moved = parseDiscoveryDocument({
+        ...given,
+        feedback: { endpoint: "http://not-https.example/feedback" },
+        excluded_tasks: { url: "http://not-https.example/excluded" },
+        skill_index: "not an index",
+      });
+      assert.equal(tasksEndpoint(moved), expect.tasks_endpoint);
+    }
     if ("account_access" in expect) assert.deepEqual(document.agent.protocols.map(accountAccess), expect.account_access);
     if ("browsing_disabled" in expect) assert.equal(browsingDisabled(document), expect.browsing_disabled);
     if ("browser_sign_in_unscoped" in expect) assert.equal(browserSignInUnscoped(document), expect.browser_sign_in_unscoped);
@@ -148,7 +162,13 @@ const CHECKS = {
   },
 
   extension_required(given, expect) {
-    assert.equal(extensionRequired(given.status, given.body, given.www_authenticate), expect.extension);
+    // The JSON body only: a challenge is never read for it (§3.3, §7).
+    assert.equal(extensionRequired(given.status, given.body) ?? null, expect.extension ?? null);
+    if ("www_authenticate" in given) {
+      const refused = new Response(null, { status: given.status, headers: { "WWW-Authenticate": given.www_authenticate } });
+      assert.equal(refusalCode(refused, given.body, "refused"), "refused");
+      assert.equal("extension" in refusalDetails(refused, given.body), false);
+    }
   },
 
   conversation_page(given, expect) {
@@ -164,6 +184,10 @@ const CHECKS = {
   },
 
   operation(given, expect) {
+    if (expect.valid === false) {
+      assert.throws(() => parseOperation(given));
+      return;
+    }
     const operation = parseOperation(given);
     for (const [key, value] of Object.entries(expect.extra ?? {})) assert.deepEqual(operation[key], value);
   },

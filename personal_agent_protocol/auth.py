@@ -213,6 +213,14 @@ class DirectSignInStart(ProtocolModel):
 
     expires_at: datetime
     requested_scopes: tuple[str, ...]
+    #: Whether the authorization URL opens on a device other than the one the User is
+    #: using (§4.2): a cross-device flow, as Device Sign-In always is (§10.8).
+    cross_device: bool = False
+
+
+#: The longest a Direct Sign-In request lives when its link opens on another device: a
+#: cross-device request is short-lived (RFC 10027 §2, which §4.2 makes a MUST there).
+CROSS_DEVICE_LIFETIME_SECONDS = 300
 
 
 class DirectSignInResult(SignInResult):
@@ -280,19 +288,34 @@ class DirectSignInClient:
         redirect_uri: str,
         scopes: Iterable[str],
         tenant_id: str,
-        lifetime_seconds: int = 600,
+        lifetime_seconds: int | None = None,
         dpop_signing_algs: Sequence[str] | None = None,
         pairwise_user_id: str | None = None,
+        cross_device: bool = False,
     ) -> DirectSignInStart:
         """Store one-use state, then open the authorization URL for the user (§4.2).
 
         `dpop_signing_algs` is the issuer's `dpop_signing_alg_values_supported`: the
         code exchange sends a DPoP proof when it includes ES256 (§4.5), by the DPoP key
         of `pairwise_user_id`, the User ID the sign-in is for, which proving needs.
+
+        Nothing in the redirect says who approved the sign-in (§10.8). `cross_device`
+        says the URL opens on a device other than the one the User is using, such as a
+        link sent to a phone: the request then lives at most
+        `CROSS_DEVICE_LIFETIME_SECONDS` (RFC 10027 §2), the host asks only for the scopes
+        the task needs, and it says who the link is for when it shows it. Whenever it
+        can, the host receives the redirect only on the device that opened the URL (a
+        loopback `redirect_uri`, or its own app signed in as the User who started), and
+        names the User it finds there to `complete(completed_by=...)`.
         """
 
-        if not 0 < lifetime_seconds <= 900:
-            raise ValueError("Direct Sign-In state lifetime must be between 1 and 900 seconds")
+        longest = CROSS_DEVICE_LIFETIME_SECONDS if cross_device else 900
+        if lifetime_seconds is None:
+            lifetime_seconds = min(600, longest)
+        if not 0 < lifetime_seconds <= longest:
+            raise ValueError(
+                f"Direct Sign-In state lifetime must be between 1 and {longest} seconds"
+            )
         if not tenant_id or len(tenant_id) > 256:
             raise ValueError("tenant_id must contain between 1 and 256 characters")
         proves_with_dpop(dpop_signing_algs, pairwise_user_id)
@@ -340,11 +363,21 @@ class DirectSignInClient:
         return DirectSignInStart(
             expires_at=expires_at,
             requested_scopes=request.scopes,
+            cross_device=cross_device,
         )
 
     @traced("pap.sign_in.direct.complete", before=sign_in_method("direct"), after=sign_in_result)
-    async def complete(self, callback_url: str) -> DirectSignInResult:
-        """Consume callback state and exchange its code with fresh proof material."""
+    async def complete(
+        self, callback_url: str, *, completed_by: str | None = None
+    ) -> DirectSignInResult:
+        """Consume callback state and exchange its code with fresh proof material.
+
+        `completed_by` is the `tenant_id` of the User the host found in the browser at
+        `redirect_uri`, when it can tell, such as by its own sign-in there: a redirect
+        that arrives for another User than the one who started the sign-in is refused
+        (`sign_in_started_by_another_user`), the state used up and no code exchanged, so a
+        link someone forwarded gives its sender no tokens (§4.2, §10.8).
+        """
 
         state = _callback_state(callback_url)
         store = cast(
@@ -364,6 +397,11 @@ class DirectSignInClient:
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
         if clock.now() > pending.expires_at:
             raise AuthorizationError("invalid_or_expired_state", "authorization state has expired")
+        if completed_by is not None and completed_by != pending.tenant_id:
+            raise AuthorizationError(
+                "sign_in_started_by_another_user",
+                "The redirect arrived for another User than the one who started the sign-in",
+            )
         callback = validate_direct_sign_in_callback(pending.request, callback_url)
         return await self._exchange(pending, callback)
 

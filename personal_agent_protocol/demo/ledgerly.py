@@ -152,7 +152,6 @@ class LedgerlyAsPersonalAgent:
                 scopes=("accounts:read", "payments:write"),
                 tenant_id=TENANT,
                 organization=company.document.organization,
-                protected_resources=metadata.protected_resources,
                 dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
                 pairwise_user_id=link.pairwise_user_id,
             )
@@ -203,7 +202,10 @@ class LedgerlyAsPersonalAgent:
                 author=Author(type="agent"),
                 extensions=operations_content(
                     approval=Approval(
-                        operation_id=proposal.operation_id, revision=proposal.revision
+                        operation_id=proposal.operation_id,
+                        revision=proposal.revision,
+                        # Northwind Ada approved it in Ledgerly's own conversation.
+                        approver="user",
                     )
                 ),
             ),
@@ -258,11 +260,11 @@ class LedgerlyAgent:
                 operation=ProposedOperation(
                     action="northwind.payment",
                     subject=invoice.group(),
-                    summary=f"At Northwind Bank: {proposal.summary}",
+                    summary=f"At Northwind Bank: {proposal.shown}",
                     terms={
                         "northwind_operation_id": proposal.operation_id,
                         "northwind_revision": proposal.revision,
-                        **(proposal.terms or {}),
+                        **proposal.terms,
                     },
                 ),
             )

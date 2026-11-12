@@ -69,7 +69,6 @@ async function signIn(w) {
     scopes: ["orders:read", "orders:write"],
     tenantId: TENANT,
     organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
-    protectedResources: w.metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -169,7 +168,7 @@ test("the reference company keeps each key per Session for its lifetime", async 
       token: tokens[step.session ?? "first"],
       body: step.body,
       idempotencyKey: step.key,
-      ...(operation === undefined ? {} : { approval: { operation_id: operation.operation_id, revision: operation.revision } }),
+      ...(operation === undefined ? {} : { approval: { operation_id: operation.operation_id, revision: operation.revision, approver: "user" } }),
     });
     const expect = step.expect;
     if (expect.error !== undefined) {

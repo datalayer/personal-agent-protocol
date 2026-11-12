@@ -272,12 +272,12 @@ test("a Session declares the extensions it uses with the company", async () => {
     tenantId: TENANT,
     company: w.company,
   });
-  assert.deepEqual(w.company.document.extensions.operations, [{ version: "2" }]);
-  assert.equal(companyExtension(w.company.document, "operations", "2")?.version, "2");
-  assert.deepEqual(session.extensions, { operations: "2", links: "1", disclosures: "1", "mediated-sign-in": "1" });
+  assert.deepEqual(w.company.document.extensions.operations, [{ version: "3" }]);
+  assert.equal(companyExtension(w.company.document, "operations", "3")?.version, "3");
+  assert.deepEqual(session.extensions, { operations: "3", links: "1", disclosures: "1", "mediated-sign-in": "1" });
   const headers = await sessionHeaders(w.host.reactor, "GET", "https://manzanita.example/api/orders", { session });
   // Mediated Sign-In is recognized from its grant: used, never declared (§3.3).
-  assert.equal(headers["Poppy-Extensions"], '"disclosures";v="1", "links";v="1", "operations";v="2"');
+  assert.equal(headers["Poppy-Extensions"], '"disclosures";v="1", "links";v="1", "operations";v="3"');
   assert.ok(!("extensions" in w.identity.metadata));
   assert.deepEqual(PapSession.fromJson(session.toJson()).extensions, session.extensions);
   // The company reads the declaration per request: a Session declaring nothing gets no extension content.
@@ -287,9 +287,10 @@ test("a Session declares the extensions it uses with the company", async () => {
   const replies = page.events.filter((e) => e.message?.role === "company").map((e) => e.message);
   assert.ok(replies.length > 0 && replies.every((reply) => reply.extensions === undefined));
   assert.deepEqual(negotiateExtensions({ operations: [{ version: "1" }] }), {});
-  assert.deepEqual(negotiateExtensions({ operations: [{ version: "1" }, { version: "2" }] }), { operations: "2" });
+  assert.deepEqual(negotiateExtensions({ operations: [{ version: "2" }] }), {});
+  assert.deepEqual(negotiateExtensions({ operations: [{ version: "2" }, { version: "3" }] }), { operations: "3" });
   assert.equal(formatExtensionsHeader({}), undefined);
-  assert.deepEqual(parseExtensionsHeader('"operations";v="2", "links";v="1"'), { operations: "2", links: "1" });
+  assert.deepEqual(parseExtensionsHeader('"operations";v="3", "links";v="1"'), { operations: "3", links: "1" });
   assert.deepEqual(parseExtensionsHeader('"operations"'), {});
 });
 
@@ -351,7 +352,6 @@ async function deviceToken(w, scopes) {
     scopes,
     tenantId: TENANT,
     organization: w.company.document.organization,
-    protectedResources: metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);
@@ -576,15 +576,15 @@ test("a reworded summary keeps the revision, and new terms change it", async () 
 test("an approval says when and how the user gave it", async () => {
   // approved_at (Unix seconds, an Integer) and input_type (a String); the Company MUST NOT reject
   // an approval because either is missing or because it doesn't recognize the input type (Operations 6).
-  const approval = { operation_id: "exc_5Rt2", revision: "r1", approved_at: 1791487260, input_type: "tap" };
+  const approval = { operation_id: "exc_5Rt2", revision: "r1", approver: "user", approved_at: 1791487260, input_type: "tap" };
   const header = approvalHeader(approval);
-  assert.equal(header, 'operation_id="exc_5Rt2", revision="r1", approved_at=1791487260, input_type="tap"');
+  assert.equal(header, 'operation_id="exc_5Rt2", revision="r1", approver="user", approved_at=1791487260, input_type="tap"');
   assert.deepEqual(parseApprovalHeader(header), approval);
   for (const odd of ['approved_at=1.5, input_type="tap"', 'approved_at="soon", input_type=tap']) {
-    const parsed = parseApprovalHeader(`operation_id="exc_5Rt2", revision="r1", ${odd}`);
+    const parsed = parseApprovalHeader(`operation_id="exc_5Rt2", revision="r1", approver="user", ${odd}`);
     assert.ok(parsed !== undefined && parsed.approved_at === undefined);
   }
-  const quoted = { operation_id: "exc_5Rt2", revision: "r1", input_type: 'a "pen" tap' };
+  const quoted = { operation_id: "exc_5Rt2", revision: "r1", approver: "user", input_type: 'a "pen" tap' };
   assert.deepEqual(parseApprovalHeader(approvalHeader(quoted)), quoted);
   assert.deepEqual(approvalFromMeta({ "personalagentprotocol.org/approval": approval }), approval);
   // The company performs with an input type it doesn't know.
@@ -593,7 +593,7 @@ test("an approval says when and how the user gave it", async () => {
   const done = await w.api.call("POST", NOTES, {
     session: w.session,
     body: {},
-    approval: { operation_id: operation.operation_id, revision: operation.revision, input_type: "gesture" },
+    approval: { operation_id: operation.operation_id, revision: operation.revision, approver: "user", input_type: "gesture" },
   });
   assert.equal(done.status, 200);
   assert.deepEqual(w.notes.performed, [[operation.operation_id, operation.revision]]);
@@ -612,7 +612,7 @@ test("the approving request is compared by meaning, from any Session of theirs",
   const other = await w.another();
   const done = await w.transport.request("POST", `${NOTES}?b=2&a=1`, {
     session: other,
-    headers: { "Content-Type": "application/json", [APPROVAL_HEADER]: approvalHeader({ operation_id: operation.operation_id, revision: operation.revision }) },
+    headers: { "Content-Type": "application/json", [APPROVAL_HEADER]: approvalHeader({ operation_id: operation.operation_id, revision: operation.revision, approver: "user" }) },
     body: '{"y":2,"x":1}',
   });
   assert.equal(done.status, 200);
@@ -632,7 +632,7 @@ test("an approval of earlier terms the user prefers is still accepted", async ()
   const done = await w.api.call("POST", NOTES, {
     session: w.session,
     body: { note: "gift" },
-    approval: { operation_id: first.operation_id, revision: first.revision },
+    approval: { operation_id: first.operation_id, revision: first.revision, approver: "user" },
   });
   assert.equal(done.status, 200);
   assert.deepEqual(w.notes.performed, [[first.operation_id, first.revision]]);
@@ -652,7 +652,6 @@ async function signedInWithReference(w) {
     scopes: ["orders:read"],
     tenantId: TENANT,
     organization: w.company.document.organization,
-    protectedResources: metadata.protected_resources,
   });
   await w.shop.approveDevice(started.userCode, { accountId: "acct_ada" });
   w.clock.advance(started.pollInterval);

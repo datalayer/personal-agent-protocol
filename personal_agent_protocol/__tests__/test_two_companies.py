@@ -73,7 +73,6 @@ async def test_ledgerly_pays_at_northwind_for_ada_asking_her_about_every_payment
         scopes=("books:read", "payments:write"),
         tenant_id=TENANT,
         organization=company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
     clock.advance(started.poll_interval)

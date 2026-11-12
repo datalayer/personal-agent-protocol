@@ -46,7 +46,7 @@ export class MutableClock {
 }
 
 /** The version of each extension an agent lists. */
-const EXTENSION_VERSIONS = { operations: "2", "mediated-sign-in": "1", links: "1", disclosures: "1" };
+const EXTENSION_VERSIONS = { operations: "3", "mediated-sign-in": "1", links: "1", disclosures: "1" };
 
 /** A personal agent's identity: its `client_id`, ES256 or PS384 key, and published documents. */
 export async function agentIdentity({ domain, name, extensions = ["operations"], privateJwk, kid = "key-1", algorithm = "ES256" } = {}) {

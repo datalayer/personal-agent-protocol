@@ -28,8 +28,21 @@ import httpx
 
 from .errors import PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
-from .models import ApiDescriptor, Approval, DiscoveryDocument, Operation, ProtocolModel
-from .operations import ACTION_FAILED, APPROVAL_HEADER, approval_header
+from .models import (
+    ApiDescriptor,
+    Approval,
+    ApprovalDeclined,
+    DiscoveryDocument,
+    Operation,
+    ProtocolModel,
+)
+from .operations import (
+    ACTION_FAILED,
+    APPROVAL_DECLINED,
+    APPROVAL_HEADER,
+    approval_header,
+    declined_from,
+)
 from .refusals import refusal_code, refusal_details
 from .sessions import AccessToken, PapSession
 from .transport import SessionHttpClient
@@ -49,11 +62,13 @@ class ApiError(PersonalAgentProtocolError):
 
 
 class ApiResponse(ProtocolModel):
-    """An API answer: the body, or the operation to approve (`403 approval_required`)."""
+    """An API answer: the body, the operation to approve (`403 approval_required`), or the
+    company's decline of an approval (`403 approval_declined`): nothing was performed."""
 
     status: int
     body: Any = None
     operation: Operation | None = None
+    declined: ApprovalDeclined | None = None
     #: The `Idempotency-Key` a write was sent with; `None` for a read.
     idempotency_key: str | None = None
 
@@ -178,6 +193,23 @@ class ApiClient:
                 raise ApiError(
                     "invalid_operation",
                     "approval_required carries no valid operation",
+                    status_code=403,
+                ) from exc
+        if (
+            response.status_code == 403
+            and isinstance(payload, dict)
+            and payload.get("error") == APPROVAL_DECLINED
+        ):
+            try:
+                return ApiResponse(
+                    status=403,
+                    declined=declined_from(payload),
+                    idempotency_key=key,
+                )
+            except ValueError as exc:
+                raise ApiError(
+                    "invalid_decline",
+                    "approval_declined names no operation and revision",
                     status_code=403,
                 ) from exc
         if response.is_success:

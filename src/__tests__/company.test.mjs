@@ -33,7 +33,7 @@ import {
   SessionSigners,
   approvalHeader,
   discoverCompany,
-  companySkills,
+  TasksClient,
   fetchSkill,
   firstContribution,
   mcpApi,
@@ -135,7 +135,6 @@ function beginDevice(w, scopes = ["orders:read", "orders:write"]) {
       scopes,
       tenantId: TENANT,
       organization: { name: "Manzanita", domain: new URL(w.metadata.protected_resources[0]).hostname },
-      protectedResources: w.metadata.protected_resources,
     })
     .then((started) => ({ device, started }));
 }
@@ -165,7 +164,7 @@ async function operationAt(w, session, token, path) {
   return body.operation;
 }
 
-const approvalOf = (operation) => ({ operation_id: operation.operation_id, revision: operation.revision });
+const approvalOf = (operation) => ({ operation_id: operation.operation_id, revision: operation.revision, approver: "user" });
 
 test("the shared journey: TypeScript agent and TypeScript company in one process", async () => {
   const clock = new MutableClock(new Date());
@@ -200,7 +199,7 @@ test("discovery and OAuth metadata publish one issuer, plain OAuth, and the two 
     "poppy:browser-sign-in": "Use the website signed in, with the other access you approve",
   });
   assert.equal(w.company.document.apis[0].url, "https://manzanita.example/api/openapi.json");
-  assert.deepEqual(w.company.document.extensions.operations, [{ version: "2" }]);
+  assert.deepEqual(w.company.document.extensions.operations, [{ version: "3" }]);
   assert.deepEqual(w.company.document.extensions["mediated-sign-in"], [{
     version: "1",
     fields: [
@@ -482,7 +481,8 @@ test("an agent without the Operations extension is told extension_required", asy
   const refused = await post(w, session, result.token, "exchanges");
   assert.equal(refused.status, 403);
   assert.deepEqual(await refused.json(), { error: "extension_required", extension: "operations" });
-  assert.equal(refused.headers.get("www-authenticate"), 'Bearer error="extension_required", extension="operations"');
+  // Not an access token error: in the JSON body, never in a challenge (§3.3, §7).
+  assert.equal(refused.headers.has("www-authenticate"), false);
 });
 
 test("an agent without the extension gets no operations in a conversation", async () => {
@@ -1190,28 +1190,31 @@ test("a key that signs blindly: its PS384 client assertions and delegations are 
   assert.equal((await w.api.call("GET", ORDERS, { session, token: result.token })).status, 200);
 });
 
-test("Sessions are kept by client_id and sid: unknown starts one, a known one keeps its User and Agent ID, an ended one is remembered", async () => {
+test("Sessions are found by client_id, sid and User ID: unknown starts one, the Agent ID is not checked again, an ended one is remembered", async () => {
   const w = await world();
   const session = await w.start(PAIRWISE, "agt_one");
   const page = await w.conversations.start(w.endpoint, w.message("Hello"), { session, wait: 0 });
   assert.ok(page.conversation_id);
   assert.equal(w.shop.store.keys("session").length, 1);
-  // The same sid under another User ID, or Agent ID, is refused.
+  // The same sid under another User ID is another Session, signed out: never `invalid_session`.
   const mixed = Object.assign(await w.start("usr_somebody_else_000000", "agt_one"), { sid: session.sid });
   const other = await sessionHeaders(w.host.reactor, "GET", ORDERS, { session: mixed });
   const answer = await w.fetch(ORDERS, { method: "GET", headers: other });
-  assert.deepEqual([answer.status, await answer.json()], [400, { error: "invalid_session" }]);
+  assert.equal(answer.status, 401);
+  assert.equal(w.shop.store.keys("session").length, 2);
+  // The Agent ID is the one the Session started with, and is not checked again (§5.3).
   const agent = Object.assign(await w.start(PAIRWISE, "agt_two"), { sid: session.sid });
   const another = await w.fetch(ORDERS, { method: "GET", headers: await sessionHeaders(w.host.reactor, "GET", ORDERS, { session: agent }) });
-  assert.deepEqual([another.status, await another.json()], [400, { error: "invalid_session" }]);
+  assert.equal(another.status, 401);
   const none = Object.assign(await w.start(PAIRWISE), { sid: session.sid });
   const without = await w.fetch(ORDERS, { method: "GET", headers: await sessionHeaders(w.host.reactor, "GET", ORDERS, { session: none }) });
-  assert.deepEqual([without.status, await without.json()], [400, { error: "invalid_session" }]);
+  assert.equal(without.status, 401);
+  assert.equal(w.shop.store.keys("session").length, 2);
 
   // The company ends it: remembered, and the agent starts a new one, once.
   const ended = session.sid;
-  assert.equal(await w.shop.endSession(session.clientId, ended), true);
-  assert.equal(await w.shop.endSession(session.clientId, ended), false);
+  assert.equal(await w.shop.endSession(session.clientId, ended, session.sub), true);
+  assert.equal(await w.shop.endSession(session.clientId, ended, session.sub), false);
   const stale = await sessionHeaders(w.host.reactor, "GET", ORDERS, { session });
   const refused = await w.fetch(ORDERS, { method: "GET", headers: stale });
   assert.deepEqual([refused.status, await refused.json()], [400, { error: "session_ended" }]);
@@ -1313,7 +1316,10 @@ test("authorize redirects to the hosted consent page, which reads the request ba
     { scope: "orders:write", description: "Exchange or return items in your orders" },
   ]);
   assert.match(summary.expires_at, /Z$/);
-  assert.deepEqual(Object.keys(summary).sort(), ["client_domain", "client_name", "expires_at", "request_id", "scopes"]);
+  // What the page starts with and says before the person goes on (§10.8).
+  assert.equal(summary.heading, "Atlas wants to connect to your Manzanita Outfitters account");
+  assert.equal(summary.caution, "Only continue if you asked Atlas to do this just now.");
+  assert.deepEqual(Object.keys(summary).sort(), ["caution", "client_domain", "client_name", "expires_at", "heading", "request_id", "scopes"]);
   const callbackUrl = await w.shop.approveAuthorization(requestId, { accountId: "acct_ada" });
   const result = await client.complete({ callbackUrl });
   assert.ok(result.token);
@@ -1389,7 +1395,7 @@ test("the company publishes its logo, its skills and a conversation resource of 
   const session = await w.start();
   const { result } = await directSignIn(w);
   assert.equal(w.company.document.organization.logo_uri, "https://manzanita.example/logo.png");
-  const [entry] = companySkills(w.company);
+  const [entry] = (await new TasksClient({ transport: w.transport }).get(w.company, { session })).skills;
   assert.deepEqual([entry.name, entry.type, entry.url], ["exchange-a-jacket", "skill-md", "https://manzanita.example/poppy/skills/exchange-a-jacket/SKILL.md"]);
   assert.equal(new TextDecoder().decode(await fetchSkill(entry, { reactor: w.host.reactor })), skill);
 

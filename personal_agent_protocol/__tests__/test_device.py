@@ -133,7 +133,6 @@ def test_device_sign_in_paces_polling_and_protects_tokens() -> None:
                 scopes=("orders:read", "orders:write"),
                 tenant_id="application-one",
                 organization=Organization(name="Company", domain="company.example"),
-                protected_resources=("https://company.example",),
             )
             assert started.user_code == "WDJB-MJHT"
             assert "private-device-code" not in started.model_dump_json()
@@ -202,7 +201,6 @@ def test_device_sign_in_denial_is_terminal() -> None:
                 scopes=("orders:read",),
                 tenant_id="application-one",
                 organization=Organization(name="Company", domain="company.example"),
-                protected_resources=("https://company.example",),
             )
             plugin.clock.advance(1)
             with pytest.raises(AuthorizationError) as caught:
@@ -232,7 +230,7 @@ def test_device_sign_in_denial_is_terminal() -> None:
     ],
 )
 def test_a_device_link_is_shown_only_on_the_issuer_or_its_domains(link: str, allowed: bool) -> None:
-    """Its host is the issuer's, a protected_resources URL's, or a subdomain of either (§4.6)."""
+    """Its host is the issuer's or `organization.domain`, or a subdomain of either (§4.3)."""
 
     async def scenario() -> None:
         def handler(_: httpx.Request) -> httpx.Response:
@@ -259,7 +257,6 @@ def test_a_device_link_is_shown_only_on_the_issuer_or_its_domains(link: str, all
                 scopes=("orders:read",),
                 tenant_id="application-one",
                 organization=Organization(name="Company", domain="company.example"),
-                protected_resources=("https://company.example",),
             )
             if allowed:
                 started = await begin
@@ -275,3 +272,24 @@ def test_a_device_link_is_shown_only_on_the_issuer_or_its_domains(link: str, all
             reactor.stop()
 
     asyncio.run(scenario())
+
+
+def test_another_protected_resource_of_the_issuer_does_not_make_a_link_showable() -> None:
+    """0.4 as published: only the issuer's host and `organization.domain` qualify (§4.3); the
+    hosts of the issuer's other `protected_resources` no longer do."""
+
+    from personal_agent_protocol import verification_host_allowed
+
+    who = {"issuer": "https://auth.example.com", "domain": "Company.example."}
+    assert verification_host_allowed("https://company.example/device", **who)
+    assert verification_host_allowed("https://id.auth.example.com/device", **who)
+    # `https://api.partner.example` may be among the issuer's protected resources: no matter.
+    assert not verification_host_allowed("https://api.partner.example/device", **who)
+    assert not verification_host_allowed("https://example.com/device", **who)
+    assert not verification_host_allowed("not a url", **who)
+    with pytest.raises(TypeError):
+        verification_host_allowed(  # type: ignore[call-arg]
+            "https://company.example/device",
+            issuer="https://auth.example.com",
+            protected_resources=("https://company.example",),
+        )

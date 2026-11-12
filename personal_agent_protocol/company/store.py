@@ -33,7 +33,7 @@ from ..reactor import Clock, SystemClock
 JsonObject = dict[str, Any]
 
 # The kinds of record a company keeps.
-#: A Session by `client_id` and `sid` (§5.3), remembered a while after it ends (§5.5).
+#: A Session by `client_id`, `sid` and User ID (§5.3), remembered a while after it ends (§5.5).
 SESSION = "session"
 #: An access token the company issued, by digest (§4.5).
 ACCESS_TOKEN = "access_token"  # noqa: S105 - a record kind, not a secret
@@ -316,10 +316,10 @@ class IssuedAccessToken:
 
 @dataclass(frozen=True)
 class StoredSession:
-    """A Session, by `client_id` and `sid` (§5.3): its User ID and Agent ID, for its life.
+    """A Session, by `client_id`, `sid` and User ID (§5.3), with the Agent ID it started with.
 
-    A request whose `sid` is unknown starts one; one that names a known `sid`
-    keeps its `sub` and `agent_id`. Once `ends_at` passes, or the company ends it
+    A request whose combination is unknown starts one, signed out; a known `sid` with
+    another User ID is another Session. Once `ends_at` passes, or the company ends it
     (`ended`), the record is kept for `ended_session_memory`, so a request naming
     it gets `session_ended` instead of silently starting it again (§5.5).
     """
@@ -765,8 +765,9 @@ class OperationRevision:
     """
 
     revision: str
-    summary: str
-    terms: dict[str, Any] | None
+    #: The terms in plain language, when the company wrote them so (optional, Operations 3).
+    summary: str | None
+    terms: dict[str, Any]
     expires_at: datetime
     request: str
     asked: str
@@ -820,7 +821,10 @@ class StoredOperation:
     performed, or nobody knows whether it took effect; `performed` with its `outcome`;
     `withdrawn` when the company will never perform it. `account_id` is `None` for one
     returned signed out, which only the Session `session_key` can approve (Operations 3).
-    `approved` and `approved_at` are the record of the approval (Operations 8.1).
+    `approved` and `approved_at` are the record of the approval (Operations 8.1): the
+    revision and when the company received it; `approval` is what the personal agent
+    stated with it, `approver` and any `approved_at`, `input_type` and `reference`
+    (Operations 6). A declined approval is never recorded.
     """
 
     operation_id: str
@@ -836,6 +840,7 @@ class StoredOperation:
     status: Literal["open", "performing", "performed", "withdrawn"] = "open"
     approved: str | None = None
     approved_at: datetime | None = None
+    approval: dict[str, Any] | None = None
     outcome: OperationOutcome | None = None
 
     @property
@@ -870,6 +875,7 @@ class StoredOperation:
             "status": self.status,
             "approved": self.approved,
             "approved_at": None if self.approved_at is None else _time(self.approved_at),
+            "approval": self.approval,
             "outcome": None if self.outcome is None else self.outcome.to_json(),
         }
 
@@ -889,6 +895,7 @@ class StoredOperation:
             status=value["status"],
             approved=value["approved"],
             approved_at=None if approved_at is None else _parse(approved_at),
+            approval=value.get("approval"),
             outcome=None if outcome is None else OperationOutcome.from_json(outcome),
         )
 

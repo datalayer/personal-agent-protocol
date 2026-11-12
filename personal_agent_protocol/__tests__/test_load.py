@@ -374,7 +374,6 @@ async def test_many_device_pollers_respect_interval_and_slow_down() -> None:
             scopes=("orders:read",),
             tenant_id=TENANT,
             organization=world.company.document.organization,
-            protected_resources=metadata.protected_resources,
         )
 
     started = await asyncio.gather(*(begin() for _ in range(SIZE)))

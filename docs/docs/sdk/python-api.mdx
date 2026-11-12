@@ -13,16 +13,19 @@ Unknown or internal symbols are deliberately excluded.
 - [`AccessToken`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. An access token for one account, kept beside what the SDK knows of it (§4.5).
 - [`ACTION_FAILED`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `ACTION_FAILED` constant.
 - [`AgentIdentityClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/identity.py) — Class. Fetch and verify a personal agent's public identity documents.
+- [`AgentInstruction`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. An instruction the User gave the Personal Agent, which an agent approval rests on
 - [`Alternative`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Another way to do a task (§8.2): `instructions`, `references`, or both.
 - [`AlternativeReference`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where an alternative points (§8.2): an OpenAPI operation, an MCP tool, or a page.
 - [`ApiClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. Read and change through a company's API, the credentials host-owned.
 - [`ApiError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. The company refused an API call; `code` is its error, never its body.
-- [`ApiResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. An API answer: the body, or the operation to approve (`403 approval_required`).
-- [`Approval`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A statement that the User approved this revision of an operation (Operations 5, 6).
+- [`ApiResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Class. An API answer: the body, the operation to approve (`403 approval_required`), or the
+- [`Approval`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A statement that this revision of an operation is approved (Operations 5, 6).
+- [`APPROVAL_DECLINED`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `APPROVAL_DECLINED` constant.
 - [`APPROVAL_HEADER`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `APPROVAL_HEADER` constant.
-- [`approval_header`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The value of `Poppy-Approval` (Operations 6): `operation_id`, `revision` and any
+- [`approval_header`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The value of `Poppy-Approval` (Operations 6): `operation_id`, `revision`, `approver`
 - [`APPROVAL_META_KEY`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `APPROVAL_META_KEY` constant.
 - [`APPROVAL_SURFACES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `APPROVAL_SURFACES` constant.
+- [`ApprovalDeclined`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A Company's final refusal of an approval that passed its checks (Operations 6).
 - [`ApprovalRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. What a user is asked to approve: nothing has been done yet.
 - [`ApprovalSent`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. What came of sending an approval.
 - [`ApprovalSurface`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The host's own approval surface: the user, not a model, answers.
@@ -57,6 +60,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`ConversationResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `ConversationResponse` constant.
 - [`create_resolving_client`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. An `httpx` client whose every request goes through a `ResolvingTransport`.
 - [`CursorExpiredHandler`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `CursorExpiredHandler` constant.
+- [`declined_from`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The decline a Company answered an approval with, or `None` (Operations 6).
 - [`DelegatedKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. One delegated key, its delegation, and when the delegation expires (§5.2).
 - [`DelegatedKeyCustody`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Where delegated keys live: one current key per User ID, replaced when it rotates.
 - [`DelegatedSessionSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. `pap.sessionSigner`: a delegated key per User ID signs each request's Session JWT (§5.2).
@@ -84,14 +88,12 @@ Unknown or internal symbols are deliberately excluded.
 - [`DpopProver`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign the DPoP proof of one request (§4.5).
 - [`Ed25519OperatorKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. An operator's Ed25519 key in this process's memory.
 - [`ExcludedTask`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A task the company chose not to offer through the protocol (§8.1).
-- [`ExcludedTasks`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The document at `excluded_tasks.url` (§8.1): the same for every user.
-- [`ExcludedTasksDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where the tasks the Company chose not to offer through the protocol are listed (§8.1).
-- [`feedback_endpoint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Function. The company's feedback endpoint, when it asks for feedback.
 - [`FeedbackClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. Send feedback reports in a Session, signed in or out.
-- [`FeedbackDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where personal agents report a task the protocol can't do at this company (§8).
+- [`FeedbackDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where personal agents report a task the protocol can't do at this company (§9.3):
 - [`FeedbackError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. The company refused a feedback report: `invalid_request`, `rate_limited`, a token error.
 - [`FeedbackReport`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. One report of a task the company offers no way to do through the protocol (§8).
 - [`fetch_ucp_profile`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. The Company's UCP profile, from its validated domain, with no redirect followed.
+- [`FetchedPage`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pages.py) — Class. A website page as the agent's own HTTP client got it. Content from the company
 - [`generate_pairwise_user_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Function. Generate a non-PII user ID to persist for one user/company issuer pair.
 - [`generate_request_id`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Function. A request ID with at least 128 random bits, unique for the User (§8.3, guides).
 - [`IdentityError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Personal-agent metadata or public keys could not be verified safely.
@@ -118,6 +120,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`MediatedSignInResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Class. Where a Mediated Sign-In stands, without any credential.
 - [`Message`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A message sent by either side, or returned in a conversation event (§8.4).
 - [`MetadataFetch`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The bounds of one public metadata fetch: size, total time, approved addresses.
+- [`new_approval_reference`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. A `reference` for one approval (Operations 6): `apr_` and 16 random bytes, so it is
 - [`new_dpop_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Function. A new P-256 key, used for nothing but DPoP proofs (§5.2).
 - [`new_idempotency_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. A fresh key for a write: a random UUID (version 4).
 - [`new_operator_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. A new Ed25519 key, used for nothing but operator signatures (§5.3).
@@ -125,14 +128,14 @@ Unknown or internal symbols are deliberately excluded.
 - [`OAuthServerMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The issuer's RFC 8414 metadata, with the fields this protocol requires (§3.2).
 - [`openapi_url`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/apis.py) — Function. The company's OpenAPI description, when it advertises one.
 - [`OpenTelemetrySink`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/telemetry.py) — Class. `pap.telemetry` as OpenTelemetry spans, one per event, under the current span.
-- [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. One action the Company performs once the User approves it (Operations 3).
+- [`Operation`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. One action the Company performs once it is approved (Operations 3).
 - [`operation_from`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The one operation object, from whichever interface carried it (Operations 4).
 - [`OperationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. An operation could not be approved, or its approval could not be sent.
 - [`operations_content`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. A message's `extensions` carrying the Operations extension's content (Operations 2).
 - [`OPERATIONS_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `OPERATIONS_EXTENSION` constant.
 - [`operations_negotiated`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Whether the Company lists `operations` at this version and the Session declares it
 - [`OPERATIONS_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Constant. Public `OPERATIONS_VERSION` constant.
-- [`OperationsClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. Get the user's approval of an operation, and send it at most once.
+- [`OperationsClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Class. Approve an operation, as the user or on the user's instruction, and send the
 - [`OperationsContent`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The Operations extension's content of a message, `extensions.operations` (Operations 2).
 - [`operator_directory`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. The JWK Set a host serves at its `Signature-Agent` URL (Web Bot Auth §5.5.1).
 - [`operator_key_from`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. The `Ed25519OperatorKey` of a private key.
@@ -143,6 +146,8 @@ Unknown or internal symbols are deliberately excluded.
 - [`OperatorSigningKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. An operator's key: `keyid` is its RFC 8037 thumbprint, and it signs with Ed25519.
 - [`OperatorVerdict`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. What one request's operator signature came to (Web Bot Auth, appendix C.1).
 - [`Organization`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `Organization` class.
+- [`page_carries_session`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pages.py) — Function. Whether a page fetch carries the Session header (§5.2): an HTTPS URL whose host is
+- [`PageClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pages.py) — Class. Fetch a company's website pages without a browser, in a Session, signed out.
 - [`PAIRWISE_USER_ID_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `PAIRWISE_USER_ID_STORES` constant.
 - [`PairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Persist stable random identities by tenant, local user, and issuer.
 - [`PapCorePlugin`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Contribute PAP's secure defaults through Reactor.
@@ -188,6 +193,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`SessionHttpClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/transport.py) — Class. Send requests with the Session header; a redirect is refused, never followed (§3).
 - [`SessionJwtRequest`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. What one Session JWT is signed for (§5.2): a request, its Session, its User.
 - [`SessionSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign the Session JWT of one request with a delegated key (§5.2).
+- [`SessionTasks`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/tasks.py) — Class. A Company's tasks response in one Session (§9): never used in another.
 - [`SharedRateLimitBudget`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default `pap.rateLimitBudget`: per-company budgets in one process.
 - [`sign_operator_request`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. The signature of one request, its `created`, `expires` and `nonce` given.
 - [`Signer`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Sign a compact assertion without exposing private key material.
@@ -204,12 +210,17 @@ Unknown or internal symbols are deliberately excluded.
 - [`SUPPORTED_PROTOCOL_VERSIONS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `SUPPORTED_PROTOCOL_VERSIONS` constant.
 - [`SystemClock`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default UTC wall clock.
 - [`SystemRandomSource`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Default operating-system cryptographic randomness.
+- [`tasks_endpoint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/tasks.py) — Function. The Company's tasks endpoint, when its poppy.json names one (§3.1).
+- [`TasksClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/tasks.py) — Class. Get a Company's tasks response in a Session, and keep it for that Session only.
+- [`TasksDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where a Personal Agent gets, for a Session, the tasks the Company chose not to offer,
+- [`TasksError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/tasks.py) — Class. The tasks endpoint refused the Session header: `invalid_session`, `version_unsupported`.
+- [`TasksResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The response to `GET {tasks.endpoint}` for one Session (§9).
 - [`TELEMETRY_ATTRIBUTES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/telemetry.py) — Constant. Public `TELEMETRY_ATTRIBUTES` constant.
 - [`TELEMETRY_EVENTS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/telemetry.py) — Constant. Public `TELEMETRY_EVENTS` constant.
 - [`TELEMETRY_SINKS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `TELEMETRY_SINKS` constant.
 - [`TelemetryEvent`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/telemetry.py) — Class. One finished protocol stage: a span for traces, an event for analytics.
 - [`TelemetrySink`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Receive each finished protocol stage (`telemetry.TelemetryEvent`), redacted already.
-- [`terms_differences`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Where `terms` disagree with the `summary`, or with what the agent asked for.
+- [`terms_differences`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. Where `terms` disagree with what the agent asked for, or with the `summary`.
 - [`TextDelta`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Class. A piece of a message still being written (SSE `text-delta`, §7.6).
 - [`TOKEN_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `TOKEN_STORES` constant.
 - [`TokenResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Class. A token endpoint's answer, as on the wire (§4.7): plain OAuth.
@@ -230,7 +241,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`UcpProfile`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Class. A Company's UCP profile, as far as this extension reads it (UCP extension 3).
 - [`URL_SAFETY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `URL_SAFETY_POLICIES` constant.
 - [`validate_direct_sign_in_callback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Validate redirect location, state, and issuer before exposing the code.
-- [`verification_host_allowed`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/device.py) — Function. Whether a device sign-in link may be shown for this company (§4.6).
+- [`verification_host_allowed`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/device.py) — Function. Whether a device sign-in link may be shown for this company (§4.3).
 - [`verify_operator_signature`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. What the request's operator signature comes to; `headers` are lower-case.
 - [`WebBotAuthSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. `pap.operatorSigner`: a fresh Web Bot Auth signature for each request (§5.3).
 - [`WorkingChanged`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Class. A stream's `working` event (§8.6): `working` is no recorded event, so the Company

@@ -97,7 +97,6 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     world.clock.advance(started.poll_interval)
     assert (await device.poll(started.reference)).status == "pending"
@@ -156,7 +155,9 @@ async def test_a_company_restarted_over_its_store_continues_every_flow() -> None
     assert again.status == "signed_in" and again.token is not None
 
     # The operation returned before the restart is performed once after it.
-    approval = Approval(operation_id=proposal.operation_id, revision=proposal.revision)
+    approval = Approval(
+        approver="user", operation_id=proposal.operation_id, revision=proposal.revision
+    )
     for _ in range(2):
         await world.conversations.send(
             endpoint,

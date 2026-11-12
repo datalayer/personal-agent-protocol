@@ -23,8 +23,9 @@ from personal_agent_protocol import (
     FeedbackReport,
     PapSession,
     SessionClient,
+    TasksClient,
 )
-from personal_agent_protocol.company.store import SESSION
+from personal_agent_protocol.company.store import SESSION, StoredSession
 from personal_agent_protocol.demo.kit import AgentIdentity
 from personal_agent_protocol.models import (
     Alternative,
@@ -87,8 +88,8 @@ async def test_an_ended_sessions_sid_is_refused_not_a_new_session() -> None:
     sessions = SessionClient(reactor=world.reactor, http_client=world.http)
     session = await sessions.start(**_who(world))
     assert (await _report(world, session)).status_code == 202
-    assert await world.shop.end_session(session.client_id, session.sid)
-    assert not await world.shop.end_session(session.client_id, session.sid)
+    assert await world.shop.end_session(session.client_id, session.sid, session.sub)
+    assert not await world.shop.end_session(session.client_id, session.sid, session.sub)
     ended = await _report(world, session)
     assert (ended.status_code, ended.json()) == (400, {"error": "session_ended"})
 
@@ -107,24 +108,41 @@ async def test_an_ended_sessions_sid_is_refused_not_a_new_session() -> None:
 
 @pytest.mark.asyncio
 async def test_a_session_keeps_the_agent_id_it_started_with() -> None:
+    """The Agent ID is fixed when the Session starts and not checked again (§5.3): a later
+    request naming another, or none, continues the same Session."""
+
     world = World()
     sessions = SessionClient(reactor=world.reactor, http_client=world.http)
     for other in ("agt_shopping", None):
         session = await sessions.start(**_who(world), agent_id="agt_travel")
         assert (await _report(world, session)).status_code == 202
-        changed = await _report(world, replace(session, agent_id=other))
-        assert (changed.status_code, changed.json()) == (400, {"error": "invalid_session"})
+        known = len(world.shop.store.keys(SESSION))
+        assert (await _report(world, replace(session, agent_id=other))).status_code == 202
+        assert len(world.shop.store.keys(SESSION)) == known
+    stored = [
+        StoredSession.from_json(record.value) for record in await world.shop.store.records(SESSION)
+    ]
+    assert {item.agent_id for item in stored} == {"agt_travel"}
 
 
 @pytest.mark.asyncio
-async def test_a_session_keeps_the_user_id_it_started_with() -> None:
+async def test_a_known_sid_with_another_user_id_is_another_session() -> None:
+    """A Session is found by `client_id`, `sid` and User ID (§5.3): the same `sid` with
+    another User ID starts another Session, signed out, never `invalid_session`; ending
+    one leaves the other (§5.5)."""
+
     world = World()
     session = await SessionClient(reactor=world.reactor, http_client=world.http).start(
         **_who(world)
     )
     assert (await _report(world, session)).status_code == 202
-    changed = await _report(world, replace(session, sub="usr_somebody_else_000000"))
-    assert (changed.status_code, changed.json()) == (400, {"error": "invalid_session"})
+    other = replace(session, sub="usr_somebody_else_000000")
+    assert (await _report(world, other)).status_code == 202
+    assert len(world.shop.store.keys(SESSION)) == 2
+    assert await world.shop.end_session(session.client_id, session.sid, session.sub)
+    ended = await _report(world, session)
+    assert (ended.status_code, ended.json()) == (400, {"error": "session_ended"})
+    assert (await _report(world, other)).status_code == 202
 
 
 @pytest.mark.asyncio
@@ -161,7 +179,6 @@ async def test_a_device_code_works_only_for_the_agent_it_was_issued_to() -> None
         scopes=("orders:read",),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     world.clock.advance(started.poll_interval)
     assert (await device.poll(started.reference)).status == "pending"
@@ -278,12 +295,10 @@ def test_an_unknown_changes_hint_is_read_as_irreversible() -> None:
 @pytest.mark.asyncio
 async def test_the_excluded_tasks_are_read_and_their_alternatives_filtered() -> None:
     world = World()
-    await world.signed_out_session()
-    excluded = await DiscoveryClient(reactor=world.reactor, http_client=world.http).excluded_tasks(
-        world.company
-    )
-    assert excluded is not None
-    assert [task.task for task in excluded.tasks] == [
+    session = await world.signed_out_session()
+    excluded = await TasksClient(transport=world.transport).get(world.company, session=session)
+    assert excluded.available
+    assert [task.task for task in excluded.excluded_tasks] == [
         "Change the size of an item after it has shipped"
     ]
     alternative = Alternative.model_validate(

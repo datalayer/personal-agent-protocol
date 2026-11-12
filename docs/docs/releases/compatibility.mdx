@@ -4,28 +4,32 @@ title: Compatibility
 
 # Compatibility
 
-This page is versioned with the SDK: it describes **SDK 0.32.0**.
+This page is versioned with the SDK: it describes **SDK 0.33.0**.
 
-## The PAP draft implemented
+## The PAP version implemented
 
 | | Python (`personal_agent_protocol`) | TypeScript (`@datalayer/personal-agent-protocol`) |
 | --- | --- | --- |
 | PAP profile | `PROTOCOL_PROFILE` = `0.4` | `PROTOCOL_PROFILE` = `"0.4"` |
-| Specification revision | `PROTOCOL_REVISION` = `2026-11-06` | `PROTOCOL_REVISION` = `"2026-11-06"` |
-| Operations extension | `OPERATIONS_VERSION` = `2` | `OPERATIONS_VERSION` = `"2"` |
+| Specification revision | `PROTOCOL_REVISION` = `2026-11-10` | `PROTOCOL_REVISION` = `"2026-11-10"` |
+| Operations extension | `OPERATIONS_VERSION` = `3` | `OPERATIONS_VERSION` = `"3"` |
 
-Both SDKs implement [PAP draft 0.4](https://personalagentprotocol.org/docs/spec)
-as of upstream commit `46beb21` (**2026-11-06**; the draft is served at `/docs/spec` until it is published), the **Operations
-extension version 2** and the **Mediated Sign-In extension version 1**. A test holds the two SDKs, this page, the package
+Both SDKs implement [PAP version 0.4](https://personalagentprotocol.org/docs/0.4/spec)
+as published on **2026-11-10** (upstream commit `4803900`, the 1.0 release candidate, frozen at `/docs/0.4/spec`), the **Operations
+extension version 3** and the **Mediated Sign-In extension version 1**. They announce and accept `protocol_version` `0.4` only:
+`/docs/spec` is now the 1.0 draft, which a later release follows once it is published or changes the wire. Operations version 2 is
+not supported on either side, and operations on websites (the `Poppy-Operation` header and the extension's `endpoint`) and the
+Browser Control extension are not implemented yet. A test holds the two SDKs, this page, the package
 descriptions, `protocol/UPSTREAM.md`, and the requirement ledger
-(`protocol/requirements.yaml`) to the same three values. Upstream is a draft:
-a change to it is reviewed and released as a new profile, never picked up
-from an unattended fetch.
+(`protocol/requirements.yaml`) to the same three values. A published version
+does not change; a later upstream version is reviewed and released as a new
+profile, never picked up from an unattended fetch.
 
 ## SDK versions
 
 | SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
 | --- | --- | --- | --- | --- |
+| `0.33.0` | `0.4` | 2026-11-10 | v3 | [0.32 → 0.33](/releases/migration/#032--033): 0.4 as published at `4803900`; wire-breaking: task coverage per Session (`tasks.endpoint`), Operations version 3 (`approver`, required `terms`, `approval_declined`), `extension_required` in a JSON body at APIs, Sessions found by User ID too, Device Sign-In links on the issuer's host or `organization.domain` |
 | `0.32.0` | `0.4` | 2026-11-06 | v2 | [0.31 → 0.32](/releases/migration/#031--032): draft 0.4 as of `46beb21`; wire-breaking: `Poppy-Version` and `Poppy-Extensions` on every request, request IDs on every conversation POST, a conversation's state in four fields, `poppy:browser-sign-in` for a signed-in join |
 | `0.31.0` | `0.3` | 2026-11-04 | v2 | [0.30 → 0.31](/releases/migration/#030--031): 0.3 as published at `2289293`; wire-breaking: `poppy_dlg`, `session_ended`, extension content in `extensions` |
 | `0.30.0` | `0.3` | 2026-10-30 | v2 | none: [0.29 → 0.30](/releases/migration/#029--030) adds operator signatures, off until a host and a company ask for them |

@@ -56,7 +56,6 @@ from personal_agent_protocol.extensions import (
     negotiate_extensions,
     parse_extensions_header,
 )
-from personal_agent_protocol.feedback import feedback_endpoint
 from personal_agent_protocol.json import loads_strict
 from personal_agent_protocol.models import (
     Author,
@@ -77,6 +76,8 @@ from personal_agent_protocol.reactor import (
     PublicUrlSafetyPolicy,
     SessionJwtRequest,
 )
+from personal_agent_protocol.refusals import refusal_code, refusal_details
+from personal_agent_protocol.tasks import tasks_endpoint
 
 LOCAL = [case for case in load_fixture_cases() if case.check is not None]
 
@@ -162,8 +163,11 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             assert document.agent is not None
             protocols = document.agent.protocols
             assert [item.account_access for item in protocols] == expect["account_access"]
-        if "feedback_endpoint" in expect:
-            assert feedback_endpoint(document) == expect["feedback_endpoint"]
+        if "tasks_endpoint" in expect:
+            assert tasks_endpoint(document) == expect["tasks_endpoint"]
+            # What 0.4 as published moved to the tasks response is not read from poppy.json.
+            for moved in ("feedback", "excluded_tasks", "skill_index"):
+                assert moved not in type(document).model_fields
         if "browsing_disabled" in expect:
             assert document.browsing_disabled is expect["browsing_disabled"]
         if "browser_sign_in_unscoped" in expect:
@@ -191,10 +195,14 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         )
         assert preserved["example.com/gift-wrap"][0].model_extra == {"color": "red"}
     elif case.check == "extension_required":
-        assert (
-            extension_required(given["status"], given["body"], given.get("www_authenticate"))
-            == expect["extension"]
-        )
+        # The JSON body only: a challenge is never read for it (§3.3, §7).
+        assert extension_required(given["status"], given["body"]) == expect["extension"]
+        if "www_authenticate" in given:
+            refused = httpx.Response(
+                given["status"], headers={"WWW-Authenticate": given["www_authenticate"]}
+            )
+            assert refusal_code(refused, given["body"], "refused") == "refused"
+            assert "extension" not in refusal_details(refused, given["body"])
     elif case.check == "conversation_page":
         page = ConversationEventPage.model_validate(given)
         assert [event.type for event in page.events if event.known] == expect["known_types"]
@@ -210,6 +218,10 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             with pytest.raises(ValueError):
                 Message(id="msg_ctx", author=Author(type="agent"), context=context)
     elif case.check == "operation":
+        if not expect["valid"]:
+            with pytest.raises(ValueError):
+                Operation.model_validate(given)
+            return
         operation = Operation.model_validate(given)
         for key, value in expect.get("extra", {}).items():
             assert (operation.model_extra or {})[key] == value

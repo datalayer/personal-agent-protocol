@@ -77,7 +77,13 @@ from personal_agent_protocol.demo.kit import (
     _Routing,
     personal_agent_reactor,
 )
-from personal_agent_protocol.demo.manzanita import ADA, ADA_CODE, UCP_PRODUCTS, ManzanitaPlugin
+from personal_agent_protocol.demo.manzanita import (
+    ADA,
+    ADA_CODE,
+    UCP_PRODUCTS,
+    ManzanitaPlugin,
+    decline_agent_returns,
+)
 from personal_agent_protocol.models import Author, DiscoveryDocument, Message
 from personal_agent_protocol.reactor import first_contribution, resolve_addresses
 
@@ -204,6 +210,8 @@ class Docs:
             mediated_fields=(("email", "Email", False), ("password", "Password", True)),
             ucp=True,
             ucp_products=UCP_PRODUCTS,
+            # Manzanita's own rule: an agent approval of a return is declined.
+            decline=decline_agent_returns,
         )
         service = build_company(
             config,
@@ -254,7 +262,6 @@ class Docs:
             scopes=scopes,
             tenant_id=TENANT,
             organization=(await self.discovered(domain)).document.organization,
-            protected_resources=metadata.protected_resources,
         )
         account = "acct_ada_northwind" if domain == northwind_demo.DOMAIN else "acct_ada"
         await self.companies[domain].approve_device(started.user_code, account_id=account)
@@ -593,6 +600,103 @@ async def _confirm_display(docs: Docs) -> tuple[dict[str, Any], Check]:
     }, check
 
 
+async def _proposed_at(docs: Docs, domain: str, path: str) -> dict[str, Any]:
+    """A signed-in Session, an operation the company proposed at `path`, and its request."""
+
+    session, token, _ = await docs.signed_in(domain, ("orders:read", "orders:write"))
+    api = ApiClient(transport=docs.transport)
+    url = f"https://{domain}/api/orders/ord_7Hk2/{path}"
+
+    async def request(approval: Any = None) -> Any:
+        return await api.call("POST", url, session=session, token=token, body={}, approval=approval)
+
+    return {"operation": (await request()).operation, "request": request}
+
+
+@case("docs/docs/guides/operations.mdx#4")
+async def _approve_as_agent(docs: Docs) -> tuple[dict[str, Any], Check]:
+    """The gift wrap is USD 5.00: the instruction covers it, and nobody is asked."""
+
+    proposed = await _proposed_at(docs, "shop.example", "gift-wrap")
+    surface = docs.host.approvals
+    assert surface is not None
+    asked = len(surface.asked)
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        approval = namespace["approval"]
+        assert approval.approver == "agent" and approval.input_type is None
+        assert approval.reference.startswith("apr_") and len(surface.asked) == asked
+        # The same check says it can't tell about an exchange, and no to a dearer wrap.
+        exchange = (await _proposed(docs, "shop.example"))["operation"]
+        assert namespace["covers"](exchange) is None
+        dear = proposed["operation"].model_copy(
+            update={"terms": {"price": {"amount": "10.01", "currency": "USD"}}}
+        )
+        assert namespace["covers"](dear) is False
+        assert (await proposed["request"](approval)).status == 200
+
+    return {
+        "operation": proposed["operation"],
+        "operations": OperationsClient(reactor=docs.reactor),
+        "organization": (await docs.discovered("shop.example")).document.organization,
+        "tenant_id": "tenant",
+    }, check
+
+
+@case("docs/docs/guides/operations.mdx#5")
+async def _declined(docs: Docs) -> tuple[dict[str, Any], Check]:
+    """Manzanita declines an agent approval of a return: nothing is done."""
+
+    from personal_agent_protocol import Approval
+
+    proposed = await _proposed_at(docs, "shop.example", "returns")
+    operation = proposed["operation"]
+
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        sent = namespace["sent"]
+        assert sent.status == "declined" and sent.ask_user
+        assert sent.declined.reason == "A return is refunded only when you approve it yourself."
+        assert sent.declined.alternative is not None
+
+    return {
+        "operations": OperationsClient(reactor=docs.reactor),
+        "request": proposed["request"],
+        "approval": Approval(
+            operation_id=operation.operation_id, revision=operation.revision, approver="agent"
+        ),
+    }, check
+
+
+@case("docs/docs/guides/personal-agent.mdx#2")
+async def _tasks_per_session(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        tasks = namespace["tasks"]
+        assert tasks.available and tasks.session == namespace["session"].sid
+        assert tasks.endpoint == "https://shop.example/poppy/tasks"
+        assert tasks.feedback_endpoint == "https://shop.example/poppy/feedback"
+
+    return {
+        "transport": docs.transport,
+        "company": await docs.discovered("shop.example"),
+        "session": await docs.signed_out("shop.example"),
+    }, check
+
+
+@case("docs/docs/guides/personal-agent.mdx#3")
+async def _fetched_page(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        page = namespace["page"]
+        # The reference company serves no such page; what matters is how it was asked.
+        assert page.url == "https://shop.example/help/returns"
+        assert page.session_header_sent and not page.invalid_session
+
+    return {
+        "transport": docs.transport,
+        "company": await docs.discovered("shop.example"),
+        "session": await docs.signed_out("shop.example"),
+    }, check
+
+
 # Companies --------------------------------------------------------------------------------
 
 
@@ -822,7 +926,7 @@ async def _acting_company(docs: Docs) -> tuple[dict[str, Any], Check]:
             "changes": "irreversible",
             "personal_data": True,
         }
-        assert document["extensions"]["operations"] == [{"version": "2"}]
+        assert document["extensions"]["operations"] == [{"version": "3"}]
 
     return {"http": docs.http, "cancel_order": cancel_order}, check
 

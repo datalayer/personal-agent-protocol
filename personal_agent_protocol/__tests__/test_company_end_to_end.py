@@ -159,7 +159,6 @@ async def test_a_user_and_a_company_from_question_to_confirmed_exchange() -> Non
         scopes=("orders:read", "orders:write"),
         tenant_id=TENANT,
         organization=world.company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     world.clock.advance(started.poll_interval)
     assert (await device.poll(started.reference)).status == "pending"

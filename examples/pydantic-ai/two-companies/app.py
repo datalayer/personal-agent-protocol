@@ -92,7 +92,6 @@ async def run_two_companies() -> dict[str, Any]:
         scopes=("books:read", "payments:write"),
         tenant_id=TENANT,
         organization=company.document.organization,
-        protected_resources=metadata.protected_resources,
     )
     await firm.approve_device(started.user_code, account_id="acct_ada_ledgerly")
     clock.advance(started.poll_interval)

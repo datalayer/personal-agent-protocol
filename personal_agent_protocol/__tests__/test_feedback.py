@@ -18,7 +18,7 @@ from personal_agent_protocol import (
     FeedbackClient,
     FeedbackError,
     FeedbackReport,
-    feedback_endpoint,
+    TasksClient,
 )
 from personal_agent_protocol.company import COMPANY_RATE_LIMITS
 
@@ -58,7 +58,10 @@ def test_a_report_is_task_and_description_only() -> None:
 async def test_a_signed_out_and_a_signed_in_session_report_with_no_scope() -> None:
     world = World()
     session = await world.signed_out_session()
-    endpoint = feedback_endpoint(world.company.document)
+    # The endpoint comes from the Session's tasks response, never from poppy.json (§9, §9.3).
+    assert "feedback" not in world.company.document.model_dump()
+    tasks = await TasksClient(transport=world.transport).get(world.company, session=session)
+    endpoint = tasks.feedback_endpoint
     assert endpoint == FEEDBACK
     client = FeedbackClient(transport=world.transport)
     # The task can be done after all: 200 and an alternative, content from the company (§9.3).
@@ -136,7 +139,8 @@ async def test_a_company_without_feedback_neither_lists_nor_accepts_it() -> None
     world = World()
     world.shop.config = dataclasses.replace(world.shop.config, feedback=False)
     session = await world.signed_out_session()
-    assert feedback_endpoint(world.company.document) is None
+    tasks = await TasksClient(transport=world.transport).get(world.company, session=session)
+    assert tasks.available and tasks.feedback_endpoint is None
     with pytest.raises(FeedbackError) as raised:
         await FeedbackClient(transport=world.transport).report(FEEDBACK, GIFT_CARD, session=session)
     assert raised.value.status_code == 404

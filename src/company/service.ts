@@ -1123,7 +1123,7 @@ interface Asked {
   readonly request: string;
   readonly digest: string;
   /** Asked by a joined browser on the website (Operations 4). */
-  readonly website: boolean;
+  readonly website?: boolean;
 }
 
 /**

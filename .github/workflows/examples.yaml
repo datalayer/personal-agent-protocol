@@ -59,12 +59,9 @@ jobs:
       # to have no upper bound. The ref is the Agent Runtimes branch that adopts the new
       # SDK.
       #
-      # 0.33.0 (PAP 0.4 as published, Operations version 3) is such a release: the ref is
-      # the adoption branch of https://github.com/datalayer/agent-runtimes/pull/140.
-      # 0.34.0 breaks nothing those applications use, but the released Agent Runtimes and
-      # that branch pin below it: feat/pap-0.34 is that branch with the pin widened to 0.34.
-      # Empty it again as soon as an Agent Runtimes release pins this SDK's minor.
-      AGENT_RUNTIMES_REF: feat/pap-0.34
+      # Empty: Agent Runtimes 1.6.32 accepts 0.33 and 0.34 (personal-agent-protocol
+      # >=0.33.0,<0.35), so the job tests the released package.
+      AGENT_RUNTIMES_REF: ''
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7

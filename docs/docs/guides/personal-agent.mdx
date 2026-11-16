@@ -67,14 +67,12 @@ own, and the company's domain and issuer; anything else is refused
 document and `company.protocol_version` (`companyProtocolVersion(company)`) names
 it.
 
-The versions the agent implements are `PROTOCOL_PROFILE`, 0.4 as published, unless
-you ask for others. The 1.0 draft (`DRAFT_PROTOCOL_VERSION`, `1.0`) is opt-in:
-`DiscoveryClient(protocol_versions=("0.4", "1.0"))`
-(`discoverCompany(domain, { protocolVersions: ["0.4", "1.0"] })`) uses a company at
-1.0 when it serves it and at 0.4 otherwise; `("1.0",)` alone uses only companies that
-serve the draft. A draft can still change in ways that aren't backward compatible,
-and two parties that both say `1.0` would not notice, so nothing announces 1.0 unless
-you name it. Today the draft differs from 0.4 on the wire in the version string only.
+The versions the agent implements are `DEFAULT_PROTOCOL_VERSION`, the 1.0 draft
+(`DRAFT_PROTOCOL_VERSION`, `1.0`), unless you ask for others. 0.4 as published
+(`PROTOCOL_PROFILE`) is opt-in: `DiscoveryClient(protocol_versions=("1.0", "0.4"))`
+(`discoverCompany(domain, { protocolVersions: ["1.0", "0.4"] })`) uses a company at
+1.0 when it serves it and at 0.4 otherwise; `("0.4",)` alone uses only companies that
+serve 0.4. Today the draft differs from 0.4 on the wire in the version string only.
 `SessionClient.start(..., company=company)` names the version the company was
 discovered at (`company.session_version`, `companySessionVersion(company)`) in the
 Session, or pass `protocol_version` (`protocolVersion`) yourself.

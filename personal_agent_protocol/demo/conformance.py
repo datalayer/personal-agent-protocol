@@ -141,8 +141,8 @@ class ManzanitaConformance:
         for identity in (self.atlas, self.plain):
             self.network.add(identity.domain, identity.website())
         config = None if world is None else replace(CONFIG, **world_config(world))
-        #: The versions Manzanita serves and Atlas implements, both: the published version
-        #: by default, or such as `("1.0",)` to run the suite at the 1.0 draft (§3.4).
+        #: The versions Manzanita serves and Atlas implements, both: the 1.0 draft by
+        #: default, or such as `("0.4",)` to run the suite at 0.4 as published (§3.4).
         self.protocol_versions = protocol_versions
         if protocol_versions is not None:
             config = replace(config or CONFIG, protocol_versions=protocol_versions)

@@ -11,7 +11,7 @@
 //
 // config.json: {"port", "ca", "base_url", "scenario", "accounts", "capabilities",
 // "clock" (ISO), "world" (a conformance world, or null for the default), "protocol_versions"
-// (the versions the agent implements, or null for the published one),
+// (the versions the agent implements, or null for the default one),
 // "agent": {"domain", "name", "key", "extensions"}, "other": {...}}.
 // The user's and the demo operator's actions are asked of the Python side, one JSON line
 // each ({"ask": "approve_device" | "approve_authorization" | "wait" | "revise" |

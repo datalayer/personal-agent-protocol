@@ -3,7 +3,7 @@
 - Protocol: Personal Agent Protocol (Poppy)
 - Profile implemented: 0.4 as published
 - Upstream page revision: 2026-11-10
-- Draft implemented, opt-in: 1.0 as of 2026-11-11 (c71f515; nothing after it through ad20217)
+- Draft implemented, the default since SDK 0.36: 1.0 as of 2026-11-11 (c71f515; nothing after it through ad20217)
 - Draft specification: https://personalagentprotocol.org/docs/spec
 - Upstream source: commit 4803900 of https://github.com/personal-agent-protocol/personal-agent-protocol (the frozen text as of ed47408, which only dropped the word "draft" from it)
 - Last reviewed by this repository: 2026-11-12 (through ad20217)
@@ -48,10 +48,12 @@ it. As of ad20217 it differs from 0.4 in two ways: documents and `Poppy-Version`
 say `1.0` (spec 3.1, 3.4), and spec 10.3 and the guides' *Finding a company*
 say that `organization.name` is unconfirmed, a lookalike domain passing every
 discovery check, with advice to show the domain with the name (c71f515; no
-requirement). SDK 0.35 implements it as an opt-in second version: both roles
-default to 0.4 and announce 1.0 only when asked (`protocol_versions` on the
-discovery client and on the company), and versions are negotiated by spec 3.4,
-so the published version stays the one a pin relies on. The lookalike advice
+requirement). SDK 0.35 implemented it as an opt-in second version, and SDK
+0.36 makes it the default: both roles announce 1.0 and use 0.4 only when asked
+(`protocol_versions` on the discovery client and on the company), and versions
+are negotiated by spec 3.4. Upstream published and froze 1.0 on 2026-11-14
+(8c02b42), with fixes after c71f515 that SDK 0.36 does not implement yet; a
+later release reviews them. The lookalike advice
 applies to every version: the SDK shows the domain with the name wherever it
 shows a name. Each later fix in the draft is reviewed and released with the
 commit it was implemented from.

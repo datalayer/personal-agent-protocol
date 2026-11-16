@@ -57,7 +57,7 @@ const fixture = async (name) =>
 
 test("parses the shared discovery fixture and preserves extension fields", async () => {
   const document = parseDiscoveryDocument(await fixture("discovery-valid.json"));
-  assert.equal(document.protocol_version, "0.4");
+  assert.equal(document.protocol_version, "1.0");
   assert.equal(document.apis[1].type, "mcp");
   assert.equal(document.auth.scopes.addresses, "See and change your saved shipping addresses");
   assert.deepEqual(document.auth.scope_hints["orders:write"], { changes: "irreversible", personal_data: true });

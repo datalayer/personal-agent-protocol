@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from ..models import Operation
-from ..profile import PROTOCOL_PROFILE
+from ..profile import DEFAULT_PROTOCOL_VERSION, PROTOCOL_PROFILE
 from ..reactor import Clock, SystemClock
 
 #: A record as stored: a JSON object (strings, numbers, booleans, null, lists, objects).
@@ -691,7 +691,7 @@ class StoredConversation:
     #: The versions the conversation started in (§8.2): the Session's protocol version and
     #: the extensions it declared. A request from other versions may be refused with
     #: `version_mismatch` when the company can't carry the conversation over.
-    protocol_version: str = PROTOCOL_PROFILE
+    protocol_version: str = DEFAULT_PROTOCOL_VERSION
     extensions: Mapping[str, str] = field(default_factory=dict)
     parent_id: str | None = None
     direct_child: str | None = None

@@ -115,7 +115,7 @@ from .operator_signatures import (
     new_operator_key,
     sign_operator_request,
 )
-from .profile import PROTOCOL_PROFILE
+from .profile import DEFAULT_PROTOCOL_VERSION
 from .reactor import (
     CLOCKS,
     DPOP_PROVERS,
@@ -402,8 +402,8 @@ class ConformanceContext:
         protocol_versions: Iterable[str] | None = None,
     ) -> None:
         """`protocol_versions` are the ones the suite's personal agent implements (§3.4):
-        the published version by default; name `DRAFT_PROTOCOL_VERSION` among them to test a
-        company that serves the 1.0 draft at that version."""
+        the 1.0 draft by default; name `PROTOCOL_PROFILE` (0.4 as published) among them to
+        test a company that serves 0.4 at that version."""
 
         parsed = urlsplit(base_url)
         if parsed.scheme != "https" or not parsed.hostname:
@@ -479,9 +479,9 @@ class ConformanceContext:
     @property
     def profile(self) -> str:
         """The protocol version the suite speaks to the company (§3.4): the one it was
-        discovered at, once it was, else the published version."""
+        discovered at, once it was, else the default version."""
 
-        return PROTOCOL_PROFILE if self._company is None else self._company.session_version
+        return DEFAULT_PROTOCOL_VERSION if self._company is None else self._company.session_version
 
     def url(self, path: str) -> str:
         """An API path at the company's API (its OpenAPI `url`'s origin), else its origin."""

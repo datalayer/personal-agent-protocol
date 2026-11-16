@@ -69,6 +69,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`create_resolving_client`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. An `httpx` client whose every request goes through a `ResolvingTransport`.
 - [`CursorExpiredHandler`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `CursorExpiredHandler` constant.
 - [`declined_from`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. The decline a Company answered an approval with, or `None` (Operations 6).
+- [`DEFAULT_PROTOCOL_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/profile.py) — Constant. Public `DEFAULT_PROTOCOL_VERSION` constant.
 - [`DelegatedKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. One delegated key, its delegation, and when the delegation expires (§5.2).
 - [`DelegatedKeyCustody`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Where delegated keys live: one current key per User ID, replaced when it rotates.
 - [`DelegatedSessionSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. `pap.sessionSigner`: a delegated key per User ID signs each request's Session JWT (§5.2).

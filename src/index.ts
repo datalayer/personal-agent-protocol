@@ -488,6 +488,7 @@ export {
   type MediatedSignInResult,
 } from "./mediated.js";
 export {
+  DEFAULT_PROTOCOL_VERSION,
   DRAFT_PROTOCOL_REVISION,
   DRAFT_PROTOCOL_VERSION,
   PROTOCOL_PROFILE,

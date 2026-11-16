@@ -11,11 +11,10 @@ exports the same three values; `protocol/requirements.yaml`,
 `protocol/UPSTREAM.md` and the compatibility page state them too, and a test
 holds all of them equal.
 
-`DRAFT_PROTOCOL_VERSION` is the 1.0 draft, which a Personal Agent or a Company
-uses only when it asks for it (`protocol_versions`): a draft can still change in
-ways that aren't backward compatible, so the SDK announces `PROTOCOL_PROFILE`
-unless told otherwise. `DRAFT_PROTOCOL_REVISION` is the date of the draft text
-implemented.
+`DRAFT_PROTOCOL_VERSION` is the 1.0 draft, and `DRAFT_PROTOCOL_REVISION` the
+date of the draft text implemented. Since 0.36 it is `DEFAULT_PROTOCOL_VERSION`,
+the version a Personal Agent or a Company uses unless it asks for others
+(`protocol_versions`): 0.4 as published stays available, used only when named.
 """
 
 from __future__ import annotations
@@ -25,12 +24,15 @@ PROTOCOL_PROFILE = "0.4"
 #: The upstream specification revision implemented: the day 0.4 was published (commit 4803900).
 PROTOCOL_REVISION = "2026-11-10"
 
-#: The draft protocol version a Personal Agent or a Company can opt into: the 1.0 draft.
+#: The draft protocol version, the 1.0 draft: the default since 0.36.
 DRAFT_PROTOCOL_VERSION = "1.0"
 #: The draft's revision implemented: lookalike domains, its first fix (commit c71f515).
 DRAFT_PROTOCOL_REVISION = "2026-11-11"
+#: The version used unless a Personal Agent or a Company names others: the 1.0 draft.
+DEFAULT_PROTOCOL_VERSION = DRAFT_PROTOCOL_VERSION
 
 __all__ = [
+    "DEFAULT_PROTOCOL_VERSION",
     "DRAFT_PROTOCOL_REVISION",
     "DRAFT_PROTOCOL_VERSION",
     "PROTOCOL_PROFILE",

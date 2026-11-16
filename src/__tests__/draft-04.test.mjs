@@ -27,7 +27,7 @@ import {
   RefreshTokenClient,
   DEVICE_CODE_GRANT,
   MEDIATED_GRANT,
-  PROTOCOL_PROFILE,
+  DEFAULT_PROTOCOL_VERSION,
   PapSession,
   SessionClient,
   SessionFetchClient,
@@ -149,15 +149,15 @@ test("versions are compatible by major and, before 1.0, by minor", () => {
   assert.ok(compatibleVersions("0.4", "0.4") && !compatibleVersions("0.4", "0.3"));
   assert.ok(compatibleVersions("1.2", "1.0") && !compatibleVersions("2.0", "1.9"));
   // The newest compatible version, its own or a linked one, else none (§3.4).
-  assert.equal(chooseProtocolVersion("0.9", ["0.1", PROTOCOL_PROFILE]), PROTOCOL_PROFILE);
-  assert.equal(chooseProtocolVersion(PROTOCOL_PROFILE, ["0.9"]), PROTOCOL_PROFILE);
+  assert.equal(chooseProtocolVersion("0.9", ["0.1", DEFAULT_PROTOCOL_VERSION]), DEFAULT_PROTOCOL_VERSION);
+  assert.equal(chooseProtocolVersion(DEFAULT_PROTOCOL_VERSION, ["0.9"]), DEFAULT_PROTOCOL_VERSION);
   assert.equal(chooseProtocolVersion("0.9", ["0.8"]), undefined);
   assert.equal(chooseProtocolVersion("1.3", ["1.1", "1.5"], ["1.0"]), "1.5");
   assert.equal(chooseProtocolVersion("not-a-version", ["1.0"], ["1.0"]), "1.0");
   assert.throws(() =>
     parseDiscoveryDocument({
       protocol_version: "0.9",
-      supported_versions: { [PROTOCOL_PROFILE]: "http://example.com/poppy.json" },
+      supported_versions: { [DEFAULT_PROTOCOL_VERSION]: "http://example.com/poppy.json" },
       organization: { name: "Example", domain: "example.com" },
       web: {},
     }),
@@ -166,10 +166,10 @@ test("versions are compatible by major and, before 1.0, by minor", () => {
 
 test("every request with the Session header names the Session's version", async () => {
   const w = await world();
-  assert.equal(w.session.protocolVersion, PROTOCOL_PROFILE);
-  assert.equal(PapSession.fromJson(w.session.toJson()).protocolVersion, PROTOCOL_PROFILE);
+  assert.equal(w.session.protocolVersion, DEFAULT_PROTOCOL_VERSION);
+  assert.equal(PapSession.fromJson(w.session.toJson()).protocolVersion, DEFAULT_PROTOCOL_VERSION);
   const headers = await sessionHeaders(w.host.reactor, "GET", "https://manzanita.example/api/orders", { session: w.session });
-  assert.equal(headers["Poppy-Version"], PROTOCOL_PROFILE);
+  assert.equal(headers["Poppy-Version"], DEFAULT_PROTOCOL_VERSION);
   assert.throws(() => new PapSession({ ...w.session, clientId: w.identity.clientId, protocolVersion: "0.9" }));
 });
 
@@ -195,12 +195,12 @@ test("a request without Poppy-Version, or in an unserved one, is refused", async
 test("the company serves its other versions' documents", async () => {
   const config = new CompanyConfig({
     ...CONFIG_OPTIONS,
-    protocolVersions: [PROTOCOL_PROFILE, "0.0"],
+    protocolVersions: [DEFAULT_PROTOCOL_VERSION, "0.0"],
     deprecatedVersions: { "0.0": ["2026-11-01T00:00:00Z", "2027-01-01T00:00:00Z"] },
   });
   const w = await world(config);
   const document = w.company.document;
-  assert.equal(document.protocol_version, PROTOCOL_PROFILE);
+  assert.equal(document.protocol_version, DEFAULT_PROTOCOL_VERSION);
   assert.deepEqual(document.supported_versions, { "0.0": "https://manzanita.example/poppy/0.0.json" });
   const older = await (await w.fetch("https://manzanita.example/poppy/0.0.json")).json();
   assert.equal(older.protocol_version, "0.0");
@@ -222,7 +222,7 @@ test("the company serves its other versions' documents", async () => {
   });
   assert.equal(current.status, 201);
   assert.equal(current.headers.get("sunset"), null);
-  assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: [PROTOCOL_PROFILE, PROTOCOL_PROFILE] }));
+  assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: [DEFAULT_PROTOCOL_VERSION, DEFAULT_PROTOCOL_VERSION] }));
   assert.throws(() => new CompanyConfig({ ...CONFIG_OPTIONS, deprecatedVersions: { "0.0": ["2026-11-01T00:00:00Z", "2027-01-01T00:00:00Z"] } }));
 });
 
@@ -301,7 +301,7 @@ test("a Session declares the extensions it uses with the company", async () => {
 // Conversations across versions (§8.2) ---------------------------------------------
 
 test("a conversation not carried over to other versions is version_mismatch", async () => {
-  const w = await world(new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: [PROTOCOL_PROFILE, "0.0"] }));
+  const w = await world(new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: [DEFAULT_PROTOCOL_VERSION, "0.0"] }));
   const conversations = new ConversationClient({ reactor: w.host.reactor, transport: new SessionFetchClient({ reactor: w.host.reactor, fetch: w.fetch }) });
   // Started in "0.0", by hand; the client's Session is in this SDK's version.
   const headers = await sessionHeaders(w.host.reactor, "POST", CONVERSATIONS, { session: w.session });
@@ -322,7 +322,7 @@ test("a conversation not carried over to other versions is version_mismatch", as
   w.sites["manzanita.example"] = manzanita({
     fetch: w.fetch,
     clock: w.clock,
-    config: new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: [PROTOCOL_PROFILE, "0.0"], conversationCarryOver: false }),
+    config: new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: [DEFAULT_PROTOCOL_VERSION, "0.0"], conversationCarryOver: false }),
     store: w.shop.store,
   }).service;
   await assert.rejects(

@@ -5,10 +5,10 @@
 """What the 1.0 draft changes, both sides, in one process: `src/__tests__/draft-10.test.mjs`
 ports it.
 
-Protocol version `1.0` (§3.1, §3.4), which a Personal Agent and a Company use only when they
-ask for it: a draft can still change in ways that aren't backward compatible, so the SDK
-announces 0.4 unless told otherwise. Lookalike domains (§10.3; guides, *Finding a
-company*): the name a `poppy.json` gives is unconfirmed, so the SDK shows the domain with it.
+Protocol version `1.0` (§3.1, §3.4), the version a Personal Agent and a Company use since
+0.36 unless they ask for others: 0.4 as published stays available, used only when named.
+Lookalike domains (§10.3; guides, *Finding a company*): the name a `poppy.json` gives is
+unconfirmed, so the SDK shows the domain with it.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import pytest
 
 from personal_agent_protocol import (
     AVAILABLE_PROTOCOL_VERSIONS,
+    DEFAULT_PROTOCOL_VERSION,
     DRAFT_PROTOCOL_REVISION,
     DRAFT_PROTOCOL_VERSION,
     PROTOCOL_PROFILE,
@@ -44,7 +45,7 @@ from personal_agent_protocol.transport import session_headers
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
 
-BOTH = (PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION)
+BOTH = (DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE)
 
 
 def _serving(world: World, *versions: str) -> None:
@@ -76,16 +77,17 @@ async def _session(world: World, *versions: str) -> PapSession:
     )
 
 
-# Protocol version 1.0, opt-in (§3.1, §3.4) ----------------------------------------------
+# Protocol version 1.0, the default (§3.1, §3.4) -----------------------------------------
 
 
-def test_the_published_version_is_the_default_and_the_draft_is_available() -> None:
+def test_the_draft_is_the_default_and_the_published_version_is_available() -> None:
     assert (PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION) == ("0.4", "1.0")
+    assert DEFAULT_PROTOCOL_VERSION == DRAFT_PROTOCOL_VERSION
     assert DRAFT_PROTOCOL_REVISION == "2026-11-11"
-    assert SUPPORTED_PROTOCOL_VERSIONS == {"0.4"}
+    assert SUPPORTED_PROTOCOL_VERSIONS == {"1.0"}
     assert AVAILABLE_PROTOCOL_VERSIONS == {"0.4", "1.0"}
-    assert implemented_protocol_versions() == {"0.4"}
-    assert implemented_protocol_versions(["1.0"]) == {"1.0"}
+    assert implemented_protocol_versions() == {"1.0"}
+    assert implemented_protocol_versions(["0.4"]) == {"0.4"}
     assert implemented_protocol_versions(BOTH) == {"0.4", "1.0"}
     for unknown in (["0.3"], ["2.0"], ["1.1"], []):
         with pytest.raises(ValueError):
@@ -100,67 +102,70 @@ def test_the_published_version_is_the_default_and_the_draft_is_available() -> No
         implemented_version_for("0.3")
 
 
-def test_a_draft_document_is_used_only_by_an_agent_that_implements_the_draft() -> None:
-    draft = {
-        "protocol_version": "1.0",
+def test_a_published_document_is_used_only_by_an_agent_that_implements_it() -> None:
+    published = {
+        "protocol_version": "0.4",
         "organization": {"name": "Example", "domain": "example.com"},
         "web": {},
     }
     # A document's version is one the SDK implements; whether an agent uses it is its own.
     with pytest.raises(ValueError):
         DiscoveryDocument.model_validate(
-            draft, context={PROTOCOL_VERSIONS_CONTEXT: SUPPORTED_PROTOCOL_VERSIONS}
+            published, context={PROTOCOL_VERSIONS_CONTEXT: SUPPORTED_PROTOCOL_VERSIONS}
         )
     with pytest.raises(ValueError):
-        DiscoveryDocument.model_validate({**draft, "protocol_version": "2.0"})
-    document = DiscoveryDocument.model_validate(draft)
-    assert document.chosen_version is None  # the SDK's default implements no 1.0
-    assert document.choose_version(BOTH) == "1.0"
-    # A 1.0 document that links to 0.4: the default agent takes 0.4, the opted-in one 1.0.
-    linked = {**draft, "supported_versions": {"0.4": "https://example.com/poppy/0.4.json"}}
+        DiscoveryDocument.model_validate({**published, "protocol_version": "2.0"})
+    document = DiscoveryDocument.model_validate(published)
+    assert document.chosen_version is None  # the SDK's default implements no 0.4
+    assert document.choose_version(BOTH) == "0.4"
+    # A 0.4 document that links to 1.0: the default agent takes 1.0, and so does one that
+    # implements both, the newest; one that implements 0.4 alone takes 0.4.
+    linked = {**published, "supported_versions": {"1.0": "https://example.com/poppy/1.0.json"}}
     document = DiscoveryDocument.model_validate(linked)
-    assert document.chosen_version == "0.4"
+    assert document.chosen_version == "1.0"
     assert document.choose_version(BOTH) == "1.0"
-    assert document.choose_version(["1.0"]) == "1.0"
+    assert document.choose_version(["0.4"]) == "0.4"
 
 
 @pytest.mark.asyncio
-async def test_the_reference_company_serves_the_published_version_only_by_default() -> None:
-    """Nothing announces 1.0 unless asked: Manzanita's `poppy.json` says 0.4 and lists no
-    other version, and a request in `1.0` is `version_unsupported` (§3.4)."""
+async def test_the_reference_company_serves_the_draft_only_by_default() -> None:
+    """Nothing announces 0.4 unless asked: Manzanita's `poppy.json` says 1.0 and lists no
+    other version, and a request in `0.4` is `version_unsupported` (§3.4)."""
 
     world = World()
-    assert CONFIG.protocol_versions == (PROTOCOL_PROFILE,)
+    assert CONFIG.protocol_versions == (DEFAULT_PROTOCOL_VERSION,)
     session = await _session(world, *BOTH)  # an agent that implements both
-    assert world.company.protocol_version == "0.4" and session.protocol_version == "0.4"
+    assert world.company.protocol_version == "1.0" and session.protocol_version == "1.0"
     assert world.company.document.supported_versions == {}
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     headers = await session_headers(world.reactor, "POST", endpoint, session=session, token=None)
-    assert headers["Poppy-Version"] == "0.4"
+    assert headers["Poppy-Version"] == "1.0"
     body = {"id": "req_draft_unserved_0000", "message": {"author": {"type": "human"}, "text": "Hi"}}
-    draft = {**headers, "Poppy-Version": "1.0"}
-    refused = await world.http.post(endpoint, headers=draft, json=body)
+    published = {**headers, "Poppy-Version": "0.4"}
+    refused = await world.http.post(endpoint, headers=published, json=body)
     assert refused.status_code == 400 and refused.json() == {"error": "version_unsupported"}
 
 
 @pytest.mark.asyncio
-async def test_an_agent_on_the_default_uses_no_company_that_serves_only_the_draft() -> None:
+async def test_an_agent_on_the_default_uses_no_company_that_serves_only_the_published_version() -> (
+    None
+):
     world = World()
-    _serving(world, DRAFT_PROTOCOL_VERSION)
+    _serving(world, PROTOCOL_PROFILE)
     with pytest.raises(DiscoveryError) as raised:
         await _session(world)
     assert raised.value.code == "unsupported_protocol_version"
-    # Asked for, the draft is used, and every request names it.
-    session = await _session(world, DRAFT_PROTOCOL_VERSION)
-    assert world.company.protocol_version == "1.0" and session.protocol_version == "1.0"
-    assert PapSession.from_json(session.to_json()).protocol_version == "1.0"
+    # Asked for, 0.4 is used, and every request names it.
+    session = await _session(world, PROTOCOL_PROFILE)
+    assert world.company.protocol_version == "0.4" and session.protocol_version == "0.4"
+    assert PapSession.from_json(session.to_json()).protocol_version == "0.4"
     receipt = await world.conversations.start(
         world.company.document.agent.protocols[0].endpoint,  # type: ignore[union-attr]
         world.message("Hello"),
         session=session,
     )
     record = await world.shop.conversation_record(receipt.conversation_id)
-    assert record.protocol_version == "1.0"
+    assert record.protocol_version == "0.4"
 
 
 @pytest.mark.asyncio
@@ -177,11 +182,13 @@ async def test_a_company_that_serves_both_versions_is_used_at_the_newest_the_age
         other = preferred[1]
         assert world.shop.config.preferred_version == preferred[0]
         default = await _session(world)
-        assert (world.company.protocol_version, default.protocol_version) == ("0.4", "0.4")
-        # `poppy.json` itself when it is 0.4's, else 0.4's own document, which lists none.
-        assert bool(world.company.document.supported_versions) is (preferred[0] == "0.4")
-        opted_in = await _session(world, *BOTH)
-        assert (world.company.protocol_version, opted_in.protocol_version) == ("1.0", "1.0")
+        assert (world.company.protocol_version, default.protocol_version) == ("1.0", "1.0")
+        # `poppy.json` itself when it is 1.0's, else 1.0's own document, which lists none.
+        assert bool(world.company.document.supported_versions) is (preferred[0] == "1.0")
+        published = await _session(world, PROTOCOL_PROFILE)
+        assert (world.company.protocol_version, published.protocol_version) == ("0.4", "0.4")
+        both = await _session(world, *BOTH)
+        assert (world.company.protocol_version, both.protocol_version) == ("1.0", "1.0")
         served = (await world.http.get("https://manzanita.example/.well-known/poppy.json")).json()
         assert served["protocol_version"] == preferred[0]
         assert served["supported_versions"] == {
@@ -189,7 +196,7 @@ async def test_a_company_that_serves_both_versions_is_used_at_the_newest_the_age
         }
         # Both Sessions are served, each in its own version.
         endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
-        for session in (default, opted_in):
+        for session in (default, published):
             receipt = await world.conversations.start(
                 endpoint, world.message("Hello"), session=session
             )
@@ -207,11 +214,11 @@ async def test_a_conversation_started_in_the_draft_can_be_refused_in_the_publish
 
     world = World()
     _serving(world, *BOTH)
-    draft = await _session(world, DRAFT_PROTOCOL_VERSION)
+    draft = await _session(world)
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     receipt = await world.conversations.start(endpoint, world.message("Hello"), session=draft)
     world.shop.config = replace(world.shop.config, conversation_carry_over=False)
-    published = await _session(world)
+    published = await _session(world, PROTOCOL_PROFILE)
     with pytest.raises(ConversationError) as raised:
         await world.conversations.send(
             endpoint, receipt.conversation_id, world.message("Still there?"), session=published
@@ -221,7 +228,7 @@ async def test_a_conversation_started_in_the_draft_can_be_refused_in_the_publish
 
 
 @pytest.mark.asyncio
-async def test_a_session_names_the_version_given_else_the_companys_else_the_published_one() -> None:
+async def test_a_session_names_the_version_given_else_the_companys_else_the_default_one() -> None:
     world = World()
     sessions = SessionClient(reactor=world.reactor, http_client=world.http)
     who = {
@@ -230,30 +237,30 @@ async def test_a_session_names_the_version_given_else_the_companys_else_the_publ
         "issuer": "https://manzanita.example",
         "tenant_id": TENANT,
     }
-    assert (await sessions.start(**who)).protocol_version == "0.4"
-    assert (await sessions.start(**who, protocol_version="1.0")).protocol_version == "1.0"
+    assert (await sessions.start(**who)).protocol_version == "1.0"
+    assert (await sessions.start(**who, protocol_version="0.4")).protocol_version == "0.4"
     with pytest.raises(ValueError):
         await sessions.start(**who, protocol_version="0.3")
     session = await sessions.start(**who)
     with pytest.raises(ValueError):
         replace(session, protocol_version="2.0")
-    assert replace(session, protocol_version="1.0").protocol_version == "1.0"
+    assert replace(session, protocol_version="0.4").protocol_version == "0.4"
 
 
 @pytest.mark.asyncio
-async def test_the_conformance_suite_passes_at_the_draft_over_tls() -> None:
-    """Every case passes with Manzanita serving the 1.0 draft only and the suite's agent
+async def test_the_conformance_suite_passes_at_the_published_version_over_tls() -> None:
+    """Every case passes with Manzanita serving 0.4 as published only and the suite's agent
     implementing it: the draft is wire-equal to 0.4 but its version string (§3.4)."""
 
     pytest.importorskip("uvicorn")
     from personal_agent_protocol.demo.sockets import served_over_tls
 
-    world = ManzanitaConformance(protocol_versions=(DRAFT_PROTOCOL_VERSION,))
+    world = ManzanitaConformance(protocol_versions=(PROTOCOL_PROFILE,))
     async with served_over_tls(world.network):
         report = await run_conformance(world.context())
     failures = [f"{r.id}: {r.message}" for r in report.results if r.outcome == "failed"]
     assert failures == []
-    assert report.profile == "1.0"
+    assert report.profile == "0.4"
     assert {r.id for r in report.results} == {case.id for case in select_cases()}
 
 

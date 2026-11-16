@@ -10,6 +10,22 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.35 → 0.36
+
+0.36.0 makes the 1.0 draft the default: both SDKs and both reference companies announce
+and accept `1.0` unless told otherwise. On the wire the draft differs from 0.4 in its
+version string only, but a party on 0.36 and one still on 0.4 no longer find each other
+by default: a 0.36 personal agent refuses a company whose `poppy.json` offers only 0.4
+(`unsupported_protocol_version`), and a 0.36 company answers `version_unsupported` to a
+request in `Poppy-Version: 0.4`. 0.4 as published stays available when named.
+
+| Change | What to do |
+| --- | --- |
+| The default version is `1.0` (spec 3.1, 3.4) | Nothing, to move to the draft. To keep using companies that serve only 0.4, give the discovery client both versions: `DiscoveryClient(protocol_versions=("1.0", "0.4"))` (`discoverCompany(domain, { protocolVersions: ["1.0", "0.4"] })`); `("0.4",)` alone stays on 0.4. `SUPPORTED_PROTOCOL_VERSIONS` is now `{"1.0"}`, `AVAILABLE_PROTOCOL_VERSIONS` is unchanged (`0.4`, `1.0`), and the new `DEFAULT_PROTOCOL_VERSION` names the default |
+| A company serves `1.0` | `CompanyConfig.protocol_versions` (`protocolVersions`) defaults to `("1.0",)`: `poppy.json` says `1.0`. To keep serving agents on 0.4, use `("1.0", "0.4")`, which lists `/poppy/0.4.json` in `supported_versions`, or `("0.4", "1.0")` to keep 0.4 the preferred document |
+| Sessions without a company | `SessionClient.start` with neither `company` nor `protocol_version` names `1.0` in `Poppy-Version`; a `PapSession`'s default `protocol_version` is `1.0` |
+| Conformance | The suite runs at `1.0` by default and its report says profile `1.0`; `ConformanceContext(protocol_versions=("0.4",))` (`protocolVersions`) runs it at 0.4. The fixtures' documents say `1.0`, and the version-negotiation fixtures use `2.0` and `3.0` for versions the agent doesn't implement |
+
 ## 0.34 → 0.35
 
 0.35.0 breaks nothing: both SDKs and both reference companies still announce and accept

@@ -36,7 +36,7 @@ from .models import (
     ProtocolModel,
     compatible_versions,
 )
-from .profile import PROTOCOL_PROFILE
+from .profile import DEFAULT_PROTOCOL_VERSION, PROTOCOL_PROFILE
 from .reactor import (
     CLOCKS,
     DPOP_PROVERS,
@@ -176,9 +176,9 @@ class PapSession:
     #: The protocol version the Session uses the Company at (§3.4), named in
     #: `Poppy-Version` on every request with the Session header, the same for its whole
     #: life: the version this SDK implements, compatible with the one chosen at discovery
-    #: (`DiscoveredCompany.session_version`); the published version unless the Personal
-    #: Agent opted into the 1.0 draft.
-    protocol_version: str = PROTOCOL_PROFILE
+    #: (`DiscoveredCompany.session_version`); the 1.0 draft unless the Personal Agent
+    #: opted into 0.4.
+    protocol_version: str = DEFAULT_PROTOCOL_VERSION
     #: The extensions the Session uses with the Company, one version each (§3.3, §3.4):
     #: declared in `Poppy-Extensions` on every request with the Session header, the same
     #: for the Session's life; `negotiate_extensions` picks them from the Company's
@@ -414,7 +414,7 @@ class SessionClient:
         everything this SDK implements (`negotiate_extensions`), else none.
         `protocol_version`, named in `Poppy-Version` for the Session's life (§3.4): as
         given, else the one `company` was discovered at (`session_version`), else the
-        published version.
+        default version (`DEFAULT_PROTOCOL_VERSION`).
         """
 
         if extensions is None and company is not None:
@@ -422,7 +422,9 @@ class SessionClient:
 
             extensions = negotiate_extensions(company.document.extensions)
         if protocol_version is None:
-            protocol_version = PROTOCOL_PROFILE if company is None else company.session_version
+            protocol_version = (
+                DEFAULT_PROTOCOL_VERSION if company is None else company.session_version
+            )
         return PapSession(
             sid=new_session_id(self._random().bytes),
             sub=pairwise_user_id,

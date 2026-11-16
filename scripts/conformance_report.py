@@ -68,6 +68,8 @@ def _version() -> str:
 _PROFILE = _constant("profile.py", "PROTOCOL_PROFILE")
 _REVISION = _constant("profile.py", "PROTOCOL_REVISION")
 _OPERATIONS = _constant("operations.py", "OPERATIONS_VERSION")
+_DRAFT = _constant("profile.py", "DRAFT_PROTOCOL_VERSION")
+_DRAFT_REVISION = _constant("profile.py", "DRAFT_PROTOCOL_REVISION")
 
 
 def _load(directory: Path) -> dict[str, dict[str, Any]]:
@@ -134,7 +136,9 @@ def render(reports: dict[str, dict[str, Any]]) -> str:
         "# Compatibility and conformance report",
         "",
         f"SDK version **{_version()}**, PAP profile **{_PROFILE}** (as published "
-        f"{_REVISION}), Operations extension **v{_OPERATIONS}**. Each pairing runs every "
+        f"{_REVISION}), Operations extension **v{_OPERATIONS}**; the pairings run at "
+        f"protocol version **{_DRAFT}**, the default (the {_DRAFT} draft as of "
+        f"{_DRAFT_REVISION}). Each pairing runs every "
         "positive, negative and recovery fixture case over real TCP and TLS, the personal "
         "agent in one language and the reference company (Manzanita) in the other. A case "
         "is skipped, never passed, when a side lacks what it needs; the reason is listed "

@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { DRAFT_PROTOCOL_VERSION, operationShown } from "../../lib/index.js";
+import { PROTOCOL_PROFILE, operationShown } from "../../lib/index.js";
 
 import { exportJWK, generateKeyPair } from "jose";
 
@@ -108,13 +108,13 @@ test("the conformance cases: TypeScript agent ↔ TypeScript company over TLS", 
   assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
 });
 
-test("the conformance cases at the 1.0 draft: TypeScript agent ↔ TypeScript company over TLS", async () => {
-  // Both sides opt in: the company serves only the draft, the agent implements only the draft.
-  const versions = [DRAFT_PROTOCOL_VERSION];
+test("the conformance cases at 0.4 as published: TypeScript agent ↔ TypeScript company over TLS", async () => {
+  // Both sides opt in: the company serves only 0.4, the agent implements only 0.4.
+  const versions = [PROTOCOL_PROFILE];
   const report = await runPairing({ config: { protocolVersions: versions }, protocolVersions: versions });
   const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
   assert.deepEqual(failed, {});
-  assert.equal(report.profile, "1.0");
+  assert.equal(report.profile, "0.4");
   assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
 });
 

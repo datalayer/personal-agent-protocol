@@ -49,7 +49,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`AuthorizationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/errors.ts) — Class; entry `.`. Public TypeScript class `AuthorizationError`.
 - [`AuthorizationStateStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `AuthorizationStateStore`.
 - [`AuthorizationStateStores`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `AuthorizationStateStores`.
-- [`AVAILABLE_PROTOCOL_VERSIONS`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Const; entry `.`. Every protocol version this SDK implements: the published one and the 1.0 draft. A Personal
+- [`AVAILABLE_PROTOCOL_VERSIONS`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Const; entry `.`. Every protocol version this SDK implements: 0.4 as published and the 1.0 draft. A Personal
 - [`BlindJoseSigner`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/blind.ts) — Class; entry `.`. `pap.signer` on the User's device: PS384 signatures a key signs blindly (§10.7).
 - [`BlindJoseSignerOptions`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/blind.ts) — Interface; entry `.`. Public TypeScript interface `BlindJoseSignerOptions`.
 - [`BlindSigningKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/blind.ts) — Interface; entry `.`. The holder of a key in `jwks_uri`: it signs a blinded message, never seeing the JWT.
@@ -116,6 +116,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`CROSS_DEVICE_LIFETIME_SECONDS`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/auth.ts) — Const; entry `.`. The longest a Direct Sign-In request lives when its link opens on another device: a
 - [`declinedFrom`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The decline a Company answered an approval with, or `undefined` (Operations 6).
 - [`DEFAULT_CACHE_BOUNDS`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/limits.ts) — Const; entry `.`. At least a minute, at most a day (the Guides' example bounds).
+- [`DEFAULT_PROTOCOL_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/profile.ts) — Const; entry `.`. The version used unless a Personal Agent or a Company names others: the 1.0 draft.
 - [`DelegatedKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `.`. One delegated key, its delegation, and when the delegation expires (§5.2).
 - [`DelegatedKeyCustody`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `.`. Where delegated keys live: one current key per User ID, replaced when it rotates.
 - [`DelegatedKeyWho`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Interface; entry `.`. Public TypeScript interface `DelegatedKeyWho`.
@@ -164,7 +165,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`DpopProver`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Sign the DPoP proof of one request (§4.5).
 - [`DpopProvers`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. `DpopProver`: the DPoP proof of a request, when the Company lists ES256 or bound a token.
 - [`DRAFT_PROTOCOL_REVISION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/profile.ts) — Const; entry `.`. The draft's revision implemented: lookalike domains, its first fix (commit c71f515).
-- [`DRAFT_PROTOCOL_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/profile.ts) — Const; entry `.`. The draft protocol version a Personal Agent or a Company can opt into: the 1.0 draft.
+- [`DRAFT_PROTOCOL_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/profile.ts) — Const; entry `.`. The draft protocol version, the 1.0 draft: the default since 0.36.
 - [`Ed25519OperatorKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operator-signatures.ts) — Class; entry `.`. An operator's Ed25519 key in this process's memory.
 - [`effectiveChanges`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. A hint's `changes`, with a value this SDK doesn't know read as `irreversible` (§4.4).
 - [`emsaPssEncode`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/blind.ts) — Value; entry `.`. Public TypeScript value `emsaPssEncode`.

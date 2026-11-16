@@ -27,7 +27,7 @@ import {
   companySessionVersion,
   type DiscoveredCompany,
 } from "./models.js";
-import { PROTOCOL_PROFILE } from "./profile.js";
+import { DEFAULT_PROTOCOL_VERSION } from "./profile.js";
 import {
   Clocks,
   DpopProvers,
@@ -256,7 +256,7 @@ export class PapSession {
     this.clientId = httpsUrl(options.clientId, "clientId");
     this.tenantId = options.tenantId;
     this.agentId = options.agentId;
-    const version = options.protocolVersion ?? PROTOCOL_PROFILE;
+    const version = options.protocolVersion ?? DEFAULT_PROTOCOL_VERSION;
     if (![...AVAILABLE_PROTOCOL_VERSIONS].some((mine) => compatibleVersions(version, mine))) {
       throw new ProtocolValidationError("unsupported_protocol_version", "a Session uses a protocol version this SDK implements");
     }
@@ -569,7 +569,7 @@ export class SessionClient {
           ...(options.agentId === undefined ? {} : { agentId: options.agentId }),
           protocolVersion:
             options.protocolVersion ??
-            (options.company === undefined ? PROTOCOL_PROFILE : companySessionVersion(options.company)),
+            (options.company === undefined ? DEFAULT_PROTOCOL_VERSION : companySessionVersion(options.company)),
           extensions:
             options.extensions ??
             (options.company === undefined ? {} : negotiateExtensions(options.company.document.extensions)),

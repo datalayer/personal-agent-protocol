@@ -36,7 +36,7 @@ const invalid = (code) => (error) => error.code === code || (code === undefined 
 
 test("discovery fixture round-trips and preserves extensions", () => {
   const document = parseDiscoveryDocument(fixture("discovery-valid.json"));
-  assert.equal(document.protocol_version, "0.4");
+  assert.equal(document.protocol_version, "1.0");
   assert.equal(document.apis[1].type, "mcp");
   assert.deepEqual(document.extensions.operations.map((entry) => entry.version), ["3"]);
   assert.equal(companyExtension(document, "operations", "3")?.version, "3");

@@ -59,10 +59,9 @@ jobs:
       # to have no upper bound. The ref is the Agent Runtimes branch that adopts the new
       # SDK.
       #
-      # feat/scenes: 0.36 makes the 1.0 draft the default, and the released Agent Runtimes
-      # pins personal-agent-protocol <0.36; feat/scenes adopts 0.36 (>=0.36.0,<0.37).
-      # Emptied once an Agent Runtimes release carries that pin.
-      AGENT_RUNTIMES_REF: 'feat/scenes'
+      # Empty: Agent Runtimes 1.6.74 accepts 0.36 (personal-agent-protocol >=0.36.0,<0.37),
+      # so the job tests the released package.
+      AGENT_RUNTIMES_REF: ''
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7

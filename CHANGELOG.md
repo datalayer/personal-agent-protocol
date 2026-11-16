@@ -6,6 +6,14 @@
 
 # Changelog
 
+## 0.36.1 (2026-11-16)
+
+- **A persisted Session keeps its version** (TypeScript). `PapSession.fromJson()` restores a
+  Session persisted without `protocol_version` (by an SDK before 0.36) at `0.4`, as Python's
+  `PapSession.from_json()` already did, instead of the new default `1.0` under the same `sid`,
+  which changed `Poppy-Version` mid-Session. A Session persisted with its version keeps it;
+  a new Session still defaults to `1.0`. Tests in both SDKs.
+
 ## 0.36.0 (2026-11-16)
 
 The 1.0 draft (upstream `/docs/spec`, as of `c71f515`, 2026-11-11) becomes the **default** in

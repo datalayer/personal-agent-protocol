@@ -187,6 +187,25 @@ test("a Session starts with no request and a new random sid", async () => {
   assert.deepEqual(PapSession.fromJson(first.toJson()).toJson(), first.toJson());
 });
 
+test("a persisted Session without its version restores as 0.4, one with it keeps it", () => {
+  const persisted = {
+    sid: "AAECAwQFBgcICQoLDA0ODw",
+    sub: PAIRWISE,
+    issuer: ISSUER,
+    client_id: CLIENT_ID,
+    tenant_id: "tenant-one",
+    agent_id: null,
+  };
+  assert.equal(PapSession.fromJson(persisted).protocolVersion, "0.4");
+  assert.equal(PapSession.fromJson({ ...persisted, protocol_version: "1.0" }).protocolVersion, "1.0");
+  assert.equal(PapSession.fromJson({ ...persisted, protocol_version: "0.4" }).protocolVersion, "0.4");
+  assert.equal(
+    new PapSession({ sid: persisted.sid, sub: PAIRWISE, issuer: ISSUER, clientId: CLIENT_ID, tenantId: "tenant-one" })
+      .protocolVersion,
+    "1.0",
+  );
+});
+
 test("a Session ID is at least 128 random bits", () => {
   assert.equal(newSessionId(fixedRandom), "AAECAwQFBgcICQoLDA0ODw");
   assert.throws(() => newSessionId(() => new Uint8Array(5)), /128 random bits/);

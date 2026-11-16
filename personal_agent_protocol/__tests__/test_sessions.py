@@ -232,6 +232,28 @@ async def test_a_session_starts_with_no_request_and_a_new_random_sid() -> None:
     assert PapSession.from_json(first.to_json()) == first
 
 
+def test_a_persisted_session_without_its_version_restores_as_0_4() -> None:
+    persisted: dict[str, object] = {
+        "sid": "AAECAwQFBgcICQoLDA0ODw",
+        "sub": PAIRWISE,
+        "issuer": ISSUER,
+        "client_id": CLIENT_ID,
+        "tenant_id": "tenant-one",
+        "agent_id": None,
+    }
+    assert PapSession.from_json(persisted).protocol_version == "0.4"
+    assert PapSession.from_json({**persisted, "protocol_version": "1.0"}).protocol_version == "1.0"
+    assert PapSession.from_json({**persisted, "protocol_version": "0.4"}).protocol_version == "0.4"
+    fresh = PapSession(
+        sid="AAECAwQFBgcICQoLDA0ODw",
+        sub=PAIRWISE,
+        issuer=ISSUER,
+        client_id=CLIENT_ID,
+        tenant_id="tenant-one",
+    )
+    assert fresh.protocol_version == "1.0"
+
+
 def test_a_session_id_is_at_least_128_random_bits() -> None:
     assert new_session_id(fixed_random) == "AAECAwQFBgcICQoLDA0ODw"
     with pytest.raises(ValueError, match="128 random bits"):

@@ -4,7 +4,7 @@ title: Compatibility
 
 # Compatibility
 
-This page is versioned with the SDK: it describes **SDK 0.36.0**.
+This page is versioned with the SDK: it describes **SDK 0.36.1**.
 
 ## The PAP version implemented
 
@@ -34,6 +34,7 @@ profile, never picked up from an unattended fetch.
 
 | SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
 | --- | --- | --- | --- | --- |
+| `0.36.1` | `0.4` | 2026-11-10 | v3 | none: a Session persisted without its version (before 0.36) restores at 0.4 in TypeScript too, as in Python |
 | `0.36.0` | `0.4` | 2026-11-10 | v3 | [0.35 → 0.36](/releases/migration/#035--036): the 1.0 draft is the default in both SDKs and both reference companies; 0.4 is used only when named (`protocol_versions`) |
 | `0.35.0` | `0.4` | 2026-11-10 | v3 | none: [0.34 → 0.35](/releases/migration/#034--035) adds the 1.0 draft as an opt-in second version (`protocol_versions`) and shows a company's domain beside its name |
 | `0.34.0` | `0.4` | 2026-11-10 | v3 | none: [0.33 → 0.34](/releases/migration/#033--034) adds operations on websites (`Poppy-Operation`, the operations `endpoint`) and the Browser Control extension, version 1 |

@@ -27,7 +27,7 @@ import {
   companySessionVersion,
   type DiscoveredCompany,
 } from "./models.js";
-import { DEFAULT_PROTOCOL_VERSION } from "./profile.js";
+import { DEFAULT_PROTOCOL_VERSION, PROTOCOL_PROFILE } from "./profile.js";
 import {
   Clocks,
   DpopProvers,
@@ -300,7 +300,9 @@ export class PapSession {
       clientId: value.client_id,
       tenantId: value.tenant_id,
       ...(value.agent_id === null ? {} : { agentId: value.agent_id }),
-      ...(value.protocol_version === undefined ? {} : { protocolVersion: value.protocol_version }),
+      // A Session persisted before it named its version was a 0.4 Session: it keeps 0.4
+      // (as Python's PapSession.from_json), never the newer default under the same sid.
+      protocolVersion: value.protocol_version || PROTOCOL_PROFILE,
       ...(value.extensions === undefined ? {} : { extensions: value.extensions }),
     });
   }

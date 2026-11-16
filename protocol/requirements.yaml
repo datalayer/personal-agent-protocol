@@ -193,8 +193,8 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   - personal_agent_protocol/__tests__/test_draft_04.py::test_versions_are_compatible_by_major_and_before_1_0_by_minor
-  - personal_agent_protocol/__tests__/test_draft_10.py::test_a_draft_document_is_used_only_by_an_agent_that_implements_the_draft
-  - personal_agent_protocol/__tests__/test_draft_10.py::test_an_agent_on_the_default_uses_no_company_that_serves_only_the_draft
+  - personal_agent_protocol/__tests__/test_draft_10.py::test_a_published_document_is_used_only_by_an_agent_that_implements_it
+  - personal_agent_protocol/__tests__/test_draft_10.py::test_an_agent_on_the_default_uses_no_company_that_serves_only_the_published_version
   conformance:
   - protocol.major-version-unsupported
   - protocol.minor-version-newer
@@ -750,7 +750,7 @@ requirements:
   - personal_agent_protocol.extensions:negotiate_extensions
   tests:
   - personal_agent_protocol/__tests__/test_draft_04.py::test_every_request_with_the_session_header_names_the_sessions_version
-  - personal_agent_protocol/__tests__/test_draft_10.py::test_a_session_names_the_version_given_else_the_companys_else_the_published_one
+  - personal_agent_protocol/__tests__/test_draft_10.py::test_a_session_names_the_version_given_else_the_companys_else_the_default_one
   - personal_agent_protocol/__tests__/test_draft_04.py::test_a_session_declares_the_extensions_it_uses_with_the_company
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   conformance:

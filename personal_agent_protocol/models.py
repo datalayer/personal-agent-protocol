@@ -27,16 +27,16 @@ from pydantic import (
 )
 
 from .errors import AuthorizationError
-from .profile import DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE
+from .profile import DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE
 
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
 #: The protocol versions a Personal Agent implements unless it asks for others (§3.4): a
 #: Company's document is used at a version compatible with one of them, the same major
-#: and, before 1.0, the same minor. The published version only, never the draft.
-SUPPORTED_PROTOCOL_VERSIONS = frozenset({PROTOCOL_PROFILE})
-#: Every protocol version this SDK implements: the published one and the 1.0 draft. A
+#: and, before 1.0, the same minor. The 1.0 draft only (`DEFAULT_PROTOCOL_VERSION`).
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({DEFAULT_PROTOCOL_VERSION})
+#: Every protocol version this SDK implements: 0.4 as published and the 1.0 draft. A
 #: Personal Agent (`DiscoveryClient(protocol_versions=...)`) or a Company
-#: (`CompanyConfig.protocol_versions`) uses the draft only when it names it.
+#: (`CompanyConfig.protocol_versions`) uses 0.4 only when it names it.
 AVAILABLE_PROTOCOL_VERSIONS = frozenset({PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION})
 #: The validation context key that names the versions a document is checked against.
 PROTOCOL_VERSIONS_CONTEXT = "pap.protocol_versions"

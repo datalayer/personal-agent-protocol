@@ -25,7 +25,7 @@ def test_discovery_fixture_round_trips_and_preserves_extensions() -> None:
     source = json.loads((FIXTURES / "discovery-valid.json").read_text())
     document = DiscoveryDocument.model_validate(source)
 
-    assert document.protocol_version == "0.4"
+    assert document.protocol_version == "1.0"
     assert document.apis[1].type == "mcp"
     assert [entry.version for entry in document.extensions["operations"]] == ["3"]
     assert document.extension("operations", "3") is not None

@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 
 from personal_agent_protocol import (
-    PROTOCOL_PROFILE,
+    DEFAULT_PROTOCOL_VERSION,
     BrowserSessionClient,
     BrowserSessionError,
     PapSession,
@@ -149,8 +149,11 @@ def test_versions_are_compatible_by_major_and_before_1_0_by_minor() -> None:
     assert compatible_versions("0.4", "0.4") and not compatible_versions("0.4", "0.3")
     assert compatible_versions("1.2", "1.0") and not compatible_versions("2.0", "1.9")
     # The newest compatible version, its own or a linked one, else none (§3.4).
-    assert choose_protocol_version("0.9", ["0.1", PROTOCOL_PROFILE]) == PROTOCOL_PROFILE
-    assert choose_protocol_version(PROTOCOL_PROFILE, ["0.9"]) == PROTOCOL_PROFILE
+    assert (
+        choose_protocol_version("0.9", ["0.1", DEFAULT_PROTOCOL_VERSION])
+        == DEFAULT_PROTOCOL_VERSION
+    )
+    assert choose_protocol_version(DEFAULT_PROTOCOL_VERSION, ["0.9"]) == DEFAULT_PROTOCOL_VERSION
     assert choose_protocol_version("0.9", ["0.8"]) is None
     assert choose_protocol_version("1.3", ["1.1", "1.5"], implemented=["1.0"]) == "1.5"
     assert choose_protocol_version("not-a-version", ["1.0"], implemented=["1.0"]) == "1.0"
@@ -158,7 +161,7 @@ def test_versions_are_compatible_by_major_and_before_1_0_by_minor() -> None:
         DiscoveryDocument.model_validate(
             {
                 "protocol_version": "0.9",
-                "supported_versions": {PROTOCOL_PROFILE: "http://example.com/poppy.json"},
+                "supported_versions": {DEFAULT_PROTOCOL_VERSION: "http://example.com/poppy.json"},
                 "organization": {"name": "Example", "domain": "example.com"},
                 "web": {},
             }
@@ -171,12 +174,12 @@ async def test_every_request_with_the_session_header_names_the_sessions_version(
 
     world = World()
     session = await world.signed_out_session()
-    assert session.protocol_version == PROTOCOL_PROFILE
-    assert PapSession.from_json(session.to_json()).protocol_version == PROTOCOL_PROFILE
+    assert session.protocol_version == DEFAULT_PROTOCOL_VERSION
+    assert PapSession.from_json(session.to_json()).protocol_version == DEFAULT_PROTOCOL_VERSION
     headers = await session_headers(
         world.reactor, "GET", "https://manzanita.example/api/orders", session=session, token=None
     )
-    assert headers["Poppy-Version"] == PROTOCOL_PROFILE
+    assert headers["Poppy-Version"] == DEFAULT_PROTOCOL_VERSION
     with pytest.raises(ValueError):
         replace(session, protocol_version="0.9")
 
@@ -222,13 +225,13 @@ async def test_the_company_serves_its_other_versions_documents() -> None:
     until = datetime(2027, 1, 1, tzinfo=timezone.utc)
     config = replace(
         CONFIG,
-        protocol_versions=(PROTOCOL_PROFILE, "0.0"),
+        protocol_versions=(DEFAULT_PROTOCOL_VERSION, "0.0"),
         deprecated_versions={"0.0": (since, until)},
     )
     world.shop, world.plugin = manzanita(world.network, world.clock, config=config)
     session = await world.signed_out_session()
     document = world.company.document
-    assert document.protocol_version == PROTOCOL_PROFILE
+    assert document.protocol_version == DEFAULT_PROTOCOL_VERSION
     assert document.supported_versions == {"0.0": "https://manzanita.example/poppy/0.0.json"}
     older = (await world.http.get("https://manzanita.example/poppy/0.0.json")).json()
     assert older["protocol_version"] == "0.0" and "supported_versions" not in older
@@ -239,7 +242,7 @@ async def test_the_company_serves_its_other_versions_documents() -> None:
         "manzanita.example", reactor=world.reactor, http_client=world.http
     )
     assert (summary["protocol_version"], summary["supported_versions"]) == (
-        PROTOCOL_PROFILE,
+        DEFAULT_PROTOCOL_VERSION,
         ["0.0"],
     )
     # A request in the older version is served, with the notice; the current one carries none.
@@ -261,7 +264,7 @@ async def test_the_company_serves_its_other_versions_documents() -> None:
     )
     assert current.status_code == 201 and "Sunset" not in current.headers
     with pytest.raises(ValueError):
-        replace(CONFIG, protocol_versions=(PROTOCOL_PROFILE, PROTOCOL_PROFILE))
+        replace(CONFIG, protocol_versions=(DEFAULT_PROTOCOL_VERSION, DEFAULT_PROTOCOL_VERSION))
     with pytest.raises(ValueError):
         replace(CONFIG, deprecated_versions={"0.0": (since, until)})
 
@@ -395,7 +398,7 @@ async def test_a_conversation_not_carried_over_to_other_versions_is_version_mism
     client surfaces that version in the error's details (§8.2)."""
 
     world = World()
-    config = replace(CONFIG, protocol_versions=(PROTOCOL_PROFILE, "0.0"))
+    config = replace(CONFIG, protocol_versions=(DEFAULT_PROTOCOL_VERSION, "0.0"))
     world.shop, world.plugin = manzanita(world.network, world.clock, config=config)
     session = await world.signed_out_session()
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]

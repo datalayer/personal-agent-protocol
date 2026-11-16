@@ -189,6 +189,7 @@ from .operator_signatures import (
 from .pages import FetchedPage, PageClient, page_carries_session
 from .pairwise import SqlitePairwiseUserIdStore, resolve_pairwise_user_id
 from .profile import (
+    DEFAULT_PROTOCOL_VERSION,
     DRAFT_PROTOCOL_REVISION,
     DRAFT_PROTOCOL_VERSION,
     PROTOCOL_PROFILE,
@@ -308,6 +309,7 @@ __all__ = [
     "BROWSER_SIGN_IN_SCOPE",
     "CACHES",
     "CLOCKS",
+    "DEFAULT_PROTOCOL_VERSION",
     "DEVICE_CODE_GRANT",
     "DISCOVERY_TRANSPORTS",
     "DPOP_PROVERS",

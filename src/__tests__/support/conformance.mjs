@@ -51,7 +51,7 @@ import {
   McpError,
   OPERATIONS_VERSION,
   OperationsClient,
-  PROTOCOL_PROFILE,
+  DEFAULT_PROTOCOL_VERSION,
   PapSession,
   PersonalAgentProtocolError,
   RefreshTokenClient,
@@ -341,8 +341,8 @@ export class Context {
     this.scenario = scenario;
     this.clock = clock;
     this.tenantId = tenantId;
-    // The versions the suite's agent implements (§3.4): the published one unless the 1.0
-    // draft is named, to test a company that serves it.
+    // The versions the suite's agent implements (§3.4): the 1.0 draft unless 0.4 as
+    // published is named, to test a company that serves it.
     this.protocolVersions = implementedProtocolVersions(protocolVersions);
     this.agent = new Agent(identity, { fetch, clock, browserFetch });
     this.otherIdentity = otherIdentity;
@@ -437,9 +437,9 @@ export class Context {
     });
   }
 
-  /** The protocol version the suite speaks to the company: the one discovered, else the published one. */
+  /** The protocol version the suite speaks to the company: the one discovered, else the default one. */
   get profile() {
-    return this.discovered === undefined ? PROTOCOL_PROFILE : companySessionVersion(this.discovered);
+    return this.discovered === undefined ? DEFAULT_PROTOCOL_VERSION : companySessionVersion(this.discovered);
   }
 
   /**

@@ -74,9 +74,9 @@ class DiscoveryClient:
         protocol_versions: Iterable[str] | None = None,
     ) -> None:
         """`protocol_versions` are the protocol versions this Personal Agent implements
-        (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`, the published version, by default. Name
-        `DRAFT_PROTOCOL_VERSION` among them to use Companies that serve the 1.0 draft, such
-        as `("0.4", "1.0")`; the newest compatible version a Company serves is chosen."""
+        (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`, the 1.0 draft, by default. Name
+        `PROTOCOL_PROFILE` among them to use Companies that serve only 0.4 as published,
+        such as `("0.4", "1.0")`; the newest compatible version a Company serves is chosen."""
 
         if timeout <= 0:
             raise ValueError("timeout must be positive")

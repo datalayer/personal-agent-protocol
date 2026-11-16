@@ -70,11 +70,11 @@ TYPESCRIPT_WORLDS: tuple[str | None, ...] = (
     "operator-signatures-required",
 )
 
-#: Each pairing's runs: every world at the published version, and the default world with
-#: both sides on the 1.0 draft only (§3.4), which saves no report.
+#: Each pairing's runs: every world at the default version, the 1.0 draft, and the default
+#: world with both sides on 0.4 as published only (§3.4), which saves no report.
 RUNS: tuple[tuple[str | None, tuple[str, ...] | None], ...] = (
     *((world, None) for world in TYPESCRIPT_WORLDS),
-    (None, ("1.0",)),
+    (None, ("0.4",)),
 )
 RUN_IDS = [
     f"{world or 'default'}{f'@{versions[0]}' if versions else ''}" for world, versions in RUNS

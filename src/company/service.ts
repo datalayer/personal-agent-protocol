@@ -126,7 +126,7 @@ import {
   parseApprovalHeader,
 } from "../operations.js";
 import { BROWSER_CONTROL_EXTENSION, BROWSER_CONTROL_VERSION } from "../browser-control.js";
-import { PROTOCOL_PROFILE } from "../profile.js";
+import { DEFAULT_PROTOCOL_VERSION } from "../profile.js";
 import { Clocks, RandomSources, firstContribution, optionalContribution } from "../reactor.js";
 import { SecretValue } from "../secret.js";
 import { DPOP_NONCE_HEADER, JWT_CLIENT_ASSERTION } from "../sessions.js";
@@ -337,9 +337,8 @@ export interface CompanyConfigOptions {
    * The protocol versions the company serves (§3.4), the first the one it prefers:
    * `poppy.json` is that version's document, and each other version's document is served at
    * `/poppy/{version}.json` and listed in `supported_versions`. A request whose `Poppy-Version`
-   * is none of them is `version_unsupported`. The reference company speaks this SDK's version;
-   * another entry lets a personal agent's choice among versions be exercised, and is answered
-   * the same way.
+   * is none of them is `version_unsupported`. By default the 1.0 draft (`DEFAULT_PROTOCOL_VERSION`);
+   * `["1.0", "0.4"]` also serves 0.4 as published, and `["0.4"]` 0.4 only.
    */
   readonly protocolVersions?: readonly string[];
   /**
@@ -576,7 +575,7 @@ export class CompanyConfig {
     this.scopeHints = { ...(options.scopeHints ?? {}) };
     this.excludedTasks = [...(options.excludedTasks ?? [])];
     this.logoUri = options.logoUri;
-    this.protocolVersions = [...(options.protocolVersions ?? [PROTOCOL_PROFILE])];
+    this.protocolVersions = [...(options.protocolVersions ?? [DEFAULT_PROTOCOL_VERSION])];
     if (!this.protocolVersions.length || new Set(this.protocolVersions).size !== this.protocolVersions.length) {
       throw new RangeError("protocolVersions lists each version the company serves once");
     }

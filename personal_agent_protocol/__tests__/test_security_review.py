@@ -21,7 +21,7 @@ from pydantic import SecretStr
 from reactor import PluginManifest
 
 from personal_agent_protocol import (
-    PROTOCOL_PROFILE,
+    DEFAULT_PROTOCOL_VERSION,
     DeviceSignInClient,
     PapSession,
     SessionClient,
@@ -1053,7 +1053,7 @@ async def test_a_copied_access_token_is_worth_nothing_without_the_agents_session
     url = "https://manzanita.example/api/orders"
     bearer = {
         "authorization": f"Bearer {token.access_token.get_secret_value()}",
-        "poppy-version": PROTOCOL_PROFILE,
+        "poppy-version": DEFAULT_PROTOCOL_VERSION,
     }
     other = AccessToken(access_token=SecretStr("another-access-token"), scope="orders:read")
     someone = ec.generate_private_key(ec.SECP256R1())

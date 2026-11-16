@@ -144,7 +144,7 @@ from ..operator_signatures import (
     accept_signature,
     verify_operator_signature,
 )
-from ..profile import PROTOCOL_PROFILE
+from ..profile import DEFAULT_PROTOCOL_VERSION
 from ..reactor import (
     CLOCKS,
     RANDOM_SOURCES,
@@ -486,10 +486,10 @@ class CompanyConfig:
     #: The protocol versions the company serves (§3.4), the first the one it prefers:
     #: `poppy.json` is that version's document, and each other version's document is
     #: served at `/poppy/{version}.json` and listed in `supported_versions`. A request
-    #: whose `Poppy-Version` is none of them is `version_unsupported`. The reference
-    #: company speaks this SDK's version; another entry lets a personal agent's choice
-    #: among versions be exercised, and is answered the same way.
-    protocol_versions: tuple[str, ...] = (PROTOCOL_PROFILE,)
+    #: whose `Poppy-Version` is none of them is `version_unsupported`. By default the
+    #: 1.0 draft (`DEFAULT_PROTOCOL_VERSION`); `("1.0", "0.4")` also serves 0.4 as
+    #: published, and `("0.4",)` 0.4 only.
+    protocol_versions: tuple[str, ...] = (DEFAULT_PROTOCOL_VERSION,)
     #: Whether a conversation continues in a Session on other protocol or extension versions
     #: than it started in (§8.2). Off, the company can't carry it over: a message, handoff
     #: or cancel on it from other versions is `version_mismatch` (409), naming the protocol
@@ -820,7 +820,7 @@ class CallerSession:
     family: str | None = None
     resource: str | None = None
     #: The protocol version the request is in, its `Poppy-Version` (§3.4).
-    protocol_version: str = PROTOCOL_PROFILE
+    protocol_version: str = DEFAULT_PROTOCOL_VERSION
     #: The extensions the request declares, one version each, its `Poppy-Extensions` (§3.4).
     extensions: Mapping[str, str] = field(default_factory=dict)
 

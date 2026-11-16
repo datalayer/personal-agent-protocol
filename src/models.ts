@@ -5,20 +5,20 @@
  */
 
 import { AuthorizationError, ProtocolValidationError } from "./errors.js";
-import { DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE } from "./profile.js";
+import { DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE } from "./profile.js";
 
 export type UnknownFields = Readonly<Record<string, unknown>>;
 
 /**
  * The protocol versions a Personal Agent implements unless it asks for others (§3.4): a
  * Company's document is used at a version compatible with one of them, the same major and,
- * before 1.0, the same minor. The published version only, never the draft.
+ * before 1.0, the same minor. The 1.0 draft only (`DEFAULT_PROTOCOL_VERSION`).
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([PROTOCOL_PROFILE]);
+export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([DEFAULT_PROTOCOL_VERSION]);
 /**
- * Every protocol version this SDK implements: the published one and the 1.0 draft. A Personal
+ * Every protocol version this SDK implements: 0.4 as published and the 1.0 draft. A Personal
  * Agent (`discoverCompany(domain, { protocolVersions })`) or a Company
- * (`CompanyConfigOptions.protocolVersions`) uses the draft only when it names it.
+ * (`CompanyConfigOptions.protocolVersions`) uses 0.4 only when it names it.
  */
 export const AVAILABLE_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION]);
 const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;

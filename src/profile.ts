@@ -14,11 +14,13 @@ export const PROTOCOL_PROFILE = "0.4";
 /** The upstream specification revision implemented: the day 0.4 was published (commit 4803900). */
 export const PROTOCOL_REVISION = "2026-11-10";
 
-// DRAFT_PROTOCOL_VERSION is the 1.0 draft, which a Personal Agent or a Company uses only when it
-// asks for it (`protocolVersions`): a draft can still change in ways that aren't backward
-// compatible, so the SDK announces PROTOCOL_PROFILE unless told otherwise.
+// DRAFT_PROTOCOL_VERSION is the 1.0 draft. Since 0.36 it is DEFAULT_PROTOCOL_VERSION, the
+// version a Personal Agent or a Company uses unless it asks for others (`protocolVersions`):
+// 0.4 as published stays available, used only when named.
 
-/** The draft protocol version a Personal Agent or a Company can opt into: the 1.0 draft. */
+/** The draft protocol version, the 1.0 draft: the default since 0.36. */
 export const DRAFT_PROTOCOL_VERSION = "1.0";
 /** The draft's revision implemented: lookalike domains, its first fix (commit c71f515). */
 export const DRAFT_PROTOCOL_REVISION = "2026-11-11";
+/** The version used unless a Personal Agent or a Company names others: the 1.0 draft. */
+export const DEFAULT_PROTOCOL_VERSION = DRAFT_PROTOCOL_VERSION;

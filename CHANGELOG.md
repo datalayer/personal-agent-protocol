@@ -6,6 +6,32 @@
 
 # Changelog
 
+## 0.36.0 (2026-11-16)
+
+The 1.0 draft (upstream `/docs/spec`, as of `c71f515`, 2026-11-11) becomes the **default** in
+both SDKs and both reference companies: they announce and accept `1.0` unless told otherwise,
+and 0.4 as published stays available when named. **Breaking by default**: a 0.36 personal
+agent no longer uses a company that serves only 0.4, and a 0.36 company refuses a request in
+`Poppy-Version: 0.4`, unless each names 0.4. See the
+[0.35 → 0.36 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#035--036).
+Upstream published and froze 1.0 on 2026-11-14 (`8c02b42`); its fixes after `c71f515` are not
+in this release.
+
+- **The default protocol version is `1.0`** (spec 3.1, 3.4). `DEFAULT_PROTOCOL_VERSION`
+  (`1.0`, the draft) is new; `SUPPORTED_PROTOCOL_VERSIONS`, the versions a personal agent
+  implements unless it names others, is now `1.0` only; `AVAILABLE_PROTOCOL_VERSIONS` stays
+  (`0.4`, `1.0`). `DiscoveryClient(protocol_versions=("1.0", "0.4"))`
+  (`discoverCompany(domain, { protocolVersions })`) still uses companies that serve only
+  0.4. `CompanyConfig.protocol_versions` (`protocolVersions`) defaults to `("1.0",)`:
+  `poppy.json` says `1.0`, and `("1.0", "0.4")` also serves 0.4 at `/poppy/0.4.json`.
+  `SessionClient.start` with no company nor version, a `PapSession`, a stored conversation
+  and a company's request context default to `1.0`.
+- **Conformance.** The suite runs at `1.0` by default (`ConformanceContext`, the TypeScript
+  runner) and reports profile `1.0`; every case also passes at `0.4`
+  (`protocol_versions=("0.4",)`) in all four language pairings. The shared fixtures'
+  documents say `1.0`, and the version-negotiation fixtures use `2.0` and `3.0` for versions
+  the agent doesn't implement. The conformance report names the version the pairings run at.
+
 ## 0.35.0 (2026-11-12)
 
 The 1.0 draft (upstream `/docs/spec`, as of `c71f515`, 2026-11-11; nothing after it through

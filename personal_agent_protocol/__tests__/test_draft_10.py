@@ -1,3 +1,7 @@
+# Copyright (c) 2025-2026 Datalayer, Inc.
+#
+# BSD 3-Clause License
+
 """What the 1.0 draft changes, both sides, in one process: `src/__tests__/draft-10.test.mjs`
 ports it.
 

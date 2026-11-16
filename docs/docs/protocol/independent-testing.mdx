@@ -1,0 +1,50 @@
+---
+title: Independent testing and the official kit
+sidebar_position: 5
+---
+
+# Independent testing and the official kit
+
+Besides the SDKs' own [conformance report](./conformance-report.mdx), two outside
+checks apply to these SDKs: an independent study of the Python SDK against
+Poppy 1.0, and the protocol's official company kit, which anyone can run against
+their own implementation.
+
+## An independent study of the Python SDK 0.35.0
+
+In November 2026 an independent tester of agent infrastructure ran the
+**Python SDK 0.35.0, self-hosted and unmodified**, through tests of Poppy 1.0's
+**Operations extension** and **sign-out**. The effects of each test were counted
+by a separate recorder, not read from the SDK's own responses.
+
+**Everything passed:**
+
+| Area | What was tested | Result |
+| --- | --- | --- |
+| Retry after a lost response | The company answers again with the original response and performs the action once | Passed in 3 of 3 trials. A deliberately broken store performed the action twice, and the test caught it. |
+| Sign-out | After sign-out, refresh is refused with `invalid_grant`, and an access token issued before sign-out is refused on the next request, with no effect | Passed |
+| The agent side, six rules | Declines; revised terms after an agent's approval; lost responses; `Retry-After`; company text never counting as the user's approval; instruction coverage | Passed |
+
+**One observation about the protocol, not the SDK:** an operation that was
+already performing when the user signed out completed and reported success.
+Poppy does not say what should happen in that case; it was raised on the Poppy
+tracker (issue #84).
+
+**What it does not cover:** the study tested 0.35.0. Version 0.36.x (the 1.0
+draft as the default) has not been tested by it.
+
+The write-up, its evidence and the harness are published:
+[studies/poppy-1.0](https://github.com/kkrlstrm/kirkaldy-conformance-kit/tree/main/studies/poppy-1.0).
+The same study proposes Operations checks for the official validator, which does
+not test Operations yet, citing the lost-response test on this SDK as its
+measured example.
+
+## The official company kit
+
+The Personal Agent Protocol project publishes a kit to validate a company's
+implementation:
+[kit/company](https://github.com/personal-agent-protocol/personal-agent-protocol/tree/main/kit/company)
+in the protocol's repository. Run it against a company built on these SDKs, or on
+any other implementation, before publishing its `poppy.json`. It is the
+reference check of a company; this site's [conformance report](./conformance-report.mdx)
+is the SDKs' own, run on every release.

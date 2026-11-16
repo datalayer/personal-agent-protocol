@@ -221,6 +221,32 @@ close, browser sessions, feedback, and Operations. What remains:
 Each open or partial requirement is listed with its reason in
 [Protocol coverage](https://personal-agent-protocol.datalayer.tech/protocol/coverage/).
 
+## Conformance and independent testing
+
+- **The SDKs' own report**: every release runs each positive, negative and
+  recovery fixture across the four pairings (a Python or TypeScript personal
+  agent against a Python or TypeScript reference company), over real TCP and
+  TLS: [Compatibility and conformance report](https://personal-agent-protocol.datalayer.tech/protocol/conformance-report/).
+- **An independent study**: in November 2026 an independent tester ran the
+  Python SDK 0.35.0, self-hosted and unmodified, through Poppy 1.0's Operations
+  extension and sign-out tests, with effects counted by a separate recorder.
+  Everything passed: a retry after a lost response returned the original
+  response and performed the action once (3 of 3 trials; a deliberately broken
+  store was caught performing it twice); after sign-out, refresh was refused
+  with `invalid_grant` and an earlier access token was refused with no effect;
+  and the agent side passed six rules (declines, revised terms after an agent
+  approval, lost responses, `Retry-After`, company text never counting as the
+  user's approval, instruction coverage). One finding is about the protocol, not
+  the SDK: an operation already performing at sign-out completed and reported
+  success, which Poppy leaves unspecified (raised on the Poppy tracker, #84).
+  0.36.x was not tested. The write-up, evidence and harness:
+  [studies/poppy-1.0](https://github.com/kkrlstrm/kirkaldy-conformance-kit/tree/main/studies/poppy-1.0).
+- **The official company kit**: validate a company implementation, on these
+  SDKs or any other, with the protocol's
+  [kit/company](https://github.com/personal-agent-protocol/personal-agent-protocol/tree/main/kit/company).
+
+See [Independent testing and the official kit](https://personal-agent-protocol.datalayer.tech/protocol/independent-testing/).
+
 ## Security boundary
 
 PAP credentials belong to the host, not to an agent model or tool call.
